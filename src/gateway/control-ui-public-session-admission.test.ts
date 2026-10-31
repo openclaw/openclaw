@@ -1,7 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
+import type { PublicSessionRepresentation } from "./control-ui-public-session-cache.js";
 
 let gate: ReturnType<typeof createControlUiPublicSessionRequestGate>;
 const config = {};
@@ -15,6 +17,7 @@ function request(index = 0) {
     sessionKey: `agent:main:public-${index}`,
     requestKey: `page-${index}`,
     config,
+    consume: (value: PublicSessionRepresentation | null) => value,
   };
 }
 afterEach(() => {
@@ -22,18 +25,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const rendered = (body: string) => ({ kind: "ok", value: { body } });
+
 describe("public reader admission", () => {
-  it("serves twenty readers behind one IP with one render, including later refreshes", async () => {
+  it("shares a superseded render and its replacement across twenty readers and later refreshes", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const render = createDeferred<string>();
-    const work = vi.fn(() => render.promise);
+    const work = vi.fn().mockReturnValueOnce(render.promise).mockResolvedValue("Public text");
     const pending = Array.from({ length: 20 }, () => {
       expect(gate.admitClient("shared-ip")).toEqual({ kind: "ok" });
       return gate.run({ ...request(), work });
     });
     await Promise.resolve();
     expect(work).toHaveBeenCalledTimes(1);
-    render.resolve("Public text");
+    sessionChanges.emit({ sessionKey: request().sessionKey, scope: "session-entry" });
+    render.resolve("Superseded text");
     const results = await Promise.all(pending);
     expect(
       results.every((result) => result.kind === "ok" && result.value?.body === "Public text"),
@@ -42,19 +48,58 @@ describe("public reader admission", () => {
       expect(gate.admitClient("shared-ip")).toEqual({ kind: "ok" });
       expect((await gate.run({ ...request(), work })).kind).toBe("ok");
     }
-    expect(work).toHaveBeenCalledTimes(1);
+    expect(work).toHaveBeenCalledTimes(2);
 
     const otherWork = vi.fn(async () => "Other configuration");
-    expect(await gate.run({ ...request(), config: {}, work: otherWork })).toMatchObject({
-      kind: "ok",
-      value: { body: "Other configuration" },
-    });
+    expect(await gate.run({ ...request(), config: {}, work: otherWork })).toMatchObject(
+      rendered("Other configuration"),
+    );
     expect(otherWork).toHaveBeenCalledTimes(1);
-    expect(await gate.run({ ...request(), work })).toMatchObject({
-      kind: "ok",
-      value: { body: "Public text" },
-    });
+    expect(await gate.run({ ...request(), work })).toMatchObject(rendered("Public text"));
+    expect(work).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops rebuilding when the HTTP work scope closes", async () => {
+    const scope = new AsyncWorkScope();
+    const release = createDeferred<string>();
+    const work = vi.fn(() => release.promise);
+    const consume = vi.fn(request().consume);
+    const pending = scope.run(() => gate.run({ ...request(), work, consume }));
+    await Promise.resolve();
+    sessionChanges.emit({ sessionKey: request().sessionKey });
+    scope.beginClose(new Error("HTTP reader disconnected"));
+    release.resolve("Superseded text");
+    await expect(pending).rejects.toThrow("HTTP reader disconnected");
+    await scope.drain();
     expect(work).toHaveBeenCalledTimes(1);
+    expect(consume).not.toHaveBeenCalled();
+    expect(await gate.run({ ...request(), work: async () => "Fresh text" })).toMatchObject(
+      rendered("Fresh text"),
+    );
+  });
+
+  it("does not repeatedly render content too large for the cache", async () => {
+    const work = vi.fn(async () => Buffer.alloc(17 * 1024 * 1024));
+    expect(await gate.run({ ...request(), work })).toEqual({ kind: "unavailable" });
+    expect(work).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a live reader replace a superseded render after its initiator disconnects", async () => {
+    const initiator = new AsyncWorkScope();
+    const survivor = new AsyncWorkScope();
+    const release = createDeferred<string>();
+    const work = vi.fn().mockReturnValueOnce(release.promise).mockResolvedValue("Fresh text");
+    const first = initiator.run(() => gate.run({ ...request(), work }));
+    const rejected = expect(first).rejects.toThrow("HTTP reader disconnected");
+    const second = survivor.run(() => gate.run({ ...request(), work }));
+    await Promise.resolve();
+    sessionChanges.emit({ sessionKey: request().sessionKey });
+    initiator.beginClose(new Error("HTTP reader disconnected"));
+    release.resolve("Superseded text");
+    await rejected;
+    await expect(second).resolves.toMatchObject(rendered("Fresh text"));
+    expect(work).toHaveBeenCalledTimes(2);
+    await Promise.all([initiator.drain(), survivor.drain()]);
   });
 
   it("queues twenty cold threads while retaining the eight-build budget", async () => {
@@ -97,18 +142,23 @@ describe("public reader admission", () => {
 
   it("does not release stale content when publication changes during a build", async () => {
     const release = createDeferred<string>();
-    const pending = gate.run({ ...request(), work: () => release.promise });
+    const work = vi.fn().mockReturnValueOnce(release.promise).mockResolvedValue(null);
+    const pending = gate.run({ ...request(), work });
     await Promise.resolve();
     sessionChanges.emit({ sessionKey: request().sessionKey });
     release.resolve("Revoked content");
-    expect(await pending).toEqual({ kind: "unavailable" });
+    expect(await pending).toEqual({ kind: "ok", value: null });
+    expect(work).toHaveBeenCalledTimes(2);
   });
 
   it("keeps transcript builds current across run updates without sharing live card work", async () => {
     const transcript = createDeferred<string>();
     const card = createDeferred<string>();
     const transcriptWork = vi.fn(() => transcript.promise);
-    const cardWork = vi.fn(() => card.promise);
+    const cardWork = vi
+      .fn()
+      .mockReturnValueOnce(card.promise)
+      .mockResolvedValue("Current live status");
     const page = gate.run({ ...request(), work: transcriptWork });
     const preview = gate.run({ ...request(), kind: "card", work: cardWork });
     await Promise.resolve();
@@ -117,20 +167,17 @@ describe("public reader admission", () => {
     sessionChanges.emit({ sessionKey: request().sessionKey, scope: "runtime" });
     transcript.resolve("Published transcript");
     card.resolve("Outdated live status");
-    expect(await page).toMatchObject({ kind: "ok", value: { body: "Published transcript" } });
-    expect(await preview).toEqual({ kind: "unavailable" });
+    expect(await page).toMatchObject(rendered("Published transcript"));
+    expect(await preview).toMatchObject(rendered("Current live status"));
     const currentCard = await gate.run({ ...request(), kind: "card", work: cardWork });
     expect(currentCard.kind).toBe("ok");
     expect(cardWork).toHaveBeenCalledTimes(2);
     sessionChanges.emit({ all: true, scope: "subagent-runs" });
-    expect(await gate.run({ ...request(), work: transcriptWork })).toMatchObject({
-      kind: "ok",
-      value: { body: "Published transcript" },
-    });
+    expect(await gate.run({ ...request(), work: transcriptWork })).toMatchObject(
+      rendered("Published transcript"),
+    );
     expect(transcriptWork).toHaveBeenCalledTimes(1);
-    if (currentCard.kind !== "ok" || !currentCard.value) {
-      throw new Error("Public card did not return its representation");
-    }
+    assert(currentCard.kind === "ok" && currentCard.value);
     expect(currentCard.value.isCurrent()).toBe(false);
   });
 
@@ -147,9 +194,7 @@ describe("public reader admission", () => {
 
     release.resolve(body);
     const completed = await slow;
-    if (completed.kind !== "ok" || !completed.value || fast.kind !== "ok" || !fast.value) {
-      throw new Error("Public builds did not return their representations");
-    }
+    assert(completed.kind === "ok" && completed.value && fast.kind === "ok" && fast.value);
     expect(completed.value.body).toBe(body);
     expect(completed.value.isCurrent()).toBe(true);
     expect(fast.value.isCurrent()).toBe(false);
@@ -172,11 +217,16 @@ describe("public reader admission", () => {
       expect(gate.admitClient("client").kind).toBe("ok");
     }
     expect(gate.admitClient("client").kind).toBe("rate-limited");
-    const work = vi.fn(async () => "Cached");
+    const work = vi.fn(async () => {
+      if (work.mock.calls.length === 1) {
+        sessionChanges.emit({ sessionKey: request().sessionKey });
+      }
+      return "Cached";
+    });
     for (let index = 0; index < 240; index++) {
       expect((await gate.run({ ...request(), work })).kind).toBe("ok");
     }
     expect((await gate.run({ ...request(), work })).kind).toBe("rate-limited");
-    expect(work).toHaveBeenCalledTimes(1);
+    expect(work).toHaveBeenCalledTimes(2);
   });
 });

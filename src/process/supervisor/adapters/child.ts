@@ -89,6 +89,7 @@ function resolveChildInvocation(params: {
 type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null> &
   Required<Pick<SpawnProcessAdapter<NodeJS.Signals | null>, "onExit" | "onError">>;
 type WorkerChildAdapter = ChildAdapter & {
+  readonly jobKillOnClose?: true;
   closeStartGate?: () => void;
   openStartGate?: () => Promise<void>;
 };
@@ -132,6 +133,7 @@ export async function createChildAdapter(
 ): Promise<ProcessAdapterStartup<WorkerChildAdapter>> {
   if (params.anchoredShellCommand !== undefined) {
     return await createServiceChildRelayAdapter({
+      executionIntent: params.executionIntent,
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
       initiateSpawn: params.initiateSpawn,
@@ -174,6 +176,7 @@ export async function createChildAdapter(
     (params.ownProcessTree === true || process.env.OPENCLAW_SERVICE_MARKER?.trim())
   ) {
     return await createServiceChildRelayAdapter({
+      executionIntent: params.executionIntent,
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
       initiateSpawn: params.initiateSpawn,
@@ -276,6 +279,7 @@ export async function createChildAdapter(
       },
       initiateSpawn: params.initiateSpawn,
       argv: [preparedSpawn.command, ...preparedSpawn.args],
+      executionIntent: params.executionIntent,
       options,
     });
 
@@ -520,13 +524,9 @@ export async function createChildAdapter(
     // the tracked root (libuv owns that ChildProcess).
     scheduleAdoptedChildZombieReapAfterExit(child, useDetached);
   };
-  const signalProcessTreeForChild = (pid: number, signal: "SIGTERM" | "SIGKILL") => {
-    signalProcessTree(pid, signal, { detached: useDetached });
-    scheduleAdoptedReapForChild();
-  };
-  const signalProcessTreeForChildAndWait = (pid: number, signal: "SIGTERM" | "SIGKILL") =>
+  const signalProcessTreeForChildAndWait = (pid: number) =>
     new Promise<void>((resolve) => {
-      signalProcessTree(pid, signal, {
+      signalProcessTree(pid, "SIGKILL", {
         detached: useDetached,
         onComplete: () => {
           scheduleAdoptedReapForChild();
@@ -556,6 +556,14 @@ export async function createChildAdapter(
     if (processClosed) {
       return;
     }
+    if (
+      process.platform === "win32" &&
+      (childExitState !== null || child.exitCode !== null || child.signalCode !== null)
+    ) {
+      // A descendant can retain output after root exit, but taskkill must not target its reusable PID.
+      scheduleForceKillWaitFallback(signal ?? "SIGKILL");
+      return;
+    }
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {
       hardKillRequested = true;
@@ -567,7 +575,7 @@ export async function createChildAdapter(
         const previousSignal = treeSignaling;
         treeSignaling = (async () => {
           try {
-            await signalProcessTreeForChildAndWait(pid, "SIGKILL");
+            await signalProcessTreeForChildAndWait(pid);
             signalChild("SIGKILL");
             windowsTreeKillCompleted = true;
             if (childCloseState) {
@@ -591,7 +599,8 @@ export async function createChildAdapter(
       return;
     }
     if (signal === "SIGTERM" && pid) {
-      signalProcessTreeForChild(pid, "SIGTERM");
+      signalProcessTree(pid, "SIGTERM", { detached: useDetached });
+      scheduleAdoptedReapForChild();
       return;
     }
     signalChild(signal);
@@ -617,6 +626,7 @@ export async function createChildAdapter(
 
   let startGateOpened = false;
   const adapter: WorkerChildAdapter = {
+    ...(windowsJob ? { jobKillOnClose: true as const } : {}),
     get pid() {
       return windowsJob?.commandPid ?? child.pid;
     },

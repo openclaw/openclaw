@@ -248,6 +248,8 @@ export async function verifyPriorCiSecurity({
   repositoryId,
   pr,
   head,
+  ciRunId,
+  ciRunAttempt,
   main,
   statusId,
 }) {
@@ -277,7 +279,7 @@ export async function verifyPriorCiSecurity({
       run.status === "completed" &&
       run.conclusion === "success" &&
       run.path === workflowPath &&
-      ["workflow_run", "schedule", "issue_comment"].includes(run.event) &&
+      ["workflow_run", "schedule", "issue_comment", "workflow_dispatch"].includes(run.event) &&
       run.head_branch === "main" &&
       oid.test(run.head_sha ?? "") &&
       run.repository?.id === repositoryId &&
@@ -331,7 +333,12 @@ export async function verifyPriorCiSecurity({
       ),
     "incomplete Security Review job identities",
   );
-  const matches = jobs.filter((job) => job.name === `review (${pr}, ${head})`);
+  // Dispatched CI replays must name the selected attempt, not just its PR head.
+  const matches = jobs.filter(
+    (job) =>
+      (run.event !== "workflow_dispatch" && job.name === `review (${pr}, ${head})`) ||
+      job.name === `review (${pr}, ${head}, ${ciRunId}, ${ciRunAttempt})`,
+  );
   const steps = matches[0]?.steps?.filter((step) => step.name === "Enforce security review");
   requireEvidence(
     matches.length === 1 &&

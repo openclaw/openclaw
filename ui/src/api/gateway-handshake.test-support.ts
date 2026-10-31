@@ -48,11 +48,7 @@ export async function startConnect(client: GatewayBrowserClient, nonce = "handsh
   client.start();
   const ws = getLatestWebSocket();
   ws.emitOpen();
-  ws.emitMessage({
-    type: "event",
-    event: "connect.challenge",
-    payload: { nonce, ts: 1_800_000_000_000 },
-  });
+  ws.emitConnectChallenge({ nonce, ts: 1_800_000_000_000 });
   await vi.advanceTimersByTimeAsync(0);
   const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as {
     id: string;

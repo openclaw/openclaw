@@ -5,7 +5,8 @@ import type {
   ControlUiLinkReaderDescriptor,
   ControlUiLinkReaderPreview,
 } from "../../../src/shared/control-ui-link-reader.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
 

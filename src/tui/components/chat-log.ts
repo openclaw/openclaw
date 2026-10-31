@@ -84,40 +84,6 @@ export class ChatLog extends Container {
     this.imageRenderer?.dispose();
   }
 
-  // Pruning must clear side maps so future stream/tool updates do not target detached components.
-  private dropComponentReferences(component: Component) {
-    for (const entries of [this.tools, this.pendingUsers]) {
-      for (const [id, entry] of entries) {
-        if (entry.component === component) {
-          entries.delete(id);
-        }
-      }
-    }
-    if (component instanceof MarkdownMessageComponent && component.role === "assistant") {
-      for (const [runId, run] of this.assistantRuns.entries()) {
-        if (run.streaming === component) {
-          run.streaming = undefined;
-        }
-        run.frozen.delete(component);
-        run.finalized.delete(component);
-        this.releaseAssistantRunIfEmpty(runId, run);
-      }
-    }
-    for (const entries of [this.userComponents, this.pendingSystemNotices]) {
-      for (const [id, entry] of entries) {
-        if (entry === component) {
-          entries.delete(id);
-        }
-      }
-    }
-    if (this.btwMessage === component) {
-      this.btwMessage = null;
-    }
-    if (this.repeatableSystemMessage?.component === component) {
-      this.repeatableSystemMessage = null;
-    }
-  }
-
   private pruneOverflow(protectedComponents?: ReadonlySet<Component>) {
     while (this.children.length > this.maxComponents) {
       // Protect only the inserted prompt, its reply, and tools owned by that run.
@@ -130,53 +96,37 @@ export class ChatLog extends Container {
         return;
       }
       this.removeChild(oldest);
-      this.dropComponentReferences(oldest);
-    }
-  }
-
-  private reserveLiveUserSlot(
-    protectedComponents: Set<Component>,
-    firstRunComponent: Component | undefined,
-    runId?: string,
-  ) {
-    if (protectedComponents.size <= this.maxComponents) {
-      return;
-    }
-
-    // Keep live output and the sole reply; completed run history is the
-    // first choice when a delayed prompt needs a bounded scrollback slot.
-    const streaming = runId ? this.assistantRuns.get(runId)?.streaming : undefined;
-    const completedTools = new Set<ToolExecutionComponent>();
-    for (const tool of this.tools.values()) {
-      if (!tool.component.isActive) {
-        completedTools.add(tool.component);
+      // Pruning must clear side maps so future stream/tool updates do not target detached components.
+      for (const entries of [this.tools, this.pendingUsers]) {
+        for (const [id, entry] of entries) {
+          if (entry.component === oldest) {
+            entries.delete(id);
+          }
+        }
       }
-    }
-    const laterComponents = this.children.filter(
-      (entry) => entry !== firstRunComponent && protectedComponents.has(entry),
-    );
-    const evictable =
-      laterComponents.find(
-        (entry) =>
-          entry !== streaming &&
-          entry instanceof MarkdownMessageComponent &&
-          entry.role === "assistant",
-      ) ??
-      laterComponents.find(
-        (entry) => entry instanceof ToolExecutionComponent && completedTools.has(entry),
-      ) ??
-      (streaming &&
-      firstRunComponent instanceof MarkdownMessageComponent &&
-      firstRunComponent.role === "assistant" &&
-      firstRunComponent !== streaming
-        ? firstRunComponent
-        : undefined) ??
-      (firstRunComponent instanceof ToolExecutionComponent && completedTools.has(firstRunComponent)
-        ? firstRunComponent
-        : undefined) ??
-      laterComponents.find((entry) => entry instanceof ToolExecutionComponent);
-    if (evictable) {
-      protectedComponents.delete(evictable);
+      if (oldest instanceof MarkdownMessageComponent && oldest.role === "assistant") {
+        for (const [runId, run] of this.assistantRuns.entries()) {
+          if (run.streaming === oldest) {
+            run.streaming = undefined;
+          }
+          run.frozen.delete(oldest);
+          run.finalized.delete(oldest);
+          this.releaseAssistantRunIfEmpty(runId, run);
+        }
+      }
+      for (const entries of [this.userComponents, this.pendingSystemNotices]) {
+        for (const [id, entry] of entries) {
+          if (entry === oldest) {
+            entries.delete(id);
+          }
+        }
+      }
+      if (this.btwMessage === oldest) {
+        this.btwMessage = null;
+      }
+      if (this.repeatableSystemMessage?.component === oldest) {
+        this.repeatableSystemMessage = null;
+      }
     }
   }
 
@@ -332,7 +282,45 @@ export class ChatLog extends Container {
       // anchor before the earliest surviving reply or tool from the same run.
       this.repeatableSystemMessage = null;
       this.children.splice(firstRunComponentIndex, 0, component);
-      this.reserveLiveUserSlot(protectedComponents, firstRunComponent, options.runId);
+      const runId = options.runId;
+      if (!(protectedComponents.size <= this.maxComponents)) {
+        // Keep live output and the sole reply; completed run history is the
+        // first choice when a delayed prompt needs a bounded scrollback slot.
+        const streaming = runId ? this.assistantRuns.get(runId)?.streaming : undefined;
+        const completedTools = new Set<ToolExecutionComponent>();
+        for (const tool of this.tools.values()) {
+          if (!tool.component.isActive) {
+            completedTools.add(tool.component);
+          }
+        }
+        const laterComponents = this.children.filter(
+          (entry) => entry !== firstRunComponent && protectedComponents.has(entry),
+        );
+        const evictable =
+          laterComponents.find(
+            (entry) =>
+              entry !== streaming &&
+              entry instanceof MarkdownMessageComponent &&
+              entry.role === "assistant",
+          ) ??
+          laterComponents.find(
+            (entry) => entry instanceof ToolExecutionComponent && completedTools.has(entry),
+          ) ??
+          (streaming &&
+          firstRunComponent instanceof MarkdownMessageComponent &&
+          firstRunComponent.role === "assistant" &&
+          firstRunComponent !== streaming
+            ? firstRunComponent
+            : undefined) ??
+          (firstRunComponent instanceof ToolExecutionComponent &&
+          completedTools.has(firstRunComponent)
+            ? firstRunComponent
+            : undefined) ??
+          laterComponents.find((entry) => entry instanceof ToolExecutionComponent);
+        if (evictable) {
+          protectedComponents.delete(evictable);
+        }
+      }
       this.pruneOverflow(protectedComponents);
       return component;
     }
@@ -444,18 +432,6 @@ export class ChatLog extends Container {
     }
     run.committedText = undefined;
     return text;
-  }
-
-  // Tool rows freeze earlier cumulative text so later deltas render below the tool.
-  private freezeStreamingAssistants() {
-    for (const run of this.assistantRuns.values()) {
-      if (!run.streaming) {
-        continue;
-      }
-      run.frozen.add(run.streaming);
-      run.committedText = run.latestText ?? "";
-      run.streaming = undefined;
-    }
   }
 
   reserveAssistantSlot(runId = "default") {
@@ -586,7 +562,15 @@ export class ChatLog extends Container {
       return existing.component;
     }
     const owningRunId = runId ?? this.resolveSingleStreamingRunId();
-    this.freezeStreamingAssistants();
+    // Tool rows freeze earlier cumulative text so later deltas render below the tool.
+    for (const run of this.assistantRuns.values()) {
+      if (!run.streaming) {
+        continue;
+      }
+      run.frozen.add(run.streaming);
+      run.committedText = run.latestText ?? "";
+      run.streaming = undefined;
+    }
     const component = new ToolExecutionComponent(toolName, args, this.imageRenderer);
     if (activity !== undefined) {
       component.setActivity(activity);

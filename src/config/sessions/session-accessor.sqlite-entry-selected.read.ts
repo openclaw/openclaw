@@ -1,3 +1,4 @@
+import { expressionBuilder } from "kysely";
 import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
@@ -7,7 +8,10 @@ import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-d
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
-import { validateDeliveryCanonicalSessionEntry } from "./session-accessor.sqlite-entry-read.js";
+import {
+  SESSION_ID_TRIM_CHARACTERS,
+  validateDeliveryCanonicalSessionEntry,
+} from "./session-accessor.sqlite-entry-read.js";
 import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
@@ -25,6 +29,7 @@ export function readSelectedSessionEntriesInDatabase(
     fullEntryKeys?: readonly string[];
     label?: string;
     sessionIdOrKey?: string;
+    transcriptSessionIds?: readonly string[];
   } = {},
 ): SessionEntrySummary[] {
   return readWithCanonicalSessionReaderContinuation(database, options.continuation, () => {
@@ -63,14 +68,45 @@ export function readSelectedSessionEntriesInDatabase(
             .where("current_session_id", "=", options.sessionIdOrKey),
         );
     }
+    if (options.transcriptSessionIds !== undefined) {
+      const ids = options.transcriptSessionIds;
+      const trimmedIds = ids.map((id) => id.trim()).filter(Boolean);
+      const eb = expressionBuilder<DB, "session_nodes">();
+      const trimmed = eb.fn<string>("trim", [
+        "current_session_id",
+        eb.val(SESSION_ID_TRIM_CHARACTERS),
+      ]);
+      const seedIds = db
+        .selectFrom("session_nodes")
+        .select(trimmed.as("session_id"))
+        .where("session_key", "in", sqliteStringSet(sessionKeys))
+        .where(trimmed, "!=", "");
+      selected = selected.union(
+        db
+          .selectFrom("session_nodes")
+          .select("session_key")
+          .where(
+            eb.or([
+              eb("current_session_id", "in", sqliteStringSet(ids)),
+              eb(trimmed, "in", sqliteStringSet(trimmedIds)),
+              eb(trimmed, "in", seedIds),
+            ]),
+          ),
+      );
+    }
     // Warm admission permits raw metadata changes. The listing contract still
     // rejects delivery-canonical sibling drift, so include its existing dirty set.
     // Older readers have no dirty set and retain their full validation inventory.
+    const selectedQuery = query.select((eb) =>
+      options.transcriptSessionIds === undefined
+        ? eb.val(0).as("transcript_selected")
+        : eb("session_key", "in", selected).as("transcript_selected"),
+    );
     const rows = iterateSqliteQuerySync(
       database.db,
       hasCanonicalSessionValidationProjection(database)
-        ? query.where("session_key", "in", pending.union(selected))
-        : query,
+        ? selectedQuery.where("session_key", "in", pending.union(selected))
+        : selectedQuery,
     );
     const entries: SessionEntrySummary[] = [];
     for (const row of rows) {
@@ -87,6 +123,7 @@ export function readSelectedSessionEntriesInDatabase(
       validateDeliveryCanonicalSessionEntry(row.session_key, entry);
       if (
         keys.has(row.session_key) ||
+        row.transcript_selected ||
         (options.label !== undefined && entry.label === options.label) ||
         (options.sessionIdOrKey !== undefined &&
           (row.session_key === options.sessionIdOrKey ||

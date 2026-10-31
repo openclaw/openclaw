@@ -172,7 +172,8 @@
   opacity: 1;
 }
 
-.workspace-desktop__row .chat-attachment-file-icon {
+.workspace-desktop__row .chat-attachment-file-icon,
+.workspace-desktop__attachment-icon {
   width: 20px;
   height: 20px;
   flex: 0 0 20px;

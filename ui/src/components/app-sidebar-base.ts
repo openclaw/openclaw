@@ -16,7 +16,9 @@ import {
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
 import { selectSidebarContext, type ContextualSidebar } from "./sidebar-context-state.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
@@ -61,7 +63,6 @@ export type AppSidebarProps = {
   onNavigate:
     | ((routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void)
     | undefined;
-  onPreloadRoute: ((routeId: NavigationRouteId) => Promise<void>) | undefined;
 };
 
 export const appSidebarProperties = {
@@ -100,7 +101,6 @@ export const appSidebarProperties = {
   onUpdateSidebarEntries: { default: undefined, attribute: false },
   onPairMobile: { default: undefined, attribute: false },
   onNavigate: { default: undefined, attribute: false },
-  onPreloadRoute: { default: undefined, attribute: false },
 } satisfies {
   [Key in keyof AppSidebarProps]: {
     default: AppSidebarProps[Key];
@@ -146,7 +146,6 @@ export abstract class AppSidebarBase {
   declare onUpdateSidebarEntries: AppSidebarProps["onUpdateSidebarEntries"];
   declare onPairMobile: AppSidebarProps["onPairMobile"];
   declare onNavigate: AppSidebarProps["onNavigate"];
-  declare onPreloadRoute: AppSidebarProps["onPreloadRoute"];
   get ownerDocument(): Document {
     return this.hostElement.ownerDocument;
   }
@@ -262,6 +261,8 @@ export abstract class AppSidebarBase {
   }
 
   abstract readonly sessionOwnerFilter: SessionOwnerFilter;
+  abstract readonly sessionData: Pick<SessionDataOwner, "sessionsResult">;
+  abstract readonly sessionsStatusFilter: SidebarSessionStatusFilter;
 
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
     this.sessionOwnerFilter.set(ownerId, involvingMe);
@@ -284,11 +285,7 @@ export abstract class AppSidebarBase {
 
   public getRouteSessionKey(): string {
     // A provisional row owns only presentation, never the saved Gateway selection.
-    return (
-      this.pendingSessionCreate()?.creation.sessionKey ||
-      this.sessionKey.trim() ||
-      this.context.gateway.snapshot.sessionKey.trim()
-    );
+    return this.pendingSessionCreate()?.creation.sessionKey || this.sessionKey.trim();
   }
 
   protected setApplicationSession(sessionKey: string, fallbackAgentId?: string): void {

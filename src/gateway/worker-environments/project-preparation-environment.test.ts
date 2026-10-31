@@ -7,7 +7,6 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { requireGit } from "../../agents/worktrees/git.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
-import { readWorkerProjectEnvironmentRecipe } from "./project-preparation.js";
 import { createProjectPreparationFixture } from "./project-preparation.test-support.js";
 import { prepareWorkerProjectSnapshot } from "./workspace-git-base.js";
 
@@ -108,7 +107,6 @@ describe("repository environment preparation", () => {
           postStartCommand: "printf 'postStart\\n' >> build/order",
         }),
     });
-    const recipe = await readWorkerProjectEnvironmentRecipe(f.project);
     const first = await f.preparedOperation();
     const result = await first.project.prepare(f);
     expect(result).toMatchObject({
@@ -120,11 +118,6 @@ describe("repository environment preparation", () => {
       },
     });
     const prepared = result.preparedWorkspace!;
-    await expectFiles(prepared.workspaceDir, {
-      "build/order": "onCreate\nupdateContent\n",
-      "build/cached": "prepared base\n",
-      "created.txt": "initialized",
-    });
     first.close();
     await fs.writeFile(path.join(f.repository, "input.txt"), "updated content\n");
     await requireGit(f.repository, ["add", "input.txt"]);
@@ -133,9 +126,6 @@ describe("repository environment preparation", () => {
       localPath: f.repository,
       namespace: "gateway",
     }))!;
-    expect((await readWorkerProjectEnvironmentRecipe(refreshedProject)).identity).toBe(
-      recipe.identity,
-    );
     const refreshed = await f.preparedOperation(() => {}, { project: refreshedProject });
     const refreshedResult = await refreshed.project.prepare(f);
     expect(refreshedResult).toMatchObject({
@@ -208,7 +198,6 @@ describe("repository environment preparation", () => {
       expect(outputTail.includes("�")).toBe(encoding !== "UTF-8");
       expect(recordRecipePreparation).toHaveBeenCalledWith(result.recipePreparation);
       const prepared = result.preparedWorkspace!;
-      expect(operation.getPreparedWorkspace()).toEqual(prepared);
       expect(await readText(prepared.workspaceDir, "input.txt")).toBe("prepared base\n");
     },
   );

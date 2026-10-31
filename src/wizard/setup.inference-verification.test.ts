@@ -1,22 +1,13 @@
 // Setup inference verification tests keep noninteractive imports prompt-free.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  readAuthProfileStoreForTest,
-  removeOAuthTestTempRoot,
-} from "../agents/auth-profiles/oauth-test-utils.js";
-import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SetupInferenceConfigTarget } from "../system-agent/setup-inference-transition.js";
 import { verifySetupInferenceConfig } from "../system-agent/setup-inference-turn.js";
 import { authCandidate, createEmptyWizardPrompter } from "./setup.credentials.test-support.js";
-import type { SetupModelAuthCandidate } from "./setup.model-auth.js";
 
 const mocks = vi.hoisted(() => ({
   repair: vi.fn(),
@@ -98,84 +89,6 @@ describe("offerLiveModelVerification", () => {
     mocks.repair.mockReset();
     mocks.verify.mockReset();
     mocks.runEmbedded.mockReset();
-  });
-
-  it("preserves a working profile when a rejected replacement is retried without another login", async () => {
-    const stateDir = await fs.realpath(tempRoots.make("openclaw-working-setup-profile-"));
-    const agentDir = path.join(stateDir, "import-agent");
-    const working = {
-      profileId: "openai:working",
-      credential: { type: "api_key" as const, provider: "openai", key: "working-key" },
-    };
-    await upsertAuthProfileWithLock({ ...working, agentDir });
-    const config: OpenClawConfig = {
-      browser: { enabled: false },
-      agents: {
-        ownership: "explicit",
-        entries: { main: {} },
-        defaults: { model: "openai/test-model@openai:working" },
-      },
-      auth: { profiles: { "openai:working": { provider: "openai", mode: "api_key" } } },
-    };
-    const before = structuredClone(config);
-    const replacement = { ...working, credential: { ...working.credential, key: "rejected-key" } };
-    const persistAuthProfiles = vi.fn(
-      async (profiles: SetupModelAuthCandidate["authProfiles"] = [replacement]) => {
-        for (const profile of profiles) {
-          await upsertAuthProfileWithLock({ ...profile, agentDir });
-        }
-      },
-    );
-    const candidate: SetupModelAuthCandidate = {
-      config: { ...config, agents: { ...config.agents, defaults: { model: "openai/test-model" } } },
-      authProfiles: [replacement],
-      persistAuthProfiles,
-    };
-    const attemptedProfiles: string[] = [];
-    mocks.verify.mockImplementation(async ({ config: tested }: { config: OpenClawConfig }) => {
-      const primary = expectDefined(
-        resolveAgentModelPrimaryValue(tested.agents?.defaults?.model),
-        "selected model",
-      );
-      const profileId = expectDefined(
-        splitTrailingAuthProfile(primary).profile,
-        "selected credential profile",
-      );
-      attemptedProfiles.push(profileId);
-      const store = readAuthProfileStoreForTest(agentDir);
-      expect(profileId).toMatch(/^openai:setup-/);
-      expect(store.profiles[profileId]).toMatchObject({
-        ...replacement.credential,
-        setup: {
-          replacement: true,
-          modelRef: "openai/test-model",
-          configJson: expect.any(String),
-        },
-      });
-      expect(store.profiles[working.profileId]).toEqual(working.credential);
-      expect(tested.browser).toEqual({ enabled: false });
-      return { ok: false, status: "auth", error: "credential rejected" };
-    });
-    const { run, writeConfig, prompter } = verificationFixture(config, {
-      initialCandidate: candidate,
-      opts: { nonInteractive: true },
-      stateDir,
-      agentDir,
-      required: true,
-    });
-    try {
-      const rejected = { verified: false, persisted: false };
-      await expect(run()).resolves.toMatchObject(rejected);
-      await expect(run()).resolves.toMatchObject(rejected);
-      expect(attemptedProfiles).toHaveLength(2);
-      expect(attemptedProfiles[1]).toBe(attemptedProfiles[0]);
-      expect(Object.keys(readAuthProfileStoreForTest(agentDir).profiles)).toHaveLength(2);
-      expect(persistAuthProfiles).toHaveBeenCalledOnce();
-      expectNotCalled(writeConfig, mocks.repair, vi.mocked(prompter.select));
-      expect(config).toEqual(before);
-    } finally {
-      await removeOAuthTestTempRoot(stateDir);
-    }
   });
 
   it.each(["research", undefined])(

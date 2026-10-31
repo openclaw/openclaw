@@ -71,21 +71,24 @@ it.each(
     const groups = [...container.querySelectorAll<HTMLElement>(".chat-group")];
     const normalGroup = groups[0]!;
     const reference = rect(normalGroup, ".chat-group-messages");
-    const expectedGutter = width === 1440 ? 46 : 0;
-    expect(reference.x - normalGroup.getBoundingClientRect().x).toBeCloseTo(expectedGutter, 1);
     if (width === 1440) {
-      expect(rect(normalGroup, ".chat-avatar").top).toBeCloseTo(reference.top, 1);
+      const avatar = rect(normalGroup, ".chat-avatar");
+      expect(reference.x - avatar.right).toBeCloseTo(10, 1);
+      expect(avatar.top).toBeCloseTo(reference.top, 1);
+    } else {
+      expect(reference.x).toBeCloseTo(normalGroup.getBoundingClientRect().x, 1);
     }
     for (const group of groups.slice(1)) {
       const content = rect(group, ".chat-group-messages");
       expect(content.x).toBeCloseTo(reference.x, 1);
       expect(content.width).toBeCloseTo(reference.width, 1);
-      expect(content.x - group.getBoundingClientRect().x).toBeCloseTo(expectedGutter, 1);
       const hasAvatar = agentId === "research";
       const gutterAvatar = group.querySelector(":scope > .chat-avatar, :scope > .chat-avatar-slot");
       expect(Boolean(gutterAvatar)).toBe(hasAvatar);
       if (width === 1440 && gutterAvatar) {
-        expect(gutterAvatar.getBoundingClientRect().top).toBeCloseTo(content.top, 1);
+        const avatar = gutterAvatar.getBoundingClientRect();
+        expect(content.x - avatar.right).toBeCloseTo(10, 1);
+        expect(avatar.top).toBeCloseTo(content.top, 1);
       }
       const attribution = query(group, ".chat-reply-attribution");
       const inlineAvatar = attribution.querySelector(".chat-reply-attribution__agent-avatar");

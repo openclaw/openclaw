@@ -59,6 +59,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
   resetLegacyWorkspaceStateCheckForTest();
@@ -198,6 +199,35 @@ it("accepts attested historical AGENTS.md while ignoring retired generated hashe
   await expect(ensureWorkspace()).resolves.toMatchObject({ dir: tempDir });
   await expectPathMissing(workspacePath(BOOTSTRAP));
 });
+
+it.each([SOUL, IDENTITY, USER])(
+  "keeps an attested historical %s pending across restarts until edited",
+  async (fileName) => {
+    await ensureWorkspace();
+    const snapshot = await readWorkspaceStateSnapshot(tempDir);
+    const oldTemplate = `# ${fileName}\n\nInstructions from an earlier default template.\n`;
+    await writeWorkspaceFile(fileName, oldTemplate);
+    const generatedHashes = new Map(snapshot.attestation!.generatedHashes);
+    const generatedHash = createHash("sha256").update(oldTemplate).digest("hex");
+    generatedHashes.set(fileName, generatedHash);
+    await attest(generatedHashes);
+
+    for (let restart = 0; restart < 2; restart++) {
+      closeOpenClawStateDatabaseForTest();
+      await expect(ensureWorkspace()).resolves.toMatchObject({ bootstrapPending: true });
+      await fs.access(workspacePath(BOOTSTRAP));
+      const current = await readWorkspaceStateSnapshot(tempDir);
+      expect(current.setup).toEqual(snapshot.setup);
+      expect(current.attestation!.generatedHashes.get(fileName)).toBe(generatedHash);
+      expect(await readWorkspaceFile(fileName)).toBe(oldTemplate);
+      await ensureWorkspace(false);
+    }
+
+    await writeWorkspaceFile(fileName, "A real profile update.\n");
+    await expect(ensureWorkspace()).resolves.toMatchObject({ bootstrapPending: false });
+    await expectCompletedWithoutBootstrap(tempDir);
+  },
+);
 
 it("accepts a recently attested workspace when only custom skills survive", async () => {
   await ensureWorkspace();

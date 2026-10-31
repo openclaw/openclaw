@@ -72,7 +72,7 @@ export function registerAdmissionDrainControlTests({
         onInterrupt: () => interrupted.resolve(),
       });
       setSubagentControlDepsForTest({
-        clearSessionQueues: () => ({ followupCleared: 0, keys: [] }),
+        clearSessionQueues: () => [],
       });
 
       const dispatch = vi.fn(async () => {});
@@ -395,7 +395,7 @@ export function registerQueuedReservationFailureTests({
       ),
     );
     setSubagentControlDepsForTest({
-      clearSessionQueues: () => ({ followupCleared: 0, keys: [] }),
+      clearSessionQueues: () => [],
     });
     if (failure === "claim release") {
       const operation = createReplyOperation({

@@ -32,6 +32,25 @@ repo_root() {
   (cd "$base_dir/.." && pwd)
 }
 
+show_pr_workspace() {
+  local root state
+  root=$(repo_root) || return 1
+  state=$(pr_worktree_state "$root/.worktrees/pr-$1" "" entry) || return 1
+  node - "$root" "$state" <<'EOF_WORKSPACE'
+const path = require("node:path");
+const [canonicalRoot, stateJson] = process.argv.slice(2);
+const state = JSON.parse(stateJson);
+const artifactDirectory = path.join(state.path, ".local");
+process.stdout.write(JSON.stringify({
+  canonicalRoot,
+  commonGitDir: state.common,
+  worktree: state.path,
+  artifactDirectory,
+  reviewJson: path.join(artifactDirectory, "review.json"),
+}) + "\n");
+EOF_WORKSPACE
+}
+
 ensure_gh_api_auth() {
   local context login
   # Keep credential selection in non-exported process memory; never record it in artifacts.
@@ -181,6 +200,30 @@ check_prep_baseline_transition() {
     "$command" "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"
 }
 
+prefetch_review_transition_objects() {
+  # Path-based restore fetches cold blobs individually. Refetch skips Git's
+  # local-history negotiation; bounded batches keep each fetch small. Retain
+  # one restore because directory/file replacements can span path batches.
+  GIT_NO_LAZY_FETCH=1 pr_git rev-list --objects --missing=print --no-object-names \
+    --quiet --max-count=1 "$1" |
+    {
+      local oid
+      local batch=()
+      while IFS= read -r oid; do
+        case "$oid" in \?*) batch+=("${oid#?}") ;; *) continue ;; esac
+        if [ "${#batch[@]}" -eq 1024 ]; then
+          printf '%s\n' "${batch[@]}" |
+            fetch_canonical_ref "${batch[0]}" --stdin --refetch --no-write-fetch-head || return 1
+          batch=()
+        fi
+      done
+      if [ "${#batch[@]}" -gt 0 ]; then
+        printf '%s\n' "${batch[@]}" |
+          fetch_canonical_ref "${batch[0]}" --stdin --refetch --no-write-fetch-head || return 1
+      fi
+    }
+}
+
 recover_review_transition() {
   local pr="$1"
   local journal=.local/review-transition.json
@@ -216,6 +259,8 @@ recover_review_transition() {
     return 1
   fi
 
+  # Network preparation precedes the existing admission immediately before writes.
+  prefetch_review_transition_objects "$target" || return 1
   validate_review_transition_state "$pr" "$source" "$target" || return 1
   if [ "$mode" = prep ]; then
     validate_prep_baseline_transition install-transition "$pr" "$source" "$target" "$branch" || return 1
@@ -261,6 +306,16 @@ recover_review_transition() {
     return 1
   fi
   rm -f "$journal"
+}
+
+review_transition_recover() {
+  local pr="$1" plan="$2" seal="$3"
+  # Containment-only entry must not replay the transition we are repairing.
+  enter_worktree "$pr" false true || return 1
+  mark_pr_operation_side_effects_started || return 1
+  node "$(dirname "${BASH_SOURCE[0]}")/review-transition-recovery.mjs" \
+    "$pr" "$plan" "$seal" "$(repo_root)" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" \
+    "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID"
 }
 
 checkout_pr_worktree_target() {
@@ -683,6 +738,22 @@ gc_pr_worktrees() {
       else
         echo "skipping $dir (PR #$pr operation lock state is indeterminate)"
       fi
+      continue
+    fi
+    # A failed clone has no review state or PR registration. Retire only its
+    # directory, even while the PR is open; keep branches for a native retry.
+    local checkout_state
+    if checkout_state=$(pr_worktree_state "$dir" "" entry) &&
+      printf '%s\n' "$checkout_state" | jq -e '.failedTemplateClone' >/dev/null; then
+      if remove_worktree_if_present "$dir" "$dry_run"; then
+        if [ "$dry_run" = true ]; then
+          echo "would remove $dir (failed template clone)"
+        else
+          echo "removed $dir (failed template clone)"
+        fi
+        removed=$((removed + 1))
+      fi
+      release_pr_operation_lock
       continue
     fi
     local state

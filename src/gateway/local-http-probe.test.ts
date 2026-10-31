@@ -6,6 +6,10 @@ import { createServer } from "node:https";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { waitForGatewayHttpReadiness } from "../cli/daemon-cli/restart-health-probe.js";
 import { startProxy } from "../infra/net/proxy/proxy-lifecycle.js";
@@ -22,20 +26,15 @@ const pin = (cert: string) =>
   new X509Certificate(cert).fingerprint256.replaceAll(":", "").toLowerCase();
 const liveBody = '{"ok":true,"status":"live"}';
 const respondLive: http.RequestListener = (_request, response) => response.end(liveBody);
+const servers: http.Server[] = [];
+const dirs = createSuiteTempRootTracker({ prefix: "openclaw-local-http-probe-" });
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map(closeHttpServer));
+  await dirs.cleanup();
+});
 async function listen(server: http.Server) {
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected an ephemeral TCP listener");
-  }
-  return address.port;
-}
-async function close(server: http.Server) {
-  server.closeAllConnections();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
+  servers.push(server);
+  return Number(new URL(await listenLoopback(server)).port);
 }
 function requestHttp(
   probe: ConfiguredGatewayLocalProbe,
@@ -78,23 +77,17 @@ test("reads detailed channel outages and retains status when the body exceeds it
       port,
       requireChannelHealth: false,
     });
-  try {
-    expect(await observe()).toEqual({
-      healthz: 200,
-      readyz: 503,
-      coreReady: true,
-      failingChannels: failing,
-    });
-    oversized = true;
-    expect(await observe()).toEqual({ healthz: 200, readyz: 503, coreReady: false });
-  } finally {
-    await close(server);
-  }
+  expect(await observe()).toEqual({
+    healthz: 200,
+    readyz: 503,
+    coreReady: true,
+    failingChannels: failing,
+  });
+  oversized = true;
+  expect(await observe()).toEqual({ healthz: 200, readyz: 503, coreReady: false });
 });
 
 describe("local TLS probes", () => {
-  const dirs = createSuiteTempRootTracker({ prefix: "openclaw-local-http-probe-" });
-  const servers: http.Server[] = [];
   let directory: string, certPath: string, port: number;
   let server: ReturnType<typeof createServer>,
     probe: ConfiguredGatewayLocalProbe,
@@ -105,18 +98,11 @@ describe("local TLS probes", () => {
     await writeFile(certPath, TEST_TLS_CERT_PEM);
     handler = respondLive;
     server = createServer(tls, (request, response) => handler(request, response));
-    servers.push(server);
     port = await listen(server);
     probe = createConfiguredGatewayLocalProbe(configFor(certPath));
   });
-  afterEach(async () => {
-    await Promise.all(servers.splice(0).map(close));
-    await dirs.cleanup();
-  });
   test("probes directly under a managed proxy while enforcing its certificate pin", async () => {
-    const paths: string[] = [];
     handler = (request, response) => {
-      paths.push(request.url ?? "");
       response.end(JSON.stringify({ ready: request.url === "/readyz" }));
     };
     // The configured private key is absent: client probes need only the public certificate.
@@ -132,7 +118,6 @@ describe("local TLS probes", () => {
           port,
         }),
       ).resolves.toEqual({ healthz: 200, readyz: 200 });
-      expect(paths).toEqual(expect.arrayContaining(["/healthz", "/readyz"]));
       for (const host of ["0.0.0.0", "::", "127.0.0.1"]) {
         await expect(
           requestHttp(probe, port, { host, pathname: "/readyz" }),
@@ -149,7 +134,6 @@ describe("local TLS probes", () => {
 
   test("keeps a WebSocket-first verified pin scoped to its endpoint", async () => {
     const secondServer = createServer(tls, respondLive);
-    servers.push(secondServer);
     const secondPort = await listen(secondServer);
     const first = await probe.resolveWebSocketTarget(port);
     expect(first).toEqual({
@@ -229,7 +213,7 @@ test.each(["silent", "dripping"])("bounds a %s native HTTP peer by one deadline"
   } finally {
     controller.abort();
     vi.useRealTimers();
-    await Promise.all([close(server), operation]);
+    await operation;
   }
 });
 
@@ -238,22 +222,18 @@ test("cancels pending readiness requests when the repair budget expires", async 
   const port = await listen(server);
   const controller = new AbortController();
   const aborted = new Error("repair-budget");
-  try {
-    const received = once(server, "request");
-    const pending = waitForGatewayHttpReadiness({
-      attempts: 3,
-      deadlineAt: performance.now() + 60_000,
-      delayMs: 500,
-      port,
-      signal: controller.signal,
-    });
-    const rejected = expect(pending).rejects.toBe(aborted);
-    await received;
-    controller.abort(aborted);
-    await rejected;
-  } finally {
-    await close(server);
-  }
+  const received = once(server, "request");
+  const pending = waitForGatewayHttpReadiness({
+    attempts: 3,
+    deadlineAt: performance.now() + 60_000,
+    delayMs: 500,
+    port,
+    signal: controller.signal,
+  });
+  const rejected = expect(pending).rejects.toBe(aborted);
+  await received;
+  controller.abort(aborted);
+  await rejected;
 });
 
 test.each(["http", "websocket"] as const)(

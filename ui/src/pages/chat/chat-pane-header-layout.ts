@@ -4,13 +4,14 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { PresentationValue } from "../../lib/presentation.ts";
-import { detailsOutputsIcons } from "./chat-details-output-icons.tsx";
+import { captureChatDetailsSnapshot } from "./chat-details-snapshot.ts";
 import { chatGoalPresentation } from "./chat-goals.ts";
 import {
   canLoadChatBranches,
   getChatBranchesQueryState,
   loadChatBranches,
 } from "./chat-history-branches.ts";
+import { chatHistoryRequests } from "./chat-history-state.ts";
 import type { ChatMobileHost, MobileDetailsRoute } from "./chat-mobile-host.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -19,7 +20,11 @@ import type { ChatProps } from "./chat-view.tsx";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import type { ChatDetailsElements, ChatDetailsViewProps } from "./components/chat-details.tsx";
 import type { ChatPaneHeaderProps } from "./components/chat-pane-header.types.ts";
-import { chatPullRequestId } from "./components/chat-pull-requests.ts";
+import {
+  chatPullRequestId,
+  publicationPullRequest,
+  retainedPublication,
+} from "./components/chat-pull-requests.ts";
 import {
   getSessionWorkspace,
   isCurrentSessionWorkspace,
@@ -45,9 +50,34 @@ export type PaneDetailsActions = Pick<
   | "onOpenTaskProgressSettings"
   | "onClearSavedProgressCard"
   | "progressCardRefresh"
+  | "progressCardRefreshReserved"
 >;
 
 export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRender {
+  protected readonly showDetailsProcess = (instanceId?: string) => {
+    this.requestBackgroundPanel("processes", "open", {
+      instanceId: instanceId ?? null,
+      fromDetails: instanceId !== undefined,
+    });
+    this.navigateMobileHost({
+      area: "panels",
+      slot: "processes",
+      backTo: { area: "details" },
+    });
+  };
+
+  protected readonly returnToProcessDetails = () => {
+    if (!this.state) {
+      return;
+    }
+    if (this.usesMobileHost) {
+      this.mobileHost(this.state.sidebarLayout)?.back();
+    } else {
+      this.requestBackgroundPanel("processes", "close");
+      this.headerDetailsRef.value?.open(this.element);
+    }
+  };
+
   dashboardControls: Element | undefined = undefined;
   protected readonly setDashboardControls = (action: Element | undefined) => {
     if (this.dashboardControls === action) {
@@ -96,7 +126,12 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
         openDetailsPage({ kind: "pull-request", id: chatPullRequestId(request) }, request.title),
       publication: chatProps.githubPublication
         ? {
-            eligible: true,
+            // One PR keeps one pill: once its PR is listed, the PR pill continues the lifecycle.
+            eligible: Boolean(
+              ((!chatProps.pullRequestsBranchDismissed && chatProps.pullRequestsBranch) ||
+                retainedPublication(chatProps.githubPublication)) &&
+              !publicationPullRequest(chatProps.githubPublication, chatProps.pullRequests ?? []),
+            ),
             onOpen: (source) =>
               openDetailsPage(
                 { kind: "publication" },
@@ -158,9 +193,8 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
         (!sidebarLayout.expanded || sidebarLayout.expandedSide === true) &&
         !isSidebarNewTabActive(sidebarLayout) &&
         Boolean(side),
-      dashboard: false,
     };
-    destinations.dashboard =
+    const showDashboardControls =
       this.dashboardControls !== undefined &&
       ((destinations.main && main?.slot === "dashboard") ||
         (destinations.side && side?.slot === "dashboard") ||
@@ -168,7 +202,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
     nativeHeader.panelActionDestinations = destinations;
     nativeHeader.setDashboardControls = this.setDashboardControls;
     const dashboard = panelDefinitions.find((definition) => definition.slot === "dashboard");
-    if (dashboard?.view?.dashboard && destinations.dashboard) {
+    if (dashboard?.view?.dashboard && showDashboardControls) {
       dashboard.view.dashboard.controls = this.dashboardControls;
     }
     if (headerDetails?.mobileBindings) {
@@ -201,7 +235,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
     chatProps: ChatProps;
     paneChatProps: ChatProps;
     detailsActions: PaneDetailsActions;
-    subagentStop: { onAbort: () => void } | undefined;
+    subagentStop: { target: string; onAbort: () => void } | undefined;
     ownsSubagentsPanel: boolean;
     mobileHost: ChatMobileHost | undefined;
     sidebarLayout: SidebarLayout;
@@ -224,7 +258,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
       panePresentation,
       conversationVisible,
     } = input;
-    const detailsOutputs = this.captureDetailsOutputs(detailsOutputsIcons);
+    const detailsOutputs = this.captureDetailsOutputs();
     const diffWorkspace = getSessionWorkspace(state);
     const diffContent = resolveSessionDiffSidebarContent(state);
     const environment =
@@ -261,12 +295,22 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
           }
         : undefined;
     const detailsProgress = this.detailsProgressCardPresentation;
+    const cached = captureChatDetailsSnapshot(state);
     const conversationMain =
       (sidebarMainPanel(sidebarLayout)?.slot ?? "conversation") === "conversation";
     const headerDetails: ChatDetailsViewProps | undefined = ownsSubagentsPanel
       ? {
           elements,
           chat: merge(paneChatProps, detailsActions, detailsOutputs, {
+            cachedDetails: cached?.details,
+            onDetailsSnapshot: cached?.write,
+            selectedSession: paneChatProps.transcriptMetadata
+              ? {
+                  ...selectedSession,
+                  ...paneChatProps.transcriptMetadata,
+                  sessionId: state.currentSessionId ?? undefined,
+                }
+              : selectedSession,
             environment,
             outputs: detailsOutputs.outputs
               ? {
@@ -305,7 +349,9 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
                     : detailsOutputs.outputs.dashboard,
                 }
               : undefined,
-            progressCard: detailsProgress?.card ?? null,
+            progressCard:
+              detailsProgress?.card ??
+              (this.detailsProgressCardInitialLoading ? cached?.snapshot.progressCard : null),
             progressCardIdentity: detailsProgress?.identity,
             progressCardLifetime: detailsProgress?.lifetime,
             progressCardInitialLoading: this.detailsProgressCardInitialLoading,
@@ -333,14 +379,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
                 backTo: { area: "details" },
               });
             },
-            onOpenProcesses: () => {
-              this.requestBackgroundPanel("processes", "open");
-              this.navigateMobileHost({
-                area: "panels",
-                slot: "processes",
-                backTo: { area: "details" },
-              });
-            },
+            onOpenProcesses: this.showDetailsProcess,
           } satisfies Partial<ChatDetailsProps>),
           mobileBindings: {
             sharing: this.prepareSessionSharing(selectedSession, {
@@ -348,6 +387,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
             }),
             goal: {
               connected: chatProps.connected,
+              resumeBusy: chatProps.goalResumeBusy,
               canAct:
                 chatProps.connected &&
                 chatProps.canSend &&
@@ -371,6 +411,9 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
           mobile: this.mergedChrome && !this.onBackToSubagents,
           nativePresentation: this.sessionPresentation,
           mobileHost,
+          contentPending:
+            this.deferredSessionHydration !== null ||
+            chatHistoryRequests(state).initialSnapshotHydration?.titlePending === true,
           // Details reserves header-owned geometry during retained navigation previews.
           presentation:
             this.sessionPresentation === "desktop" ? headerPresentation : panePresentation,

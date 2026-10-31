@@ -1,8 +1,8 @@
+import { withFreshOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
   isPostgresSqlConnection,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { withFreshOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,

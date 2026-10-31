@@ -39,7 +39,17 @@ function formatPlan(plan: MigrationPlan, mode: FormatMode): string[] {
       const message = formatItemMessage(item, mode);
       const messageSuffix = message ? ` ${theme.muted(`(${message})`)}` : "";
       const sensitive = item.sensitive ? " [sensitive]" : "";
-      const prefix = formatItemPrefix(item);
+      let prefix = "• ";
+      if (item.kind === "manual") {
+        prefix = "🔍 ";
+      } else if (item.kind === "archive") {
+        prefix = "📖 ";
+      } else {
+        const glyph = RESULT_STATUS_GLYPHS[item.status];
+        if (glyph) {
+          prefix = `${glyph} `;
+        }
+      }
       lines.push(`${prefix}${name}${sensitive}${messageSuffix}`);
     }
   }
@@ -161,20 +171,6 @@ const RESULT_STATUS_GLYPHS: Record<string, string> = {
   skipped: "⏭️ ",
   conflict: "⚠️ ",
 };
-
-function formatItemPrefix(item: MigrationItem): string {
-  if (item.kind === "manual") {
-    return "🔍 ";
-  }
-  if (item.kind === "archive") {
-    return "📖 ";
-  }
-  const glyph = RESULT_STATUS_GLYPHS[item.status];
-  if (glyph) {
-    return `${glyph} `;
-  }
-  return "• ";
-}
 
 /** Throws when a plan still contains conflicts that require explicit overwrite. */
 export function assertConflictFreePlan(plan: MigrationPlan, providerId: string): void {

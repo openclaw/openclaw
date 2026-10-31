@@ -99,12 +99,7 @@
   border: 1.5px solid color-mix(in srgb, currentColor 25%, transparent);
   border-top-color: currentColor;
   border-radius: 50%;
-  animation: session-worker-stop-spin 0.8s linear infinite;
-}
-@keyframes session-worker-stop-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: btn-spinner-spin 0.8s linear infinite;
 }
 @media (max-width: 640px) {
   .session-worker-stop {

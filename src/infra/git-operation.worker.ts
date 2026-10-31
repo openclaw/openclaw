@@ -27,11 +27,15 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
                 ({ executeWorkspaceInventoryComputation }) =>
                   executeWorkspaceInventoryComputation(command),
               );
+            case "workspace.manifest.local":
             case "workspace.manifest.capture":
+            case "workspace.manifest.base-refresh":
+            case "workspace.manifest.equal":
             case "workspace.manifest.snapshot":
             case "workspace.manifest.document":
             case "workspace.manifest.reference":
             case "workspace.manifest.parse":
+            case "workspace.manifest.paths":
             case "workspace.manifest.serialize":
             case "workspace.manifest.overlay":
             case "workspace.manifest.pair":
@@ -128,6 +132,9 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
       return { ok: true, value, revisionUnavailableReason: diffTiming?.revisionUnavailableReason };
     } catch (error) {
       return { ok: false, error: serializeGitWorkerFailure(error) };
+    } finally {
+      // V8 retains the last successful regex input, including task-owned checkout paths.
+      /(?:)/.test("");
     }
   },
   {

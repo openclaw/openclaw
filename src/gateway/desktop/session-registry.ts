@@ -199,8 +199,7 @@ export function createDesktopSessionRegistry() {
       return;
     }
     clearTimeout(entry.lingerTimer);
-    entry.lingerTimer = setTimeout(() => void stopEntry(entry), DEFAULT_LINGER_MS);
-    entry.lingerTimer.unref?.();
+    entry.lingerTimer = setTimeout(() => void stopEntry(entry), DEFAULT_LINGER_MS).unref();
   };
 
   const waitForReady = async (entry: DesktopSessionEntry): Promise<DesktopSessionStartResult> => {
@@ -429,8 +428,7 @@ export function createDesktopSessionRegistry() {
             }
           },
           Math.max(0, expiresAtMs - Date.now()),
-        );
-        unclaimedTimer.unref?.();
+        ).unref();
       },
       stop: stopStream,
     };

@@ -1,10 +1,14 @@
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeAll, expect, it } from "vitest";
+import { DiscordError } from "./internal/rest-errors.js";
 import {
   createDiscordOutboundHoisted,
   installDiscordOutboundModuleSpies,
+  mockDiscordBoundThreadManager,
   resetDiscordOutboundMocks,
 } from "./outbound-adapter.test-harness.js";
+import { sendMessageDiscord } from "./send.outbound.js";
+import { makeDiscordRest, requestBody } from "./send.test-harness.js";
 
 const hoisted = createDiscordOutboundHoisted();
 await installDiscordOutboundModuleSpies(hoisted);
@@ -136,3 +140,69 @@ it("backs declared durable-final capabilities with outbound send proofs", async 
     },
   });
 });
+
+it.each([
+  { source: "explicit", mode: "off", replies: ["parent-message", "parent-message"] },
+  { source: "implicit", mode: "first", replies: ["parent-message", undefined] },
+] as const)(
+  "sends $source bound-thread replies through the native message endpoint",
+  async ({ source, mode, replies }) => {
+    resetDiscordOutboundMocks(hoisted);
+    mockDiscordBoundThreadManager(hoisted);
+    const sendText = discordPlugin.message?.send?.text;
+    if (!sendText) {
+      throw new Error("Expected Discord text sender");
+    }
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ id: "thread-1", type: 11 });
+    postMock.mockResolvedValueOnce({ id: "native-reply-1", channel_id: "thread-1" });
+    postMock.mockResolvedValueOnce({ id: "native-reply-2", channel_id: "thread-1" });
+    const cfg = { channels: { discord: { token: "fixture-token" } } };
+    const result = await sendText({
+      cfg,
+      to: "channel:parent-1",
+      accountId: "default",
+      threadId: "thread-1",
+      text: "x".repeat(2001),
+      replyToId: "parent-message",
+      replyToIdSource: source,
+      replyToMode: mode,
+      deps: {
+        discord: async (...[to, text, options]: Parameters<typeof sendMessageDiscord>) =>
+          await sendMessageDiscord(to, text, { ...options, cfg, rest, token: "fixture-token" }),
+      },
+    });
+    expect(hoisted.sendWebhookMessageDiscordMock).not.toHaveBeenCalled();
+    expect(postMock).toHaveBeenCalledTimes(2);
+    expect([0, 1].map((index) => requestBody(postMock, index).message_reference)).toEqual(
+      replies.map((messageId) =>
+        messageId ? { message_id: messageId, fail_if_not_exists: false } : undefined,
+      ),
+    );
+    expect(result.receipt.parts.map((part) => part.replyToId)).toEqual(replies);
+
+    postMock.mockRejectedValueOnce(
+      new DiscordError(new Response(null, { status: 403 }), {
+        code: 50013,
+        message: "Missing Permissions",
+      }),
+    );
+    await expect(
+      sendText({
+        cfg,
+        to: "channel:parent-1",
+        accountId: "default",
+        threadId: "thread-1",
+        text: "permission failure",
+        replyToId: "parent-message",
+        replyToIdSource: source,
+        replyToMode: mode,
+        deps: {
+          discord: async (...[to, text, options]: Parameters<typeof sendMessageDiscord>) =>
+            await sendMessageDiscord(to, text, { ...options, cfg, rest, token: "fixture-token" }),
+        },
+      }),
+    ).rejects.toThrow(/missing permissions/i);
+    expect(hoisted.sendWebhookMessageDiscordMock).not.toHaveBeenCalled();
+  },
+);

@@ -2,11 +2,11 @@ import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runFinalConfigValidationHealth } from "./doctor-config-validation-findings.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { runCoreHealthFindingNote } from "./doctor-health-contribution-core.js";
 import {
   collectWriteConfigHealthFindings,
-  runFinalConfigValidationHealth,
   runWriteConfigHealth,
 } from "./doctor-health-contribution-runners.config.js";
 import {
@@ -23,13 +23,7 @@ import {
   runWebFetchProxyHealth,
   runWhatsappResponsivenessHealth,
 } from "./doctor-health-contribution-runners.gateway.js";
-import {
-  runHeartbeatCadenceMigrationHealth,
-  runHeartbeatScratchMigrationHealth,
-  runHeartbeatTaskMigrationHealth,
-  runMemorySearchHealthContribution,
-  runToolsMdMigrationHealth,
-} from "./doctor-health-contribution-runners.workspace.js";
+import { runMemorySearchHealthContribution } from "./doctor-health-contribution-runners.workspace.js";
 import type {
   DoctorHealthCheckContext,
   DoctorHealthContribution,
@@ -351,7 +345,15 @@ export function resolveFinalDoctorHealthContributions(params: {
             return collectHeartbeatCadenceMigrationFindings(ctx.cfg, ctx.env);
           },
         },
-        run: runHeartbeatCadenceMigrationHealth,
+        async run(ctx) {
+          const { maybeMigrateHeartbeatCadenceToCron } =
+            await import("../commands/doctor-heartbeat-retirement.js");
+          await maybeMigrateHeartbeatCadenceToCron({
+            cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
+            shouldRepair: ctx.prompter.shouldRepair,
+            env: ctx.env,
+          });
+        },
       },
     ),
     createDoctorHealthContribution(
@@ -364,10 +366,18 @@ export function resolveFinalDoctorHealthContributions(params: {
           async detect(ctx) {
             const { collectHeartbeatScratchMigrationFindings } =
               await import("../commands/doctor-heartbeat-scratch-migration.js");
-            return collectHeartbeatScratchMigrationFindings(ctx.cfg);
+            return collectHeartbeatScratchMigrationFindings(ctx.cfg, ctx.env);
           },
         },
-        run: runHeartbeatScratchMigrationHealth,
+        async run(ctx) {
+          const { maybeMigrateHeartbeatCadenceToCron } =
+            await import("../commands/doctor-heartbeat-retirement.js");
+          await maybeMigrateHeartbeatCadenceToCron({
+            cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
+            shouldRepair: ctx.prompter.shouldRepair,
+            env: ctx.env,
+          });
+        },
       },
     ),
     createDoctorHealthContribution("doctor:tools-md-migration", "TOOLS.md migration", {
@@ -380,7 +390,14 @@ export function resolveFinalDoctorHealthContributions(params: {
           return collectToolsMdMigrationFindings(ctx.cfg);
         },
       },
-      run: runToolsMdMigrationHealth,
+      async run(ctx) {
+        const { maybeMigrateToolsMd } = await import("../commands/doctor-tools-md-migration.js");
+        await maybeMigrateToolsMd({
+          cfg: ctx.cfg,
+          shouldRepair: ctx.prompter.shouldRepair,
+          env: ctx.env,
+        });
+      },
     }),
     createDoctorHealthContribution(
       "doctor:heartbeat-task-cron-migration",
@@ -395,7 +412,15 @@ export function resolveFinalDoctorHealthContributions(params: {
             return collectHeartbeatTaskMigrationFindings(ctx.cfg, ctx.env);
           },
         },
-        run: runHeartbeatTaskMigrationHealth,
+        async run(ctx) {
+          const { maybeMigrateHeartbeatTasksToCron } =
+            await import("../commands/doctor-heartbeat-task-migration.js");
+          await maybeMigrateHeartbeatTasksToCron({
+            cfg: ctx.cfg,
+            shouldRepair: ctx.prompter.shouldRepair,
+            env: ctx.env,
+          });
+        },
       },
     ),
     createDoctorHealthContribution("doctor:shell-completion", "Shell completion", {

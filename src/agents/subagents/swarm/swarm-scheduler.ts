@@ -89,6 +89,7 @@ const runLocations = new Map<
   | { lane: SwarmGroupLane; state: "active"; item?: QueuedSwarmRun }
   | { lane: SwarmGroupLane; state: "queued"; item: QueuedSwarmRun }
 >();
+let reservationRevision = 0;
 
 function publishCapacityChange(item: QueuedSwarmRun) {
   if (!item.owner) {
@@ -228,11 +229,7 @@ function pumpLane(lane: SwarmGroupLane) {
   });
 }
 
-function ensureLane(params: {
-  groupId: string;
-  maxConcurrent: number;
-  activeRunIds: readonly string[];
-}): SwarmGroupLane {
+function ensureLane(params: Parameters<typeof reserveSwarmRun>[0]): SwarmGroupLane {
   const lane = lanes.get(params.groupId) ?? {
     groupId: params.groupId,
     limit: params.maxConcurrent,
@@ -289,10 +286,16 @@ export function bindSwarmRunReservation(
   const item = runLocations.get(runId)?.item;
   if (item && item.owner === undefined) {
     item.owner = owner;
+    reservationRevision++;
     item.onCapacityChange = onCapacityChange;
     notifyGatewayWorkMetricsChanged();
     publishCapacityChange(item);
   }
+}
+
+/** Retire derived ownership facts only when reservation ownership changes. */
+export function readSwarmReservationRevision(): number {
+  return reservationRevision;
 }
 
 /** Includes held/preactivation work and the launch awaiting Gateway acceptance. */
@@ -342,20 +345,6 @@ export function activateSwarmRun(
   pumpLane(lane);
 }
 
-export function enqueueSwarmRun(
-  params: SwarmLaunch & {
-    groupId: string;
-    runId: string;
-    maxConcurrent: number;
-    activeRunIds: readonly string[];
-  },
-): void {
-  if (!reserveSwarmRun(params)) {
-    throw new Error(`swarm scheduler run already exists: ${params.runId}`);
-  }
-  activateSwarmRun(params);
-}
-
 export function releaseSwarmRun(runId: string): boolean {
   const location = runLocations.get(runId);
   if (!location || location.state !== "active") {
@@ -364,6 +353,9 @@ export function releaseSwarmRun(runId: string): boolean {
   const previouslyFull = location.lane.active.size >= location.lane.limit;
   location.lane.active.delete(runId);
   runLocations.delete(runId);
+  if (location.item?.owner !== undefined) {
+    reservationRevision++;
+  }
   notifyGatewayWorkMetricsChanged();
   publishLaneCapacityChange(location.lane, previouslyFull);
   pumpLane(location.lane);
@@ -379,6 +371,9 @@ function removeQueuedSwarmRun(runId: string): boolean {
   const index = location.lane.queue.indexOf(location.item);
   location.lane.queue.splice(index, 1);
   runLocations.delete(runId);
+  if (location.item.owner !== undefined) {
+    reservationRevision++;
+  }
   notifyGatewayWorkMetricsChanged();
   void finalizeRemovedRun(location.item);
   publishCapacityChange(location.item);
@@ -483,24 +478,5 @@ export function holdQueuedSwarmRun(runId: string) {
         (await item.removal) && !item.pendingLaunch && item.removalReason === "cancelled",
       );
     },
-  };
-}
-
-const testing = {
-  reset() {
-    for (const location of runLocations.values()) {
-      location.item?.removeAbortListener?.();
-    }
-    lanes.clear();
-    runLocations.clear();
-    notifyGatewayWorkMetricsChanged();
-    pendingRemovals.clear();
-    pendingLaunches.clear();
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.swarmSchedulerTestApi")] = {
-    testing,
   };
 }

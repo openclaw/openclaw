@@ -68,6 +68,8 @@ export async function phase(element: HTMLElement, value: "open" | "hidden"): Pro
   await expect
     .poll(() => [element.matches(":popover-open"), element.dataset.phase], {
       message: `${element.id} native visibility and completed phase`,
+      // Native frame and animation settlement can exceed the default poll window on WebKit CI.
+      timeout: 5_000,
     })
     .toEqual([value === "open", value]);
 }

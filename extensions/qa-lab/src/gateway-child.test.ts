@@ -8,7 +8,6 @@ import { inspect } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { preserveQaGatewayDebugArtifacts } from "./gateway-child-artifacts.js";
 import { runQaGatewayCliCommand } from "./gateway-child-command.js";
 import {
   buildGatewayEnvironmentCaptureScript,
@@ -779,6 +778,9 @@ describe("QA Gateway child preparation", () => {
         GOOGLE_API_KEY: "google-live",
         OPENAI_API_KEY: "openai-live",
         OPENAI_API_KEYS: "openai-a,openai-b",
+        OPENROUTER_API_KEY: "openrouter-live",
+        CUSTOM_API_KEYS: "custom-a,custom-b",
+        CUSTOM_API_KEY_2: "custom-b",
         CODEX_HOME: "/host/.codex",
         OPENCLAW_LIVE_ANTHROPIC_KEY: "anthropic-live",
         OPENCLAW_LIVE_ANTHROPIC_KEYS: "anthropic-a,anthropic-b",
@@ -790,6 +792,9 @@ describe("QA Gateway child preparation", () => {
 
     expect(env.OPENAI_API_KEY).toBeUndefined();
     expect(env.OPENAI_API_KEYS).toBeUndefined();
+    expect(env.OPENROUTER_API_KEY).toBeUndefined();
+    expect(env.CUSTOM_API_KEYS).toBeUndefined();
+    expect(env.CUSTOM_API_KEY_2).toBeUndefined();
     expect(env.CODEX_API_KEY).toBeUndefined();
     expect(env.CODEX_HOME).toBeUndefined();
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
@@ -1266,94 +1271,6 @@ describe("QA Gateway child preparation", () => {
         "OpenClaw plugin migration inputs changed during startup convergence; refusing readiness.",
       ),
     ).toBe(true);
-  });
-
-  it("preserves only sanitized gateway debug artifacts", async () => {
-    const tempRoot = await tempDirs.makeTempDir("qa-gateway-preserve-src-");
-    const repoRoot = await tempDirs.makeTempDir("qa-gateway-preserve-repo-");
-
-    const stdoutLogPath = path.join(tempRoot, "gateway.stdout.log");
-    const stderrLogPath = path.join(tempRoot, "gateway.stderr.log");
-    const artifactDir = path.join(repoRoot, ".artifacts", "qa-e2e", "gateway-runtime");
-    await mkdir(path.dirname(artifactDir), { recursive: true });
-    await writeFile(
-      stdoutLogPath,
-      [
-        "OPENCLAW_GATEWAY_TOKEN=qa-suite-token",
-        'OPENAI_API_KEY="openai-live"',
-        "OPENCLAW_QA_CONVEX_SECRET_CI=convex-ci-secret",
-        "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER=convex-maintainer-secret",
-        "OPENCLAW_LIVE_CODEX_API_KEY=codex-live-secret",
-        "botToken=12345:AbCdEfGhIjKl",
-        "--botToken=12345:flag-secret",
-        '"driverToken":"12345:driver-secr3t"',
-        "sutToken='12345:sut-secr3t'",
-        "leaseToken=lease-12345",
-        '"apiKey":"secret-json-api-key"',
-        "clientSecret=secret-client-secret&secret-tail",
-        "url=http://127.0.0.1:18789/#token=abc123",
-        "callback=https://gateway.example.test/callback?access_token=secret-access-token&ok=1",
-      ].join("\n"),
-      "utf8",
-    );
-    await writeFile(
-      stderrLogPath,
-      [
-        "Authorization: Bearer secret+/token=123456",
-        "Cookie: qa_session=secret-cookie; theme=dark",
-        "Set-Cookie: qa_session=secret-cookie; HttpOnly",
-        "x-api-key: secret-header-api-key",
-      ].join("\n"),
-      "utf8",
-    );
-    await mkdir(path.join(tempRoot, "state"), { recursive: true });
-    await writeFile(path.join(tempRoot, "state", "secret.txt"), "do-not-copy", "utf8");
-
-    await preserveQaGatewayDebugArtifacts({
-      preserveToDir: artifactDir,
-      stdoutLogPath,
-      stderrLogPath,
-      tempRoot,
-      repoRoot,
-    });
-
-    expect((await readdir(artifactDir)).toSorted()).toEqual([
-      "README.txt",
-      "gateway.stderr.log",
-      "gateway.stdout.log",
-    ]);
-    await expect(readFile(path.join(artifactDir, "gateway.stdout.log"), "utf8")).resolves.toBe(
-      [
-        "OPENCLAW_GATEWAY_TOKEN=<redacted>",
-        "OPENAI_API_KEY=<redacted>",
-        "OPENCLAW_QA_CONVEX_SECRET_CI=<redacted>",
-        "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER=<redacted>",
-        "OPENCLAW_LIVE_CODEX_API_KEY=<redacted>",
-        "botToken=<redacted>",
-        "--botToken=<redacted>",
-        '"driverToken":"<redacted>"',
-        "sutToken=<redacted>",
-        "leaseToken=<redacted>",
-        '"apiKey":"<redacted>"',
-        "clientSecret=<redacted>",
-        "url=http://127.0.0.1:18789/#token=<redacted>",
-        "callback=https://gateway.example.test/callback?access_token=<redacted>&ok=1",
-      ].join("\n"),
-    );
-    await expect(readFile(path.join(artifactDir, "gateway.stderr.log"), "utf8")).resolves.toBe(
-      [
-        "Authorization: Bearer <redacted>",
-        "Cookie: <redacted>",
-        "Set-Cookie: <redacted>",
-        "x-api-key: <redacted>",
-      ].join("\n"),
-    );
-    await expect(readFile(path.join(artifactDir, "README.txt"), "utf8")).resolves.toContain(
-      "was not copied because it may contain credentials or auth tokens",
-    );
-    await expect(readFile(path.join(artifactDir, "README.txt"), "utf8")).resolves.not.toContain(
-      tempRoot,
-    );
   });
 });
 

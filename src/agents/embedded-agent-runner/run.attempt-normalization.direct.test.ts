@@ -1,23 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  createMockUsage,
-  makeEmbeddedRunnerAttempt,
-} from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { createEmbeddedRunReplayState } from "./replay-state.js";
+import { createMockUsage } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
+import {
+  makeAttempt,
+  makeNormalizationInput,
+  makePromptState,
+} from "./run/attempt-normalization.test-support.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import { MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT } from "./run/idle-timeout-breaker.js";
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
-import { createUsageAccumulator, toNormalizedUsage } from "./usage-accumulator.js";
-
-function makeAttempt(
-  preflightRecovery?: EmbeddedRunAttemptResult["preflightRecovery"],
-  overrides: Partial<EmbeddedRunAttemptResult> = {},
-): EmbeddedRunAttemptResult {
-  return makeEmbeddedRunnerAttempt({ sessionIdUsed: "session-1", preflightRecovery, ...overrides });
-}
+import { toNormalizedUsage } from "./usage-accumulator.js";
 
 function withAssistant(assistant: ReturnType<typeof makeCliUsageAssistant>) {
   return { lastAssistant: assistant as never, currentAttemptAssistant: assistant as never };
@@ -33,54 +26,6 @@ function makeCliUsageAssistant(stopReason: "aborted" | "error" | "stop", text = 
     usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
     stopReason,
     timestamp: 1,
-  };
-}
-
-function makePromptState(waitForPersistence = async () => {}) {
-  const activePrompt = { persisted: false, internal: false };
-  return {
-    sessionId: "session-1",
-    sessionFile: "agent:main:main",
-    activePrompt,
-    suppressNextUserMessagePersistence: false,
-    adoptSessionId: vi.fn(),
-    waitForCurrentUserMessagePersistence: vi.fn(waitForPersistence),
-    markOwnedTranscriptRetry: vi.fn(),
-    continueFromCurrentTranscript: vi.fn(),
-  };
-}
-
-function makeNormalizationInput(
-  attempt: EmbeddedRunAttemptResult,
-  sessionPromptState = makePromptState(),
-): Parameters<typeof normalizeEmbeddedRunAttempt>[0] {
-  return {
-    runInput: {
-      runParams: {
-        sessionId: "session-1",
-        config: {},
-      },
-      laneController: { throwIfAborted: vi.fn() },
-      fallbackConfigured: false,
-      startedAtMs: Date.now(),
-      resolvedSessionKey: "agent:main:main",
-    } as never,
-    preparedRuntime: {
-      nativeModelOwned: false,
-      model: { id: "gpt-5.6-luna" },
-      snapshot: () => ({}),
-    } as never,
-    dispatchedAttempt: { rawAttempt: attempt } as never,
-    sessionPromptState: sessionPromptState as never,
-    provider: "openai",
-    modelId: "gpt-5.6-luna",
-    bootstrapPromptWarningSignaturesSeen: [],
-    usageAccumulator: createUsageAccumulator(),
-    lastRunPromptUsage: undefined,
-    idleTimeoutBreakerState: { consecutiveIdleTimeoutsBeforeOutput: 0 },
-    contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-    replayState: createEmbeddedRunReplayState(),
-    lastRetryFailoverReason: null,
   };
 }
 
@@ -144,27 +89,6 @@ describe("normalizeEmbeddedRunAttempt", () => {
     expect(result.result.meta.agentMeta?.credentialSource).toEqual({ kind: "profile" });
   });
 
-  it("keeps attempt cost authoritative over a synthetic assistant zero-cost placeholder", async () => {
-    const assistant = {
-      ...makeCliUsageAssistant("stop"),
-      api: "openai-chatgpt-responses",
-      usage: createMockUsage(150_000, 100),
-    };
-    const attempt = makeAttempt(undefined, {
-      ...withAssistant(assistant),
-      attemptUsage: { input: 300_000, output: 200, cost: { total: 0.125 } },
-    });
-    const input = makeNormalizationInput(attempt);
-
-    await normalizeEmbeddedRunAttempt(input);
-
-    expect(toNormalizedUsage(input.usageAccumulator)).toMatchObject({
-      input: 300_000,
-      output: 200,
-    });
-    expect(toNormalizedUsage(input.usageAccumulator)?.cost).toEqual({ total: 0.125 });
-  });
-
   it("waits for pending user-turn persistence before deriving retry suppression", async () => {
     const persistence = createDeferred();
     const state = makePromptState(async () => {
@@ -210,7 +134,14 @@ describe("normalizeEmbeddedRunAttempt", () => {
         },
         continues
           ? truncatedCount
-            ? { attemptUsage: { input: 2_000, output: 100, total: 2_100 } }
+            ? {
+                ...withAssistant({
+                  ...assistant,
+                  api: "openai-chatgpt-responses",
+                  usage: createMockUsage(150_000, 100),
+                }),
+                attemptUsage: { input: 2_000, output: 100, total: 2_100, cost: { total: 0.125 } },
+              }
             : { toolMetas: [{ toolName: "read", isError: false }] }
           : { ...withAssistant(assistant), messagesSnapshot: [assistant] as never },
       );
@@ -258,6 +189,7 @@ describe("normalizeEmbeddedRunAttempt", () => {
         output: 100,
         total: 2_100,
       });
+      expect(toNormalizedUsage(input.usageAccumulator)?.cost).toEqual({ total: 0.125 });
     },
   );
 

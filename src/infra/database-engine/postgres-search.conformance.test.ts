@@ -1,15 +1,11 @@
-import path from "node:path";
 import { getEnvironmentData, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
-import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { PostgresSyncConnection } from "../postgres-sync/connection.js";
-import { publishSqliteDatabaseSchemaChange } from "../sqlite-database-admission.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
+import type { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import type { StoreSchema } from "./contract.js";
-import { openEngineStore, readEngineAnchor } from "./open.js";
+import { createPostgresEngineTestFixture } from "./engine-store.test-support.js";
 import { bindStoreSearch } from "./search.js";
 import type { TextQuery } from "./text-contract.js";
 
@@ -20,6 +16,7 @@ const schema: StoreSchema = {
   id: "search",
   version: 1,
   sqlite: "",
+  postgresVectorSearchVersion: 2,
   postgres: `CREATE TABLE notes (
     id TEXT PRIMARY KEY, ordinal BIGINT NOT NULL UNIQUE, text TEXT NOT NULL,
     model TEXT NOT NULL, source TEXT NOT NULL, embedding BYTEA
@@ -74,51 +71,17 @@ async function fixture(
   }) => void | Promise<void>,
 ) {
   expect(threadId, "The fixture host must retain the native admission descriptor").toBe(0);
-  const anchor = openNodeSqliteDatabase(path.join(dirs.make("pg-search-"), "anchor.sqlite"));
-  const connections: PostgresSyncConnection[] = [];
-  const open = () => {
-    const db = openEngineStore({
-      anchor,
-      schema,
-      input: { connection: connection!, schemaPrefix: "search_test" },
-      openSqlite: () => {
-        throw new Error("Unexpected SQLite bootstrap");
-      },
-      prepareAnchor: () => {},
-      inspectSqlite: () => {
-        admitSqliteSchema(anchor);
-        return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
-      },
-    });
-    if (!(db instanceof PostgresSyncConnection)) {
-      throw new Error("Expected PostgreSQL");
-    }
-    connections.push(db);
-    return db;
-  };
-  try {
-    // The synchronous bridge runs before an async test yields; no admission scope spans an await.
-    const { result } = withEngineStoreAdmission(() => ({
-      result: test({
-        db: open(),
-        open,
-        invalidate: () => publishSqliteDatabaseSchemaChange(anchor),
-      }),
-    }));
-    await result;
-  } finally {
-    withEngineStoreAdmission(() => {
-      try {
-        const db = connections[0];
-        if (db) {
-          db.exec(`DROP SCHEMA "${db.schema}" CASCADE`);
-        }
-      } finally {
-        connections.forEach((db) => db.close());
-        anchor.close();
-      }
-    });
-  }
+  using store = createPostgresEngineTestFixture({
+    directory: dirs.make("pg-search-"),
+    connection: connection!,
+    schemaPrefix: "search_test",
+    schema,
+  });
+  // The synchronous bridge runs before an async test yields; no admission scope spans an await.
+  const { result } = withEngineStoreAdmission(() => ({
+    result: test({ db: store.open(), open: store.open, invalidate: store.invalidate }),
+  }));
+  await result;
 }
 
 function searchFixture(db: PostgresSyncConnection) {
@@ -163,6 +126,12 @@ function searchFixture(db: PostgresSyncConnection) {
   };
   const nearest = (vector: readonly number[], model = "model-a", source = "memory", limit = 1) => {
     const vectorIndex = search.vectors.notes!;
+    const scoped = () =>
+      k
+        .selectFrom("notes_vec as v")
+        .innerJoin("notes as n", "n.id", "v.id")
+        .where("n.model", "=", model)
+        .where("n.source", "=", source);
     const { pending } = withEngineStoreAdmission(() => ({
       pending: search.vector!.nearest({
         index: vectorIndex,
@@ -170,14 +139,17 @@ function searchFixture(db: PostgresSyncConnection) {
         limit,
         isRow: isVectorRow,
         scopeCount: k.selectFrom("notes").select(k.fn.countAll<number>().as("count")),
+        candidates: ({ match, distance, limit: candidateLimit }) =>
+          scoped()
+            .select("v.id")
+            .where(match)
+            .orderBy(distance)
+            .orderBy("v.id")
+            .limit(candidateLimit),
         query: ({ match, distance }) =>
-          k
-            .selectFrom("notes_vec as v")
-            .innerJoin("notes as n", "n.id", "v.id")
+          scoped()
             .select(["n.id", distance.as("distance")])
             .where(match)
-            .where("n.model", "=", model)
-            .where("n.source", "=", source)
             .orderBy(distance)
             .orderBy("n.id")
             .limit(limit),
@@ -206,6 +178,33 @@ const terms = (kind: "any" | "all", ...texts: string[]): TextQuery => ({
 });
 
 describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
+  it("keeps cover-density ranking by default and supports a frequency opt-in", async () => {
+    await fixture(({ db }) => {
+      const { add, search } = searchFixture(db);
+      add("adjacent", 1, "red fox");
+      const fullText = search.fullText!;
+      const index = search.text.notes!;
+      const query = terms("all", "red", "fox");
+      const row = executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<SearchDB>(db)
+          .selectFrom("notes")
+          .select([
+            fullText.rank(index, query).value.as("default_rank"),
+            fullText
+              .rank(index, query, { postgres: { normalization: 0 } })
+              .value.as("cover_density"),
+            fullText
+              .rank(index, query, { postgres: { normalization: 0, rank: "frequency" } })
+              .value.as("frequency"),
+          ]),
+      ).rows[0]!;
+      expect(row.default_rank).toBeCloseTo(0.05, 6);
+      expect(row.cover_density).toBeCloseTo(0.1, 6);
+      expect(row.frequency).toBeCloseTo(0.09910322, 6);
+    });
+  });
+
   it("composes literal terms, phrases, final-lexeme prefixes and OR with bounded ranked snippets", async () => {
     await fixture(({ db }) => {
       const { add, text, ids, search } = searchFixture(db);
@@ -303,6 +302,38 @@ describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
     });
   });
 
+  it("prefilters within model/source scope and distinguishes negative vectors from zero", async () => {
+    await fixture(async ({ db }) => {
+      const { add, nearest } = searchFixture(db);
+      db.runTransaction(() => {
+        for (let i = 0; i < 20; i++) {
+          add(`decoy-${i}`, i + 1, "excluded", [-1, -0.01, 0], "other-model");
+          add(`source-${i}`, i + 21, "excluded", [-1, -0.01, 0], "model-a", "sessions");
+        }
+        add("a-far", 41, "negative", [-1, -5, -1]);
+        add("b-close", 42, "negative", [-1, -0.1, -0.1]);
+        add("c-orthogonal", 43, "orthogonal", [0, 1, 0]);
+        add("zero", 44, "ineligible", [0, 0, 0]);
+      });
+      expect(
+        db
+          .prepare(
+            "SELECT id, embedding_bits::text AS bits FROM notes_vec WHERE id IN ('b-close', 'zero') ORDER BY id",
+          )
+          .all(),
+      ).toEqual([
+        { id: "b-close", bits: "000" },
+        { id: "zero", bits: null },
+      ]);
+      const result = await nearest([-1, -0.01, 0], "model-a", "memory", 2);
+      expect(result.rows.map((row) => row.id)).toEqual(["b-close", "a-far"]);
+      expect(result.rows[0]!.distance).toBeCloseTo(
+        1 - 1.001 / (Math.hypot(1, 0.01) * Math.hypot(1, 0.1, 0.1)),
+        6,
+      );
+    });
+  });
+
   it("projects fresh and replacement vectors without deleting their projection first", async () => {
     await fixture(({ db }) => {
       const { add } = searchFixture(db);
@@ -377,6 +408,7 @@ FOR EACH STATEMENT EXECUTE FUNCTION reject_projection_delete();`);
 
   it.each([
     ["GIN index", "DROP INDEX notes_search_gin"],
+    ["binary projection", "ALTER TABLE notes_vec DROP COLUMN embedding_bits"],
     [
       "text configuration",
       "ALTER TEXT SEARCH CONFIGURATION openclaw_simple_unaccent ALTER MAPPING FOR word WITH pg_catalog.simple",

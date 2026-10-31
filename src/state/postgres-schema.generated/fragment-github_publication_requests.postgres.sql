@@ -49,4 +49,4 @@ CREATE TABLE "github_publication_requests" (
   UNIQUE ("session_id", "idempotency_key")
 );
 
-CREATE INDEX "idx_github_publication_requests_pending" ON "github_publication_requests" (("status") ASC NULLS FIRST, ("updated_at_ms") ASC NULLS FIRST, ("request_id") ASC NULLS FIRST);
+CREATE INDEX "idx_github_publication_requests_pending" ON "github_publication_requests" (("status") ASC, ("updated_at_ms") ASC, ("request_id") ASC);

@@ -1,8 +1,6 @@
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
-import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
-import type { MarkdownGitHubContext } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 import type {
@@ -15,6 +13,7 @@ import type {
   ChatDetailPanelContent,
   FileReaderInteraction,
   FileReaderDraftState,
+  WorkspaceFileLinkTarget,
 } from "./chat-sidebar-content-types.ts";
 
 type SessionWorkspaceView = ReturnType<typeof createSessionWorkspaceProps>;
@@ -37,6 +36,7 @@ type SessionWorkspaceOptionalKey =
   | "onNavigationScroll"
   | "connectionEpoch"
   | "onDownloadFile"
+  | "onFindWorkspaceFile"
   | "onOpenDiff";
 export type SessionWorkspaceProps = Omit<SessionWorkspaceView, SessionWorkspaceOptionalKey> &
   Partial<Pick<SessionWorkspaceView, SessionWorkspaceOptionalKey>>;
@@ -77,9 +77,9 @@ export type ChatDetailPanelProps = {
   canvasPluginSurfaceUrl: string | null;
   embedSandboxMode: EmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
-  githubContext: MarkdownGitHubContext;
   embedded: boolean;
-  onOpenWorkspaceFile: ((target: MarkdownFileLinkTarget) => void) | null;
+  onOpenWorkspaceFile: ((target: WorkspaceFileLinkTarget) => void) | null;
+  onBrowseFiles?: (() => void) | null;
   onOpenSessionLink: ((target: SessionLinkTarget) => void) | null;
   onRevealInWorkspace: ((path: string) => void) | null;
   onOpenImage: ((item: ImageLightboxItem) => void) | null;

@@ -413,15 +413,14 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
         },
       );
       const reconcile = async (signal: AbortSignal) => {
-        await friends.reconcile(signal);
-        await friends.surfacePairingCandidates(async ({ peer, fingerprint, approvalToken }) => {
+        await friends.reconcile(signal, async ({ peer, fingerprint, approvalToken }) => {
           await pairing.issueChallenge({
             senderId: peer,
             senderIdLine: `Reef handle: @${peer}\nSafety fingerprint: ${fingerprint}`,
             meta: { reefApproval: approvalToken },
             sendPairingReply: async () => {},
           });
-        }, signal);
+        });
         await receiptNotifier.notifyRejections(await trust.pendingOutboundRejections());
       };
       // Attempt the peer-key refresh before recovery can dispatch an agent

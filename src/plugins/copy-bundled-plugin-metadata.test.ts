@@ -22,9 +22,9 @@ function readText(root: string, relative: string): string {
   return fs.readFileSync(path.join(root, relative), "utf8");
 }
 
-function expectFiles(root: string, files: Record<string, string>) {
+function expectFiles(root: string, files: Record<string, string | Buffer>) {
   for (const [file, contents] of Object.entries(files)) {
-    expect(readText(root, file)).toBe(contents);
+    expect(fs.readFileSync(path.join(root, file))).toEqual(Buffer.from(contents));
   }
 }
 
@@ -86,15 +86,6 @@ function theme(source: string, beret: string) {
   };
 }
 
-function writeStaleMetadata(dir: string, id: string, skills?: string[]) {
-  writeJsonFile(path.join(dir, "openclaw.plugin.json"), {
-    id,
-    configSchema: { type: "object" },
-    ...(skills ? { skills } : {}),
-  });
-  writeJsonFile(path.join(dir, "package.json"), { name: `@openclaw/${id}` });
-}
-
 afterEach(() => cleanupTempDirs(tempDirs));
 
 describe("copyBundledPluginMetadata", () => {
@@ -118,17 +109,17 @@ describe("copyBundledPluginMetadata", () => {
         writeJsonFile(path.join(pluginDir, "dist/openclaw.plugin.json"), { controlUi });
       }
       const sibling = bundledPluginDir(repoRoot, "sibling");
-      writeFiles(sibling, {
+      const siblingFiles = {
         "index.js": "preserve runtime",
         "openclaw.plugin.json": '{"id":"sibling"}',
-      });
+      };
+      writeFiles(sibling, siblingFiles);
       copyBundledPluginMetadata({ repoRoot, pluginIds: new Set(["profile-fixture"]) });
       expect(readBundledManifest(repoRoot, "profile-fixture")).toMatchObject({
         channels: ["custom"],
         controlUi,
       });
-      expect(readText(sibling, "index.js")).toBe("preserve runtime");
-      expect(readText(sibling, "openclaw.plugin.json")).toBe('{"id":"sibling"}');
+      expectFiles(sibling, siblingFiles);
     },
   );
   it("copies plugin metadata, README, activity artwork, and skills without replacing runtime assets", () => {
@@ -142,7 +133,7 @@ describe("copyBundledPluginMetadata", () => {
       ],
     });
     const activityIcon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"/>';
-    writeFiles(pluginDir, {
+    const copiedFiles = {
       "README.md": "# ACP overview\n",
       "skills/acp-router/SKILL.md": "# ACP Router\n",
       "assets/icon.png": Buffer.from("package icon"),
@@ -151,6 +142,9 @@ describe("copyBundledPluginMetadata", () => {
       "assets/theme-art/beret.svg": activityIcon,
       "assets/theme-art/ferris.svg": activityIcon,
       "assets/activity/acp_status.svg": activityIcon,
+    };
+    writeFiles(pluginDir, {
+      ...copiedFiles,
       "assets/activity/notes.txt": "not artwork",
       "assets/activity/bad name.svg": activityIcon,
     });
@@ -162,21 +156,8 @@ describe("copyBundledPluginMetadata", () => {
 
     copyBundledPluginMetadata({ repoRoot });
 
-    expect(fs.existsSync(path.join(distDir, "openclaw.plugin.json"))).toBe(true);
-    expect(readText(distDir, "skills/acp-router/SKILL.md")).toContain("ACP Router");
     expectBundledSkills(repoRoot, "acpx", ["./skills"]);
-    expect(fs.readFileSync(path.join(distAssetsDir, "icon.png"))).toEqual(
-      Buffer.from("package icon"),
-    );
-    expectFiles(distDir, {
-      "README.md": "# ACP overview\n",
-      "themes/workshop.json": '{"name":"Workshop"}',
-      "assets/activity.svg": activityIcon,
-      "assets/theme-art/beret.svg": activityIcon,
-      "assets/theme-art/ferris.svg": activityIcon,
-      "assets/activity/acp_status.svg": activityIcon,
-      "assets/runtime.js": "keep runtime asset",
-    });
+    expectFiles(distDir, { ...copiedFiles, "assets/runtime.js": "keep runtime asset" });
     expect(fs.readdirSync(path.join(distAssetsDir, "activity"))).toEqual(["acp_status.svg"]);
     expect(JSON.parse(readText(distDir, "package.json"))).toMatchObject({
       openclaw: { extensions: ["./index.js"] },
@@ -184,32 +165,31 @@ describe("copyBundledPluginMetadata", () => {
   });
 
   it.skipIf(process.platform === "win32")("does not copy escaped theme artwork", () => {
-    const { repoRoot, pluginDir } = fixture("acpx", {
+    const { repoRoot, pluginDir, distDir } = fixture("acpx", {
       themes: [theme("theme.json", "art/beret.svg")],
     });
     const outside = path.join(repoRoot, "outside.svg");
-    fs.writeFileSync(outside, "outside bytes");
+    writeFiles(repoRoot, { "outside.svg": "outside bytes" });
+    writeFiles(distDir, { "art/beret.svg": "stale bytes" });
     fs.mkdirSync(path.join(pluginDir, "art"));
     fs.symlinkSync(outside, path.join(pluginDir, "art/beret.svg"));
-    const target = path.join(bundledPluginDir(repoRoot, "acpx"), "art/beret.svg");
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, "stale bytes");
 
     copyBundledPluginMetadata({ repoRoot });
 
-    expect(fs.existsSync(target)).toBe(false);
+    expect(fs.existsSync(path.join(distDir, "art/beret.svg"))).toBe(false);
     expect(fs.readFileSync(outside, "utf8")).toBe("outside bytes");
   });
 
   it("copies generated bundled channel config schemas into dist manifests", () => {
+    const staleHints = { "channels.telegram.stale": { help: "stale hint" } };
+    const schema = { type: "object", properties: { groups: { type: "object" } } };
+    const uiHints = { "channels.telegram.groups": { help: "generated hint" } };
     const { repoRoot } = fixture("telegram", {
       channels: ["telegram"],
       channelConfigs: {
         telegram: {
           schema: { type: "object", properties: { stale: { type: "boolean" } } },
-          uiHints: {
-            "channels.telegram.stale": { help: "stale hint" },
-          },
+          uiHints: staleHints,
         },
       },
     });
@@ -218,8 +198,8 @@ describe("copyBundledPluginMetadata", () => {
         pluginId: "telegram",
         channelId: "telegram",
         label: "Telegram",
-        schema: { type: "object", properties: { groups: { type: "object" } } },
-        uiHints: { "channels.telegram.groups": { help: "generated hint" } },
+        schema,
+        uiHints,
       },
     ];
     writeFiles(repoRoot, {
@@ -231,51 +211,47 @@ describe("copyBundledPluginMetadata", () => {
     const manifest = readBundledManifest(repoRoot, "telegram");
     expect(manifest.channelConfigs).toEqual({
       telegram: {
-        schema: { type: "object", properties: { groups: { type: "object" } } },
+        schema,
         label: "Telegram",
-        uiHints: {
-          "channels.telegram.groups": { help: "generated hint" },
-          "channels.telegram.stale": { help: "stale hint" },
-        },
+        uiHints: { ...uiHints, ...staleHints },
       },
     });
   });
 
-  it("relocates node_modules-backed skill paths into bundled-skills and rewrites the manifest", () => {
-    const { repoRoot, pluginDir, legacy, copied } = skillFixture();
-    const storeSkillDir = path.join(
-      repoRoot,
-      "node_modules/.pnpm/@tloncorp+tlon-skill@0.2.2/node_modules/@tloncorp/tlon-skill",
-    );
-    writeFiles(storeSkillDir, {
-      "SKILL.md": "# Tlon Skill\n",
-      "node_modules/.bin/tlon": "#!/bin/sh\n",
-    });
-    fs.mkdirSync(path.join(pluginDir, "node_modules", "@tloncorp"), { recursive: true });
-    fs.symlinkSync(
-      storeSkillDir,
-      path.join(pluginDir, "node_modules", "@tloncorp", "tlon-skill"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    writeFiles(legacy, { "stale.txt": "stale\n" });
+  it.each(["package symlink", "hoisted"])(
+    "relocates %s skills and rewrites the manifest",
+    (layout) => {
+      const { repoRoot, pluginDir, legacy, copied } = skillFixture();
+      const packageSkillDir = path.join(pluginDir, "node_modules/@tloncorp/tlon-skill");
+      const storeSkillDir = path.join(
+        repoRoot,
+        layout === "hoisted"
+          ? "node_modules/@tloncorp/tlon-skill"
+          : "node_modules/.pnpm/@tloncorp+tlon-skill@0.2.2/node_modules/@tloncorp/tlon-skill",
+      );
+      writeFiles(storeSkillDir, {
+        "SKILL.md": "# Tlon Skill\n",
+        "node_modules/.bin/tlon": "#!/bin/sh\n",
+      });
+      if (layout === "package symlink") {
+        fs.mkdirSync(path.dirname(packageSkillDir), { recursive: true });
+        fs.symlinkSync(
+          storeSkillDir,
+          packageSkillDir,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      }
+      writeFiles(legacy, { "stale.txt": "stale\n" });
 
-    copyBundledPluginMetadata({ repoRoot });
+      copyBundledPluginMetadata({ repoRoot });
 
-    expect(readText(copied, "SKILL.md")).toBe("# Tlon Skill\n");
-    expect(fs.lstatSync(copied).isSymbolicLink()).toBe(false);
-    expect(fs.existsSync(path.join(copied, "node_modules"))).toBe(false);
-    expect(fs.existsSync(legacy)).toBe(false);
-    expectBundledSkills(repoRoot, "tlon", ["./bundled-skills/@tloncorp/tlon-skill"]);
-  });
-
-  it("falls back to repo-root hoisted node_modules skill paths", () => {
-    const { repoRoot, copied } = skillFixture();
-    const hoistedSkillDir = path.join(repoRoot, "node_modules", "@tloncorp", "tlon-skill");
-    writeFiles(hoistedSkillDir, { "SKILL.md": "# Hoisted Tlon Skill\n" });
-    copyBundledPluginMetadata({ repoRoot });
-    expect(readText(copied, "SKILL.md")).toContain("Hoisted Tlon Skill");
-    expectBundledSkills(repoRoot, "tlon", ["./bundled-skills/@tloncorp/tlon-skill"]);
-  });
+      expect(readText(copied, "SKILL.md")).toBe("# Tlon Skill\n");
+      expect(fs.lstatSync(copied).isSymbolicLink()).toBe(false);
+      expect(fs.existsSync(path.join(copied, "node_modules"))).toBe(false);
+      expect(fs.existsSync(legacy)).toBe(false);
+      expectBundledSkills(repoRoot, "tlon", ["./bundled-skills/@tloncorp/tlon-skill"]);
+    },
+  );
 
   it("omits missing declared skill paths and removes stale generated outputs", () => {
     const { repoRoot, distDir, copied } = skillFixture();
@@ -299,8 +275,7 @@ describe("copyBundledPluginMetadata", () => {
     const cpSyncSpy = vi.spyOn(fs, "cpSync").mockImplementation((...args) => {
       attempts += 1;
       if (attempts === 1) {
-        const error = Object.assign(new Error("race"), { code: "EEXIST" });
-        throw error;
+        throw Object.assign(new Error("race"), { code: "EEXIST" });
       }
       return realCpSync(...args);
     });
@@ -317,62 +292,51 @@ describe("copyBundledPluginMetadata", () => {
     );
   });
 
-  it("removes generated outputs for plugins no longer present in source", () => {
-    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-removed-");
-    const distDir = bundledPluginDir(repoRoot, "removed-plugin");
-    writeFiles(distDir, {
-      "bundled-skills/@scope/skill/SKILL.md": "# stale\n",
-      "index.js": "export default {}\n",
-    });
-    fs.mkdirSync(path.join(distDir, "node_modules"), { recursive: true });
-    writeStaleMetadata(distDir, "removed-plugin", ["./bundled-skills/@scope/skill"]);
-    fs.mkdirSync(path.join(repoRoot, "extensions"), { recursive: true });
-
-    copyBundledPluginMetadata({ repoRoot });
-
-    expect(fs.existsSync(distDir)).toBe(false);
-  });
-
-  it("removes stale dist outputs when a source extension directory no longer has a manifest", () => {
-    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-manifestless-source-");
-    const sourcePluginDir = path.join(repoRoot, "extensions", "google-gemini-cli-auth");
-    fs.mkdirSync(path.join(sourcePluginDir, "node_modules"), { recursive: true });
-    const staleDistDir = bundledPluginDir(repoRoot, "google-gemini-cli-auth");
-    writeFiles(staleDistDir, { "index.js": "export default {}\n" });
-    writeStaleMetadata(staleDistDir, "google-gemini-cli-auth");
-    copyBundledPluginMetadata({ repoRoot });
-    expect(fs.existsSync(staleDistDir)).toBe(false);
-  });
-
-  it("preserves manifest-less runtime support package outputs and copies package metadata", () => {
-    const repoRoot = makeRepoRoot("openclaw-bundled-runtime-support-");
-    const pluginDir = path.join(repoRoot, "extensions", "image-generation-core");
-    fs.mkdirSync(pluginDir, { recursive: true });
+  it.each(["removed", "manifestless", "runtime support"])("reconciles %s dist outputs", (kind) => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-output-");
+    const id = "fixture";
+    const pluginDir = path.join(repoRoot, "extensions", id);
+    const distDir = bundledPluginDir(repoRoot, id);
     const packageJson = {
-      name: "@openclaw/image-generation-core",
+      name: `@openclaw/${id}`,
       version: "0.0.1",
       private: true,
       type: "module",
     };
-    writeJsonFile(path.join(pluginDir, "package.json"), packageJson);
-    writeFiles(pluginDir, { "runtime-api.ts": "export {};\n" });
-    const distDir = bundledPluginDir(repoRoot, "image-generation-core");
-    writeFiles(distDir, { "runtime-api.js": "export {};\n" });
-
+    fs.mkdirSync(path.join(repoRoot, "extensions"), { recursive: true });
+    if (kind === "runtime support") {
+      writeJsonFile(path.join(pluginDir, "package.json"), packageJson);
+      writeFiles(pluginDir, { "runtime-api.ts": "export {};\n" });
+      writeFiles(distDir, { "runtime-api.js": "export {};\n" });
+    } else {
+      writeFiles(distDir, {
+        "bundled-skills/@scope/skill/SKILL.md": "# stale\n",
+        "index.js": "export default {}\n",
+      });
+      fs.mkdirSync(path.join(distDir, "node_modules"), { recursive: true });
+      writeJsonFile(path.join(distDir, "openclaw.plugin.json"), {
+        id,
+        configSchema: { type: "object" },
+        skills: ["./bundled-skills/@scope/skill"],
+      });
+      writeJsonFile(path.join(distDir, "package.json"), { name: `@openclaw/${id}` });
+      if (kind === "manifestless") {
+        fs.mkdirSync(path.join(pluginDir, "node_modules"), { recursive: true });
+      }
+    }
     copyBundledPluginMetadata({ repoRoot });
-
-    expect(fs.existsSync(distDir)).toBe(true);
-    expect(fs.existsSync(path.join(distDir, "runtime-api.js"))).toBe(true);
-    expect(fs.existsSync(path.join(distDir, "openclaw.plugin.json"))).toBe(false);
-    expect(JSON.parse(readText(distDir, "package.json"))).toEqual(packageJson);
+    expect(fs.existsSync(distDir)).toBe(kind === "runtime support");
+    if (kind === "runtime support") {
+      expectFiles(distDir, { "runtime-api.js": "export {};\n" });
+      expect(fs.existsSync(path.join(distDir, "openclaw.plugin.json"))).toBe(false);
+      expect(JSON.parse(readText(distDir, "package.json"))).toEqual(packageJson);
+    }
   });
 
   it("refuses to remove dist plugin trees through a symlinked dist root", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-plugin-meta-symlink-");
     const targetDir = path.join(repoRoot, "gateway-dist");
-    const pluginFile = path.join(targetDir, "extensions", "acpx", "index.js");
-    fs.mkdirSync(path.dirname(pluginFile), { recursive: true });
-    fs.writeFileSync(pluginFile, "export {};\n");
+    writeFiles(targetDir, { "extensions/acpx/index.js": "export {};\n" });
     createPlugin(repoRoot, "acpx", {}, true);
     const distLink = path.join(repoRoot, "dist");
     fs.symlinkSync(targetDir, distLink, "dir");
@@ -380,6 +344,6 @@ describe("copyBundledPluginMetadata", () => {
     expect(() => copyBundledPluginMetadata({ repoRoot })).toThrow(/symbolic link/u);
 
     expect(fs.readlinkSync(distLink)).toBe(targetDir);
-    expect(fs.readFileSync(pluginFile, "utf8")).toBe("export {};\n");
+    expectFiles(targetDir, { "extensions/acpx/index.js": "export {};\n" });
   });
 });

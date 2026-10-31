@@ -1,8 +1,8 @@
-// Feishu tests prove the document create contract through the real Lark SDK.
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -21,51 +21,56 @@ vi.spyOn(runtimeModule, "getFeishuRuntime").mockReturnValue({
 
 const { registerFeishuDocTools } = await import("./docx.js");
 
+type Request = { method: string; path: string; body?: string };
+const ok = (data: unknown) => ({ code: 0, data });
+const docPath = "/open-apis/docx/v1/documents";
+const block = (block_id: string, block_type = 2) => ({ block_id, block_type });
+
+function serve(routes: Record<string, (request: Request, url: URL) => unknown>) {
+  const requests: Request[] = [];
+  const server = createServer((request, response) => {
+    void (async () => {
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      const rawBody = (await consumeBuffer(request)).toString("utf8");
+      const received = {
+        method: request.method ?? "",
+        path: url.pathname,
+        ...(rawBody ? { body: rawBody } : {}),
+      };
+      requests.push(received);
+      const route = routes[`${received.method} ${received.path}`];
+      if (!route) {
+        response.writeHead(404).end();
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(route(received, url)));
+    })().catch((error: unknown) => {
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: String(error) }));
+    });
+  });
+  return { server, requests };
+}
+
 async function resolveLoopbackTool(
   server: ReturnType<typeof createServer>,
   context: Record<string, unknown> = {},
 ) {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const port = await listenOnLoopback(server);
   onTestFinished(
     () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   );
-  const address = server.address() as AddressInfo;
-  const loopbackHttp = Object.create(Lark.defaultHttpInstance) as Lark.HttpInstance;
-  loopbackHttp.request = async (options) => {
-    const upstream = new URL(options.url ?? "");
-    const target = new URL(
-      `${upstream.pathname}${upstream.search}`,
-      `http://127.0.0.1:${address.port}`,
-    );
-    for (const [key, value] of Object.entries(options.params ?? {})) {
-      if (value !== undefined && value !== null) {
-        target.searchParams.set(key, String(value));
-      }
-    }
-    const method = options.method ?? "GET";
-    const response = await fetch(target, {
-      method,
-      headers: { "content-type": "application/json" },
-      ...(method === "GET" || method === "HEAD"
-        ? {}
-        : { body: JSON.stringify(options.data ?? {}) }),
-    });
-    return response.json();
-  };
   createFeishuClientMock.mockReturnValue(
     new Lark.Client({
       appId: "loopback-test-app",
       appSecret: "loopback-test-placeholder", // pragma: allowlist secret
-      domain: Lark.Domain.Feishu,
+      domain: `http://127.0.0.1:${port}`,
       loggerLevel: Lark.LoggerLevel.error,
       disableTokenCache: true,
-      httpInstance: loopbackHttp,
     }),
   );
   const harness = createToolFactoryHarness({
@@ -90,67 +95,14 @@ describe("feishu_doc contract over the real Lark SDK", () => {
   });
 
   it("rejects create content before HTTP and supports the create-then-write API workflow", async () => {
-    const requests: Array<{ method: string; path: string; body?: unknown }> = [];
-    const server = createServer((request, response) => {
-      void (async () => {
-        const bodyChunks: Buffer[] = [];
-        for await (const chunk of request) {
-          bodyChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-        }
-        const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-        const rawBody = Buffer.concat(bodyChunks).toString("utf8");
-        requests.push({
-          method: request.method ?? "",
-          path: pathname,
-          ...(rawBody ? { body: JSON.parse(rawBody) as unknown } : {}),
-        });
-
-        const sendJson = (body: unknown) => {
-          response.writeHead(200, { "content-type": "application/json" });
-          response.end(JSON.stringify(body));
-        };
-        if (request.method === "POST" && pathname === "/open-apis/docx/v1/documents") {
-          sendJson({
-            code: 0,
-            data: { document: { document_id: "doc_loopback", title: "Loopback Doc" } },
-          });
-          return;
-        }
-        if (
-          request.method === "POST" &&
-          pathname === "/open-apis/docx/v1/documents/blocks/convert"
-        ) {
-          sendJson({
-            code: 0,
-            data: {
-              blocks: [{ block_type: 2, block_id: "body_loopback" }],
-              first_level_block_ids: ["body_loopback"],
-            },
-          });
-          return;
-        }
-        if (
-          request.method === "GET" &&
-          pathname === "/open-apis/docx/v1/documents/doc_loopback/blocks"
-        ) {
-          sendJson({ code: 0, data: { items: [] } });
-          return;
-        }
-        if (
-          request.method === "POST" &&
-          pathname === "/open-apis/docx/v1/documents/doc_loopback/blocks/doc_loopback/descendant"
-        ) {
-          sendJson({
-            code: 0,
-            data: { children: [{ block_type: 2, block_id: "body_loopback" }] },
-          });
-          return;
-        }
-        response.writeHead(404).end();
-      })().catch((error: unknown) => {
-        response.writeHead(500, { "content-type": "application/json" });
-        response.end(JSON.stringify({ error: String(error) }));
-      });
+    const { server, requests } = serve({
+      [`POST ${docPath}`]: () =>
+        ok({ document: { document_id: "doc_loopback", title: "Loopback Doc" } }),
+      [`POST ${docPath}/blocks/convert`]: () =>
+        ok({ blocks: [block("body_loopback")], first_level_block_ids: ["body_loopback"] }),
+      [`GET ${docPath}/doc_loopback/blocks`]: () => ok({ items: [] }),
+      [`POST ${docPath}/doc_loopback/blocks/doc_loopback/descendant`]: () =>
+        ok({ children: [block("body_loopback")] }),
     });
 
     const tool = await resolveLoopbackTool(server);
@@ -177,7 +129,11 @@ describe("feishu_doc contract over the real Lark SDK", () => {
     });
 
     expect(written.details).toMatchObject({ success: true, blocks_added: 1 });
-    expect(requests).toEqual([
+    expect(
+      requests.map(({ body, ...request }) =>
+        Object.assign(request, body ? { body: JSON.parse(body) as unknown } : {}),
+      ),
+    ).toEqual([
       {
         method: "POST",
         path: "/open-apis/docx/v1/documents",
@@ -188,7 +144,7 @@ describe("feishu_doc contract over the real Lark SDK", () => {
         path: "/open-apis/docx/v1/documents/blocks/convert",
         body: { content_type: "markdown", content: markdown },
       },
-      { method: "GET", path: "/open-apis/docx/v1/documents/doc_loopback/blocks" },
+      { method: "GET", path: "/open-apis/docx/v1/documents/doc_loopback/blocks", body: {} },
       {
         method: "POST",
         path: "/open-apis/docx/v1/documents/doc_loopback/blocks/doc_loopback/descendant",
@@ -216,46 +172,20 @@ describe("feishu_doc contract over the real Lark SDK", () => {
     "stops insert pagination when the SDK returns $description",
     async ({ pageToken, expectedPageTokens, expectedError }) => {
       const pageTokens: Array<string | null> = [];
-      const server = createServer((request, response) => {
-        const url = new URL(request.url ?? "/", "http://127.0.0.1");
-        const sendJson = (body: unknown) => {
-          response.writeHead(200, { "content-type": "application/json" });
-          response.end(JSON.stringify(body));
-        };
-
-        if (
-          request.method === "GET" &&
-          url.pathname === "/open-apis/docx/v1/documents/doc_loopback/blocks/after_loopback"
-        ) {
-          sendJson({
-            code: 0,
-            data: {
-              block: { block_id: "after_loopback", parent_id: "parent_loopback", block_type: 2 },
-            },
-          });
-          return;
-        }
-        if (
-          request.method === "GET" &&
-          url.pathname ===
-            "/open-apis/docx/v1/documents/doc_loopback/blocks/parent_loopback/children"
-        ) {
+      const child = { ...block("after_loopback"), parent_id: "parent_loopback" };
+      const { server } = serve({
+        [`GET ${docPath}/doc_loopback/blocks/after_loopback`]: () => ok({ block: child }),
+        [`GET ${docPath}/doc_loopback/blocks/parent_loopback/children`]: (_, url) => {
           pageTokens.push(url.searchParams.get("page_token"));
           if (pageTokens.length > 2) {
-            sendJson({ code: 1, msg: "unexpected third pagination request" });
-            return;
+            return { code: 1, msg: "unexpected third pagination request" };
           }
-          sendJson({
-            code: 0,
-            data: {
-              items: [{ block_id: "after_loopback", parent_id: "parent_loopback", block_type: 2 }],
-              has_more: true,
-              ...(pageToken ? { page_token: pageToken } : {}),
-            },
+          return ok({
+            items: [child],
+            has_more: true,
+            ...(pageToken ? { page_token: pageToken } : {}),
           });
-          return;
-        }
-        response.writeHead(404).end();
+        },
       });
 
       const tool = await resolveLoopbackTool(server);
@@ -272,110 +202,35 @@ describe("feishu_doc contract over the real Lark SDK", () => {
   );
 
   it("reports fulfilled nonzero image and permission responses as partial failures", async () => {
-    const requests: Array<{ method: string; path: string; body?: string }> = [];
     const patchResponses = [
       { code: 230001, msg: "replace rejected" },
       { code: 0, data: { block: { block_id: "image_two", block_type: 27 } } },
     ];
-    const server = createServer((request, response) => {
-      void (async () => {
-        const bodyChunks: Buffer[] = [];
-        for await (const chunk of request) {
-          bodyChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-        }
-        const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-        const rawBody = Buffer.concat(bodyChunks).toString("utf8");
-        requests.push({
-          method: request.method ?? "",
-          path: pathname,
-          ...(rawBody ? { body: rawBody } : {}),
+    const images = [block("image_one", 27), block("image_two", 27)];
+    const { server, requests } = serve({
+      [`POST ${docPath}`]: ({ body }) => {
+        const title = (JSON.parse(body ?? "{}") as { title?: string }).title;
+        return ok({
+          document: {
+            document_id: title === "Permission OK" ? "doc_permission_ok" : "doc_permission_no",
+            title,
+          },
         });
-
-        const sendJson = (body: unknown) => {
-          response.writeHead(200, { "content-type": "application/json" });
-          response.end(JSON.stringify(body));
-        };
-        if (request.method === "POST" && pathname === "/open-apis/docx/v1/documents") {
-          const title = (JSON.parse(rawBody) as { title?: string }).title;
-          sendJson({
-            code: 0,
-            data: {
-              document: {
-                document_id: title === "Permission OK" ? "doc_permission_ok" : "doc_permission_no",
-                title,
-              },
-            },
-          });
-          return;
-        }
-        if (
-          request.method === "POST" &&
-          pathname === "/open-apis/drive/v1/permissions/doc_permission_ok/members"
-        ) {
-          sendJson({ code: 0, data: { member: { member_id: "ou_requester" } } });
-          return;
-        }
-        if (
-          request.method === "POST" &&
-          pathname === "/open-apis/drive/v1/permissions/doc_permission_no/members"
-        ) {
-          sendJson({ code: 999, msg: "grant denied" });
-          return;
-        }
-        if (
-          request.method === "POST" &&
-          pathname === "/open-apis/docx/v1/documents/blocks/convert"
-        ) {
-          sendJson({
-            code: 0,
-            data: {
-              blocks: [
-                { block_type: 27, block_id: "image_one" },
-                { block_type: 27, block_id: "image_two" },
-              ],
-              first_level_block_ids: ["image_one", "image_two"],
-            },
-          });
-          return;
-        }
-        if (
-          request.method === "GET" &&
-          pathname === "/open-apis/docx/v1/documents/doc_images/blocks"
-        ) {
-          sendJson({ code: 0, data: { items: [] } });
-          return;
-        }
-        if (
-          request.method === "POST" &&
-          pathname === "/open-apis/docx/v1/documents/doc_images/blocks/doc_images/descendant"
-        ) {
-          sendJson({
-            code: 0,
-            data: {
-              children: [
-                { block_type: 27, block_id: "image_one" },
-                { block_type: 27, block_id: "image_two" },
-              ],
-            },
-          });
-          return;
-        }
-        if (request.method === "POST" && pathname === "/open-apis/drive/v1/medias/upload_all") {
-          sendJson({ code: 0, data: { file_token: `file_${requests.length}` } });
-          return;
-        }
-        if (
-          request.method === "PATCH" &&
-          pathname.startsWith("/open-apis/docx/v1/documents/doc_images/blocks/image_")
-        ) {
-          sendJson(patchResponses.shift());
-          return;
-        }
-        response.writeHead(404).end();
-      })().catch((error: unknown) => {
-        response.writeHead(500, { "content-type": "application/json" });
-        response.end(JSON.stringify({ error: String(error) }));
-      });
+      },
+      "POST /open-apis/drive/v1/permissions/doc_permission_ok/members": () =>
+        ok({ member: { member_id: "ou_requester" } }),
+      "POST /open-apis/drive/v1/permissions/doc_permission_no/members": () => ({
+        code: 999,
+        msg: "grant denied",
+      }),
+      [`POST ${docPath}/blocks/convert`]: () =>
+        ok({ blocks: images, first_level_block_ids: ["image_one", "image_two"] }),
+      [`GET ${docPath}/doc_images/blocks`]: () => ok({ items: [] }),
+      [`POST ${docPath}/doc_images/blocks/doc_images/descendant`]: () => ok({ children: images }),
+      "POST /open-apis/drive/v1/medias/upload_all": () =>
+        ok({ file_token: `file_${requests.length}` }),
+      [`PATCH ${docPath}/doc_images/blocks/image_one`]: () => patchResponses.shift(),
+      [`PATCH ${docPath}/doc_images/blocks/image_two`]: () => patchResponses.shift(),
     });
 
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});

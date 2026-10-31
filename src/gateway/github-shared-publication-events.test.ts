@@ -8,13 +8,13 @@ import {
 } from "../state/openclaw-state-db.js";
 import {
   claimGitHubPublicationExecutionFixture as claimShared,
-  createGitHubPublicationExecutionStoreFixture,
+  createGitHubPublicationExecutionStoreFixture as executionStore,
   deferGitHubPublicationRequestsFixture as deferShared,
   ensureGitHubPublicationStoreFixture,
-  bindRepositoryGitHubPublicationCheckpointFixture,
+  bindRepositoryGitHubPublicationCheckpointFixture as bindCheckpoint,
   claimRepositoryGitHubPublicationFixture as claimRepository,
-  deferRepositoryGitHubPublicationClaimsFixture,
-  failRepositoryGitHubPublicationPreparationFixture,
+  deferRepositoryGitHubPublicationClaimsFixture as deferClaims,
+  failRepositoryGitHubPublicationPreparationFixture as failPreparation,
   insertRepositoryGitHubPublicationFixture as insertRepository,
   readRepositoryGitHubPublicationFixture as readRepository,
 } from "./github-publication-store.test-support.js";
@@ -150,7 +150,7 @@ describe("shared publication committed notifications", () => {
     const row = insertSharedWorktreeReceipt("facts");
     using observer = observe();
     let current = claimShared(row.request_id, "instance");
-    const store = createGitHubPublicationExecutionStoreFixture("instance");
+    const store = executionStore("instance");
     const facts = {
       repository: "owner/repository",
       branch: BRANCH,
@@ -162,10 +162,7 @@ describe("shared publication committed notifications", () => {
     current = store.updatePublishingFacts({ row: current, ...facts });
     expect(observer).toHaveBeenCalledTimes(2);
     expect(() =>
-      createGitHubPublicationExecutionStoreFixture("wrong-owner").updatePublishingFacts({
-        row: current,
-        ...facts,
-      }),
+      executionStore("wrong-owner").updatePublishingFacts({ row: current, ...facts }),
     ).toThrow(/state changed/);
     expect(observer).toHaveBeenCalledTimes(2);
     deferShared([row.request_id]);
@@ -203,7 +200,7 @@ describe("shared publication committed notifications", () => {
     let row = insertRepository(unbound, noop);
     insertRepository(unbound, noop);
     expect(observer).toHaveBeenCalledTimes(1);
-    row = bindRepositoryGitHubPublicationCheckpointFixture(
+    row = bindCheckpoint(
       row,
       {
         checkpoint_ref: "refs/openclaw/worker-results/bound",
@@ -311,12 +308,12 @@ describe("shared publication committed notifications", () => {
       placement_generation: 1,
     });
     using observer = observe();
-    failRepositoryGitHubPublicationPreparationFixture(first, "Capture a fresh checkpoint.", noop);
+    failPreparation(first, "Capture a fresh checkpoint.", noop);
     retire(second);
-    deferRepositoryGitHubPublicationClaimsFixture([third.request_id]);
+    deferClaims([third.request_id]);
     expect(observer).toHaveBeenCalledTimes(3);
     retire(second);
-    deferRepositoryGitHubPublicationClaimsFixture([first.request_id, "absent"]);
+    deferClaims([first.request_id, "absent"]);
     expect(observer).toHaveBeenCalledTimes(3);
   });
 });

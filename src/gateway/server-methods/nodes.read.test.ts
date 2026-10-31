@@ -239,6 +239,7 @@ it("shares immutable catalog rows until pairing or live node facts change", asyn
 it("retains received stats after replacement and rejects the retired connection", async () => {
   const pairedNode = createPairedNode("stats-node");
   registry = new NodeRegistry({
+    persistHostStats: mocks.stats,
     resolveCurrentPairingState: async () =>
       prepareDevicePairingBinding(pairedNode.deviceId, pairedNode).binding ?? undefined,
   });

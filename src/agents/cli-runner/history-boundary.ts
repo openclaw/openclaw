@@ -44,6 +44,17 @@ import { createCliRunCurrentAssertion, resolveCliExecutionTarget } from "./execu
 import type { PreparedCliRunContext } from "./types.js";
 
 /**
+ * Another writer or lifecycle owns the session history. Local session state, not a provider
+ * failure: model fallback must stop instead of replaying the turn on another candidate.
+ */
+class CliHistoryOwnerChangedError extends Error {
+  constructor() {
+    super("CLI history owner changed before preparation");
+    this.name = "CliHistoryOwnerChangedError";
+  }
+}
+
+/**
  * Execution layers the run's skill env overrides onto the process environment right before it
  * builds the child environment. Apply the same snapshot here, synchronously, so preparation
  * resolves the login the child will actually run under.
@@ -60,7 +71,7 @@ function resolvePreparedChildEnv(
         })
       : undefined;
   try {
-    return resolveCliChildEnv(preparedBackend).env;
+    return resolveCliChildEnv(preparedBackend, params).env;
   } finally {
     restoreSkillEnv?.();
   }
@@ -272,7 +283,7 @@ async function prepareCliHistoryBoundaryOnce(
           snapshot.activeWriterRunId !== writerRunId &&
           hasLiveAgentRunContext(snapshot.activeWriterRunId)
         ) {
-          throw new Error("CLI history owner changed before preparation");
+          throw new CliHistoryOwnerChangedError();
         }
         assertSource();
       }),
@@ -288,7 +299,7 @@ async function prepareCliHistoryBoundaryOnce(
         (params.expectedLifecycleRevision !== undefined &&
           current.lifecycleRevision !== params.expectedLifecycleRevision)
       ) {
-        throw new Error("CLI history owner changed before preparation");
+        throw new CliHistoryOwnerChangedError();
       }
       return { activeWriterRunId: writerRunId, cliHistoryBoundary: boundary };
     },

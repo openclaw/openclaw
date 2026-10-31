@@ -29,7 +29,7 @@ type ZalouserIngressPayload = {
   rawMessage: string;
 };
 
-export type ZalouserIngressLifecycle = ReturnType<
+type ZalouserIngressLifecycle = ReturnType<
   typeof bindIngressLifecycleToReplyOptions
 >["turnAdoptionLifecycle"];
 
@@ -118,7 +118,6 @@ export function createZalouserIngressMonitor(options: {
   runtime: Pick<RuntimeEnv, "error" | "log">;
   dispatch: ZalouserIngressDispatch;
   queue?: ChannelIngressQueue<ZalouserIngressPayload>;
-  pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
 }) {
   const monitor = createChannelIngressMonitor<
@@ -170,7 +169,7 @@ export function createZalouserIngressMonitor(options: {
         bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
       );
     },
-    pollIntervalMs: options.pollIntervalMs ?? ZALOUSER_INGRESS_POLL_INTERVAL_MS,
+    pollIntervalMs: ZALOUSER_INGRESS_POLL_INTERVAL_MS,
     retention: {
       completedMaxEntries: 1_000,
       failedMaxEntries: 1_000,

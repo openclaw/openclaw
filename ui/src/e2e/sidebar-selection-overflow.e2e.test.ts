@@ -45,7 +45,34 @@ suite.define(() => {
       }
       if (overflow) {
         await page.getByRole("button", { name: "Show more", exact: true }).click();
-        await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(20);
+        const body = page.locator(".sidebar-shell__body");
+        const toolbar = page.locator(".sidebar-session-toolbar");
+        const toolbarBefore = await toolbar.boundingBox();
+        const last = page.locator(
+          '.sidebar-recent-session[data-session-key="agent:main:dashboard:session-19"]',
+        );
+        await expect
+          .poll(async () => {
+            await body.evaluate((element) => {
+              element.scrollTop = element.scrollHeight;
+            });
+            return last.isVisible();
+          })
+          .toBe(true);
+        // The session toolbar stays pinned and unobscured above the scrolled list.
+        expect(await toolbar.boundingBox()).toEqual(toolbarBefore);
+        expect(
+          await toolbar.evaluate((element) => {
+            const title = element.firstElementChild!;
+            const box = title.getBoundingClientRect();
+            return title.contains(
+              document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2),
+            );
+          }),
+        ).toBe(true);
+        await body.evaluate((element) => {
+          element.scrollTop = 0;
+        });
       }
       const active = page.locator(
         `.sidebar-recent-session--active[data-session-key="${sessionKey}"]`,
@@ -91,7 +118,8 @@ suite.define(() => {
       expect(geometry.rightInset, JSON.stringify(geometry)).toBeCloseTo(geometry.leftInset, 1);
       expect(geometry.rowLeft).toBeCloseTo(geometry.listLeft, 1);
       expect(geometry.rowRight).toBeCloseTo(geometry.listRight, 1);
-      expect(geometry.clearance).toBeGreaterThanOrEqual(8);
+      // The mobile rail reserves 6px gutters to preserve session title space.
+      expect(geometry.clearance).toBeGreaterThanOrEqual(width === 390 ? 6 : 8);
       if (overflow) {
         expect(geometry.maskImage.match(/linear-gradient/g)).toHaveLength(2);
         expect(geometry.maskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("100%");

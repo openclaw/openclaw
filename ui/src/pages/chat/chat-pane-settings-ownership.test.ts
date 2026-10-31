@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { withSessionMutationOperations } from "../../lib/sessions/session-mutation-operations.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import { mountSettings, settingsAck, settingsRow } from "./chat-pane-settings.test-support.ts";
@@ -15,17 +16,26 @@ import {
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
-it.each(["rejected", "older-clock ACK"] as const)(
-  "retains settled thinking facts after an older direct capability patch returns %s",
-  async (outcome) => {
+it.each([
+  { outcome: "rejected", field: "thinking" },
+  { outcome: "older-clock ACK", field: "thinking" },
+  { outcome: "rejected", field: "access program" },
+  { outcome: "older-clock ACK", field: "access program" },
+] as const)(
+  "retains settled $field facts after an older direct capability patch returns $outcome",
+  async ({ outcome, field }) => {
     const initial = settingsRow("settings-ownership", {
       label: "Original label",
       fastMode: false,
       effectiveFastMode: false,
       contextWindow: "64k",
     });
-    const firstFields = { thinkingLevel: "off" };
-    const secondFields = { thinkingLevel: "low" };
+    const firstFields =
+      field === "thinking"
+        ? { thinkingLevel: "off" }
+        : { cyberAccessProgram: "daybreak_blue" as const };
+    const secondFields =
+      field === "thinking" ? { thinkingLevel: "low" } : { cyberAccessProgram: "standard" as const };
     const firstReply = createDeferred<unknown>();
     const secondReply = createDeferred<unknown>();
     const firstAcknowledgement = settingsAck(initial, { updatedAt: 2, ...firstFields });
@@ -64,8 +74,9 @@ it.each(["rejected", "older-clock ACK"] as const)(
       });
       assertFields(firstFields);
       second = sessions.patch(initial.key, secondFields, options);
-      expect(patch).toHaveBeenCalledTimes(2);
       assertFields(secondFields);
+      await withSessionMutationOperations(() => undefined);
+      expect(patch).toHaveBeenCalledTimes(2);
 
       secondReply.resolve(secondAcknowledgement);
       await expect(second).resolves.toMatchObject(secondAcknowledgement);
@@ -156,8 +167,9 @@ it.each([
       };
       const options = { agentId: "main", deferListRefresh: read === "deferred" };
       first = sessions.patch(initial.key, { fastMode: true }, options);
-      expect(patch).toHaveBeenCalledOnce();
       assertModes(true, true);
+      await withSessionMutationOperations(() => undefined);
+      expect(patch).toHaveBeenCalledOnce();
       if (observeEffective) {
         emitGatewayEvent("sessions.changed", {
           sessionKey: initial.key,

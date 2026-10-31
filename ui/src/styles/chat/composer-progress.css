@@ -11,7 +11,6 @@
 
   position: relative;
   display: block;
-  box-sizing: border-box;
   width: 100%;
   max-width: none;
   border: 1px solid var(--chat-composer-hairline);
@@ -78,15 +77,6 @@
   stroke-linejoin: round;
 }
 
-.agent-chat__goal-copy,
-.agent-chat__goal-label,
-.agent-chat__goal-objective {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .agent-chat__goal-copy {
   display: flex;
   align-items: baseline;
@@ -150,9 +140,9 @@
   border-radius: var(--radius-sm);
 }
 
-.agent-chat__goal-action:hover {
+.agent-chat__goal-action:hover:not(:disabled) {
   color: var(--text);
-  background: color-mix(in srgb, var(--text) 10%, transparent);
+  background: var(--surface-hover);
 }
 
 .agent-chat__goal-action svg {
@@ -451,7 +441,6 @@
 }
 
 .agent-chat__goal-float .agent-chat__goal {
-  box-sizing: border-box;
   width: 100%;
   max-width: none;
   margin: 0;

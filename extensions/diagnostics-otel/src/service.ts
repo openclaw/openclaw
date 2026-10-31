@@ -19,11 +19,6 @@ import {
   normalizeOptionalString,
   readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  DEFAULT_SERVICE_NAME,
-  OTEL_EXPORTER_OTLP_ENDPOINT_ENV,
-  OTEL_EXPORTER_OTLP_PROTOCOL_ENV,
-} from "./service-constants.js";
 import { hasPreloadedOtelSdk } from "./service-content-normalization.js";
 import { createDiagnosticsEventHandler, type DiagnosticHandlers } from "./service-events.js";
 import {
@@ -53,6 +48,9 @@ import { createDiagnosticsTraceRuntime } from "./service-traces.js";
 import type { OtelLogsExporter, TelemetryExporterDiagnosticEvent } from "./service-types.js";
 
 const OTLP_HTTP_PROTOBUF_PROTOCOL = "http/protobuf";
+const DEFAULT_SERVICE_NAME = "openclaw";
+const OTEL_EXPORTER_OTLP_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_ENDPOINT";
+const OTEL_EXPORTER_OTLP_PROTOCOL_ENV = "OTEL_EXPORTER_OTLP_PROTOCOL";
 const RESOURCE_DETECTORS = [
   ["host", resources.hostDetector],
   ["os", resources.osDetector],
@@ -554,11 +552,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }),
         metricsActive
           ? tracesActive
-            ? undefined
-            : { exclude: ["diagnostic.phase.completed"] }
+            ? { exclude: ["worker.request"] }
+            : {
+                exclude: ["diagnostic.phase.completed", "worker.request"],
+                includePromptStats: false,
+              }
           : tracesActive
             ? {
                 exclude: [
+                  "worker.request",
                   "gateway.event_loop.sample",
                   "diagnostic.gc",
                   "gateway.ws.event",

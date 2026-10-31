@@ -47,5 +47,5 @@ export async function runSessionPatchGroups(
     return;
   }
   const groups = groupRecords(ready, (target) => target.storePath + "\0" + target.targetAgentId);
-  await Promise.all([...groups.values()].map(apply));
+  await Promise.all(Array.from(groups.values(), apply));
 }

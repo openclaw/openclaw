@@ -9,6 +9,7 @@ import { handleCopyButton } from "./copy-button-state.ts";
 import { Picker, type PickerParams } from "./select-picker.ts";
 import { SensitiveInput } from "./sensitive-input.tsx";
 import { ChannelPicker, type ChannelPickerOption } from "./solid/channel-picker.tsx";
+import { ModelSetupSignIn } from "./wizard-sign-in.tsx";
 import "../styles/wizard-step-controls.css";
 
 registerEnglishCatalog(registerModelSetupEnglish);
@@ -26,6 +27,10 @@ type WizardStepControlsProps = {
   confirmAffirmativeLabel?: string;
   leadingAction?: JSX.Element;
   externalAuthInput?: boolean;
+  /** Model-setup sign-in identity: Gateway brand id (icon) and display name. */
+  brandId?: string;
+  providerLabel?: string;
+  signInIcon?: JSX.Element;
   presentation?: "channels" | "model-setup";
   channelSelect?: boolean;
   answerLabel?: string;
@@ -98,71 +103,80 @@ function OptionBody(props: { option: WizardStepOption; channels?: boolean; selec
   );
 }
 
-function SignIn(props: Pick<WizardStepControlsProps, "step" | "presentation" | "onAutofocusRef">) {
+type SignInProps = Pick<
+  WizardStepControlsProps,
+  "step" | "presentation" | "onAutofocusRef" | "brandId" | "providerLabel" | "signInIcon"
+> & { waiting: boolean };
+
+function SignIn(props: SignInProps) {
+  return (
+    <Show when={props.step.externalUrl || props.step.deviceCode}>
+      <Show when={props.presentation === "model-setup"} fallback={<EmbeddedSignIn {...props} />}>
+        <ModelSetupSignIn
+          step={props.step}
+          waiting={props.waiting}
+          icon={props.signInIcon}
+          brandId={props.brandId}
+          providerLabel={props.providerLabel}
+          onAutofocusRef={props.onAutofocusRef}
+        />
+      </Show>
+    </Show>
+  );
+}
+
+function EmbeddedSignIn(props: SignInProps) {
   const code = createMemo(() => props.step.deviceCode);
   const copyLabel = () => t(code() ? "modelSetup.wizard.copyCode" : "modelSetup.wizard.copyLink");
   const copyValue = createMemo(() => code()?.code ?? props.step.externalUrl);
   return (
-    <Show when={props.step.externalUrl || code()}>
-      <div class="wizard-step__sign-in">
-        <p class="muted">{code()?.message ?? t("modelSetup.wizard.browserInstructions")}</p>
-        <Show when={code()}>
-          {(value) => <code class="wizard-step__sign-in-code">{value().code}</code>}
+    <div class="wizard-step__sign-in">
+      <p class="muted">{code()?.message ?? t("modelSetup.wizard.browserInstructions")}</p>
+      <Show when={code()}>
+        {(value) => <code class="wizard-step__sign-in-code">{value().code}</code>}
+      </Show>
+      <div class="wizard-step__actions">
+        <Show when={props.step.externalUrl}>
+          <a
+            ref={(element) => props.onAutofocusRef?.(element)}
+            class="btn primary wizard-step__external-link"
+            data-link-reader-external
+            href={props.step.externalUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {t("modelSetup.wizard.openSignIn")}
+          </a>
         </Show>
-        <div class="wizard-step__actions">
-          <Show when={props.step.externalUrl}>
-            <a
-              ref={(element) => props.onAutofocusRef?.(element)}
-              class="btn primary wizard-step__external-link"
-              autofocus={props.presentation === "model-setup"}
-              data-link-reader-external
-              href={props.step.externalUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {t("modelSetup.wizard.openSignIn")}
-            </a>
-          </Show>
-          <Show when={copyValue()} keyed>
-            {(value) => {
-              let label!: HTMLSpanElement;
-              return (
-                <button
-                  type="button"
-                  class="btn"
-                  onClick={(event) => void handleCopyButton(event, value, copyLabel(), { label })}
-                >
-                  <span ref={(element) => (label = element)} data-copy-label>
-                    {copyLabel()}
-                  </span>
-                </button>
-              );
-            }}
-          </Show>
-        </div>
-        <div
-          class={["muted", { "wizard-step__waiting": props.presentation === "model-setup" }]}
-          role="status"
-          aria-live="polite"
-          aria-busy={props.presentation === "model-setup" ? "true" : undefined}
-        >
-          <Show when={props.presentation === "model-setup"}>
-            <span class="wizard-step__spinner" aria-hidden="true" />
-          </Show>
-          {props.presentation === "model-setup"
-            ? (props.step.progressMessage ?? t("modelSetup.waitingForApproval"))
-            : t("modelSetup.wizard.waiting")}
-        </div>
-        <Show when={code()?.expiresInMinutes}>
-          <div class="muted">
-            {t("modelSetup.wizard.expires", { count: String(code()?.expiresInMinutes) })}
-          </div>
-        </Show>
-        <Show when={code()}>
-          <p class="muted">{t("modelSetup.wizard.deviceCodeWarning")}</p>
+        <Show when={copyValue()} keyed>
+          {(value) => {
+            let label!: HTMLSpanElement;
+            return (
+              <button
+                type="button"
+                class="btn"
+                onClick={(event) => void handleCopyButton(event, value, copyLabel(), { label })}
+              >
+                <span ref={(element) => (label = element)} data-copy-label>
+                  {copyLabel()}
+                </span>
+              </button>
+            );
+          }}
         </Show>
       </div>
-    </Show>
+      <div class="muted" role="status" aria-live="polite">
+        {t("modelSetup.wizard.waiting")}
+      </div>
+      <Show when={code()?.expiresInMinutes}>
+        <div class="muted">
+          {t("modelSetup.wizard.expires", { count: String(code()?.expiresInMinutes) })}
+        </div>
+      </Show>
+      <Show when={code()}>
+        <p class="muted">{t("modelSetup.wizard.deviceCodeWarning")}</p>
+      </Show>
+    </div>
   );
 }
 
@@ -247,7 +261,7 @@ function TextForm(props: WizardStepControlsProps) {
         </div>
       </Show>
       <Show when={!props.externalAuthInput}>
-        <SignIn {...props} />
+        <SignIn {...props} waiting={false} />
       </Show>
       <Show
         when={props.step.sensitive && props.onToggleSensitiveVisibility}
@@ -297,7 +311,7 @@ function TextForm(props: WizardStepControlsProps) {
 function TextStep(props: WizardStepControlsProps) {
   return (
     <Show when={props.externalAuthInput} fallback={<TextForm {...props} />}>
-      <SignIn {...props} />
+      <SignIn {...props} waiting />
       <details class="wizard-step__manual-entry">
         <summary class="muted">{t("modelSetup.wizard.manualEntry")}</summary>
         <TextForm {...props} />
@@ -520,8 +534,15 @@ function ConfirmStep(props: WizardStepControlsProps) {
 function ContinueStep(props: WizardStepControlsProps) {
   return (
     <>
-      <Message {...props} />
-      <SignIn {...props} />
+      {/* Model-setup sign-in folds the step message into its own heading block. */}
+      <Show
+        when={
+          props.presentation !== "model-setup" || !(props.step.externalUrl || props.step.deviceCode)
+        }
+      >
+        <Message {...props} />
+      </Show>
+      <SignIn {...props} waiting={false} />
       <Answer
         {...props}
         label={t("modelSetup.wizard.continue")}
@@ -540,7 +561,7 @@ function ProgressStep(props: WizardStepControlsProps) {
           <Message {...props} />
         </div>
       </Show>
-      <SignIn {...props} />
+      <SignIn {...props} waiting />
       <Show when={props.leadingAction}>
         <ActionRow
           modal={props.presentation === "model-setup"}

@@ -27,6 +27,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { dispatchReplyFromConfig } from "./dispatch-from-config.js";
 import * as runtimeLoaders from "./dispatch-from-config.runtime-loaders.js";
+import { createReplyAgentDefaults } from "./get-reply-config.test-support.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
@@ -36,11 +37,6 @@ export const conversation = {
   accountId: "default",
   conversationId: "room",
 };
-
-const commandNames = () =>
-  createPluginCommandRuntime()
-    .listNativeCandidates("webchat")
-    .map((item) => item.name);
 
 let state: OpenClawTestState | undefined;
 let adapter: SessionBindingAdapter | undefined;
@@ -124,12 +120,7 @@ export async function createHookHarness(params: {
           { workspace: testState.path(`${id}-workspace`) },
         ]),
       ),
-      defaults: {
-        workspace: testState.workspaceDir,
-        skipBootstrap: true,
-        model: { primary: "mock-openai/gpt-5.6-luna" },
-        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-      },
+      defaults: createReplyAgentDefaults(testState.workspaceDir),
     },
     plugins: {
       enabled: true,
@@ -173,7 +164,11 @@ export async function createHookHarness(params: {
   if (params.registeredCommand) {
     const loadAbortRuntime = runtimeLoaders.loadAbortRuntime;
     vi.spyOn(runtimeLoaders, "loadAbortRuntime").mockImplementation(async () => {
-      preparedCatalogs.push(commandNames());
+      preparedCatalogs.push(
+        createPluginCommandRuntime()
+          .listNativeCandidates("webchat")
+          .map((item) => item.name),
+      );
       return await loadAbortRuntime();
     });
   }
@@ -215,8 +210,8 @@ export async function createHookHarness(params: {
         : undefined,
     });
   };
-  const invoke = (ctx: Awaited<ReturnType<typeof buildContext>>) => {
-    return (pendingDispatch = (async () => {
+  const invoke = (ctx: Awaited<ReturnType<typeof buildContext>>) =>
+    (pendingDispatch = (async () => {
       const dispatcher = createReplyDispatcher({
         deliver: async () => {
           throw new Error("The handled hook must not send a provider message");
@@ -238,7 +233,6 @@ export async function createHookHarness(params: {
         await dispatcher.waitForIdle();
       }
     })());
-  };
 
   return { buildContext, invoke, pluginRoot, preparedCatalogs };
 }

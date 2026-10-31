@@ -217,6 +217,10 @@ function dispatchSeg<T extends object, Child extends object>(
   context: WalkContext,
   memoIdentity: object = node,
 ): void {
+  if (i >= subs.length) {
+    context.onMatch(walked);
+    return;
+  }
   // Different recursive routes can reach the same node and remaining pattern.
   const remaining = subs.slice(i);
   let key: string;
@@ -327,7 +331,7 @@ const jsoncOps: WalkOps<JsoncValue> = {
         : { keySub: key === lookupKey ? quoteSeg(e.key) : key, child: e.value };
     }
     if (node.kind === "array") {
-      const idx = parseArrayIndexSegment(key, node.items.length);
+      const idx = parseArrayIndexSegment(unquoteSeg(key), node.items.length);
       if (idx === null) {
         return null;
       }
@@ -352,10 +356,6 @@ const jsoncOps: WalkOps<JsoncValue> = {
   },
   walk(node, subs, i, walked, context) {
     checkDepth(walked);
-    if (i >= subs.length) {
-      context.onMatch(walked);
-      return;
-    }
     dispatchSeg(node, jsoncOps, subs, i, walked, context);
   },
 };
@@ -453,7 +453,7 @@ const yamlOps: WalkOps<Node> = {
         : { keySub: key === lookupKey ? quoteSeg(lookupKey) : key, child: pair.value as Node };
     }
     if (isSeq(node)) {
-      const idx = parseArrayIndexSegment(key, node.items.length);
+      const idx = parseArrayIndexSegment(unquoteSeg(key), node.items.length);
       if (idx === null) {
         return null;
       }
@@ -479,10 +479,6 @@ const yamlOps: WalkOps<Node> = {
   },
   walk(node, subs, i, walked, context) {
     checkDepth(walked);
-    if (i >= subs.length) {
-      context.onMatch(walked);
-      return;
-    }
     dispatchSeg(node, yamlOps, subs, i, walked, context);
   },
 };
@@ -549,30 +545,42 @@ function walkMd(
       context.onMatch([{ slot: cur.slot, value: cur.value }]);
       return;
     }
-    if (next.value === WILDCARD_SINGLE || next.value === WILDCARD_RECURSIVE) {
-      for (const fm of level.ast.frontmatter) {
-        context.onMatch([
-          { slot: cur.slot, value: cur.value },
-          { slot: next.slot, value: fm.key },
-        ]);
+    if (isUnionSeg(next.value)) {
+      for (const alt of parseUnionSeg(next.value) ?? []) {
+        const altSubs = subs.slice();
+        altSubs[i + 1] = { slot: next.slot, value: alt };
+        walkMd(level, altSubs, i, walked, context);
       }
       return;
     }
+    const wildcard = next.value === WILDCARD_SINGLE || next.value === WILDCARD_RECURSIVE;
     const fmKey = unquoteSeg(next.value);
-    const entry = level.ast.frontmatter.find((e) => e.key === fmKey);
-    if (entry === undefined) {
-      return;
+    for (const fm of level.ast.frontmatter) {
+      if (!wildcard && fm.key !== fmKey) {
+        continue;
+      }
+      context.onMatch([
+        { slot: cur.slot, value: cur.value },
+        { slot: next.slot, value: quoteSeg(fm.key) },
+      ]);
     }
-    context.onMatch([
-      { slot: cur.slot, value: cur.value },
-      { slot: next.slot, value: next.value },
-    ]);
     return;
   }
 
-  // Item-level field slot is terminal — descending would loop.
+  // Fields are leaves; recursive wildcards may match zero segments around the key.
   if (level.kind === "item") {
-    walkMdItemField(level.item, cur, walked, context);
+    let field: SlotSub | undefined;
+    for (let j = i; j < subs.length; j++) {
+      const sub = expectDefined(subs[j], "Markdown field index checked above");
+      if (sub.value === WILDCARD_RECURSIVE) {
+        continue;
+      }
+      if (field) {
+        return;
+      }
+      field = sub;
+    }
+    walkMdItemField(level.item, field ?? cur, walked, context);
     return;
   }
 
@@ -597,8 +605,8 @@ function walkMdItemField(
     return;
   }
   const key = item.kv.key;
-  const emit = (value: string): void => {
-    context.onMatch([...walked, { slot: cur.slot, value }]);
+  const emit = (): void => {
+    context.onMatch([...walked, { slot: cur.slot, value: quoteSeg(key) }]);
   };
   if (isUnionSeg(cur.value)) {
     const alts = parseUnionSeg(cur.value);
@@ -606,8 +614,8 @@ function walkMdItemField(
       return;
     }
     for (const alt of alts) {
-      if (alt.toLowerCase() === key.toLowerCase()) {
-        emit(key);
+      if (unquoteSeg(alt).toLowerCase() === key.toLowerCase()) {
+        emit();
       }
     }
     return;
@@ -615,16 +623,16 @@ function walkMdItemField(
   if (isPredicateSeg(cur.value)) {
     const pred = parsePredicateSeg(cur.value);
     if (pred !== null && mdItemMatchesPredicate(item, pred)) {
-      emit(key);
+      emit();
     }
     return;
   }
   if (cur.value === WILDCARD_SINGLE || cur.value === WILDCARD_RECURSIVE) {
-    emit(key);
+    emit();
     return;
   }
-  if (key.toLowerCase() === cur.value.toLowerCase()) {
-    emit(cur.value);
+  if (key.toLowerCase() === unquoteSeg(cur.value).toLowerCase()) {
+    emit();
   }
 }
 
@@ -644,7 +652,7 @@ const mdOps: WalkOps<MdLevel> = {
       for (const block of level.ast.blocks) {
         const child = { kind: "block" as const, block };
         if (!matches || matches(child)) {
-          yield { keySub: block.slug, child };
+          yield { keySub: quoteSeg(block.slug), child };
         }
       }
       return;
@@ -656,7 +664,7 @@ const mdOps: WalkOps<MdLevel> = {
       for (const [idx, item] of level.block.items.entries()) {
         const child = { kind: "item" as const, item };
         if (!matches || matches(child)) {
-          const seg = (counts.get(item.slug) ?? 0) > 1 ? `#${idx}` : item.slug;
+          const seg = (counts.get(item.slug) ?? 0) > 1 ? `#${idx}` : quoteSeg(item.slug);
           yield { keySub: seg, child };
         }
       }
@@ -664,9 +672,11 @@ const mdOps: WalkOps<MdLevel> = {
   },
   lookup(level, key) {
     if (level.kind === "root") {
-      const target = key.toLowerCase();
+      const target = unquoteSeg(key).toLowerCase();
       const block = level.ast.blocks.find((b) => b.slug === target);
-      return block === undefined ? null : { keySub: key, child: { kind: "block", block } };
+      return block === undefined
+        ? null
+        : { keySub: quoteSeg(block.slug), child: { kind: "block", block } };
     }
     if (level.kind === "block") {
       if (isOrdinalSeg(key)) {
@@ -682,9 +692,11 @@ const mdOps: WalkOps<MdLevel> = {
           },
         };
       }
-      const target = key.toLowerCase();
+      const target = unquoteSeg(key).toLowerCase();
       const item = level.block.items.find((it) => it.slug === target);
-      return item === undefined ? null : { keySub: key, child: { kind: "item", item } };
+      return item === undefined
+        ? null
+        : { keySub: quoteSeg(item.slug), child: { kind: "item", item } };
     }
     return null;
   },

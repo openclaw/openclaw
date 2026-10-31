@@ -1,5 +1,6 @@
 import {
   getReplyPayloadMetadata,
+  readReplyPayloadSourceOccurrence,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
@@ -97,12 +98,14 @@ export async function createDirectPendingFinalCustody(
   };
 }
 
-export function toCoreManagedDeliveryInfo(info: ChannelDeliveryInfo) {
+export function toCoreManagedDeliveryInfo(info: ChannelDeliveryInfo, payload: ReplyPayload) {
+  const blockSource = info.kind === "block" ? readReplyPayloadSourceOccurrence(payload) : undefined;
   return {
     kind: info.kind,
     ...(info.participant ? { participant: info.participant } : {}),
     ...(info.assistantMessageIndex === undefined
       ? {}
       : { assistantMessageIndex: info.assistantMessageIndex }),
+    ...(blockSource ? { blockSourceRange: blockSource.sourceRange } : {}),
   };
 }

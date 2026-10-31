@@ -7,6 +7,7 @@ import "../components/tooltip.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import {
   configEnumOptionLabel,
+  configFieldRequiresInput,
   formatConfigValueText,
   type SensitiveRenderState,
 } from "./config-form.node.shared.ts";
@@ -59,6 +60,7 @@ export function FieldRow(props: {
   helpId?: string;
   defaultDescription?: JSX.Element;
   showLabel: boolean;
+  required?: boolean;
   control: JSX.Element;
   stacked?: boolean;
   error?: JSX.Element;
@@ -81,7 +83,17 @@ export function FieldRow(props: {
     >
       {hasText() && (
         <div class="settings-row__text">
-          {props.showLabel && <span class="settings-row__title">{props.label}</span>}
+          {props.showLabel && (
+            <span class="settings-row__title">
+              {props.label}
+              {props.required && (
+                <span class="settings-row__desc" aria-hidden="true">
+                  {" · "}
+                  {t("configForm.required")}
+                </span>
+              )}
+            </span>
+          )}
           {help() && (
             <span class="settings-row__desc" id={props.helpId}>
               {help()}
@@ -102,6 +114,11 @@ export function FieldRow(props: {
       )}
       {props.control != null && (
         <div class="settings-row__control">
+          {!props.showLabel && props.required && (
+            <span class="settings-row__desc" aria-hidden="true">
+              {t("configForm.required")}
+            </span>
+          )}
           {props.control}
           {props.errorId && (
             <span
@@ -207,6 +224,7 @@ export function SegmentedControl(props: {
   options: unknown[];
   resolvedValue: unknown;
   disabled: boolean;
+  required?: boolean;
   ariaLabel: string;
   descriptionId?: string;
   onSelect: (value: unknown) => boolean | void;
@@ -226,6 +244,7 @@ export function SegmentedControl(props: {
       value={selectedIndex() < 0 ? "" : String(selectedIndex())}
       options={options()}
       disabled={props.disabled}
+      ariaRequired={props.required}
       ariaLabel={props.ariaLabel}
       descriptionId={props.descriptionId}
       onChange={(index: string) => {
@@ -249,6 +268,7 @@ export function JsonTextareaControl(props: {
   sensitiveState: SensitiveRenderState;
   disabled: boolean;
   isRequired?: boolean;
+  showRequiredCue?: boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
   onPatch: (path: Array<string | number>, value: unknown) => boolean | void;
 }): JSX.Element {
@@ -298,6 +318,7 @@ export function JsonTextareaControl(props: {
       ref={draft.ref}
       class={["settings-input", { "cfg-redacted": props.sensitiveState.isRedacted }]}
       aria-label={props.ariaLabel}
+      aria-required={configFieldRequiresInput(props) ? "true" : undefined}
       aria-describedby={[props.descriptionId, errorId()].filter(Boolean).join(" ") || undefined}
       aria-invalid="false"
       placeholder={
@@ -332,6 +353,11 @@ export function JsonTextareaControl(props: {
   );
   return (
     <span class="cfg-json-editor">
+      {props.showRequiredCue !== false && configFieldRequiresInput(props) && (
+        <span class="settings-row__desc" aria-hidden="true">
+          {t("configForm.required")}
+        </span>
+      )}
       {(props.sensitiveState.isSensitiveField || props.sensitiveState.isSensitive) &&
       props.onToggleSensitivePath ? (
         <span class="settings-secret">

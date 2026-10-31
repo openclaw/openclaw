@@ -101,7 +101,10 @@ async function createTerminalRun(
   return {
     runId,
     toolCallId,
-    onToolOutcome,
+    expectPresentation: (terminalPresentation: string | undefined) =>
+      expect(onToolOutcome).toHaveBeenLastCalledWith(
+        expect.objectContaining({ presentationOnly: true, terminalPresentation }),
+      ),
     emit: () =>
       handler({
         toolName: "web_fetch",
@@ -194,11 +197,8 @@ describe("buildEmbeddedExtensionFactories", () => {
     );
     await terminal.emit();
 
-    expect(terminal.onToolOutcome).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        presentationOnly: true,
-        terminalPresentation: "URL: https://private.example\nOrigin: redacted.example\nStatus: 200",
-      }),
+    terminal.expectPresentation(
+      "URL: https://private.example\nOrigin: redacted.example\nStatus: 200",
     );
     expect(seenMiddlewareArgs).toEqual([{ url: "https://approved.example" }]);
     expect(
@@ -217,12 +217,7 @@ describe("buildEmbeddedExtensionFactories", () => {
     const result = await terminal.emit();
 
     expect(result).toMatchObject({ isError: true });
-    expect(terminal.onToolOutcome).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        presentationOnly: true,
-        terminalPresentation: undefined,
-      }),
-    );
+    terminal.expectPresentation(undefined);
   });
 
   it.each([false, true])(
@@ -235,14 +230,12 @@ describe("buildEmbeddedExtensionFactories", () => {
         return { result: { content: event.result.content, details: { redacted: true } } };
       });
       const receipt = {
-        toolSend: fails
-          ? { to: "channel:C123" }
-          : { to: "channel:resolved-id", threadId: "root-1" },
+        toolSend: { to: "channel:resolved-id", threadId: "root-1" },
         messageDelivery: {
           status: "settled",
-          primaryPlatformMessageId: fails ? "1700000000.000100" : "message-1",
+          primaryPlatformMessageId: "message-1",
           partialDelivery: false,
-          createdThreadIds: fails ? [] : ["root-1"],
+          createdThreadIds: ["root-1"],
         },
       };
       const sessionManager = SessionManager.inMemory();
@@ -274,41 +267,24 @@ describe("buildEmbeddedExtensionFactories", () => {
     },
   );
 
-  it("keeps an accepted sessions_spawn launch successful even when the event is flagged as an error", async () => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-
-    const runner = await createToolResultRunner();
-    const acceptedResult = jsonResult({
-      status: "accepted",
-      childSessionKey: "agent:watcher:subagent:abc",
-      runId: "run-123",
-      mode: "run",
-    });
-
-    const result = await runner.emitToolResult({
-      type: "tool_result",
-      toolName: "sessions_spawn",
-      toolCallId: "call-spawn",
-      input: {},
-      ...acceptedResult,
-      isError: true,
-    });
-
-    expect(result).toEqual({ ...acceptedResult, isError: false });
-  });
-
-  it("retains errors without the full spawn contract", async () => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    const handler = await createToolResultHandler();
-    const content = [{ type: "text", text: "failed" }];
-    const details = { status: "accepted" };
-    const result = await handler?.({
-      toolName: "sessions_spawn",
-      toolCallId: "call-invalid-acceptance",
-      content,
-      details,
-      isError: true,
-    });
-    expect(result).toEqual({ content, details, isError: true });
-  });
+  it.each([false, true])(
+    "clears a spawn error only with the full acceptance contract: complete=%s",
+    async (complete) => {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      const runner = await createToolResultRunner();
+      const payload = jsonResult({
+        status: "accepted",
+        ...(complete ? { childSessionKey: "agent:watcher:subagent:abc", runId: "run-123" } : {}),
+      });
+      const result = await runner.emitToolResult({
+        type: "tool_result",
+        toolName: "sessions_spawn",
+        toolCallId: "call-spawn",
+        input: {},
+        ...payload,
+        isError: true,
+      });
+      expect(result).toEqual({ ...payload, isError: !complete });
+    },
+  );
 });

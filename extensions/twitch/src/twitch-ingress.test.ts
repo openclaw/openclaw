@@ -52,6 +52,13 @@ function gateAppend(queue: Queue, committed = () => {}) {
   return { entered: entered.promise, release: gate.resolve, enqueue, queue: { ...queue, enqueue } };
 }
 
+function waitForAbort(signal: AbortSignal, entered: () => void) {
+  return new Promise<void>((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+    entered();
+  });
+}
+
 async function expectStopWaits(
   ingress: ReturnType<CreateIngress>,
   release: () => void | Promise<void>,
@@ -73,21 +80,27 @@ async function expectStopWaits(
 afterEach(() => vi.restoreAllMocks());
 
 describe("Twitch durable ingress", () => {
-  it("durably appends before dispatch", async () => {
+  it.each(["append", "recovery"])("dispatches one durable event after %s", async (mode) => {
     await withTwitchIngressTestQueue(async (queue, createIngress) => {
       const append = gateAppend(queue);
+      if (mode === "recovery") {
+        const interrupted = createIngress({ queue, deliver: vi.fn() });
+        await interrupted.accept(createTwitchIngressTestMessage("durable-first"));
+        await interrupted.stop();
+      }
       const deliver = vi.fn(async (_message, lifecycle) => {
         await lifecycle.onAdopted();
       });
-      const ingress = createIngress({ queue: append.queue, deliver, pollIntervalMs: 5 });
+      const ingress = createIngress({ queue: mode === "append" ? append.queue : queue, deliver });
       ingress.start();
       try {
-        const admission = ingress.accept(createTwitchIngressTestMessage("durable-first"));
-        await append.entered;
-        expect(append.enqueue).toHaveBeenCalledOnce();
-        expect(deliver).not.toHaveBeenCalled();
-        append.release();
-        await admission;
+        if (mode === "append") {
+          const admission = ingress.accept(createTwitchIngressTestMessage("durable-first"));
+          await append.entered;
+          expect(deliver).not.toHaveBeenCalled();
+          append.release();
+          await admission;
+        }
         await expectSettledIngressVerdict(queue, "durable-first", "completed");
         expect(deliver).toHaveBeenCalledOnce();
       } finally {
@@ -96,22 +109,6 @@ describe("Twitch durable ingress", () => {
       }
     });
   });
-
-  it("recovers an uncompleted event with a fresh drain and dispatches exactly once", async () => {
-    await withTwitchIngressTestQueue(async (queue, createIngress) => {
-      const interrupted = createIngress({ queue, deliver: vi.fn() });
-      await interrupted.accept(createTwitchIngressTestMessage("restart"));
-      await interrupted.stop();
-      const deliver = vi.fn(async (_message, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const recovered = createIngress({ queue, deliver, pollIntervalMs: 5 });
-      recovered.start();
-      await expectSettledIngressVerdict(queue, "restart", "completed");
-      expect(deliver).toHaveBeenCalledOnce();
-    });
-  });
-
   it("dead-letters malformed persisted JSON without dispatch", async () => {
     await withTwitchIngressTestQueue(async (queue, createIngress) => {
       await queue.enqueue(
@@ -120,13 +117,12 @@ describe("Twitch durable ingress", () => {
         { laneKey: "channel:testchannel" },
       );
       const deliver = vi.fn();
-      const ingress = createIngress({ queue, deliver, pollIntervalMs: 5 });
+      const ingress = createIngress({ queue, deliver });
       ingress.start();
       await expectSettledIngressVerdict(queue, "malformed", "failed");
       expect(deliver).not.toHaveBeenCalled();
     });
   });
-
   it("waits for an in-flight durable admission before stop returns", async () => {
     await withTwitchIngressTestQueue(async (queue, createIngress) => {
       const trace: string[] = [];
@@ -153,7 +149,6 @@ describe("Twitch durable ingress", () => {
       }
     });
   });
-
   it.each(["adopted", "deferred"] as const)(
     "waits for %s delivery before stop returns",
     async (mode) => {
@@ -175,7 +170,7 @@ describe("Twitch durable ingress", () => {
             }
           }
         });
-        const ingress = createIngress({ queue, deliver, pollIntervalMs: 5 });
+        const ingress = createIngress({ queue, deliver });
         try {
           ingress.start();
           await ingress.accept(createTwitchIngressTestMessage(mode));
@@ -200,19 +195,18 @@ describe("Twitch durable ingress", () => {
         } finally {
           gate.resolve();
           try {
-            try {
-              await adoptDeferred?.();
-            } finally {
-              await ingress.stop();
-            }
+            await adoptDeferred?.();
           } finally {
-            vi.useRealTimers();
+            try {
+              await ingress.stop();
+            } finally {
+              vi.useRealTimers();
+            }
           }
         }
       });
     },
   );
-
   it.each(["abort", "release"] as const)(
     "returns pre-adoption work to the queue on shutdown (%s)",
     async (mode) => {
@@ -221,16 +215,13 @@ describe("Twitch durable ingress", () => {
         const gate = Promise.withResolvers<void>();
         const deliver = vi.fn<IngressOptions["deliver"]>(async (_message, lifecycle) => {
           if (mode === "abort") {
-            await new Promise<void>((resolve) => {
-              lifecycle.abortSignal.addEventListener("abort", () => resolve(), { once: true });
-              entered.resolve();
-            });
+            await waitForAbort(lifecycle.abortSignal, entered.resolve);
           } else {
             entered.resolve();
             await gate.promise;
           }
         });
-        const ingress = createIngress({ queue, deliver, pollIntervalMs: 5 });
+        const ingress = createIngress({ queue, deliver });
         try {
           ingress.start();
           await ingress.accept(createTwitchIngressTestMessage("shutdown-retry"));
@@ -265,10 +256,7 @@ describe("Twitch ingress fixture isolation", () => {
       const ingress = createIngress({
         queue,
         deliver: async (_message, lifecycle) => {
-          await new Promise<void>((resolve) => {
-            lifecycle.abortSignal.addEventListener("abort", () => resolve(), { once: true });
-            delivering.resolve();
-          });
+          await waitForAbort(lifecycle.abortSignal, delivering.resolve);
         },
       });
       const stop = ingress.stop.bind(ingress);
@@ -287,14 +275,11 @@ describe("Twitch ingress fixture isolation", () => {
     try {
       await stopping.promise;
       expect(settled).not.toHaveBeenCalled();
-      expect(
-        (
-          await expectDefined(activeQueue, "active queue").enqueue("pending", {
-            version: 1,
-            rawEvent: "{}",
-          })
-        ).kind,
-      ).toBe("claimed");
+      const verdict = await expectDefined(activeQueue, "active queue").enqueue("pending", {
+        version: 1,
+        rawEvent: "{}",
+      });
+      expect(verdict.kind).toBe("claimed");
     } finally {
       release.resolve();
       await rejected;

@@ -168,7 +168,7 @@ export function modelParentMailbox(inputs: readonly PilotParentInput[]): PilotPa
   });
 }
 
-export function pilotRandom(seed: number): (bound: number) => number {
+function pilotRandom(seed: number): (bound: number) => number {
   let value = (seed ^ 0x9e3779b9) >>> 0;
   return (bound) => {
     // Mix all bits; low-bit LCG sampling otherwise alternates binary choices.

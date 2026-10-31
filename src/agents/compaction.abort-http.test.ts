@@ -1,10 +1,12 @@
 import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
+import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { summarizeCompactionHistory } from "./compaction.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { ExtensionContext } from "./sessions/index.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 describe("compaction retry backoff over real HTTP", () => {
   it("aborts after one provider response without changing the source history", async () => {
@@ -41,31 +43,18 @@ describe("compaction retry backoff over real HTTP", () => {
       );
     });
 
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.removeListener("error", reject);
-        resolve();
-      });
-    });
+    const origin = await httpFixtures.listenLoopback(server);
 
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Compaction loopback server did not expose a TCP port");
-      }
-      const model = {
+      const model = makeProviderModelFixture<"openai-completions">({
         id: "loopback-compaction-model",
         name: "Loopback compaction model",
         api: "openai-completions",
         provider: "openai",
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        baseUrl: `${origin}/v1`,
         contextWindow: 200_000,
         maxTokens: 8_192,
-      } satisfies NonNullable<ExtensionContext["model"]>;
+      }) satisfies NonNullable<ExtensionContext["model"]>;
 
       const messages: AgentMessage[] = [
         makeUserMessage("Keep this original conversation and opaque ID 5cf86ba9 unchanged.", 1),

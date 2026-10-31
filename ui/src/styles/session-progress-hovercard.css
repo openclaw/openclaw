@@ -1,0 +1,74 @@
+.session-progress-hovercard {
+  --session-hovercard-shift-x: 0;
+  --session-hovercard-shift-y: 0;
+
+  position: fixed;
+  inset: auto;
+  z-index: 1990;
+  width: min(320px, calc(100vw - 24px));
+  max-height: min(580px, calc(100vh - 24px));
+  padding: 0;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid transparent;
+  border-radius: var(--menu-radius);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
+  corner-shape: superellipse(1.5);
+  color: var(--text);
+  pointer-events: none;
+  opacity: 0;
+  transform: translate3d(var(--session-hovercard-shift-x), var(--session-hovercard-shift-y), 0)
+    scale(0.99);
+  transition:
+    opacity 100ms var(--ease-out),
+    transform 100ms var(--ease-out);
+}
+
+.session-progress-hovercard[data-side="right"] {
+  --session-hovercard-shift-x: -4px;
+  transform-origin: top left;
+}
+
+.session-progress-hovercard[data-side="left"] {
+  --session-hovercard-shift-x: 4px;
+  transform-origin: top right;
+}
+
+.session-progress-hovercard[data-side="bottom"] {
+  --session-hovercard-shift-y: -4px;
+  transform-origin: top left;
+}
+
+.session-progress-hovercard[data-side="top"] {
+  --session-hovercard-shift-y: 4px;
+  transform-origin: bottom left;
+}
+
+.session-progress-hovercard[data-open="true"] {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+  transition-duration: 150ms;
+}
+
+.session-progress-hovercard[data-instant="true"][data-open="true"] {
+  transition: none;
+}
+
+@media (hover: hover) {
+  .session-progress-hovercard[data-open="true"] {
+    pointer-events: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-progress-hovercard {
+    transform: none;
+    transition: opacity 80ms linear;
+  }
+
+  .session-progress-hovercard[data-open="true"] {
+    transform: none;
+  }
+}

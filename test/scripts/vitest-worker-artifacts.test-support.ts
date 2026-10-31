@@ -452,7 +452,7 @@ export function workerProbe(
       expect(Object.values(runtimeProcessBuildEntries)).toHaveLength(runtimeProcessBuildEntrypoints.length);
       for (const source of Object.values(runtimeProcessBuildEntries)) {
         expect(source).not.toContain('/dist/');
-        expect(source).toMatch(/\\.m?ts$/);
+        expect(source).toMatch(/\\.m?[jt]s$/);
         expect(fs.existsSync(source)).toBe(true);
       }
       expect(entriesPresentAtCollection).toBe(true);
@@ -481,7 +481,7 @@ export function workerProbe(
           const [archiveUrl] = Worker.mock.calls.at(-1);
           expect(archiveUrl.href.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
           if (!sourceMode) expect(fileURLToPath(archiveUrl).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
-          expect(tuiUrls).toHaveLength(5);
+          expect(tuiUrls).toHaveLength(6);
           expect(setupUrls).toHaveLength(2);
           expect(scriptUrl.endsWith(sourceMode ? '.mts' : '.js')).toBe(true);
           for (const url of [...tuiUrls,...setupUrls,retentionUrl]) {

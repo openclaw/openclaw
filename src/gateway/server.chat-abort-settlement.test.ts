@@ -205,6 +205,7 @@ describe("gateway WebSocket chat abort settlement", () => {
                   injectionSettled = true;
                 });
                 injectionWork.push(work);
+                dispatchStarted.resolve();
                 return work;
               },
             },
@@ -239,12 +240,13 @@ describe("gateway WebSocket chat abort settlement", () => {
         const started = await rpcReq(socket, "chat.send", sendParameters);
         expect(started.ok).toBe(true);
         expect(started.payload).toMatchObject({ runId, status: "started" });
+        // The ACK owns durable custody; backend admission happens in detached dispatch.
+        await withinTest(dispatchStarted.promise, signal);
         if (settlement === "accepted-injection") {
           expect(injectionWork).toHaveLength(1);
           expect(injectionSignal?.aborted).toBe(false);
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         } else {
-          await withinTest(dispatchStarted.promise, signal);
           expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
         }
 

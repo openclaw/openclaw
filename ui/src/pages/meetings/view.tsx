@@ -11,7 +11,7 @@ import { registerTranscriptsEnglish } from "../../i18n/locales/en-transcripts.ts
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../config/settings-targets.ts";
@@ -92,10 +92,6 @@ function ReadBoundary(props: {
   error?: JSX.Element;
   children?: JSX.Element;
 }) {
-  const ready = () => {
-    latest(props.read);
-    return null;
-  };
   return (
     <Show when={props.scope} keyed>
       {/* A value-taking child lets keyed Show replace the error scope. */}
@@ -117,7 +113,7 @@ function ReadBoundary(props: {
           }
         >
           <Loading fallback={props.loading ?? null}>
-            {ready()}
+            {(latest(props.read), null)}
             {props.children}
           </Loading>
         </Errored>
@@ -232,13 +228,7 @@ function MeetingRow(props: TranscriptsViewProps & { entry: TranscriptSessionSumm
           pathForRoute("meetings", props.basePath) +
           transcriptRouteSearch(props.search, selection())
         }
-        onClick={(event) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          props.onNavigate(selection());
-        }}
+        onClick={(event) => handleNavigationClick(event, () => props.onNavigate(selection()))}
       >
         <span class="meetings-row__title">
           {props.entry.title || props.entry.providerName || props.entry.providerId}
@@ -396,13 +386,11 @@ function Reader(props: TranscriptsViewProps) {
           pathForRoute("meetings", props.basePath) +
           transcriptRouteSearch(props.search, { selector: null, find: null, tab: null })
         }
-        onClick={(event) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          props.onNavigate({ selector: null, find: null, tab: null });
-        }}
+        onClick={(event) =>
+          handleNavigationClick(event, () =>
+            props.onNavigate({ selector: null, find: null, tab: null }),
+          )
+        }
       >
         <Icon name="arrowLeft" />
         {t("transcripts.back")}
@@ -493,7 +481,7 @@ function Reader(props: TranscriptsViewProps) {
                   {(format) => (
                     <button
                       class="btn"
-                      disabled={props.exportState.kind === "loading"}
+                      disabled={props.exporting}
                       onClick={() => props.onDownload(format())}
                     >
                       <Icon name="download" />
@@ -502,20 +490,20 @@ function Reader(props: TranscriptsViewProps) {
                   )}
                 </For>
               </div>
-              {props.exportState.kind === "error" ? (
-                <p role="alert">
-                  {t("transcripts.exportError")} {props.exportState.message}
-                </p>
-              ) : null}
-              {props.exportState.kind === "loading" || props.exportState.kind === "done" ? (
-                <p role="status">
-                  {t(
-                    props.exportState.kind === "loading"
-                      ? "transcripts.exporting"
-                      : "transcripts.downloadStarted",
+              <Loading
+                on={props.exportCompletion}
+                fallback={<p role="status">{t("transcripts.exporting")}</p>}
+              >
+                <Errored
+                  fallback={(error) => (
+                    <p role="alert">
+                      {t("transcripts.exportError")} {formatUiError(error())}
+                    </p>
                   )}
-                </p>
-              ) : null}
+                >
+                  {props.exportRead() && <p role="status">{t("transcripts.downloadStarted")}</p>}
+                </Errored>
+              </Loading>
             </header>
             <HubTabs<TranscriptsViewProps["readerTab"]>
               id="transcript-reader"
@@ -539,7 +527,9 @@ function Reader(props: TranscriptsViewProps) {
                   {(summaryPage) => (
                     <MeetingSummary
                       page={summaryPage()}
-                      generation={props.summaryGeneration}
+                      generating={props.summaryGenerating}
+                      completion={props.summaryCompletion}
+                      read={props.summaryRead}
                       onRetry={props.onSummaryRetry}
                     />
                   )}
@@ -653,13 +643,7 @@ export function TranscriptsView(props: TranscriptsViewProps) {
                 captureTarget.search +
                 captureTarget.hash
               }
-              onClick={(event) => {
-                if (!shouldHandleNavigationClick(event)) {
-                  return;
-                }
-                event.preventDefault();
-                props.onOpenCaptureSettings();
-              }}
+              onClick={(event) => handleNavigationClick(event, () => props.onOpenCaptureSettings())}
             >
               <Icon name="settings" />
               {t("meetingCapture.title")}

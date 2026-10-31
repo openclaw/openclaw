@@ -48,7 +48,7 @@ it("does not derive cards for unrelated host notifications but updates permissio
 
   Object.assign(w.host, { locale: "es" });
   w.notify();
-  expect(select.getAttribute("aria-label")).toBe(`Estado: ${w.card.title}`);
+  await vi.waitFor(() => expect(select.getAttribute("aria-label")).toBe(`Estado: ${w.card.title}`));
   expect(deriveCards).not.toHaveBeenCalled();
   for (const canWrite of [false, true]) {
     w.connection.canWrite = canWrite;

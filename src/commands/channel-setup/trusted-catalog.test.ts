@@ -1,5 +1,6 @@
 // Trusted channel catalog tests cover workspace shadow filtering and plugin auto-enable trust resolution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeMeta } from "../../flows/channel-setup.test-helpers.js";
 
 const getChannelPluginCatalogEntry = vi.hoisted(() => vi.fn());
 const listRawChannelPluginCatalogEntries = vi.hoisted(() => vi.fn());
@@ -39,14 +40,10 @@ function createCatalogEntry(params: {
     id: params.id,
     pluginId: params.pluginId,
     origin: params.origin,
-    meta: {
-      id: params.id,
-      label: params.label,
-      selectionLabel: params.label,
-      docsPath: `/channels/${params.id}`,
+    meta: makeMeta(params.id, params.label, {
       blurb:
         params.blurb ?? (params.origin === "bundled" ? "bundled entry" : `${params.origin} shadow`),
-    },
+    }),
     install: { localPath: params.localPath, defaultChoice: "local" },
   };
 }

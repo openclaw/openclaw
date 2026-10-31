@@ -65,7 +65,7 @@ export function readSqliteDatabaseAdmissionDeadline(): number | undefined {
   return deadline;
 }
 
-function assertAdmissionWaitActive(): void {
+export function assertSqliteDatabaseAdmissionWaitActive(): void {
   try {
     for (let scope = admissionWait.getStore(); scope; scope = scope.parent) {
       if (scope.active) {
@@ -134,7 +134,7 @@ export function exchangeDatabaseAdmissions(
       : Math.max(0, deadlineAtMs - Date.now());
   const deadlineNs = readSqliteWorkerMonotonicNs() + BigInt(Math.ceil(timeoutMs)) * 1_000_000n;
   const remaining = () => {
-    assertAdmissionWaitActive();
+    assertSqliteDatabaseAdmissionWaitActive();
     const remainingMs = Number(deadlineNs - readSqliteWorkerMonotonicNs()) / 1e6;
     if (remainingMs <= 0) {
       throw new SqliteWorkerError(

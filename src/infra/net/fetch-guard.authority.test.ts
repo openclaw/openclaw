@@ -1,7 +1,10 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { fetchWithSsrFGuard, type GuardedFetchOptions } from "./fetch-guard.js";
-import { withGuardedFetchRequestAuthority } from "./fetch-request-authority.js";
+import {
+  withGuardedFetchBeforeRequest,
+  withGuardedFetchRequestAuthority,
+} from "./fetch-request-authority.js";
 
 const lookupFn = async () => [{ address: "93.184.216.34", family: 4 }];
 const fetchImpl = vi.fn<NonNullable<GuardedFetchOptions["fetchImpl"]>>();
@@ -98,4 +101,35 @@ it.each([
     request({ rejectCrossOriginUnsafeRedirectReplay: true, ...options }),
   ).rejects.toThrow(error);
   expect(fetchImpl).toHaveBeenCalledTimes(calls);
+});
+
+it("adds a dispatch check for later requests while keeping the inherited scope", async () => {
+  const release = createDeferred();
+  const events: string[] = [];
+  let retained: ReturnType<typeof request> | undefined;
+  await withGuardedFetchRequestAuthority(
+    () => events.push("scope"),
+    async () => {
+      // The helper returns before its request dispatches, like a returned stream.
+      withGuardedFetchBeforeRequest(
+        () => events.push("egress"),
+        () => {
+          retained = release.promise.then(() => request());
+        },
+      );
+      events.length = 0;
+      release.resolve();
+      await (await retained)?.release();
+      expect(events).toEqual(["scope", "dispatch", "egress"]);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    },
+    () => events.push("dispatch"),
+  );
+  const rejected = vi.fn(() => {
+    throw new Error("egress revoked");
+  });
+  await expect(withGuardedFetchBeforeRequest(rejected, () => request())).rejects.toThrow(
+    "egress revoked",
+  );
+  expect(fetchImpl).toHaveBeenCalledOnce();
 });

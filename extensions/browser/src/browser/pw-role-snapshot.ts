@@ -65,35 +65,6 @@ export function getRoleSnapshotIdentityKeys<T extends RoleRef>(
   );
 }
 
-/** Mark ref-bearing lines that were absent from the previous compatible snapshot. */
-function annotateRoleSnapshotDelta<T extends RoleRef>(params: {
-  lines: string[];
-  lineRefs: readonly (string | undefined)[];
-  refs: Record<string, T>;
-  mode: RoleSnapshotIdentityMode;
-  previousKeys: ReadonlySet<string>;
-}): boolean {
-  const markedKeys = new Set<string>();
-  for (const [index, line] of params.lines.entries()) {
-    const ref = params.lineRefs[index];
-    const value = ref && Object.hasOwn(params.refs, ref) ? params.refs[ref] : undefined;
-    if (!ref || !value) {
-      continue;
-    }
-    const key = getRoleSnapshotIdentityKey(ref, value, params.mode);
-    if (params.previousKeys.has(key)) {
-      continue;
-    }
-    params.lines[index] = `${line} [new]`;
-    markedKeys.add(key);
-  }
-  if (markedKeys.size === 0) {
-    return false;
-  }
-  params.lines.push(`${markedKeys.size} new element(s) since last snapshot`);
-  return true;
-}
-
 function truncateRoleSnapshot(lines: readonly string[], maxChars: number) {
   const marker =
     maxChars >= ROLE_SNAPSHOT_TRUNCATION_MARKER.length ? ROLE_SNAPSHOT_TRUNCATION_MARKER : "…";
@@ -132,13 +103,24 @@ export function finalizeRoleSnapshot<T extends RoleRef>(params: {
   let annotated = false;
   if (delta && previousKeys !== undefined) {
     lineRefs = sourceLines.map(findRoleSnapshotLineRef);
-    annotated = annotateRoleSnapshotDelta({
-      lines: sourceLines,
-      lineRefs,
-      refs: params.refs,
-      mode: delta.mode,
-      previousKeys,
-    });
+    const markedKeys = new Set<string>();
+    for (const [index, line] of sourceLines.entries()) {
+      const ref = lineRefs[index];
+      const value = ref && Object.hasOwn(params.refs, ref) ? params.refs[ref] : undefined;
+      if (!ref || !value) {
+        continue;
+      }
+      const key = getRoleSnapshotIdentityKey(ref, value, delta.mode);
+      if (previousKeys.has(key)) {
+        continue;
+      }
+      sourceLines[index] = `${line} [new]`;
+      markedKeys.add(key);
+    }
+    annotated = markedKeys.size > 0;
+    if (annotated) {
+      sourceLines.push(`${markedKeys.size} new element(s) since last snapshot`);
+    }
   }
   const sourceSnapshot = annotated ? sourceLines.join("\n") : params.snapshot;
   const truncated = maxChars !== undefined && sourceSnapshot.length > maxChars;

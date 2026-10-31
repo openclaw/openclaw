@@ -212,6 +212,26 @@ suite.define(() => {
     await pollCount(suggestions).toBe(4);
   });
 
+  it("offers session-scoped guests starter prompts within their own sessions", async () => {
+    const page = await openPage({ viewport: { width: 1280, height: 900 } });
+    await installMockGateway(page, {
+      operatorScopes: ["operator.sessions.write"],
+      methodResponses: {
+        "sessions.list": sessionList([]),
+      },
+    });
+
+    await page.goto(`${suite.server.baseUrl}new`);
+    const suggestions = page.locator(".agent-chat__suggestion:visible");
+    await pollCount(suggestions).toBe(4);
+    expect(await suggestions.allTextContents()).toEqual([
+      "What can you do?",
+      "Tour OpenClaw's code and docs",
+      "Investigate an issue in a sandbox",
+      "Fix a bug and open a draft PR",
+    ]);
+  });
+
   it("keeps recent-chat timestamps on one right-aligned line in a narrow column", async () => {
     const page = await openPage({ viewport: { width: 1280, height: 900 } });
     const now = Date.now();

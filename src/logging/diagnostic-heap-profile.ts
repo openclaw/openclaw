@@ -3,12 +3,15 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import type { HeapSpaceInfo } from "node:v8";
 import type { DiagnosticsHeapProfileParams } from "../../packages/gateway-protocol/src/schema/diagnostics.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { observeRuntimeProfileCapability } from "../infra/runtime-capabilities.js";
 import {
   captureDiagnosticProfile,
   createInspectorProfileCapture,
   DIAGNOSTIC_PROFILE_MAX_BYTES,
   sanitizeDiagnosticProfileFrame,
 } from "./diagnostic-profile.js";
+
+const SUMMARY_STACK_DEPTH = 8;
 
 // Node's inspector declarations omit these fields from the current V8 protocol.
 type SamplingNode = Omit<HeapProfiler.SamplingHeapProfileNode, "children"> & {
@@ -106,6 +109,9 @@ export async function sanitizeDiagnosticHeapProfile(
     totalBytes: number;
     count: number;
     frameId: number;
+    app?: Row;
+    owner?: Row;
+    cycle?: { width: number; count: number; next?: Row };
   };
   const rows = new Map<number, Row>();
   const pending: Array<{ source: SamplingNode; parent?: Row }> = [{ source: profile.head }];
@@ -189,7 +195,9 @@ export async function sanitizeDiagnosticHeapProfile(
   // Intern exact sanitized frames so each stack key need not repeat their JSON.
   const frameIds = new Map<string, number>();
   const groups = new Map<string, AllocationSummary>();
-  const stackIds: number[] = [];
+  const stackIds: (string | number)[] = [];
+  const stackRows: (Row | undefined)[] = [];
+  const repetitions: number[] = [];
   for (const row of ordered) {
     if (++work % 1024 === 0) {
       await nextTurn();
@@ -206,12 +214,65 @@ export async function sanitizeDiagnosticHeapProfile(
       continue;
     }
     const selfBytes = row.node.selfSize;
-    const stack: AllocationSummary["stack"] = [row.node.callFrame];
-    stackIds.length = 0;
+    row.app = row.node.callFrame.url.startsWith("openclaw:") ? row : row.parent?.app;
+    row.owner = row.parent?.owner ?? row.app;
+    // Reuse the preceding cycle's endpoint instead of rescanning recursive ancestors.
+    let previous = row.parent;
+    for (
+      let width = 1;
+      previous && width <= SUMMARY_STACK_DEPTH;
+      width++, previous = previous.parent
+    ) {
+      if (previous.frameId !== frameId) {
+        continue;
+      }
+      let left = row.parent;
+      let right = previous.parent;
+      let matched = 1;
+      while (matched < width && left && right && left.frameId === right.frameId) {
+        left = left.parent;
+        right = right.parent;
+        matched++;
+      }
+      if (matched === width) {
+        const cycle = previous.cycle;
+        row.cycle = {
+          width,
+          count: cycle?.width === width ? cycle.count + 1 : 2,
+          next: cycle?.width === width ? cycle.next : right,
+        };
+        break;
+      }
+    }
+    stackRows.length = repetitions.length = stackIds.length = 0;
+    stackRows.push(row);
+    repetitions.push(1);
     stackIds.push(frameId);
-    for (let parent = row.parent; parent && stack.length < 8; parent = parent.parent) {
-      stack.push(parent.node.callFrame);
-      stackIds.push(parent.frameId);
+    let cursor = row.parent;
+    while (cursor && stackRows.length < SUMMARY_STACK_DEPTH) {
+      const cycle = cursor.cycle;
+      const width =
+        cycle && cycle.width <= SUMMARY_STACK_DEPTH - stackRows.length ? cycle.width : 1;
+      const repeatCount = width === cycle?.width ? cycle.count : 1;
+      const next = repeatCount > 1 ? cycle!.next : cursor.parent;
+      for (let index = 0; index < width; index++) {
+        const entry: Row = cursor!;
+        const repeated = index === width - 1 && repeatCount > 1;
+        stackRows.push(entry);
+        repetitions.push(repeated ? repeatCount : 1);
+        stackIds.push(repeated ? `${entry.frameId}x${repeatCount}` : entry.frameId);
+        cursor = entry.parent;
+      }
+      cursor = next;
+    }
+    if (cursor) {
+      // Reserve two slots for the closest omitted app frame and its outer owner.
+      const nearest = stackRows[SUMMARY_STACK_DEPTH - 3]!.app;
+      const tail = nearest ? (nearest === row.owner ? [nearest] : [nearest, row.owner!]) : [];
+      stackRows.length = repetitions.length = stackIds.length = SUMMARY_STACK_DEPTH - 3;
+      stackRows.push(undefined, ...tail);
+      repetitions.push(1, 1, 1);
+      stackIds.push("...", ...tail.map((entry) => entry.frameId));
     }
     const key = stackIds.join(",");
     const group = groups.get(key);
@@ -220,10 +281,28 @@ export async function sanitizeDiagnosticHeapProfile(
       group.totalBytes += totalBytes;
       group.count += count;
     } else {
+      const stack: AllocationSummary["stack"] = [row.node.callFrame];
+      for (let index = 1; index < stackRows.length; index++) {
+        const frame = stackRows[index]?.node.callFrame;
+        stack.push(
+          !frame
+            ? {
+                functionName: "[...]",
+                url: "",
+                scriptId: "0",
+                lineNumber: -1,
+                columnNumber: -1,
+              }
+            : repetitions[index]! > 1
+              ? { ...frame, functionName: `${frame.functionName} ×${repetitions[index]}` }
+              : frame,
+        );
+      }
       groups.set(key, { stack, selfBytes, totalBytes, count });
     }
   }
   frameIds.clear();
+  stackRows.length = 0;
   ordered.length = 0;
   const result: HeapProfileResult = { ...common, truncated: true, summary: [] };
   let bytes = Buffer.byteLength(JSON.stringify(result));
@@ -262,42 +341,45 @@ export function captureDiagnosticHeapProfile(
       : 900_000;
   const requestedDurationMs = options.durationMs ?? 5_000;
   const durationMs = Math.min(maxDurationMs, Math.max(1, requestedDurationMs));
-  return captureDiagnosticProfile({
-    signal: options.signal,
-    hasAuthority: options.hasAuthority,
-    durationMs,
-    create: (inspector) =>
-      createInspectorProfileCapture(inspector, {
-        setup: (session) => session.post("HeapProfiler.enable"),
-        start: (session) =>
-          session.post("HeapProfiler.startSampling", {
-            samplingInterval: samplingIntervalBytes,
-            ...collectionOptions,
-          }),
-        stop: (session) => session.post("HeapProfiler.stopSampling"),
-        disable: (session) => session.post("HeapProfiler.disable"),
-      }),
-    sanitize: (profile, packageRoot, measurement) =>
-      // SAFETY: The native protocol includes IDs and samples omitted by Node's declarations.
-      sanitizeDiagnosticHeapProfile(profile as SamplingProfile, packageRoot, {
-        durationMs: measurement.durationMs,
-        requestedDurationMs,
-        effectiveDurationMs: durationMs,
-        actualDurationMs: measurement.durationMs,
-        durationLimitReason:
-          requestedDurationMs <= maxDurationMs
-            ? null
-            : maxDurationMs === 30_000
-              ? "collected-samples"
-              : "maximum-duration",
-        samplingIntervalBytes,
-        ...collectionOptions,
-        heapUsedBefore: measurement.before.heapUsed,
-        heapUsedAfter: measurement.after.heapUsed,
-        heapSpacesBefore: measurement.before.heapSpaces,
-        heapSpacesAfter: measurement.after.heapSpaces,
-        rssBefore: measurement.before.rss,
-        rssAfter: measurement.after.rss,
-      }),
-  });
+  return observeRuntimeProfileCapability(
+    "heapSampling",
+    captureDiagnosticProfile({
+      signal: options.signal,
+      hasAuthority: options.hasAuthority,
+      durationMs,
+      create: (inspector) =>
+        createInspectorProfileCapture(inspector, {
+          setup: (session) => session.post("HeapProfiler.enable"),
+          start: (session) =>
+            session.post("HeapProfiler.startSampling", {
+              samplingInterval: samplingIntervalBytes,
+              ...collectionOptions,
+            }),
+          stop: (session) => session.post("HeapProfiler.stopSampling"),
+          disable: (session) => session.post("HeapProfiler.disable"),
+        }),
+      sanitize: (profile, packageRoot, measurement) =>
+        // SAFETY: The native protocol includes IDs and samples omitted by Node's declarations.
+        sanitizeDiagnosticHeapProfile(profile as SamplingProfile, packageRoot, {
+          durationMs: measurement.durationMs,
+          requestedDurationMs,
+          effectiveDurationMs: durationMs,
+          actualDurationMs: measurement.durationMs,
+          durationLimitReason:
+            requestedDurationMs <= maxDurationMs
+              ? null
+              : maxDurationMs === 30_000
+                ? "collected-samples"
+                : "maximum-duration",
+          samplingIntervalBytes,
+          ...collectionOptions,
+          heapUsedBefore: measurement.before.heapUsed,
+          heapUsedAfter: measurement.after.heapUsed,
+          heapSpacesBefore: measurement.before.heapSpaces,
+          heapSpacesAfter: measurement.after.heapSpaces,
+          rssBefore: measurement.before.rss,
+          rssAfter: measurement.after.rss,
+        }),
+    }),
+  );
 }

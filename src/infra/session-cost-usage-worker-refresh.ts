@@ -13,6 +13,10 @@ import {
 } from "../config/sessions/transcript-tree.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import { sha256Base64Url } from "./crypto-digest.js";
+import {
+  dropInheritedTranscriptEvents,
+  projectUsageScanFields,
+} from "./session-cost-usage-inherited.js";
 import { parseUsageCostTranscriptRecord } from "./session-cost-usage-pricing.js";
 import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
 import { createUsageRollupScan } from "./session-cost-usage-rollup-scan.js";
@@ -147,7 +151,8 @@ type RollupScanInput = {
     marker: SqliteSessionFileMarker,
     afterSeq: number,
     throughSeq: number,
-  ) => Promise<Array<{ seq: number; event: unknown }>>;
+    consume: (seq: number, event: unknown) => void,
+  ) => Promise<number>;
   checkProgress?: () => void;
 };
 
@@ -269,7 +274,8 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
     previousCheckpoint.maxSeq < maxSeq &&
     previousCheckpoint.eventCount < eventCount,
   );
-  const afterSeq = appendCandidate ? (previousCheckpoint?.maxSeq ?? 0) : 0;
+  // Full scans start before seq 0: the session header carries the inherited-history marker.
+  const afterSeq = appendCandidate ? (previousCheckpoint?.maxSeq ?? 0) : eventCount > 0 ? -1 : 0;
   type UsageRecord = Record<string, unknown> & {
     seq: number;
     usageEntry: ParsedTranscriptEntry | null;
@@ -282,36 +288,24 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
     const records: UsageRecord[] = [];
     while (after < endSeq) {
       params.checkProgress?.();
-      const page = await params.readRows(scope, after, endSeq);
-      params.checkProgress?.();
-      if (page.length === 0) {
-        throw new Error(`SQLite transcript changed while scanning: ${params.file.filePath}`);
-      }
-      for (const { seq, event } of page) {
+      const lastSeq = await params.readRows(scope, after, endSeq, (seq, event) => {
         const record: UsageRecord = {
           seq,
           usageEntry: isRecord(event) ? parseUsageCostTranscriptRecord(event) : null,
         };
         if (isRecord(event)) {
-          for (const key of [
-            "type",
-            "id",
-            "parentId",
-            "targetId",
-            "appendParentId",
-            "appendMode",
-          ]) {
-            if (Object.hasOwn(event, key)) {
-              record[key] = event[key];
-            }
-          }
+          projectUsageScanFields(event, record);
         }
         if (seq === maxSeq) {
           anchorHash = sqliteCheckpointAnchorHash(event);
         }
         records.push(record);
+      });
+      params.checkProgress?.();
+      if (lastSeq <= after) {
+        throw new Error(`SQLite transcript changed while scanning: ${params.file.filePath}`);
       }
-      after = page.at(-1)!.seq;
+      after = lastSeq;
     }
     return records;
   };
@@ -322,11 +316,12 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
   const appendOnly = Boolean(incremental && params.previous);
   if (!appendOnly && afterSeq > 0) {
     // A rewind or side branch needs the prefix, but the suffix is already decoded.
-    records = [...(await readRange(0, afterSeq)), ...records];
+    records = [...(await readRange(-1, afterSeq)), ...records];
   }
+  // Appended rows follow any inherited history, so only full scans drop it.
   const selected = appendOnly
     ? records.filter(isCanonicalSessionTranscriptEntry)
-    : selectVisibleTranscriptEvents(records);
+    : dropInheritedTranscriptEvents(records, selectVisibleTranscriptEvents(records));
   const scan = createUsageRollupScan({ ...params, appendOnly });
   await scan.addEntries(
     selected.flatMap((record) => (record.usageEntry ? [record.usageEntry] : [])),

@@ -9,6 +9,7 @@ import { resolveDoctorMode } from "./doctor-health-contribution-utils.js";
 import {
   renderStructuredHealthFindings,
   recordDoctorHealthWarnings,
+  reportDoctorHealthFinding,
 } from "./doctor-health-contribution.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 
@@ -45,11 +46,14 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
   // Stray jobs can disrupt admitted maintenance; managed-service repair stays below the fence.
   const { noteMacForeignLaunchdJobs } = await import("../commands/doctor-foreign-launchd-jobs.js");
   await noteMacForeignLaunchdJobs(ctx.options, ctx.runtime, ctx.env ?? process.env);
-  if (ctx.gatewayMaintenanceActive) {
-    return;
-  }
   if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
+    return;
+  }
+  const { noteMacGatewayPlatformWarnings } = await import("../commands/doctor-platform-notes.js");
+  // Maintenance pins the launcher fingerprint; inspection here must remain read-only.
+  await noteMacGatewayPlatformWarnings(ctx.cfg, undefined, ctx.env ?? process.env);
+  if (ctx.gatewayMaintenanceActive) {
     return;
   }
   const { maybeRepairNodeServiceConfig } = await import("../commands/doctor-node-services.js");
@@ -62,7 +66,6 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
     maybeResolveDuelingSystemdGatewayScopes,
     maybeScanExtraGatewayServices,
   } = await import("../commands/doctor-gateway-services.js");
-  const { noteMacGatewayPlatformWarnings } = await import("../commands/doctor-platform-notes.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
   await maybeResolveDuelingSystemdGatewayScopes(ctx.runtime, ctx.prompter);
   ctx.cfg = await maybeRepairGatewayServiceConfig(
@@ -72,18 +75,10 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
     ctx.prompter,
     {
       allowExecSecretRefs: ctx.options.allowExec === true,
-      onFinding: (finding) => {
-        recordDoctorHealthWarnings(
-          ctx,
-          [finding],
-          finding.severity === "error" ? [`${finding.checkId}: ${finding.message}`] : [],
-        );
-        renderStructuredHealthFindings(ctx, [finding]);
-      },
+      onFinding: (finding) => reportDoctorHealthFinding(ctx, finding),
       writeConfig: (nextConfig) => writeDoctorGatewayConfig(ctx, nextConfig),
     },
   );
-  await noteMacGatewayPlatformWarnings(ctx.cfg);
 }
 
 export async function runHostDesktopHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -112,14 +107,7 @@ export async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<v
   await noteInstallPolicyHealth(ctx.cfg, {
     deep: ctx.options.deep === true,
     env: ctx.env,
-    onFinding: (finding) => {
-      recordDoctorHealthWarnings(
-        ctx,
-        [finding],
-        finding.severity === "error" ? [`${finding.checkId}: ${finding.message}`] : [],
-      );
-      renderStructuredHealthFindings(ctx, [finding]);
-    },
+    onFinding: (finding) => reportDoctorHealthFinding(ctx, finding),
   });
 }
 

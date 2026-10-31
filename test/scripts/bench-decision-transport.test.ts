@@ -62,14 +62,13 @@ function fixture(candidateResult: Record<string, unknown> = {}) {
     writeFileSync(file, JSON.stringify(manifest));
     return { file, manifest, flag: `--${side}` };
   });
-  const controls = ["--runs", "2", "--requests", "2", "--json"];
   const run = () =>
     spawnSync(
       process.execPath,
       [
         "scripts/bench-decision-transport.mts",
         ...manifests.flatMap(({ flag, file }) => [flag, file]),
-        ...controls,
+        ..."--runs 2 --requests 2 --json".split(" "),
       ],
       { encoding: "utf8", timeout: 20_000 },
     );
@@ -89,24 +88,21 @@ it("runs serial ABAB samples and reports bounded evidence without unsupported ta
   expect(scope).toContain("no model inference, TLS or Gateway startup claims");
 });
 
-it.each(["workerSourceSha256", "harnessSourceSha256", "node"] as const)(
-  "rejects mismatched %s before running samples",
+it.each(["workerSourceSha256", "harnessSourceSha256", "node", "artifact", "result"] as const)(
+  "rejects invalid %s without publishing a report",
   (field) => {
-    const { manifests, run } = fixture();
+    const { manifests, run } = fixture(field === "result" ? { warmTimingsMs: [] } : {});
     const candidate = manifests[1]!;
-    candidate.manifest[field] = "f".repeat(64);
-    writeFileSync(candidate.file, JSON.stringify(candidate.manifest));
+    if (field === "artifact") {
+      writeFileSync(path.join(path.dirname(candidate.file), "worker.mjs"), "process.exit(0);");
+    } else if (field !== "result") {
+      candidate.manifest[field] = "f".repeat(64);
+      writeFileSync(candidate.file, JSON.stringify(candidate.manifest));
+    }
     const result = run();
     expect(result).toMatchObject({ status: 1, stdout: "" });
-    expect(result.stderr).not.toContain("worker 1/4 start");
-    expect(result.stderr.trim()).toMatch(/\[bench-decision-transport\] FAILED \(exit 1\)$/u);
+    if (field !== "result") {
+      expect(result.stderr).not.toContain("worker 1/4 start");
+    }
   },
 );
-
-it.each(["artifact", "result"])("rejects an invalid %s without a report", (invalid) => {
-  const { manifests, run } = fixture(invalid === "result" ? { warmTimingsMs: [] } : {});
-  if (invalid === "artifact") {
-    writeFileSync(path.join(path.dirname(manifests[1]!.file), "worker.mjs"), "process.exit(0);");
-  }
-  expect(run()).toMatchObject({ status: 1, stdout: "" });
-});

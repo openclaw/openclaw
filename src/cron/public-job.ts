@@ -19,6 +19,7 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
   } = job;
   const state = { ...job.state };
   delete state.pluginCommandRuns;
+  delete state.pluginCommandBinding;
   delete state.queuedAtMs;
   delete state.runningReceiptId;
   delete state.startupCatchupAtMs;
@@ -32,6 +33,16 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
     state,
     ...(job.schedule.kind === "stream"
       ? { streamExecutionHost: job.streamSandbox ? ("sandbox" as const) : ("gateway" as const) }
+      : {}),
+    // Names the stored kind without exposing the private envelope or the requester's arguments.
+    ...(job.pluginCommand
+      ? {
+          payloadSource: {
+            kind: "pluginCommand" as const,
+            pluginId: job.pluginCommand.pluginId,
+            command: job.pluginCommand.command,
+          },
+        }
       : {}),
   };
 }

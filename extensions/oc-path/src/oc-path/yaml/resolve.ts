@@ -52,7 +52,7 @@ function walkNode(
     return null;
   }
   let seg = unquoteSeg(rawSeg);
-  if (seg.length === 0) {
+  if (rawSeg.length === 0) {
     return null;
   }
 

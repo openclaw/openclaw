@@ -15,7 +15,10 @@ import {
 import type { RawData } from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import { OpenAILiveDelegationQueue } from "./realtime-live-delegation-queue.js";
-import { assertOpenAIQuicksilverPcmOutput } from "./realtime-quicksilver-audio-buffer.js";
+import {
+  assertOpenAIQuicksilverPcmOutput,
+  closeOpenAIQuicksilverAudioOutput,
+} from "./realtime-quicksilver-audio-buffer.js";
 import { buildOpenAIQuicksilverDelegationPrompt } from "./realtime-quicksilver-instructions.js";
 import {
   captureOpenAIQuicksilverTransportEvent,
@@ -95,17 +98,8 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     if (this.lifecycle.currentConnection() && this.lifecycle.phase() !== "terminal") {
       throw new Error("GPT-Live audio output must be configured before connecting");
     }
-    this.closeAudioOutput();
+    this.audioOutput = closeOpenAIQuicksilverAudioOutput(this.audioOutput);
     this.audioOutput = output;
-  }
-
-  private closeAudioOutput(): void {
-    if (!this.audioOutput) {
-      return;
-    }
-    Atomics.store(new Int32Array(this.audioOutput.state), 0, 1);
-    this.audioOutput.port.close();
-    this.audioOutput = undefined;
   }
 
   async connect(): Promise<void> {
@@ -356,7 +350,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   acknowledgeMark(_markName?: string): void {}
 
   close(): void | Promise<void> {
-    this.closeAudioOutput();
+    this.audioOutput = closeOpenAIQuicksilverAudioOutput(this.audioOutput);
     const connection = this.lifecycle.currentConnection();
     if (!this.lifecycle.cancel()) {
       return this.closing?.connection === connection ? this.closing?.completion : undefined;
@@ -685,7 +679,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private resetTerminalState(): void {
-    this.closeAudioOutput();
+    this.audioOutput = closeOpenAIQuicksilverAudioOutput(this.audioOutput);
     this.socket?.stopAudio();
     this.delegations?.stop();
     this.delegations = undefined;

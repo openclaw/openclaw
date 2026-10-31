@@ -21,7 +21,8 @@ export type RemoteModelCatalogWriteResult =
   | { status: "written" }
   | { status: "retained-newer"; row: RemoteModelCatalogStoreRow };
 
-// V3 must never replace the slot read by released v2 clients, even for the same mirror.
+// Slot name predates the v2 wire; renaming it would discard cached catalogs.
+// It must never replace the slot read by released v2 clients, even for the same mirror.
 export const REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote.v3";
 export const PREVIOUS_REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote.v2";
 // Released v1/v2 snapshots remain readable until this client stores its own.

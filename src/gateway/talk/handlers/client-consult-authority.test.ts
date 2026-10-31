@@ -2,7 +2,11 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../../test/helpers/promise.js";
 import {
   isSessionEntryDataSql,
   observeHostDataSql,
@@ -299,12 +303,11 @@ describe("voice consult registration authority", () => {
         const { respond } = call;
         pending = call.pending;
         await withinTest(
-          Promise.race([
+          awaitGateBeforeSettlement(
             waiting.promise,
-            pending.then(() => {
-              throw new Error("Tool call ended before source handoff waited");
-            }),
-          ]),
+            pending,
+            "Tool call ended before source handoff waited",
+          ),
           signal,
         );
         setTestEnvValue("OPENCLAW_STATE_DIR", successor);
@@ -538,12 +541,11 @@ describe("voice consult registration authority", () => {
       );
       try {
         await withinTest(
-          Promise.race([
+          awaitGateBeforeSettlement(
             queued.promise,
-            Promise.resolve(running).then(() => {
-              throw new Error("Consult ended before real registration was queued");
-            }),
-          ]),
+            running,
+            "Consult ended before real registration was queued",
+          ),
           signal,
         );
         expect(chat.dispatched).not.toHaveBeenCalled();

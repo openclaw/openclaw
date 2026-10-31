@@ -143,6 +143,21 @@ export function captureNativeSessionWorkerDeletion(entries: readonly DeletionEnt
   };
 }
 
+/** A context cut retires the native generation without deleting the session or its artifacts. */
+export async function withSqliteSessionContextReset<T>(
+  scope: Parameters<typeof withSqliteSessionDeletions>[0],
+  entry: DeletionEntry,
+  run: SessionMutationRun<T>,
+  assertSourceCurrent?: () => void,
+  memory?: MemorySessionDeletionSource,
+): Promise<T> {
+  return withSqliteSessionDeletions(scope, [entry], run, {
+    contextReset: true,
+    assertSourceCurrent,
+    memory,
+  });
+}
+
 /** Prepare owner leases before entering a physical writer or changing any transcript state. */
 export async function withSqliteSessionDeletions<T>(
   scope: Pick<
@@ -154,38 +169,10 @@ export async function withSqliteSessionDeletions<T>(
   options: {
     additionalIdentities?: readonly string[];
     receiptsOnCommit?: { generations: readonly SessionReceiptDeletionGeneration[] };
-    memory?: MemorySessionDeletionSource;
-  } = {},
-): Promise<T> {
-  return withSqliteSessionMutations(scope, entries, run, options);
-}
-
-/** A context cut retires the native generation without deleting the session or its artifacts. */
-export async function withSqliteSessionContextReset<T>(
-  scope: Parameters<typeof withSqliteSessionDeletions>[0],
-  entry: DeletionEntry,
-  run: SessionMutationRun<T>,
-  assertSourceCurrent?: () => void,
-  memory?: MemorySessionDeletionSource,
-): Promise<T> {
-  return withSqliteSessionMutations(scope, [entry], run, {
-    contextReset: true,
-    assertSourceCurrent,
-    memory,
-  });
-}
-
-async function withSqliteSessionMutations<T>(
-  scope: Parameters<typeof withSqliteSessionDeletions>[0],
-  entries: readonly DeletionEntry[],
-  run: SessionMutationRun<T>,
-  options: {
-    additionalIdentities?: readonly string[];
-    receiptsOnCommit?: { generations: readonly SessionReceiptDeletionGeneration[] };
     contextReset?: boolean;
     assertSourceCurrent?: () => void;
     memory?: MemorySessionDeletionSource;
-  },
+  } = {},
 ): Promise<T> {
   const memory = options.memory;
   if (memory) {

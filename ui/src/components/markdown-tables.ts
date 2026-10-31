@@ -1,16 +1,20 @@
 import type { MarkdownIt } from "markdown-it";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
+import { formatUiError, UserFacingError } from "../lib/format-error.ts";
+import { cancelLayout, scheduleLayout } from "../lib/layout-frame.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { showToast } from "../lib/toast.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
 import { createIconElement } from "./markdown-icon.ts";
+import { registerSessionTitleTarget } from "./markdown-link-display.ts";
 import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
-import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
 
 const tableShellSelector = ".chat-text .markdown-table[data-table-interactions]";
 const tableViewportSelector = ".markdown-table__viewport";
 const enhancedTableShells = new WeakSet<HTMLElement>();
+const tableCopyStatuses = new WeakMap<HTMLElement, HTMLElement>();
 const tableOwnerStates = new WeakMap<HTMLElement, TableOwnerState>();
 
 type TableOwnerState = {
@@ -50,18 +54,20 @@ export function markdownTableCopyText(table: HTMLTableElement): string {
     .join("\n");
 }
 
-function syncTableOverflow(shell: HTMLElement): void {
+function measureTableOverflow(shell: HTMLElement): (() => void) | undefined {
   const viewport = shell.querySelector<HTMLElement>(tableViewportSelector);
   if (!viewport) {
-    return;
+    return undefined;
   }
   const { scrollWidth, clientWidth, scrollLeft } = viewport;
   const overflows = scrollWidth - clientWidth > 1;
-  shell.classList.toggle("markdown-table--can-scroll-left", overflows && scrollLeft > 1);
-  shell.classList.toggle(
-    "markdown-table--can-scroll-right",
-    overflows && scrollLeft + clientWidth < scrollWidth - 1,
-  );
+  return () => {
+    shell.classList.toggle("markdown-table--can-scroll-left", overflows && scrollLeft > 1);
+    shell.classList.toggle(
+      "markdown-table--can-scroll-right",
+      overflows && scrollLeft + clientWidth < scrollWidth - 1,
+    );
+  };
 }
 
 function enhanceTableShell(shell: HTMLElement): void {
@@ -78,20 +84,36 @@ function enhanceTableShell(shell: HTMLElement): void {
   label.textContent = t("common.expandTable");
   expand.replaceChildren(createIconElement("maximize", shell.ownerDocument), label);
   copy.replaceChildren(createIconElement("copy", shell.ownerDocument));
+  const status = shell.ownerDocument.createElement("span");
+  status.className = "sr-only";
+  status.setAttribute("role", "status");
+  copy.after(status);
+  tableCopyStatuses.set(copy, status);
 }
 
 export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
   let state = tableOwnerStates.get(owner);
   if (!state) {
     const observedNodes = new Set<HTMLElement>();
+    const pendingOverflow = new Set<HTMLElement>();
     const resizeObserver = new ResizeObserver((entries) => {
       const shells = new Set(
         entries.map((entry) => entry.target.closest<HTMLElement>(tableShellSelector)),
       );
       for (const shell of shells) {
         if (shell) {
-          syncTableOverflow(shell);
+          pendingOverflow.add(shell);
         }
+      }
+      if (pendingOverflow.size) {
+        // Even reading a masked scrollport can force WebKit layout mid-delivery.
+        scheduleLayout(pendingOverflow, () => {
+          const updates = [...pendingOverflow].map((shell) =>
+            owner.contains(shell) ? measureTableOverflow(shell) : undefined,
+          );
+          pendingOverflow.clear();
+          return () => updates.forEach((update) => update?.());
+        });
       }
     });
     const syncTables = (shells: Iterable<HTMLElement>) => {
@@ -127,6 +149,10 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           if (node.matches(tableShellSelector)) {
             shells.add(node);
           }
+          // Syntax highlighting inserts many leaf spans, which cannot contain tables.
+          if (!node.firstElementChild) {
+            continue;
+          }
           for (const added of node.querySelectorAll<HTMLElement>(tableShellSelector)) {
             shells.add(added);
           }
@@ -137,7 +163,9 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           }
           const removed = [
             node,
-            ...node.querySelectorAll<HTMLElement>(`${tableViewportSelector}, table`),
+            ...(node.firstElementChild
+              ? node.querySelectorAll<HTMLElement>(`${tableViewportSelector}, table`)
+              : []),
           ];
           for (const observed of removed) {
             if (observedNodes.delete(observed)) {
@@ -165,7 +193,8 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
         }
         const shell = viewport.closest<HTMLElement>(tableShellSelector);
         if (shell) {
-          syncTableOverflow(shell);
+          pendingOverflow.delete(shell);
+          measureTableOverflow(shell)?.();
         }
       },
       { capture: true, passive: true },
@@ -175,6 +204,8 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
         stopScroll();
         mutationObserver.disconnect();
         resizeObserver.disconnect();
+        cancelLayout(pendingOverflow);
+        pendingOverflow.clear();
       },
     };
     tableOwnerStates.set(owner, state);
@@ -214,7 +245,13 @@ async function showTableDialog(
   // Reserve through teardown before loading; reconnect cannot revive this request.
   state.closeDialog = close;
   try {
-    await import("./modal-dialog.tsx");
+    try {
+      await import("./modal-dialog.tsx");
+    } catch (cause) {
+      throw new UserFacingError(`${t("lazyView.errorTitle")}. ${t("lazyView.staleSubtitle")}`, {
+        cause,
+      });
+    }
     if (state.closeDialog !== close || !owner.isConnected || !trigger.isConnected) {
       return;
     }
@@ -265,6 +302,10 @@ async function showTableDialog(
     for (const target of content.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)) {
       stopListeners.push(registerSessionTitleTarget(target, document.createElement("span")));
     }
+  } catch (error) {
+    if (state.closeDialog === close && owner.isConnected && trigger.isConnected) {
+      showToast({ message: formatUiError(error), severity: "error" });
+    }
   } finally {
     if (!dialog) {
       close();
@@ -303,6 +344,11 @@ export function handleMarkdownTableInteraction(event: Event): void {
         markdownTableCopyText(table) === text,
       (copied) => {
         copy.replaceChildren(createIconElement(copied ? "check" : "copy", copy.ownerDocument));
+        const status = tableCopyStatuses.get(copy);
+        if (status) {
+          status.textContent =
+            copied === undefined ? "" : t(copied ? "common.copied" : "common.copyFailed");
+        }
         if (copied === undefined) {
           copy.setAttribute("aria-label", t("common.copyTable"));
         } else {

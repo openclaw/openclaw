@@ -7,7 +7,7 @@ import {
   indexPluginNodeCapabilitySurfaces,
   normalizePluginNodeCapabilityScopedUrl,
   pluginNodeCapabilityScopedHostUrlsConflict,
-  prepareClientPluginNodeCapabilities,
+  preparePluginNodeCapabilityPublication,
   reconcileClientPluginNodeCapabilities,
   refreshClientPluginNodeCapability,
   setClientPluginNodeCapability,
@@ -36,7 +36,9 @@ function authorizedUrl(
   url: string,
   nowMs?: number,
 ) {
-  return hasAuthorizedClientPluginNodeCapabilityUrl({ client, surface, url, nowMs });
+  const now = nowMs ?? Date.now();
+  using _ = vi.spyOn(Date, "now").mockReturnValueOnce(now);
+  return hasAuthorizedClientPluginNodeCapabilityUrl({ client, surface, url });
 }
 
 function authorizeCapability(
@@ -45,11 +47,11 @@ function authorizeCapability(
   capability = "canvas-token",
   nowMs = 1_000,
 ) {
+  using _ = vi.spyOn(Date, "now").mockReturnValueOnce(nowMs);
   return hasAuthorizedPluginNodeCapability({
     clients: new Set([client]),
     surface,
     capability,
-    nowMs,
   });
 }
 
@@ -61,7 +63,8 @@ function makeRefreshClient() {
 }
 
 function refresh(client: GatewayWsClient, surface = "canvas", nowMs = 1_000) {
-  return refreshClientPluginNodeCapability({ client, surface: { surface }, nowMs });
+  using _ = vi.spyOn(Date, "now").mockReturnValueOnce(nowMs);
+  return refreshClientPluginNodeCapability({ client, surface: { surface } });
 }
 
 function makeTokenClient(expiresAtMs = 1_500, key = "canvas") {
@@ -76,17 +79,14 @@ describe("plugin node capability helpers", () => {
     const files = { surface: "files", scopeKey: "storage:files" };
     const removed = { surface: "retired", scopeKey: "drawing:retired" };
     const client = makeClient({ pluginSurfaceBaseUrl: "https://gateway.example" });
-    prepareClientPluginNodeCapabilities({
-      client,
-      surfaces: [canvas, files, removed],
-      changedPluginIds: new Set(),
-    })();
+    client.connect.role = "operator";
+    preparePluginNodeCapabilityPublication([client], [canvas, files, removed], new Set())();
     const previous = { ...client.pluginSurfaceUrls };
-    const publish = prepareClientPluginNodeCapabilities({
-      client,
-      surfaces: [canvas, files],
-      changedPluginIds: new Set(["drawing"]),
-    });
+    const publish = preparePluginNodeCapabilityPublication(
+      [client],
+      [canvas, files],
+      new Set(["drawing"]),
+    );
     expect(client.pluginSurfaceUrls).toEqual(previous);
     expect(authorizedUrl(client, canvas, previous.canvas!)).toBe(true);
     publish();
@@ -100,13 +100,16 @@ describe("plugin node capability helpers", () => {
   test("publishes newly enabled surfaces only within the client's admitted capabilities", () => {
     const canvas = { surface: "canvas", scopeKey: "drawing:canvas" };
     const files = { surface: "files", scopeKey: "storage:files" };
-    const client = makeClient({ pluginSurfaceBaseUrl: "https://gateway.example" });
-    const publish = prepareClientPluginNodeCapabilities({
-      client,
-      surfaces: [canvas, files],
-      changedPluginIds: new Set(["drawing", "storage"]),
-      allowedSurfaces: new Set(["canvas"]),
+    const client = makeClient({
+      connect: { ...makeClient().connect, caps: ["canvas"] },
+      pluginSurfaceBaseUrl: "https://gateway.example",
+      pluginNodeCapabilitySurfaces: { canvas },
     });
+    const publish = preparePluginNodeCapabilityPublication(
+      [client],
+      [canvas, files],
+      new Set(["drawing", "storage"]),
+    );
     expect(client.pluginSurfaceUrls).toBeUndefined();
     expect(client.pluginNodeCapabilities).toBeUndefined();
     publish();
@@ -396,12 +399,12 @@ describe("plugin node capability helpers", () => {
       },
     });
 
+    using _ = vi.spyOn(Date, "now").mockReturnValueOnce(1_000);
     expect(
       hasAuthorizedPluginNodeCapability({
         clients: new Set([client]),
         surface: { surface: "canvas", ttlMs: 100 },
         capability: "canvas-token",
-        nowMs: 1_000,
       }),
     ).toBe(false);
     expect(client.pluginNodeCapabilities?.canvas?.expiresAtMs).toBe(1_500);
@@ -419,12 +422,12 @@ describe("plugin node capability helpers", () => {
         canvas: { capability: "canvas-token", expiresAtMs: Number.POSITIVE_INFINITY },
       },
     });
+    using _ = vi.spyOn(Date, "now").mockReturnValueOnce(1_000);
     expect(
       hasAuthorizedPluginNodeCapability({
         clients: new Set([client]),
         surface: { surface: "canvas", ttlMs: 100 },
         capability: "canvas-token",
-        nowMs: 1_000,
       }),
     ).toBe(false);
   });

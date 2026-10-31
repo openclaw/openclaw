@@ -4,14 +4,15 @@ import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-c
 import { createUpdateErrorFact, type UpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import type { PluginCohortRecoveryContinuation } from "../../infra/update-run-recovery-types.js";
 import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
+import { automaticallyCleanUpdateRecovery, failedBeforeActivation } from "./automatic-cleanup.js";
 import { prepareResult, printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
@@ -20,6 +21,10 @@ import {
   publishUnreportedUpdateAdmissionOutcome,
   resolveUnreportedUpdateAdmissionReport,
 } from "./update-command-admission-report.js";
+import {
+  assertUpdatePluginCohortReportingContinuation,
+  assertUpdatePluginCohortReportingAdmission,
+} from "./update-command-cohort.js";
 import { registerUpdateCommandTerminalPreparation } from "./update-command-executor-capabilities.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type { MigratedUpdateFinalizationResult } from "./update-command-migrated-types.js";
@@ -37,7 +42,6 @@ import {
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
   UpdateCommandPendingRecoveryFailure,
-  withUpdateStateRead,
   isUpdateStateReadContention,
 } from "./update-command-result.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
@@ -53,7 +57,9 @@ type Publisher = (
   onTerminalRecord?: PublishedRecord,
 ) => Promise<UpdateRunResult>;
 const terminalOwners = new WeakMap<Run, { publish?: Publisher }>();
-type PreparedPublisher = (onTerminalRecord?: PublishedRecord) => UpdateRunResult;
+type PreparedPublisher = (
+  onTerminalRecord?: PublishedRecord,
+) => UpdateRunResult | Promise<UpdateRunResult>;
 type TerminalOptions = Pick<UpdateCommandOptions, "json" | "onResult"> & {
   /** Internal candidate-worker output, never a serialized continuation grant. */
   onTerminalRecord?: PublishedRecord;
@@ -103,7 +109,7 @@ export function deferUpdateCommandTerminalPreparation(
       throw pending(failure ?? new Error("Update terminal preparation did not settle."));
     }
     try {
-      return prepared(onTerminalRecord);
+      return await prepared(onTerminalRecord);
     } catch (cause) {
       throw pending(cause);
     }
@@ -226,7 +232,13 @@ export async function prepareUnexpectedUpdateCommandFailure(
   const params = { opts, root: result.root ?? "" };
   const prepare = async (settlementFailure?: unknown) => {
     opts.run.executorFence?.assertCurrent();
-    const settled = await resolveSettledUpdateCommandResult(params, result, settlementFailure);
+    const settled = await resolveSettledUpdateCommandResult(
+      params,
+      result,
+      settlementFailure,
+      undefined,
+      opts.run.executorFence ? { runId: opts.run.runId, fence: opts.run.executorFence } : undefined,
+    );
     return prepareUpdateCommandTerminalResult(params, settled.result, { rolledBack: false }, () =>
       opts.run.executorFence?.assertCurrent(),
     );
@@ -519,17 +531,26 @@ async function settleUpdateCommandTerminalResult<T>(
   return outcome.value;
 }
 
-/** Resolve diagnostic output without reusing a released mutation fence. */
+/** Live preparation can retain its own plugin intent; post-release diagnostics cannot. */
 export async function resolveSettledUpdateCommandResult(
   params: Pick<FinishUpdateParams, "opts" | "ownedManagedUpdateEnv" | "root">,
   pendingResult: UpdateRunResult,
   failure?: unknown,
   captured?: UpdateCommandTerminalRecord,
+  pluginCohort?: PluginCohortRecoveryContinuation,
 ): Promise<{
   result: UpdateRunResult;
   settlementFailed: boolean;
   captured?: UpdateCommandTerminalRecord;
 }> {
+  if (
+    failure instanceof UpdateCommandPendingRecoveryFailure &&
+    failure.cause instanceof UpdateRecoveryRequiredError
+  ) {
+    // Retained state already has an owner; report the captured initiating failure
+    // without reopening it or treating that intentional refusal as cleanup failure.
+    throw failure;
+  }
   const settlementFailed =
     failure !== undefined &&
     (!(failure instanceof UpdateCommandFailure) ||
@@ -562,31 +583,15 @@ export async function resolveSettledUpdateCommandResult(
     : failure instanceof UpdateCommandFailure
       ? failure.result
       : pendingResult;
-  // The mutation owner is now closed. This is diagnostic publication only,
-  // never authority to reopen displaced state or replace another terminal row.
+  // The explicit continuation is supplied only during live preparation. Ordinary
+  // post-release publication cannot reopen retained state or adopt that exception.
   try {
+    assertUpdatePluginCohortReportingContinuation(params.opts, pluginCohort);
     if (failure === undefined && captured) {
       readUpdateCommandTerminalRecord(params, result, captured);
       return { result, settlementFailed, captured };
     }
-    const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env;
-    // Keep the first target stable if selectors change during admission.
-    const targetPath = resolveOpenClawStateSqlitePath(env);
-    await withUpdateStateRead(
-      async () => {
-        await assertUpdateRecoveryAdmission({ env, path: targetPath });
-        if (params.opts.run) {
-          if (resolveOpenClawStateSqlitePath(params.opts.run.env) !== targetPath) {
-            await assertUpdateRecoveryAdmission({ env: params.opts.run.env });
-          }
-          const prior = getUpdateRun(params.opts.run.runId, { env: params.opts.run.env });
-          if (prior && prior.status !== "running" && settlementFailed) {
-            throw new Error("Update history was already finalized by another owner.");
-          }
-        }
-      },
-      params.opts.run?.deadline?.remainingMs() ?? params.opts.run?.defaultStepTimeoutMs ?? 0,
-    );
+    await assertUpdatePluginCohortReportingAdmission(params, pluginCohort, settlementFailed);
   } catch (cause) {
     throw new UpdateCommandPendingRecoveryFailure(result, formatErrorMessage(cause), { cause });
   }
@@ -603,6 +608,12 @@ export async function recordUpdatePackageCompletion(
   if (!transaction) {
     return;
   }
+  const retention = {
+    name: "package-backup-retention",
+    command: "openclaw update",
+    cwd: result.root ?? params.root,
+    durationMs: 0,
+  };
   if (
     isUpdateGatewayReadinessPending(result) ||
     (result.status === "ok" &&
@@ -612,10 +623,7 @@ export async function recordUpdatePackageCompletion(
     assertCurrent();
     const message = `Gateway readiness is pending; backup retirement deferred for ${transaction.backupRoot}. Verify readiness before cleanup.`;
     result.steps.push({
-      name: "package-backup-retention",
-      command: "openclaw update",
-      cwd: result.root ?? params.root,
-      durationMs: 0,
+      ...retention,
       exitCode: 0,
       advisory: { kind: "recoverable-maintenance", message },
     });
@@ -633,6 +641,8 @@ export async function recordUpdatePackageCompletion(
   if (params.databaseBackup?.restoreRefusal) {
     transaction.databaseBackupRoot = undefined;
   }
+  // Retirement deletes the previous package before exit; time it even on success.
+  const retirementStartedAt = performance.now();
   const retained: UpdateStepResult | void = await transaction
     .complete({ activationVerified: result.status === "ok" }, assertCurrent)
     .catch((error: unknown) => {
@@ -642,19 +652,16 @@ export async function recordUpdatePackageCompletion(
       }
       cleanupFailure = error;
       return {
-        name: "package-backup-retention",
-        command: "openclaw update",
-        cwd: result.root ?? params.root,
-        durationMs: 0,
+        ...retention,
         exitCode: 1,
         stderrTail: `Update backup cleanup failed: ${formatErrorMessage(error)}. Inspect ${transaction.backupRoot} before manual cleanup.`,
       };
     });
   assertCurrent();
-  if (!retained) {
-    return;
-  }
-  const step = { ...retained, stderrTail: retained.stderrTail };
+  const step: UpdateStepResult = {
+    ...(retained ?? { ...retention, exitCode: 0 }),
+    durationMs: Math.round(performance.now() - retirementStartedAt),
+  };
   if (step.exitCode !== 0) {
     const recoveryPath = `Recovery transaction backup path: ${transaction.backupRoot}`;
     if (!step.advisory) {
@@ -665,6 +672,9 @@ export async function recordUpdatePackageCompletion(
     }
   }
   result.steps = [...result.steps, step];
+  if (!retained) {
+    return;
+  }
   if (result.status !== "ok" && !result.recovery?.packageRollbackVerified) {
     defaultRuntime.error(step.stderrTail);
     return;
@@ -691,7 +701,7 @@ async function publishUpdateCommandTerminalResult(
   return prepared(onTerminalRecord);
 }
 
-/** All state/report effects precede release; the returned closure only emits captured facts. */
+/** Prepare the update outcome under its executor; optional cleanup uses fresh custody after release. */
 export async function prepareUpdateCommandTerminalResult(
   params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
   input: UpdateRunResult,
@@ -719,14 +729,25 @@ export async function prepareUpdateCommandTerminalResult(
     : completeUpdateCommandRun(input, params.opts.run, outcome);
   const emit = await prepareResult(result, params.opts, { nextAction, record }, assertCurrent);
   assertCurrent?.();
-  return (onTerminalRecord) => {
+  return async (onTerminalRecord) => {
     if (outcome.captured) {
       readCaptured();
     }
-    emit();
+    // The activation executor has settled. Cleanup gets independent state-owner
+    // custody, so its budget/failure cannot turn a committed success into rollback.
+    const cleanup =
+      params.opts.run &&
+      !params.opts.dryRun &&
+      (result.status === "ok" ||
+        (result.status === "skipped" && result.reason === "already-current") ||
+        (result.status === "error" &&
+          failedBeforeActivation(params.opts.run.runId, params.opts.run.env)))
+        ? await automaticallyCleanUpdateRecovery(params.opts.run.runId, params.opts.run.env)
+        : undefined;
+    emit(cleanup ? [cleanup] : []);
     if (record) {
       onTerminalRecord?.(record);
     }
-    return result;
+    return cleanup ? { ...result, steps: [...result.steps, cleanup] } : result;
   };
 }

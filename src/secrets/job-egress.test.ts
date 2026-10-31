@@ -142,7 +142,6 @@ it("inspects setup migration through protected-store ownership without returning
   const env: NodeJS.ProcessEnv = { ...process.env, JOB_TOKEN: "synthetic-job-token" };
   const inspect = (names = ["JOB_TOKEN"], candidateEnv = env) =>
     inspectSetupSecretMigration({ names, env: candidateEnv });
-  const ready = [{ name: "JOB_TOKEN", status: "ready" }];
   expect(
     await inspect(["JOB_TOKEN", "UNBOUND_TOKEN", "READABLE_TOKEN", "MISSING", "lowercase"]),
   ).toEqual([
@@ -156,7 +155,7 @@ it("inspects setup migration through protected-store ownership without returning
     { name: "JOB_TOKEN", status: "conflicting-value" },
   ]);
   delete env.JOB_TOKEN;
-  expect(await inspect()).toEqual(ready);
+  expect(await inspect()).toEqual([{ name: "JOB_TOKEN", status: "ready" }]);
   await expect(inspect(Array.from({ length: 17 }, (_, index) => `TOKEN_${index}`))).rejects.toThrow(
     "at most 16",
   );

@@ -2331,8 +2331,10 @@ async function createChatPickerScenario(
       "session.reactions.list",
       "session.reactions.set",
       ...(fixture === "reactions" ? ["users.mentionable"] : []),
+      "skills.workshop.applyDraft",
       "skills.workshop.archive",
       "skills.workshop.changes",
+      "skills.workshop.discardDraft",
       "skills.workshop.list",
       "skills.workshop.read",
       "skills.workshop.restore",
@@ -3691,8 +3693,8 @@ async function buildWorkboardStatesAssets() {
   );
   const projections = new Map([
     [
-      "../../lib/workboard/index.ts",
-      { source: "index.ts", name: "getWorkboardLifecycle", fixture: "getFixtureLifecycle" },
+      "../../lib/workboard/lifecycle.ts",
+      { source: "lifecycle.ts", name: "getWorkboardLifecycle", fixture: "getFixtureLifecycle" },
     ],
     [
       "../../lib/workboard/card-alerts.ts",
@@ -3723,7 +3725,7 @@ async function buildWorkboardStatesAssets() {
         setup(builder) {
           builder.onResolve(
             {
-              filter: /^\.\.\/\.\.\/lib\/workboard\/(?:index|card-alerts)\.ts$/,
+              filter: /^\.\.\/\.\.\/lib\/workboard\/(?:lifecycle|card-alerts)\.ts$/,
               namespace: "file",
             },
             ({ path: specifier, importer }) => {

@@ -7,7 +7,7 @@ import { maybeRepairSkillReadiness } from "./doctor-skills.js";
 
 const mocks = vi.hoisted(() => ({
   buildWorkspaceSkillStatus: vi.fn(),
-  detectGhConfigDirMismatch: vi.fn(),
+  fileExists: vi.fn<(_path: string) => boolean>(() => false),
   note: vi.fn(),
 }));
 
@@ -15,9 +15,9 @@ vi.mock("../skills/discovery/status.js", async (importActual) => ({
   ...(await importActual<typeof import("../skills/discovery/status.js")>()),
   buildWorkspaceSkillStatus: mocks.buildWorkspaceSkillStatus,
 }));
-vi.mock("../skills/lifecycle/gh-config-discovery.js", async (importActual) => ({
-  ...(await importActual<typeof import("../skills/lifecycle/gh-config-discovery.js")>()),
-  detectGhConfigDirMismatch: mocks.detectGhConfigDirMismatch,
+vi.mock("node:fs", async (importActual) => ({
+  ...(await importActual<typeof import("node:fs")>()),
+  existsSync: mocks.fileExists,
 }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
@@ -76,7 +76,12 @@ async function runSkillDoctor(skills: SkillStatusEntry[]) {
 }
 
 describe("doctor skills", () => {
-  afterEach(() => vi.unstubAllEnvs());
+  const originalPlatform = process.platform;
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+    mocks.fileExists.mockReset().mockReturnValue(false);
+  });
 
   it.each(["bins", "anyBins"] as const)(
     "preserves skills whose missing %s may be available on a paired node",
@@ -144,19 +149,75 @@ describe("doctor skills", () => {
     ]);
   });
 
-  it("surfaces a GH_CONFIG_DIR hint through the doctor path", async () => {
-    mocks.detectGhConfigDirMismatch.mockReturnValue({
-      kind: "mismatch",
-      effectiveConfigDir: "/agent/home/.config/gh",
-      alternateConfigDir: "/root/.config/gh",
-      alternateHomeHint: "/root",
-    });
-    const calls = await runSkillDoctor([createSkill({ name: "github" })]);
-    const output = String(calls.find((call) => call[1] === "GitHub CLI")?.[0] ?? "");
+  const processHome = "/agent/home";
+  const serviceHome = "/var/lib/openclaw/agent";
+  const windowsHome = "C:\\Users\\agent";
+  const appData = `${windowsHome}\\AppData\\Roaming`;
+  const windowsHosts = `${appData}\\GitHub CLI\\hosts.yml`;
+  const legacyWindowsHosts = `${windowsHome}\\.config\\gh\\hosts.yml`;
+  const xdgHosts = "/agent/xdg/gh/hosts.yml";
+  type NoHintCase = [string, NodeJS.ProcessEnv, string?, NodeJS.Platform?, string?];
 
-    expect(output).toContain("/root/.config/gh");
-    expect(output).toContain("GH_CONFIG_DIR=/root/.config/gh");
-  });
+  async function githubHint(
+    env: NodeJS.ProcessEnv,
+    hosts?: string,
+    platform: NodeJS.Platform = "linux",
+  ) {
+    Object.defineProperty(process, "platform", { value: platform });
+    for (const key of [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "GH_CONFIG_DIR",
+      "APPDATA",
+      "SUDO_USER",
+      "USER",
+      "USERPROFILE",
+    ]) {
+      vi.stubEnv(key, env[key]);
+    }
+    mocks.fileExists.mockImplementation((file) => file === hosts);
+    const calls = await runSkillDoctor([createSkill({ name: "github" })]);
+    return calls.find((call) => call[1] === "GitHub CLI")?.[0];
+  }
+
+  it.each([
+    ["sudo operator", { HOME: serviceHome, SUDO_USER: "alice" }, "/home/alice", "linux"],
+    ["login operator", { HOME: serviceHome, USER: "ops" }, "/home/ops", "linux"],
+    ["root operator", { HOME: processHome }, "/root", "linux"],
+    ["macOS sudo operator", { HOME: processHome, SUDO_USER: "alice" }, "/Users/alice", "darwin"],
+  ] as const)(
+    "discovers the GitHub CLI hint for %s",
+    async (_name, env, alternateHome, platform) => {
+      const alternate = `${alternateHome}/.config/gh`;
+      expect(await githubHint(env, `${alternate}/hosts.yml`, platform)).toBe(
+        [
+          "GitHub CLI auth was found at a different HOME than the one this OpenClaw process uses.",
+          `  Process gh config dir: ${env.HOME}/.config/gh`,
+          `  Authenticated config:  ${alternate} (contains hosts.yml)`,
+          `  Authenticated HOME:    ${alternateHome}`,
+          `  Fix: set GH_CONFIG_DIR=${alternate} on the OpenClaw service environment, then restart the gateway.`,
+        ].join("\n"),
+      );
+    },
+  );
+
+  it.each<NoHintCase>([
+    ["explicit config directory", { HOME: processHome, GH_CONFIG_DIR: "/etc/openclaw/gh" }],
+    ["missing home", {}],
+    ["no known auth", { HOME: processHome }, undefined, "linux", "/root/.config/gh/hosts.yml"],
+    ["XDG precedence", { HOME: processHome, XDG_CONFIG_HOME: "/agent/xdg" }, xdgHosts],
+    ["Windows APPDATA", { APPDATA: appData }, windowsHosts, "win32"],
+    ["Windows profile fallback", { USERPROFILE: windowsHome }, windowsHosts, "win32"],
+    ["Windows HOME fallback", { HOME: windowsHome }, legacyWindowsHosts, "win32"],
+  ])(
+    "does not emit a GitHub CLI hint for %s",
+    async (_name, env, hosts, platform, checked = hosts) => {
+      expect(await githubHint(env, hosts, platform)).toBeUndefined();
+      if (checked) {
+        expect(mocks.fileExists).toHaveBeenCalledWith(checked);
+      }
+    },
+  );
 
   it.each(["eligible", "missing binary"])(
     "does not offer a global disable when another agent's skill is %s",

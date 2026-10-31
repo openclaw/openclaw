@@ -1,16 +1,11 @@
-import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import { createEffect, createSignal, onSettled } from "solid-js";
 import type { PluginsUninstallResult } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
-import {
-  pathForRoute,
-  pluginCatalogIdFromPath,
-  pluginSettingsIdFromPath,
-} from "../../app-route-paths.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
 import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
@@ -30,7 +25,7 @@ import { createPluginPageTargets } from "./plugin-removal-focus.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
 import { pluginMutationWarnings, createPluginsConsent } from "./plugins-consent.ts";
 import { createPluginDetailReads } from "./plugins-detail-reads.ts";
-import type { PluginsHubTab } from "./plugins-hub.ts";
+import { createPluginsMutationPresentation } from "./plugins-mutation-presentation.ts";
 import { createPluginsPageIcons } from "./plugins-page-icons.ts";
 import {
   createPluginsPageState,
@@ -39,7 +34,7 @@ import {
   pluginMutationBlockedReason,
   type PluginMutationAction,
 } from "./plugins-page-model.ts";
-import type { PluginsRouteData } from "./route-data.ts";
+import { pluginIdForRoute, type PluginsRouteData } from "./route-data.ts";
 import type { PluginSettingsEditorProps } from "./settings-editor.tsx";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { createPluginPreview } from "./skill-preview.tsx";
@@ -57,6 +52,7 @@ export function createPluginsPage(options: {
   let routeData: PluginsRouteData | undefined;
   let surface: "discovery" | "settings" = "settings";
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const [renderedIconRevision, setRenderedIconRevision] = createSignal(0);
   const [settingsTab, setSettingsTab] = createSignal<PluginSettingsTab>("installed");
 
   const state = createPluginsPageState();
@@ -112,6 +108,7 @@ export function createPluginsPage(options: {
     onInstalledUrlsChange: (urls) => setState({ iconUrls: urls }),
     onCatalogUrlsChange: (urls) => setState({ catalogIconUrls: urls }),
     onChange: publish,
+    onRenderedChange: () => setRenderedIconRevision((current) => current + 1),
   });
   const gateway = new GatewayPageBinding(publish, {
     getGateway: () => context.gateway,
@@ -132,8 +129,8 @@ export function createPluginsPage(options: {
   const mcpLogin = createPluginMcpLogin(gateway, {
     getDetail: () => state.detail,
     getName: (pluginId) => state.result?.plugins.find((plugin) => plugin.id === pluginId)?.name,
-    canSignIn: () => canCallGatewayMethod(gateway.snapshot, "mcp.authLogin", "operator.admin"),
     refresh: showDetails,
+    setMessage,
   });
   const discovery = createPluginDiscovery(
     {
@@ -196,6 +193,15 @@ export function createPluginsPage(options: {
 
   const canMutate = () => state.result?.mutationAllowed === true && accessBlockedReason() === null;
 
+  const mutationPresentation = createPluginsMutationPresentation({
+    gateway,
+    read,
+    isActive: () => active,
+    lifetime: () => credentialPresentation.lifetime,
+    catalog,
+    setMessage,
+  });
+
   const consent = createPluginsConsent({
     gateway,
     getContext: () => context,
@@ -209,6 +215,7 @@ export function createPluginsPage(options: {
     closeDetails: skillPreview.close,
     applyMutationResult,
     refreshCatalogAfterMutation: refreshCatalog,
+    presentMutation: mutationPresentation.present,
     onChange: publish,
   });
   const catalogTask = createPageRequest(publish, {
@@ -222,12 +229,6 @@ export function createPluginsPage(options: {
     },
     onError: (error) => setState({ error: formatUiError(error) }),
   });
-  onCleanup(() => {
-    catalogTask.cancel();
-    details.inspection.release();
-    details.catalog.release();
-  });
-
   onSettled(() => {
     let configAutoSaveStatus = runtime.state.configAutoSaveStatus;
     // Preserve saving-to-saved receipts so plugin edits refresh the catalog even within one render turn.
@@ -252,6 +253,7 @@ export function createPluginsPage(options: {
       surface = nextSurface;
       gateway.refresh();
       if (previous !== routeData) {
+        credentialPresentation.retire();
         skillPreview.close();
         if (previous?.location.pathname !== routeData?.location.pathname) {
           installRequestGeneration += 1;
@@ -267,6 +269,7 @@ export function createPluginsPage(options: {
   createEffect(
     () => {
       revision();
+      renderedIconRevision();
       return icons.rendered();
     },
     (rendered) =>
@@ -282,6 +285,9 @@ export function createPluginsPage(options: {
     return () => {
       stopKeydown();
       active = false;
+      catalogTask.cancel();
+      details.inspection.release();
+      details.catalog.release();
       icons.reset();
       gateway.dispose();
     };
@@ -492,12 +498,8 @@ export function createPluginsPage(options: {
 
   const loading = () => gateway.connected && (!routeDataConsumed || catalogTask.pending);
 
-  function activeRoutePluginId(): string | null {
-    const pathname = routeData?.location.pathname ?? "";
-    return surface === "settings"
-      ? pluginSettingsIdFromPath(pathname, context.basePath)
-      : pluginCatalogIdFromPath(pathname, context.basePath);
-  }
+  const activeRoutePluginId = () =>
+    pluginIdForRoute(surface, routeData?.location.pathname ?? "", context.basePath);
 
   function uninstallingSelection(): boolean {
     return Boolean(
@@ -552,12 +554,6 @@ export function createPluginsPage(options: {
     }
     const catalogId = activeRoutePluginId();
     return catalogId ? showCatalogDetail(catalogId) : discovery.refresh();
-  }
-
-  function selectHubTab(tab: PluginsHubTab) {
-    if (tab !== "plugins" || surface !== "discovery") {
-      context.navigate(tab);
-    }
   }
 
   function accessBlockedReason(
@@ -703,6 +699,8 @@ export function createPluginsPage(options: {
   }
   return {
     read,
+    presentedEnabled: mutationPresentation.enabled,
+    mutationSaving: mutationPresentation.saving,
     get state() {
       return read();
     },
@@ -736,7 +734,6 @@ export function createPluginsPage(options: {
     detailRead: details.catalog,
     setState,
     refreshCatalog,
-    selectHubTab,
     accessBlockedReason,
     canMutate,
     canEditConfig,

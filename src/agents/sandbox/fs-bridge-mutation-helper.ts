@@ -38,6 +38,22 @@ export const PINNED_MUTATION_ACTION_LABELS = {
 
 export const SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL = `'${GUEST_FILESYSTEM_PYTHON.replaceAll("'", `'\\''`)}'`;
 
+export const SANDBOX_PINNED_READ_TOO_LARGE_EXIT_CODE = 27;
+
+// The guest program's stderr is diagnostic text. Preserve its actual bounded-read
+// exception at this invocation boundary without parsing or changing that program.
+const sandboxPinnedReadPython = [
+  "import errno, sys",
+  "try:",
+  `    exec(${JSON.stringify(GUEST_FILESYSTEM_PYTHON)})`,
+  "except OSError as error:",
+  "    if sys.argv[1] == 'read' and len(sys.argv) > 5 and error.errno == errno.EFBIG:",
+  `        sys.exit(${SANDBOX_PINNED_READ_TOO_LARGE_EXIT_CODE})`,
+  "    raise",
+].join("\n");
+
+export const SANDBOX_PINNED_READ_PYTHON_SHELL_LITERAL = `'${sandboxPinnedReadPython.replaceAll("'", `'\\''`)}'`;
+
 export type PinnedSandboxOperation =
   | {
       kind: "read";

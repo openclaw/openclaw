@@ -27,7 +27,7 @@ it("joins an accepted pairing reader through the real Gateway close prelude", as
     vi.spyOn(stateReader, "captureOpenClawStateReadSource").mockImplementation(() => {
       const source = capture();
       return {
-        ...source,
+        own: (close) => source.own(close),
         createTransport(command) {
           const transport = source.createTransport(command);
           if (command.type !== "pairing.allowFrom") {
@@ -35,7 +35,7 @@ it("joins an accepted pairing reader through the real Gateway close prelude", as
           }
           let cleanup: Promise<void> | undefined;
           return {
-            ...transport,
+            startValidateFresh: (...args) => transport.startValidateFresh(...args),
             startRead(location, authority) {
               const operation = transport.startRead(location, authority);
               void operation.then(

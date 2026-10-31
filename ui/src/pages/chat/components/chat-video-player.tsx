@@ -1,7 +1,9 @@
 import { createSignal, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { AttachmentCardHeader, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
@@ -14,6 +16,10 @@ import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import { createChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceOwner } from "./chat-media-source.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 type ChatVideoPlayerProps = {
   src: string;
@@ -208,12 +214,19 @@ function ChatVideoPlayerContent(
     );
   };
   return (
-    <Show
-      when={sourceState.read().readiness !== "unavailable"}
-      fallback={<CompactAttachmentCard {...card()} onExpand={props.onFallbackExpand} />}
-    >
-      <Player />
-    </Show>
+    <>
+      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {sourceState.read().readiness === "unavailable"
+          ? `${props.label.trim() || t("chat.attachments.video")}: ${t("chat.attachments.previewUnavailable")}`
+          : ""}
+      </span>
+      <Show
+        when={sourceState.read().readiness !== "unavailable"}
+        fallback={<CompactAttachmentCard {...card()} onExpand={props.onFallbackExpand} />}
+      >
+        <Player />
+      </Show>
+    </>
   );
 }
 

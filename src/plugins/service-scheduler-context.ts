@@ -27,6 +27,13 @@ export function createPluginServiceSchedulerRunner(owner: {
         inheritRequestScope: false,
       });
   const runScheduled = createScheduledGatewayRunner(resolveGatewayContext);
+  const authority =
+    owner.instance?.owner?.record.generationOverlap === true
+      ? owner.instance.retainOwnerWork()
+      : undefined;
+  if (authority) {
+    owner.lease.retain(authority.release);
+  }
   return (work: () => void | Promise<unknown>) =>
     runOutsideOperatorToolGatewayAuthority(() =>
       runScheduled(async () =>
@@ -37,9 +44,11 @@ export function createPluginServiceSchedulerRunner(owner: {
           const run = () => withPluginHttpRouteRegistry(registry, work, owner.lease);
           // The lifecycle owner joins scheduled work before disposal can finish.
           const invoke = () =>
-            owner.instance
-              ? owner.instance.runInRegistry(registry, run, { joinDisposal: false })
-              : run();
+            authority
+              ? authority.run(run)
+              : owner.instance
+                ? owner.instance.runInRegistry(registry, run, { joinDisposal: false })
+                : run();
           return withPluginRuntimeGatewayContextResolver(
             resolveGatewayContext,
             () => {

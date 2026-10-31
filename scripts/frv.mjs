@@ -57,6 +57,7 @@ import {
   selectLatestRunsPerLane,
 } from "./lib/release-priority.mjs";
 import { sleep } from "./lib/sleep.mjs";
+import { sameJobExecution } from "./npm-prepared-bundle.mjs";
 import {
   createReleaseEvidenceClient,
   releaseExecutionPlanRestoreContract,
@@ -70,11 +71,23 @@ const DEFAULT_POLL_MS = 30_000;
 const DEFAULT_TIMEOUT_MS = 12 * 60 * 60_000;
 const DEFAULT_RECONCILE_TIMEOUT_MS = 60_000;
 const DEFAULT_WATCH_POLL_MS = 60_000;
+const DEFAULT_PLAN_SEAL_WAIT_MS = 15 * 60_000;
 const DEFAULT_CHILD_MAX_ATTEMPTS = 2;
 const PLAN_ARTIFACT_PROPAGATION_MS = 2 * 60_000;
 const PLAN_FILENAME = "full-release-execution-plan.json";
 const USAGE =
-  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed | --job <child>:<name> | --child <key|run-id> [--max-attempts <n>]] | pnpm frv prioritize --restore <record>";
+  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed [--wait-for-seal] | --job <child>:<name> [--no-follow] | --child <key|run-id> [--max-attempts <n>]] | pnpm frv prioritize --restore <record>";
+const PACIFIC_TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/Los_Angeles",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+  timeZoneName: "short",
+});
 
 function requiredValue(value, label) {
   const normalized = String(value ?? "").trim();
@@ -126,6 +139,7 @@ function parseArgs(argv) {
     dryRun: false,
     failedOnly: false,
     force: false,
+    noFollow: false,
     json: false,
     repository: DEFAULT_REPOSITORY,
     runId: "",
@@ -159,10 +173,14 @@ function parseArgs(argv) {
       options.intervalMs = positiveInteger(argv[++index], "--interval") * 1000;
     } else if (argument === "--once") {
       options.once = true;
+    } else if (argument === "--no-follow") {
+      options.noFollow = true;
     } else if (argument === "--force") {
       options.force = true;
     } else if (argument === "--failed") {
       options.failedOnly = true;
+    } else if (argument === "--wait-for-seal") {
+      options.waitForSeal = true;
     } else if (argument === "--restore") {
       options.restore = requiredValue(argv[++index], "--restore");
     } else if (argument === "--json") {
@@ -200,6 +218,9 @@ function parseArgs(argv) {
   if (command !== "continue" && options.failedOnly) {
     throw new Error("--failed is valid only with continue");
   }
+  if (command !== "continue" && options.waitForSeal) {
+    throw new Error("--wait-for-seal is valid only with continue --failed");
+  }
   if (!["cancel", "continue", "prioritize", "rerun"].includes(command) && options.dryRun) {
     throw new Error("--dry-run is valid only with cancel, continue, rerun, or prioritize");
   }
@@ -212,6 +233,9 @@ function parseArgs(argv) {
     }
   } else if (options.job !== undefined || options.child !== undefined) {
     throw new Error("--job and --child are valid only with rerun");
+  }
+  if (options.noFollow && !(command === "rerun" && options.job !== undefined)) {
+    throw new Error("--no-follow is valid only with rerun --job");
   }
   if (options.maxAttempts !== undefined && options.child === undefined) {
     throw new Error("--max-attempts is valid only with rerun --child");
@@ -346,21 +370,24 @@ async function ghJson(repository, path, options, fresh) {
   return JSON.parse(await readGhApi(repository, path, [], options, fresh));
 }
 
-async function downloadExecutionPlan(repository, runId) {
+async function downloadExecutionPlan(repository, runId, options = {}) {
   const directory = mkdtempSync(join(tmpdir(), "openclaw-frv-plan-"));
   try {
     try {
-      await execGhRead([
-        "run",
-        "download",
-        runId,
-        "--repo",
-        repository,
-        "--name",
-        `full-release-execution-plan-${runId}`,
-        "--dir",
-        directory,
-      ]);
+      await execGhRead(
+        [
+          "run",
+          "download",
+          runId,
+          "--repo",
+          repository,
+          "--name",
+          `full-release-execution-plan-${runId}`,
+          "--dir",
+          directory,
+        ],
+        options,
+      );
     } catch (error) {
       if (isReleaseGhArtifactMissingError(error)) {
         return undefined;
@@ -417,7 +444,7 @@ function exactParentJob(parentJobs, child, sourceParentAttempt) {
 
 async function inspectArtifactProducers(producers, client, options) {
   return Promise.all(
-    producers.map(async ({ request, runId, runAttempt }) => {
+    producers.map(async ({ request, runId, runAttempt, preparation }) => {
       const run = validateArtifactProducerRun(
         request,
         await client.getRun(runId, options),
@@ -438,6 +465,7 @@ async function inspectArtifactProducers(producers, client, options) {
         conclusion: String(run.conclusion ?? ""),
         status: active ? "active" : passed ? "passed" : "failed",
         passed,
+        preparation,
         url: run.html_url,
       };
     }),
@@ -460,6 +488,60 @@ function continuationStatus(children) {
     missing: children.filter((child) => child.status === "missing"),
     passed: children.filter((child) => child.status === "passed"),
   };
+}
+
+async function assertFailedArtifactProducersAreReusable(plan, status, client, operationDeadline) {
+  if (!plan.candidate) {
+    return;
+  }
+  const consumed = [];
+  for (const child of status.failed.filter((entry) => entry.key === "artifact:npm")) {
+    if (!child.preparation) {
+      continue;
+    }
+    const sourceJobs = await client.getAttemptJobs(child.runId, child.preparation.runAttempt, {
+      operationDeadline,
+    });
+    const preparation = sourceJobs.filter(
+      (job) =>
+        String(job.id) === child.preparation.jobId &&
+        Number(job.run_attempt) === child.preparation.runAttempt,
+    );
+    if (preparation.length !== 1) {
+      throw new Error(
+        `artifact:npm producer ${child.runId} preparation identity is missing or ambiguous; refusing a rerun that could replace consumed candidate bytes`,
+      );
+    }
+    if (preparation[0].status !== "completed" || preparation[0].conclusion !== "success") {
+      consumed.push(child);
+      continue;
+    }
+    let preserved = true;
+    for (
+      let attempt = child.preparation.runAttempt + 1;
+      attempt <= child.effectiveRunAttempt;
+      attempt += 1
+    ) {
+      const jobs = await client.getAttemptJobs(child.runId, attempt, { operationDeadline });
+      const copies = jobs.filter((job) => job.name === preparation[0].name);
+      if (
+        copies.length > 1 ||
+        (copies.length === 1 && !sameJobExecution(preparation[0], copies[0]))
+      ) {
+        preserved = false;
+        break;
+      }
+    }
+    if (!preserved) {
+      consumed.push(child);
+    }
+  }
+  if (consumed.length === 0) {
+    return;
+  }
+  throw new Error(
+    `${consumed.map((child) => `${child.key} producer ${child.runId}`).join(", ")} already supplied the sealed candidate evidence; rerunning cannot preserve those consumed immutable bytes. Dispatch a fresh all-group FRV with reuse_evidence=true to authenticate reuse instead.`,
+  );
 }
 
 async function recheckArtifactProducers(
@@ -580,7 +662,10 @@ function artifactRecoveryJobs(workflow) {
   ) {
     throw new Error("Source workflow artifact producer contract is ambiguous");
   }
-  if (producers.length > 0 && source.env?.FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT !== "1") {
+  if (
+    producers.length > 0 &&
+    !["1", "2"].includes(source.env?.FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT)
+  ) {
     throw new Error("Source workflow artifact producer recovery contract is unsupported");
   }
   return producers;
@@ -593,7 +678,8 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
   } catch {
     throw new Error("Source workflow artifact producer contract is unavailable");
   }
-  if (source?.env?.FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT !== "1") {
+  const recoveryContract = source?.env?.FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT;
+  if (!["1", "2"].includes(recoveryContract)) {
     return legacyNpmRecoveryProducers(plan, parentJobs, client, repository, workflow, options);
   }
   const producers = [];
@@ -635,6 +721,22 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
     ) {
       throw new Error(`Original ${stage} dispatch identity is unavailable or ambiguous`);
     }
+    let preparation;
+    if (stage === "npm" && recoveryContract === "2") {
+      const identities = [
+        ...log.matchAll(
+          /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact preparation npm identity: job ([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
+        ),
+      ];
+      // Failed preparation may never emit its identity. Only consumed candidate
+      // bytes require that witness; ambiguous identities are never safe to adopt.
+      if (identities.length > 1 || (plan.candidate && identities.length === 0)) {
+        throw new Error("Original npm preparation identity is unavailable or ambiguous");
+      }
+      if (identities.length === 1) {
+        preparation = { jobId: identities[0][1], runAttempt: Number(identities[0][2]) };
+      }
+    }
     producers.push({
       request: {
         stage,
@@ -645,6 +747,7 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
       },
       runId: dispatches[0][4],
       runAttempt: dispatches[0][5],
+      preparation,
     });
   }
   if (new Set(producers.map((producer) => producer.runId)).size !== producers.length) {
@@ -1238,7 +1341,6 @@ export function createClient(repository, dependencies = {}) {
       }
     },
     cancelRun: (runId, force) => rerun(runId, force ? "force-cancel" : "cancel"),
-    rerunFailed: (runId) => rerun(runId, "rerun-failed-jobs"),
     rerunRun: (runId) => rerun(runId, "rerun"),
     listRuns: (query) => listReleasePriorityRuns(query, apiJson, apiText),
     async getVariable(name) {
@@ -1727,11 +1829,11 @@ async function planChildRerun(child, target, client, operationDeadline) {
   const runnerBackend = client.getVariable
     ? await client.getVariable("OPENCLAW_CI_RUNNER_BACKEND").catch(() => "unknown")
     : "unknown";
-  // The producer rerun also reruns every dependent consumer in the same new attempt.
-  const job = plan.producer
+  const jobName = plan.producer ?? plan.jobName;
+  const job = jobName
     ? await selectedRerunJob(
         child,
-        { childKey: child.key, name: plan.producer },
+        { childKey: child.key, name: jobName },
         client,
         operationDeadline,
       )
@@ -1739,13 +1841,73 @@ async function planChildRerun(child, target, client, operationDeadline) {
   return { ...plan, failedJobs, job, runnerBackend };
 }
 
+function payloadRerunMessage(child, rerun) {
+  return rerun.mode === "producer"
+    ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning green producer "${rerun.producer}" and its dependents; its consumers bind the producer's run attempt`
+    : `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning all jobs; payload consumers bind the producer's run attempt and failures outside its dependents need the whole run`;
+}
+
+// continue --failed applies the same exact-job policy as rerun --child, without its
+// attempt budget. Ambiguous or multi-job failures are refused before mutation.
+function normalizedRerunJob(job, runAttempt) {
+  return {
+    acceptedRunAttempt: runAttempt,
+    completedAt: String(job?.completed_at ?? ""),
+    conclusion: String(job?.conclusion ?? ""),
+    name: String(job?.name ?? ""),
+    startedAt: String(job?.started_at ?? ""),
+    status: String(job?.status ?? ""),
+    url: String(job?.html_url ?? ""),
+  };
+}
+
+async function failedChildRerunPlan(child, client, operationDeadline) {
+  let plannedChild = child;
+  if (!Array.isArray(child.jobs)) {
+    const jobs = await client.getAttemptJobs(child.runId, child.effectiveRunAttempt, {
+      operationDeadline,
+    });
+    plannedChild = {
+      ...child,
+      jobs: jobs.map((job) => normalizedRerunJob(job, child.effectiveRunAttempt)),
+    };
+  }
+  let plan;
+  try {
+    plan = planReleaseChildRerun({ childKey: child.key, jobs: plannedChild.jobs });
+  } catch (error) {
+    if (/has no blocking failed job to rerun/u.test(String(error?.message ?? error))) {
+      throw new Error(
+        `${child.key} has no exact failed job identity; refusing a risky rerun. Start a fresh all-group FRV instead`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  const jobName = plan.producer ?? plan.jobName;
+  const job = await selectedRerunJob(
+    plannedChild,
+    { childKey: child.key, name: jobName },
+    client,
+    operationDeadline,
+  );
+  return { job, plan };
+}
+
+function sendChildRerun(client, { child, job }) {
+  if (job) {
+    return client.rerunJob(job.id);
+  }
+  throw new Error(`${child.key} rerun lacks an exact job identity`);
+}
+
 function reportChildRerun(child, rerun, log) {
   log(
     rerun.mode === "receipt"
       ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning only failed receipt "${rerun.producer}"; passing workloads are retained`
-      : rerun.mode === "producer"
-        ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning green producer "${rerun.producer}" and its dependents; its consumers bind the producer's run attempt`
-        : `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning failed jobs`,
+      : rerun.mode === "single-job"
+        ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning only failed job "${rerun.jobName}"`
+        : payloadRerunMessage(child, rerun),
   );
   for (const job of rerun.failedJobs) {
     log(
@@ -1791,7 +1953,7 @@ async function verifyRerunAttemptJobs(child, runAttempt, client, operationDeadli
     if (remaining <= 0) {
       throw new Error(
         duplicates.length > 0
-          ? `${child.key} run ${child.runId} attempt ${runAttempt} holds duplicate jobs: ${duplicates.join(", ")}; cancel that attempt before another rerun`
+          ? `${child.key} run ${child.runId} attempt ${runAttempt} is unsealable and holds duplicate jobs: ${duplicates.join(", ")}; cancel that attempt and start a fresh all-group FRV`
           : `${child.key} run ${child.runId} attempt ${runAttempt} exposed no jobs; inspect it before another rerun`,
       );
     }
@@ -1806,6 +1968,9 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       : validateOperationDeadline(options.operationDeadline);
   const ownedAttempts = new Map();
   const target = resolveRerunTarget(plan, options);
+  if (options.noFollow && target?.name === undefined) {
+    throw new Error("no-follow is valid only for a targeted job rerun");
+  }
   const runKeys = new Map(selectedChildren(plan).map((child) => [child.runId, child.key]));
   runKeys.set(String(rootRunId), "parent");
   const reported = new Map();
@@ -1859,6 +2024,7 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       runKeys.set(producer.runId, `artifact:${producer.request.stage}`);
     }
     status = await inspectRecovery(plan, artifactProducers, client, { operationDeadline });
+    await assertFailedArtifactProducersAreReusable(plan, status, client, operationDeadline);
     for (const child of status.children) {
       const expectedAttempt = ownedAttempts.get(child.runId);
       if (expectedAttempt !== undefined) {
@@ -1897,23 +2063,44 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
         target && target.name === undefined
           ? await planChildRerun(ready[0], target, client, operationDeadline)
           : undefined;
+      const failedReruns = target
+        ? []
+        : await Promise.all(
+            ready.map((child) => failedChildRerunPlan(child, client, operationDeadline)),
+          );
+      const failedPlans = failedReruns.map((rerun) => rerun.plan);
+      const payloadReruns = failedPlans.flatMap((failedPlan, index) =>
+        ["producer", "all-jobs"].includes(failedPlan.mode)
+          ? [{ child: ready[index].key, ...failedPlan }]
+          : [],
+      );
       if (options.dryRun) {
         if (target?.name !== undefined) {
           await selectedRerunJob(ready[0], target, client, operationDeadline);
         }
-        return { action: "would-rerun", ...(childRerun ? { childRerun } : {}), status };
+        return {
+          action: "would-rerun",
+          ...(childRerun ? { childRerun } : {}),
+          ...(payloadReruns.length > 0 ? { payloadReruns } : {}),
+          status,
+        };
       }
       if (childRerun) {
         reportChildRerun(ready[0], childRerun, options.log ?? console.error);
       }
       const requests = await Promise.all(
-        ready.map(async (child) => {
-          const job = childRerun
-            ? childRerun.job
-            : target
-              ? await selectedRerunJob(child, target, client, operationDeadline)
-              : undefined;
-          return { child, job };
+        ready.map(async (child, index) => {
+          if (childRerun) {
+            return { child, job: childRerun.job, mode: childRerun.mode };
+          }
+          if (target) {
+            return { child, job: await selectedRerunJob(child, target, client, operationDeadline) };
+          }
+          const failedPlan = failedPlans[index];
+          if (["producer", "all-jobs"].includes(failedPlan.mode)) {
+            log(payloadRerunMessage(child, failedPlan));
+          }
+          return { child, job: failedReruns[index].job, mode: failedPlan.mode };
         }),
       );
       const priorRuns = new Map(
@@ -1974,14 +2161,13 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       remainingOperationTime(operationDeadline);
       const sentRunIds = new Set();
       const mutationResults = await Promise.allSettled(
-        requests.map(async ({ child, job }) => {
+        requests.map(async (request) => {
           remainingOperationTime(operationDeadline);
-          sentRunIds.add(child.runId);
-          await (job ? client.rerunJob(job.id) : client.rerunFailed(child.runId));
+          sentRunIds.add(request.child.runId);
+          await sendChildRerun(client, request);
         }),
       );
       if (sentRunIds.size > 0) {
-        const requestsByRunId = new Map(requests.map((request) => [request.child.runId, request]));
         await reconcileAttemptStarts(
           new Map([...minimumAttempts].filter(([runId]) => sentRunIds.has(runId))),
           priorRuns,
@@ -1989,24 +2175,6 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
           mutationResults.filter((_result, index) => sentRunIds.has(requests[index].child.runId)),
           operationDeadline,
           (run) => report(run, true),
-          async (runId) => {
-            const source = exactTerminalRunState(priorRuns.get(runId), runId);
-            assertRootRunIdentity(
-              await client.getRun(rootRunId, { operationDeadline }),
-              parentBinding,
-              true,
-            );
-            const current = exactTerminalRunState(
-              await client.getRun(runId, { operationDeadline }),
-              runId,
-            );
-            if (JSON.stringify(current) !== JSON.stringify(source)) {
-              throw new Error(`child ${runId} changed before mutation retry`);
-            }
-            const { child, job } = requestsByRunId.get(runId);
-            remainingOperationTime(operationDeadline);
-            await (job ? client.rerunJob(job.id) : client.rerunFailed(child.runId));
-          },
         );
       }
       const admissionFailure = mutationResults.find(
@@ -2016,15 +2184,13 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       if (admissionFailure) {
         throw admissionFailure.reason;
       }
-      for (const { child, job } of requests) {
+      for (const { child, job, mode } of requests) {
         if (!sentRunIds.has(child.runId)) {
           continue;
         }
         const runAttempt = minimumAttempts.get(child.runId);
         ownedAttempts.set(child.runId, runAttempt);
-        if (target) {
-          await verifyRerunAttemptJobs(child, runAttempt, client, operationDeadline);
-        }
+        await verifyRerunAttemptJobs(child, runAttempt, client, operationDeadline);
         const record = {
           child: child.key,
           runId: child.runId,
@@ -2040,13 +2206,30 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
                 mode: childRerun.mode,
                 runnerBackend: childRerun.runnerBackend,
               }
-            : {}),
+            : mode
+              ? { mode }
+              : {}),
         };
         reruns.push(record);
         options.audit?.({ parentRunId: String(rootRunId), ...record });
       }
       if (childRerun) {
         return { action: "reran-child", reruns, status };
+      }
+      if (options.noFollow) {
+        const receipt = reruns.at(-1);
+        const repositoryOption =
+          client.repository && client.repository !== DEFAULT_REPOSITORY
+            ? ` --repo ${client.repository}`
+            : "";
+        return {
+          action: "rerun-accepted",
+          continueCommand: `pnpm frv continue --failed --run ${rootRunId}${repositoryOption}`,
+          nextCommand: `pnpm frv watch --run ${rootRunId}${repositoryOption}`,
+          receipt: { parentRunId: String(rootRunId), ...receipt },
+          reruns,
+          status,
+        };
       }
       continue;
     }
@@ -2175,7 +2358,9 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
 export class MissingFrvPlanError extends Error {}
 
 export async function loadPlan(options, loadExecutionPlan = downloadExecutionPlan) {
-  const payload = await loadExecutionPlan(options.repository, options.runId);
+  const payload = await loadExecutionPlan(options.repository, options.runId, {
+    operationDeadline: options.operationDeadline,
+  });
   if (!payload) {
     throw new MissingFrvPlanError("run has no authenticated immutable FRV plan");
   }
@@ -2216,7 +2401,7 @@ function unsealedParentIdentity(run, options) {
 
 /** Project only authenticated lifecycle facts while the immutable plan is not yet available. */
 export async function inspectUnsealedPlan(options, client) {
-  const operationDeadline = createOperationDeadline();
+  const operationDeadline = options.operationDeadline ?? createOperationDeadline();
   const parent = await client.getRun(options.runId, { operationDeadline });
   const before = unsealedParentIdentity(parent, options);
   const jobs = await client.getAttemptJobs(options.runId, before.runAttempt, {
@@ -2299,20 +2484,60 @@ export async function loadPlanForCommand(
   client,
   loadExecutionPlan = downloadExecutionPlan,
 ) {
-  try {
-    return { plan: await loadPlan(options, loadExecutionPlan) };
-  } catch (error) {
-    if (!(error instanceof MissingFrvPlanError)) {
-      throw error;
-    }
-    const pending = await inspectUnsealedPlan(options, client);
-    if (options.command === "status") {
-      return { pending };
-    }
+  const waitDeadline = options.waitForSeal
+    ? (options.operationDeadline ??
+      Date.now() + configuredTimeout("OPENCLAW_FRV_PLAN_SEAL_WAIT_MS", DEFAULT_PLAN_SEAL_WAIT_MS))
+    : undefined;
+  let pending;
+  const throwSealWaitTimeout = (cause) => {
+    const state = pending?.planAvailability.state;
     throw new Error(
-      `run ${options.runId} plan is ${pending.planAvailability.state}; ${options.command} is unavailable until the immutable plan is sealed; next: ${pending.nextCommand}`,
-      { cause: error },
+      `run ${options.runId}${state ? ` plan is ${state};` : ""} timed out waiting for the immutable plan seal`,
+      { cause },
     );
+  };
+  while (true) {
+    if (waitDeadline !== undefined && Date.now() >= waitDeadline) {
+      throwSealWaitTimeout();
+    }
+    try {
+      const plan = await loadPlan(
+        { ...options, operationDeadline: waitDeadline ?? options.operationDeadline },
+        loadExecutionPlan,
+      );
+      if (waitDeadline !== undefined && Date.now() >= waitDeadline) {
+        throwSealWaitTimeout();
+      }
+      return { plan };
+    } catch (error) {
+      if (waitDeadline !== undefined && Date.now() >= waitDeadline) {
+        throwSealWaitTimeout(error);
+      }
+      if (!(error instanceof MissingFrvPlanError)) {
+        throw error;
+      }
+      pending = await inspectUnsealedPlan(
+        { ...options, operationDeadline: waitDeadline ?? options.operationDeadline },
+        client,
+      );
+      if (options.command === "status") {
+        return { pending };
+      }
+      if (!options.waitForSeal) {
+        throw new Error(
+          `run ${options.runId} plan is ${pending.planAvailability.state}; ${options.command} is unavailable until the immutable plan is sealed; next: ${pending.nextCommand}`,
+          { cause: error },
+        );
+      }
+      const remaining = waitDeadline - Date.now();
+      if (remaining < 1) {
+        throw new Error(
+          `run ${options.runId} plan is ${pending.planAvailability.state}; timed out waiting for the immutable plan seal`,
+          { cause: error },
+        );
+      }
+      await sleep(Math.min(configuredTimeout("OPENCLAW_FRV_POLL_MS", DEFAULT_POLL_MS), remaining));
+    }
   }
 }
 
@@ -3043,8 +3268,20 @@ function formatRunProgress(owner, run, state) {
   return `${owner}${owner === "parent" ? "" : " run"} ${run.id} attempt ${run.run_attempt} ${state ?? (run.status === "completed" ? `completed ${run.conclusion}` : run.status)}`;
 }
 
+function formatFrvTimestamp(value = new Date()) {
+  const timestamp = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) {
+    throw new Error(`invalid FRV timestamp: ${String(value)}`);
+  }
+  const parts = Object.fromEntries(
+    PACIFIC_TIME_FORMAT.formatToParts(timestamp).map(({ type, value: part }) => [type, part]),
+  );
+  const pacific = `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.timeZoneName}`;
+  return `${timestamp.toISOString()} / ${pacific}`;
+}
+
 function formatProgressEvent(command, event) {
-  return `[frv ${command}] ${new Date().toISOString().slice(11, 19)}Z ${event.message}${event.url ? ` ${event.url}` : ""}`;
+  return `[frv ${command}] ${formatFrvTimestamp()} ${event.message}${event.url ? ` ${event.url}` : ""}`;
 }
 
 function failedJobEvent(owner, job, attempt, runId) {
@@ -3060,9 +3297,10 @@ function failedJobEvent(owner, job, attempt, runId) {
       : `attempt ${jobAttempt}`;
   const labels = Array.isArray(job.labels) && job.labels.length > 0 ? job.labels.join(",") : "none";
   const runner = job.runner_name ? ` / ${job.runner_name}` : "";
+  const blocker = owner.startsWith("artifact:") ? " blocker:" : "";
   return [
     `job:${runId ?? job.run_id ?? owner}:${jobAttempt}:${job.name}`,
-    `${owner} job "${job.name}" ${job.conclusion} (${attemptLabel}; runner ${labels}${runner})`,
+    `${owner}${blocker} job "${job.name}" ${job.conclusion} (${attemptLabel}; runner ${labels}${runner})`,
     job.html_url,
   ];
 }
@@ -3315,7 +3553,7 @@ export async function watchRelease(parentRunId, client, options = {}) {
         events.push({
           message:
             state.nextCheckAt > Date.now()
-              ? `GitHub rate limited (${failedReads.join(", ")}); next check at ${new Date(state.nextCheckAt).toISOString()}`
+              ? `GitHub rate limited (${failedReads.join(", ")}); next check at ${formatFrvTimestamp(state.nextCheckAt)}`
               : `GitHub reads failed (${failedReads.join(", ")}); retrying next poll`,
         });
         state.failedReadFingerprint = fingerprint;
@@ -3413,6 +3651,16 @@ function print(value, json) {
       `plan: ${value.childRerun.mode} ${value.childRerun.producer ?? value.childRerun.failed.join(", ")}`,
     );
   }
+  for (const rerun of value.payloadReruns ?? []) {
+    console.log(`plan: ${rerun.child} ${rerun.mode} ${rerun.producer ?? rerun.failed.join(", ")}`);
+  }
+  if (value.receipt) {
+    console.log(
+      `accepted: child=${value.receipt.child} run=${value.receipt.runId} source-attempt=${value.receipt.sourceRunAttempt} attempt=${value.receipt.runAttempt} job=${JSON.stringify(value.receipt.jobName)} job-id=${value.receipt.jobId}`,
+    );
+    console.log(`next: ${value.nextCommand}`);
+    console.log(`continue: ${value.continueCommand}`);
+  }
   if (value.action) {
     console.log(`action: ${value.action}`);
   }
@@ -3494,6 +3742,7 @@ async function main() {
     child: options.child,
     dryRun: options.dryRun,
     job: options.job,
+    noFollow: options.noFollow,
     maxAttempts: options.maxAttempts,
   });
   print(result, options.json);

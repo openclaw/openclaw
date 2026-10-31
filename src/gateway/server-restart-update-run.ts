@@ -1,15 +1,23 @@
 import {
   captureDeliveryQueueStateContext,
+  resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
+import {
+  AUTOMATIC_RECOVERY_CLEANUP_STEP,
+  automaticRecoveryCleanupWarning,
+  canAutomaticallyCleanUpdateRecovery,
+} from "../infra/update-automatic-cleanup-result.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
 import { getUpdateRunAsync as getUpdateRun } from "../infra/update-run-reader.js";
+import { projectUpdateRunResultSteps } from "../infra/update-run-step.js";
 import {
   finishUpdateRunAsync as finishUpdateRun,
   recordUpdateRunPhaseAsync as recordUpdateRunPhase,
   recordUpdateRunVerificationAsync as recordUpdateRunVerification,
 } from "../infra/update-run-write.async.js";
+import type { UpdateStepResult } from "../infra/update-step-result.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 
@@ -18,6 +26,7 @@ export async function finalizeRestartUpdateRun(
   payload: RestartSentinelPayload,
   pendingExpired = false,
   context: DeliveryQueueStateContext = captureDeliveryQueueStateContext(),
+  continuation: { signal?: AbortSignal; assertCurrent?: () => void } = {},
 ) {
   const options = { env: context.workerContext.environment };
   const updateRunId = payload.stats?.runId;
@@ -117,6 +126,23 @@ export async function finalizeRestartUpdateRun(
       !orchestratorOwnsVerification &&
       (pendingExpired || !isPendingControlPlaneUpdateRestartSentinel(payload))
     ) {
+      if (
+        !pendingExpired &&
+        payload.status === "ok" &&
+        updateRun.verification.versionMatch !== false
+      ) {
+        const { commitRestartPluginCohort } = await import("./server-restart-plugin-cohort.js");
+        await commitRestartPluginCohort(updateRun.runId, {
+          // The database projection omits the command's HOME, scratch and config selectors.
+          env: resolveDeliveryQueueStateEnv(undefined, context),
+          signal: continuation.signal,
+          assertCurrent: () => {
+            continuation.signal?.throwIfAborted();
+            continuation.assertCurrent?.();
+            context.workerContext.admission.assertCurrent();
+          },
+        });
+      }
       updateRun = await finishUpdateRun(
         updateRun.runId,
         {
@@ -139,6 +165,27 @@ export async function finalizeRestartUpdateRun(
         },
         options,
       );
+    }
+  }
+  if (
+    !pendingExpired &&
+    updateRun &&
+    canAutomaticallyCleanUpdateRecovery(updateRun) &&
+    !updateRun.steps.some(
+      (step) => step.step === AUTOMATIC_RECOVERY_CLEANUP_STEP && step.status === "completed",
+    )
+  ) {
+    let cleanup: UpdateStepResult | undefined;
+    try {
+      const { cleanupGatewayUpdateRecovery } = await import("./update-automatic-cleanup.js");
+      cleanup = await cleanupGatewayUpdateRecovery(updateRun.runId, options.env);
+    } catch (error) {
+      cleanup = automaticRecoveryCleanupWarning(error);
+    }
+    // Completion must carry the warning even when optional diagnostic writes fail.
+    // Required boot/outcome persistence above remains outside this advisory boundary.
+    if (cleanup) {
+      updateRun = projectUpdateRunResultSteps(updateRun, [cleanup]);
     }
   }
   return updateRun;

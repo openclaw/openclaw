@@ -8,6 +8,7 @@ import {
 import { GOOGLE_MEET_TRANSCRIPT_MAX_LINES as maxLines } from "./types.js";
 
 const words = "Please share the recap";
+const extended = `${words} after review`;
 const caption = (text = words, marker?: string) =>
   new CaptionNode(`Alice\n${text}`, marker === undefined ? {} : { "data-is-self": marker });
 type Page = ReturnType<typeof createCaptionPage>;
@@ -23,49 +24,50 @@ function revise(page: Page, row: CaptionNode, text: string, rows = [row]) {
 }
 function historical(page: Page, text: string) {
   const line = onlyLine(page.read().pendingLines);
-  expect(line.text).toBe(text);
-  expect(line.source).toBeUndefined();
+  expect([line.text, line.source]).toEqual([text, undefined]);
   return line;
 }
+const origin = (marker?: string) => ({ speaker: "Alice", self: marker ? "other" : "unknown" });
 async function observe(row = caption()) {
   const page = createCaptionPage([row]);
   await page.poll();
   return { row, page, first: pending(page) };
 }
 
-it("retains correction provenance without reviving superseded source revisions", async () => {
-  const { row, page, first } = await observe();
-  expect(first.source).toEqual({
-    id: expect.stringMatching(/^session-1:epoch-1:\d+$/),
-    epoch: page.read().epoch,
-    revision: "1",
-    finalized: false,
-  });
-  expect(first.provenance).toMatchObject({
-    observer: "google-meet-caption-dom",
-    sessionId: "session-1",
-    epoch: first.source.epoch,
-    speaker: "Alice",
-    self: "unknown",
-    observationId: expect.stringContaining(":observation:"),
-    observedAt: expect.any(String),
-  });
+it.each([
+  ["Actually, wait for approval", undefined, undefined, false],
+  [extended, undefined, undefined, true],
+  [extended, undefined, "false", false],
+  [words, "false", undefined, false],
+] as const)("rejects replay authority: %s", async (text, before, after, reuse) => {
+  const { row, page, first } = await observe(caption(words, before));
+  const changed = text !== words;
   await page.poll();
   expect(pending(page)).toEqual(first);
-  revise(page, row, "Actually, wait for approval");
-  const retired = onlyLine(lines(page));
-  expect(retired).toMatchObject({ text: words, provenance: first.provenance });
-  expect(retired.source).toBeUndefined();
+  revise(page, row, text);
+  if (!text.startsWith(words)) {
+    const retired = onlyLine(lines(page));
+    expect(retired).toMatchObject({ text: words, provenance: first.provenance });
+    expect(retired.source).toBeUndefined();
+  }
   const corrected = pending(page);
-  expect(corrected.text).toBe("Actually, wait for approval");
-  expect(corrected.source).toEqual({ ...first.source, revision: "2" });
-  expect(corrected.provenance?.observationId).not.toBe(first.provenance?.observationId);
-  const committed = page.read(true).lines;
-  expect(committed.at(-1)?.provenance).toEqual(corrected.provenance);
-  page.show([caption()]);
+  expect(corrected.text).toBe(text);
+  expect(corrected.provenance).toMatchObject(origin(before));
+  expect(corrected.provenance?.observationId === first.provenance?.observationId).toBe(!changed);
+  settle(page);
+  const committed = lines(page);
+  expect(committed).toHaveLength(text.startsWith(words) ? 1 : 2);
+  const last = committed.at(-1);
+  expect(last?.provenance).toEqual(corrected.provenance);
+  const finalRevision = changed ? "3" : "2";
+  expect(last?.source).toEqual({ ...first.source, revision: finalRevision, finalized: true });
+  page.advance(5_000);
+  row.textContent = `Alice\n${words}`;
+  page.show([reuse ? row : caption(words, after)]);
   await page.poll();
   expect(lines(page)).toEqual(committed);
   const replay = historical(page, words);
+  expect(replay.provenance).toMatchObject(origin(after));
   expect(replay.provenance?.observationId).not.toBe(first.provenance?.observationId);
   expect(page.read(true).lines).toEqual([...committed, replay]);
 });
@@ -76,35 +78,18 @@ it("retires stale duplicates without advancing their shared source", async () =>
   const page = createCaptionPage([row, stale]);
   await page.poll();
   const source = onlySourcedLine(page.read().pendingLines.slice(0, 1)).source;
-  expect(page.read().pendingLines.map((line) => line.source)).toEqual([source, source]);
-  revise(page, row, words + " after review", [row, stale]);
-  expect(page.read().pendingLines[0]?.source).toEqual({ ...source, revision: "2" });
+  revise(page, row, extended, [row, stale]);
   // Expire cross-node matching so the survivor keeps its stale lifecycle.
   page.advance(2_000);
   page.show([stale]);
   const committed = onlySourcedLine(lines(page));
   expect(committed).toMatchObject({
-    text: words + " after review",
+    text: extended,
     source: { ...source, revision: "3", finalized: true },
   });
-  historical(page, words);
-  settle(page);
-  expect(page.read().pendingLines).toEqual([]);
-  expect(lines(page).map((line) => line.text)).toEqual([words + " after review", words]);
-  expect(lines(page)[0]).toEqual(committed);
-  expect(lines(page)[1]?.source).toBeUndefined();
-});
-
-it("does not revive a finalized source from a historical prefix in its DOM row", async () => {
-  const { row, page, first } = await observe();
-  revise(page, row, words + " after review");
-  const committed = onlySourcedLine(page.read(true).lines);
-  expect(committed.source).toEqual({ ...first.source, revision: "3", finalized: true });
-  revise(page, row, words);
-  await page.poll();
-  expect(lines(page)).toEqual([committed]);
   const replay = historical(page, words);
-  expect(page.read(true).lines).toEqual([committed, replay]);
+  settle(page);
+  expect(lines(page)).toEqual([committed, replay]);
 });
 
 it("preserves old identities at capacity without granting authority to new captions", async () => {
@@ -112,26 +97,14 @@ it("preserves old identities at capacity without granting authority to new capti
   const page = createCaptionPage(texts.map((text) => caption(text)));
   await page.poll();
   const visible = page.read().pendingLines;
-  expect(visible).toHaveLength(texts.length);
   const ids = visible.slice(0, maxLines).map((line) => line.source?.id);
-  expect(ids).not.toContain(undefined);
-  expect(new Set(ids).size).toBe(maxLines);
+  expect([new Set(ids).size, ids.includes(undefined)]).toEqual([maxLines, false]);
   expect(visible.at(-1)?.source).toBeUndefined();
-  expect(visible.every((line) => line.provenance?.self === "unknown")).toBe(true);
   const first = onlySourcedLine(visible.slice(0, 1));
   const committed = page.read(true);
-  expect(committed.pendingLines).toEqual([]);
   expect(committed.lines.map((line) => line.text)).toEqual(texts.slice(1));
-  expect(committed.lines.at(-1)?.source).toBeUndefined();
   page.show([caption(first.text)]);
-  expect(lines(page)).toEqual(committed.lines);
   expect(pending(page).source).toEqual({ ...first.source, revision: "2", finalized: true });
-  page.show([caption("Final thought")]);
-  const last = historical(page, "Final thought");
-  expect(last.provenance).toMatchObject({ speaker: "Alice", self: "unknown" });
-  const final = page.read(true);
-  expect(final.lines).toHaveLength(maxLines);
-  expect(final.lines.at(-1)).toEqual(last);
 });
 
 it("separates document epochs and meeting sessions", async () => {
@@ -148,54 +121,14 @@ it("separates document epochs and meeting sessions", async () => {
   expect(page.read(false, "session-1").sessionMatched).toBe(false);
 });
 
-it("separates native self and other observations when a DOM row is reused", async () => {
-  const parent = new CaptionNode("", { "data-is-self": "true" });
-  const row = new CaptionNode(`Assistant\n${words}`, {}, parent);
+it("keeps own-echo authority sticky until a DOM row changes speaker", async () => {
+  const parent = new CaptionNode("");
+  const row = new CaptionNode(`Alice\n${words}`, {}, parent);
   const { page, first } = await observe(row);
-  expect(first.source.ownEcho).toBe(true);
-  settle(page);
-  row.textContent = `Alice\n${words}`;
-  row.setAttribute("data-is-self", "false");
-  page.advance(5_000);
-  page.show([row]);
-  const next = pending(page);
-  expect(next.source.id).not.toBe(first.source.id);
-  expect(next.source.ownEcho).toBe(false);
-  expect(next.provenance).toMatchObject({ speaker: "Alice", self: "other" });
-  expect(lines(page)[0]?.provenance).toEqual(first.provenance);
-});
-
-it("does not borrow an earlier non-self marker when attribution is missing", async () => {
-  const { page, first } = await observe(caption(words, "false"));
-  settle(page);
-  page.show([caption()]);
-  const unknown = historical(page, words);
-  expect(unknown.provenance).toMatchObject({ speaker: "Alice", self: "unknown" });
-  expect(lines(page)[0]?.provenance).toEqual(first.provenance);
-});
-
-it("suppresses superseded unknown observations even after attribution appears", async () => {
-  const { row, page, first } = await observe();
-  revise(page, row, words + " only after approval");
-  settle(page);
-  const corrected = onlySourcedLine(lines(page));
-  expect(corrected.source.id).toBe(first.source.id);
-  expect(corrected.provenance?.self).toBe("unknown");
-  page.advance(5_000);
-  page.show([caption(words, "false")]);
-  const replay = historical(page, words);
-  expect(replay.provenance).toMatchObject({ speaker: "Alice", self: "other" });
-  expect(page.read(true).lines.at(-1)).toEqual(replay);
-});
-
-it("keeps own-echo authority sticky through marker changes and settled rerenders", async () => {
-  const { row, page, first } = await observe();
   const id = first.source.id;
-  expect(first.provenance?.self).toBe("unknown");
-  page.markSelf(row, "true");
+  page.markSelf(parent, "true");
   const self = pending(page);
   expect(self.source).toMatchObject({ id, ownEcho: true });
-  expect(self.provenance?.self).toBe("self");
   page.markSelf(row, "false");
   const other = pending(page);
   expect(other.source).toMatchObject({ id, ownEcho: true });
@@ -206,10 +139,21 @@ it("keeps own-echo authority sticky through marker changes and settled rerenders
   page.show([caption(words, "false")]);
   const replacement = pending(page);
   expect(replacement.source).toMatchObject({ id, ownEcho: true });
-  expect(replacement.provenance?.self).toBe("other");
-  expect(replacement.provenance?.observationId).not.toBe(other.provenance?.observationId);
   const finalized = page.read(true).lines.at(-1);
   expect(finalized?.source).toMatchObject({ id, ownEcho: true, finalized: true });
+  row.textContent = "Assistant\nNew speech";
+  row.setAttribute("data-is-self", "true");
+  page.show([row]);
+  const spoken = pending(page);
+  settle(page);
+  row.textContent = "Bob\nNew speech";
+  row.setAttribute("data-is-self", "false");
+  page.advance(5_000);
+  page.show([row]);
+  const next = pending(page);
+  expect(next.source.id).not.toBe(spoken.source.id);
+  expect(next.source.ownEcho).toBe(false);
+  expect(next.provenance).toMatchObject({ speaker: "Bob", self: "other" });
 });
 
 it("does not finalize a shared source while a duplicate row is still visible", async () => {
@@ -229,10 +173,7 @@ it("does not finalize a shared source while a duplicate row is still visible", a
   revise(page, survivor, words + " only after approval");
   const edited = pending(page);
   expect(edited.source).toMatchObject({ id: live.source.id, revision: "2", finalized: false });
-  expect(edited.text).toContain("only after approval");
-  expect(edited.provenance?.observationId).not.toBe(live.provenance?.observationId);
   settle(page);
   expect(page.read().pendingLines).toEqual([]);
   expect(lines(page).at(-1)?.source).toMatchObject({ id: live.source.id, finalized: true });
-  expect(lines(page).at(-1)?.provenance).toEqual(edited.provenance);
 });

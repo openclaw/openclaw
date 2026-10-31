@@ -87,46 +87,37 @@ function history(row: GatewaySessionRow, calls: number | unknown[] = 0): ChatHis
 function fixture(
   list: (params: Record<string, unknown>) => SessionsListResult,
   readHistory: (params: Record<string, unknown>) => unknown,
+  readNative: (params: Record<string, unknown>) => unknown = () => ({ session: null }),
 ) {
   const subscriptions = new Set<string>();
   const released = createDeferred();
-  const request = vi.fn((method: string, params?: unknown): unknown => {
-    const values = asOptionalRecord(params) ?? {};
-    if (method === "sessions.messages.subscribe") {
+  const methods: Record<string, (values: Record<string, unknown>) => unknown> = {
+    "sessions.messages.subscribe": (values) => {
       subscriptions.add(String(values.key));
       return { key: values.key, agentId: values.agentId };
-    }
-    if (method === "sessions.messages.unsubscribe") {
+    },
+    "sessions.messages.unsubscribe": (values) => {
       subscriptions.delete(String(values.key));
       released.resolve();
       return {};
+    },
+    "sessions.subscribe": () => ({}),
+    "sessions.unsubscribe": () => ({}),
+    "sessions.abort": () => ({ aborted: true }),
+    "sessions.list": list,
+    "sessions.describe": readNative,
+    "chat.history": readHistory,
+  };
+  const request = vi.fn((method: string, params?: unknown): unknown => {
+    if (!Object.hasOwn(methods, method)) {
+      throw new Error(`Unexpected method: ${method}`);
     }
-    if (method === "sessions.subscribe" || method === "sessions.unsubscribe") {
-      return {};
-    }
-    if (method === "sessions.abort") {
-      return { aborted: true };
-    }
-    if (method === "sessions.list") {
-      return list(values);
-    }
-    if (method === "chat.history") {
-      return readHistory(values);
-    }
-    throw new Error(`Unexpected method: ${method}`);
+    return methods[method]!(asOptionalRecord(params) ?? {});
   });
   const client = createTestGatewayClient(request);
   const connection = createGatewayHarness(client);
   connection.publish({
-    hello: gatewayHelloForMethods([
-      ...SESSION_MUTATION_TEST_METHODS,
-      "sessions.list",
-      "sessions.subscribe",
-      "sessions.unsubscribe",
-      "sessions.messages.subscribe",
-      "sessions.messages.unsubscribe",
-      "chat.history",
-    ]),
+    hello: gatewayHelloForMethods([...SESSION_MUTATION_TEST_METHODS, ...Object.keys(methods)]),
   });
   const sessions = createTestSessionCapability(connection.gateway);
   const context = createContext(connection.gateway, sessions);
@@ -256,41 +247,35 @@ describe("Subagents panel data ownership", () => {
     expect(f.subscriptions.has(row.key)).toBe(false);
   });
 
-  it.each([undefined, "parallel-audits"])(
-    "loads older running children beyond the first page (%s)",
-    async (swarmGroupId) => {
-      const finished = Array.from({ length: 20 }, (_, index) => child(`finished-${index}`));
-      const last = child("last", {
-        key: "agent:research:subagent:last",
-        agentId: "research",
-        swarmGroupId,
-        status: "running",
-        hasActiveRun: true,
-        activeRunIds: ["run-1"],
-      });
-      const persistent = child("persistent", {
-        key: "agent:main:dashboard:persistent",
-        classification: undefined,
-      });
-      const f = fixture(
-        (params) =>
-          !params.spawnedBy
-            ? page([])
-            : params.offset === 21
-              ? page([last], { offset: 21, totalCount: 22 })
-              : page([...finished, persistent], { hasMore: true, nextOffset: 21, totalCount: 22 }),
-        (params) => history(params.sessionKey === last.key ? last : finished[0]!),
-      );
-      f.open();
-      await f.data.refresh();
-      expect(f.data.rows.map((row) => row.session.key)).toEqual([
-        ...finished.map((row) => row.key),
-        last.key,
-      ]);
-      expect(f.data.rows.at(-1)?.canStop).toBe(true);
-      expect(f.data.loading).toBe(false);
-    },
-  );
+  it("loads older running children beyond the first page", async () => {
+    const finished = Array.from({ length: 20 }, (_, index) => child(`finished-${index}`));
+    const last = runningChild("last", {
+      key: "agent:research:subagent:last",
+      agentId: "research",
+      swarmGroupId: "parallel-audits",
+    });
+    const persistent = child("persistent", {
+      key: "agent:main:dashboard:persistent",
+      classification: undefined,
+    });
+    const f = fixture(
+      (params) =>
+        !params.spawnedBy
+          ? page([])
+          : params.offset === 21
+            ? page([last], { offset: 21, totalCount: 22 })
+            : page([...finished, persistent], { hasMore: true, nextOffset: 21, totalCount: 22 }),
+      (params) => history(params.sessionKey === last.key ? last : finished[0]!),
+    );
+    f.open();
+    await f.data.refresh();
+    expect(f.data.rows.map((row) => row.session.key)).toEqual([
+      ...finished.map((row) => row.key),
+      last.key,
+    ]);
+    expect(f.data.rows.at(-1)?.canStop).toBe(true);
+    expect(f.data.loading).toBe(false);
+  });
 
   it("rejects a stale Stop target while allowing the current run to be stopped exactly", async () => {
     let row = runningChild("stop", { activeRunIds: ["original-run"] });
@@ -412,5 +397,120 @@ describe("Subagents panel data ownership", () => {
     publish("run-2", "lifecycle", { phase: "start" });
     expect(view(f)?.activity).toBeUndefined();
     expect(f.changed).toHaveBeenCalledOnce();
+  });
+});
+
+describe("native observations in the Subagents panel owner", () => {
+  const nativeSnapshot = {
+    coverage: "live",
+    children: [{ id: "native-child", label: "Synthetic helper", status: "running" }],
+    truncated: false,
+  };
+  const nativeParent = { key: parentKey, sessionId: "parent-session", kind: "direct" };
+  const nativeResult = (children = nativeSnapshot.children) => ({
+    session: nativeParent,
+    nativeSubagents: { ...nativeSnapshot, children },
+  });
+  const nativeFixture = (read: Parameters<typeof fixture>[2] = () => nativeResult()) =>
+    fixture(
+      () => page([]),
+      () => ({}),
+      read,
+    );
+
+  it("keeps native observations separate from managed sessions and controls", async () => {
+    const f = nativeFixture();
+    f.open();
+    await f.when(() => f.data.nativeSnapshot?.children.length === 1);
+    expect(f.data.rows).toEqual([]);
+    expect(f.data.nativeSnapshot?.children).toEqual(nativeSnapshot.children);
+    expect(f.request).toHaveBeenCalledWith("sessions.describe", {
+      key: parentKey,
+      includeNativeSubagents: true,
+    });
+    expect(f.request.mock.calls.some(([method]) => method === "chat.history")).toBe(false);
+    expect(f.request.mock.calls.some(([method]) => method === "sessions.abort")).toBe(false);
+  });
+
+  it.each(["parent", "connection", "disposal"])(
+    "drops a late native read after %s",
+    async (change) => {
+      const blocked = createDeferred<unknown>();
+      let reads = 0;
+      const f = nativeFixture(() => (++reads === 1 ? blocked.promise : nativeResult([])));
+      f.open();
+      await vi.waitFor(() => expect(reads).toBe(1));
+      if (change === "parent") {
+        f.open(otherParentKey);
+      } else if (change === "connection") {
+        f.connection.publish({ phase: "reconnecting" });
+        expect(f.data.nativeSnapshot?.children).toBeUndefined();
+        f.connection.publish({ phase: "connected" });
+      } else {
+        f.data.dispose();
+      }
+      if (change !== "disposal") {
+        await vi.waitFor(() => expect(reads).toBe(2));
+      }
+      blocked.resolve(nativeResult());
+      await blocked.promise;
+      await Promise.resolve();
+      if (change === "disposal") {
+        expect(f.data.nativeSnapshot).toBeUndefined();
+      } else {
+        expect(f.data.nativeSnapshot?.children).toEqual([]);
+      }
+    },
+  );
+
+  it.each(["missing", "denied"])(
+    "clears prior contents when the parent becomes %s",
+    async (outcome) => {
+      let allowed = true;
+      const f = nativeFixture(() => {
+        if (allowed) {
+          return nativeResult();
+        }
+        if (outcome === "denied") {
+          throw new Error("Access denied");
+        }
+        return { session: null };
+      });
+      f.open();
+      await f.when(() => f.data.nativeSnapshot?.children.length === 1);
+      allowed = false;
+      await f.data.refresh();
+      expect(f.data.nativeSnapshot).toBeUndefined();
+      expect(Boolean(f.data.nativeError)).toBe(outcome === "denied");
+    },
+  );
+
+  it("polls only while visible and retires pending reads on disposal", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const f = nativeFixture();
+    f.open();
+    await vi.advanceTimersByTimeAsync(0);
+    const reads = () =>
+      f.request.mock.calls.filter(([method]) => method === "sessions.describe").length;
+    expect(reads()).toBe(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(reads()).toBe(2);
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    onTestFinished(() => visibility.mockRestore());
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(f.data.nativeSnapshot?.children).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(reads()).toBe(2);
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads()).toBe(3);
+    f.data.dispose();
+    expect(f.data.nativeSnapshot?.children).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(reads()).toBe(3);
   });
 });

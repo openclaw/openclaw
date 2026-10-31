@@ -40,7 +40,6 @@ export { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 
 export {
   CodexAppServerEventProjector,
-  createCodexTestModel,
   createCodexTestToolTerminalObserver,
   createMockPluginRegistry,
   describe,
@@ -106,18 +105,6 @@ export async function createProjector(
 ): Promise<CodexAppServerEventProjector> {
   const resolvedParams = params ?? (await createParams());
   return new CodexAppServerEventProjector(resolvedParams, THREAD_ID, TURN_ID, options);
-}
-
-export async function createProjectorWithAssistantHooks() {
-  const onAssistantMessageStart = vi.fn();
-  const onPartialReply = vi.fn();
-  const params = await createParams();
-  const projector = await createProjector({
-    ...params,
-    onAssistantMessageStart,
-    onPartialReply,
-  });
-  return { onAssistantMessageStart, onPartialReply, projector };
 }
 
 export function registerCodexEventProjectorTestLifecycle(): void {

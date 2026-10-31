@@ -1,23 +1,19 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
-import { ensureMemoryChunkProvenance } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
-import { ensureMemoryEntryOriginsSchema } from "../../packages/memory-host-sdk/src/memory-entry-origins.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { ensureExecutionOwnerLifecycleBindingSchema } from "../audit/execution-owner-lifecycle-binding-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { stageSqliteCommittedPublication } from "../infra/sqlite-post-commit.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { useSqliteSchemaTestFixture } from "../infra/sqlite-schema-facts.test-support.js";
-import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { ensureMeetingTranscriptsSchema } from "../transcripts/sqlite-schema.js";
-import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
-import { ensureSessionGoalOperationsSchema } from "./openclaw-agent-goal-operations-schema.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION as SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { expectRow, readRow, readRows } from "./openclaw-state-db-fixtures.test-support.js";
 import {
@@ -28,12 +24,13 @@ import {
 import {
   openExistingOpenClawStateDatabaseReadOnly as openReadOnly,
   openOpenClawStateDatabase as openState,
+  runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
+import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema-ensure.js";
 import {
   getOpenClawStateRuntimeSchema,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
 } from "./openclaw-state-schema-compatibility.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -43,6 +40,14 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 const { openDatabase } = useSqliteSchemaTestFixture();
+
+const featureEnsurer = () =>
+  createOpenClawStateSchemaEnsurer({
+    table: "web_push_approval_deliveries",
+    indexes: ["idx_web_push_approval_deliveries_subscription"],
+    endMarker: "  ON web_push_approval_deliveries(subscription_id, approval_id);\n",
+    operationLabel: "test.feature-schema",
+  });
 
 function expectRepeatedSqlAbsent(pattern: (sql: string) => boolean, run: () => void) {
   const observation = observeHostDataSql();
@@ -55,41 +60,77 @@ function expectRepeatedSqlAbsent(pattern: (sql: string) => boolean, run: () => v
   }
 }
 
-it.each([
-  [
-    "audit lifecycle binding",
-    OPENCLAW_STATE_SCHEMA_SQL,
-    ensureExecutionOwnerLifecycleBindingSchema,
-  ],
-  ["goal receipt", OPENCLAW_AGENT_SCHEMA_SQL, ensureSessionGoalOperationsSchema],
-  ["board", OPENCLAW_AGENT_SCHEMA_SQL, ensureOpenClawAgentBoardSchemaInTransaction],
-  ["memory origin", OPENCLAW_AGENT_SCHEMA_SQL, ensureMemoryEntryOriginsSchema],
-  ["memory provenance", OPENCLAW_AGENT_SCHEMA_SQL, ensureMemoryChunkProvenance],
-] as const)(
-  "never issues persistent DDL on first or repeated warm %s use",
-  (_name, schema, ensure) => {
-    const database = openDatabase(schema);
-    expectRepeatedSqlAbsent(
-      (sql) => classifySqliteMutation(sql, "batch").mainSchemaChange,
+it("retries rolled-back feature DDL and publishes only its durable installation", () => {
+  const database = openState({
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-feature-rollback-") },
+  });
+  const ensure = featureEnsurer();
+  using reader = openNodeSqliteDatabase(database.path);
+  const installed = () =>
+    readRow(
+      reader,
+      "SELECT name FROM sqlite_schema WHERE name = ?",
+      "web_push_approval_deliveries",
+    ) !== undefined;
+  const publications: boolean[] = [];
+  const install = () => {
+    ensure({ database });
+    stageSqliteCommittedPublication(database.db, {
+      installFacts: () => {},
+      invalidate: () => {},
+      notify: () => publications.push(installed()),
+    });
+    expect(publications).toEqual([]);
+    expect(installed()).toBe(false);
+  };
+  database.db.exec("BEGIN IMMEDIATE");
+  try {
+    expect(() => ensure({ database })).toThrow("Cannot join an unmanaged shared-state transaction");
+  } finally {
+    database.db.exec("ROLLBACK");
+  }
+  expect(() =>
+    runOpenClawStateWriteTransaction(
       () => {
-        database.exec("BEGIN IMMEDIATE");
-        ensure(database);
-        database.exec("COMMIT");
+        install();
+        throw new Error("installation refused");
       },
-    );
-  },
-);
-
-it("installs only the secret-store table and index on first use", () => {
-  using database = new DatabaseSync(":memory:");
-
-  ensureSecretStoreSchema(database);
-  expect(
-    readRows(
-      database,
-      "SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name",
+      { database },
     ),
-  ).toEqual([{ name: "secret_store_entries" }, { name: "secret_store_entries_live_idx" }]);
+  ).toThrow("installation refused");
+  expect(installed()).toBe(false);
+  expect(publications).toEqual([]);
+  runOpenClawStateWriteTransaction(install, { database });
+  expect(publications).toEqual([true]);
+  expectRepeatedSqlAbsent(
+    (sql) => /^(?:BEGIN|COMMIT|ROLLBACK)\b/i.test(sql),
+    () => featureEnsurer()({ database }),
+  );
+});
+
+it("installs additive DDL on the write runner's connection and rolls it back there", () => {
+  const outer = openDatabase();
+  const writer = openDatabase();
+  const ensure = createSqliteSchemaEnsurer(() => "CREATE TABLE feature (id INTEGER)", {
+    tables: ["feature"],
+  });
+  const installed = (db: EngineConnection) =>
+    readRow(db, "SELECT name FROM sqlite_schema WHERE name = 'feature'") !== undefined;
+
+  expect(() =>
+    ensure(outer, (install) =>
+      runSqliteImmediateTransactionSync(writer, () => {
+        install(writer);
+        throw new Error("installation refused");
+      }),
+    ),
+  ).toThrow("installation refused");
+  expect(installed(outer)).toBe(false);
+  expect(installed(writer)).toBe(false);
+
+  ensure(outer, (install) => runSqliteImmediateTransactionSync(writer, () => install(writer)));
+  expect(installed(outer)).toBe(false);
+  expect(installed(writer)).toBe(true);
 });
 
 it("lazily adds allowed_hosts to a v6 secret store without changing user_version", () => {

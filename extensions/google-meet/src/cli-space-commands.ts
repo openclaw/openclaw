@@ -212,10 +212,7 @@ export function registerGoogleMeetApiCommands(context: GoogleMeetCliCommandConte
       const meeting = resolveMeetingInput(context.config, options.meeting);
       const { space, token } = await resolveSpaceFromParams(
         context.config,
-        {
-          ...resolveCliParams(options),
-          meeting,
-        },
+        resolveCliParams(options),
         context.oauthRuntime,
       );
       if (options.json) {
@@ -249,10 +246,7 @@ export function registerGoogleMeetApiCommands(context: GoogleMeetCliCommandConte
       const meeting = resolveMeetingInput(context.config, options.meeting);
       const { space, token } = await resolveSpaceFromParams(
         context.config,
-        {
-          ...resolveCliParams(options),
-          meeting,
-        },
+        resolveCliParams(options),
         context.oauthRuntime,
       );
       const report = buildGoogleMeetPreflightReport({

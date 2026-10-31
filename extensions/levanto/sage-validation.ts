@@ -121,6 +121,19 @@ function groundingMeta(value: unknown) {
     number(g.search_ms, 0, Infinity, "search latency");
   }
 }
+function orderedProbabilities(
+  value: unknown,
+  expected: readonly (string | number)[],
+  kind: "option" | "level",
+) {
+  const probabilities = array(value, expected.length, expected.length, kind + " probabilities");
+  probabilities.forEach((entry, index) => {
+    const probability = object(entry, kind + " probability");
+    check(probability[kind] === expected[index], kind + " correlation");
+    number(probability.probability, 0, 1, kind + " probability");
+  });
+}
+
 export function parseSageResponse(value: unknown, q: SageQuestion, c: SageContent): SageResponse {
   const v = object(value, "response");
   check(v.id === q.id && v.kind === q.kind, "response correlation");
@@ -143,34 +156,14 @@ export function parseSageResponse(value: unknown, q: SageQuestion, c: SageConten
       } else if (r.probability !== null) {
         number(r.probability, 0, 1, "chosen probability");
       }
-      const probabilities = array(
-        r.probabilities,
-        options.length,
-        options.length,
-        "option probabilities",
-      );
-      probabilities.forEach((p, i) => {
-        const o = object(p, "option probability");
-        check(o.option === options[i], "option correlation");
-        number(o.probability, 0, 1, "option probability");
-      });
+      orderedProbabilities(r.probabilities, options, "option");
       break;
     }
     case "scale": {
       const levels = q.levels.map((level) => level.level);
       number(r.expectation, Math.min(...levels), Math.max(...levels), "expectation");
       number(r.confidence, -Infinity, Infinity, "confidence");
-      const probabilities = array(
-        r.probabilities,
-        levels.length,
-        levels.length,
-        "level probabilities",
-      );
-      probabilities.forEach((p, i) => {
-        const estimate = object(p, "level probability");
-        check(estimate.level === levels[i], "level correlation");
-        number(estimate.probability, 0, 1, "level probability");
-      });
+      orderedProbabilities(r.probabilities, levels, "level");
       break;
     }
     case "sort": {

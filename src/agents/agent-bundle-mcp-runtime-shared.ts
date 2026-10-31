@@ -1,5 +1,6 @@
+import type { Client, Transport, McpSubscription } from "@modelcontextprotocol/client";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
-/** Shared session MCP runtime constants and create-runtime factory type. */
+/** Shared session MCP runtime constants and ownership contracts. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type {
@@ -8,7 +9,10 @@ import type {
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
+import type { bindMcpClientElicitation } from "./mcp-client-elicitation.runtime.js";
 import type { McpServerConnectionResolved } from "./mcp-connection-resolver.js";
+import type { McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
+import type { createNativeMcpClientBridge } from "./native-mcp-runtime-client.js";
 
 export const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
 export const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
@@ -62,3 +66,29 @@ export type CreateSessionMcpRuntime = (params: {
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   toolDenylist?: string[];
 }) => SessionMcpRuntime | Promise<SessionMcpRuntime>;
+
+export type BundleMcpSession = {
+  serverName: string;
+  client: Client;
+  transport: Transport;
+  transportType: "stdio" | "sse" | "streamable-http";
+  requestTimeoutMs: number;
+  connected: boolean;
+  disconnectReason?: string;
+  retiring: boolean;
+  connectPromise?: Promise<void>;
+  disposePromise?: Promise<void>;
+  detachStderr?: () => void;
+  toolMetadata?: McpToolCatalogMetadata;
+  withElicitation?: ReturnType<typeof bindMcpClientElicitation>;
+  nativeBridge?: ReturnType<typeof createNativeMcpClientBridge>;
+  nativeSubscription?: McpSubscription;
+};
+
+export type ServerMcpRuntime = SessionMcpRuntime & {
+  readonly pluginOwned: boolean;
+  resetStartupBackoff: () => void;
+  readonly nativeContextKey: string | undefined;
+  readonly nativeCapabilityContext: object | undefined;
+  readonly nativeViewCount: number;
+};

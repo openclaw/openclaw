@@ -1,7 +1,8 @@
 import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { assert, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   readMigrationArtifactIdentity,
@@ -132,7 +133,9 @@ it.each(["native", "isolated", "copy", "zero", "ctime"] as const)(
         mode === "isolated" ? { mode: "isolated-process", stagingRoot: tempDir } : undefined,
       beforePublish: async () => {
         const images: string[] = [];
-        for (const entry of await fs.readdir(tempDir, { recursive: true, withFileTypes: true })) {
+        for (const entry of (await listDirectoryTreeStrict(tempDir)).map(
+          (walkEntry) => walkEntry.dirent,
+        )) {
           const file = path.join(entry.parentPath, entry.name);
           if (
             entry.isFile() &&
@@ -158,8 +161,8 @@ it.each(["native", "isolated", "copy", "zero", "ctime"] as const)(
       expect(copy).toHaveBeenCalledOnce();
     }
     expect((await fs.readdir(tempDir)).toSorted()).toEqual(["snapshot.sqlite", "source.sqlite"]);
-    expect(await fs.readFile(targetPath)).toEqual(preparedBytes);
-    expect(await fs.readFile(sourcePath)).toEqual(original);
+    assert(preparedBytes?.equals(await fs.readFile(targetPath)), targetPath);
+    assert(original.equals(await fs.readFile(sourcePath)), sourcePath);
     expect(query("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(query("SELECT rowid,value,length(payload) AS bytes FROM records")).toEqual([
       { rowid: 71, value: "retained", bytes: 131072 },

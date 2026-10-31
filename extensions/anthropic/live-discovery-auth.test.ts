@@ -4,23 +4,14 @@ import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import { buildAnthropicProvider } from "./register.runtime.js";
 
-type GuardedRequest = Parameters<typeof fetchWithSsrFGuard>[0];
-const guardedFetchCalls = vi.hoisted(() => [] as GuardedRequest[]);
-
 const discoveryRows = vi.hoisted(() => ({ value: [] as unknown[] }));
+const guardedFetch = vi.hoisted(() => vi.fn<typeof fetchWithSsrFGuard>());
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
   return {
     ...actual,
-    fetchWithSsrFGuard: async (params: GuardedRequest) => {
-      guardedFetchCalls.push(params);
-      return {
-        response: new Response(JSON.stringify({ data: discoveryRows.value })),
-        finalUrl: "https://api.anthropic.com/v1/models",
-        release: async () => undefined,
-      };
-    },
+    fetchWithSsrFGuard: guardedFetch,
   };
 });
 
@@ -54,7 +45,11 @@ async function discover(apiKey: string) {
 }
 
 beforeEach(() => {
-  guardedFetchCalls.length = 0;
+  guardedFetch.mockReset().mockImplementation(async () => ({
+    response: Response.json({ data: discoveryRows.value }),
+    finalUrl: "https://api.anthropic.com/v1/models",
+    release: async () => undefined,
+  }));
   discoveryRows.value = [];
   clearLiveCatalogCacheForTests();
 });
@@ -64,8 +59,7 @@ it.each([
   ["sk-ant-oat01-test-token", "authorization", "Bearer sk-ant-oat01-test-token", "x-api-key"],
 ])("sends %s with the exclusive %s header", async (key, header, value, absent) => {
   await buildAnthropicProvider().catalog?.run?.(buildCatalogContext(key));
-  const request = guardedFetchCalls.at(-1);
-  expect(request).toBeDefined();
+  const request = guardedFetch.mock.calls.at(-1)?.[0];
   const headers = new Headers(request?.init?.headers);
   expect(headers.get(header)).toBe(value);
   expect(headers.get(absent)).toBeNull();
@@ -85,11 +79,10 @@ it("does not resolve Anthropic credentials for Claude CLI-only catalog scope", a
     }),
   ).resolves.toBeNull();
   expect(resolveProviderApiKey).not.toHaveBeenCalled();
-  expect(guardedFetchCalls).toEqual([]);
+  expect(guardedFetch).not.toHaveBeenCalled();
 });
 
-it("keeps shipped models Anthropic does not publish while adding discovered ones", async () => {
-  // Discovery must retain shipped rows absent from the live response.
+it("retains shipped models and their compat while projecting discovered capabilities", async () => {
   discoveryRows.value = [
     discoveryRow("claude-opus-5"),
     discoveryRow("claude-brand-new-9", {
@@ -97,6 +90,7 @@ it("keeps shipped models Anthropic does not publish while adding discovered ones
       capabilities: capabilities(),
     }),
     discoveryRow("claude-unshaped-9"),
+    discoveryRow("claude-sonnet-4-6", { capabilities: capabilities(false) }),
   ];
   const result = await discover("sk-ant-oat01-test-token");
   // Never republish API rows under the native CLI hook alias.
@@ -113,8 +107,6 @@ it("keeps shipped models Anthropic does not publish while adding discovered ones
   expect(models.get("claude-brand-new-9")).toMatchObject({
     name: "Claude Brand New 9",
     input: ["text", "image"],
-    contextWindow: 1_000_000,
-    maxTokens: 128_000,
     thinkingLevelMap: { xhigh: "xhigh", max: "max" },
     params: {
       claudeCapabilities: {
@@ -126,17 +118,8 @@ it("keeps shipped models Anthropic does not publish while adding discovered ones
     },
   });
   expect(models.has("claude-unshaped-9")).toBe(false);
-});
-
-it("keeps the closest shipped model's request contract for a listed unknown id", async () => {
-  discoveryRows.value = [discoveryRow("claude-sonnet-4-6", { capabilities: capabilities(false) })];
-  const result = await discover("sk-ant-api03-test-key");
-  const model = result.providers.anthropic?.models?.find(
-    (entry) => entry.id === "claude-sonnet-4-6",
-  );
-
   // Tool surface (Code Mode) comes from the shipped Sonnet row; effort comes from the listing.
-  expect(model).toMatchObject({
+  expect(models.get("claude-sonnet-4-6")).toMatchObject({
     compat: { codeMode: "preferred" },
     thinkingLevelMap: { xhigh: null, max: "max" },
     params: { claudeCapabilities: { xhighEffort: false, maxEffort: true } },

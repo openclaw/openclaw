@@ -257,10 +257,10 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
       return;
     }
     this.opened.reject(error);
-    this.failSends(error);
     const wasConnected = this.connected;
     this.connected = false;
     this.channel = undefined;
+    this.failSends(error);
     if (wasConnected) {
       this.emit("disconnect");
     }

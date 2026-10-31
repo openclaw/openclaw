@@ -6,18 +6,12 @@ import type { AgentsCreateResult } from "../../packages/gateway-protocol/src/sch
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/config.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../infra/device-identity.js";
-import { approveDevicePairing } from "../infra/device-pairing-approval.js";
-import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
-import { requestDevicePairing } from "../infra/device-pairing.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as profileCheck from "../system-agent/setup-inference-profile.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { resetGatewayTestState } from "./gateway.test-support.js";
+import { pairOperatorDeviceFixture } from "./paired-device.test-support.js";
 import type {
   GatewayRequestHandlerOptions,
   GatewayRequestOptions,
@@ -27,6 +21,7 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
+import { createAuthorityGatewayTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const observation = vi.hoisted(() => ({
@@ -142,16 +137,7 @@ it(
       await withOpenClawTestState(
         {
           label: "agent-create-inference-authority",
-          env: {
-            OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_CRON: "1",
-            OPENCLAW_DISABLE_BONJOUR: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-            OPENCLAW_SKIP_CANVAS_HOST: "1",
-            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          },
+          env: createAuthorityGatewayTestEnv(),
         },
         async (state) => {
           const recoveryRestart = vi.fn(() => {
@@ -193,24 +179,13 @@ it(
           });
           const clients: Array<Awaited<ReturnType<typeof connectGatewayClient>>> = [];
           const connectDevice = async (label: string, scopes: string[]) => {
-            const identity = loadOrCreateDeviceIdentity({
-              path: state.path(label, "client", "credentials.sqlite"),
-            });
-            const pending = await requestDevicePairing({
-              deviceId: identity.deviceId,
-              publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+            const { identity, issued: rotated } = await pairOperatorDeviceFixture({
+              identityPath: state.path(label, "client", "credentials.sqlite"),
+              scopes,
+              tokenScopes: scopes,
               clientId: "test",
               clientMode: "backend",
-              role: "operator",
-              scopes,
-            });
-            await approveDevicePairing(pending.request.requestId, {
               callerScopes: ["operator.admin"],
-            });
-            const rotated = await rotateDeviceToken({
-              deviceId: identity.deviceId,
-              role: "operator",
-              scopes,
             });
             if (!rotated.ok) {
               throw new Error("Expected paired device token");

@@ -5,12 +5,14 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { configSnapshot } from "./config-snapshot.test-support.ts";
+import { createPatchServer, loadedConfig } from "./config-suite.test-support.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createGatewayHarness,
   createConfigServerMock,
-  createConfigCapabilityHarness,
 } from "./config-test-harness.ts";
+import { mockRequest } from "./config-write.test-support.ts";
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 describe("config gateway operations", () => {
@@ -26,20 +28,23 @@ describe("config gateway operations", () => {
       const client = createTestGatewayClient(request);
       const { gateway, publish } = createGatewayHarness(client);
       const runtimeConfig = createRuntimeConfigCapability(gateway);
+      const { state } = runtimeConfig;
       const refresh = () =>
         method === "config.get" ? runtimeConfig.refresh() : runtimeConfig.refreshSchema();
       try {
         const loading = refresh();
-        expect(request).toHaveBeenCalledWith(method, {});
+        await vi.waitFor(() => expect(request).toHaveBeenCalledWith(method, {}));
         publish(true, client, gatewayHelloForMethods([method], ["operator.sessions.read"]));
         publish(true, client);
         pending.resolve(response);
         await loading;
-        expect(runtimeConfig.state.configSnapshot).toBeNull();
-        expect(runtimeConfig.state.configSchema).toBeNull();
-        expect(runtimeConfig.state.configForm).toBeNull();
-        expect(runtimeConfig.state.configLoading).toBe(false);
-        expect(runtimeConfig.state.configSchemaLoading).toBe(false);
+        expect(state).toMatchObject({
+          configSnapshot: null,
+          configSchema: null,
+          configForm: null,
+          configLoading: false,
+          configSchemaLoading: false,
+        });
 
         await refresh();
         expect(
@@ -54,14 +59,13 @@ describe("config gateway operations", () => {
   );
 
   it("config.apply adopts the canonical receipt before saving an in-flight edit", async () => {
-    const method = "config.apply";
     vi.useFakeTimers();
     const ack = deferred<unknown>();
     const server = createConfigServerMock();
     const canonical = { count: 2, ui: { prefs: { locale: "fr" } } };
     let firstWrite = true;
     const request = vi.fn(async (operation: string, params?: unknown) => {
-      if (operation === method && firstWrite) {
+      if (operation === "config.apply" && firstWrite) {
         firstWrite = false;
         await server.request(operation, params);
         await ack.promise;
@@ -72,10 +76,7 @@ describe("config gateway operations", () => {
       }
       return server.request(operation, params);
     });
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
+    const { runtimeConfig } = await loadedConfig(request);
     runtimeConfig.patchForm(["count"], 2);
     const applied = runtimeConfig.apply();
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
@@ -125,36 +126,20 @@ describe("config gateway operations", () => {
 
   it("config.set does not report Saved while edits made during the reload are still dirty", async () => {
     vi.useFakeTimers();
-    let hashCounter = 1;
-    let storedRaw = '{\n  "count": 1\n}\n';
+    const server = createConfigServerMock();
     let deferReload: ReturnType<typeof deferred<unknown>> | null = null;
-    const request = vi.fn((method: string, params?: unknown) => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      const response = await server.request(method, params);
       if (method === "config.get") {
-        const response = {
-          config: JSON.parse(storedRaw) as Record<string, unknown>,
-          raw: storedRaw,
-          hash: `hash-${hashCounter}`,
-          valid: true,
-          issues: [],
-        };
         if (deferReload) {
           const pending = deferReload;
           deferReload = null;
           return pending.promise.then(() => response);
         }
-        return Promise.resolve(response);
       }
-      if (method === "config.set") {
-        storedRaw = (params as { raw: string }).raw;
-        hashCounter += 1;
-        return Promise.resolve({ config: JSON.parse(storedRaw), hash: `hash-${hashCounter}` });
-      }
-      return Promise.resolve({});
+      return response;
     });
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
+    const { runtimeConfig } = await loadedConfig(request);
 
     const reloadGate = deferred<unknown>();
     deferReload = reloadGate;
@@ -177,38 +162,14 @@ describe("config gateway operations", () => {
   });
 
   it("adopts config.patch acknowledgements for consecutive queued patches", async () => {
-    const patchBaseHashes: string[] = [];
-    let storedConfig: Record<string, unknown> = { count: 1 };
-    let hashCounter = 1;
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "config.get") {
-        return {
-          config: storedConfig,
-          raw: JSON.stringify(storedConfig),
-          hash: `hash-${hashCounter}`,
-          valid: true,
-          issues: [],
-        };
-      }
-      if (method === "config.patch") {
-        const patch = params as { baseHash: string; raw: string };
-        patchBaseHashes.push(patch.baseHash);
-        storedConfig = { ...storedConfig, ...(JSON.parse(patch.raw) as Record<string, unknown>) };
-        hashCounter += 1;
-        return { config: storedConfig, hash: `hash-${hashCounter}` };
-      }
-      return {};
-    });
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
+    const { request, store } = createPatchServer();
+    const { runtimeConfig } = await loadedConfig(request);
 
     const first = runtimeConfig.patch({ raw: { first: true }, note: "first test patch" });
     const second = runtimeConfig.patch({ raw: { second: true }, note: "second test patch" });
 
     await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
-    expect(patchBaseHashes).toEqual(["hash-1", "hash-2"]);
+    expect(store.submissions.map(({ baseHash }) => baseHash)).toEqual(["hash-1", "hash-2"]);
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
     expect(runtimeConfig.state.configForm).toEqual({ count: 1, first: true, second: true });
     runtimeConfig.dispose();
@@ -218,29 +179,18 @@ describe("config gateway operations", () => {
     vi.useFakeTimers();
     const staleLoad = deferred<ConfigSnapshot>();
     let getCalls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "config.get") {
+    const request = mockRequest({
+      "config.get": () => {
         getCalls += 1;
         if (getCalls === 2) {
           return staleLoad.promise;
         }
-        return {
-          config: { count: 1 },
-          raw: '{"count":1}',
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        };
-      }
-      if (method === "config.patch" || method === "config.set") {
-        return { config: { count: 1, patched: true }, hash: "hash-2" };
-      }
-      return {};
+        return configSnapshot({ count: 1 }, "hash-1", '{"count":1}');
+      },
+      "config.patch": () => ({ config: { count: 1, patched: true }, hash: "hash-2" }),
+      "config.set": () => ({ config: { count: 1, patched: true }, hash: "hash-2" }),
     });
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
+    const { runtimeConfig } = await loadedConfig(request);
 
     const staleRefresh = runtimeConfig.refresh();
     expect(getCalls).toBe(2);
@@ -249,13 +199,7 @@ describe("config gateway operations", () => {
     ).resolves.toBe(true);
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
 
-    staleLoad.resolve({
-      config: { count: 1 },
-      raw: '{"count":1}',
-      hash: "hash-1",
-      valid: true,
-      issues: [],
-    });
+    staleLoad.resolve(configSnapshot({ count: 1 }, "hash-1", '{"count":1}'));
     await staleRefresh;
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
     expect(runtimeConfig.state.configForm).toEqual({ count: 1, patched: true });

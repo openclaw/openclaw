@@ -4,6 +4,22 @@ import { en } from "./en.ts";
 
 // Editor copy stays with the lazy Skills surface; sessions load only their subset.
 const enSkillLibrary = {
+  skillGroups: {
+    workspace: "Workspace Skills",
+    learned: "Learned Skills",
+    builtIn: "Built-in Skills",
+    installed: "Installed Skills",
+    extra: "Extra Skills",
+    other: "Other Skills",
+  },
+  skillStatus: {
+    bundled: "bundled",
+    eligible: "eligible",
+    blocked: "blocked",
+    disabled: "disabled",
+    blockedAllowlist: "blocked by allowlist",
+    blockedAgentFilter: "blocked by agent filter",
+  },
   skillDiscovery: {
     search: "Search skills",
     settings: "Skill settings",
@@ -88,6 +104,8 @@ export const registerSkillLibraryEnglish = Object.assign(
   () => {
     Object.assign((en.skillLibrary ??= enSkillLibrary.skillLibrary), enSkillLibrary.skillLibrary);
     en.skillDiscovery = enSkillLibrary.skillDiscovery;
+    Object.assign(en.skillGroups, enSkillLibrary.skillGroups);
+    Object.assign(en.skillStatus, enSkillLibrary.skillStatus);
   },
   { catalog: enSkillLibrary },
 );

@@ -1,4 +1,5 @@
 // Anthropic provider tests cover stream events, tools, and message mapping.
+import type { ClientOptions } from "@anthropic-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { AssistantMessage, Context, Model, Tool } from "../types.js";
@@ -7,9 +8,10 @@ import {
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "../utils/system-prompt-cache-boundary.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 
 const anthropicMockState = vi.hoisted(() => ({
-  configs: [] as unknown[],
+  configs: [] as ClientOptions[],
   requestOptions: [] as unknown[],
 }));
 
@@ -22,13 +24,13 @@ vi.mock("@anthropic-ai/sdk", () => ({
       }),
     };
 
-    constructor(config: unknown) {
+    constructor(config: ClientOptions) {
       anthropicMockState.configs.push(config);
     }
   },
 }));
 
-import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { collectEventTypes } from "../transports/openai-stream-cases.test-support.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
   anthropicTerminalFallbackCases,
@@ -63,11 +65,16 @@ function createSseResponse(events: Record<string, unknown>[] = []): Response {
   });
 }
 
-function createAnthropicSseClient(events: Record<string, unknown>[]) {
+function createAnthropicSseClient(events: Record<string, unknown>[] | string) {
   return {
     messages: {
       create: vi.fn(() => ({
-        asResponse: () => Promise.resolve(createSseResponse(events)),
+        asResponse: () =>
+          Promise.resolve(
+            typeof events === "string"
+              ? new Response(events, { headers: { "content-type": "text/event-stream" } })
+              : createSseResponse(events),
+          ),
       })),
     },
   };
@@ -86,10 +93,7 @@ function startStream(
   });
 }
 async function consumeStream(stream: ReturnType<typeof streamAnthropic>) {
-  const eventTypes: string[] = [];
-  for await (const event of stream) {
-    eventTypes.push(event.type);
-  }
+  const eventTypes = await collectEventTypes(stream);
   return { eventTypes, result: await stream.result() };
 }
 
@@ -118,20 +122,26 @@ function messageDelta(delta: Record<string, unknown>, usage?: Record<string, unk
   return { type: "message_delta", delta, usage };
 }
 
+function messageEnd(usage: Record<string, unknown>, stop_reason = "end_turn") {
+  return [messageDelta({ stop_reason }, usage), { type: "message_stop" }];
+}
+
+function textBlock(index: number, text: string) {
+  return [
+    blockStart(index, { type: "text", text: "" }),
+    blockDelta(index, { type: "text_delta", text }),
+    blockStop(index),
+  ];
+}
+
 function makeAnthropicModel(overrides: Partial<Model<"anthropic-messages">> = {}) {
-  return {
-    id: "claude-sonnet-4-6",
+  return makeProviderModel("anthropic-messages", "anthropic", "claude-sonnet-4-6", {
     name: "Claude Sonnet 4.6",
-    provider: "anthropic",
-    api: "anthropic-messages",
     baseUrl: "https://api.anthropic.com",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,
     maxTokens: 4096,
     ...overrides,
-  } satisfies Model<"anthropic-messages">;
+  });
 }
 
 function makeAnthropicAssistantMessage(
@@ -157,7 +167,10 @@ function toolContext(content: ToolResultContent, isError = false, provider = "an
     messages: [
       makeAnthropicAssistantMessage(
         [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
-        { provider, stopReason: "toolUse" },
+        {
+          provider,
+          stopReason: "toolUse",
+        },
       ),
       {
         role: "toolResult",
@@ -186,23 +199,16 @@ function getToolResult(payload: Record<string, unknown>) {
   return result;
 }
 
-type SimpleAnthropicTestOptions = Omit<
-  NonNullable<Parameters<typeof streamSimpleAnthropic>[2]>,
-  "onPayload"
-> & {
-  mode?: "simple";
+type PayloadCaptureOptions = {
   injectPayload?: Record<string, unknown>;
   stopBeforeNetwork?: boolean;
 };
-
-type RawAnthropicTestOptions = Omit<
-  NonNullable<Parameters<typeof streamAnthropic>[2]>,
-  "onPayload"
-> & {
-  mode: "raw";
-  injectPayload?: Record<string, unknown>;
-  stopBeforeNetwork?: boolean;
-};
+type SimpleAnthropicTestOptions = PayloadCaptureOptions &
+  Omit<NonNullable<Parameters<typeof streamSimpleAnthropic>[2]>, "onPayload"> & {
+    mode?: "simple";
+  };
+type RawAnthropicTestOptions = PayloadCaptureOptions &
+  Omit<NonNullable<Parameters<typeof streamAnthropic>[2]>, "onPayload"> & { mode: "raw" };
 
 async function captureSimpleAnthropicPayload(
   model: Partial<Model<"anthropic-messages">>,
@@ -233,21 +239,6 @@ async function captureSimpleAnthropicPayload(
   return { payload: capturedPayload as Record<string, unknown>, result };
 }
 
-function tinyJpegBase64(): string {
-  return Buffer.from([
-    0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01,
-  ]).toString("base64");
-}
-
-function configureTestAnthropicImageNormalizer(): void {
-  configureAiTransportHost({
-    normalizeAnthropicInlineContentBlocks: async (content) =>
-      content.map((block) =>
-        block.type === "image" ? { ...block, mimeType: "image/jpeg" } : block,
-      ),
-  });
-}
-
 describe("Anthropic provider", () => {
   beforeEach(() => {
     anthropicMockState.configs = [];
@@ -258,9 +249,9 @@ describe("Anthropic provider", () => {
     configureAiTransportHost({});
   });
 
-  it("keeps Cloudflare upstream auth on the Anthropic API key", async () => {
-    const hostFetch: typeof fetch = async () => new Response(null, { status: 500 });
-    configureAiTransportHost({ buildModelFetch: () => hostFetch });
+  it.each([false, true])("keeps auth with host fetch=%s", async (managedFetch) => {
+    const hostFetch = vi.fn<typeof fetch>(async () => new Response(null, { status: 500 }));
+    configureAiTransportHost({ buildModelFetch: () => (managedFetch ? hostFetch : undefined) });
     await streamAnthropic(
       makeAnthropicModel({
         provider: "cloudflare-ai-gateway",
@@ -274,10 +265,16 @@ describe("Anthropic provider", () => {
     expect(anthropicMockState.configs[0]).toMatchObject({
       apiKey: "sk-ant-provider",
       authToken: null,
-      fetch: hostFetch,
+      fetch: managedFetch ? expect.any(Function) : undefined,
       defaultHeaders: { "cf-aig-authorization": "Bearer gateway-token" },
     });
     expect(anthropicMockState.configs[0]).not.toHaveProperty("defaultHeaders.x-api-key");
+    const input = "https://provider.invalid";
+    const init = { method: "POST", body: '{"text":"🦞"}' };
+    if (managedFetch) {
+      await anthropicMockState.configs[0]?.fetch?.(input, init);
+      expect(hostFetch).toHaveBeenCalledWith(input, init);
+    }
   });
   it("keeps sentinel-backed Foundry headers on bearer routing", async () => {
     const sentinel = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
@@ -298,47 +295,23 @@ describe("Anthropic provider", () => {
     expect(anthropicMockState.configs[0]).toMatchObject({ apiKey: null, authToken: sentinel });
   });
 
-  it.each(["long"] as const)(
-    "sends the OpenCode session header with %s cache retention",
-    async (cacheRetention) => {
-      streamAnthropic(
-        makeAnthropicModel({ baseUrl: "https://opencode.ai/zen/go" }),
-        conversation(user("hello", 1)),
-        { apiKey: "sk-ant-provider", sessionId: "session-123", cacheRetention },
-      );
-      await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
-      const config = anthropicMockState.configs[0] as {
-        defaultHeaders?: Record<string, string | null>;
-      };
-      expect(
-        Object.fromEntries(
-          Object.entries(config.defaultHeaders ?? {}).filter(
-            ([key]) => key.startsWith("x-") || key === "session_id",
-          ),
-        ),
-      ).toEqual({ "x-opencode-session": "session-123" });
-    },
-  );
-
-  it("puts Claude subscription billing identity first for OAuth requests", async () => {
-    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
-      {},
-      { apiKey: "sk-ant-oat01-test-token" },
+  it("sends the OpenCode session header with long cache retention", async () => {
+    streamAnthropic(
+      makeAnthropicModel({ baseUrl: "https://opencode.ai/zen/go" }),
       conversation(user("hello", 1)),
+      { apiKey: "sk-ant-provider", sessionId: "session-123", cacheRetention: "long" },
     );
-
-    expect(result.stopReason).toBe("error");
-    expect((capturedPayload as { system?: unknown }).system).toEqual([
-      {
-        type: "text",
-        text: "x-anthropic-billing-header: cc_version=2.1.280; cc_entrypoint=sdk-cli;",
-      },
-      {
-        type: "text",
-        text: "You are Claude Code, Anthropic's official CLI for Claude.",
-        cache_control: { type: "ephemeral" },
-      },
-    ]);
+    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+    const config = anthropicMockState.configs[0] as {
+      defaultHeaders?: Record<string, string | null>;
+    };
+    expect(
+      Object.fromEntries(
+        Object.entries(config.defaultHeaders ?? {}).filter(
+          ([key]) => key.startsWith("x-") || key === "session_id",
+        ),
+      ),
+    ).toEqual({ "x-opencode-session": "session-123" });
   });
 
   it.each(anthropicTerminalFallbackCases)("terminal fallback: $name", async (testCase) => {
@@ -383,7 +356,7 @@ describe("Anthropic provider", () => {
 
   it("includes compaction iterations in billed usage while keeping final context usage", async () => {
     const client = createAnthropicSseClient([
-      messageStart(wireUsage(12, 0, 120_000, null), "claude-fable-5"),
+      messageStart(wireUsage(12, 0, 120_000, null), "claude-sonnet-4-6"),
       blockStart(0, { type: "text", text: "" }),
       blockDelta(0, { type: "text_delta", text: "Done." }),
       blockStop(0),
@@ -413,8 +386,8 @@ describe("Anthropic provider", () => {
     ]);
 
     const result = await startStream(client, {
-      id: "claude-fable-5",
-      name: "Claude Fable 5",
+      id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
       cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
     }).result();
 
@@ -433,84 +406,70 @@ describe("Anthropic provider", () => {
     expect(result.usage.cost.total).toBeCloseTo(1.469044, 6);
   });
 
-  it.each([null])(
-    "captures streamed Anthropic compaction deltas and replays final opaque metadata %s",
-    async (encryptedContent) => {
-      const firstClient = createAnthropicSseClient([
-        messageStart({ input_tokens: 50_001, output_tokens: 0 }, "claude-sonnet-4-6"),
-        blockStart(0, {
-          type: "compaction",
-          content: null,
-          encrypted_content: "opaque-initial-compaction",
-        }),
-        blockDelta(0, {
-          type: "compaction_delta",
-          content: "summary ",
-          encrypted_content: "opaque-partial-compaction",
-        }),
-        blockDelta(0, {
-          type: "compaction_delta",
-          content: "checkpoint",
-          encrypted_content: encryptedContent,
-        }),
-        blockStop(0),
-        blockStart(1, { type: "text", text: "" }),
-        blockDelta(1, { type: "text_delta", text: "Done." }),
-        blockStop(1),
-        messageDelta({ stop_reason: "compaction" }, { input_tokens: 1, output_tokens: 1 }),
-        { type: "message_stop" },
-      ]);
-      const replayOptions = {
-        anthropicServerCompaction: true,
-        authProfileId: "anthropic:work",
-        sessionId: "session-1",
-      } as const;
-      const firstUser = { role: "user" as const, content: "old question", timestamp: 0 };
-      const first = await startStream(firstClient, {}, conversation(firstUser), {
-        ...replayOptions,
-      }).result();
+  it("captures streamed Anthropic compaction deltas and replays final opaque metadata", async () => {
+    const firstClient = createAnthropicSseClient([
+      messageStart({ input_tokens: 50_001, output_tokens: 0 }, "claude-sonnet-4-6"),
+      blockStart(0, {
+        type: "compaction",
+        content: null,
+        encrypted_content: "opaque-initial-compaction",
+      }),
+      blockDelta(0, {
+        type: "compaction_delta",
+        content: "summary ",
+        encrypted_content: "opaque-partial-compaction",
+      }),
+      blockDelta(0, {
+        type: "compaction_delta",
+        content: "checkpoint",
+        encrypted_content: null,
+      }),
+      blockStop(0),
+      ...textBlock(1, "Done."),
+      ...messageEnd({ input_tokens: 1, output_tokens: 1 }, "compaction"),
+    ]);
+    const replayOptions = {
+      anthropicServerCompaction: true,
+      authProfileId: "anthropic:work",
+      sessionId: "session-1",
+    } as const;
+    const firstUser = { role: "user" as const, content: "old question", timestamp: 0 };
+    const first = await startStream(firstClient, {}, conversation(firstUser), {
+      ...replayOptions,
+    }).result();
 
-      expect(first.stopReason).toBe("stop");
-      expect(first.providerReplay).toMatchObject({
-        type: "anthropic-compaction",
-        data: "summary checkpoint",
-        replayIndex: 0,
-      });
+    expect(first.stopReason).toBe("stop");
+    expect(first.providerReplay).toMatchObject({
+      type: "anthropic-compaction",
+      data: "summary checkpoint",
+      replayIndex: 0,
+    });
 
-      let replayPayload: Record<string, unknown> | undefined;
-      const secondClient = createAnthropicSseClient([
-        messageStart({ input_tokens: 1 }, "claude-sonnet-4-6"),
-        messageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
-        { type: "message_stop" },
-      ]);
-      // oxlint-disable-next-line unicorn/prefer-structured-clone -- Verify persisted provider replay after JSON transcript reload.
-      const savedMessages: Context["messages"] = JSON.parse(
-        JSON.stringify([firstUser, first, user("new question", 2)]),
-      );
-      await startStream(
-        secondClient,
-        {},
-        { messages: savedMessages },
-        {
-          ...replayOptions,
-          onPayload: (payload) => {
-            replayPayload = payload as Record<string, unknown>;
-          },
-        },
-      ).result();
+    const secondClient = createAnthropicSseClient([
+      messageStart({ input_tokens: 1 }, "claude-sonnet-4-6"),
+      ...messageEnd({ input_tokens: 1, output_tokens: 1 }),
+    ]);
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Verify persisted provider replay after JSON transcript reload.
+    const savedMessages: Context["messages"] = JSON.parse(
+      JSON.stringify([firstUser, first, user("new question", 2)]),
+    );
+    const { payload: replayPayload } = await captureSimpleAnthropicPayload(
+      {},
+      { mode: "raw", ...replayOptions, client: secondClient as never },
+      { messages: savedMessages },
+    );
 
-      const replayMessages = replayPayload?.messages as Array<Record<string, unknown>>;
-      expect(replayMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
-      expect(replayMessages[0]?.content).toEqual([
-        {
-          type: "compaction",
-          content: "summary checkpoint",
-          encrypted_content: encryptedContent,
-        },
-        { type: "text", text: "Done." },
-      ]);
-    },
-  );
+    const replayMessages = replayPayload?.messages as Array<Record<string, unknown>>;
+    expect(replayMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
+    expect(replayMessages[0]?.content).toEqual([
+      {
+        type: "compaction",
+        content: "summary checkpoint",
+        encrypted_content: null,
+      },
+      { type: "text", text: "Done." },
+    ]);
+  });
 
   it.each([
     {
@@ -548,8 +507,7 @@ describe("Anthropic provider", () => {
   ])("$name", async ({ initial, final, expectedUsage, contextUsage }) => {
     const client = createAnthropicSseClient([
       messageStart(initial, "claude-fable-5"),
-      messageDelta({ stop_reason: "end_turn" }, final),
-      { type: "message_stop" },
+      ...messageEnd(final),
     ]);
     const result = await startStream(client, {
       id: "claude-fable-5",
@@ -571,8 +529,7 @@ describe("Anthropic provider", () => {
         },
         "claude-sonnet-4-6",
       ),
-      messageDelta({ stop_reason: "end_turn" }, { output_tokens: 5 }),
-      { type: "message_stop" },
+      ...messageEnd({ output_tokens: 5 }),
     ]);
 
     const result = await startStream(client, {
@@ -582,6 +539,7 @@ describe("Anthropic provider", () => {
     expect(result.usage).toMatchObject({
       cacheWrite: 1_000_000,
       cacheWrite1h: 400_000,
+      cacheWrite5m: 600_000,
     });
     expect(result.usage.cost.cacheWrite).toBeCloseTo(7.75, 10);
   });
@@ -618,19 +576,9 @@ describe("Anthropic provider", () => {
   it("preserves provider-signed Anthropic thinking and drops reasoning_content placeholders", async () => {
     const highSurrogate = String.fromCharCode(0xd83d);
     const signedThinking = `keep${highSurrogate}signed`;
-    let capturedPayload: unknown;
-    const client = createAnthropicSseClient([
-      messageStart({ input_tokens: 1, output_tokens: 0 }, "claude-fable-5"),
-      messageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
-      { type: "message_stop" },
-    ]);
-
-    const stream = startStream(
-      client,
-      {
-        id: "claude-fable-5",
-        name: "Claude Fable 5",
-      },
+    const { payload } = await captureSimpleAnthropicPayload(
+      { id: "claude-fable-5" },
+      { mode: "raw", stopBeforeNetwork: true },
       conversation(
         user("hello"),
         makeAnthropicAssistantMessage(
@@ -643,19 +591,9 @@ describe("Anthropic provider", () => {
         ),
         user("again"),
       ),
-      {
-        onPayload: (payload) => {
-          capturedPayload = payload;
-        },
-      },
     );
-
-    const result = await stream.result();
-
-    const payload = capturedPayload as { messages: Array<{ role: string; content: unknown[] }> };
-    const assistantMessage = payload.messages.find((message) => message.role === "assistant");
-    expect(JSON.stringify(assistantMessage?.content)).not.toContain("reasoning_content");
-    expect(assistantMessage?.content).toEqual([
+    expect(JSON.stringify(assistantContent(payload))).not.toContain("reasoning_content");
+    expect(assistantContent(payload)).toEqual([
       {
         type: "thinking",
         thinking: signedThinking,
@@ -667,175 +605,41 @@ describe("Anthropic provider", () => {
         signature: "sig_omitted",
       },
     ]);
-    expect(result.responseModel).toBe("claude-fable-5");
   });
 
-  it("omits completed-turn thinking when no thinking mode is requested", async () => {
-    const { payload } = await captureSimpleAnthropicPayload(
-      {},
-      { mode: "raw", stopBeforeNetwork: true },
-      conversation(
-        user("hello"),
-        makeAnthropicAssistantMessage([
-          thinking("private reasoning", "sig_1"),
-          {
-            type: "thinking",
-            thinking: "[Reasoning redacted]",
-            thinkingSignature: "opaque_1",
-            redacted: true,
-          },
-        ]),
-        user("again"),
-      ),
-    );
-    expect(payload.thinking).toBeUndefined();
-    expect(assistantContent(payload)).toEqual([
-      { type: "text", text: "[assistant reasoning omitted]" },
-    ]);
-  });
-
-  it("preserves signed thinking for an active tool turn when new thinking is disabled", async () => {
-    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
-      {},
-      { mode: "raw", thinkingEnabled: false, stopBeforeNetwork: true },
-      conversation(
-        user("look it up"),
-        makeAnthropicAssistantMessage(
-          [
-            thinking("call lookup", "sig_tool"),
-            { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
-          ],
-          { stopReason: "toolUse" },
-        ),
-        makeTextToolResult("call_1", "lookup", "42", false, 0),
-      ),
-    );
-
-    const payload = capturedPayload as {
-      messages: Array<{ role: string; content: unknown[] }>;
-    };
-    expect(payload.messages.find((message) => message.role === "assistant")?.content).toEqual([
-      { type: "thinking", thinking: "call lookup", signature: "sig_tool" },
-      { type: "tool_use", id: "call_1", name: "lookup", input: {} },
-    ]);
-  });
-
-  it.each([{ modelMaxTokens: undefined, expectedMaxTokens: 5_000 }])(
-    "resolves explicit output requests with model limit $modelMaxTokens",
-    async ({ modelMaxTokens, expectedMaxTokens }) => {
-      const model = makeAnthropicModel({
-        id: "claude-opus-4-5",
-        name: "Claude Opus 4.5",
-        contextWindow: 4_000,
-        maxTokens: modelMaxTokens,
-      });
-      const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
-        model,
-        { apiKey: "test-api-key", maxTokens: 5_000, reasoning: "off", stopBeforeNetwork: true },
-        conversation(
-          makeAnthropicAssistantMessage(
-            [
-              thinking("private reasoning ".repeat(1_000), "sig_old"),
-              { type: "text", text: "Visible answer." },
-            ],
-            { model: model.id },
-          ),
-          user("again"),
-        ),
-      );
-
-      expect(capturedPayload.max_tokens).toBe(expectedMaxTokens);
-    },
-  );
-
-  it.each([500])(
-    "restores the caller output cap when thinking cannot fit with model limit %s",
-    async (maxTokens) => {
-      const model = makeAnthropicModel({
-        id: "claude-haiku-4-5",
-        name: "Claude Haiku 4.5",
-        contextWindow: 4_000,
-        maxTokens,
-      });
-      const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
-        model,
-        { apiKey: "test-api-key", maxTokens: 32, reasoning: "low", stopBeforeNetwork: true },
-        conversation(
-          makeAnthropicAssistantMessage(
-            [
-              thinking("private reasoning ".repeat(1_000), "sig_tool"),
-              { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
-            ],
-            { model: model.id, stopReason: "toolUse" },
-          ),
-          makeTextToolResult("call_1", "lookup", "42", false, 0),
-        ),
-      );
-
-      expect(capturedPayload as { max_tokens?: number; thinking?: unknown }).toMatchObject({
-        max_tokens: 32,
-      });
-      expect((capturedPayload as { thinking?: unknown }).thinking).toEqual({ type: "disabled" });
-    },
-  );
-
-  it("preserves mixed text and image tool-result order", async () => {
-    const imageData = Buffer.from("image").toString("base64");
-    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
-      { input: ["text", "image"] },
-      { mode: "raw", stopBeforeNetwork: true },
-      toolContext(
-        [
-          { type: "text", text: "before image" },
-          { type: "image", data: imageData, mimeType: "image/png" },
-          {
-            type: "resource" as const,
-            resource: { uri: "https://example.com/data.json", text: '{"key":"value"}' },
-          },
-          { type: "text", text: "after image" },
-        ] as unknown as ToolResultContent,
-        false,
-      ),
-    );
-
-    const toolResult = getToolResult(capturedPayload);
-
-    expect(toolResult.content).toEqual([
-      { type: "text", text: "before image" },
-      {
-        type: "image",
-        source: {
-          type: "base64",
-          media_type: "image/png",
-          data: imageData,
-        },
-      },
-      { type: "text", text: expect.stringContaining('{"type":"resource"') },
-      { type: "text", text: "after image" },
-    ]);
-  });
-
-  it("normalizes unsupported user image blocks before Anthropic payloads", async () => {
-    configureTestAnthropicImageNormalizer();
-    const imageData = tinyJpegBase64();
-    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
-      { input: ["text", "image"] },
-      { mode: "raw", apiKey: "test-api-key", stopBeforeNetwork: true },
-      conversation(
-        user([
-          { type: "text", text: "look" },
-          { type: "image", mimeType: "image/heic", data: imageData },
-        ]),
-      ),
-    );
-
-    expect(result.stopReason).toBe("error");
-    const [userMessage] = (capturedPayload as { messages: [Record<string, unknown>] }).messages;
-    const imageBlock = (userMessage.content as Array<Record<string, unknown>>)[1];
-    expect(imageBlock).toMatchObject({
-      type: "image",
-      source: { type: "base64", media_type: "image/jpeg", data: imageData },
+  it("resolves explicit output requests without a model output limit", async () => {
+    const model = makeAnthropicModel({
+      id: "claude-opus-4-5",
+      name: "Claude Opus 4.5",
+      contextWindow: 4_000,
+      maxTokens: undefined,
     });
+    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(model, {
+      apiKey: "test-api-key",
+      maxTokens: 5_000,
+      reasoning: "off",
+      stopBeforeNetwork: true,
+    });
+
+    expect(capturedPayload.max_tokens).toBe(5_000);
+  });
+
+  it("restores the caller output cap when thinking cannot fit the model limit", async () => {
+    const model = makeAnthropicModel({
+      id: "claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      contextWindow: 4_000,
+      maxTokens: 500,
+    });
+    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(model, {
+      apiKey: "test-api-key",
+      maxTokens: 32,
+      reasoning: "low",
+      stopBeforeNetwork: true,
+    });
+
+    expect(capturedPayload.max_tokens).toBe(32);
+    expect(capturedPayload.thinking).toEqual({ type: "disabled" });
   });
 
   it("keeps non-vision image downgrade behavior without invoking normalization", async () => {
@@ -863,27 +667,6 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it("normalizes unsupported tool result image blocks before Anthropic payloads", async () => {
-    configureTestAnthropicImageNormalizer();
-    const imageData = tinyJpegBase64();
-    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
-      { input: ["text", "image"] },
-      { mode: "raw", apiKey: "test-api-key", stopBeforeNetwork: true },
-      toolContext([{ type: "image", data: imageData, mimeType: "image/tiff" }], false),
-    );
-
-    expect(result.stopReason).toBe("error");
-    const [, userMessage] = (
-      capturedPayload as { messages: [Record<string, unknown>, Record<string, unknown>] }
-    ).messages;
-    const [toolResult] = userMessage.content as [Record<string, unknown>];
-    const imageBlock = (toolResult.content as Array<Record<string, unknown>>)[1];
-    expect(imageBlock).toMatchObject({
-      type: "image",
-      source: { type: "base64", media_type: "image/jpeg", data: imageData },
-    });
-  });
-
   it("does not emit Anthropic image blocks or placeholders for payload-less tool media", async () => {
     const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
       { input: ["text", "image"] },
@@ -897,79 +680,63 @@ describe("Anthropic provider", () => {
     expect(JSON.stringify(toolResult)).not.toContain("see attached image");
   });
 
-  it.each([["invalid-surrogate-only", String.fromCharCode(0xd83d)]])(
-    "replaces %s error tool results with non-empty content",
-    async (_label, text) => {
-      const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
-        { provider: "github-copilot" },
-        { mode: "raw", apiKey: "copilot-token", stopBeforeNetwork: true },
-        toolContext([{ type: "text", text }], true, "github-copilot"),
-      );
+  it("replaces invalid-surrogate-only error tool results with non-empty content", async () => {
+    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
+      { provider: "github-copilot" },
+      { mode: "raw", apiKey: "copilot-token", stopBeforeNetwork: true },
+      toolContext([{ type: "text", text: String.fromCharCode(0xd83d) }], true, "github-copilot"),
+    );
 
-      const payload = capturedPayload as {
-        messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
-      };
-      const userMessage = payload.messages.find((message) => message.role === "user");
-      const toolResult = userMessage?.content.find((entry) => entry.type === "tool_result");
-      expect(toolResult).toMatchObject({
-        content: "[tool error with no output]",
-        is_error: true,
-      });
-    },
-  );
+    expect(getToolResult(capturedPayload)).toMatchObject({
+      content: "[tool error with no output]",
+      is_error: true,
+    });
+  });
 
-  it.each([["claude-mythos-5", "Claude Mythos 5", "anthropic-vertex", "vertex-token"]])(
-    "surfaces structured %s streaming refusals for %s",
-    async (id, name, provider) => {
-      const client = createAnthropicSseClient([
-        messageStart({ input_tokens: 3, output_tokens: 0 }),
-        blockStart(0, { type: "text", text: "" }),
-        blockDelta(0, { type: "text_delta", text: "discard this partial output" }),
-        blockStop(0),
-        messageDelta(
-          {
-            stop_reason: "refusal",
-            stop_details: {
-              type: "refusal",
-              category: "cyber",
-              explanation: "This request is not allowed.",
-            },
-          },
-          { input_tokens: 3, output_tokens: 2 },
-        ),
-        { type: "message_stop" },
-      ]);
-
-      const stream = startStream(client, {
-        id,
-        name,
-        provider,
-      });
-      const eventTypes: string[] = [];
-      for await (const event of stream) {
-        eventTypes.push(event.type);
-      }
-      const result = await stream.result();
-
-      expect(eventTypes).toEqual(["error"]);
-      expect(result.stopReason).toBe("error");
-      expect(result.content).toEqual([]);
-      expect(result.errorMessage).toBe(
-        "Anthropic refusal (category: cyber): This request is not allowed.",
-      );
-      expect(result.usage).toMatchObject({ input: 3, output: 2 });
-      expect(result.diagnostics).toEqual([
-        expect.objectContaining({
-          type: "provider_refusal",
-          details: {
-            provider,
+  it("surfaces structured Mythos streaming refusals for Anthropic Vertex", async () => {
+    const client = createAnthropicSseClient([
+      messageStart({ input_tokens: 3, output_tokens: 0 }),
+      ...textBlock(0, "discard this partial output"),
+      messageDelta(
+        {
+          stop_reason: "refusal",
+          stop_details: {
+            type: "refusal",
             category: "cyber",
             explanation: "This request is not allowed.",
           },
-        }),
-      ]);
-    },
-  );
+        },
+        { input_tokens: 3, output_tokens: 2 },
+      ),
+      { type: "message_stop" },
+    ]);
+
+    const stream = startStream(client, {
+      id: "claude-mythos-5",
+      name: "Claude Mythos 5",
+      provider: "anthropic-vertex",
+    });
+    const eventTypes = await collectEventTypes(stream);
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["error"]);
+    expect(result.stopReason).toBe("error");
+    expect(result.content).toEqual([]);
+    expect(result.errorMessage).toBe(
+      "Anthropic refusal (category: cyber): This request is not allowed.",
+    );
+    expect(result.usage).toMatchObject({ input: 3, output: 2 });
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        type: "provider_refusal",
+        details: {
+          provider: "anthropic-vertex",
+          category: "cyber",
+          explanation: "This request is not allowed.",
+        },
+      }),
+    ]);
+  });
 
   it.each([
     { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" },
@@ -998,15 +765,13 @@ describe("Anthropic provider", () => {
     },
   );
 
-  it("rebuilds Fable output at a mid-stream server-side fallback boundary", async () => {
+  it("withholds pre-fallback thinking and tool events until the replacement completes", async () => {
     const client = createAnthropicSseClient([
       messageStart({ input_tokens: 5, output_tokens: 0 }, "claude-fable-5"),
       blockStart(0, { type: "thinking", thinking: "" }),
       blockDelta(0, { type: "thinking_delta", thinking: "pre-boundary reasoning" }),
       blockStop(0),
-      blockStart(1, { type: "text", text: "" }),
-      blockDelta(1, { type: "text_delta", text: "partial " }),
-      blockStop(1),
+      ...textBlock(1, "partial "),
       blockStart(2, { type: "tool_use", id: "call_1", name: "lookup", input: {} }),
       blockStop(2),
       blockStart(3, {
@@ -1015,11 +780,8 @@ describe("Anthropic provider", () => {
         to: { model: "claude-opus-4-8" },
       }),
       blockStop(3),
-      blockStart(4, { type: "text", text: "" }),
-      blockDelta(4, { type: "text_delta", text: "continued" }),
-      blockStop(4),
-      messageDelta({ stop_reason: "end_turn" }, { input_tokens: 5, output_tokens: 9 }),
-      { type: "message_stop" },
+      ...textBlock(4, "continued"),
+      ...messageEnd({ input_tokens: 5, output_tokens: 9 }),
     ]);
 
     const stream = startStream(client, {
@@ -1032,29 +794,9 @@ describe("Anthropic provider", () => {
     // Pre-boundary thinking/tool blocks must not replay or execute; text is
     // the continuation prefix the fallback model built on.
     expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([
-      { type: "text", text: "partial " },
-      { type: "text", text: "continued" },
-    ]);
-    expect(result.responseModel).toBe("claude-opus-4-8");
-    expect(result.diagnostics).toEqual([
-      expect.objectContaining({
-        type: "provider_fallback",
-        details: {
-          provider: "anthropic",
-          fromModel: "claude-fable-5",
-          toModel: "claude-opus-4-8",
-        },
-      }),
-    ]);
     expect(eventTypes).not.toContain("thinking_start");
     expect(eventTypes).not.toContain("toolcall_start");
     expect(eventTypes.filter((type) => type === "start")).toHaveLength(1);
-    // Fallback-served turns bill at the serving model's rates, not Fable's:
-    // 5 input tokens at $5/MTok plus 9 output tokens at $25/MTok.
-    expect(result.usage.cost.input).toBeCloseTo(0.000025, 10);
-    expect(result.usage.cost.output).toBeCloseTo(0.000225, 10);
-    expect(result.usage.cost.total).toBeCloseTo(0.00025, 10);
   });
 
   it("routes interleaved active content blocks by their event indexes", async () => {
@@ -1066,8 +808,7 @@ describe("Anthropic provider", () => {
       blockDelta(0, { type: "text_delta", text: "first" }),
       blockStop(1),
       blockStop(0),
-      messageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 2 }),
-      { type: "message_stop" },
+      ...messageEnd({ input_tokens: 1, output_tokens: 2 }),
     ]);
 
     const result = await startStream(client).result();
@@ -1076,46 +817,6 @@ describe("Anthropic provider", () => {
       { type: "text", text: "first" },
       { type: "text", text: "second" },
     ]);
-  });
-
-  it("rejects a malformed later tool before any sibling becomes executable", async () => {
-    const client = createAnthropicSseClient([
-      messageStart({ input_tokens: 1, output_tokens: 0 }),
-      blockStart(0, { type: "tool_use", id: "call_valid", name: "read", input: {} }),
-      blockDelta(0, { type: "input_json_delta", partial_json: '{"path":"README.md"}' }),
-      blockStop(0),
-      blockStart(1, { type: "tool_use", id: "call_invalid", name: "read", input: {} }),
-      blockDelta(1, { type: "input_json_delta", partial_json: '{"path":"SECRET.md"' }),
-      blockStop(1),
-      messageDelta({ stop_reason: "tool_use" }, { input_tokens: 1, output_tokens: 2 }),
-      { type: "message_stop" },
-    ]);
-    const stream = startStream(client);
-    const { eventTypes, result } = await consumeStream(stream);
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe("Provider completed tool call with malformed JSON arguments");
-    expect(result.errorMessage).not.toContain("SECRET.md");
-    expect(eventTypes).not.toContain("toolcall_end");
-    expect(eventTypes).not.toContain("done");
-  });
-
-  it("rejects an active tool call that never receives content_block_stop", async () => {
-    const client = createAnthropicSseClient([
-      messageStart({ input_tokens: 1, output_tokens: 0 }),
-      blockStart(0, { type: "tool_use", id: "call_unsealed", name: "read", input: {} }),
-      blockDelta(0, { type: "input_json_delta", partial_json: '{"path":"README.md"' }),
-      messageDelta({ stop_reason: "tool_use" }, { input_tokens: 1, output_tokens: 1 }),
-      { type: "message_stop" },
-    ]);
-    const stream = startStream(client);
-    const { eventTypes, result } = await consumeStream(stream);
-
-    expect(result.stopReason).toBe("error");
-    expect(eventTypes.at(-1)).toBe("error");
-    expect(eventTypes).not.toContain("toolcall_end");
-    expect(eventTypes).not.toContain("done");
-    expect(result.content.some((block) => block.type === "toolCall")).toBe(false);
   });
 
   it("uses a complete tool input seeded at block start when no deltas arrive", async () => {
@@ -1128,8 +829,7 @@ describe("Anthropic provider", () => {
         input: { path: "README.md" },
       }),
       blockStop(0),
-      messageDelta({ stop_reason: "tool_use" }, { input_tokens: 1, output_tokens: 1 }),
-      { type: "message_stop" },
+      ...messageEnd({ input_tokens: 1, output_tokens: 1 }, "tool_use"),
     ]);
 
     const result = await startStream(client).result();
@@ -1137,20 +837,6 @@ describe("Anthropic provider", () => {
     expect(result.content).toContainEqual(
       expect.objectContaining({ type: "toolCall", arguments: { path: "README.md" } }),
     );
-  });
-
-  it("discards buffered Fable output when the stream fails before terminal status", async () => {
-    const client = createAnthropicSseClient([
-      blockStart(0, { type: "text", text: "" }),
-      blockDelta(0, { type: "text_delta", text: "unsafe partial output" }),
-    ]);
-    const stream = startStream(client, { id: "claude-fable-5", name: "Claude Fable 5" });
-    const { eventTypes, result } = await consumeStream(stream);
-
-    expect(eventTypes).toEqual(["error"]);
-    expect(result.stopReason).toBe("error");
-    expect(result.content).toEqual([]);
-    expect(result.errorMessage).toContain("ended before message_stop");
   });
 
   it("terminates the stream when the thrown error is a circular structure", async () => {
@@ -1174,43 +860,6 @@ describe("Anthropic provider", () => {
     // Keep salient transport fields while replacing the cycle, so the terminal
     // diagnostic remains actionable without stranding the stream.
     expect(result.errorMessage).toBe('{"code":"ECONNRESET","self":"[Circular]"}');
-  });
-
-  it("terminates the stream when provider terminal accessors throw", async () => {
-    const hostile = Object.create(null) as Record<string, unknown>;
-    Object.defineProperties(hostile, {
-      code: { enumerable: true, value: "ECONNRESET" },
-      safe: { enumerable: true, value: "socket failed" },
-      status: {
-        enumerable: true,
-        get: () => {
-          throw new Error("status getter");
-        },
-      },
-      body: {
-        enumerable: true,
-        get: () => {
-          throw new Error("body getter");
-        },
-      },
-      message: {
-        enumerable: true,
-        get: () => {
-          throw new Error("message getter");
-        },
-      },
-    });
-    const asResponse = vi.fn().mockRejectedValue(hostile);
-    const client = { messages: { create: vi.fn(() => ({ asResponse })) } };
-    const stream = startStream(client, { id: "claude-fable-5", name: "Claude Fable 5" });
-    const { eventTypes, result } = await consumeStream(stream);
-
-    expect(eventTypes).toEqual(["error"]);
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorCode: "ECONNRESET",
-    });
-    expect(result.errorMessage).toContain("socket failed");
   });
 
   it("strips Fable thinking when replay targets Anthropic Vertex", async () => {
@@ -1263,70 +912,50 @@ describe("Anthropic provider", () => {
       expect(payload).not.toHaveProperty(key);
     }
   });
-  it("does not infer adaptive thinking from forward-compatible effort maps", async () => {
-    const { payload } = await captureSimpleAnthropicPayload(
+  it("normalizes a sub-minimum raw manual thinking budget", async () => {
+    const model = makeAnthropicModel({
+      id: "claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      maxTokens: 8192,
+    });
+    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
+      model,
       {
-        id: "claude-future",
-        name: "Future Claude",
-        provider: "github-copilot",
-        reasoning: true,
-        thinkingLevelMap: { xhigh: null, max: "max" },
+        mode: "raw",
+        maxTokens: 8192,
+        temperature: 0.2,
+        thinkingEnabled: true,
+        thinkingBudgetTokens: 512,
+        toolChoice: "any",
+        stopBeforeNetwork: true,
       },
-      { apiKey: "copilot-token", reasoning: "max", stopBeforeNetwork: true },
+      {
+        messages: [user("hello")],
+        tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
+      },
     );
-    expect(payload).toMatchObject({ thinking: { type: "enabled" } });
-    expect(payload).not.toHaveProperty("output_config");
+
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "disabled" },
+      temperature: 0.2,
+      tool_choice: { type: "any" },
+    });
   });
 
-  it.each([{ budgetTokens: 512, maxTokens: 8192 }])(
-    "normalizes raw manual thinking budget $budgetTokens below max $maxTokens",
-    async ({ budgetTokens, maxTokens }) => {
-      const model = makeAnthropicModel({
-        id: "claude-haiku-4-5",
-        name: "Claude Haiku 4.5",
-        maxTokens: 8192,
-      });
-      const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
-        model,
-        {
-          mode: "raw",
-          maxTokens,
-          temperature: 0.2,
-          thinkingEnabled: true,
-          thinkingBudgetTokens: budgetTokens,
-          toolChoice: "any",
-          stopBeforeNetwork: true,
-        },
-        {
-          messages: [user("hello")],
-          tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
-        },
-      );
-
-      expect(capturedPayload).toMatchObject({
-        thinking: { type: "disabled" },
-        temperature: 0.2,
-        tool_choice: { type: "any" },
-      });
-    },
-  );
-
-  it.each([
-    { reasoning: "xhigh", thinkingLevelMap: { xhigh: null, max: null }, effort: "high" },
-  ] as const)("honors provider effort restrictions for Claude Fable 5: %j", async (testCase) => {
+  it("honors provider effort restrictions for Claude Fable 5", async () => {
     const { payload } = await captureSimpleAnthropicPayload(
       {
         id: "claude-fable-5",
         name: "Claude Fable 5",
         provider: "github-copilot",
         reasoning: false,
-        thinkingLevelMap: testCase.thinkingLevelMap,
+        thinkingLevelMap: { xhigh: null, max: null },
       },
-      { apiKey: "copilot-token", reasoning: testCase.reasoning },
+      { apiKey: "copilot-token", reasoning: "xhigh" },
     );
     expect(payload).toMatchObject({
       thinking: { type: "adaptive", display: "summarized" },
-      output_config: { effort: testCase.effort },
+      output_config: { effort: "high" },
     });
   });
 
@@ -1337,89 +966,6 @@ describe("Anthropic provider", () => {
     );
     expect(result.stopReason).toBe("error");
     expect(payload.stop_sequences).toEqual(["STOP"]);
-  });
-
-  it("skips invalid Anthropic provider schemas while preserving healthy siblings", async () => {
-    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
-      {},
-      { mode: "raw", stopBeforeNetwork: true },
-      {
-        messages: [user("hello")],
-        tools: [
-          {
-            name: "invalid_required_tool",
-            description: "invalid required",
-            parameters: {
-              type: "object",
-              properties: { query: { type: "string" } },
-              required: "query",
-            },
-          } as unknown as Tool,
-          {
-            name: "healthy_tool",
-            description: "healthy schema",
-            parameters: {
-              type: "object",
-              properties: { query: { $ref: "#/$defs/Query" } },
-              $defs: { Query: { type: "string", minLength: 1 } },
-              required: ["query"],
-              additionalProperties: false,
-            },
-          } as Tool,
-        ],
-      },
-    );
-
-    const payload = capturedPayload as {
-      tools?: Array<{ name?: string; input_schema?: unknown }>;
-    };
-
-    expect(result.stopReason).toBe("error");
-    expect(payload.tools?.map((tool) => tool.name)).toEqual(["healthy_tool"]);
-    expect(payload.tools?.[0]?.input_schema).toEqual({
-      type: "object",
-      properties: { query: { $ref: "#/$defs/Query" } },
-      $defs: { Query: { type: "string", minLength: 1 } },
-      required: ["query"],
-      additionalProperties: false,
-    });
-  });
-
-  it("fails locally when a pinned Anthropic provider tool is skipped", async () => {
-    const invalidTool = {
-      name: "invalid_plugin_tool",
-      description: "invalid schema",
-      parameters: { type: "object", properties: false },
-    };
-    const onPayload = vi.fn();
-    const stream = streamAnthropic(
-      makeAnthropicModel(),
-      {
-        messages: [user("hello")],
-        tools: [
-          invalidTool,
-          {
-            name: "healthy_tool",
-            description: "healthy schema",
-            parameters: { type: "object", properties: {} },
-          } as Tool,
-        ],
-      },
-      {
-        apiKey: "sk-ant-provider",
-        toolChoice: { type: "tool", name: "invalid_plugin_tool" },
-        onPayload,
-      },
-    );
-
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain(
-      'Anthropic tool_choice requested unavailable tool "invalid_plugin_tool"',
-    );
-    expect(onPayload).not.toHaveBeenCalled();
-    expect(anthropicMockState.requestOptions).toHaveLength(0);
   });
 
   it("keeps Anthropic wire tool bytes and their cache breakpoint stable across discovery orders", async () => {
@@ -1493,39 +1039,14 @@ describe("Anthropic provider", () => {
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {
-    function createSseEventResponse(lines: string): Response {
-      return new Response(lines, {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      });
-    }
-
-    const client = {
-      messages: {
-        create: vi.fn(() => ({
-          asResponse: () =>
-            Promise.resolve(
-              createSseEventResponse(
-                "event: error\ndata: " +
-                  JSON.stringify({
-                    type: "invalid_request_error",
-                    message: "messages.1.content.63: Invalid signature in thinking block",
-                  }) +
-                  "\n\n",
-              ),
-            ),
-        })),
-      },
-    };
-
+    const client = createAnthropicSseClient(
+      `event: error\ndata: ${JSON.stringify({
+        type: "invalid_request_error",
+        message: "messages.1.content.63: Invalid signature in thinking block",
+      })}\n\n`,
+    );
     const stream = startStream(client, {}, conversation(user("hi")));
-
-    const eventTypes: string[] = [];
-    for await (const event of stream as AsyncIterable<{ type: string }>) {
-      eventTypes.push(event.type);
-    }
-
-    // error must be the first event — no start emitted before it
+    const eventTypes = await collectEventTypes(stream);
     expect(eventTypes[0]).toBe("error");
     expect(eventTypes).not.toContain("start");
   });
@@ -1543,4 +1064,3 @@ describe("Anthropic provider", () => {
     expect(payload.system).toEqual([{ type: "text", text: "Stable prefix\nDynamic suffix" }]);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

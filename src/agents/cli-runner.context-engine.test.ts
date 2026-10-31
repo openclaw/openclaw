@@ -1,11 +1,11 @@
 /** Tests CLI runner integration with context-engine lifecycle hooks. */
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import {
   createAdmittedRunOperatorAuthority,
   prepareSystemAgentRunAdmission,
@@ -13,6 +13,10 @@ import {
 } from "./admitted-run-context.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+import {
+  createContextEngine as createTestContextEngine,
+  textMessage,
+} from "./harness/context-engine-lifecycle.test-support.js";
 import { waitForSessionMaintenance } from "./session-maintenance/coordinator.js";
 
 const { executeMock, historyMock, hookHistoryMock, hookRunnerMock, beforeReplyMock, prepareMock } =
@@ -53,25 +57,11 @@ vi.mock("../plugins/before-agent-reply.js", async (importOriginal) => ({
   runBeforeAgentReplyForTurn: beforeReplyMock,
 }));
 
-function textMessage(role: "user" | "assistant", text: string, timestamp: number): AgentMessage {
-  return {
-    role,
-    content: [{ type: "text", text }],
-    timestamp,
-  } as AgentMessage;
-}
-
 function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEngine {
-  return {
+  return createTestContextEngine({
     info: { id: "test-context-engine", name: "Test context engine" },
-    ingest: vi.fn(async () => ({ ingested: true })),
-    assemble: vi.fn(async (params) => ({
-      messages: params.messages,
-      estimatedTokens: 0,
-    })),
-    compact: vi.fn(async () => ({ ok: true, compacted: false })),
     ...overrides,
-  };
+  });
 }
 
 function createLifecycle() {
@@ -147,12 +137,6 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
     contextEngine,
     contextEngineTurnPrompt: "transcript visible ask",
   };
-}
-
-function expectNoCalls(...mocks: Array<ReturnType<typeof vi.fn>>) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 describe("runPreparedCliAgent context engine lifecycle", () => {
@@ -310,7 +294,6 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect.soft(afterTurnParams).toMatchObject({
       ...session,
       prePromptMessageCount: 101,
-      isHeartbeat: false,
       tokenBudget: undefined,
       runtimeContext: undefined,
     });

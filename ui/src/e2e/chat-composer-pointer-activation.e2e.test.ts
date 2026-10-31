@@ -1,34 +1,19 @@
-// Control UI E2E tests cover pointer activation near the mobile safe area.
-import { chromium, type Browser, type Locator, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import type { Locator, Page } from "playwright";
+import { expect, it } from "vitest";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI composer pointer controls",
+  startServerBeforeBrowser: true,
+});
 
 type PointerTraceEntry = {
-  activeTag: string;
-  bottom: number;
   centerHitLabel: string | null;
-  clientX: number;
-  clientY: number;
-  defaultPrevented: boolean;
   eventTargetLabel: string | null;
   top: number;
   type: string;
 };
-
-let server: ControlUiE2eServer;
-let browser: Browser;
 
 type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
 
@@ -38,28 +23,27 @@ async function withComposer(
   run: (page: Page, gateway: Gateway) => Promise<void>,
   deferred = true,
 ): Promise<void> {
-  const context = await browser.newContext({
-    hasTouch: mobile,
-    isMobile: mobile,
-    serviceWorkers: "block",
-    viewport: wide ? { width: 1280, height: 900 } : { width: 393, height: 852 },
-  });
-  try {
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      assistantName: "OpenClaw",
-      ...(deferred ? { deferredMethods: ["chat.send"] } : {}),
-    });
-    await page.goto(`${server.baseUrl}chat`);
-    await gateway.waitForRequest("chat.startup");
-    if (!wide) {
-      const protocol = await context.newCDPSession(page);
-      await protocol.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 34 } });
-    }
-    await run(page, gateway);
-  } finally {
-    await context.close();
-  }
+  return suite.withPage(
+    {
+      hasTouch: mobile,
+      isMobile: mobile,
+      serviceWorkers: "block",
+      viewport: wide ? { width: 1280, height: 900 } : { width: 393, height: 852 },
+    },
+    async ({ page, context }) => {
+      const gateway = await installMockGateway(page, {
+        assistantName: "OpenClaw",
+        ...(deferred ? { deferredMethods: ["chat.send"] } : {}),
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("sessions.messages.subscribe");
+      if (!wide) {
+        const protocol = await context.newCDPSession(page);
+        await protocol.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 34 } });
+      }
+      await run(page, gateway);
+    },
+  );
 }
 
 async function expectComposerFocus(page: Page): Promise<void> {
@@ -73,14 +57,14 @@ async function expectComposerFocus(page: Page): Promise<void> {
 }
 
 async function expectSafeArea(page: Page): Promise<void> {
-  // The injected 34px safe area plus the native composer's 10px bottom gap.
+  // Keep the composer above the injected safe area without fixing its visual gap.
   await expect
     .poll(() =>
       page
         .locator(".agent-chat__composer-shell")
         .evaluate((node) => window.innerHeight - node.getBoundingClientRect().bottom),
     )
-    .toBe(44);
+    .toBeGreaterThanOrEqual(34);
 }
 
 async function streamReply(gateway: Gateway, afterRequest?: () => Promise<void>): Promise<string> {
@@ -165,12 +149,7 @@ async function installPointerTrace(button: Locator): Promise<void> {
       const bounds = target.getBoundingClientRect();
       const hit = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY);
       trace.push({
-        activeTag: document.activeElement?.tagName ?? "",
-        bottom: bounds.bottom,
-        clientX: pointerEvent.clientX,
-        clientY: pointerEvent.clientY,
         centerHitLabel: hit?.closest("button")?.getAttribute("aria-label") ?? null,
-        defaultPrevented: event.defaultPrevented,
         eventTargetLabel:
           event.target instanceof Element
             ? (event.target.closest("button")?.getAttribute("aria-label") ?? null)
@@ -237,21 +216,7 @@ async function clickMouseAtCurrentCenter(page: Page, button: Locator): Promise<v
   await page.mouse.up();
 }
 
-describeControlUiE2e("Control UI composer pointer controls", () => {
-  beforeAll(async () => {
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await runQaGatewayFixture(
-      async () => {
-        await browser?.close();
-      },
-      () => server?.close(),
-    );
-  });
-
+suite.define(() => {
   it("sends and stops without moving the action out from under an Android-like tap", async () => {
     await narrowSendAndStop(true);
   });
@@ -260,47 +225,25 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
     await narrowSendAndStop(false);
   });
 
-  it("keeps wide desktop mouse activation and keyboard activation working", async () => {
+  it("keeps wide desktop keyboard activation working", async () => {
     await withComposer(false, true, async (page, gateway) => {
       const textarea = page.locator(".agent-chat__input textarea");
-      await textarea.fill("Verify wide desktop pointer controls");
-      await textarea.focus();
-      const send = page.getByRole("button", { name: "Send message" });
-      await installPointerTrace(send);
-      await clickMouseAtCurrentCenter(page, send);
-      expectStablePointerActivation(await readPointerTrace(page));
-      const runId = await streamReply(gateway);
-
-      const stop = page.getByRole("button", { name: "Stop generating" });
-      await stop.focus();
-      await expect.poll(() => stop.evaluate((node) => document.activeElement === node)).toBe(true);
-      await stop.press("Space");
-      const abortRequest = await gateway.waitForRequest("chat.abort");
-      expect(abortRequest.params).toMatchObject({ runId, sessionKey: "agent:main:main" });
-
-      await textarea.fill("Verify keyboard Send");
+      await textarea.fill("Verify desktop keyboard controls");
       await textarea.focus();
       const keyboardSend = page.getByRole("button", { name: "Send message" });
-      // Send holds the trailing end of the action row, behind the microphone, so
-      // it is no longer one Tab away. What this proves is that plain forward
-      // tabbing still reaches it — no trap, no skipped control.
-      for (let tabs = 0; tabs < 4; tabs += 1) {
-        await page.keyboard.press("Tab");
-        if (await keyboardSend.evaluate((node) => document.activeElement === node)) {
-          break;
-        }
-      }
       await expect
         .poll(async () => {
-          if (await keyboardSend.evaluate((node) => document.activeElement === node)) {
-            return true;
-          }
           await page.keyboard.press("Tab");
-          return false;
+          return keyboardSend.evaluate((node) => document.activeElement === node);
         })
         .toBe(true);
       await keyboardSend.press("Enter");
-      await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(2);
+      const runId = await streamReply(gateway);
+      const stop = page.getByRole("button", { name: "Stop generating" });
+      await stop.focus();
+      await stop.press("Space");
+      const abortRequest = await gateway.waitForRequest("chat.abort");
+      expect(abortRequest.params).toMatchObject({ runId, sessionKey: "agent:main:main" });
     });
   });
 

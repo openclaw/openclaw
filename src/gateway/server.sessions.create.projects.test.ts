@@ -112,6 +112,21 @@ function expectChatEvent(broadcast: ReturnType<typeof vi.fn>, fields: Record<str
     expect.anything(),
   );
 }
+function expectPreparedProject(
+  entry: SessionEntry | null | undefined,
+  sessionId: string,
+  project: Awaited<ReturnType<typeof registerProjectRegistry>>,
+  projectRoot: string,
+  worktree: boolean,
+) {
+  expect(entry).toMatchObject({
+    sessionId,
+    projectId: project.id,
+    ...(worktree
+      ? { worktree: { canonicalWorkspaceDir: projectRoot } }
+      : { spawnedCwd: projectRoot, sessionRoot: projectRoot }),
+  });
+}
 async function remoteProjectFixture<T = Awaited<ReturnType<typeof registerProjectRegistry>>>(
   prefix: string,
   options: { sandboxed?: boolean; alias?: boolean; recordInput?: boolean } = {},
@@ -268,27 +283,27 @@ test.each([
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         const transcriptScope = { agentId: "main", sessionKey: key, sessionId, storePath };
         const pending = await listSessionPendingInputs(transcriptScope);
+        const committed = loadTranscriptEventsSync(transcriptScope)
+          .map(asNullableRecord)
+          .filter((event) => event?.type === "message");
         if (image) {
-          expect(
-            loadTranscriptEventsSync(transcriptScope).filter(
-              (event) => asNullableRecord(event)?.type === "message",
-            ),
-          ).toEqual([]);
-          expect(pending).toMatchObject({
-            total: 1,
-            items: [{ runId, state: "queued", message: { idempotencyKey: `${runId}:user` } }],
-          });
+          expect(committed).toMatchObject([
+            { message: { role: "user", idempotencyKey: `${runId}:user` } },
+          ]);
+          expect(pending).toEqual({ items: [], total: 0 });
           const startup = await request(
             "chat.startup",
             { sessionKey: key },
             { ...controlUiClient, context },
           );
           expect(startup).toMatchObject({
-            messages: [],
-            pendingInputs: { total: 1, items: [{ runId, state: "queued" }] },
+            messages: [{ role: "user" }],
+            pendingInputs: { total: 0, items: [] },
           });
-          expect(created).not.toHaveProperty("messageSeq");
-          const media = readPersistedMediaFacts(pending.items[0]!.message);
+          expect(created).toMatchObject({ messageSeq: 1 });
+          const media = readPersistedMediaFacts(
+            expectDefined(asNullableRecord(committed[0]?.message), "committed initial input"),
+          );
           expect(media).toMatchObject([{ contentType: "image/png" }]);
           expect(await fs.readFile(await resolveMediaReferenceLocalPath(media![0]!.url!))).toEqual(
             Buffer.from(attachments![0]!.content, "base64"),
@@ -310,26 +325,19 @@ test.each([
         expect(transcript.at(-1)).toMatchObject({ message: { idempotencyKey: `${runId}:user` } });
         expect(await listSessionPendingInputs(transcriptScope)).toEqual({ items: [], total: 0 });
         if (image) {
-          expect(transcript.at(-1)?.id).toBe(pending.items[0]?.id);
+          expect(transcript.at(-1)?.id).toBe(committed[0]?.id);
           const persistedMessage = expectDefined(
             asNullableRecord(transcript.at(-1)?.message),
             "persisted initial input",
           );
           expect(readPersistedMediaFacts(persistedMessage)).toEqual(
-            readPersistedMediaFacts(pending.items[0]!.message),
+            readPersistedMediaFacts(
+              expectDefined(asNullableRecord(committed[0]?.message), "committed initial input"),
+            ),
           );
         }
         const prepared = readEntry(storePath, key);
-        expect(prepared).toMatchObject({
-          sessionId,
-          projectId: project.id,
-          ...(worktree
-            ? { worktree: { canonicalWorkspaceDir: projectRoot } }
-            : {
-                spawnedCwd: projectRoot,
-                sessionRoot: projectRoot,
-              }),
-        });
+        expectPreparedProject(prepared, sessionId, project, projectRoot, worktree);
         if (worktree) {
           expect((await managedWorktrees.findLiveByOwner("session", key))?.baseRef).toBe("main");
           expect(prepared?.spawnedCwd).not.toBe(projectRoot);
@@ -404,11 +412,22 @@ test.each([
                 role: "custom",
                 customType: "run-failed-before-reply",
                 display: true,
-                content: expect.stringContaining(failureMessage),
+                content: "Your request couldn't be completed.",
               }),
             ],
           });
         }
+
+        // Concise display copy must not discard the recovery cause retained by the writer.
+        expect(
+          loadTranscriptEventsSync({ agentId: "main", sessionKey: key, sessionId, storePath }),
+        ).toContainEqual(
+          expect.objectContaining({
+            type: "custom_message",
+            customType: "run-failed-before-reply",
+            details: { runId, error: expect.stringContaining(failureMessage) },
+          }),
+        );
 
         const retriedMaterialization = createDeferredCore<typeof project>();
         projectCloneMocks.materialize.mockReturnValueOnce(retriedMaterialization.promise);
@@ -432,18 +451,12 @@ test.each([
           await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledTimes(2));
           expect(readEntry(storePath, key)?.lastRunError).toBe(undefined);
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-          expect(entryAfterCreation).toMatchObject({
-            sessionId,
-            pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
-          });
-          expect(entryAfterFailure).toMatchObject({
-            sessionId,
-            pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
-          });
-          expect(readEntry(storePath, key)).toMatchObject({
-            sessionId,
-            pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
-          });
+          for (const entry of [entryAfterCreation, entryAfterFailure, readEntry(storePath, key)]) {
+            expect(entry).toMatchObject({
+              sessionId,
+              pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
+            });
+          }
 
           retriedMaterialization.resolve(project);
           await settleWorkspaceRuns(restartedContext, storePath, key);
@@ -456,13 +469,7 @@ test.each([
           expect(error?.[1]).toBeUndefined();
           expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
           const preparedEntry = readEntry(storePath, key);
-          expect(preparedEntry).toMatchObject({
-            sessionId,
-            projectId: project.id,
-            ...(worktree
-              ? { worktree: { canonicalWorkspaceDir: projectRoot } }
-              : { spawnedCwd: projectRoot, sessionRoot: projectRoot }),
-          });
+          expectPreparedProject(preparedEntry, sessionId, project, projectRoot, worktree);
           expect(preparedEntry).not.toHaveProperty("pendingProjectGitUrl");
           expect(preparedEntry).not.toHaveProperty("pendingWorktree");
           if (preparedEntry?.worktree) {

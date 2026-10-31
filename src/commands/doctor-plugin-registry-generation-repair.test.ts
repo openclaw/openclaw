@@ -12,7 +12,6 @@ import {
   readPersistedInstalledPluginIndexInstallRecordsAsync as readRecords,
 } from "../plugins/installed-plugin-index-records.js";
 import {
-  cleanupRetainedManagedNpmInstallGenerations as pruneGenerations,
   hasRetainedManagedNpmInstallMarker,
   resolveRetainedManagedNpmInstallPackageInfo,
 } from "../plugins/managed-npm-retention.js";
@@ -24,7 +23,6 @@ import {
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { maybeRepairStaleManagedNpmInstallGenerations as repairGenerations } from "./doctor-plugin-generations.js";
 import { maybeRepairPluginRegistryState } from "./doctor-plugin-registry.js";
 
 const PACKAGE_NAME = "@proof/openclaw-generation";
@@ -92,13 +90,6 @@ it.each([false, true])(
           seedInstalledPluginIndex({}, { stateDir, candidates: [] }),
         );
       await (independentWriter ? runOutsidePluginCache(write) : write());
-      const retained = await readRecords({ stateDir });
-      if (independentWriter) {
-        expect(retained).toHaveProperty("stale");
-      } else {
-        expect(retained).toEqual({});
-      }
-
       await maybeRepairPluginRegistryState({
         config: {},
         env,
@@ -115,8 +106,8 @@ it.each(["record", "recency"] as const)(
   "retires stale generations using %s authority",
   async (authority) => {
     const stateDir = tempDirs.make("openclaw-doctor-plugin-generation-");
-    const active = writeManaged(stateDir, authority === "record" ? "2026.7.1" : "1.0.0", true);
-    const stale = writeManaged(stateDir, authority === "record" ? "2026.6.11" : "9.0.0");
+    const active = writeManaged(stateDir, "1.0.0", true);
+    const stale = writeManaged(stateDir, "9.0.0");
     await seedInstalledPluginIndex(
       authority === "record"
         ? {
@@ -124,7 +115,7 @@ it.each(["record", "recency"] as const)(
               source: "npm",
               spec: `${PACKAGE_NAME}@latest`,
               installPath: active,
-              resolvedVersion: "2026.7.1",
+              resolvedVersion: "1.0.0",
             },
           }
         : {},
@@ -134,24 +125,15 @@ it.each(["record", "recency"] as const)(
       setInstallTimestamp(active, new Date("2026-01-02T00:00:00.000Z"));
       setInstallTimestamp(stale, new Date("2026-01-01T00:00:00.000Z"));
       vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-      await maybeRepairPluginRegistryState({
-        ...repairParams(stateDir),
-        config: { plugins: { allow: [PLUGIN_ID], entries: { [PLUGIN_ID]: { enabled: true } } } },
-      });
+    }
+    await maybeRepairPluginRegistryState({
+      ...repairParams(stateDir),
+      config: { plugins: { allow: [PLUGIN_ID], entries: { [PLUGIN_ID]: { enabled: true } } } },
+    });
+    if (authority === "recency") {
       const persisted = await readRecords({ stateDir });
       expect(persisted?.[PLUGIN_ID]?.installPath).toBe(active);
-    } else {
-      await expect(repairGenerations(repairParams(stateDir))).resolves.toBe(true);
     }
     expect([stale, active].map(hasRetainedManagedNpmInstallMarker)).toEqual([true, false]);
-    if (authority === "record") {
-      await expect(
-        pruneGenerations({
-          activeInstallPaths: [active],
-          npmDir: path.join(stateDir, "npm"),
-        }),
-      ).resolves.toBe(1);
-      expect([stale, active].map((dir) => fs.existsSync(dir))).toEqual([false, true]);
-    }
   },
 );

@@ -4,6 +4,7 @@ import { registerInternalHook, unregisterInternalHook } from "../../hooks/intern
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { resetSessionControllerStateForTest } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { createChatRunState } from "../server-chat-state.js";
+import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createControlFixture } from "./client-control-fixture.test-support.js";
 
 const { config, coreParams, mocks } = await vi.hoisted(
@@ -30,6 +31,7 @@ import {
   resetConsultFixture,
 } from "./client-gateway-control.agent-consult-fixture.test-support.js";
 import type { ConsultParams } from "./client-gateway-control.agent-consult.test-support.js";
+import { controlContext } from "./client-gateway-control.test-support.js";
 import { createTalkRunCancel } from "./realtime-run-control.js";
 
 const sessionTarget = {
@@ -69,9 +71,16 @@ function gate(backend = true) {
   return { started, release: () => released.resolve(), run };
 }
 
-function createOwner(flushTranscript: () => Promise<void> = async () => undefined) {
+function createOwner(
+  flushTranscript: () => Promise<void> = async () => undefined,
+  boundGateway = false,
+) {
+  const context: GatewayRequestContext = controlContext();
+  if (boundGateway) {
+    context.resolveGatewayContext = () => context;
+  }
   const runner = createConsultRunner({
-    context: { logGateway: { warn: vi.fn() } } as never,
+    context,
     sessionTarget,
     ownerConnId: "conn-talk",
     getVoiceSessionId: () => "voice-talk",
@@ -83,6 +92,7 @@ function createOwner(flushTranscript: () => Promise<void> = async () => undefine
     runToolAgentConsult: runner.runArgs,
     runAgentConsult: runner.runOwnedArgs,
     flushTranscript,
+    context,
   });
   owner.control.bindBridge(bridge);
   owner.activate();
@@ -106,8 +116,12 @@ function createOwner(flushTranscript: () => Promise<void> = async () => undefine
       }
       return { ...task, done };
     },
-    waitForResults: (count = 1) =>
-      vi.waitFor(() => expect(bridge.submitToolResult).toHaveBeenCalledTimes(count)),
+    expectResults: (...ids: string[]) =>
+      vi.waitFor(() =>
+        expect(bridge.submitToolResult.mock.calls).toEqual(
+          ids.map((id) => [id, { result: `answer: ${id}` }]),
+        ),
+      ),
   };
 }
 
@@ -144,6 +158,19 @@ beforeEach(() => {
 
 afterEach(resetSessionControllerStateForTest);
 
+it("runs a Gateway-bound voice consult outside the request scope", async () => {
+  const { enqueue, owner, expectResults } = createOwner(undefined, true);
+  const task = enqueue("consult", "configure the Dial");
+  try {
+    await vi.waitFor(() => expect(order).toEqual(["configure the Dial"]));
+    task.release();
+    await expectResults("configure the Dial");
+  } finally {
+    task.release();
+    await owner.close();
+  }
+});
+
 it.each([
   ["consult", "consult", ["first", "second"]],
   ["channel", "consult", ["second"]],
@@ -152,7 +179,7 @@ it.each([
   "runs %s then %s FIFO across transcript flush",
   async (firstKind, secondKind, callIds) => {
     const flush = createDeferred();
-    const { bridge, enqueue, owner, waitForResults } = createOwner(() => flush.promise);
+    const { enqueue, owner, expectResults } = createOwner(() => flush.promise);
     const first = enqueue(firstKind, "first");
     const second = enqueue(secondKind, "second");
     flush.resolve();
@@ -166,11 +193,8 @@ it.each([
     expect(order).toEqual(["first", "second"]);
     second.release();
     await Promise.all([first.done, second.done]);
-    await waitForResults(callIds.length);
+    await expectResults(...callIds);
     expect(order).toEqual(["first", "second"]);
-    expect(bridge.submitToolResult.mock.calls).toEqual(
-      callIds.map((id) => [id, { result: `answer: ${id}` }]),
-    );
     await owner.close();
   },
 );
@@ -237,6 +261,10 @@ it("keeps an in-flight consult running across a preserveRuns transport replaceme
   replacement.consult("call-2", "next");
   await next.started.promise;
   next.release();
-  await replacement.waitForResults();
+  await vi.waitFor(() =>
+    expect(replacement.bridge.submitToolResult.mock.calls).toEqual([
+      ["call-2", { result: "answer: next" }],
+    ]),
+  );
   await replacement.owner.close();
 });

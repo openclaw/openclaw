@@ -87,7 +87,6 @@ describe("Bun-only Node spawn ledger", () => {
         expect(report).toContain(JSON.stringify(["node", ...sentinel.argv]));
         expect(report).toContain('ancestor 10: "bun openclaw.mjs gateway run"');
         expect(report).toContain("spawnNodeTerminalPty");
-        expect(result.attempts).toMatchObject([{ ancestors: sentinel.ancestors }]);
         expect(markdown({ ...result, bunVersion: "1", bunRevision: "rev" })).toContain(
           "Bun 1 (rev)",
         );

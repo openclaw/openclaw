@@ -12,16 +12,14 @@ export type RfbProbeResult =
   | { kind: "unreachable" }
   | { kind: "timeout" };
 
-type ParsedRfbVersion = {
-  kind: "rfb";
-  minor: number;
-  reply: Buffer;
-};
-
 /** Parses the fixed-width RFB ProtocolVersion banner without socket state. */
-export function parseRfbVersionBanner(
-  buffer: Buffer,
-): ParsedRfbVersion | { kind: "not-rfb"; banner: string } {
+export function parseRfbVersionBanner(buffer: Buffer):
+  | {
+      kind: "rfb";
+      minor: number;
+      reply: Buffer;
+    }
+  | { kind: "not-rfb"; banner: string } {
   const banner = buffer.subarray(0, RFB_BANNER_BYTES).toString("ascii");
   if (buffer.length < RFB_BANNER_BYTES) {
     return { kind: "not-rfb", banner };
@@ -165,17 +163,16 @@ class ConnectedRfbStream extends Duplex {
   }
 }
 
-type ConnectedRfbResult =
-  | { kind: "rfb"; securityTypes: number[]; stream: Duplex }
-  | Exclude<RfbProbeResult, { kind: "rfb" }>;
-
 /** Inspects an RFB offer and retains that connection for its authenticated stream. */
 export async function connectRfbServer(params: {
   host: "127.0.0.1";
   port: number;
   timeoutMs: number;
   signal?: AbortSignal;
-}): Promise<ConnectedRfbResult> {
+}): Promise<
+  | { kind: "rfb"; securityTypes: number[]; stream: Duplex }
+  | Exclude<RfbProbeResult, { kind: "rfb" }>
+> {
   params.signal?.throwIfAborted();
   // ConnectedRfbStream alone drains and ends writes; native auto-finalization
   // would race the wrapper's queued writes when FIN arrives with unread output.

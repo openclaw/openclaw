@@ -119,6 +119,8 @@ fi
 trap cleanup_openclaw_plugins_sweep EXIT
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
+# Initialize the canonical state schema before fixture trust writes its install record.
+run_plugins_openclaw_logged initialize-state config set plugins.enabled true
 BUNDLED_PLUGIN_ROOT_DIR="extensions"
 OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
 
@@ -137,6 +139,7 @@ pack_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-pack.XXXXXX")"
 pack_fixture_archive plugin "$pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-tgz.tgz" demo-plugin-tgz 0.0.1 demo.tgz "Demo Plugin TGZ"
 
 run_plugins_fixture_logged install-tgz plugins install "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-tgz.tgz" --force
+
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins2.json" plugins list --json
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins2-inspect.json" plugins inspect demo-plugin-tgz --runtime --json
 

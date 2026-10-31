@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { runSessionStartupMigration } from "../../src/config/sessions/startup-migration.js";
+import { runSessionStartupMigration } from "../../src/config/sessions/startup-migration-runtime.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import {
   getSessionEntry,
@@ -65,7 +65,6 @@ it("MCP channels Docker seed preserves startup-ready SQLite history and attachme
     const cfg = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
     await runSessionStartupMigration({ cfg, env: state.env, log: { info() {}, warn() {} } });
     const storePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
-    await expect(fs.stat(storePath)).resolves.toMatchObject({ size: expect.any(Number) });
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:main",

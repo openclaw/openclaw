@@ -1,7 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-control-ui-controllers.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -41,8 +40,12 @@ function fixture(source = "export {};\n") {
     "flush",
     "getOwner",
     "runWithOwner",
+    "onCleanup",
+    "manualImport",
   ]) {
-    write(root, `config/control-ui-${pattern}-baseline.txt`, "");
+    for (const surface of ["control-ui", "plugin-ui"]) {
+      write(root, `config/${surface}-${pattern}-baseline.txt`, "");
+    }
   }
   for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) {
     git(root, args);
@@ -64,11 +67,66 @@ function runLint(root: string, args: string[]) {
 
 describe("Control UI controller guard", () => {
   it.each([
+    "extensions/workboard/browser/page.tsx",
+    "extensions/memory-core/browser/page.tsx",
+    "extensions/nostr/browser/page.tsx",
+    "extensions/whatsapp/browser/page.tsx",
+    "extensions/clawrouter/src/control-ui.tsx",
+    "extensions/x/src/control-ui.tsx",
+  ])("rejects forbidden Solid patterns in the plugin view %s", (file) => {
+    const root = fixture();
+    write(root, file, 'element.addEventListener("click", handler);');
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain(`${file}:1`);
+  });
+
+  it("ratchets plugin helpers separately from host and other plugin allowances, including staged source", () => {
+    const root = fixture();
+    const file = "extensions/nostr/browser/lifetime.ts";
+    const baseline = "config/plugin-ui-onCleanup-baseline.txt";
+    const source = 'import { onCleanup } from "solid-js"; onCleanup(dispose);';
+    write(root, file, source);
+    write(root, baseline, `${file}\t1\n`);
+    // Backend owners and test helpers are outside the browser-view guard.
+    write(root, "extensions/nostr/src/server.ts", 'element.querySelector("button");');
+    write(root, "extensions/nostr/browser/profile.test.tsx", source);
+    write(root, "extensions/workboard/browser/test/dom-host.ts", source);
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "existing plugin integration"]);
+    expect(main(root, [])).toBe(0);
+    write(root, file, `${source}\nonCleanup(dispose);`);
+    write(root, baseline, `${file}\t2\n`);
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain(
+      "Plugin UI onCleanup allowances must not increase",
+    );
+    write(root, baseline, `${file}\t1\n`);
+    git(root, ["add", "."]);
+    write(root, file, source);
+    expect(main(root, ["--staged"])).toBe(1);
+    expect(main(root, [])).toBe(0);
+    write(root, "extensions/whatsapp/browser/lifetime.ts", source);
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain(
+      "extensions/whatsapp/browser/lifetime.ts: 1 > 0",
+    );
+    write(root, "extensions/whatsapp/browser/lifetime.ts", "export {};\n");
+    write(root, file, "export {};\n");
+    expect(main(root, ["--prune"])).toBe(0);
+    expect(fs.readFileSync(path.join(root, baseline), "utf8")).not.toContain(`${file}\t`);
+  });
+
+  it.each([
     'import { createRenderEffect as render } from "solid-js"; render(() => 1, () => {});',
     'import * as solid from "solid-js"; solid.createRenderEffect(() => 1, () => {});',
     'element["addEventListener"]("click", handler);',
     'element?.querySelector<HTMLElement>("button");',
     'element[`querySelectorAll`]("button");',
+    'import { createComponent as render } from "solid-js"; render(View, {});',
+    'import * as solid from "solid-js"; solid["createComponent"]?.(View, {});',
+    "const view = <div classList={{ active: true }} />;",
+    "const view = <div {...{ classList: { active: true } }} />;",
+    "const view = <div {...{ classList }} />;",
   ])("rejects forbidden production call syntax: %s", (source) => {
     const root = fixture();
     write(root, "ui/src/new.tsx", source);
@@ -89,22 +147,16 @@ describe("Control UI controller guard", () => {
       write(
         root,
         `ui/src/${name}`,
-        "element.querySelector('button'); element.addEventListener('click', fn);",
+        'import { createComponent, onCleanup } from "solid-js"; createComponent(View, {}); onCleanup(dispose); const view = <div classList={{ active: true }} />; element.querySelector("button");',
       );
     }
     expect(main(root, [])).toBe(0);
   });
 
   it.each([
-    [
-      "createEffect",
-      "ui/src/view.ts",
-      'import { createEffect as effect } from "solid-js"; effect(read, write);',
-    ],
     ["untrack", "ui/src/view.ts", "untrack(read);"],
-    ["addEventListener", "ui/src/view.ts", "signal.addEventListener('abort', done);"],
-    ["querySelector", "ui/src/components/markdown.ts", "root.querySelectorAll<HTMLElement>('a');"],
-  ])("ratchets %s per file and rejects allowance inflation", (pattern, file, source) => {
+    ["querySelector", "ui/src/components/markdown.ts", "root.querySelectorAll('a');"],
+  ])("ratchets %s allowances and prunes resolved debt", (pattern, file, source) => {
     const root = fixture();
     write(root, file, source);
     const baseline = path.join(root, `config/control-ui-${pattern}-baseline.txt`);
@@ -112,8 +164,7 @@ describe("Control UI controller guard", () => {
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "existing debt"]);
     expect(main(root, [])).toBe(0);
-    const addedCall = pattern === "createEffect" ? "effect(read, write);" : source;
-    write(root, file, `${source}\n${addedCall}`);
+    write(root, file, `${source}\n${source}`);
     fs.writeFileSync(baseline, `${file}\t2\n`);
     expect(main(root, [])).toBe(1);
     expect(errors.mock.calls.flat().join("\n")).toContain("allowances must not increase");
@@ -124,6 +175,98 @@ describe("Control UI controller guard", () => {
     expect(fs.readFileSync(baseline, "utf8")).not.toContain(`${file}\t`);
     write(root, file, source);
     expect(main(root, [])).toBe(1);
+  });
+
+  it("permits the remaining context factory, native classList, and unrelated factory names", () => {
+    const root = fixture();
+    write(
+      root,
+      "ui/src/lib/reactive/context.ts",
+      'import { createComponent } from "solid-js"; createComponent(Context, props);',
+    );
+    write(
+      root,
+      "ui/src/view.tsx",
+      [
+        'import { createComponent as render } from "./factory.ts";',
+        'import { createComponent } from "solid-js";',
+        'render(View, {}); element.classList.toggle("active");',
+        "function local(createComponent: any) { createComponent(View, {}); }",
+        "// <div classList={{ active: true }} />",
+      ].join("\n"),
+    );
+    expect(main(root, [])).toBe(0);
+  });
+
+  it("ratchets view lifetime cleanup but permits computation cleanup and reactive primitives", () => {
+    const root = fixture();
+    const source = [
+      'import { onCleanup as cleanup, createMemo as memo, createEffect as effect, createStore } from "solid-js";',
+      'import * as solid from "@solidjs/signals";',
+      "memo(() => { cleanup(dispose); return read(); });",
+      "effect(() => { solid.onCleanup(dispose); return read(); }, apply);",
+      "createStore((draft) => { cleanup(dispose); draft.value = read(); });",
+      "memo((() => { cleanup(dispose); return read(); }));",
+      "function local(cleanup: any) { cleanup(dispose); }",
+    ].join("\n");
+    write(root, "ui/src/view.tsx", source);
+    write(
+      root,
+      "ui/src/lib/reactive/resource.ts",
+      'import { onCleanup } from "solid-js"; onCleanup(dispose);',
+    );
+    write(root, "config/control-ui-createEffect-baseline.txt", "ui/src/view.tsx\t1\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "existing effect"]);
+    expect(main(root, [])).toBe(0);
+    write(root, "ui/src/view.tsx", source + "\ncleanup(dispose);");
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain("onCleanup calls must not increase");
+    errors.mockClear();
+    write(
+      root,
+      "ui/src/view.tsx",
+      source.replace(
+        "effect(() => { solid.onCleanup(dispose); return read(); }, apply);",
+        "effect(read, () => { cleanup(dispose); });",
+      ),
+    );
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain("onCleanup calls must not increase");
+  });
+
+  it("ratchets stored import loaders while preserving lazy components, route loaders, and utility reads", () => {
+    const root = fixture();
+    const file = "ui/src/pages/view.tsx";
+    const source = [
+      'import { lazy as deferred } from "solid-js";',
+      'const Panel = deferred(() => import("./panel.tsx"));',
+      'const AsyncPanel = deferred(async () => { const module = await import("./panel.tsx"); return module; });',
+      'const route = { component: () => import("./page.tsx") };',
+      'async function command() { const { save } = await import("./save.ts"); await save(); }',
+      'type Module = typeof import("./panel.tsx");',
+    ].join("\n");
+    write(root, file, source);
+    write(
+      root,
+      "ui/src/pages/route.tsx",
+      'const route = { component: async () => { const entry = await import("./page.tsx"); await entry.Page.preload(); return entry; } };',
+    );
+    expect(main(root, [])).toBe(0);
+    for (const loader of [
+      'let loaded; loaded = import("./panel.tsx").then(module => { setPanel(module.Panel); });',
+      'async function load() { setPanel(await import("./panel.tsx")); }',
+      'import("./panel.tsx").then(module => { state.panel = module.Panel; });',
+      'function load() { return import("./panel.tsx").then(module => setPanel(module.Panel)); }',
+      'const panel = cached ?? await import("./panel.tsx");',
+      'const panel = cached || await import("./panel.tsx");',
+      'async function load() { const { Panel } = await import("./panel.tsx"); setPanel(Panel); }',
+    ]) {
+      errors.mockClear();
+      write(root, file, source + "\n" + loader);
+      expect(main(root, []), loader).toBe(1);
+      expect(errors.mock.calls.flat().join("\n")).toContain("manualImport calls must not increase");
+    }
   });
 
   it.each(["flush", "getOwner", "runWithOwner"])(
@@ -336,15 +479,5 @@ describe("Control UI controller guard", () => {
     expect(staged.error).toBeUndefined();
     expect(staged.status, staged.stderr).toBe(1);
     expect(staged.stderr).toContain("ui/src/new.ts");
-  });
-
-  it("checks current source in a shallow checkout without base history", () => {
-    const source = fixture();
-    const root = tempDirs.make("openclaw-controller-shallow-");
-    git(root, ["clone", "--depth=1", pathToFileURL(source).href, "."]);
-    expect(main(root, [])).toBe(0);
-    fs.writeFileSync(path.join(root, "ui/src/new.ts"), "class NewController {}\n");
-    expect(main(root, [])).toBe(1);
-    expect(errors.mock.calls.flat().join("\n")).toContain("ui/src/new.ts");
   });
 });

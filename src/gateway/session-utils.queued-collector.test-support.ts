@@ -50,7 +50,7 @@ const lifecycleRequests = vi.hoisted(() => ({ controller: new AbortController() 
 type Client = GatewayRequestHandlerOptions["client"];
 type RpcParams = Record<string, unknown>;
 
-vi.mock(import("./server-recovery-runtime-context.js"), async (importOriginal) => ({
+vi.mock(import("./server-lifecycle-runtime-context.js"), async (importOriginal) => ({
   ...(await importOriginal()),
   bindGatewayLifecycleRequest: () => async (request: CallGatewayOptions) => {
     const signal = request.signal
@@ -83,6 +83,7 @@ vi.mock(
 
 export function useQueuedCollectorFixture() {
   const parentKey = "agent:main:dashboard:queued-projection";
+  const parent = { sessionKey: parentKey, sessionId: "parent-session", agentId: "main" };
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   let projection: SessionRowProjection;
   let cachedContext: Context | undefined;
@@ -190,15 +191,9 @@ export function useQueuedCollectorFixture() {
       broadcastToConnIds: vi.fn(),
     }) as unknown as Context;
     const registration = registerChatAbortController({
-      target: captureRpcTargetForTest({
-        sessionKey: parentKey,
-        sessionId: "parent-session",
-        agentId: "main",
-      }),
+      target: captureRpcTargetForTest(parent),
       runId: "parent-turn",
-      sessionId: "parent-session",
-      sessionKey: parentKey,
-      agentId: "main",
+      ...parent,
       ownerConnId: "parent-requester",
       timeoutMs: 60_000,
     });
@@ -208,9 +203,7 @@ export function useQueuedCollectorFixture() {
       "parent controller turn",
     );
     const operation = createReplyOperation({
-      sessionKey: parentKey,
-      sessionId: "parent-session",
-      agentId: "main",
+      ...parent,
       resetTriggered: false,
       mailboxClaim: claim,
       target: entry.input.target,

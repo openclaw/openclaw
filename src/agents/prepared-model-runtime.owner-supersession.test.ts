@@ -48,14 +48,17 @@ import { getPreparedModelRuntimeStartupStatus as startupStatus } from "./prepare
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
+const configWithPrefix = (responsePrefix: string): OpenClawConfig => ({
+  messages: { responsePrefix },
+});
 
 function holdNextCatalogWrite() {
   const started = createDeferred();
   const release = createDeferred();
-  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
+  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, _agentDir) => {
     started.resolve();
     await release.promise;
-    return { agentDir: String(agentDir), wrote: false };
+    return {};
   });
   return { started, release };
 }
@@ -131,16 +134,13 @@ it.for(["success", "preserved admission", "failure before retired cleanup"] as c
     const fails = outcome === "failure before retired cleanup";
     mocks.configuredAgentIds = ["default", "deferred"];
     const initial: OpenClawConfig = {
+      ...configWithPrefix("initial"),
       agents: { entries: { default: {}, deferred: {} } },
       models: {
         providers: { fixture: { baseUrl: "https://provider.example.test/v1", models: [] } },
       },
-      messages: { responsePrefix: "initial" },
     };
-    const latest: OpenClawConfig = {
-      agents: initial.agents,
-      messages: { responsePrefix: "latest" },
-    };
+    const latest = { ...configWithPrefix("latest"), agents: initial.agents };
     setRuntimeConfigSnapshot(initial);
     const pruning = createDeferred();
     const releasePruning = createDeferred();
@@ -361,24 +361,21 @@ it("retires only the deleted agent's physical owners", async () => {
       await expect(retireAgentDeleteRuntime(deletion, [input.agentDir])).rejects.toThrow(
         "no longer owns",
       );
-      expect(deleted.isCurrent()).toBe(true);
-      expect(sharing.isCurrent()).toBe(true);
+      expect([deleted.isCurrent(), sharing.isCurrent()]).toEqual([true, true]);
 
       replaceJournal.run(deletion.entry.operationId, input.agentId);
       await deletion.rollback();
       await expect(retireAgentDeleteRuntime(deletion, [input.agentDir])).rejects.toThrow(
         "no longer owns",
       );
-      expect(deleted.isCurrent()).toBe(true);
-      expect(sharing.isCurrent()).toBe(true);
+      expect([deleted.isCurrent(), sharing.isCurrent()]).toEqual([true, true]);
     },
     options,
   );
 
   await retireAgent({ agentId: input.agentId, agentDirs: [input.agentDir] });
 
-  expect(deleted.isCurrent()).toBe(false);
-  expect(sharing.isCurrent()).toBe(true);
+  expect([deleted.isCurrent(), sharing.isCurrent()]).toEqual([false, true]);
   await expect(loadDispatch({ agentId: "worker" })).resolves.toBe(separate);
 });
 
@@ -411,14 +408,7 @@ it.each([
     }
   } else {
     let claimCurrent = true;
-    void work.track(
-      refresh(
-        {},
-        {
-          isPublicationCurrent: () => claimCurrent,
-        },
-      ),
-    );
+    void work.track(refresh({}, { isPublicationCurrent: () => claimCurrent }));
     if (boundary === "lost claim") {
       claimCurrent = false;
     } else {
@@ -429,37 +419,44 @@ it.each([
   await rejected;
 });
 
+it("lets a published read follow the reload that supersedes its replacement gate", async () => {
+  mocks.configuredAgentIds = ["default"];
+  const options = { gatewayLifecycle: true, catalogMode: "static" as const };
+  await refresh({}, options);
+  invalidate("operator replacement gate", { waitForReplacement: true });
+  const read = prepare(fixture.agentInput("default", {}), { readPublished: true });
+  // The reload resolves the operator gate first, then publishes behind its own gate.
+  await refresh(configWithPrefix("replacement"), options);
+  const snapshot = await read;
+  expect(snapshot.isCurrent()).toBe(true);
+  expect(snapshot.config).toEqual(configWithPrefix("replacement"));
+});
+
 it("joins the latest of multiple replacements without rebuilding skipped config", async () => {
   mocks.configuredAgentIds = ["default"];
   const { started, release } = holdNextCatalogWrite();
   await using work = pendingWork(release);
   const first = work.track(refresh({}, { joinSupersedingPublication: true }));
   await started.promise;
-  const skipped = work.track(refresh({ messages: { responsePrefix: "skipped" } }));
-  const latest = work.track(refresh({ messages: { responsePrefix: "latest" } }));
+  const skipped = work.track(refresh(configWithPrefix("skipped")));
+  const latest = work.track(refresh(configWithPrefix("latest")));
   release.resolve();
   await expect(first).resolves.toBeUndefined();
   await Promise.all([skipped, latest]);
   expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
-  expect(mocks.ensureOpenClawModelsJson.mock.calls.at(-1)?.[0]).toEqual({
-    messages: { responsePrefix: "latest" },
-  });
+  expect(mocks.ensureOpenClawModelsJson.mock.calls.at(-1)?.[0]).toEqual(configWithPrefix("latest"));
 });
 
 it("finishes config replacement after a second adopted auth mutation", async () => {
   mocks.configuredAgentIds = ["default"];
   const config = {};
-  const nextConfig = { messages: { responsePrefix: "updated" } };
+  const nextConfig = configWithPrefix("updated");
   await refresh(config, { gatewayLifecycle: true });
   const input = fixture.agentInput("default", config);
   const configWrite = holdNextCatalogWrite();
   const authWrite = holdNextCatalogWrite();
   await using work = pendingWork(configWrite.release, authWrite.release);
-  const replacement = work.track(
-    refresh(nextConfig, {
-      gatewayLifecycle: true,
-    }),
-  );
+  const replacement = work.track(refresh(nextConfig, { gatewayLifecycle: true }));
   const result = expect(replacement).resolves.toBeUndefined();
   void result.catch(() => undefined);
   await configWrite.started.promise;
@@ -487,7 +484,7 @@ it("keeps logged-out reply dispatch after the config operation cache retires", a
 }) => {
   mocks.configuredAgentIds = ["default"];
   const config = {};
-  const nextConfig = { messages: { responsePrefix: "updated" } };
+  const nextConfig = configWithPrefix("updated");
   const metadata = { ...(await pluginMetadata.resolvePluginMetadataSnapshotAsync({ config })) };
   bindPluginMetadataSnapshotCache(metadata, getProcessPluginCache());
   await refresh(config, {
@@ -609,7 +606,7 @@ it("stops a superseded same-directory batch before another catalog write", async
       staleWriteStarted.resolve();
       await releaseStaleWriteGate.promise;
     }
-    return { agentDir: fixture.state.agentDir("shared-catalog-agent-dir"), wrote: false };
+    return {};
   });
 
   await using work = pendingWork(releaseStaleWriteGate);

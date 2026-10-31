@@ -16,9 +16,10 @@ function dispatchDragEvent(
   target: Element,
   type: "dragstart" | "dragover" | "drop",
   dataTransfer: ReturnType<typeof createDataTransferStub>,
+  clientY = 0,
 ) {
   const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+  Object.assign(event, { dataTransfer, clientY });
   target.dispatchEvent(event);
 }
 
@@ -82,23 +83,79 @@ describe("AppSidebar section reordering", () => {
     return { sidebar, harness, section, header, moveSection };
   }
 
-  it("disables section and row dragging without group write access", async () => {
+  it("allows personal session drags but blocks shared group changes without group write access", async () => {
     const { sidebar, harness, header, section } = await mountWithGroups(["Alpha"], [], {
       scopes: ["operator.read"],
     });
     const source = header("category:Alpha");
-    const row = sidebar.querySelector('[data-session-key="agent:main:plain"]');
+    const row = sidebar.querySelector('[data-session-key="agent:main:plain"]')!;
 
     expect(source.getAttribute("draggable")).toBe("false");
     expect(source.getAttribute("title")).toBeTruthy();
-    expect(row?.getAttribute("draggable")).toBe("false");
-    expect(row?.hasAttribute("title")).toBe(false);
+    expect(row.getAttribute("draggable")).toBe("true");
+    expect(row.hasAttribute("title")).toBe(false);
 
     const dataTransfer = createDataTransferStub();
     dispatchDragEvent(source, "dragstart", dataTransfer);
     dispatchDragEvent(section("ungrouped"), "drop", dataTransfer);
 
     expect(dataTransfer.types).toEqual([]);
+
+    dispatchDragEvent(row, "dragstart", dataTransfer);
+    expect(dataTransfer.types).not.toEqual([]);
+    dispatchDragEvent(section("category:Alpha"), "dragover", dataTransfer);
+    dispatchDragEvent(section("category:Alpha"), "drop", dataTransfer);
+    expect(harness.sessions.patch).not.toHaveBeenCalled();
+    expect(harness.groupsPut).not.toHaveBeenCalled();
+  });
+
+  it("reorders personal pins around a row without changing other navigation entries", async () => {
+    const { sidebar, harness, section } = await mountWithGroups(["Alpha"], [], {
+      scopes: ["operator.sessions.read"],
+    });
+    const plain = "session:agent:main:plain";
+    const thread = "session:agent:main:thread";
+    const group = "session:agent:main:group-0";
+    const rail = "session-rail:agent:main:plain";
+    const unavailable = "session:agent:missing:saved";
+    sidebar.sidebarEntries = [plain, "route:usage", unavailable, thread, rail];
+    const update = vi.fn((next: string[]) => {
+      sidebar.sidebarEntries = next;
+    });
+    sidebar.onUpdateSidebarEntries = update;
+    await sidebar.updateComplete;
+    const row = (entry: string) =>
+      section("pinned").querySelector(`[data-session-key="${entry.slice("session:".length)}"]`)!;
+    const drop = async (source: Element, target: Element, after = false) => {
+      const transfer = createDataTransferStub();
+      dispatchDragEvent(source, "dragstart", transfer);
+      const bounds = target.getBoundingClientRect();
+      dispatchDragEvent(target, "dragover", transfer, after ? bounds.bottom + 1 : bounds.top - 1);
+      await sidebar.updateComplete;
+      expect(
+        target.classList.contains(`sidebar-zone-entry--drop-${after ? "after" : "before"}`),
+      ).toBe(true);
+      dispatchDragEvent(target, "drop", transfer);
+      await sidebar.updateComplete;
+    };
+
+    await drop(row(thread), row(plain));
+    expect(sidebar.sidebarEntries).toEqual([thread, plain, "route:usage", unavailable, rail]);
+    await drop(row(thread), row(plain), true);
+    expect(sidebar.sidebarEntries).toEqual([plain, thread, "route:usage", unavailable, rail]);
+    const writes = update.mock.calls.length;
+    await drop(row(plain), row(plain));
+    expect(update).toHaveBeenCalledTimes(writes);
+    await drop(sidebar.querySelector('[data-session-key="agent:main:group-0"]')!, row(thread));
+    expect(sidebar.sidebarEntries).toEqual([
+      plain,
+      group,
+      thread,
+      "route:usage",
+      unavailable,
+      rail,
+    ]);
+    expect(harness.sessions.patch).not.toHaveBeenCalled();
     expect(harness.groupsPut).not.toHaveBeenCalled();
   });
 

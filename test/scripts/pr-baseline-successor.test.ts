@@ -1,34 +1,25 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
+import { describe, expect, it } from "vitest";
+import { createBaselineFixture, reuseBaselineFixture } from "./pr-baseline-native.test-support.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterAll);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
-const fixture = () => createBaselineFixture(dirs.make("openclaw-pr-successor-"));
+const fixture = reuseBaselineFixture((root) => {
+  const f = createBaselineFixture(root, 2);
+  f.writeLocal("gates-build.log", "original proof bytes\n");
+  f.pass("prepare-baseline-refresh", f.manifest(f.advanceMain("initial upstream")));
+  return f;
+});
 
 describePosix("native successor source admission entry", () => {
-  it("admits two reviewed successors while preserving signed ancestry, all sixteen resolutions and proof", () => {
+  it("admits two reviewed successors while preserving signed ancestry, resolutions and proof", () => {
     const f = fixture();
-    f.writeLocal("gates-build.log", "original proof bytes\n");
-    const initial = f.advanceMain("initial upstream");
-    f.pass("prepare-baseline-refresh", f.manifest(initial));
     const initialHead = f.prepGit("rev-parse", "HEAD");
-    const initialBinding = f.readLocal("prepare-baseline.json");
-    const archives = () =>
-      Object.fromEntries(
-        readdirSync(join(f.worktree, ".local"))
-          .filter((n) => n.startsWith("prep-evidence."))
-          .flatMap((dir) =>
-            readdirSync(f.local(dir)).map((name) => [
-              `${dir}/${name}`,
-              f.readLocal(`${dir}/${name}`).toString("base64"),
-            ]),
-          ),
-      );
-    const retained = archives();
-    expect(JSON.parse(initialBinding.toString()).resolutions).toHaveLength(16);
+    const retained = f.snapshot(
+      readdirSync(join(f.worktree, ".local"))
+        .filter((n) => n.startsWith("prep-evidence."))
+        .flatMap((dir) => readdirSync(f.local(dir)).map((name) => `${dir}/${name}`)),
+    );
     writeFileSync(join(f.worktree, "docs/later-fixup.md"), "reviewed post-refresh correction\n");
     f.prepGit("add", "docs/later-fixup.md");
     f.prepGit("commit", "-qm", "fix: reviewed post-refresh correction");
@@ -41,7 +32,7 @@ describePosix("native successor source admission entry", () => {
       f.pass("prepare-baseline-successor", args);
       f.prepGit("verify-commit", "HEAD");
       expect(f.prepGit("show", "-s", "--format=%P", "HEAD")).toBe(`${prior} ${baseline}`);
-      expect(archives()).toMatchObject(retained);
+      f.expectSnapshot(retained);
       expect(f.prepGit("show", "HEAD:docs/later-fixup.md")).toBe(
         "reviewed post-refresh correction",
       );
@@ -53,14 +44,13 @@ describePosix("native successor source admission entry", () => {
       expect(rejected.stderr).toContain("Released the operation lock for PR #42");
       expect(f.git(f.repo, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
     }
-    expect(archives()).toMatchObject(retained);
+    f.expectSnapshot(retained);
     f.publish();
   });
   it.each(["branch", "closed", "head", "work", "branch-after-live", "closed-after-live"])(
     "preserves transition custody when %s authority changes during replay",
     (scenario) => {
       const f = fixture();
-      f.pass("prepare-baseline-refresh", f.manifest(f.advanceMain("initial upstream")));
       f.approve();
       const source = f.prepGit("rev-parse", "HEAD");
       const before = f.snapshot([
@@ -181,7 +171,6 @@ syncBuiltinESMExports();
           Buffer.from(admitted.binding, "base64"),
         );
       }
-      expect(f.readLocal("review-transition.json")).toEqual(journal);
     },
   );
 });

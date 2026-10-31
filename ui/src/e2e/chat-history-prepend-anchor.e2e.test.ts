@@ -38,12 +38,9 @@ suite.define(() => {
     const message = (seq: number) => ({
       __openclaw: { id: `recall-${seq}`, seq },
       role: prompts[seq] ? "user" : "assistant",
-      content: [
-        {
-          type: "text",
-          text: prompts[seq] ?? `History entry ${seq}. ${"History detail. ".repeat(20)}`,
-        },
-      ],
+      content: textContent(
+        prompts[seq] ?? `History entry ${seq}. ${"History detail. ".repeat(20)}`,
+      ),
       timestamp: 1_800_000_000_000 + seq,
     });
     const gateway = await installMockGateway(page, {
@@ -54,6 +51,7 @@ suite.define(() => {
           messages: Array.from({ length: 80 }, (_, index) => message(index + 3)),
           hasMore: true,
           nextOffset: 80,
+          olderCursor: "older-recall",
           totalMessages: 82,
           sessionId: "recall-session",
         },
@@ -88,7 +86,7 @@ suite.define(() => {
     await thread.getByText("Earlier prompt", { exact: true }).waitFor();
     const requests = await gateway.getRequests("chat.history");
     expect(requests).toHaveLength(1);
-    expect(requests[0]?.params).toMatchObject({ offset: 80 });
+    expect(requests[0]?.params).toMatchObject({ cursor: "older-recall" });
     await textarea.press("ArrowUp");
     await expect.poll(() => textarea.inputValue()).toBe("Latest prompt");
     await textarea.press("ArrowUp");
@@ -107,6 +105,7 @@ suite.define(() => {
     const historyPage = (messages: unknown[], nextOffset: number) => ({
       messages,
       nextOffset,
+      olderCursor: `older-activity-${nextOffset}`,
       hasMore: true,
       totalMessages: 2072,
       sessionId: "activity-history",
@@ -165,7 +164,7 @@ suite.define(() => {
       await thread.hover();
       await page.mouse.wheel(0, -100_000);
       await gateway.waitForRequest("chat.history", {
-        match: { sessionKey: "agent:main:main", offset: 72 },
+        match: { sessionKey: "agent:main:main", cursor: "older-activity-72" },
       });
       await waitForChatScrollIdle(page);
       // Let virtualization settle, then anchor the same retained bubble before delivery.
@@ -287,6 +286,7 @@ suite.define(() => {
           messages,
           hasMore,
           nextOffset,
+          ...(hasMore ? { olderCursor: `older-prepend-${nextOffset}` } : {}),
           totalMessages,
           sessionId: "prepend-session",
         });
@@ -312,7 +312,10 @@ suite.define(() => {
           await gateway.rejectDeferred("chat.history", {
             message: "History temporarily unavailable",
           });
-          const showEarlier = thread.getByRole("button", { name: "Show earlier", exact: true });
+          const showEarlier = thread.getByRole("button", {
+            name: "Retry earlier messages",
+            exact: true,
+          });
           await expect.poll(() => showEarlier.isEnabled()).toBe(true);
           await gateway.deferNext("chat.history");
           await showEarlier.click();
@@ -414,10 +417,15 @@ suite.define(() => {
             ],
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+          await thread.getByText("Initial streamed output.", { exact: false }).waitFor();
+          // The long live tail leaves earlier rows unmounted until reader navigation.
+          await thread.hover();
+          await page.mouse.wheel(0, -120);
           await page.getByText("Synthetic message 72.", { exact: true }).waitFor();
+          await page.getByRole("button", { name: "Scroll to latest", exact: true }).click();
           await waitForChatScrollIdle(page);
           await expect.poll(async () => (await position()).distance).toBeLessThanOrEqual(8);
-          const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
 
           // Force a delayed media measurement in an overscan row above the viewport.
           await thread.evaluate((element) => {
@@ -429,6 +437,7 @@ suite.define(() => {
               throw new Error("Expected a mounted overscan row above the viewport");
             }
             row.style.contentVisibility = "visible";
+            row.style.contain = "none";
             const filler = document.createElement("div");
             filler.id = "follow-delayed-measurement";
             filler.style.height = "200px";

@@ -1,11 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { makeAssistantMessage } from "./agent-loop.test-support.js";
 import type { ExecutedToolCallBatch } from "./agent-stream-response.js";
-import {
-  commitInternalToolTurnInput,
-  type InternalToolTurnCompletionHook,
-} from "./internal-hooks.js";
+import { commitInternalToolTurnInput } from "./internal-hooks.js";
 import { combineExecutedToolBatches } from "./tool-batch-completion.js";
+import type { AgentLoopConfig } from "./types.js";
 
 describe("tool batch terminal identity", () => {
   const recovery: ExecutedToolCallBatch = {
@@ -69,7 +67,7 @@ describe("tool batch terminal identity", () => {
 
   it("keeps input identity until commit without consuming or duplicating queued steering", () => {
     const input = { role: "user" as const, content: "Next input", timestamp: 1 };
-    const completesToolTurn = vi.fn<InternalToolTurnCompletionHook>(() => true);
+    const completesToolTurn = vi.fn<NonNullable<AgentLoopConfig["completesToolTurn"]>>(() => true);
     const result = combineExecutedToolBatches({ completesToolTurn }, makeAssistantMessage([]), [
       { ...recovery, steeringMessages: [input] },
       { ...terminal, steeringMessages: [input] },

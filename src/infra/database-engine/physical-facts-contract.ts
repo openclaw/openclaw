@@ -1,6 +1,11 @@
 import type { SqliteDatabaseFactKey } from "../sqlite-database-admission-record.js";
 import type { PostgresCatalogFact } from "./postgres-catalog.js";
-import type { PostgresCapabilities } from "./postgres-schema.js";
+
+export type PostgresCapabilities = {
+  serverMajor: number;
+  serverEncoding: "UTF8";
+  clientEncoding: "UTF8";
+};
 
 export type PostgresPhysicalFacts = {
   engine: "postgres";

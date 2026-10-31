@@ -12,7 +12,7 @@ import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { expectDefined } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { deviceGatewayEnv } from "./device-gateway.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 import { catalogList } from "./sidebar-assertions.test-support.ts";
 
 type ProgressRequest = { outcome: "pending" | "ok"; sessionKey: string };

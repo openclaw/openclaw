@@ -8,7 +8,6 @@ import {
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import type { StoredConversationReference } from "./conversation-store.js";
 import type { MSTeamsProactiveContext } from "./send-context.js";
 import {
   deleteMessageMSTeams,
@@ -16,16 +15,11 @@ import {
   editMessageMSTeams,
   sendMessageMSTeams,
 } from "./send.js";
+import { createMSTeamsTestConfig } from "./setup.test-support.js";
 
 const mockState = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
   resolveMSTeamsSendContext: vi.fn(),
-  resolveMarkdownTableMode: vi.fn<
-    typeof import("openclaw/plugin-sdk/markdown-table-runtime").resolveMarkdownTableMode
-  >(() => "off"),
-  convertMarkdownTables: vi.fn<
-    typeof import("openclaw/plugin-sdk/text-chunking").convertMarkdownTables
-  >((text) => text),
   requiresFileConsent: vi.fn(),
   prepareFileConsentActivityFs: vi.fn(),
   setPendingUploadActivityIdFs: vi.fn(),
@@ -42,20 +36,6 @@ const mockState = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
-
-vi.mock("openclaw/plugin-sdk/markdown-table-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/markdown-table-runtime")>();
-  return { ...actual, resolveMarkdownTableMode: mockState.resolveMarkdownTableMode };
-});
-
-vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>();
-  return {
-    ...actual,
-    convertMarkdownTables: mockState.convertMarkdownTables,
-  };
-});
 
 vi.mock("./send-context.js", () => ({
   resolveMSTeamsSendContext: mockState.resolveMSTeamsSendContext,
@@ -74,27 +54,12 @@ vi.mock("./pending-uploads-fs.js", () => ({
 vi.mock("./media-helpers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./media-helpers.js")>()),
   extractFilename: mockState.extractFilename,
-  extractMessageId: () => "message-1",
 }));
 
 // mock-isolation: capture outbound messages without opening a live Teams transport.
-vi.mock("./messenger.js", () => ({
+vi.mock("./messenger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./messenger.js")>()),
   sendMSTeamsMessages: mockState.sendMSTeamsMessages,
-  buildConversationReference: ({
-    serviceUrl = "https://service.example.com",
-    conversation = { id: "19:conversation@thread.tacv2" },
-    agent,
-    user,
-    tenantId,
-    aadObjectId,
-  }: StoredConversationReference) => ({
-    serviceUrl,
-    conversation,
-    agent,
-    user,
-    tenantId,
-    aadObjectId,
-  }),
 }));
 
 vi.mock("./graph-upload.js", async (importOriginal) => {
@@ -121,7 +86,6 @@ function mockContext(
     app: { id: "send-app" },
     appId: "app-id",
     conversationId,
-    ref: {},
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     conversationType: "personal",
     replyStyle: "top-level",
@@ -130,6 +94,13 @@ function mockContext(
     mediaMaxBytes: 8 * 1024,
     sharePointSiteId: undefined,
     ...overrides,
+    ref: {
+      serviceUrl: "https://service.example.com",
+      conversation: { id: overrides.conversationId ?? conversationId },
+      agent: { id: "agent-1" },
+      user: { id: "user-1" },
+      ...overrides.ref,
+    },
   };
   mockState.resolveMSTeamsSendContext.mockResolvedValue(context);
 }
@@ -163,8 +134,6 @@ beforeEach(() => {
   for (const mock of Object.values(mockState)) {
     mock.mockReset();
   }
-  mockState.resolveMarkdownTableMode.mockReturnValue("off");
-  mockState.convertMarkdownTables.mockImplementation((text) => text);
   mockState.setPendingUploadActivityIdFs.mockResolvedValue(undefined);
   mockState.extractFilename.mockResolvedValue("fallback.bin");
   mockState.requiresFileConsent.mockReturnValue(false);
@@ -284,24 +253,12 @@ describe("editMessageMSTeams", () => {
         },
       ]),
     );
-    const markdown = await vi.importActual<
-      typeof import("openclaw/plugin-sdk/markdown-table-runtime")
-    >("openclaw/plugin-sdk/markdown-table-runtime");
-    const text = await vi.importActual<typeof import("openclaw/plugin-sdk/text-chunking")>(
-      "openclaw/plugin-sdk/text-chunking",
-    );
-    mockState.resolveMarkdownTableMode.mockImplementation(markdown.resolveMarkdownTableMode);
-    mockState.convertMarkdownTables.mockImplementation(text.convertMarkdownTables);
     mockContext({ app: {}, ref: { conversation: { id: conversationId } } });
-    const cfg: OpenClawConfig = {
-      channels: {
-        msteams: {
-          defaultAccount: "support",
-          markdown: { tables: "off" },
-          accounts: { support: { markdown: { tables: "bullets" } } },
-        },
-      },
-    };
+    const cfg: OpenClawConfig = createMSTeamsTestConfig({
+      defaultAccount: "support",
+      markdown: { tables: "off" },
+      accounts: { support: { markdown: { tables: "bullets" } } },
+    });
     await editMessageMSTeams({
       cfg,
       accountId: undefined,

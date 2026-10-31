@@ -5,7 +5,7 @@ import { liveValue as createLiveValue } from "../lib/reactive/live-value.ts";
 
 export const COMMAND_PALETTE_INPUT_ID = "cmd-palette-input";
 
-type CommandPaletteInputProps = {
+export function CommandPaletteInput(props: {
   value: string;
   placeholder: string;
   onInputRef: (element: Element | undefined, previous?: HTMLTextAreaElement) => void;
@@ -17,14 +17,12 @@ type CommandPaletteInputProps = {
   onCompositionEnd?: () => void;
   actions?: JSX.Element;
   onPaste?: (event: ClipboardEvent) => void;
-  disabled?: boolean;
+  busy?: boolean;
   readOnly?: boolean;
   controls?: string;
   activeDescendant?: string;
   describedBy?: string;
-};
-
-export function CommandPaletteInput(props: CommandPaletteInputProps) {
+}) {
   let textarea!: HTMLTextAreaElement;
   let entry!: HTMLDivElement;
   let widthReference!: HTMLDivElement;
@@ -111,6 +109,7 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
           ]}
           autofocus
           rows={1}
+          enterkeyhint="enter"
           id={COMMAND_PALETTE_INPUT_ID}
           class="cmd-palette__input"
           aria-label={props.placeholder}
@@ -120,7 +119,7 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
           aria-activedescendant={props.activeDescendant}
           aria-describedby={props.describedBy}
           placeholder={committedPlaceholder()}
-          disabled={props.disabled}
+          aria-busy={props.busy ? "true" : undefined}
           readonly={props.readOnly}
           onScroll={() => textarea.isConnected && updateOverflow()}
           onPaste={(event) => props.onPaste?.(event)}

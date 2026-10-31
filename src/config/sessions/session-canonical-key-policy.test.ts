@@ -5,16 +5,16 @@ import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-exe
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as databaseAdmissions from "../../infra/sqlite-database-admission.js";
-import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
+import { withSqlitePostCommitPublications as withPublications } from "../../infra/sqlite-post-commit.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteDeferredTransactionSync as transaction } from "../../infra/sqlite-transaction.js";
 import { ensureSessionKeyContractSchemaInTransaction } from "../../state/openclaw-agent-db-schema-helpers.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
-  readCanonicalSessionMainKey,
-  readStoredCanonicalSessionMainKey,
-  setCanonicalSqliteSessionMainKey,
+  readCanonicalSessionMainKey as readKey,
+  readStoredCanonicalSessionMainKey as storedKey,
+  setCanonicalSqliteSessionMainKey as setKey,
 } from "./session-canonical-key.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -40,16 +40,14 @@ function diskPath() {
   return path.join(tempDirs.make("canonical-policy-"), "agent.sqlite");
 }
 
-function fixture(filename = ":memory:", canonicalAdmission = true) {
+function fixture(filename = ":memory:") {
   const db = connect(filename);
   db.exec(`BEGIN; ${OPENCLAW_AGENT_SCHEMA_SQL} COMMIT;`);
   admitSqliteSchema(db);
   const database = { db, agentId: "main" };
   // Maintenance admission has no physical runtime receipt; it uses the same policy owner.
-  if (canonicalAdmission) {
-    assertCanonicalSqliteSessionKeysCurrent(database);
-  }
-  const read = () => runSqliteReadOperationSync(db, () => readCanonicalSessionMainKey(database));
+  assertCanonicalSqliteSessionKeysCurrent(database);
+  const read = () => runSqliteReadOperationSync(db, () => readKey(database));
   expect(read()).toBe("main");
   const observe = (admit = false) => {
     const values: string[] = [];
@@ -65,44 +63,61 @@ function fixture(filename = ":memory:", canonicalAdmission = true) {
   return { db, database, read, observe };
 }
 
-it.each([true, false])(
-  "reuses policy with canonical admission %s and observes writes",
-  (admitted) => {
-    const { db, database, read } = fixture(":memory:", admitted);
-    using observation = observeReads();
-    expect(Array.from({ length: 10 }, read)).toEqual(Array(10).fill("main"));
-    expect(
-      observation.queries.filter((sql) => sql.includes('from "session_key_contract"')),
-    ).toEqual([]);
-    setCanonicalSqliteSessionMainKey(database, "custom");
-    expect(read()).toBe("custom");
-    db.exec(
-      "WITH policy(value) AS (VALUES ('raw')) UPDATE session_key_contract SET main_key = (SELECT value FROM policy) WHERE id = 1",
-    );
-    expect(read()).toBe("raw");
-    db.prepare("DELETE FROM session_key_contract WHERE id = 1").run();
-    expect(read()).toBe("main");
-    expect(readStoredCanonicalSessionMainKey(database)).toBeNull();
-    setCanonicalSqliteSessionMainKey(database, undefined);
-    expect(readStoredCanonicalSessionMainKey(database)).toBe("main");
-    db.prepare(
-      "REPLACE INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'replacement', 1)",
-    ).run();
-    expect(read()).toBe("replacement");
-  },
-);
+it("reuses admitted policy and observes writes", () => {
+  const { db, database, read } = fixture();
+  using observation = observeReads();
+  expect(Array.from({ length: 10 }, read)).toEqual(Array(10).fill("main"));
+  expect(observation.queries.filter((sql) => sql.includes('from "session_key_contract"'))).toEqual(
+    [],
+  );
+  setKey(database, "custom");
+  expect(read()).toBe("custom");
+  db.exec(
+    "WITH policy(value) AS (VALUES ('raw')) UPDATE session_key_contract SET main_key = (SELECT value FROM policy) WHERE id = 1",
+  );
+  expect(read()).toBe("raw");
+  db.prepare("DELETE FROM session_key_contract WHERE id = 1").run();
+  expect(read()).toBe("main");
+  expect(storedKey(database)).toBeNull();
+  setKey(database, undefined);
+  expect(storedKey(database)).toBe("main");
+  db.prepare(
+    "REPLACE INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'replacement', 1)",
+  ).run();
+  expect(read()).toBe("replacement");
+});
+
+it.each([true, false])("reads startup policy with receipt column present=%s", (receiptColumn) => {
+  const db = connect(":memory:");
+  db.exec(`BEGIN; ${OPENCLAW_AGENT_SCHEMA_SQL} COMMIT;`);
+  if (!receiptColumn) {
+    db.exec("ALTER TABLE session_key_contract DROP COLUMN canonical_ready");
+  }
+  admitSqliteSchema(db);
+  const database = { db, agentId: "main" };
+  const read = () => runSqliteReadOperationSync(db, () => storedKey(database, database.agentId));
+  using observation = observeReads();
+  expect(read()).toBe("main");
+  const queries = observation.queries.filter((query) =>
+    query.includes('from "session_key_contract"'),
+  );
+  expect(queries).toHaveLength(1);
+  expect(queries[0]?.includes('"canonical_ready"')).toBe(receiptColumn);
+  setKey(database, "configured");
+  expect(read()).toBe("configured");
+});
 
 it("keeps current policy inside read transactions and refreshes after savepoint rollback", () => {
   const { db, read } = fixture();
   using observation = observeReads();
   runSqliteReadOperationSync(db, () => {
-    for (let transaction = 0; transaction < 3; transaction += 1) {
-      runSqliteDeferredTransactionSync(db, () => {
+    for (let index = 0; index < 3; index += 1) {
+      transaction(db, () => {
         expect(Array.from({ length: 10 }, read)).toEqual(Array(10).fill("main"));
       });
     }
   });
-  runSqliteDeferredTransactionSync(db, () => {
+  transaction(db, () => {
     const isVersionProbe = (sql: string) =>
       /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql);
     const probes = observation.queries.filter(isVersionProbe).length;
@@ -162,22 +177,22 @@ it("shares the physical policy across handles and unrelated writes without rerea
   const peer = connect(filename, true);
   admitSqliteSchema(peer);
   using observation = observeReads();
-  expect(readCanonicalSessionMainKey({ db: peer })).toBe("main");
+  expect(storedKey({ db: peer }, "main")).toBe("main");
   db.exec("UPDATE session_nodes SET updated_at = updated_at + 1");
   expect(read()).toBe("main");
-  setCanonicalSqliteSessionMainKey(database, "configured");
+  setKey(database, "configured");
   expect(read()).toBe("configured");
-  expect(readCanonicalSessionMainKey({ db: peer })).toBe("configured");
+  expect(storedKey({ db: peer }, "main")).toBe("configured");
   db.exec("CREATE TABLE unrelated_policy_data (value TEXT)");
   admitSqliteSchema(db);
   expect(read()).toBe("configured");
-  expect(readCanonicalSessionMainKey({ db: peer })).toBe("configured");
+  expect(readKey({ db: peer })).toBe("configured");
   expect(observation.queries.filter((sql) => sql.includes('from "session_key_contract"'))).toEqual(
     [],
   );
   db.exec("BEGIN");
   try {
-    expect(() => setCanonicalSqliteSessionMainKey(database, "unmanaged")).toThrow(
+    expect(() => setKey(database, "unmanaged")).toThrow(
       "Canonical main-key changes require managed transaction publication",
     );
   } finally {
@@ -194,13 +209,13 @@ it("observes the schema owner's seed after reading a missing policy row", () => 
   admitSqliteSchema(db);
   const reader = connect(filename, true);
   admitSqliteSchema(reader);
-  expect(readStoredCanonicalSessionMainKey({ db })).toBeNull();
-  expect(readStoredCanonicalSessionMainKey({ db: reader })).toBeNull();
-  withSqlitePostCommitPublications(db, () =>
-    runSqliteDeferredTransactionSync(db, () => ensureSessionKeyContractSchemaInTransaction(db)),
+  expect(storedKey({ db })).toBeNull();
+  expect(storedKey({ db: reader })).toBeNull();
+  withPublications(db, () =>
+    transaction(db, () => ensureSessionKeyContractSchemaInTransaction(db)),
   );
-  expect(readStoredCanonicalSessionMainKey({ db: reader })).toBe("main");
-  expect(readCanonicalSessionMainKey({ db })).toBe("main");
+  expect(storedKey({ db: reader })).toBe("main");
+  expect(readKey({ db })).toBe("main");
 });
 
 it.each(["tracked", "native", "native-before-begin"] as const)(
@@ -229,7 +244,7 @@ it.each(["tracked", "native", "native-before-begin"] as const)(
       if (db.isTransaction) {
         db.exec("COMMIT");
       }
-      setCanonicalSqliteSessionMainKey(database, "committed-after-rollback");
+      setKey(database, "committed-after-rollback");
       db.exec("BEGIN");
       try {
         expect(read()).toBe("committed-after-rollback");
@@ -244,7 +259,7 @@ it.each(["autocommit", "managed"] as const)(
   "retires stale policy when %s committed fact installation fails",
   (mode) => {
     const { db, database, read } = fixture(diskPath());
-    setCanonicalSqliteSessionMainKey(database, "previous");
+    setKey(database, "previous");
     const publish = databaseAdmissions.publishSqliteDatabaseAdmission;
     let injected = false;
     const publication = vi
@@ -256,12 +271,10 @@ it.each(["autocommit", "managed"] as const)(
         }
         return publish(...args);
       });
-    const write = () => setCanonicalSqliteSessionMainKey(database, "committed");
+    const write = () => setKey(database, "committed");
     try {
       if (mode === "managed") {
-        expect(() =>
-          withSqlitePostCommitPublications(db, () => runSqliteDeferredTransactionSync(db, write)),
-        ).not.toThrow();
+        expect(() => withPublications(db, () => transaction(db, write))).not.toThrow();
       } else {
         expect(write).toThrow("publication failed");
       }

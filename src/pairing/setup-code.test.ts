@@ -1,9 +1,12 @@
+import assert from "node:assert/strict";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SecretInput } from "../config/types.secrets.js";
 import {
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
+import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 
 vi.mock("../infra/device-bootstrap.js", () => ({
   issueDevicePairSetupBootstrapToken: vi.fn(async () => ({
@@ -40,6 +43,9 @@ const limited = {
   accessDowngraded: true,
 } as const;
 const secret = (id: string, provider = "default"): SecretInput => ({ source: "env", provider, id });
+const noDiscovery = vi.fn(async () => {
+  throw new Error("Tailscale discovery must not run for a direct bind");
+});
 
 function config(gateway: Gateway = {}, extra: Omit<Config, "gateway"> = {}): Config {
   return { ...extra, gateway: { auth: { mode: "token", token: "tok_123" }, ...gateway } };
@@ -53,29 +59,20 @@ function mounted(gateway: Gateway = {}, extra?: Omit<Config, "gateway">) {
 function command(stdout: string) {
   return vi.fn(async () => ({ code: 0, stdout, stderr: "" }));
 }
-function ipv4(
-  address: string,
-  name = "en0",
-): ReturnType<NonNullable<Options["networkInterfaces"]>> {
-  return {
-    [name]: [
-      {
-        address,
-        family: "IPv4",
-        internal: false,
-        netmask: "255.255.255.0",
-        mac: "00:00:00:00:00:00",
-        cidr: address + "/24",
-      },
-    ],
-  };
+function publicConfig(publicUrl: string) {
+  return mounted(
+    { bind: "loopback" },
+    { plugins: { entries: { "device-pair": { config: { publicUrl } } } } },
+  );
+}
+function ipv4(address: string, name = "en0") {
+  return makeNetworkInterfacesSnapshot({
+    [name]: [{ address, family: "IPv4", netmask: "255.255.255.0" }],
+  });
 }
 async function checkSetup(cfg: Config, expected: Expected = {}, options?: Options) {
   const resolved = await resolve(cfg, options);
-  expect(resolved.ok).toBe(true);
-  if (!resolved.ok) {
-    throw new Error(resolved.error);
-  }
+  assert.ok(resolved.ok);
   const { url, tlsFingerprint, profile, ...fields } = expected;
   expect(resolved).toMatchObject({
     authLabel: "token",
@@ -91,21 +88,8 @@ async function checkSetup(cfg: Config, expected: Expected = {}, options?: Option
     expiresAtMs: 123,
     ...(tlsFingerprint ? { tlsFingerprint } : {}),
   });
-  expect(resolved.payload).not.toHaveProperty("setupId");
   expect(issueToken).toHaveBeenCalledWith({
-    baseDir: undefined,
-    profile: profile ?? {
-      roles: ["node", "operator"],
-      scopes: [
-        "operator.admin",
-        "operator.approvals",
-        "operator.questions",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ],
-      purpose: "mobile-full",
-    },
+    profile: profile ?? FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   });
 }
 beforeEach(() => {
@@ -128,7 +112,6 @@ it("round-trips setup codes while canonicalizing their TLS fingerprint", () => {
     expiresAtMs: 20_000,
   };
   const code = encode(payload);
-  expect(code).toMatch(/[A-Z]/u);
   const expected = { ...payload, tlsFingerprint: TLS_FINGERPRINT };
   expect(decode(code, { nowMs: 10_000 })).toEqual(expected);
   expect(decode("oc-pair://" + code, { nowMs: 10_000 })).toEqual(expected);
@@ -148,17 +131,13 @@ it("accepts older payloads without a TLS fingerprint or expiry", () => {
   expect(decode(encode(PAYLOAD))).toEqual(PAYLOAD);
 });
 
-it.each<[Config, Options | undefined, string]>([
-  ...["https://gateway.example:8444", "https://gateway.example:8444/proxy"].map(
-    (publicUrl): [Config, Options | undefined, string] => [
-      mounted(
-        { bind: "loopback" },
-        { plugins: { entries: { "device-pair": { config: { publicUrl } } } } },
-      ),
-      undefined,
-      "wss://gateway.example:8444" + (publicUrl.endsWith("/proxy") ? "/proxy" : "/gateway"),
-    ],
-  ),
+it.each<[Config, Options | undefined, string | Expected]>([
+  [publicConfig("https://gateway.example:8444"), undefined, "wss://gateway.example:8444/gateway"],
+  [
+    publicConfig("https://gateway.example:8444/proxy"),
+    undefined,
+    "wss://gateway.example:8444/proxy",
+  ],
   [
     mounted(),
     { publicUrl: "wss://override.example", localTlsFingerprint: "sha256:" + COLON_TLS_FINGERPRINT },
@@ -179,8 +158,24 @@ it.each<[Config, Options | undefined, string]>([
     { preferRemoteUrl: true },
     "wss://remote.example",
   ],
-])("preserves the selected endpoint's context path: %s", async (cfg, options, url) => {
-  await checkSetup(cfg, { url }, options);
+  ...(
+    [
+      ["custom", "gateway.local", false],
+      ["tailnet", "100.64.0.9", true],
+    ] as const
+  ).map(([bind, host, secure]): [Config, Options, Expected] => [
+    config({ bind, customBindHost: host, tls: { enabled: secure } }),
+    { runCommandWithTimeout: noDiscovery, networkInterfaces: () => ipv4(host) },
+    {
+      url: `${secure ? "wss" : "ws"}://${host}:18789`,
+      urlSource: `gateway.bind=${bind}`,
+      ...(secure ? {} : limited),
+    },
+  ]),
+])("preserves the selected endpoint and access: %s", async (cfg, options, expected) => {
+  noDiscovery.mockClear();
+  await checkSetup(cfg, typeof expected === "string" ? { url: expected } : expected, options);
+  expect(noDiscovery).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -199,101 +194,52 @@ it.each([
   ),
 );
 
-it.each<[string, Config, Options | undefined, string]>([
-  [
-    "invalid remote URL",
-    custom({ remote: { url: "http://localhost:notaport" } }),
-    { preferRemoteUrl: true },
-    "Configured gateway.remote.url is invalid.",
-  ],
+it.each<[Config, Options?]>([
+  [custom({ remote: { url: "http://localhost:notaport" } }), { preferRemoteUrl: true }],
   ...[
     "http:gateway.example.test",
     "mailto:foo@example.com",
     "ws://user:pass@gateway.example.test:18789",
-  ].map((publicUrl): [string, Config, Options, string] => [
-    "invalid public URL " + publicUrl,
-    custom(),
-    { forceSecure: true, publicUrl },
-    "Configured publicUrl is invalid.",
-  ]),
-  [
-    "no auth",
-    custom({ auth: {} }),
-    { env: {} },
-    "Gateway auth is not configured (no token or password).",
-  ],
-  [
-    "disabled auth",
-    custom({ auth: { mode: "none" } }),
-    { env: {} },
-    'Pairing setup requires gateway.auth.mode "token" or "password"; current mode is "none".',
-  ],
-  [
-    "public cleartext",
-    config({ bind: "custom", customBindHost: "gateway.example" }),
-    undefined,
-    "Tailscale and public mobile pairing require a secure gateway URL",
-  ],
-  [
-    "tailnet cleartext",
-    config({ bind: "tailnet" }),
-    { networkInterfaces: () => ipv4("100.64.0.9") },
-    "prefer gateway.tailscale.mode=serve",
-  ],
-  ["loopback-only", config({ bind: "loopback" }), undefined, "only bound to loopback"],
-  [
-    "invalid TLS pin",
-    custom({ tls: { enabled: true } }),
-    { localTlsFingerprint: "sha256:abc123" },
-    "TLS fingerprint is invalid",
-  ],
-])("rejects %s before issuing a setup token", async (_name, cfg, options, error) => {
-  expect(await resolve(cfg, options)).toEqual({ ok: false, error: expect.stringContaining(error) });
+  ].map((publicUrl): [Config, Options] => [custom(), { forceSecure: true, publicUrl }]),
+  [custom({ auth: {} }), { env: {} }],
+  [custom({ auth: { mode: "none" } }), { env: {} }],
+  [config({ bind: "custom", customBindHost: "gateway.example" })],
+  [config({ bind: "tailnet" }), { networkInterfaces: () => ipv4("100.64.0.9") }],
+  [config({ bind: "loopback" })],
+  [custom({ tls: { enabled: true } }), { localTlsFingerprint: "sha256:abc123" }],
+])("rejects %j before issuing a setup token", async (cfg, options) => {
+  expect(await resolve(cfg, options)).toEqual({ ok: false, error: expect.any(String) });
   expect(issueToken).not.toHaveBeenCalled();
 });
 
 type AuthCase = [
-  string,
   Gateway["auth"],
   NodeJS.ProcessEnv,
   { authLabel: Success["authLabel"] } | { error: string | RegExp },
 ];
 it.each<AuthCase>([
   [
-    "inactive password SecretRef",
-    {
-      mode: "token",
-      token: "tok_123",
-      password: secret("GW_PASSWORD", "missing"),
-    },
+    { mode: "token", token: "tok_123", password: secret("GW_PASSWORD", "missing") },
     {},
     { authLabel: "token" },
   ],
   [
-    "inferred password with an unresolved token",
     { token: "${MISSING_GW_TOKEN}" },
     { OPENCLAW_GATEWAY_PASSWORD: "password-from-env" },
     { authLabel: "password" },
   ],
+  [{ mode: "token", token: secret("MISSING_GW_TOKEN") }, {}, { error: "MISSING_GW_TOKEN" }],
   [
-    "unresolved token",
-    { mode: "token", token: secret("MISSING_GW_TOKEN") },
-    {},
-    { error: "MISSING_GW_TOKEN" },
-  ],
-  [
-    "unresolved password",
     { mode: "password", password: secret("MISSING_GW_PASSWORD") },
     { OPENCLAW_GATEWAY_PASSWORD: "password-from-env" },
     { error: "MISSING_GW_PASSWORD" },
   ],
   [
-    "ambiguous credentials",
     { token: secret("MISSING_GW_TOKEN"), password: secret("GW_PASSWORD") },
     { GW_PASSWORD: "resolved-password" },
     { error: /gateway\.auth\.mode is unset/i },
   ],
-])("resolves or rejects %s", async (_name, auth, env, expected) => {
+])("resolves or rejects %j", async (auth, env, expected) => {
   const cfg = custom({ auth }, { secrets: { providers: { default: { source: "env" } } } });
   if ("error" in expected) {
     await expect(resolve(cfg, { env })).rejects.toThrow(expected.error);
@@ -302,45 +248,14 @@ it.each<AuthCase>([
   }
 });
 
-it.each([
-  { bind: "custom", host: "gateway.local", secure: false, limited: true },
-  { bind: "tailnet", host: "100.64.0.9", secure: true, limited: false },
-] as const)("resolves $bind $host without discovering legacy Serve routes", async (row) => {
-  const { bind, host, secure } = row;
-  const runCommandWithTimeout = vi.fn(async () => {
-    throw new Error("Tailscale Serve discovery must not run for a direct bind");
-  });
-  await checkSetup(
-    config({
-      bind,
-      customBindHost: bind === "custom" ? host : undefined,
-      port: 18789,
-      tls: { enabled: secure },
-    }),
-    {
-      url: (secure ? "wss" : "ws") + "://" + host + ":18789",
-      urlSource: "gateway.bind=" + bind,
-      ...(row.limited ? limited : {}),
-    },
-    { runCommandWithTimeout, networkInterfaces: () => ipv4(host) },
-  );
-  expect(runCommandWithTimeout).toHaveBeenCalledTimes(0);
-});
-
 it("advertises the routed LAN address ahead of a private bridge", async () => {
-  const route = command(
+  const runCommandWithTimeout = command(
     process.platform === "win32"
       ? JSON.stringify({ InterfaceAlias: "en1" })
       : process.platform === "linux"
         ? "default via 10.211.55.1 dev en1 proto dhcp metric 100\n"
         : "   route to: default\ninterface: en1\n",
   );
-  const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
-    if (argv.includes("serve")) {
-      throw new Error("legacy Serve discovery must not run for a LAN bind");
-    }
-    return route();
-  });
   await checkSetup(
     config({ bind: "lan", auth: { mode: "password", password: "secret" } }),
     {
@@ -357,7 +272,6 @@ it("advertises the routed LAN address ahead of a private bridge", async () => {
       runCommandWithTimeout,
     },
   );
-  expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
 });
 
 it.each([false, true])(

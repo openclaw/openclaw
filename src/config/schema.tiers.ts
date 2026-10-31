@@ -5,7 +5,7 @@ import { asSchemaObject, type ConfigJsonSchemaObject } from "./schema.shared.js"
 const ROOT_TIER_PATHS = `
 accessGroups acp agents approvals attachments auth bindings broadcast browser channels
 cloudWorkers commands cron database desktop diagnostics discovery env gateway hooks logging mcp memory messages
-meta models nodeHost plugins proxy secrets security session skills storage surfaces talk telemetry tools transcripts
+meta models nodeHost plugins proxy repositoryBranchPrefix secrets security session skills storage surfaces talk telemetry tools transcripts
 tts ui update wizard worktreeAcceleration worktreeMaxCount worktreeRoot
 `
   .trim()
@@ -21,7 +21,7 @@ bindings commands messages session
 acp.allowedAgents
 agents.defaults.elevatedDefault agents.defaults.embeddedAgent.projectSettingsPolicy
 agents.defaults.fastModeDefault
-agents.defaults.compaction.memoryFlush.model agents.defaults.compaction.model
+agents.defaults.compaction.model
 agents.defaults.imageModel.primary agents.defaults.model
 agents.defaults.mediaModels agents.defaults.model.primary agents.defaults.modelPolicy.allow
 agents.defaults.pdfModel.primary agents.defaults.sandbox.browser.enabled

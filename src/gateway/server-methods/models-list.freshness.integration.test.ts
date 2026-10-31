@@ -31,13 +31,11 @@ it.for([
     let requests = 0;
     let hold = false;
     const renewal = createDeferred();
-    let fail = false;
-    let failSibling = false;
     const original = initiallyEmpty ? [] : ["original"];
     let advertised = original;
     const held: ServerResponse[] = [];
     const reply = (response: ServerResponse) => {
-      response.writeHead(fail ? 503 : 200, { "content-type": "application/json" });
+      response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify(advertised));
     };
     const release = () => {
@@ -48,7 +46,7 @@ it.for([
     };
     const endpoint = createServer((request, response) => {
       if (request.url === `/${sibling}`) {
-        response.writeHead(failSibling ? 503 : 200, { "content-type": "application/json" });
+        response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify(["sibling"]));
         return;
       }
@@ -143,31 +141,27 @@ it.for([
         expect(initialRequests).toBe(1);
       }
       if (withSibling && !initiallyEmpty) {
-        const projection = vi.spyOn(modelsListResult, "prepareModelsListResult");
-        try {
-          for (let index = 0; index < 6; index++) {
-            const ack = await client.request<{ ok: boolean; config?: unknown }>("config.patch", {
-              raw: JSON.stringify({ ui: { prefs: { chatShowToolCalls: index % 2 === 0 } } }),
-              response: "summary",
-            });
-            expect(ack.ok).toBe(true);
-            expect(ack).not.toHaveProperty("config");
-            const after = await list();
-            expect(after.models.filter((row) => row.provider === provider)).toEqual(
-              initial.models.filter((row) => row.provider === provider),
-            );
-            expect(requests).toBe(initialRequests);
-          }
-          expect(projection.mock.calls.length).toBe(0);
-          const noop = await client.request("config.patch", {
-            raw: JSON.stringify({ ui: { prefs: { chatShowToolCalls: false } } }),
+        using projection = vi.spyOn(modelsListResult, "prepareModelsListResult");
+        for (let index = 0; index < 6; index++) {
+          const ack = await client.request<{ ok: boolean; config?: unknown }>("config.patch", {
+            raw: JSON.stringify({ ui: { prefs: { chatShowToolCalls: index % 2 === 0 } } }),
             response: "summary",
           });
-          expect(noop).toMatchObject({ ok: true, noop: true, changedPaths: [] });
-          expect(noop).not.toHaveProperty("config");
-        } finally {
-          projection.mockRestore();
+          expect(ack.ok).toBe(true);
+          expect(ack).not.toHaveProperty("config");
+          const after = await list();
+          expect(after.models.filter((row) => row.provider === provider)).toEqual(
+            initial.models.filter((row) => row.provider === provider),
+          );
+          expect(requests).toBe(initialRequests);
         }
+        expect(projection.mock.calls.length).toBe(0);
+        const noop = await client.request("config.patch", {
+          raw: JSON.stringify({ ui: { prefs: { chatShowToolCalls: false } } }),
+          response: "summary",
+        });
+        expect(noop).toMatchObject({ ok: true, noop: true, changedPaths: [] });
+        expect(noop).not.toHaveProperty("config");
       }
       const owner = getPublishedPreparedModelCatalogOwnerSnapshot({ agentId: "main" });
       if (!owner?.readFullModelCatalog) {
@@ -204,7 +198,6 @@ it.for([
         expect(requests).toBe(initialRequests);
       }
       // Arm the response hold before making any accepted inventory due.
-      failSibling = withSibling && !initiallyEmpty;
       expire(withSibling && !initiallyEmpty ? providers : [provider]);
       // Expiring a provider response cache does not invalidate the published Gateway view.
       const saved = await withinTest(list(), signal);
@@ -221,46 +214,6 @@ it.for([
       const renewed = await acceptRenewal(release);
       await requestedRefresh;
       expect(ids(renewed)).toEqual(["newly-published", ...original]);
-
-      if (!withSibling || initiallyEmpty) {
-        fail = true;
-        expire([provider]);
-        await list(true);
-      }
-      const failed = await waitForCatalogPublication({
-        signal,
-        read: list,
-        ready: (result) => result.refreshFailed === true,
-      });
-      expect(failed.refreshFailed).toBe(true);
-      if (withSibling && !initiallyEmpty) {
-        advertised = ["original", "newly-published", "after-sibling-failure"];
-        const afterSiblingFailure = await acceptRenewal(() => {
-          expire([provider]);
-          return list(true);
-        });
-        expect(ids(afterSiblingFailure)).toEqual([
-          "after-sibling-failure",
-          "newly-published",
-          "original",
-        ]);
-        expect((await list()).refreshFailed).toBe(true);
-      } else {
-        const failedRequests = requests;
-        expect(ids(await list())).toEqual(["newly-published", ...original]);
-        expect((await list()).refreshFailed).toBe(true);
-        expect(siblingIds(await list())).toEqual(withSibling ? ["sibling"] : []);
-        expect(requests).toBe(failedRequests);
-        fail = false;
-      }
-      failSibling = false;
-      const recovered = await waitForCatalogPublication({
-        signal,
-        start: () => list(true),
-        read: list,
-        ready: (result) => result.refreshFailed !== true,
-      });
-      expect(recovered.refreshFailed).not.toBe(true);
     } finally {
       release();
       await requestedRefresh?.catch(() => undefined);

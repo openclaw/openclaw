@@ -5,6 +5,10 @@ import { FailoverReasonSchema } from "./failover-reason.js";
 import { withSince } from "./since.js";
 import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "./worker-computer.js";
 import {
+  WORKER_EXEC_APPROVAL_METHOD,
+  WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
+} from "./worker-exec-approval-schemas.js";
+import {
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOL_METHODS,
   WorkerToolSurfaceSchema,
@@ -29,6 +33,7 @@ import {
   workerRequestSchema,
   workerResponseSchema,
 } from "./worker-protocol-primitives.js";
+import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "./worker-turn-admission.js";
 
 export * from "./worker-session-tools.js";
 export {
@@ -54,6 +59,7 @@ export const WORKER_PROTOCOL_METHODS = [
   "worker.transcript.commit",
   "worker.live-event",
   "worker.computer",
+  WORKER_EXEC_APPROVAL_METHOD,
   WORKER_GATEWAY_TOOL_METHODS.invoke,
   WORKER_GATEWAY_TOOL_METHODS.cancel,
 ] as const;
@@ -64,10 +70,13 @@ export const WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE = "worker-execution-conte
 export const WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE = "worker-execution-authority-v1";
 export const WORKER_LINEAGE_START_PROTOCOL_FEATURE = "worker-lineage-start-v1";
 export const WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE = "worker-native-process-owner-v1";
+// V1 workers couple an inherited native owner to Linux subreaper ownership.
+export const WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE = "worker-native-process-owner-v2";
 export const NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE = "node-worker-idle-retention-v1";
 export const NODE_WORKER_PROCESS_CHANGES_PROTOCOL_FEATURE = "node-worker-process-changes-v1";
 export const WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE = "worker-local-inference-v1";
 export const WORKER_PROTOCOL_FEATURES = [
+  WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
   WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE,
   "skill-resources-v1",
   "worker-heartbeat-v1",
@@ -80,9 +89,11 @@ export const WORKER_PROTOCOL_FEATURES = [
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
   WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
+  WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE,
   NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
   NODE_WORKER_PROCESS_CHANGES_PROTOCOL_FEATURE,
   WORKER_COMPUTER_PROTOCOL_FEATURE,
+  WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   "worker-inference-v1",
 ] as const;

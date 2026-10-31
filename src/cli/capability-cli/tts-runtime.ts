@@ -13,6 +13,7 @@ import { isLoopbackHost } from "../../gateway/net.js";
 import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../../tts/provider-registry.js";
 import type { TtsResult } from "../../tts/tts-runtime-types.js";
+import { updateTtsPrefsAsync } from "../../tts/tts-settings-write-worker.js";
 import { resolveTtsPersonaList } from "../../tts/tts-settings.js";
 import {
   getTtsProviderAsync,
@@ -21,9 +22,6 @@ import {
   resolveExplicitTtsOverridesAsync,
   resolveTtsConfig,
   resolveTtsPrefsPathAsync,
-  setTtsEnabled,
-  setTtsPersona,
-  setTtsProvider,
   textToSpeech,
 } from "../../tts/tts.js";
 import { getTtsCommandSecretTargetIds } from "../command-secret-targets.js";
@@ -341,12 +339,12 @@ export async function runTtsStateMutation(params: {
   const prefsPath = await resolveTtsPrefsPathAsync(config);
   if (params.capability === "tts.enable" || params.capability === "tts.disable") {
     const enabled = params.capability === "tts.enable";
-    setTtsEnabled(prefsPath, enabled);
+    await updateTtsPrefsAsync(prefsPath, { auto: enabled ? "always" : "off" });
     return { enabled };
   }
   if (params.capability === "tts.set-persona") {
     if (!params.persona) {
-      setTtsPersona(prefsPath, null);
+      await updateTtsPrefsAsync(prefsPath, { persona: null });
       return { persona: null };
     }
     const persona = listTtsPersonas(config).find(
@@ -355,7 +353,7 @@ export async function runTtsStateMutation(params: {
     if (!persona) {
       throw new Error(`Unknown TTS persona: ${params.persona}`);
     }
-    setTtsPersona(prefsPath, persona.id);
+    await updateTtsPrefsAsync(prefsPath, { persona: persona.id });
     return { persona: persona.id };
   }
   if (!params.provider) {
@@ -365,6 +363,6 @@ export async function runTtsStateMutation(params: {
   if (!provider) {
     throw new Error(`Unknown speech provider: ${params.provider}`);
   }
-  setTtsProvider(prefsPath, provider);
+  await updateTtsPrefsAsync(prefsPath, { provider });
   return { provider };
 }

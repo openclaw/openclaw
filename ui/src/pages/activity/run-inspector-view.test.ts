@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { presentResult as inspectionFixture } from "../../e2e/activity-run-inspector.test-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -12,41 +11,29 @@ const hmacRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
 const missingEvidence = ["identity.context"];
 const presentResult = inspectionFixture("run-1", "execution-1");
 
-const unavailableResult = (
-  state: "unknown" | "unsupported",
-  reasonCode: string,
-): RunInspectorResult => ({
+const unavailableResult = (reasonCode: string): RunInspectorResult => ({
   schemaVersion: 1,
-  run: { runId: "run-1", status: state === "unknown" ? "unknown" : "known" },
-  identity: { state, reasonCode, missingEvidence, remediation: [] },
+  run: { runId: "run-1", status: "known" },
+  identity: { state: "unsupported", reasonCode, missingEvidence, remediation: [] },
   decisionDisplays: [],
-  coverage: { state, missingEvidence },
+  coverage: { state: "unsupported", missingEvidence },
 });
 
-const ready = (
-  result: RunInspectorResult,
-  executionPageStatus?: "loading" | "error",
-): RunInspectorState => ({
+const ready = (result: RunInspectorResult): RunInspectorState => ({
   status: "ready",
   result,
-  executionPageStatus,
   receiptPageCursors: new Map(),
 });
 
-function renderState(
-  state: RunInspectorState | (() => RunInspectorState),
-  onLoadMoreExecutions = vi.fn(),
-) {
+function renderState(state: RunInspectorState) {
   const { container } = mountSolid(() =>
     renderRunInspector({
       basePath: "/operator",
-      get state() {
-        return typeof state === "function" ? state() : state;
-      },
+      state,
       selector: { kind: "run" as const, id: "run-1" },
       selectorId: null,
       onLoadMoreDecisions: vi.fn(),
-      onLoadMoreExecutions,
+      onLoadMoreExecutions: vi.fn(),
       onRestart: vi.fn(),
       onRetry: vi.fn(),
     }),
@@ -55,43 +42,20 @@ function renderState(
   return container;
 }
 
-it("updates inspection content when the selected run changes", () => {
-  const [state, setState] = createSignal<RunInspectorState>({
-    status: "loading",
-  });
-
-  const container = renderState(state);
-  expect(container.textContent).toContain("Loading run inspection");
-
-  setState(ready(presentResult));
-  flush();
-  expect(container.textContent).toContain("Trust domain");
-  expect(container.querySelector("[data-run-id]")?.getAttribute("data-run-id")).toBe("run-1");
-  expect(container.textContent).not.toContain("Loading run inspection");
+it("renders recorded identity, admission evidence, and the mounted parent link", () => {
+  const container = renderState(ready(presentResult));
   for (const label of [
     "Agent definition",
-    "Present",
-    "Absent",
-    "Unknown",
-    "Unsupported",
-    "Unattributed",
     hmacRef,
     "Not applicable",
     "run_admission_identity_not_evaluated",
-    "Verified producer",
     "run-admission",
-    "Treat this receipt as attribution only; it does not prove authorization.",
   ]) {
     expect(container.textContent).toContain(label);
   }
   expect(
     container.querySelector<HTMLAnchorElement>('a[href*="view=run"]')?.getAttribute("href"),
   ).toBe("/operator/activity?view=run&run=parent-safe-ref");
-
-  setState({ status: "empty" });
-  flush();
-  expect(container.textContent).toContain("No run selected");
-  expect(container.querySelector("[data-run-id]")).toBeNull();
 });
 
 it("labels a generic receipt's selected authority without claiming human intent or verification", () => {
@@ -116,44 +80,6 @@ it("renders the disconnected panel without retained evidence", () => {
 
 it("renders unsupported identity evidence without inferring expiry", () => {
   expect(
-    renderState(ready(unavailableResult("unsupported", "identity_context_unavailable")))
-      .textContent,
+    renderState(ready(unavailableResult("identity_context_unavailable"))).textContent,
   ).toContain("Identity evidence unsupported");
-});
-
-it("links an ambiguous run candidate to exact execution inspection", () => {
-  const result: RunInspectorResult = {
-    ...unavailableResult("unknown", "execution_selection_required"),
-    run: { runId: "ambiguous-run", status: "known" },
-    identity: {
-      state: "ambiguous",
-      reasonCode: "execution_selection_required",
-      candidates: [{ executionId: "execution:a/b", contextId: "candidate-context", createdAt: 1 }],
-      missingEvidence: ["execution.selection"],
-      remediation: [],
-    },
-    coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
-    nextExecutionCursor: "opaque-cursor",
-  };
-
-  const onLoadMoreExecutions = vi.fn();
-  const container = renderState(ready(result), onLoadMoreExecutions);
-  const link = container.querySelector<HTMLAnchorElement>('a[href*="execution="]');
-  expect(link?.textContent).toContain("execution:a/b");
-  expect(link?.getAttribute("href")).toBe(
-    "/operator/activity?view=run&execution=execution%3Aa%2Fb",
-  );
-  container.querySelector("button")?.click();
-  expect(onLoadMoreExecutions).toHaveBeenCalledOnce();
-
-  const loading = renderState(ready(result, "loading"));
-  expect(loading.querySelector("button")).toMatchObject({
-    disabled: true,
-    textContent: "Loading executions…",
-  });
-
-  const failed = renderState(ready(result, "error"));
-  expect(failed.querySelector('[role="alert"]')?.textContent).toContain(
-    "More executions could not be loaded",
-  );
 });

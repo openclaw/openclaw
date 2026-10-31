@@ -17,6 +17,7 @@ import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-worker-runtim
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { recordMemorySessionTombstonesInDatabase } from "../memory-session-tombstones.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
+import { registerPublicationBatchTests } from "./manager-publication-batch.test-helpers.js";
 import {
   memoryEmbeddingCacheBatches,
   memoryPublicationBatches,
@@ -315,6 +316,12 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
         }),
       ).toMatchObject({ ok: true, value: false, facts: { revision: revision + 4 } });
     }));
+
+  registerPublicationBatchTests(
+    { pg, replacement, state, metadata },
+    () => backend,
+    (value) => (denyCommit = value),
+  );
 
   it("preserves fragment order across the PostgreSQL bind-parameter limit", () =>
     admitted(() => {

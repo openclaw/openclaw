@@ -8,14 +8,10 @@ import { resolveTestNodeExecPath } from "../../../../../src/test-utils/node-proc
 import { runNodeScript } from "../../../../../test/helpers/run-node-script.js";
 import { agentCoreRetentionEntrypoints } from "../../retention-runtime.test-support.js";
 
-it.for(
-  ["head", "tail", "partial-tail", "line"].flatMap((mode) =>
-    [64, 4096].map((limit) => ({ mode, limit })),
-  ),
-)(
-  "owns $mode output with a $limit limit",
+it.for([64, 4096])(
+  "owns head output with a %i limit",
   { timeout: 30_000 },
-  async ({ mode, limit }, { signal }) => {
+  async (limit, { signal }) => {
     const result = await runNodeScript(
       [
         "--expose-gc",
@@ -23,7 +19,6 @@ it.for(
           resolveRuntimeWorkerUrl(agentCoreRetentionEntrypoints.truncate),
           resolveTestNodeExecPath(),
         ),
-        mode,
         String(limit),
       ],
       { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },

@@ -167,7 +167,8 @@ export function resolveNodeServiceIdentityEnvironment(
     OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(profile),
     OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
     OPENCLAW_TASK_SCRIPT_NAME: NODE_WINDOWS_TASK_SCRIPT_NAME,
-    OPENCLAW_LOG_PREFIX: "node",
+    // launchd writes every node's supervisor logs to one ~/Library/Logs/openclaw.
+    OPENCLAW_LOG_PREFIX: `node${resolveGatewayProfileSuffix(profile)}`,
     OPENCLAW_SERVICE_MARKER: NODE_SERVICE_MARKER,
     OPENCLAW_SERVICE_KIND: NODE_SERVICE_KIND,
   };

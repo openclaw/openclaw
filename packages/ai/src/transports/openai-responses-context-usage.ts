@@ -1,5 +1,5 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
-import { stableStringify } from "@openclaw/normalization-core";
+import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   responsesContinuationPrefixFingerprint,
@@ -16,10 +16,8 @@ import {
   isProviderReplayContext,
   providerReplayContextMatches,
 } from "./provider-replay-context.js";
-import { sha256Hex } from "./transport-utils.js";
 
 type ReplayIdentity = NonNullable<Parameters<typeof buildProviderReplayContext>[1]>;
-type Projection = "transport" | "provider";
 
 function contextFingerprint(input: readonly unknown[], output: readonly unknown[] = []): string {
   // Continuation normalizes provider output into replayable input. Context accounting
@@ -31,9 +29,10 @@ function contextFingerprint(input: readonly unknown[], output: readonly unknown[
     const { id: _id, status: _status, ...content } = item;
     return [content];
   });
-  return sha256Hex(
-    stableStringify({ prefix: responsesContinuationPrefixFingerprint(input, output), reasoning }),
-  );
+  return sha256StableValue({
+    prefix: responsesContinuationPrefixFingerprint(input, output),
+    reasoning,
+  }).digest;
 }
 
 /** Bind measured usage to the admitted replay prefix, without copying its content. */
@@ -43,7 +42,7 @@ export function recordResponsesContextUsage(
   identity: ReplayIdentity | undefined,
   request: ResponsesContinuationRequest,
   output: readonly unknown[],
-  projection: Projection,
+  projection: "transport" | "provider",
 ): void {
   const usage = message.usage.contextUsage;
   if (

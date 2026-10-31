@@ -67,8 +67,10 @@ export function createSessionActivity(notify: () => void) {
     | {
         controller: AbortController;
         completion: ReturnType<typeof createDeferredCore<void>>;
+        presentation: ReturnType<typeof createDeferredCore<void>>;
       }
     | undefined;
+  let read: { promise: Promise<void> } | undefined;
   let summaryPending: AbortController | undefined;
   const summaryAttempts = new Map<string, string>();
   const summaryRetries = new Set<string>();
@@ -118,6 +120,7 @@ export function createSessionActivity(notify: () => void) {
     clearTimeout(bucketRollover);
     bucketRollover = undefined;
     eventRefresh.reset();
+    pendingRequest?.presentation.resolve();
     pendingRequest?.controller.abort();
     pendingRequest = undefined;
     resetSummaries();
@@ -129,6 +132,7 @@ export function createSessionActivity(notify: () => void) {
 
   function resetQuery(): void {
     suspendRequests();
+    read = undefined;
     incomplete = false;
     currentError = undefined;
     currentClient = null;
@@ -389,7 +393,9 @@ export function createSessionActivity(notify: () => void) {
           }
         }
         if (!requiresRefresh && !incomplete && !changesOverflowed) {
-          eventRefresh.scheduleFallback();
+          if (currentFilters !== "current") {
+            eventRefresh.scheduleFallback();
+          }
           return;
         }
       }
@@ -478,10 +484,18 @@ export function createSessionActivity(notify: () => void) {
       void ensureSummaries();
       return Promise.resolve();
     }
+    pendingRequest?.presentation.resolve();
     pendingRequest?.controller.abort();
     eventRefresh.absorb();
-    const pending = { controller: new AbortController(), completion: createDeferredCore() };
+    const pending = {
+      controller: new AbortController(),
+      completion: createDeferredCore(),
+      presentation: createDeferredCore(),
+    };
     pendingRequest = pending;
+    read = pending.presentation;
+    // The owner can finish while no view is mounted; a later reader still sees the rejection.
+    void read.promise.catch(() => undefined);
     currentClient = client;
     currentQueryKey = queryKey;
     currentFilters = filters;
@@ -531,6 +545,7 @@ export function createSessionActivity(notify: () => void) {
             incomplete = false;
           }
           currentError = error instanceof Error ? error.message : String(error);
+          pending.presentation.reject(error);
         }
       })
       .finally(() => {
@@ -541,6 +556,7 @@ export function createSessionActivity(notify: () => void) {
           notify();
         }
         pending.completion.resolve();
+        pending.presentation.resolve();
       });
     return pending.completion.promise;
   }
@@ -556,6 +572,9 @@ export function createSessionActivity(notify: () => void) {
     return connected && (requestState !== "idle" || incomplete);
   }
   return {
+    get read() {
+      return read;
+    },
     get result() {
       return currentResult;
     },

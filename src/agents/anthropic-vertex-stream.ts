@@ -6,19 +6,17 @@ import type { StreamFn } from "@openclaw/llm-core";
  */
 import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-runtime.js";
 
-type AnthropicVertexStreamFacade = {
-  createAnthropicVertexStreamFnForModel: (
-    model: { baseUrl?: string },
-    env?: NodeJS.ProcessEnv,
-  ) => StreamFn;
-};
-
 /** Creates an Anthropic Vertex stream function through the bundled provider facade. */
 export function createAnthropicVertexStreamFnForModel(
   model: { baseUrl?: string },
   env: NodeJS.ProcessEnv = process.env,
 ): StreamFn {
-  return loadBundledPluginPublicSurfaceModuleSync<AnthropicVertexStreamFacade>({
+  return loadBundledPluginPublicSurfaceModuleSync<{
+    createAnthropicVertexStreamFnForModel: (
+      model: { baseUrl?: string },
+      env?: NodeJS.ProcessEnv,
+    ) => StreamFn;
+  }>({
     dirName: "anthropic-vertex",
     artifactBasename: "api.js",
   }).createAnthropicVertexStreamFnForModel(model, env);

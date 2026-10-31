@@ -108,14 +108,14 @@ export function projectCodexCatalogMessage(
       );
       message.result = page;
       if (!cachedPreview) {
-        const states = Array.isArray(raw.data)
-          ? raw.data
-              .slice(0, page.data.length)
-              .map((row) =>
-                isJsonObject(row) && typeof row.preview === "string"
-                  ? Boolean(row.preview)
-                  : undefined,
-              )
+        const rows = raw.data;
+        const states = Array.isArray(rows)
+          ? page.data.map((_, index) => {
+              const row = rows[index];
+              return isJsonObject(row) && typeof row.preview === "string"
+                ? Boolean(row.preview)
+                : undefined;
+            })
           : [];
         result.preview = { rows: page.data, states };
       }

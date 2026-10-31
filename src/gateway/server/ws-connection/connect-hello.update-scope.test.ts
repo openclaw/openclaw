@@ -448,11 +448,12 @@ describe("sendGatewayHello update detail scope", () => {
     async (withdrawal) => {
       const gatewayMethods = ["health", "config.get"];
       const exited = createDeferredCore();
-      tailscaleClaim.mockResolvedValue({
+      tailscaleClaim.mockResolvedValueOnce({
         exited: exited.promise,
         isActive: () => true,
         stop: vi.fn(),
       });
+      tailscaleClaim.mockRejectedValue(new Error("Tailscale daemon unavailable"));
       const cleanup = await startGatewayTailscaleExposure({
         tailscaleMode: "serve",
         port: 18789,
@@ -643,6 +644,27 @@ describe("sendGatewayHello update detail scope", () => {
     }
   });
 
+  it.each([
+    [{ controlUi: { basePath: "/__openclaw__/" } }, "/__openclaw__"],
+    [{ controlUi: { basePath: "/" } }, undefined],
+    [{ controlUi: { enabled: false, basePath: "/__openclaw__" } }, undefined],
+  ])(
+    "advertises the Control UI mount path without a public origin: %j",
+    async (gateway, basePath) => {
+      const context = makeContext("operator", ["operator.read"]);
+      context.configSnapshot = { gateway };
+      await sendGatewayHello(
+        context as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
+      expect(helloPayload(context)?.controlUiBasePath).toBe(basePath);
+      if (basePath === undefined) {
+        expect(helloPayload(context)).not.toHaveProperty("controlUiBasePath");
+      }
+    },
+  );
+
   it("keeps hello projection and telemetry at effective scopes", async () => {
     const state = {
       ...makeState("operator", ["operator.pairing"]),
@@ -667,6 +689,7 @@ describe("sendGatewayHello update detail scope", () => {
       method: "none",
       role: "operator",
       scopes: ["operator.pairing"],
+      roleAllowsAdmin: true,
       recoveryMigrationAllowed: true,
       recoveryScope: expect.stringMatching(/^[A-Za-z0-9_-]+$/u),
       deviceToken: "paired-token",

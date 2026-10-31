@@ -10,9 +10,9 @@ import {
   runCrabboxCommand,
 } from "./crabbox-worker-command.js";
 import { WARM_IMAGE_COMMAND_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
-import type { WarmImageRecord } from "./crabbox-worker-warm-image-store.js";
+import type { WarmImageRecord } from "./crabbox-worker-warm-image-records.js";
 
-const CHECKPOINT_ID_PATTERN = /^chk_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
+export const CHECKPOINT_ID_PATTERN = /^chk_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 
 export class CrabboxCheckpointCreateError extends Error {
   private readonly notSubmitted?: { provider: string; leaseId: string };
@@ -173,7 +173,7 @@ function assertCurrent(context: CheckpointContext | MaintenanceContext) {
 
 export async function checkpointCommand(
   context: CheckpointContext,
-  action: "create" | "delete" | "fork" | "inspect" | "scrub",
+  action: "create" | "delete" | "fork" | "inspect" | "list" | "scrub",
   args: string[],
   timeoutMs = WARM_IMAGE_COMMAND_TIMEOUT_MS,
   input?: string,

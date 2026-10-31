@@ -5,7 +5,6 @@ import {
   installMockGateway,
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
-import { chatMessage } from "./chat-flow.test-support.ts";
 import { computedStyles } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { expectStyles } from "./style-contract.test-support.ts";
@@ -27,21 +26,15 @@ suite.define(() => {
           },
           { settingsKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl), textScale },
         );
-        const gateway = await installMockGateway(page, {
-          historyMessages: [
-            chatMessage("user", "Check the deployment checklist."),
-            chatMessage("assistant", "The checklist is ready for review."),
-          ],
-        });
+        const gateway = await installMockGateway(page, {});
         await page.goto(`${suite.server.baseUrl}chat`);
         await waitForControlUiGatewayReady(page);
-        await page.getByText("The checklist is ready for review.", { exact: true }).waitFor();
         await page.clock.install();
         await pauseVirtualClock(page);
         await gateway.setOnline(false);
         await page.clock.runFor(2_001);
         await gateway.closeLatest(1006, "synthetic failed attempt");
-        const status = page.locator(".sidebar-shell__footer .gateway-status");
+        const status = page.locator(".sidebar-shell__connection .gateway-status");
         const spinnerLocator = status.locator(".session-run-spinner");
         const labelLocator = status.locator(".gateway-status__label");
         await status.getByText("Reconnecting…", { exact: true }).waitFor();
@@ -128,6 +121,7 @@ suite.define(() => {
         await page.clock.resume();
         await waitForControlUiGatewayReady(page);
         await status.waitFor({ state: "detached" });
+        await spinnerLocator.waitFor({ state: "detached" });
       },
     ),
   );

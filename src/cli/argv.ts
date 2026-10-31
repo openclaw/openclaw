@@ -164,10 +164,8 @@ export function isSimpleCommandHelpInvocation(
   return commandSeen && helpSeen;
 }
 
-type HelpNormalizationPositional = { value: string; index: number };
-
 function scanHelpNormalizationArgv(argv: string[]) {
-  const positionals: HelpNormalizationPositional[] = [];
+  const positionals: { value: string; index: number }[] = [];
   const rootOptions: string[] = [];
   let helpFlagIndex: number | null = null;
   let literal = false;
@@ -291,21 +289,6 @@ export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
   return [runtimePath, entryPath, ...rootOptions, ...targetPath, "--help"];
 }
 
-type NormalizeRootNoColorArgvOptions = {
-  shouldPreserveNoColor?: (params: {
-    remainingArgs: readonly string[];
-    noColorIndex: number;
-  }) => boolean;
-};
-
-type NormalizeRootLogLevelArgvOptions = {
-  shouldPreserveLogLevel?: (params: {
-    remainingArgs: readonly string[];
-    logLevelIndex: number;
-    consumed: number;
-  }) => boolean;
-};
-
 function isPossibleCommandOptionValue(
   remainingArgs: readonly string[],
   optionIndex: number,
@@ -395,7 +378,12 @@ function normalizeRootOptionArgv(
 
 export function normalizeRootNoColorArgv(
   argv: string[],
-  options: NormalizeRootNoColorArgvOptions = {},
+  options: {
+    shouldPreserveNoColor?: (params: {
+      remainingArgs: readonly string[];
+      noColorIndex: number;
+    }) => boolean;
+  } = {},
 ): string[] {
   return normalizeRootOptionArgv(
     argv,
@@ -407,7 +395,13 @@ export function normalizeRootNoColorArgv(
 
 export function normalizeRootLogLevelArgv(
   argv: string[],
-  options: NormalizeRootLogLevelArgvOptions = {},
+  options: {
+    shouldPreserveLogLevel?: (params: {
+      remainingArgs: readonly string[];
+      logLevelIndex: number;
+      consumed: number;
+    }) => boolean;
+  } = {},
 ): string[] {
   return normalizeRootOptionArgv(
     argv,

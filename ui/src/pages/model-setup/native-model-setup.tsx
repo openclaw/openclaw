@@ -5,8 +5,10 @@ import {
   createSignal,
   Errored,
   isPending,
+  latest,
   Loading,
   onCleanup,
+  Show,
 } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
@@ -25,15 +27,8 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 import type { captureModelSetupConnection } from "./first-run-setup.ts";
+import { createModelSetupSaving } from "./model-setup-saving.ts";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
-
-type NativeModelSetupOptions = {
-  getContext: () => ApplicationContext;
-  getConnection: () => ReturnType<typeof captureModelSetupConnection> | null;
-  canUseSetup: (client: GatewayBrowserClient | null) => boolean;
-  blocked: () => boolean;
-  onSelected: () => void;
-};
 
 export type NativeModelSetup = ReturnType<typeof createNativeModelSetup>;
 
@@ -43,7 +38,14 @@ type NativeCatalogRequest = {
   result: Promise<ModelCatalogResult>;
 };
 
-export function createNativeModelSetup(options: NativeModelSetupOptions) {
+export function createNativeModelSetup(options: {
+  getContext: () => ApplicationContext;
+  getConnection: () => ReturnType<typeof captureModelSetupConnection> | null;
+  canUseSetup: (client: GatewayBrowserClient | null) => boolean;
+  blocked: () => boolean;
+  onSelected: () => void;
+  onChange: () => void;
+}) {
   const catalog = projectSource<NativeCatalogRequest | null, ReturnType<typeof readModelCatalog>>(
     null,
     {
@@ -64,10 +66,11 @@ export function createNativeModelSetup(options: NativeModelSetupOptions) {
   const [nativeModel, setNativeModel] = createSignal<string>((previous = "") =>
     nativeModels.some((model) => `${model.provider}/${model.id}` === previous) ? previous : "",
   );
-  const [nativeModelError, setNativeModelError] = createSignal<string | null>(null);
-  const [saving, setSaving] = createSignal(false);
+  const [nativeMutation, setNativeMutation] = createSignal<{ completion: Promise<null> }>();
+  const saving = createModelSetupSaving(options.getConnection);
   const [request, setRequest] = createSignal<NativeCatalogRequest | null>(null);
   let generation = 0;
+  let mutationActive = false;
   let nativeModelsAbort: AbortController | null = null;
   let nativeModelsUnsubscribe: (() => void) | null = null;
   const result = createMemo<ModelCatalogResult>(
@@ -75,18 +78,19 @@ export function createNativeModelSetup(options: NativeModelSetupOptions) {
   );
 
   function reset() {
+    saving.retire();
     generation += 1;
+    mutationActive = false;
     catalog.replaceSource(null);
     setRequest(null);
     setNativeModel("");
-    setNativeModelError(null);
-    setSaving(false);
+    setNativeMutation(undefined);
     nativeModelsAbort?.abort();
     nativeModelsAbort = null;
     nativeModelsUnsubscribe?.();
     nativeModelsUnsubscribe = null;
   }
-  async function useNativeModel(): Promise<void> {
+  function useNativeModel(): void {
     const connection = options.getConnection();
     const requestGeneration = generation;
     const isCurrent = () =>
@@ -102,47 +106,53 @@ export function createNativeModelSetup(options: NativeModelSetupOptions) {
       !options.canUseSetup(client) ||
       !agentId ||
       model?.available !== true ||
-      saving() ||
+      mutationActive ||
       options.blocked()
     ) {
       return;
     }
-    setSaving(true);
-    setNativeModelError(null);
+    mutationActive = true;
+    options.onChange();
     const modelRef = `${model.provider}/${model.id}`;
-    try {
-      const mutation = await context.runtimeConfig.runExternalMutation(
-        (mutationClient) =>
-          mutationClient.request("agents.update", {
-            agentId,
-            model: modelRef,
-            agentRuntime: model.agentRuntime?.id,
-          }),
-        {
-          canDispatch: () => isCurrent() && options.canUseSetup(client),
-        },
-      );
-      if (!isCurrent()) {
-        return;
+    const pending = (async () => {
+      try {
+        const mutation = await context.runtimeConfig.runExternalMutation(
+          (mutationClient) =>
+            mutationClient.request("agents.update", {
+              agentId,
+              model: modelRef,
+              agentRuntime: model.agentRuntime?.id,
+            }),
+          {
+            canDispatch: () => isCurrent() && options.canUseSetup(client),
+          },
+        );
+        if (!isCurrent()) {
+          return;
+        }
+        const outcome = mutation.ok ? mutation.refresh : mutation;
+        if (!outcome.ok) {
+          throw new Error(outcome.error);
+        }
+        await context.agents.refreshList();
+        if (isCurrent()) {
+          options.onSelected();
+        }
+      } catch (error) {
+        if (isCurrent()) {
+          throw error;
+        }
+      } finally {
+        if (isCurrent()) {
+          mutationActive = false;
+          options.onChange();
+        }
       }
-      const outcome = mutation.ok ? mutation.refresh : mutation;
-      if (!outcome.ok) {
-        setNativeModelError(outcome.error);
-        return;
-      }
-      await context.agents.refreshList();
-      if (isCurrent()) {
-        options.onSelected();
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        setNativeModelError(formatModelSetupError(error));
-      }
-    } finally {
-      if (isCurrent()) {
-        setSaving(false);
-      }
-    }
+    })();
+    const completion = saving.present(pending, isCurrent).then(() => null);
+    // The error boundary observes this completion; a retired view may no longer read it.
+    void completion.catch(() => {});
+    setNativeMutation({ completion });
   }
 
   function loadNativeModels(refresh: boolean): void {
@@ -180,7 +190,9 @@ export function createNativeModelSetup(options: NativeModelSetupOptions) {
     setRequest(read);
   }
 
+  // Retire the command owner's request, subscription, and pending mutation together.
   onCleanup(() => {
+    saving.retire();
     generation += 1;
     nativeModelsAbort?.abort();
     nativeModelsUnsubscribe?.();
@@ -189,13 +201,13 @@ export function createNativeModelSetup(options: NativeModelSetupOptions) {
     reset,
     models: () => nativeModels,
     selected: nativeModel,
-    modelError: nativeModelError,
+    mutation: nativeMutation,
     catalogPending: () => Boolean(catalog.read().pendingProviders?.length),
     result,
     request,
     setSelected: setNativeModel,
     blocked: options.blocked,
-    useModel: () => void useNativeModel(),
+    useModel: () => useNativeModel(),
     retry: () => loadNativeModels(true),
     open: () => {
       if (!nativeModelsAbort) {
@@ -206,7 +218,10 @@ export function createNativeModelSetup(options: NativeModelSetupOptions) {
       return nativeModels.length;
     },
     get saving() {
-      return saving();
+      return saving.saving() || mutationActive;
+    },
+    get active() {
+      return mutationActive;
     },
   };
 }
@@ -221,7 +236,7 @@ export function NativeModelSetupView(props: { owner: NativeModelSetup }) {
       value: `${model.provider}/${model.id}`,
       label: model.name,
       provider: model.provider,
-      detail:
+      description:
         model.available === true
           ? providerDisplayLabel(model.provider)
           : (chatModelUnavailableMessage(model.unavailableReason) ??
@@ -256,22 +271,20 @@ export function NativeModelSetupView(props: { owner: NativeModelSetup }) {
         label={t("modelSetup.nativeModels.choose")}
         value={props.owner.selected()}
         options={pickerOptions()}
-        disabled={props.owner.blocked() || props.owner.saving}
+        disabled={props.owner.saving || props.owner.blocked()}
         onChange={(value) => props.owner.setSelected(value)}
         onOpen={() => props.owner.open()}
       />
       <button
         class="btn primary"
-        disabled={props.owner.blocked() || props.owner.saving || selected()?.available !== true}
+        disabled={props.owner.saving || props.owner.blocked() || selected()?.available !== true}
         onClick={() => props.owner.useModel()}
       >
         {t(props.owner.saving ? "modelSetup.nativeModels.saving" : "modelSetup.nativeModels.use")}
       </button>
-      {props.owner.modelError() ? (
-        <div class="callout danger" role="alert">
-          {props.owner.modelError()}
-        </div>
-      ) : undefined}
+      <Show when={props.owner.mutation()} keyed>
+        {(mutation) => <NativeModelMutationStatus completion={mutation.completion} />}
+      </Show>
       <Errored
         fallback={(error) => (
           <NativeCatalogError
@@ -283,7 +296,7 @@ export function NativeModelSetupView(props: { owner: NativeModelSetup }) {
         <Loading on={props.owner.request()}>
           <NativeCatalogError
             owner={props.owner}
-            message={modelCatalogRefreshError(props.owner.result())}
+            message={modelCatalogRefreshError(latest(() => props.owner.result()))}
           />
         </Loading>
       </Errored>
@@ -314,7 +327,7 @@ function NativeCatalogError(props: { owner: NativeModelSetup; message: string | 
           <button
             class="btn btn--sm"
             type="button"
-            disabled={props.owner.blocked() || props.owner.saving}
+            disabled={props.owner.saving || props.owner.blocked()}
             onClick={() => props.owner.retry()}
           >
             {t("common.retry")}
@@ -322,6 +335,21 @@ function NativeCatalogError(props: { owner: NativeModelSetup; message: string | 
         </div>
       ) : undefined}
     </>
+  );
+}
+
+function NativeModelMutationStatus(props: { completion: Promise<null> }) {
+  const completion = createMemo(() => props.completion);
+  return (
+    <Errored
+      fallback={(error) => (
+        <div class="callout danger" role="alert">
+          {formatModelSetupError(error())}
+        </div>
+      )}
+    >
+      <Loading>{completion()}</Loading>
+    </Errored>
   );
 }
 

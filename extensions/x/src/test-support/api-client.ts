@@ -6,16 +6,35 @@ import { createXTestSpend } from "./spend.js";
 export type { XFetch } from "./fetch.js";
 
 export function createXTestApi(
-  options: Partial<Parameters<typeof createXApiClient>[0]> & { fetch: XFetch },
+  options: Partial<Parameters<typeof createXApiClient>[0]> & {
+    fetch: XFetch;
+    loadRefreshToken?: () => Promise<string | undefined>;
+    saveRefreshToken?: (token: string) => Promise<void>;
+  },
 ) {
-  const { fetch, ...apiOptions } = options;
+  const { fetch, loadRefreshToken, saveRefreshToken, ...apiOptions } = options;
+  let refreshToken = apiOptions.refreshToken ?? "refresh";
+  let loaded = false;
   setXTestFetch("api.x.com", fetch);
   return createXApiClient({
     spend: createXTestSpend(),
     clientId: "client",
     clientSecret: "secret",
     refreshToken: "refresh",
-    saveRefreshToken: async () => {},
+    claimRefreshToken: async () => {
+      if (!loaded) {
+        refreshToken = (await loadRefreshToken?.()) ?? refreshToken;
+        loaded = true;
+      }
+      return {
+        refreshToken,
+        commit: async (next) => {
+          await saveRefreshToken?.(next);
+          refreshToken = next;
+        },
+        restore: async () => {},
+      };
+    },
     ...apiOptions,
   });
 }

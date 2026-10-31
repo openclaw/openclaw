@@ -22,6 +22,7 @@ import type {
   ConfigHealthEntryChanges,
   ConfigHealthState,
   ConfigHealthSnapshot,
+  ConfigHealthUpdateResult,
 } from "./io.health-state.types.js";
 import { setBoundedConfigIoWarningEntry } from "./io.state.js";
 
@@ -116,11 +117,14 @@ export function patchConfigHealthEntryToStore(
 type ConfigHealthStateStore = {
   assertCurrent: () => void;
   read(): Promise<ConfigHealthSnapshot>;
-  update(changes: ConfigHealthEntryChanges, previous: ConfigHealthSnapshot): Promise<void>;
+  update(
+    changes: ConfigHealthEntryChanges,
+    previous: ConfigHealthSnapshot,
+  ): Promise<ConfigHealthUpdateResult>;
   updateAfterFileCommit(
     changes: ConfigHealthEntryChanges,
     previous: ConfigHealthSnapshot,
-  ): Promise<void>;
+  ): Promise<ConfigHealthUpdateResult>;
 };
 
 /** Bind one asynchronous observation/recovery to its original shared-state owner. */
@@ -171,7 +175,7 @@ export function captureConfigHealthStateStore(
         const reply = await executeExistingOpenClawStateRead(
           options,
           { type: "config.health.read", input: undefined },
-          { context: captured.context },
+          { context: captured.context, snapshotPreparation: "awaited" },
         );
         assertCurrent();
         const snapshot = reply?.snapshot ?? { state: {}, basis: {} };
@@ -187,11 +191,11 @@ export function captureConfigHealthStateStore(
         return { state, basis: null };
       }
     },
-    async update(changes: ConfigHealthEntryChanges, previous: ConfigHealthSnapshot): Promise<void> {
+    async update(changes, previous): Promise<ConfigHealthUpdateResult> {
       try {
         const patch = prepareConfigHealthPatch(changes);
         if (Object.keys(patch).length === 0) {
-          return;
+          return { status: "applied" };
         }
         if ("error" in captured) {
           throw captured.error;
@@ -210,7 +214,10 @@ export function captureConfigHealthStateStore(
         );
         if (applied) {
           loggedHealthWriteFailures.delete(databasePath);
+          return { status: "applied" };
         }
+        // A failed read supplies no comparison basis, not evidence of a CAS miss.
+        return { status: expected === undefined ? "unavailable" : "conflict" };
       } catch (error) {
         if (
           error instanceof OpenClawStateOwnershipError ||
@@ -220,14 +227,16 @@ export function captureConfigHealthStateStore(
         }
         assertCurrent();
         handleHealthWriteFailure(deps, databasePath, error);
+        return { status: "unavailable" };
       }
     },
-    async updateAfterFileCommit(changes, previous): Promise<void> {
+    async updateAfterFileCommit(changes, previous): Promise<ConfigHealthUpdateResult> {
       try {
-        await store.update(changes, previous);
+        return await store.update(changes, previous);
       } catch (error) {
         // Ownership and maintenance refusals still propagate after the file commits.
         handleHealthWriteFailure(deps, databasePath, error);
+        return { status: "unavailable" };
       }
     },
   };

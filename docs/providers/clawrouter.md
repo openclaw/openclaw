@@ -44,6 +44,8 @@ you only need an issued ClawRouter key.
     `plugins.allow`, add `clawrouter` to that list before enabling it. For a
     custom deployment, set `models.providers.clawrouter.baseUrl` to the
     ClawRouter origin; the default is `https://clawrouter.openclaw.ai`.
+    Live and retained model catalogs must come from that configured origin.
+    Static capability declarations remain scoped to their declared endpoints.
 
   </Step>
   <Step title="List granted models">
@@ -68,6 +70,23 @@ you only need an issued ClawRouter key.
 
   </Step>
 </Steps>
+
+## Utility model
+
+When `agents.defaults.utilityModel` is unset, a ClawRouter primary model uses a
+small model from the same vendor for short internal tasks such as titles,
+progress narration, Activity recaps, Side chat, and composer predictions:
+
+| Primary model vendor       | Automatic utility model                 |
+| -------------------------- | --------------------------------------- |
+| `clawrouter/openai/...`    | `clawrouter/openai/gpt-6-luna`          |
+| `clawrouter/anthropic/...` | `clawrouter/anthropic/claude-haiku-5-5` |
+
+OpenClaw selects it only when your key's model catalog lists it. Other vendors,
+and keys without that grant, keep the behavior of having no automatic utility
+model. GPT-6 Luna is text-only through ClawRouter, so Side chat questions with
+images need an image-capable `utilityModel`. An explicit `utilityModel`, or
+`""` to disable utility routing, always wins.
 
 ## Decision models
 
@@ -100,9 +119,10 @@ primary, fallback, utility, thinking, or Fast settings.
 
 The bundled `clawrouter` owner implements native OpenAI Decisions for Boolean,
 choice, and score questions. Inputs are explicit text/JSON or inline PNG, JPEG,
-or WebP images (up to 4 MiB). Limits are 200 questions per batch and 255 choice
-alternatives. Reasoning accepts only `auto` (or omission). Provider probabilities,
-confidence, usage, and individual refusals remain typed; there is no chat/JSON
+or WebP images (up to 4 MiB). V2 batches support up to 400 questions and 255 choice
+alternatives. Legacy V1 callers retain the host's 256-question limit; use
+`contractVersion: 2` for larger batches. Reasoning accepts only `auto` (or omission).
+Provider probabilities, confidence, usage, and individual refusals remain typed; there is no chat/JSON
 fallback, invented probability, or ambient conversation history.
 
 Static decision catalog support is **not a key grant**. Each evaluation checks

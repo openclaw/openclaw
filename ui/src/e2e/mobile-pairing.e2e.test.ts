@@ -143,7 +143,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Pair device", exact: true }).isDisabled(),
       ).toBe(true);
       await gateway.setMethodResponse("device.pair.list", { pending: [], paired: [] });
-      await pending.getByRole("button", { name: "Approve", exact: true }).click();
+      await pending.getByRole("button", { name: "Approve Synthetic browser", exact: true }).click();
       const approved = await gateway.waitForRequest("device.pair.approve");
       expect(approved.params).toEqual({ requestId: "synthetic-browser-request" });
       await pending.waitFor({ state: "hidden" });
@@ -593,6 +593,7 @@ suite.define(() => {
           await manageDevices.click({ trial: true });
           if (viewport.width === 1280) {
             await page.locator(".device-pair-setup__close").click();
+            await dialog.waitFor({ state: "hidden" });
           }
         }
         // The body scrolls while completion actions stay outside it in the pinned footer.

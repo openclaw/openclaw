@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import * as transcriptDisplay from "../chat/transcript-display-position.js";
 import {
   appendTranscriptMessage,
   waitForSessionTranscriptProjection,
@@ -7,8 +8,8 @@ import {
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import * as chatDisplayProjection from "./chat-display-projection.core.js";
-import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
-import { prepareChatHistoryResponsePage } from "./server-methods/chat-history-response-page.js";
+import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
+import { prepareChatHistoryResponsePage } from "./chat-history-response-page.js";
 import {
   expectMessageIds,
   historyTarget,
@@ -93,7 +94,15 @@ it.each([
         offset,
         messageId: undefined,
       };
-      const page = await readChatHistoryPageKernel(params, { readers, readOnly: true });
+      const compose = vi.spyOn(transcriptDisplay, "composeTranscriptDisplay");
+      let page: Awaited<ReturnType<typeof readChatHistoryPageKernel>>;
+      try {
+        page = await readChatHistoryPageKernel(params, { readers, readOnly: true });
+        // Scanning needs a byte-limit decision, not a discarded display response.
+        expect(compose).not.toHaveBeenCalled();
+      } finally {
+        compose.mockRestore();
+      }
       const response = prepareChatHistoryResponsePage(page, params);
       // A full response needs less than one source chunk, independent of the requested count.
       expect(readRows).toBeLessThan(hiddenHead ? 300 : 200);

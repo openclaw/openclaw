@@ -50,10 +50,10 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
   const finalText = "HANDOFF-FOLLOWUP-DELIVERED";
   const settled = vi.fn();
   const acceptanceEvents: boolean[] = [];
-  const deferred = vi.fn();
-  const adopted = vi.fn();
-  const abandoned = vi.fn();
-  const lifecycleSettled = vi.fn();
+  const adoptionEvents: string[] = [];
+  const recordAdoption = (event: string) => {
+    adoptionEvents.push(event);
+  };
   const finalDelivery = vi.fn(async (_text: string) => {});
   const followupRuns: string[] = [];
   const followupOperations: string[] = [];
@@ -146,10 +146,10 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
     originatingTo: "chat:handoff-proof",
     turnAdoptionLifecycle: {
       admission: "exclusive",
-      onDeferred: () => deferred(),
-      onAdopted: async () => adopted(),
-      onAbandoned: abandoned,
-      onSettled: lifecycleSettled,
+      onDeferred: () => recordAdoption("deferred"),
+      onAdopted: async () => recordAdoption("adopted"),
+      onAbandoned: () => recordAdoption("abandoned"),
+      onSettled: () => recordAdoption("settled"),
     },
     run: {
       sessionId,
@@ -242,10 +242,7 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
     await Promise.resolve();
 
     expect(acceptanceEvents).toEqual([false]);
-    expect(deferred).toHaveBeenCalledOnce();
-    expect(adopted).not.toHaveBeenCalled();
-    expect(abandoned).not.toHaveBeenCalled();
-    expect(lifecycleSettled).not.toHaveBeenCalled();
+    expect(adoptionEvents).toEqual(["deferred"]);
     expect(followupRuns).toEqual([]);
     expect(session.pendingMessageCount).toBe(0);
     expect(session.getSteeringMessages()).toEqual([]);
@@ -269,9 +266,7 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
     ownerReleased.resolve();
     await vi.waitFor(() => expect(finalDelivery).toHaveBeenCalledExactlyOnceWith(finalText));
 
-    expect(adopted).toHaveBeenCalledOnce();
-    expect(abandoned).not.toHaveBeenCalled();
-    expect(lifecycleSettled).toHaveBeenCalledOnce();
+    expect(adoptionEvents).toEqual(["deferred", "adopted", "settled"]);
     expect(followupRuns).toEqual([steerText]);
     expect(followupOperations).toEqual(["queued_followup"]);
     expect(requests).toHaveLength(2);

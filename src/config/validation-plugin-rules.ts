@@ -27,6 +27,7 @@ import {
 import { resolveChannelSchemaSelection } from "./channel-schema-selection.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import { collectMcpTransportIssues } from "./mcp-config-normalize.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import {
   bundledChannelIds,
@@ -56,6 +57,8 @@ export type ValidateConfigWithPluginsParams = {
   pluginValidation?: "full" | "skip" | "core-only";
   /** Runtime preserves inactive-owner startup; strict mode checks all declared targets for explicit validation and writes. */
   semanticValidation?: "runtime" | "strict";
+  /** Captured source, even during legacy repair; the candidate is validated separately. */
+  mcpTransportBaseline?: OpenClawConfig;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
   loadPluginMetadataSnapshot?: (
     config: OpenClawConfig,
@@ -77,7 +80,7 @@ type RegistryInfo = {
 };
 
 export function validatePreparedConfigWithPlugins(
-  raw: unknown,
+  raw: OpenClawConfig,
   parsedConfig: OpenClawConfig,
   opts: ValidateConfigWithPluginsParams & {
     applyDefaults: boolean;
@@ -103,6 +106,10 @@ export function validatePreparedConfigWithPlugins(
   const ensureSchemaValidations = () =>
     (schemaValidations ??= preparePluginSchemaValidations(ensureLoadedRegistryInfo().registry));
 
+  const warnings = collectMcpTransportIssues(raw, opts.mcpTransportBaseline);
+  if (opts.semanticValidation === "strict" && warnings.length > 0) {
+    return { ok: false, issues: warnings, warnings: [] };
+  }
   const config = opts.applyDefaults
     ? materializeRuntimeConfig(parsedConfig, {
         env: opts.env,
@@ -119,11 +126,10 @@ export function validatePreparedConfigWithPlugins(
       })
     : parsedConfig;
   if (opts.pluginValidation === "skip" || opts.pluginValidation === "core-only") {
-    return { ok: true, config, warnings: [] };
+    return { ok: true, config, warnings };
   }
 
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
   const preserveUnavailableConfig = (path: string): boolean => {
     const diagnostic = findUninspectedPluginDiagnostic(
       ensureLoadedRegistryInfo().registry.diagnostics,
@@ -327,15 +333,17 @@ export function validatePreparedConfigWithPlugins(
       issues.push({ path: issuePath, message: "web_search provider must not be empty" });
       return;
     }
+    // Match the runtime's case-insensitive provider lookup.
+    const normalizedProviderId = trimmed.toLowerCase();
     const activeProviderIds = collectActiveWebSearchProviderIds();
-    if (activeProviderIds.includes(trimmed)) {
+    if (activeProviderIds.includes(normalizedProviderId)) {
       return;
     }
     if (preserveUnavailableConfig(issuePath)) {
       return;
     }
     const installCatalogEntry = resolveWebSearchInstallCatalogEntries().find(
-      (entry) => entry.provider.id === trimmed,
+      (entry) => entry.provider.id === normalizedProviderId,
     );
     if (installCatalogEntry) {
       const issue = {

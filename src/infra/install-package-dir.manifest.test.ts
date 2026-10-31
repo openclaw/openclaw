@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { expectedNpmCommand } from "../test-utils/npm-command.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
   installPackageDir,
   requestDeferredPackageDirInstall,
@@ -69,14 +70,7 @@ it.each(["install", "commit", "rollback"] as const)(
       expect(manifest.peerDependencies).not.toHaveProperty("openclaw");
       expect(manifest.peerDependenciesMeta).not.toHaveProperty("openclaw");
       expect(manifest).not.toHaveProperty("devDependencies");
-      return {
-        stdout: "",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      return createCommandResult();
     });
 
     let validated = false;

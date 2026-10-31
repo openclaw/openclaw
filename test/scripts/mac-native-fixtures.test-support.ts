@@ -20,15 +20,15 @@ export async function runMacFixtureTool(
   return result.stdout.trim();
 }
 
-type PreparedNativeFixtures = Awaited<ReturnType<typeof compileMacNativeFixtures>>;
-let nativeFixtures: Promise<PreparedNativeFixtures> | undefined;
+const prepareMacObjects = nativeFixturePreparation(compileMacObjects);
+const prepareMacNativeFixtures = nativeFixturePreparation(compileMacNativeFixtures);
 
 export async function macObjectFixture(
   root: string,
   arch: "arm64" | "x86_64",
   mac: MacScriptFixture,
 ) {
-  return (await prepareMacNativeFixtures(root, mac)).objects[arch];
+  return (await prepareMacObjects(root, mac))[arch];
 }
 
 export async function macFatContainerFixture(
@@ -71,26 +71,48 @@ export async function singleSliceMacFat64(
 }
 
 export async function compiledMacNativeFixtures(root: string, mac: MacScriptFixture) {
-  return (await prepareMacNativeFixtures(root, mac)).binaries;
+  return prepareMacNativeFixtures(root, mac);
 }
 
-function prepareMacNativeFixtures(root: string, mac: MacScriptFixture) {
-  if (nativeFixtures) {
-    return nativeFixtures;
-  }
-  // The first case owns preparation; only complete in-memory bytes are shared.
-  // A failed flight rejects its borrowers, but must not poison later case lifetimes.
-  const preparation = mac.lifetime.run(() => compileMacNativeFixtures(root, mac));
-  nativeFixtures = preparation;
-  void preparation.catch(() => {
-    if (nativeFixtures === preparation) {
-      nativeFixtures = undefined;
+function nativeFixturePreparation<T>(compile: (root: string, mac: MacScriptFixture) => Promise<T>) {
+  let fixtures: Promise<T> | undefined;
+  return (root: string, mac: MacScriptFixture) => {
+    if (fixtures) {
+      return fixtures;
     }
-  });
-  return preparation;
+    // The first case owns preparation; only complete in-memory bytes are shared.
+    // Failed borrowers reject together; a later lifetime can prepare independently.
+    const preparation = mac.lifetime.run(() => compile(root, mac));
+    fixtures = preparation;
+    void preparation.catch(() => {
+      if (fixtures === preparation) {
+        fixtures = undefined;
+      }
+    });
+    return preparation;
+  };
+}
+
+async function compileMacObjects(root: string, mac: MacScriptFixture) {
+  const source = path.join(root, "inert-object.c");
+  await writeFile(source, "int main(void) { return 0; }\n");
+  for (const arch of ["arm64", "x86_64"] as const) {
+    await runMacFixtureTool(
+      "/usr/bin/xcrun",
+      ["clang", "-arch", arch, "-c", source, "-o", path.join(root, `${arch}.o`)],
+      root,
+      mac,
+    );
+  }
+  return {
+    arm64: await readFile(path.join(root, "arm64.o")),
+    x86_64: await readFile(path.join(root, "x86_64.o")),
+  };
 }
 
 async function compileMacNativeFixtures(root: string, mac: MacScriptFixture) {
+  // Full-image and object borrowers must share the first preparation failure.
+  const objects = await prepareMacObjects(root, mac);
   const tool = (command: string, args: string[]) => runMacFixtureTool(command, args, root, mac);
   const at = (name: string) => path.join(root, name);
   const source = path.join(root, "inert.c");
@@ -114,7 +136,7 @@ async function compileMacNativeFixtures(root: string, mac: MacScriptFixture) {
       ]);
       expect(await tool("/usr/bin/lipo", ["-archs", output])).toBe(arch);
     }
-    await tool("/usr/bin/xcrun", ["clang", "-arch", arch, "-c", source, "-o", at(`${arch}.o`)]);
+    await writeFile(at(`${arch}.o`), objects[arch]);
     await tool("/usr/bin/ar", ["rcs", at(`${prefix}.a`), at(`${arch}.o`)]);
     expect(await tool("/usr/bin/lipo", ["-archs", at(`${prefix}.a`)])).toBe(arch);
   }
@@ -161,21 +183,18 @@ async function compileMacNativeFixtures(root: string, mac: MacScriptFixture) {
   await writeFile(peFile, pe);
   expect(await tool("/usr/bin/file", ["-b", peFile])).toContain("PE32+");
   return {
-    binaries: {
-      arm64: await readFile(at("arm64")),
-      x86_64: await readFile(at("x86_64")),
-      universal: await readFile(at("universal")),
-      fat64: await readFile(at("fat64")),
-      universalArchive: await readFile(at("universal.a")),
-      coff: await readFile(at("windows.obj")),
-      pe,
-      armLibrary: await readFile(at("arm-library")),
-      intelLibrary: await readFile(at("intel-library")),
-      universalLibrary: await readFile(at("universal-library")),
-      elf: await readFile(at("elf")),
-      armArchive: await readFile(at("arm.a")),
-      intelArchive: await readFile(at("intel.a")),
-    },
-    objects: { arm64: await readFile(at("arm64.o")), x86_64: await readFile(at("x86_64.o")) },
+    arm64: await readFile(at("arm64")),
+    x86_64: await readFile(at("x86_64")),
+    universal: await readFile(at("universal")),
+    fat64: await readFile(at("fat64")),
+    universalArchive: await readFile(at("universal.a")),
+    coff: await readFile(at("windows.obj")),
+    pe,
+    armLibrary: await readFile(at("arm-library")),
+    intelLibrary: await readFile(at("intel-library")),
+    universalLibrary: await readFile(at("universal-library")),
+    elf: await readFile(at("elf")),
+    armArchive: await readFile(at("arm.a")),
+    intelArchive: await readFile(at("intel.a")),
   };
 }

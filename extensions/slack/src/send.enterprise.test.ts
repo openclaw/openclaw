@@ -1,7 +1,7 @@
 import type { ChatPostMessageResponse, WebClient } from "@slack/web-api";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerSlackInstallationState } from "./installation-identity-state.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useSlackInstallations } from "./approval-native.test-support.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import type { SlackPostMessagePayload } from "./post-message-payload.js";
 import {
@@ -39,6 +39,7 @@ const { sendMessageSlack, updateMessageSlack } = await import("./send.js");
 type Post = (payload: SlackPostMessagePayload) => Promise<ChatPostMessageResponse>;
 const ENTERPRISE_CFG = { channels: { slack: {} } };
 const postResult = (ts = "123.456") => ({ ok: true, ts, channel: "C123" });
+const install = useSlackInstallations();
 
 function createEnterpriseClient() {
   const stub = {
@@ -63,7 +64,6 @@ function enterpriseOptions(client: WebClient, teamId = "T1", writeClient: WebCli
 }
 
 describe("sendMessageSlack Enterprise listener scope", () => {
-  let installation: ReturnType<typeof registerSlackInstallationState> | undefined;
   let client: ReturnType<typeof createEnterpriseClient>;
   beforeEach(() => {
     client = createEnterpriseClient();
@@ -73,13 +73,8 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     getSlackWriteClientMock.mockReset();
   });
 
-  afterEach(() => {
-    installation?.release();
-    installation = undefined;
-  });
-
   it("rejects a bare detached target for an authenticated Enterprise install", async () => {
-    installation = registerSlackInstallationState("default", "enterprise");
+    install("default", "enterprise");
     await expect(
       sendMessageSlack("C08GQH53EJM", "hello", {
         cfg: ENTERPRISE_CFG,
@@ -239,7 +234,7 @@ describe("sendMessageSlack Enterprise listener scope", () => {
   it("caps Enterprise finalization text at Slack's UTF-8 edit limit", async () => {
     const update = vi.fn(async (_payload: { text: string }) => ({ ok: true }));
     getSlackWriteClientMock.mockReturnValue({ chat: { update } } as unknown as WebClient);
-    installation = registerSlackInstallationState("default", "enterprise");
+    install("default", "enterprise");
     await updateMessageSlack({
       cfg: { channels: { slack: { botToken: "xoxb-test" } } },
       channelId: "C123",

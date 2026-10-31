@@ -17,7 +17,7 @@ import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { markPluginRegistryActive } from "./registry-lifecycle.js";
-import { createPluginRegistry } from "./registry.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { bindGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
@@ -40,14 +40,10 @@ export function createRuntimeBuilder(params: {
     getRuntimeConfig: () => ({}),
   } as GatewayRequestContext;
   bindGatewayContextResolver(subagent, params.gatewayContextResolver ?? (() => context));
-  const builder = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {
-      channel: { inbound: { buildContext: buildChannelInboundEventContext } },
-      subagent,
-    } as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
+  const builder = createTestPluginRegistry({
+    channel: { inbound: { buildContext: buildChannelInboundEventContext } },
+    subagent,
+  } as PluginRuntime);
   const record = createPluginRecord({
     id: params.id ?? "channel-owner",
     origin: params.origin,

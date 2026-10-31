@@ -19,6 +19,7 @@ import {
 } from "./harness/context-engine-logical-turn.js";
 import { shellQuoteArgs } from "./harness/native-hook-relay-utils.js";
 import {
+  createLiveResponsesConfig,
   isLiveTestEnabled,
   logLiveProgress,
   useLiveTestRuntimeConfig,
@@ -88,34 +89,7 @@ describeLive("embedded Responses output-limit recovery live", () => {
       );
       const command = shellQuoteArgs([process.execPath, scriptPath]);
       const config = {
-        models: {
-          providers: {
-            openai: {
-              api: "openai-responses",
-              auth: "api-key",
-              baseUrl: "https://api.openai.com/v1",
-              timeoutSeconds: 90,
-              models: [
-                {
-                  id: modelId,
-                  name: modelId,
-                  reasoning: true,
-                  input: ["text"],
-                  contextWindow: 200_000,
-                  maxTokens: 1024,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                },
-              ],
-            },
-          },
-        },
-        agents: {
-          entries: { main: { workspace: state.workspaceDir } },
-          defaults: {
-            skipBootstrap: true,
-            models: { [`openai/${modelId}`]: { params: { transport: "sse" } } },
-          },
-        },
+        ...createLiveResponsesConfig(modelId, state.workspaceDir, 1024),
         tools: { exec: { host: "gateway", mode: "full" } },
         plugins: { allow: ["openai"], slots: { memory: "none" } },
       } satisfies OpenClawConfig;

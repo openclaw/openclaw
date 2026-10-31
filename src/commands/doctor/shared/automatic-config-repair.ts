@@ -4,7 +4,6 @@ import {
   resolveManagedUnsetPathsForWrite,
 } from "../../../config/config-path-mutation.js";
 import { resolveConfigSnapshotHash, transformConfigFile } from "../../../config/config.js";
-import { applyMessageQueueDefaults } from "../../../config/defaults.js";
 import {
   getDeferredPluginMigrationConfigFacts,
   omitDeferredPluginMigrationConfig,
@@ -15,7 +14,8 @@ import { stampConfigWriteMetadata } from "../../../config/io.meta.js";
 import { containsConfigIncludeDirective } from "../../../config/io.read-helpers.js";
 import { prepareConfigWriteTopology } from "../../../config/io.write-topology.js";
 import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
-import { findLegacyConfigIssues, findLegacyConfigRuleIssues } from "../../../config/legacy.js";
+import { findLegacyConfigIssues } from "../../../config/legacy.js";
+import { findLegacyConfigRuleIssues } from "../../../config/legacy.shared.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import {
@@ -110,12 +110,7 @@ async function planConfigRepair(
     nextConfig: migration.next ?? migrationSource,
     pending: deferredPluginMigrations ?? [],
   });
-  // Include the Doctor default in this write so a later write does not rotate
-  // the original backup. Read-only backup projection keeps its existing shape.
-  const config = inheritLegacyDefaultAgentId(
-    migration.next ?? migrationSource,
-    pluginContracts ? applyMessageQueueDefaults(migrated) : migrated,
-  );
+  const config = inheritLegacyDefaultAgentId(migration.next ?? migrationSource, migrated);
   if (
     !additionalMigration?.pendingStateMigration &&
     isDeepStrictEqual(config, snapshot.sourceConfig)
@@ -159,9 +154,6 @@ async function planConfigRepair(
       ...(additionalMigration?.changes ?? []),
       ...migration.changes,
       ...(migration.warnings ?? []),
-      ...(config === migrated
-        ? []
-        : ["Set messages.queue.allowCollaborativeSteering to false (default)."]),
     ],
     snapshot: {
       ...snapshot,

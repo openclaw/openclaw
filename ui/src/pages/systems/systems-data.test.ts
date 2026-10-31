@@ -5,6 +5,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import {
   loadSystemsInventory,
   projectSystemsInventory,
@@ -33,15 +34,7 @@ const inventory: SystemsInventory = {
   errors: {},
 };
 const timing = { generation: 1, createdAtMs: 1, updatedAtMs: 2, stateChangedAtMs: 2 };
-const active: SessionPlacement = {
-  state: "active",
-  ...timing,
-  environmentId: "worker:active",
-  activeOwnerEpoch: 1,
-  workerBundleHash: "a".repeat(64),
-  workspaceBaseManifestRef: "manifest",
-  remoteWorkspaceDir: "/work",
-};
+const active = createActiveSessionPlacement({ environmentId: "worker:active" });
 function session(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   return { key, kind: "direct", updatedAt: 1, ...fields };
 }

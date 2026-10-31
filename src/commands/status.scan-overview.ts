@@ -27,6 +27,7 @@ import {
 import type { GatewayProbeSnapshot } from "./status.scan.shared.js";
 
 export type StatusScanOverviewResult = {
+  recoveryCopies?: import("./recovery-disk-usage.js").RecoveryDiskUsage;
   env?: NodeJS.ProcessEnv;
   skipColdStartNetworkChecks: boolean;
   cfg: OpenClawConfig;
@@ -314,6 +315,10 @@ export async function collectStatusScanOverview(params: {
   }
 
   return {
+    recoveryCopies: (await import("./recovery-disk-usage.js")).collectRecoveryDiskUsage({
+      cfg,
+      env,
+    }),
     env,
     skipColdStartNetworkChecks: bootstrap.skipColdStartNetworkChecks,
     cfg,

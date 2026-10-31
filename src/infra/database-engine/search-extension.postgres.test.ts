@@ -1,17 +1,13 @@
 import { channel } from "node:diagnostics_channel";
-import path from "node:path";
 import { getEnvironmentData, threadId } from "node:worker_threads";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
-import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { PostgresSyncConnection } from "../postgres-sync/connection.js";
-import { publishSqliteDatabaseSchemaChange } from "../sqlite-database-admission.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
+import type { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import { admitStoreSearch } from "./adapters.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import type { SearchSchema, StoreSchema } from "./contract.js";
-import { openEngineStore, readEngineAnchor } from "./open.js";
+import { createPostgresEngineTestFixture } from "./engine-store.test-support.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -30,6 +26,7 @@ const schema: StoreSchema = {
   id: "search_extension",
   version: 1,
   sqlite: "",
+  postgresTextSearchVersion: 2,
   postgres: tables
     .map(
       (table) => `CREATE TABLE ${table} (
@@ -69,9 +66,8 @@ function embedding(values: readonly number[]) {
 }
 
 describe.skipIf(!connection)("PostgreSQL search extension admission", () => {
-  let anchor: ReturnType<typeof openNodeSqliteDatabase>;
+  let fixture: ReturnType<typeof createPostgresEngineTestFixture>;
   let db: PostgresSyncConnection;
-  const connections: PostgresSyncConnection[] = [];
   const row = (sql: string, ...values: string[]) => db.prepare(sql).get(...values);
   const expectDefinitions = (...names: string[]) => {
     const definitions = row(
@@ -82,7 +78,7 @@ describe.skipIf(!connection)("PostgreSQL search extension admission", () => {
     }
   };
   const matchText = (
-    table: "notes" | "keywords" | "nested",
+    table: "notes" | "keywords" | "keywords_archive" | "nested",
     search: ReturnType<typeof admitStoreSearch>,
     text: string,
   ) =>
@@ -91,48 +87,24 @@ describe.skipIf(!connection)("PostgreSQL search extension admission", () => {
       getNodeSqliteKysely<{
         notes: { id: string };
         keywords: { id: string };
+        keywords_archive: { id: string };
         nested: { id: string };
       }>(db)
         .selectFrom(table)
         .select("id")
         .where(search.fullText!.match(search.text.body!, { kind: "term", text })),
     ).rows;
-  const open = () => {
-    const opened = openEngineStore({
-      anchor,
-      schema,
-      input: { connection: connection!, schemaPrefix: "search_extension_test" },
-      openSqlite: () => {
-        throw new Error("Unexpected SQLite bootstrap");
-      },
-      prepareAnchor: () => {},
-      inspectSqlite: () => {
-        admitSqliteSchema(anchor);
-        return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
-      },
-    });
-    if (!(opened instanceof PostgresSyncConnection)) {
-      throw new Error("Expected PostgreSQL");
-    }
-    connections.push(opened);
-    return opened;
-  };
-
   beforeAll(() => {
     expect(threadId, "The fixture retains the in-process admission descriptor").toBe(0);
-    anchor = openNodeSqliteDatabase(path.join(dirs.make("pg-search-extension-"), "anchor.sqlite"));
-    db = withEngineStoreAdmission(open);
-  });
-  afterAll(() => {
-    withEngineStoreAdmission(() => {
-      try {
-        db?.exec(`DROP SCHEMA "${db.schema}" CASCADE`);
-      } finally {
-        connections.forEach((opened) => opened.close());
-        anchor?.close();
-      }
+    fixture = createPostgresEngineTestFixture({
+      directory: dirs.make("pg-search-extension-"),
+      connection: connection!,
+      schemaPrefix: "search_extension_test",
+      schema,
     });
+    db = withEngineStoreAdmission(() => fixture.open());
   });
+  afterAll(() => fixture?.[Symbol.dispose]());
 
   it("installs keyword-only extensions and reopens without scratch DDL", () => {
     withEngineStoreAdmission(() => {
@@ -167,8 +139,8 @@ describe.skipIf(!connection)("PostgreSQL search extension admission", () => {
       events.subscribe(observe);
       try {
         const previous = db;
-        publishSqliteDatabaseSchemaChange(anchor);
-        db = open();
+        fixture.invalidate();
+        db = fixture.open();
         previous.close();
         admitStoreSearch(db, selected, { extension: "keywords-search" });
         admitStoreSearch(db, textSchema("keywords_archive"), {
@@ -191,6 +163,27 @@ describe.skipIf(!connection)("PostgreSQL search extension admission", () => {
           .all(),
       ).toEqual([{ id: "one" }]);
       expectDefinitions("keywords-search", "keywords-archive-search");
+    });
+  });
+
+  // #183439: SQLite FTS5 unicode61 splits dates, paths and file names into words;
+  // PostgreSQL's parser kept them as single lexemes, so the same query missed.
+  it("matches words inside dates, paths and file names like SQLite FTS5", () => {
+    withEngineStoreAdmission(() => {
+      const search = admitStoreSearch(db, textSchema("keywords_archive"), {
+        extension: "keywords-archive-search",
+      });
+      db.runTransaction(() => {
+        db.prepare("INSERT INTO keywords_archive(id, ordinal, text) VALUES (?, ?, ?)").run(
+          "deploy",
+          1,
+          "Release went out on 2026-08-18 after the fix to server.py landed; the API serves /v1/models and the input/output schema is unchanged.",
+        );
+      });
+      for (const text of ["08 18", "server", "models", "input output", "server.py", "Release"]) {
+        expect(matchText("keywords_archive", search, text), text).toEqual([{ id: "deploy" }]);
+      }
+      expect(matchText("keywords_archive", search, "grocery")).toEqual([]);
     });
   });
 
@@ -247,8 +240,8 @@ describe.skipIf(!connection)("PostgreSQL search extension admission", () => {
     );
     withEngineStoreAdmission(() => {
       const previous = db;
-      publishSqliteDatabaseSchemaChange(anchor);
-      db = open();
+      fixture.invalidate();
+      db = fixture.open();
       previous.close();
       expect(row("SELECT embedding FROM notes WHERE id = 'one'")?.embedding).toEqual(
         new Uint8Array(precise),
@@ -349,8 +342,8 @@ describe.skipIf(!connection)("PostgreSQL search extension admission", () => {
     withEngineStoreAdmission(() => {
       admitStoreSearch(db, textSchema("drift"), { extension: "drift-search" });
       db.exec("DROP INDEX drift_search_gin");
-      publishSqliteDatabaseSchemaChange(anchor);
-      expect(open).toThrow(/schema drift/i);
+      fixture.invalidate();
+      expect(() => fixture.open()).toThrow(/schema drift/i);
     });
   });
 });

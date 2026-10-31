@@ -1,6 +1,8 @@
-import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
-import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store-scope.ts";
-import type { ChatComposerScope as Composer } from "./composer-persistence.ts";
+import {
+  type StoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+} from "../../lib/chat/outbox-store-scope.ts";
+import type { ChatComposerScope as Composer } from "../../lib/chat/outbox-store.ts";
 
 /** Owned by one Gateway outbox; volatile transfers block every pane until admitted or discarded. */
 export class ChatOutboxAdmissions {

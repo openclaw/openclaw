@@ -1,21 +1,29 @@
+import { omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import {
   redactPathForSupport,
   sanitizeSupportSnapshotValue,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
+import { getSecretRedactionRegistryRevision } from "../logging/secret-redaction-registry.js";
 import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistry, listImportedRuntimePluginIds } from "../plugins/runtime.js";
+import { memoizeFrozenPlainDataProjection } from "../shared/immutable-data.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { VERSION } from "../version.js";
+
+const redactTrajectoryConfig = memoizeFrozenPlainDataProjection((config: OpenClawConfig) =>
+  redactConfigObject(config),
+);
 
 // Runtime metadata capture for trajectory events. This records enough config,
 // plugin, skill, and prompt context to explain a run after logs are exported.
@@ -81,9 +89,7 @@ function toSortedUniqueStrings(values: readonly string[] | undefined): string[] 
   if (!values || values.length === 0) {
     return undefined;
   }
-  return [...new Set(values)]
-    .filter((value) => typeof value === "string")
-    .map((value) => value.trim())
+  return Array.from(new Set(values), (value) => value.trim())
     .filter(Boolean)
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -136,6 +142,7 @@ function buildPluginsFromActiveRegistry() {
         webSearchProviderIds: toSortedUniqueStrings(plugin.webSearchProviderIds),
         agentHarnessIds: toSortedUniqueStrings(plugin.agentHarnessIds),
       }))
+      .map(omitUndefinedFields)
       .toSorted((left, right) => left.id.localeCompare(right.id)),
   };
 }
@@ -182,6 +189,35 @@ function buildPluginsFromManifest(params: {
   };
 }
 
+type ResolvedSkill = NonNullable<SkillSnapshot["resolvedSkills"]>[number];
+const skillCaptures = new Map<
+  string,
+  WeakMap<ResolvedSkill, ReturnType<typeof captureResolvedSkill>>
+>();
+
+function captureResolvedSkill(skill: ResolvedSkill, redaction: SupportRedactionContext) {
+  return {
+    id: skill.name,
+    name: skill.name,
+    description: skill.description,
+    filePath: redactPathForSupport(skill.filePath, redaction),
+    baseDir: redactPathForSupport(skill.baseDir, redaction),
+    source: skill.source,
+    sourceInfo: sanitizeSupportSnapshotValue(skill.sourceInfo, redaction),
+    disableModelInvocation: skill.disableModelInvocation,
+    available: true,
+  };
+}
+
+function isFrozenDataRecord(value: object): boolean {
+  const prototype = Object.getPrototypeOf(value);
+  return (
+    Object.isFrozen(value) &&
+    (prototype === Object.prototype || prototype === null) &&
+    Object.values(Object.getOwnPropertyDescriptors(value)).every((entry) => "value" in entry)
+  );
+}
+
 function buildSkillsCapture(
   skillsSnapshot: SkillSnapshot | undefined,
   redaction: SupportRedactionContext,
@@ -190,26 +226,58 @@ function buildSkillsCapture(
     return undefined;
   }
   const filteredResolvedSkills =
-    skillsSnapshot.resolvedSkills?.filter(
-      (skill) => typeof skill.name === "string" && skill.name.length > 0,
-    ) ?? [];
+    skillsSnapshot.resolvedSkills?.filter((skill) => skill.name.length > 0) ?? [];
+  // Support redaction uses built-in rules plus live exact secrets. Relative paths
+  // also depend on cwd; retain separate bounded scopes for interleaved callers.
+  const revision = getSecretRedactionRegistryRevision();
+  const home = redaction.env.HOME;
+  const userProfile = redaction.env.USERPROFILE;
+  const cwd = tryProcessCwd();
+  const scope = JSON.stringify([revision, redaction.stateDir, home, userProfile, cwd]);
+  // An uncached accessor can change the scope while earlier entries are captured.
+  const isCurrentScope = () =>
+    getSecretRedactionRegistryRevision() === revision &&
+    redaction.env.HOME === home &&
+    redaction.env.USERPROFILE === userProfile &&
+    tryProcessCwd() === cwd;
+  let cache = skillCaptures.get(scope);
+  if (!cache) {
+    cache = new WeakMap();
+    skillCaptures.set(scope, cache);
+    if (skillCaptures.size > 8) {
+      skillCaptures.delete(skillCaptures.keys().next().value!);
+    }
+  }
   const entries =
     // Prefer resolved skill files when available; older call sites may only
     // have the summarized skill catalog, which is still useful for support.
     filteredResolvedSkills.length > 0
-      ? filteredResolvedSkills.map((skill) => ({
-          id: skill.name,
-          name: skill.name,
-          description: skill.description,
-          filePath: redactPathForSupport(skill.filePath, redaction),
-          baseDir: redactPathForSupport(skill.baseDir, redaction),
-          source: skill.source,
-          sourceInfo: sanitizeSupportSnapshotValue(skill.sourceInfo, redaction),
-          disableModelInvocation: skill.disableModelInvocation,
-          available: true,
-        }))
+      ? filteredResolvedSkills.map((skill) => {
+          const previous = cache.get(skill);
+          if (previous && isCurrentScope()) {
+            return previous;
+          }
+          const capture = captureResolvedSkill(skill, redaction);
+          // Discovery shares frozen catalog facts; mutable/custom nested inputs
+          // and capture-local identifier numbering still need fresh redaction.
+          if (
+            isCurrentScope() &&
+            isFrozenDataRecord(skill) &&
+            skill.sourceInfo &&
+            isFrozenDataRecord(skill.sourceInfo) &&
+            !redaction.identifierKeys &&
+            Object.values(skill.sourceInfo).every(
+              (value) =>
+                value === null || (typeof value !== "object" && typeof value !== "function"),
+            )
+          ) {
+            Object.freeze(capture.sourceInfo);
+            cache.set(skill, Object.freeze(capture));
+          }
+          return capture;
+        })
       : skillsSnapshot.skills
-          .filter((skill) => typeof skill.name === "string" && skill.name.length > 0)
+          .filter((skill) => skill.name.length > 0)
           .map((skill) => ({
             id: skill.name,
             name: skill.name,
@@ -220,7 +288,7 @@ function buildSkillsCapture(
   return {
     snapshotVersion: skillsSnapshot.version,
     skillFilter: toSortedUniqueStrings(skillsSnapshot.skillFilter),
-    entries: entries.toSorted((left, right) => (left.name ?? "").localeCompare(right.name ?? "")),
+    entries: entries.toSorted((left, right) => left.name.localeCompare(right.name)),
   };
 }
 
@@ -251,7 +319,7 @@ export function buildTrajectoryRunMetadata(
       runtime: {
         node: process.version,
       },
-      invocation: sanitizeSupportSnapshotValue([...process.argv], redaction, "programArguments"),
+      invocation: sanitizeSupportSnapshotValue(process.argv, redaction, "programArguments"),
       entrypoint: process.argv[1] ? redactPathForSupport(process.argv[1], redaction) : undefined,
       workspaceDir: redactPathForSupport(params.workspaceDir, redaction),
       sessionFile: params.sessionFile
@@ -267,7 +335,7 @@ export function buildTrajectoryRunMetadata(
       reasoningLevel: params.reasoningLevel ?? "off",
     },
     config: {
-      redacted: params.config ? redactConfigObject(params.config) : undefined,
+      redacted: params.config ? redactTrajectoryConfig(params.config) : undefined,
       runtime: {
         timeoutMs: params.timeoutMs,
         trigger: params.trigger,

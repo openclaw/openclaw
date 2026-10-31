@@ -1,3 +1,5 @@
+import { serialize } from "node:v8";
+import { zstdCompressSync } from "node:zlib";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { WorkerTaskHandler } from "@openclaw/worker-runtime/worker";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
@@ -10,6 +12,7 @@ import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
+import { ownedWorkerBytes } from "../infra/worker-transfer-bytes.js";
 import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.read.worker.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
@@ -18,8 +21,10 @@ import {
   readOpenClawStateReadOnlyLocation,
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
+import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 import { postgresStateReadSnapshot } from "./openclaw-state-postgres-snapshot-context.js";
 import { stateReadRegistry } from "./openclaw-state-read-operation-registry.js";
+import { prepareStateStream } from "./openclaw-state-read-stream.js";
 import type {
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
@@ -49,7 +54,16 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       input.command.type === "localWorkspace.manifest"
         ? await import("../gateway/worker-environments/local-workspace-manifest-scan.js")
         : undefined;
+    // Finish the selected owner's import before fresh admission, not during stream execution.
+    const readStream =
+      input.command.type === "subagents.restore" ||
+      input.command.type === "meetingTranscripts.export"
+        ? await prepareStateStream(input, input.command, channel, () => {
+            sourceAdmitted = true;
+          })
+        : undefined;
     const dedicatedRead =
+      readStream !== undefined ||
       input.command.type === "admit" ||
       input.command.type === "plugins.metadata.read" ||
       input.command.type === "gatewayOwnerLease.read" ||
@@ -64,6 +78,7 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
         ? undefined
         : await import("./openclaw-state-read-handlers.js");
     const executeRead = async (): Promise<OpenClawStateReadReply> => {
+      const quarantineStorePath = resolveQuarantineStorePath(input.context.environment);
       if (input.checkFreshAdmission) {
         openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
           input.databasePath,
@@ -73,6 +88,7 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
               error: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
             };
           },
+          true,
         );
       }
       const { command } = input;
@@ -130,12 +146,17 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
             return manifestReader.readLocalWorkspaceManifestRows(db, command.input);
           },
           ...locationArgs,
+          undefined,
+          quarantineStorePath,
         );
-        const value = await manifestReader.executeLocalWorkspaceManifestRead(
-          snapshot,
-          command.input.action,
-        );
-        return { ok: true, type: command.type, sourceAdmitted: true, value };
+        // Release the shared reader before filesystem discovery; forward encoded facts
+        // through the host without expanding the inventory on the Gateway thread.
+        return {
+          ok: true,
+          type: command.type,
+          sourceAdmitted: true,
+          snapshot: ownedWorkerBytes(zstdCompressSync(serialize([snapshot, command.input.action]))),
+        };
       }
       if (command.type === "plugins.metadata.read") {
         const result = withOpenClawStateReadOnlyLocation(
@@ -144,6 +165,8 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
             return pluginMetadataReadOperations[command.type](command.input, db);
           },
           ...locationArgs,
+          undefined,
+          quarantineStorePath,
         );
         return { ok: true, sourceAdmitted: true, ...result };
       }
@@ -167,6 +190,8 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
             return stateReadRegistry.execute(command, db);
           },
           ...locationArgs,
+          undefined,
+          quarantineStorePath,
         );
         return { ok: true, sourceAdmitted: true, ...result };
       }
@@ -180,6 +205,8 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
             return registryReader.readRegisteredAgentDatabaseRows(db, input.databasePath, false);
           },
           ...locationArgs,
+          undefined,
+          quarantineStorePath,
         );
         return {
           ok: true,
@@ -191,15 +218,14 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
               : { status: "unavailable" },
         };
       }
+      if (command.type === "subagents.restore" || command.type === "meetingTranscripts.export") {
+        if (!readStream) {
+          throw new Error("State read stream is unavailable");
+        }
+        return await control.runNativeSection(readStream);
+      }
       if (!handlers) {
         throw new Error("State read command handlers are unavailable");
-      }
-      if (command.type === "subagents.restore" || command.type === "meetingTranscripts.export") {
-        return await control.runNativeSection(() =>
-          handlers.readStateStream(input, command, channel, () => {
-            sourceAdmitted = true;
-          }),
-        );
       }
       if (command.type === "subagents.sessionList") {
         const result = readOpenClawStateReadOnlyLocation(
@@ -208,6 +234,8 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
             return handlers.loadSubagentSessionListRunsFromSqlite(undefined, { db });
           },
           ...locationArgs,
+          undefined,
+          quarantineStorePath,
         );
         if (result.status === "unavailable" && sourceAdmitted !== true) {
           throw result.error;
@@ -237,6 +265,7 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
         },
         ...locationArgs,
         metadataRead?.readContentVersionRow,
+        quarantineStorePath,
       );
       return { ok: true, sourceAdmitted: true, ...result };
     };
@@ -286,5 +315,9 @@ serveOwnedWorkerTasks(
     const run = () => read(message, channel, control);
     return await (bridge ? bridge.run(run) : run());
   },
-  { closeResource: closeRetainedOpenClawStateReadConnections },
+  {
+    closeResource: closeRetainedOpenClawStateReadConnections,
+    transferList: (reply) =>
+      reply.ok && reply.type === "localWorkspace.manifest" ? [reply.snapshot.buffer] : [],
+  },
 );

@@ -1,8 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { createEnteredGate as gate } from "../agents/entered-gate.test-support.js";
 import { runExclusiveSqliteSessionWrite as writeSession } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
-import { admissionGate as gate } from "./session-admission.test-support.js";
 import {
   beginSessionEffect,
   closeAgentWorkAdmissions as closeAgent,

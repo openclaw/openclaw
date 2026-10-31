@@ -6,13 +6,8 @@ import {
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMattermostRuntime } from "../runtime.js";
-import { resolveMattermostAccount } from "./accounts.js";
-import {
-  createMattermostClient,
-  fetchMattermostMe,
-  normalizeMattermostBaseUrl,
-  type MattermostUser,
-} from "./client.js";
+import { createMattermostAccountClient, resolveMattermostAccount } from "./accounts.js";
+import { fetchMattermostMe, type MattermostUser } from "./client.js";
 import {
   computeInteractionCallbackUrl,
   resolveInteractionCallbackPath,
@@ -90,24 +85,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     channel: "mattermost",
     accountId: account.accountId,
   });
-  const botToken =
-    normalizeOptionalString(opts.botToken) ?? normalizeOptionalString(account.botToken);
-  if (!botToken) {
-    throw new Error(
-      `Mattermost bot token missing for account "${account.accountId}" (set channels.mattermost.accounts.${account.accountId}.botToken or MATTERMOST_BOT_TOKEN for default).`,
-    );
-  }
-  const baseUrl = normalizeMattermostBaseUrl(opts.baseUrl ?? account.baseUrl);
-  if (!baseUrl) {
-    throw new Error(
-      `Mattermost baseUrl missing for account "${account.accountId}" (set channels.mattermost.accounts.${account.accountId}.baseUrl or MATTERMOST_URL for default).`,
-    );
-  }
-  const client = createMattermostClient({
-    baseUrl,
-    botToken,
-    allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
-  });
+  const { client, baseUrl, botToken } = createMattermostAccountClient(account, opts);
 
   // Wait for the Mattermost API to accept our bot token before proceeding.
   // When a bot account is disabled and re-enabled, the session is invalidated

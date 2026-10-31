@@ -19,7 +19,7 @@ import {
   CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
 } from "./native-hook-relay.js";
 import type { CodexServerNotification, CodexDynamicToolCallParams } from "./protocol.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
@@ -43,6 +43,7 @@ class CodexAttemptState {
   settlementWarning?: AttemptSettlementWarning;
   // Finalization fills this slot while its transcript mirror is pending.
   pendingSettlementStage?: string;
+  readRetainedNativeCommands?: () => ReadonlyMap<string, string>;
   clientClosedPromptError?: string;
   clientClosedDiagnostic?: string;
   clientClosedAbort = false;
@@ -62,7 +63,7 @@ class CodexAttemptState {
   currentTurnHadNonTerminalDynamicToolResult = false;
 }
 
-export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
+export function createCodexAttemptTurnState(resources: StartedCodexAttemptResources) {
   const {
     prompt,
     state: resourceState,
@@ -97,7 +98,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   };
   const interruptTurn = async (
     turnId: string,
-    completionOptions?: { locallyCompleted?: boolean; timeoutMs?: number },
+    completionOptions?: { locallyCompleted?: boolean },
   ) => {
     if (completionOptions?.locallyCompleted) {
       state.localCompletionRequested = true;
@@ -105,7 +106,6 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     const completed = await interruptCodexTurnAndWaitBestEffort(resourceState.client, {
       threadId: resourceState.thread.threadId,
       turnId,
-      timeoutMs: completionOptions?.timeoutMs,
     });
     if (!completed) {
       await closeCodexStartupClientBestEffort(resourceState.client);
@@ -185,7 +185,13 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
         state.pendingSettlementStage ??
         projectorRef.current?.settlement.pendingStage ??
         "notification_queue";
-      if (timeout.kind === "settlement" && projectorRef.current?.recoverCompletedAnswer()) {
+      if (
+        timeout.kind === "settlement" &&
+        projectorRef.current?.recoverCompletedAnswer(
+          prompt.context.attemptTools.toolBridge.telemetry,
+          { readRetainedNativeCommands: state.readRetainedNativeCommands },
+        )
+      ) {
         state.settlementWarning = {
           pendingStage,
           elapsedMs: timeout.elapsedMs,

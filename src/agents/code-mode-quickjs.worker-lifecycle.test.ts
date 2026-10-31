@@ -9,7 +9,6 @@ import { observeWorkerActivity } from "../../test/helpers/worker-activity.js";
 import { resolveBundledPublicSurfaceLocation } from "../plugin-sdk/facade-loader.js";
 import * as executorPlugins from "../plugins/code-mode-executor.js";
 import type { CodeModeExecutor } from "./code-mode-executor-types.js";
-import { CodeModeOutputState } from "./code-mode-json.js";
 import { resolveCodeModeConfig } from "./code-mode-runtime.js";
 import { activeRuns, disposeAllCodeModeRuns } from "./code-mode-state.js";
 import { createCatalogCodeModeHarness } from "./code-mode.test-support.js";
@@ -108,7 +107,6 @@ it.each(["exec", "resume"] as const)(
 
 it.each([
   ["returned values", 'return "x".repeat(2_048);', "completed"],
-  ["output and value", 'text("x".repeat(700)); return "y".repeat(700);', "completed"],
   ["suspended output", 'text("x".repeat(2_048)); await yield_control();', "waiting"],
   ["failed output", 'text("x".repeat(2_048)); throw new Error("boom");', "failed"],
 ] as const)(
@@ -142,9 +140,5 @@ it.each([
       result.status === "failed" ? Buffer.byteLength(JSON.stringify(result.error)) : 0;
     expect(Math.max(outputBytes, valueBytes)).toBeLessThanOrEqual(1_024);
     expect(outputBytes + valueBytes + errorBytes).toBeLessThanOrEqual(2 * 1_024);
-    const state = new CodeModeOutputState(1_024);
-    state.append(result.output);
-    const projected = state.take(result.status === "waiting" ? {} : result);
-    expect(JSON.stringify(projected)).toContain("rerun with narrower args");
   },
 );

@@ -1,5 +1,10 @@
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
+  WorkerTurnAdmissionParams,
+  WorkerTurnAdmissionResult,
+} from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
+import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
+import type {
   AdmittedRunOperatorAuthority,
   OperationalRunInstanceRef,
 } from "../../agents/admitted-run-context.js";
@@ -25,15 +30,16 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
-import type { FastMode } from "../../shared/fast-mode.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { notifyListeners } from "../../shared/listeners.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
+import type { WorkerExecApprovalOwner } from "./worker-exec-approval-contract.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 import type { WorkerGitHubBindingGrant } from "./worker-github-binding-contract.js";
 import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
+import type { WorkerTurnPromptCacheContext } from "./worker-turn-prompt.types.js";
 
 type TurnClaimReleaseWaiter = (error?: Error) => void;
 
@@ -90,14 +96,6 @@ export type WorkerTurnExecutionIdentityCapability = WorkerTurnTranscriptSource &
 
 type WorkerTurnFinishingOutcome = { error?: string; replayInvalid?: true };
 
-export type WorkerTurnPromptCacheContext = Readonly<{
-  boundaryCount: number;
-  promptCacheKey?: string;
-  fastMode?: FastMode;
-  fastModeStartedAtMs?: number;
-  fastModeAutoOnSeconds?: number;
-}>;
-
 type BoundWorkerTurnOwner = {
   capability: WorkerTurnExecutionIdentityCapability;
   claimKey: string;
@@ -105,6 +103,9 @@ type BoundWorkerTurnOwner = {
     assertActive: () => void;
     toolSurface?: WorkerGatewayToolRuntime;
     inference?: WorkerInferenceExecutor;
+    admitTurn?: WorkerTurnAdmission;
+    execApproval?: WorkerExecApprovalOwner;
+    inputApproved?: boolean;
     prepareReplyMedia?: WorkerReplyMediaPreparer;
     githubGrant?: WorkerGitHubBindingGrant;
     delegatedAuthority: AgentRunDelegatedAuthority;
@@ -122,6 +123,12 @@ type BoundWorkerTurnOwner = {
     stopWatchingAuthority?: () => void;
   };
 };
+
+type WorkerTurnAdmission = (
+  request: WorkerTurnAdmissionParams,
+  assertCurrent: () => void,
+  recordApproval: () => void,
+) => Promise<WorkerTurnAdmissionResult>;
 
 const workerTurnOwners = resolveGlobalMap<string, Map<string, BoundWorkerTurnOwner>>(
   Symbol.for("openclaw.workerTurnExecutionIdentities"),
@@ -360,7 +367,7 @@ export function captureWorkerTurnClaimCurrentness(
     isBoundCurrent();
 }
 
-function resolveWorkerTurnRuntime(
+function resolveBoundWorkerTurnRuntime(
   identity: Pick<
     WorkerConnectionIdentity,
     "turnClaim" | "sessionId" | "runId" | "environmentId" | "ownerEpoch"
@@ -389,16 +396,14 @@ function resolveWorkerTurnRuntime(
     }
     owner = candidate;
   }
-  const runtime = owner?.runtime;
-  if (
-    !owner ||
-    !runtime ||
-    !runtime.claimAuthority.isCurrent() ||
-    !validateAgentRunDelegatedAuthority(runtime.delegatedAuthority)
-  ) {
-    return undefined;
-  }
-  return runtime;
+  return owner?.runtime.claimAuthority.isCurrent() ? owner.runtime : undefined;
+}
+
+function resolveWorkerTurnRuntime(identity: Parameters<typeof resolveBoundWorkerTurnRuntime>[0]) {
+  const runtime = resolveBoundWorkerTurnRuntime(identity);
+  return runtime && validateAgentRunDelegatedAuthority(runtime.delegatedAuthority)
+    ? runtime
+    : undefined;
 }
 
 /** Cache identity follows the Gateway's admitted transcript, never worker-supplied history. */
@@ -415,8 +420,10 @@ export function bindWorkerTurnCapabilities(
     toolSurface: WorkerGatewayToolRuntime;
     prepareReplyMedia?: WorkerReplyMediaPreparer;
     inference?: WorkerInferenceExecutor;
+    admitTurn?: WorkerTurnAdmission;
+    execApproval?: WorkerExecApprovalOwner;
   },
-): void {
+): () => void {
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
   const owner = path ? workerTurnOwners.get(path)?.get(claim.sessionId) : undefined;
   if (
@@ -429,6 +436,13 @@ export function bindWorkerTurnCapabilities(
   }
   owner.runtime.toolSurface?.abort();
   Object.assign(owner.runtime, capabilities);
+  owner.runtime.inputApproved = false;
+  // Finalization retains this claim's decision after execution authority closes.
+  return () => {
+    if (capabilities.admitTurn) {
+      assertWorkerTurnInputApproval(owner.runtime);
+    }
+  };
 }
 
 export function captureWorkerReplyMedia(identity: WorkerConnectionIdentity) {
@@ -437,6 +451,10 @@ export function captureWorkerReplyMedia(identity: WorkerConnectionIdentity) {
 
 export function getWorkerTurnToolSurface(identity: Parameters<typeof resolveWorkerTurnRuntime>[0]) {
   return resolveWorkerTurnRuntime(identity)?.toolSurface;
+}
+
+export function getWorkerTurnExecApproval(identity: WorkerConnectionIdentity) {
+  return resolveWorkerTurnRuntime(identity)?.execApproval;
 }
 
 /** The exact admitted turn retains the grant; reconnects cannot elect another issuer. */
@@ -476,6 +494,59 @@ export function assertWorkerTurnGitHubGrantCurrent(
 
 export function getWorkerTurnInference(identity: WorkerConnectionIdentity) {
   return resolveWorkerTurnRuntime(identity)?.inference;
+}
+
+function assertWorkerTurnInputApproval(runtime: BoundWorkerTurnOwner["runtime"] | undefined): void {
+  if (!runtime?.inputApproved) {
+    throw new Error("Worker turn input admission is required before persistence or inference");
+  }
+}
+
+export function assertWorkerTurnInputAdmitted(identity: WorkerConnectionIdentity): void {
+  const runtime = resolveWorkerTurnRuntime(identity);
+  if (
+    runtime?.admitTurn ||
+    identity.protocolFeatures.includes(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE)
+  ) {
+    assertWorkerTurnInputApproval(runtime);
+    runtime?.assertActive();
+  }
+}
+
+/** Cancellation closes execution, but the exact claim retains its prior input decision. */
+export function assertWorkerTurnLiveEventInputAdmitted(identity: WorkerConnectionIdentity): void {
+  const runtime = resolveBoundWorkerTurnRuntime(identity);
+  if (
+    runtime?.admitTurn ||
+    identity.protocolFeatures.includes(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE)
+  ) {
+    assertWorkerTurnInputApproval(runtime);
+  }
+}
+
+export async function admitWorkerTurnInput(
+  identity: WorkerConnectionIdentity,
+  request: WorkerTurnAdmissionParams,
+  validate: () => boolean,
+) {
+  const runtime = resolveWorkerTurnRuntime(identity);
+  if (!runtime?.admitTurn || !validate()) {
+    return { ok: false as const, closeReason: "placement-mismatch" as const };
+  }
+  const assertCurrent = () => {
+    if (!validate()) {
+      throw new Error("Worker turn admission authority changed");
+    }
+    runtime.assertActive();
+  };
+  assertCurrent();
+  const result = await runtime.admitTurn(request, assertCurrent, () => {
+    assertCurrent();
+    // Approval belongs to this claim's callback and its captured Gateway input.
+    runtime.inputApproved = true;
+  });
+  assertCurrent();
+  return { ok: true as const, result };
 }
 
 /** Capture before buffering; delayed events must never bind to a replacement owner. */

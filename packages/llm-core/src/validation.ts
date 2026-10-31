@@ -3,10 +3,18 @@ import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coe
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
-import { Pointer } from "typebox/schema";
+import { CheckContext, CheckSchema, Pointer, Stack } from "typebox/schema";
+import { Convert, Errors } from "typebox/value";
+import { getRuntimeExecutionProfile } from "../../../standalone-runtime-profile.mjs";
 import type { Tool, ToolCall } from "./types.js";
 
-const validatorCache = new WeakMap<object, WeakMap<object, ReturnType<typeof Compile>>>();
+type ToolArgumentValidator = {
+  Check(value: unknown): boolean;
+  Convert(value: unknown): unknown;
+  Errors(value: unknown): TLocalizedValidationError[];
+};
+
+const validatorCache = new WeakMap<object, WeakMap<object, ToolArgumentValidator>>();
 
 /** Maximum string length accepted for schema-gated JSON coercion. */
 const MAX_JSON_COERCE_LENGTH = 64 * 1024;
@@ -103,7 +111,7 @@ function isValidatorSchema(value: unknown): value is Tool["parameters"] {
 function getSubSchemaValidator(
   schema: JsonSchemaObject,
   root?: JsonSchemaObject,
-): ReturnType<typeof Compile> | undefined {
+): ToolArgumentValidator | undefined {
   if (!isValidatorSchema(schema)) {
     return undefined;
   }
@@ -176,49 +184,6 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
     }
     default:
       return value;
-  }
-}
-
-function applySchemaObjectCoercion(
-  value: Record<string, unknown>,
-  schema: JsonSchemaObject,
-  root: JsonSchemaObject | undefined,
-): void {
-  const properties = schema.properties;
-  const propertyKeys = properties ? Object.keys(properties) : [];
-
-  if (properties) {
-    for (const [key, propertySchema] of Object.entries(properties)) {
-      if (key in value) {
-        value[key] = coerceWithJsonSchema(value[key], propertySchema, root);
-      }
-    }
-  }
-
-  if (schema.additionalProperties && isJsonSchemaObject(schema.additionalProperties)) {
-    const definedKeys = new Set<string>(propertyKeys);
-    for (const [key, propertyValue] of Object.entries(value)) {
-      if (!definedKeys.has(key)) {
-        value[key] = coerceWithJsonSchema(propertyValue, schema.additionalProperties, root);
-      }
-    }
-  }
-}
-
-function applySchemaArrayCoercion(
-  value: unknown[],
-  schema: JsonSchemaObject,
-  root: JsonSchemaObject | undefined,
-): void {
-  const items = schema.items;
-  if (!isJsonSchemaObject(items)) {
-    return;
-  }
-  for (let index = 0; index < value.length; index++) {
-    const itemSchema = Array.isArray(items) ? items[index] : items;
-    if (itemSchema) {
-      value[index] = coerceWithJsonSchema(value[index], itemSchema, root);
-    }
   }
 }
 
@@ -308,20 +273,44 @@ function coerceWithJsonSchema(
     isObjectBackedRecord(nextValue) &&
     !Array.isArray(nextValue)
   ) {
-    applySchemaObjectCoercion(nextValue, schema, root);
+    const properties = schema.properties;
+    const propertyKeys = properties ? Object.keys(properties) : [];
+
+    if (properties) {
+      for (const [key, propertySchema] of Object.entries(properties)) {
+        if (key in nextValue) {
+          nextValue[key] = coerceWithJsonSchema(nextValue[key], propertySchema, root);
+        }
+      }
+    }
+
+    if (schema.additionalProperties && isJsonSchemaObject(schema.additionalProperties)) {
+      const definedKeys = new Set<string>(propertyKeys);
+      for (const [key, propertyValue] of Object.entries(nextValue)) {
+        if (!definedKeys.has(key)) {
+          nextValue[key] = coerceWithJsonSchema(propertyValue, schema.additionalProperties, root);
+        }
+      }
+    }
   }
 
   if (schemaTypes.includes("array") && Array.isArray(nextValue)) {
-    applySchemaArrayCoercion(nextValue, schema, root);
+    const items = schema.items;
+    if (!isJsonSchemaObject(items)) {
+      return nextValue;
+    }
+    for (let index = 0; index < nextValue.length; index++) {
+      const itemSchema = Array.isArray(items) ? items[index] : items;
+      if (itemSchema) {
+        nextValue[index] = coerceWithJsonSchema(nextValue[index], itemSchema, root);
+      }
+    }
   }
 
   return nextValue;
 }
 
-function getValidator(
-  schema: Tool["parameters"],
-  root?: JsonSchemaObject,
-): ReturnType<typeof Compile> {
+function getValidator(schema: Tool["parameters"], root?: JsonSchemaObject): ToolArgumentValidator {
   const scope = root ?? schema;
   let validators = validatorCache.get(scope);
   const cached = validators?.get(schema);
@@ -329,11 +318,22 @@ function getValidator(
     return cached;
   }
   // Keep root refs and non-enumerable TypeBox refinements when checking union candidates.
-  const validator = Compile(
+  const scopedSchema =
     root && root !== schema
       ? { $defs: root.$defs, definitions: root.definitions, allOf: [schema] }
-      : schema,
-  );
+      : schema;
+  let validator: ToolArgumentValidator;
+  if (getRuntimeExecutionProfile() === "embedded-aot") {
+    const stack = Stack({}, scopedSchema);
+    validator = {
+      // Evaluated properties and items belong to one input, including failed union branches.
+      Check: (value) => CheckSchema(stack, new CheckContext(), scopedSchema, value),
+      Convert: (value) => Convert(scopedSchema, value),
+      Errors: (value) => Errors(scopedSchema, value),
+    };
+  } else {
+    validator = Compile(scopedSchema);
+  }
   if (!validators) {
     validators = new WeakMap();
     validatorCache.set(scope, validators);

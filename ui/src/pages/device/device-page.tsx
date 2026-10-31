@@ -1,5 +1,14 @@
 import { createSignal } from "@solidjs/signals";
-import { action, createOptimistic, For, onSettled, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  Errored,
+  For,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type {
   NativeDeviceSettingsCapability,
@@ -7,6 +16,7 @@ import type {
   SettingKey,
 } from "../../app/native-device-settings.ts";
 import { NativeChromeSetup } from "../../components/native-chrome-setup.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -21,6 +31,7 @@ import {
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerAppsEnglish } from "../../i18n/locales/en-apps.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -69,7 +80,10 @@ export function DevicePage() {
   const [newDomain, setNewDomain] = createSignal("");
   const [editRevision, setEditRevision] = createSignal(0);
   const [gatewayHostingPending, setGatewayHostingPending] = createOptimistic(false);
-  const [gatewayHostingError, setGatewayHostingError] = createSignal<Error>();
+  const [gatewayHostingCompletion, setGatewayHostingCompletion] = createSignal<Promise<void>>();
+  const gatewayHostingResult = createMemo(
+    () => gatewayHostingCompletion()?.then(() => null) ?? null,
+  );
   let finishGatewayHosting: (() => void) | undefined;
   let targetProfileTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -84,12 +98,10 @@ export function DevicePage() {
     finishGatewayHosting?.();
     flushTargetProfile();
   });
-  const presentGatewayHosting = action(function* (pending: Promise<Error | undefined>) {
+  const presentGatewayHosting = action(function* (pending: Promise<void>) {
     setGatewayHostingPending(true);
-    const error: Error | undefined = yield pending;
-    if (!disposed) {
-      setGatewayHostingError(error);
-    }
+    // The completion reader owns failures; this action only owns saving.
+    yield pending.catch(() => undefined);
     finishGatewayHosting = undefined;
   });
   const invalidateEdits = () => {
@@ -107,7 +119,7 @@ export function DevicePage() {
     const profile = pendingCookieSyncEdits.get(capability)?.targetProfile;
     if (profile && !profile.sent) {
       profile.sent = true;
-      capability.set("browser.cookieSync.targetProfile", profile.value, () => {
+      void capability.set("browser.cookieSync.targetProfile", profile.value, () => {
         settleCookieSyncEdit(capability, "targetProfile", profile);
         invalidateEdits();
       });
@@ -143,7 +155,7 @@ export function DevicePage() {
     ];
     retainCookieSyncEdits(capability).domains = values;
     invalidateEdits();
-    capability.set("browser.cookieSync.domains", values, () => {
+    void capability.set("browser.cookieSync.domains", values, () => {
       settleCookieSyncEdit(capability, "domains", values);
       invalidateEdits();
     });
@@ -163,7 +175,7 @@ export function DevicePage() {
           description={props.description}
           checked={props.checked ?? false}
           disabled={props.disabled}
-          onChange={(value) => capability?.set(props.setting, value)}
+          onChange={(value) => void capability?.set(props.setting, value)}
         />
       </Show>
     );
@@ -182,25 +194,18 @@ export function DevicePage() {
         title={title()}
         description={props.description}
         control={
-          <select
-            class="settings-select"
+          <SettingsSelect
             aria-label={title()}
             ref={liveValue(() => props.value)}
+            value={props.value}
+            options={props.options.map((option) => ({
+              value: option.id,
+              label: option.name,
+              disabled: option.disabled,
+            }))}
             disabled={props.disabled}
-            onChange={(event) => capability?.set(props.setting, event.currentTarget.value)}
-          >
-            <For each={props.options} keyed={(option) => option.id}>
-              {(option) => (
-                <option
-                  value={option().id}
-                  selected={option().id === props.value}
-                  disabled={option().disabled}
-                >
-                  {option().name}
-                </option>
-              )}
-            </For>
-          </select>
+            onChange={(event) => void capability?.set(props.setting, event.currentTarget.value)}
+          />
         }
       />
     );
@@ -213,31 +218,39 @@ export function DevicePage() {
           description={
             <>
               {t("configPage.deviceSettings.keepGatewayRunningHint")}
-              <Show when={!gatewayHostingPending() && gatewayHostingError()}>
-                {(error) => (
-                  <>
-                    <br />
-                    <span role="alert">
-                      {t("configPage.deviceSettings.keepGatewayRunningFailed")} {error().message}
-                    </span>
-                  </>
-                )}
-              </Show>
+              <Loading on={gatewayHostingCompletion()}>
+                <Errored
+                  fallback={(error) => (
+                    <>
+                      <br />
+                      <span role="alert">
+                        {t("configPage.deviceSettings.keepGatewayRunningFailed")}{" "}
+                        {formatUiError(error())}
+                      </span>
+                    </>
+                  )}
+                >
+                  {gatewayHostingResult()}
+                </Errored>
+              </Loading>
             </>
           }
           checked={props.app.keepGatewayRunning ?? false}
-          disabled={props.app.keepGatewayRunningAvailable !== true || gatewayHostingPending()}
+          disabled={props.app.keepGatewayRunningAvailable !== true}
+          saving={gatewayHostingPending()}
           onChange={(value) => {
             if (!capability || disposed || finishGatewayHosting) {
               return;
             }
-            const pending = Promise.withResolvers<Error | undefined>();
+            const pending = Promise.withResolvers<void>();
             // Navigation releases presentation without cancelling the native write.
-            finishGatewayHosting = () => pending.resolve(undefined);
-            capability.set("app.keepGatewayRunning", value, (error) => {
-              pending.resolve(error);
+            finishGatewayHosting = () => pending.resolve();
+            void capability.set("app.keepGatewayRunning", value, (error) => {
+              return error ? pending.reject(error) : pending.resolve();
             });
-            void presentGatewayHosting(pending.promise);
+            void setGatewayHostingCompletion(pending.promise);
+            // Publish the new feedback receipt before joining the saving action.
+            void Promise.resolve().then(() => presentGatewayHosting(pending.promise));
           }}
         />
       </Show>

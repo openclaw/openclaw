@@ -1,6 +1,7 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
   getGatewayRestartDrainSignal,
+  isGatewayWorkAdmissionClosed,
   onGatewaySuspendAdmissionChange,
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -20,7 +21,7 @@ export function createWorkerReconcileCancellation(ownerSignal: AbortSignal) {
       interrupt();
     }
   });
-  if (lifetime.aborted) {
+  if (lifetime.aborted || isGatewayWorkAdmissionClosed()) {
     interrupt();
   }
   return {

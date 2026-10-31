@@ -159,23 +159,34 @@ afterEach(async () => {
 const makeModel = (id: string, name: string) =>
   modelDefinition(id, name, { contextWindow: 16_000, maxTokens: 2048 });
 
-const makeConfig = (opts?: { fallbacks?: string[]; apiKey?: string }): OpenClawConfig =>
-  ({
+const copilotModelId = "gpt-4o";
+const makeConfig = (opts?: {
+  fallbacks?: string[];
+  apiKey?: string;
+  copilot?: boolean;
+}): OpenClawConfig => {
+  const provider = opts?.copilot ? "github-copilot" : "openai";
+  return {
     agents: {
-      defaults: { model: { fallbacks: opts?.fallbacks ?? [] } },
+      ...(!opts?.copilot ? { defaults: { model: { fallbacks: opts?.fallbacks ?? [] } } } : {}),
       entries: { test: {} },
     },
     models: {
       providers: {
-        openai: {
+        [provider]: {
           api: "openai-responses",
-          apiKey: opts?.apiKey ?? "sk-test",
-          baseUrl: "https://example.com",
-          models: [makeModel("mock-1", "Mock 1")],
+          ...(!opts?.copilot ? { apiKey: opts?.apiKey ?? "sk-test" } : {}),
+          baseUrl: opts?.copilot ? "https://api.copilot.example" : "https://example.com",
+          models: [
+            opts?.copilot
+              ? makeModel(copilotModelId, "Copilot GPT-4o")
+              : makeModel("mock-1", "Mock 1"),
+          ],
         },
       },
     },
-  }) satisfies OpenClawConfig;
+  };
+};
 
 const makeAgentOverrideOnlyFallbackConfig = (agentId: string): OpenClawConfig => ({
   ...makeConfig(),
@@ -184,24 +195,6 @@ const makeAgentOverrideOnlyFallbackConfig = (agentId: string): OpenClawConfig =>
     entries: { [agentId]: { model: { fallbacks: ["openai/mock-2"] } } },
   },
 });
-
-const copilotModelId = "gpt-4o";
-
-const makeCopilotConfig = (): OpenClawConfig =>
-  ({
-    agents: {
-      entries: { test: {} },
-    },
-    models: {
-      providers: {
-        "github-copilot": {
-          api: "openai-responses",
-          baseUrl: "https://api.copilot.example",
-          models: [makeModel(copilotModelId, "Copilot GPT-4o")],
-        },
-      },
-    },
-  }) satisfies OpenClawConfig;
 
 const writeAuthStore = async (
   storageDir: string,
@@ -238,19 +231,15 @@ const writeCopilotAuthStore = async (storageDir: string, token = "gh-token") => 
   );
 };
 
-const writeOpenAiCodexAuthStore = async (storageDir: string, includeBackup = false) => {
+const writeOpenAiCodexAuthStore = async (storageDir: string) => {
   runtime.auth.saveAuthProfileStore(
     {
       version: 1,
       profiles: {
         "openai:work": createApiKeyCredential("openai", "sk-codex"),
-        ...(includeBackup
-          ? {
-              "openai:backup": { type: "api_key" as const, provider: "openai", key: "sk-backup" },
-            }
-          : {}),
+        "openai:backup": createApiKeyCredential("openai", "sk-backup"),
       },
-      ...(includeBackup ? { order: { openai: ["openai:work", "openai:backup"] } } : {}),
+      order: { openai: ["openai:work", "openai:backup"] },
     },
     storageDir,
   );
@@ -311,14 +300,11 @@ async function runAutoPinnedRotationCase(params: {
   sessionKey: string;
   runId: string;
   failureStage?: "assistant" | "prompt";
-  exhaustTransientRetries?: boolean;
-  config?: OpenClawConfig;
 }) {
   runEmbeddedAttemptMock.mockReset();
   await writeAuthStore(agentDir);
   // Exhaust this provider's three-retry cap before rotating on transient failures.
-  const failureCount = params.exhaustTransientRetries ? 4 : 1;
-  for (let attempt = 0; attempt < failureCount; attempt += 1) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
     runEmbeddedAttemptMock.mockResolvedValueOnce({
       ...(params.failureStage === "prompt"
         ? makeAttempt({
@@ -332,16 +318,11 @@ async function runAutoPinnedRotationCase(params: {
   await runTurn({
     sessionKey: params.sessionKey,
     runId: params.runId,
-    config: params.config ?? makeConfig(),
     authProfileId: "openai:p1",
   });
 
-  expectAuthProfileAttempts(
-    params.exhaustTransientRetries
-      ? ["openai:p1", "openai:p1", "openai:p1", "openai:p1", "openai:p2"]
-      : ["openai:p1", "openai:p2"],
-  );
-  expect(sleepWithAbortMock).toHaveBeenCalledTimes(params.exhaustTransientRetries ? 3 : 0);
+  expectAuthProfileAttempts(["openai:p1", "openai:p1", "openai:p1", "openai:p1", "openai:p2"]);
+  expect(sleepWithAbortMock).toHaveBeenCalledTimes(3);
   const usageStats = await readUsageStats(agentDir);
   expect(usageStats["openai:p2"]?.lastUsed).toBeGreaterThan(2);
   return { usageStats };
@@ -439,7 +420,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
       );
 
     await runTurn({
-      config: makeCopilotConfig(),
+      config: makeConfig({ copilot: true }),
       provider: "github-copilot",
       model: copilotModelId,
       runId: "run:copilot-auth-repeat",
@@ -451,7 +432,6 @@ describe("runEmbeddedAgent auth profile rotation", () => {
   it("rotates for overloaded prompt failures across auto-pinned profiles", async () => {
     const { usageStats } = await runAutoPinnedRotationCase({
       failureStage: "prompt",
-      exhaustTransientRetries: true,
       errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
       sessionKey: "agent:test:overloaded-prompt-rotation",
       runId: "run:overloaded-prompt-rotation",
@@ -482,7 +462,6 @@ describe("runEmbeddedAgent auth profile rotation", () => {
 
   it("rotates after provider-started timeouts and records the failed profile cooldown", async () => {
     const { usageStats } = await runAutoPinnedRotationCase({
-      exhaustTransientRetries: true,
       errorMessage: "request ended without sending any chunks",
       sessionKey: "agent:test:provider-timeout",
       runId: "run:provider-timeout",
@@ -574,7 +553,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
   );
 
   it("rotates a user-pinned profile inside the Codex harness", async () => {
-    await writeOpenAiCodexAuthStore(agentDir, true);
+    await writeOpenAiCodexAuthStore(agentDir);
     mockFailedThenSuccessfulAttempt("429 Too Many Requests: subscription usage limit reached", {
       provider: "codex-cli",
       model: "gpt-5.4",

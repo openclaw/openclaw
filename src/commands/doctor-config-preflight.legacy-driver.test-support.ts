@@ -394,31 +394,21 @@ export function registerLegacyHeartbeatDriverTests() {
           },
         },
         async (state) => {
+          const heartbeat = {
+            every: repair ? "17m" : "30m",
+            target: "none",
+            prompt: "Check the synthetic migration fixture.",
+            activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
+            ...(repair ? { model: "openai/gpt-5.6-luna", directPolicy: "block" } : {}),
+          };
+          const main = { id: "main", default: true, workspace: state.workspaceDir };
           await state.writeConfig({
             meta: { lastTouchedVersion: version },
             plugins: { enabled: false },
             agents: {
-              ...(explicitConfig
-                ? {
-                    defaults: {
-                      heartbeat: {
-                        every: repair ? "17m" : "30m",
-                        ...(repair ? { model: "openai/gpt-5.6-luna" } : {}),
-                        target: "none",
-                        ...(repair ? { directPolicy: "block" } : {}),
-                        prompt: "Check the synthetic migration fixture.",
-                        activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
-                      },
-                    },
-                  }
-                : {}),
+              ...(explicitConfig ? { defaults: { heartbeat } } : {}),
               ...(repair
-                ? {
-                    list: [
-                      { id: "main", default: true, workspace: state.workspaceDir },
-                      { id: "second" },
-                    ],
-                  }
+                ? { list: [main, { id: "second" }] }
                 : { entries: { main: { workspace: state.workspaceDir } } }),
             },
             gateway: { mode: "local", auth: { mode: "none" } },
@@ -439,43 +429,25 @@ export function registerLegacyHeartbeatDriverTests() {
               jobs: [monitor],
             });
             await closeOpenClawStateDatabaseAsync();
-            const legacy = new DatabaseSync(databasePath);
-            try {
-              const row = legacy
-                .prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?")
-                .get(monitor.id);
-              const definition = JSON.parse(String(row?.job_json));
-              definition.payload = { kind: "heartbeat" };
-              legacy
-                .prepare(
-                  "UPDATE cron_jobs SET payload_kind = 'heartbeat', job_json = ? WHERE job_id = ?",
-                )
-                .run(JSON.stringify(definition), monitor.id);
-            } finally {
-              legacy.close();
-            }
+            using legacy = new DatabaseSync(databasePath);
+            const row = legacy
+              .prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?")
+              .get(monitor.id);
+            const definition = JSON.parse(String(row?.job_json));
+            definition.payload = { kind: "heartbeat" };
+            legacy
+              .prepare(
+                "UPDATE cron_jobs SET payload_kind = 'heartbeat', job_json = ? WHERE job_id = ?",
+              )
+              .run(JSON.stringify(definition), monitor.id);
           } else {
             await closeOpenClawStateDatabaseAsync();
           }
-          const originalJobs = (() => {
-            const originalDatabase = new DatabaseSync(databasePath, { readOnly: true });
-            try {
-              return originalDatabase
-                .prepare("SELECT * FROM cron_jobs ORDER BY store_key, sort_order, job_id")
-                .all();
-            } finally {
-              originalDatabase.close();
-            }
-          })();
+          const jobsQuery = "SELECT * FROM cron_jobs ORDER BY store_key, sort_order, job_id";
+          const [originalJobs] = queryAgent(databasePath, [jobsQuery]);
           const result = await runBuiltRuntime(
             runtimeRoot,
-            disableUpdatedPackageCompileCacheEnv({
-              ...process.env,
-              NODE_ENV: undefined,
-              VITEST: undefined,
-              VITEST_POOL_ID: undefined,
-              VITEST_WORKER_ID: undefined,
-            }),
+            childEnv({}),
             [
               "doctor",
               ...(repair ? ["--fix"] : []),
@@ -509,40 +481,31 @@ export function registerLegacyHeartbeatDriverTests() {
           } else {
             expect(fs.readFileSync(`${state.configPath}.bak`, "utf8")).toBe(original);
           }
-          const db = new DatabaseSync(databasePath, { readOnly: true });
-          try {
-            const jobs = db
-              .prepare("SELECT job_json FROM cron_jobs")
-              .all()
-              .map((row) => JSON.parse(String(row.job_json)));
-            expect(jobs).toContainEqual(
-              expect.objectContaining({
-                agentId: "main",
-                schedule: expect.objectContaining({
-                  kind: "every",
-                  everyMs: explicitConfig && repair ? 1_020_000 : 1_800_000,
-                }),
-                payload: expect.objectContaining({ kind: "agentTurn" }),
-                ...(!explicitConfig || repair ? { id: "published-monitor" } : {}),
-                ...(explicitConfig
-                  ? {
-                      payload: expect.objectContaining({
-                        kind: "agentTurn",
-                        message: "Check the synthetic migration fixture.",
-                        ...(repair ? { model: "openai/gpt-5.6-luna" } : {}),
-                      }),
-                      delivery: expect.objectContaining({
-                        mode: "none",
-                        ...(repair ? { directPolicy: "block" } : {}),
-                      }),
-                      activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
-                    }
-                  : {}),
-              }),
-            );
-          } finally {
-            db.close();
-          }
+          const [rows] = queryAgent(databasePath, ["SELECT job_json FROM cron_jobs"]);
+          const jobs = rows!.map((row) => JSON.parse(String(row.job_json)));
+          const expectedJob = {
+            agentId: "main",
+            schedule: expect.objectContaining({
+              kind: "every",
+              everyMs: explicitConfig && repair ? 1_020_000 : 1_800_000,
+            }),
+            payload: expect.objectContaining({
+              kind: "agentTurn",
+              ...(explicitConfig ? { message: "Check the synthetic migration fixture." } : {}),
+              ...(explicitConfig && repair ? { model: "openai/gpt-5.6-luna" } : {}),
+            }),
+            ...(!explicitConfig || repair ? { id: "published-monitor" } : {}),
+            ...(explicitConfig
+              ? {
+                  delivery: expect.objectContaining({
+                    mode: "none",
+                    ...(repair ? { directPolicy: "block" } : {}),
+                  }),
+                  activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
+                }
+              : {}),
+          };
+          expect(jobs).toContainEqual(expect.objectContaining(expectedJob));
           const databaseBackups = fs
             .readdirSync(path.dirname(databasePath))
             .filter(
@@ -552,21 +515,12 @@ export function registerLegacyHeartbeatDriverTests() {
             );
           expect(databaseBackups.length).toBeGreaterThan(0);
           for (const name of databaseBackups) {
-            const backup = new DatabaseSync(path.join(path.dirname(databasePath), name), {
-              readOnly: true,
-            });
-            try {
-              expect(backup.prepare("PRAGMA integrity_check").all()).toEqual([
-                { integrity_check: "ok" },
-              ]);
-              expect(
-                backup
-                  .prepare("SELECT * FROM cron_jobs ORDER BY store_key, sort_order, job_id")
-                  .all(),
-              ).toEqual(originalJobs);
-            } finally {
-              backup.close();
-            }
+            const [integrity, backedUpJobs] = queryAgent(
+              path.join(path.dirname(databasePath), name),
+              ["PRAGMA integrity_check", jobsQuery],
+            );
+            expect(integrity).toEqual([{ integrity_check: "ok" }]);
+            expect(backedUpJobs).toEqual(originalJobs);
           }
         },
       );

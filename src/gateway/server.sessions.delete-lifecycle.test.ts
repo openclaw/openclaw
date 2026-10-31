@@ -21,14 +21,14 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { readAttachedSessionEndTranscriptSourceForTest } from "../plugins/session-end-transcript.test-support.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import {
   beginSessionEffect,
   captureSessionTarget,
-  isSessionMutationActive,
+  readSessionControllerAdmissionError,
   runSessionMutation,
 } from "../sessions/session-controller.lifecycle.js";
 import {
@@ -706,7 +706,10 @@ test("sessions.delete returns unavailable when active run does not stop", async 
       ),
       signal,
     );
-    expect(isSessionMutationActive(storePath, target.aliases)).toBe(true);
+    // The short mutation releases before draining; its admission closure stays held.
+    expect(readSessionControllerAdmissionError({ target })).toMatchObject({
+      code: "OPENCLAW_DIRECT_ABORT",
+    });
     await withinTest(deadlineArmed.promise, signal);
     await vi.advanceTimersByTimeAsync(15_000);
     restoreDeadlineObserver();

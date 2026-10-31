@@ -4,6 +4,7 @@ import {
   normalizeStringifiedEntries,
 } from "@openclaw/normalization-core/string-coerce";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentConfig,
@@ -27,7 +28,7 @@ import {
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { sessionDeliveryChannel } from "../utils/delivery-context.read.js";
@@ -53,15 +54,6 @@ export async function sandboxExplainCommand(
     throw new Error("--agent must not be blank");
   }
   const requestedAgentId = requestedAgent ? normalizeAgentId(requestedAgent) : undefined;
-  const sessionAgentId =
-    requestedSession && requestedSession !== "global" && requestedSession.includes(":")
-      ? normalizeAgentId(resolveAgentIdFromSessionKey(requestedSession))
-      : undefined;
-  if (requestedAgentId && sessionAgentId && requestedAgentId !== sessionAgentId) {
-    throw new Error(
-      `Sandbox explain agent "${requestedAgentId}" does not match session agent "${sessionAgentId}".`,
-    );
-  }
   if (requestedAgentId) {
     resolveConfiguredAgentId(cfg, requestedAgentId);
   }
@@ -71,16 +63,16 @@ export async function sandboxExplainCommand(
     agentId: requestedAgentId,
   });
 
-  const rawSession = (opts.session ?? "").trim();
-  // Fully-qualified session keys are already scoped; only short names need
-  // agent/main-key expansion.
-  const sessionKey = !rawSession
+  // Channel-prefixed aliases still need agent scope before lookup; only parsed
+  // agent keys and the global sentinel already name their store session.
+  const sessionKey = !requestedSession
     ? resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId })
-    : rawSession.includes(":") || rawSession === "global"
-      ? rawSession
-      : buildAgentMainSessionKey({
+    : requestedSession === "global"
+      ? requestedSession
+      : toAgentStoreSessionKey({
           agentId: resolvedAgentId,
-          mainKey: normalizeMainKey(rawSession),
+          requestKey: requestedSession,
+          mainKey: cfg.session?.mainKey,
         });
 
   const storePath = resolveSessionStorePathCore(cfg.session?.store, {
@@ -294,7 +286,7 @@ export async function sandboxExplainCommand(
   const rich = isRich();
   const heading = (value: string) => colorize(rich, theme.heading, value);
   const key = (value: string) => colorize(rich, theme.muted, value);
-  const value = (val: string) => colorize(rich, theme.info, val);
+  const value = (val: string) => colorize(rich, theme.info, terminalText`${val}`);
   const ok = (val: string) => colorize(rich, theme.success, val);
   const warn = (val: string) => colorize(rich, theme.warn, val);
   const err = (val: string) => colorize(rich, theme.error, val);
@@ -323,17 +315,17 @@ export async function sandboxExplainCommand(
       lines.push(
         `    - ${value(mount.hostRoot)} -> ${value(mount.containerRoot)} ${key(
           mount.writable ? "rw" : "ro",
-        )} ${key(`(${mount.source})`)}`,
+        )} ${key(terminalText`(${mount.source})`)}`,
       );
     }
   }
   lines.push(
     "",
     heading("Sandbox tool policy:"),
-    `  ${key(`allow (${payload.sandbox.tools.sources.allow.source}):`)} ${value(
+    `  ${key(terminalText`allow (${payload.sandbox.tools.sources.allow.source}):`)} ${value(
       payload.sandbox.tools.allow.join(", ") || "(empty)",
     )}`,
-    `  ${key(`deny  (${payload.sandbox.tools.sources.deny.source}):`)} ${value(
+    `  ${key(terminalText`deny  (${payload.sandbox.tools.sources.deny.source}):`)} ${value(
       payload.sandbox.tools.deny.join(", ") || "(empty)",
     )}`,
     "",
@@ -345,7 +337,7 @@ export async function sandboxExplainCommand(
   if (payload.elevated.failures.length > 0) {
     lines.push(
       `  ${key("failing gates:")} ${warn(
-        payload.elevated.failures.map((f) => `${f.gate} (${f.key})`).join(", "),
+        terminalText`${payload.elevated.failures.map((f) => `${f.gate} (${f.key})`).join(", ")}`,
       )}`,
     );
   }
@@ -359,7 +351,7 @@ export async function sandboxExplainCommand(
   }
   lines.push("", heading("Fix-it:"));
   for (const keyLocal of payload.fixIt) {
-    lines.push(`  - ${keyLocal}`);
+    lines.push(terminalText`  - ${keyLocal}`);
   }
   lines.push("", `${key("Docs:")} ${formatDocsLink("/sandbox", "docs.openclaw.ai/sandbox")}`);
 

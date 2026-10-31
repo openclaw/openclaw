@@ -5,6 +5,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectBytesEqual, expectFilesEqual } from "../../test/helpers/file-snapshots.js";
 import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
@@ -29,14 +30,15 @@ import {
   resolvePackageActivationAnchor,
 } from "./package-update-activation-paths.js";
 import { preparePackageActivationJournal } from "./package-update-activation-prepare.js";
-import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 import {
   readPackageActivationStatus as status,
   runPackageActivationRecovery as recovery,
 } from "./package-update-activation.js";
 import { createPackageIntegrityReader } from "./package-update-integrity.js";
-import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
-import { swapStagedPackageInstall } from "./package-update-swap.js";
+import {
+  runPublicationSwap,
+  withPublicationFence,
+} from "./package-update-publication.test-support.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
@@ -52,14 +54,7 @@ beforeEach(() => {
   ({ root, assertDatabasePath, childGuardEnv } = fixture.setup());
   anchor = "";
 });
-afterEach(async () => {
-  try {
-    await fixture.lifetime.cleanup();
-  } finally {
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-  }
-});
+afterEach(async () => fixture.cleanup());
 
 describe.skipIf(process.platform === "win32")("package fingerprint bounds", () => {
   beforeEach(() => {
@@ -94,16 +89,8 @@ describe.skipIf(process.platform === "win32")("package fingerprint bounds", () =
       const location = resolvePackageActivationAnchor(f.packageRoot);
       // Exhaust the budget before candidate hashing, but only on its first regular file.
       const assertOversized = oversizedFile(payload, true);
-      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(f.packageRoot);
-        let transaction: PackageUpdateTransaction | undefined;
-        const result = await swapStagedPackageInstall({
-          ...f.params,
-          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
-          onTransaction: (issued) => {
-            transaction = issued;
-          },
-        });
+      await withPublicationFence(f.packageRoot, async (fence) => {
+        const { result, transaction } = await runPublicationSwap(f, fence);
         expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
         assertOversized();
         expect(result.step.advisory?.message).toContain("full package contents are unverified");
@@ -447,11 +434,8 @@ describe.skipIf(process.platform === "win32")("package preparation durability", 
     expect(() => fs.fstatSync(helperFd!)).toThrow();
     expect(custody).not.toHaveBeenCalled();
     if (before) {
-      expect(
-        fs.readFileSync(
-          `${anchor}.superseded-${before.descriptor.operationId}/control/operation.sqlite`,
-        ),
-      ).toEqual(previousReceipt);
+      const superseded = `${anchor}.superseded-${before.descriptor.operationId}/control/operation.sqlite`;
+      expectBytesEqual(fs.readFileSync(superseded), previousReceipt!, superseded);
     }
     absent(control(anchor));
   });
@@ -646,7 +630,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
     expect(report.body).not.toContain(fact.message);
     expect(fact.message!.length).toBeLessThanOrEqual(200);
     expect(report.body).not.toContain(root);
-    expect(journalFiles(f.anchor)).toEqual(before);
+    expectFilesEqual(journalFiles(f.anchor), before);
     expect(fs.lstatSync(file)).toMatchObject({ nlink: observed.nlink, mode: observed.mode });
   });
 
@@ -667,17 +651,17 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
         true,
       );
       await expect(status(f.anchor, f.operationId)).rejects.toThrow();
-      expect(journalFiles(f.anchor)).toEqual(before);
+      expectFilesEqual(journalFiles(f.anchor), before);
       expect(fs.existsSync(`${f.journalPath}-wal`)).toBe(false);
       expect(fs.existsSync(`${f.journalPath}-shm`)).toBe(false);
 
       const admission = await f.journal.readForRecovery();
       expect(admission.record).toEqual(f.record);
-      expect(journalFiles(f.anchor)).toEqual(before);
+      expectFilesEqual(journalFiles(f.anchor), before);
       await expect(recovery(f.anchor, "repair", randomUUID())).rejects.toThrow(
         "different operation",
       );
-      expect(journalFiles(f.anchor)).toEqual(before);
+      expectFilesEqual(journalFiles(f.anchor), before);
       const rollback = fs.readFileSync(rollbackPath);
       if (replaced) {
         const replacement = path.join(path.dirname(f.journalPath), "replacement.sqlite");
@@ -697,7 +681,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
         { existingAuthority: f.authority },
       );
       if (replaced) {
-        expect(fs.readFileSync(rollbackPath)).toEqual(rollback);
+        expectBytesEqual(fs.readFileSync(rollbackPath), rollback, rollbackPath);
       } else {
         expect(f.journal.read()).toEqual(f.record);
         expect(fs.existsSync(rollbackPath)).toBe(false);
@@ -722,9 +706,9 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
         expect(fs.existsSync(`${f.journalPath}-shm`)).toBe(liveWriter);
         const before = journalFiles(f.anchor);
         await expect(status(f.anchor, f.operationId)).rejects.toThrow();
-        expect(journalFiles(f.anchor)).toEqual(before);
+        expectFilesEqual(journalFiles(f.anchor), before);
         await expect(recovery(f.anchor, "repair", f.operationId)).rejects.toThrow();
-        expect(journalFiles(f.anchor)).toEqual(before);
+        expectFilesEqual(journalFiles(f.anchor), before);
       } finally {
         if (database.isOpen) {
           database.close();
@@ -830,7 +814,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
       (column === null ? f.journal : openPackageActivationJournal(f.anchor)).read(),
     ).toThrow(name === "malformed descriptor" ? SyntaxError : undefined);
     await expect(f.transition(f.record, "publishing", { kind: "displace" })).rejects.toThrow();
-    expect(journalFiles(f.anchor)).toEqual(before);
+    expectFilesEqual(journalFiles(f.anchor), before);
   });
 
   it.each(["rollback-in-progress", "retiring"] as const)(
@@ -846,7 +830,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
       await expect(recovery(f.anchor, "repair", f.operationId)).rejects.toThrow(
         `Forward publication is disarmed (${phase})`,
       );
-      expect(journalFiles(f.anchor)).toEqual(before);
+      expectFilesEqual(journalFiles(f.anchor), before);
       expect(fs.existsSync(path.join(f.anchor, "candidate"))).toBe(true);
       expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
       expect(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).toContain(
@@ -905,7 +889,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
       }),
     ).toThrow(failure);
     expect(f.journal.read()).toEqual(f.record);
-    expect(journalFiles(f.anchor)).toEqual(before);
+    expectFilesEqual(journalFiles(f.anchor), before);
   });
   const jsonColumns = ["descriptor_json", "intent_json", "publications_json"] as const;
   it.each(jsonColumns)(
@@ -919,7 +903,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
       expect(() => openPackageActivationJournal(f.anchor).read()).toThrow(
         "Package publication journal must contain one bounded operation.",
       );
-      expect(journalFiles(f.anchor)).toEqual(before);
+      expectFilesEqual(journalFiles(f.anchor), before);
       expect(fs.readdirSync(f.anchor)).toEqual(names);
     },
   );

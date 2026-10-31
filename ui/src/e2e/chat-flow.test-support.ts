@@ -11,6 +11,7 @@ import {
 } from "./control-ui-e2e-suite.test-support.ts";
 
 export { expectDefined, installMockGateway };
+export { exactButton } from "./chat-presentation.test-support.ts";
 export { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
 export {
   controlUiSessionPath,
@@ -30,10 +31,6 @@ export async function newChatPage(
 
 export function textContent(text: string) {
   return [{ type: "text", text }];
-}
-
-export function exactButton(root: Page | Locator, name: string) {
-  return root.getByRole("button", { name, exact: true });
 }
 
 export function chatMessage(role: string, text: string, extra?: Record<string, unknown>) {
@@ -104,22 +101,6 @@ export function createChatFlowE2eSuite(
     unavailableMessage: (executablePath) =>
       `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
   });
-}
-
-export async function buildLocalWebchatAudioMessage(source: string) {
-  const { buildWebchatAssistantMessageFromReplyPayloads } =
-    await import("../../../src/gateway/server-methods/chat-webchat-media.ts");
-  const audioPath = new URL(source).pathname;
-  const localRoot = path.dirname(audioPath);
-  await mkdir(localRoot, { recursive: true });
-  await writeFile(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
-  return expectDefined(
-    await buildWebchatAssistantMessageFromReplyPayloads(
-      [{ mediaUrl: source, trustedLocalMedia: true }],
-      { localRoots: [localRoot] },
-    ),
-    "Gateway-produced WebChat audio message",
-  );
 }
 
 export const requireRecord = createRequireRecord("record", "expected-object-value");

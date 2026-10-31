@@ -32,12 +32,27 @@ replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
 
 ### Validation and activation
 
+Git updates check exact candidates' Node requirements before runtime retention,
+snapshot staging, or candidate checkout. Incompatible development candidates are
+skipped so an older compatible commit can still be selected. Local rebases and
+reference build inputs can change the manifest; their resulting Node requirements
+are checked before installation and building.
+
+Git `--dry-run` reports the selected target's Node requirement when its manifest
+is available locally, or explains why compatibility could not be checked. It does
+not fetch missing objects or predict the result of local rebases and build-tested
+fallbacks. These checks require the installed updater to contain the fix; they do
+not install or activate another Node runtime.
+
 Readiness checks share an overall deadline across native service inspection,
 listener checks, authenticated RPC, and HTTP readiness. A network probe's
 per-request limit does not shorten native inspection. Slow inspection still
 consumes the shared deadline, so it cannot extend the update's overall budget.
 These checks belong to the installed updater; a candidate cannot change an
 older updater's already-running readiness wait.
+
+On Windows, Doctor restoration uses the same cold-start readiness allowance as
+Gateway start and restart, including when Doctor runs as part of update repair.
 
 Before replacing the same installation, the updater observes the incumbent Gateway once. Failed
 readiness produces a warning and prevents automatic rollback from restarting it;
@@ -184,6 +199,13 @@ retries one transient timeout with a recorded warning. A second timeout names
 the stalled check and leaves the original Gateway running; ownership refusals
 are never retried. The installed updater owns this sequence, so a candidate
 cannot change an older updater's stop behavior during its first update.
+
+During finalization, an explicit update timeout includes Doctor preparation,
+maintenance admission, and the fresh Doctor process. Nested service inspection
+and stop attempts receive only the remaining allowance. An expired allowance
+prevents new effects; an already admitted stop still settles and retains the
+existing restoration path. This requires the running updater to contain the fix;
+a new candidate cannot change an older updater’s parent deadline.
 
 Unavailable service inspection produces a recorded `managed-service` warning,
 including the manual restart action. A stale, uninspectable service record cannot
@@ -716,6 +738,13 @@ you to `openclaw update repair` and `openclaw gateway status --deep`.
 Only named data risks, such as unsettled Doctor writers or unverified migrated
 state, instruct you to keep the Gateway stopped.
 
+On Windows, recovery re-enables the Scheduled Task before starting the Gateway
+and retains that recovery handle until final readiness verification completes.
+Re-enabling autostart alone does not count as a Gateway start. This also applies
+when post-update verification fails during a same-version npm reinstall. The
+running updater must contain this fix; installing a newer candidate cannot
+change an older updater's recovery orchestration.
+
 Respawn and update verification use the same progress-aware readiness wait as
 Gateway restart. Startup that continues making progress can use the existing
 five-minute startup lease. If that lease ends while the same Gateway is still
@@ -997,7 +1026,9 @@ The Gateway stays available during validation. Before replacing its installed
 code, the updater asks that exact Gateway to drain work and close its services,
 databases, and listener. A foreground Gateway launches a fresh process only after
 the updater settles; it does not reopen its old module graph after replacement.
-Managed services restart through their existing service manager.
+Managed services restart through their existing service manager. Android
+(Termux) verifies a foreground Gateway with the same Linux kernel process and
+boot identities as Linux.
 
 Chat updates retain the requester's original person-access grant while staging
 and validation run. Revoking that grant stops the pending update and leaves the
@@ -1111,11 +1142,24 @@ is running; the new CLI cannot fix the old CLI's pre-update inspection.
 #### Node runtime for package-manager updates
 
 Package-manager updates normally keep using the Node binary recorded in the
-managed service. If that Node cannot run the target release, but the current
-CLI Node can and the service is proven to belong to the package being updated,
-a restart-enabled update uses the current Node for finalization and rewrites
-the service metadata to that runtime. `--no-restart` cannot repair service
-metadata, so the same runtime mismatch stops before package mutation.
+managed service. If that Node cannot run the target release, the update refuses
+before staging the package or migrating state, even when the current CLI Node
+is compatible and restart is enabled. The diagnostic names the service Node
+path, its version, the required range, and the recovery steps. Changing the
+shell's Node alone does not change an absolute Node path in the service unit.
+
+For an installation already updated with an unsupported service Node, run
+`openclaw doctor --fix` under a supported Node. Doctor can refresh the runtime
+of a verified owned service, keeping a backup and preserving native settings
+and unrelated systemd drop-ins. This includes a drop-in whose
+`EnvironmentFile=-%t/...` supplies unrelated environment variables. A drop-in
+that overrides the launcher or PATH must be repaired by its owner; Doctor
+leaves it unchanged and identifies the unit to inspect with `systemctl --user cat`.
+
+Explicit saved runtime pins remain operator choices. To replace an unsupported
+pin, run `openclaw gateway install --force --runtime node --runtime-path /path/to/supported/node`
+from the intended installation and profile. Preserve operator overrides; the
+installer cannot repair a conflicting drop-in by rewriting the base unit.
 
 #### macOS LaunchAgent verification
 
@@ -1290,6 +1334,10 @@ the sentinel.
   </Step>
   <Step id="build-a-candidate" title="Build the update">
     Stable, beta, and dev updates install dependencies and build in a temporary worktree while the old Gateway serves. Dev rebases the staged checkout first so local commits are preserved and the build validates the exact source that will be activated. On POSIX, staging uses a private directory in the checkout's existing ignored `.artifacts` area. By default, the full workspace stays on the checkout filesystem, not a potentially small system temporary filesystem. An existing `.artifacts` redirect is honored as an operator storage choice, just like the build cache. Existing checkout, parent, and artifact directory permissions are not changed. Windows keeps its short system-drive staging path. Only dev updates walk back through earlier commits; stable and beta updates validate their selected target.
+
+    Dev skips local commit replay with a warning when shallow boundaries or unrelated history hide a shared ancestor with the target. Optional local checkout and rebase each have a ten-minute deadline, shortened by an explicit `--timeout`. If replay times out, that candidate is validated without local replay; conflicts retain the existing walk back through older candidates, and interruption stops the attempt.
+
+    Before moving `main`, commits outside the validated candidate are kept at `refs/openclaw/update-preserved/main-<sha>`. The warning names the ref and its inspection/removal commands. If the ref cannot be written, activation uses a detached HEAD and leaves `main` unchanged; interruption is not downgraded to this fallback. The installed updater must contain this fix: candidate code cannot repair an older updater's already-running preflight.
 
     When switching a package installation to a new Git checkout, POSIX builds use artifact storage inside the private clone transaction on the destination filesystem. Publishing the checkout leaves the build directory in place until runtime preparation and cleanup finish.
 

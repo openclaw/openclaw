@@ -8,7 +8,6 @@ import {
   MODEL_CATALOG_THINKING_LEVELS,
 } from "./model-catalog-types.js";
 import type { ModelCatalogModel, ModelCatalogProvider } from "./model-catalog-types.js";
-import { ModelInferenceCapabilitiesSchema } from "./model-inference-capabilities.js";
 
 export const REMOTE_CATALOG_MAX_FUTURE_SKEW_MS = 24 * 60 * 60_000;
 
@@ -307,18 +306,6 @@ function validateBundleModelRefs(
 export const remoteModelCatalogBundleV2Schema =
   bundleV2FieldsSchema.superRefine(validateBundleModelRefs);
 
-const modelV3Schema = modelV2Schema.safeExtend({
-  inference: ModelInferenceCapabilitiesSchema.optional(),
-});
-const bundleV3FieldsSchema = bundleV2FieldsSchema.extend({
-  schemaVersion: z.literal(3),
-  models: z.array(modelV3Schema).min(1),
-});
-
-/** Native task metadata is negotiated separately from the strict released v2 wire. */
-export const remoteModelCatalogBundleV3Schema =
-  bundleV3FieldsSchema.superRefine(validateBundleModelRefs);
-
 export type RemoteModelCatalogModelV2 = Omit<
   ModelCatalogModel,
   "cost" | "baseUrl" | "headers" | "upstreamModel" | "inference"
@@ -331,19 +318,6 @@ export type RemoteModelCatalogBundleV2 = Omit<
   z.infer<typeof remoteModelCatalogBundleV2Schema>,
   "models"
 > & { models: RemoteModelCatalogModelV2[] };
-
-export type RemoteModelCatalogBundleV3 = Omit<
-  RemoteModelCatalogBundleV2,
-  "schemaVersion" | "models"
-> & {
-  schemaVersion: 3;
-  models: Array<RemoteModelCatalogModelV2 & Pick<ModelCatalogModel, "inference">>;
-};
-
-export function parseRemoteModelCatalogBundleV3(value: unknown): RemoteModelCatalogBundleV3 {
-  // SAFETY: the schema validates every field; shared catalog types narrow compat metadata.
-  return remoteModelCatalogBundleV3Schema.parse(value) as RemoteModelCatalogBundleV3;
-}
 
 export function parseRemoteModelCatalogBundleV2(value: unknown): RemoteModelCatalogBundleV2 {
   // SAFETY: the schema validates every model field; shared catalog types narrow compat metadata.
@@ -375,7 +349,7 @@ function stripRemoteTransportOverrides(value: unknown): unknown {
 
 /** Removes every transport endpoint/header override before remote data reaches persistence. */
 export function sanitizeRemoteModelCatalogBundle<
-  T extends RemoteModelCatalogBundle | RemoteModelCatalogBundleV2 | RemoteModelCatalogBundleV3,
+  T extends RemoteModelCatalogBundle | RemoteModelCatalogBundleV2,
 >(bundle: T): T {
   // Provider dictionary keys are identities, even when named "headers" or "baseUrl".
   return (
@@ -453,27 +427,5 @@ export function validateAndSanitizeRemoteModelCatalogBundleV2(
     throw new Error("remote model catalog contains no valid models");
   }
   const providers = pruneRemoteCatalogRecommendations(bundle.providers, models);
-  return sanitizeRemoteModelCatalogBundle({ ...bundle, providers, models });
-}
-
-export function validateAndSanitizeRemoteModelCatalogBundleV3(
-  value: unknown,
-  warn: CatalogWarning = console.warn,
-): RemoteModelCatalogBundleV3 {
-  const bundle = bundleV3FieldsSchema.extend({ models: z.array(z.unknown()) }).parse(value);
-  const models = parseCatalogRows(
-    bundle.models,
-    modelV3Schema.refine((model) => Object.hasOwn(bundle.providers, model.provider)),
-    "models",
-    warn,
-    (model) => JSON.stringify([model.provider, model.id]),
-  );
-  if (models.length === 0) {
-    throw new Error("remote model catalog contains no valid models");
-  }
-  const providers = pruneRemoteCatalogRecommendations(
-    bundle.providers,
-    models.filter((model) => model.inference?.chat !== false),
-  );
   return sanitizeRemoteModelCatalogBundle({ ...bundle, providers, models });
 }

@@ -131,6 +131,7 @@ describe("zalo outbound hosted media", () => {
     );
     expect(getResponse.res.statusCode).toBe(200);
     expect(getResponse.headers.get("Content-Type")).toBe("image/png");
+    expect(getResponse.headers.get("Cache-Control")).toBe("no-store");
     expect(getResponse.res.end).toHaveBeenCalledWith(Buffer.from("image-bytes"));
 
     const consumedResponse = createMockResponse();

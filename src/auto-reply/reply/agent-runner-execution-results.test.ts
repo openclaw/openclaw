@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { assert, expect, it, vi } from "vitest";
-import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { GetReplyOptions } from "../types.js";
 import { setupExecutionSuite } from "./agent-runner-execution-suite.test-support.js";
@@ -11,8 +11,6 @@ import {
   initialFallbackAttemptOptions,
   requireRecord,
   expectRecordFields,
-  requireMockCall,
-  expectMockCallArgFields,
   createMinimalRunAgentTurnParams,
   createNonDirectFailureSessionCtx,
 } from "./agent-runner-execution.test-support.js";
@@ -23,6 +21,7 @@ import type {
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import { resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import { createTurn } from "./followup-delivery.test-helpers.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 const { state, runTurn } = await setupExecutionSuite();
 
 function primaryRun() {
@@ -55,117 +54,135 @@ async function classifyPrimary(params: FallbackRunnerParams) {
 }
 
 it.each([
-  { stopReason: "error", isHeartbeat: true, failureText: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT },
-  { stopReason: "superseded", isHeartbeat: false, failureText: undefined },
-])(
-  "preserves canonical $stopReason after private partial output (heartbeat=$isHeartbeat)",
-  async (testCase) => {
+  { stopReason: "error", failureText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
+  { stopReason: "superseded", failureText: undefined },
+])("preserves canonical $stopReason after private partial output", async (testCase) => {
+  const followupRun = createFollowupRun();
+  followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+  state.runEmbeddedAgentMock.mockResolvedValueOnce({
+    payloads: [{ text: "Private partial output before the run ended." }],
+    meta: { stopReason: testCase.stopReason },
+  });
+
+  const result = await runTurn({ followupRun });
+
+  assert(result.kind === "success");
+  expect(result.terminalFailurePayload?.text).toBe(testCase.failureText);
+  if (testCase.failureText !== undefined) {
+    assert(result.terminalFailurePayload);
+    expect(result.terminalFailurePayload.isError).toBe(true);
+    expect(
+      getReplyPayloadMetadata(result.terminalFailurePayload)?.deliverDespiteSourceReplySuppression,
+    ).toBe(true);
+  }
+});
+
+it.each(["missing-answer", "blocked-tool"])(
+  "preserves one %s notice through queued delivery",
+  async (kind) => {
     const followupRun = createFollowupRun();
-    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Private partial output before the run ended." }],
-      meta: { stopReason: testCase.stopReason },
-    });
-
-    const result = await runTurn({ followupRun, isHeartbeat: testCase.isHeartbeat });
-
-    assert(result.kind === "success");
-    expect(result.terminalFailurePayload?.text).toBe(testCase.failureText);
-    if (testCase.failureText !== undefined) {
-      assert(result.terminalFailurePayload);
-      expect(result.terminalFailurePayload.isError).toBe(true);
-      expect(
-        getReplyPayloadMetadata(result.terminalFailurePayload)
-          ?.deliverDespiteSourceReplySuppression,
-      ).toBe(true);
+    followupRun.originatingChannel = "whatsapp";
+    followupRun.originatingTo = "user";
+    if (kind === "missing-answer") {
+      followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
     }
+    followupRun.run.terminalReplyExpectation = "required";
+    const notice =
+      kind === "missing-answer"
+        ? setReplyPayloadMetadata(
+            {
+              text: "No answer was returned. Ask again if you still need one.",
+              isError: true,
+              isStatusNotice: true,
+            },
+            { assistantTranscriptOwned: true },
+          )
+        : { text: "⚠️ Bash blocked", isError: true };
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [notice],
+      meta: {
+        error: {
+          kind: "incomplete_turn",
+          message: notice.text,
+        },
+      },
+    });
+    const params = createMinimalRunAgentTurnParams({ followupRun });
+    const execute = await getRawExecuteAgentTurnForTest();
+    const execution = await execute(params);
+    assert(execution.outcome.kind === "settled");
+    expect(execution.outcome.status).toBe("failed");
+    expect(execution.outcome.result.payloads).toEqual(kind === "missing-answer" ? [] : [notice]);
+    if (kind === "missing-answer") {
+      expect(execution.outcome.terminalFailurePayload).toBe(notice);
+    }
+
+    const accounting = await accountAgentTurn({
+      activeSessionEntry: undefined,
+      activeSessionStore: undefined,
+      blockReplyPipeline: null,
+      cfg: followupRun.run.config,
+      defaultModel: followupRun.run.model,
+      followupRun,
+      pendingToolTasks: params.pendingToolTasks,
+      preflightCompactionApplied: false,
+      resolvedVerboseLevel: "off",
+      execution: execution.outcome,
+      runId: execution.runId,
+      runStartedAt: 0,
+      sessionCtx: params.sessionCtx,
+      sessionKey: undefined,
+      storePath: undefined,
+      shouldInjectGroupIntro: false,
+    });
+    const turn = createTurn({ runId: execution.runId, queued: followupRun });
+    const decision = await resolveFollowupDeliveryDecision({ turn, execution, accounting });
+    assert(decision.kind === "deliver");
+    expect(decision.payloads).toHaveLength(1);
+    expect(decision.payloads[0]).toMatchObject(notice);
+    if (kind === "missing-answer") {
+      expect(
+        getReplyPayloadMetadata(expectDefined(decision.payloads[0], "missing-answer notice")),
+      ).toMatchObject({
+        assistantTranscriptOwned: true,
+        deliverDespiteSourceReplySuppression: true,
+      });
+    }
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({ deliver });
+    dispatcher.sendFinalReply(expectDefined(decision.payloads[0], "terminal notice"));
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: notice.text, isError: true }),
+      { kind: "final" },
+    );
   },
 );
 
-it("preserves one core missing-answer notice through queued message-tool-only delivery", async () => {
-  const followupRun = createFollowupRun();
-  followupRun.originatingChannel = "whatsapp";
-  followupRun.originatingTo = "user";
-  followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-  followupRun.run.terminalReplyExpectation = "required";
-  const notice = setReplyPayloadMetadata(
-    {
-      text: "No answer was returned. Ask again if you still need one.",
-      isError: true,
-      isStatusNotice: true,
-    },
-    { assistantTranscriptOwned: true },
-  );
-  state.runEmbeddedAgentMock.mockResolvedValueOnce({
-    payloads: [notice],
-    meta: {
-      error: {
-        kind: "incomplete_turn",
-        message: "No answer was returned. Ask again if you still need one.",
-      },
-    },
-  });
-  const params = createMinimalRunAgentTurnParams({ followupRun });
-  const execute = await getRawExecuteAgentTurnForTest();
-  const execution = await execute(params);
-  assert(execution.outcome.kind === "settled");
-  expect(execution.outcome.status).toBe("failed");
-  expect(execution.outcome.result.payloads).toEqual([]);
-  expect(execution.outcome.terminalFailurePayload).toBe(notice);
+it.each([{ mediaUrls: ["/tmp/generated.png"] }, { text: "NO_REPLYThe user is saying hello" }])(
+  "forwards tool results without losing literal text or media: %j",
+  async (payload) => {
+    const onToolResult = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onToolResult?.(payload);
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
 
-  const accounting = await accountAgentTurn({
-    activeSessionEntry: undefined,
-    activeSessionStore: undefined,
-    blockReplyPipeline: null,
-    cfg: followupRun.run.config,
-    defaultModel: followupRun.run.model,
-    followupRun,
-    isHeartbeat: false,
-    pendingToolTasks: params.pendingToolTasks,
-    preflightCompactionApplied: false,
-    resolvedVerboseLevel: "off",
-    execution: execution.outcome,
-    runId: execution.runId,
-    runStartedAt: 0,
-    sessionCtx: params.sessionCtx,
-    sessionKey: undefined,
-    storePath: undefined,
-    shouldInjectGroupIntro: false,
-  });
-  const turn = createTurn({ runId: execution.runId, queued: followupRun });
-  const decision = await resolveFollowupDeliveryDecision({ turn, execution, accounting });
-  assert(decision.kind === "deliver");
-  expect(decision.payloads).toHaveLength(1);
-  expect(decision.payloads[0]).toMatchObject({
-    text: "No answer was returned. Ask again if you still need one.",
-    isError: true,
-    isStatusNotice: true,
-  });
-  expect(
-    getReplyPayloadMetadata(expectDefined(decision.payloads[0], "missing-answer notice")),
-  ).toMatchObject({ assistantTranscriptOwned: true, deliverDespiteSourceReplySuppression: true });
-});
+    const { result, typingSignals } = await deliverToolResults(onToolResult);
 
-it("forwards media-only tool results without typing text", async () => {
-  const onToolResult = vi.fn();
-  state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-    await params.onToolResult?.({ mediaUrls: ["/tmp/generated.png"] });
-    return { payloads: [{ text: "final" }], meta: {} };
-  });
-
-  const { result, typingSignals } = await deliverToolResults(onToolResult);
-
-  expect(result.kind).toBe("success");
-  expect(typingSignals.signalTextDelta).not.toHaveBeenCalled();
-  expect(onToolResult).toHaveBeenCalledTimes(1);
-  expectMockCallArgFields(onToolResult, 0, "tool result payload", {
-    mediaUrls: ["/tmp/generated.png"],
-  });
-  expect(
-    requireRecord(requireMockCall(onToolResult, 0, "tool result payload")[0], "tool result payload")
-      .text,
-  ).toBeUndefined();
-});
+    expect(result.kind).toBe("success");
+    expect(onToolResult).toHaveBeenCalledOnce();
+    if (payload.text) {
+      expect(typingSignals.signalTextDelta).toHaveBeenCalledWith(payload.text);
+      expect(onToolResult).toHaveBeenCalledWith(payload);
+    } else {
+      expect(typingSignals.signalTextDelta).not.toHaveBeenCalled();
+      expect(onToolResult.mock.calls[0]?.[0]).toMatchObject(payload);
+      expect(onToolResult.mock.calls[0]?.[0].text).toBeUndefined();
+    }
+  },
+);
 
 it("surfaces model capacity errors from no-text mid-turn failures in Slack channels", async () => {
   state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -272,20 +289,6 @@ it.each(["sent", "buffered"] as const)(
     expect(result.kind).toBe("success");
   },
 );
-
-it("preserves a glued leading NO_REPLY mention in streamed tool results", async () => {
-  const onToolResult = vi.fn();
-  state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-    await params.onToolResult?.({ text: "NO_REPLYThe user is saying hello" });
-    return { payloads: [{ text: "final" }], meta: {} };
-  });
-
-  const { result, typingSignals } = await deliverToolResults(onToolResult);
-
-  expect(result.kind).toBe("success");
-  expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("NO_REPLYThe user is saying hello");
-  expect(onToolResult).toHaveBeenCalledWith({ text: "NO_REPLYThe user is saying hello" });
-});
 
 it("propagates rejected approval notice delivery while preserving later best-effort results", async () => {
   const payload = {

@@ -16,6 +16,11 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
+  SQLITE_ARCHIVE_TASK_TIMEOUT_MS,
+  SQLITE_WORKER_RETIREMENT_GRACE_MS,
+  watchSqliteWorkerSettlement,
+} from "./session-accessor.sqlite-archive-worker-lifetime.js";
+import {
   withSqliteWorkerLifecycleCoordination,
   type SqliteMutationWorkerCoordination,
 } from "./session-accessor.sqlite-worker-coordination.js";
@@ -34,7 +39,6 @@ type ReconcileRuntime = {
   closing?: Promise<void>;
 };
 const MAX_WORKERS = resolveWorkerPoolSize("writer");
-const CLOSE_GRACE_MS = 5_000;
 const log = createSubsystemLogger("sessions/transcript-index");
 const runtime = resolveGlobalSingleton<ReconcileRuntime>(
   Symbol.for("openclaw.sessionTranscriptReconcilePool"),
@@ -204,7 +208,7 @@ export function closeSessionTranscriptReconcileWorkerPool(): Promise<void> {
     for (const controller of runtime.tasks.keys()) {
       controller.abort(error);
     }
-  }, CLOSE_GRACE_MS);
+  }, SQLITE_WORKER_RETIREMENT_GRACE_MS);
   runtime.closing = Promise.resolve()
     .then(async () => {
       while (runtime.operations.size) {
@@ -310,7 +314,8 @@ async function startReconcileWorkerTask(
           // Cancel queued admission, but join native settlement once the task is dispatched.
           abort[Symbol.dispose]();
           controller.signal.throwIfAborted();
-          return pool.run(
+          const execution = createDeferredCore();
+          const result = pool.run(
             {
               input,
               port: port2,
@@ -319,6 +324,8 @@ async function startReconcileWorkerTask(
             },
             {
               inputBytes,
+              timeoutMs: SQLITE_ARCHIVE_TASK_TIMEOUT_MS,
+              onExecutionSettled: () => execution.resolve(),
               transferList: (task) => [
                 task.port,
                 ...(task.coordination?.databaseAdmission
@@ -328,6 +335,8 @@ async function startReconcileWorkerTask(
               signal: controller.signal,
             },
           );
+          watchSqliteWorkerSettlement(execution.promise, SQLITE_ARCHIVE_TASK_TIMEOUT_MS);
+          return result;
         }),
       waiting.signal,
     );

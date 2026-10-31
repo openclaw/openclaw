@@ -1,3 +1,6 @@
+// Frame normalization: --mode frames --nodes 4096 --iterations 5 (Node 26.12+).
+// Each iteration sanitizes 20 batches; compare interleaved base/candidate runs.
+// CPU and total allocated bytes are untraced; this is owner cost, not Gateway load.
 import { createHook } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
@@ -11,6 +14,7 @@ import {
 } from "node:perf_hooks";
 import { setImmediate as immediate, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { getHeapStatistics } from "node:v8";
 import type { SamplingProfile } from "../../src/logging/diagnostic-heap-profile.js";
 
 const args = process.argv.slice(2);
@@ -27,7 +31,7 @@ const nodes = Number(option("nodes", "65535"));
 const samples = Number(option("samples", "131072"));
 const allocationBytes = Number(option("allocation-bytes", String(4 * 1024 ** 3)));
 if (
-  !["all", "sanitize", "heap", "cpu", "record"].includes(mode) ||
+  !["all", "sanitize", "heap", "cpu", "record", "native-parse", "frames"].includes(mode) ||
   !Number.isSafeInteger(iterations) ||
   iterations < 1 ||
   !Number.isSafeInteger(nodes) ||
@@ -194,6 +198,100 @@ if (startAt) {
     throw new Error("Missed --start-at; do not compare unsynchronized pairs");
   }
   await delay(waitMs);
+}
+if (mode === "frames") {
+  const {
+    sanitizeDiagnosticProfileFrame,
+  }: typeof import("../../src/logging/diagnostic-profile.js") = await import(
+    pathToFileURL(path.join(sourceRoot, "src/logging/diagnostic-profile.ts")).href
+  );
+  const frames = Array.from({ length: nodes }, (_, index) => ({
+    functionName: `work${index}`,
+    scriptId: String(index),
+    lineNumber: index,
+    columnNumber: 0,
+    url: path.join(
+      "/fixture",
+      index % 3 === 0 ? "openclaw/src" : index % 3 === 1 ? "openclaw/dist" : "node_modules/ws/lib",
+      `module${index % 512}.js`,
+    ),
+  }));
+  const packageRoot = path.resolve("/fixture/openclaw");
+  const batch = () => {
+    for (const frame of frames) {
+      sanitizeDiagnosticProfileFrame(frame, packageRoot);
+    }
+  };
+  for (let warm = 0; warm < 5; warm++) {
+    batch();
+  }
+  for (let iteration = 0; iteration < iterations; iteration++) {
+    const allocated = getHeapStatistics().total_allocated_bytes;
+    const cpuBefore = process.threadCpuUsage();
+    const startedAt = performance.now();
+    for (let pass = 0; pass < 20; pass++) {
+      batch();
+    }
+    const wallMs = performance.now() - startedAt;
+    const usedCpu = process.threadCpuUsage(cpuBefore);
+    reports.push({
+      iteration,
+      frames: nodes * 20,
+      cpuMs: (usedCpu.user + usedCpu.system) / 1000,
+      wallMs,
+      allocatedBytes: getHeapStatistics().total_allocated_bytes - allocated,
+    });
+  }
+}
+if (mode === "native-parse") {
+  const { parseNativeCpuProfile }: typeof import("../../src/logging/diagnostic-profile.js") =
+    await import(pathToFileURL(path.join(sourceRoot, "src/logging/diagnostic-profile.ts")).href);
+  const nativeNodes = Array.from(
+    { length: nodes },
+    (_, index) =>
+      `{"id":${index + 1},"hitCount":${index % 3},"callFrame":{"functionName":"work${index}","lineNumber":${index - 2},"columnNumber":-1,"scriptId":${index - 2},"url":"file:///fixture/module${index % 512}.js"}${index + 1 < nodes ? `,"children":[${index + 2}]` : ""}${index % 2 === 0 ? ',"deoptReason":"not optimized","positionTicks":[{"line":1,"ticks":2}]' : ""}}`,
+  );
+  const json = `{"nodes":[${nativeNodes.join(",")}],"startTime":10000,"endTime":5510000,"samples":${JSON.stringify(Array.from({ length: samples }, (_, index) => 1 + (index % nodes)))},"timeDeltas":${JSON.stringify(Array(samples).fill(1000))}}`;
+  const parses = 20;
+  for (let index = 0; index < 5; index++) {
+    parseNativeCpuProfile(json);
+  }
+  const session = new Session();
+  session.connect();
+  try {
+    for (let iteration = 0; iteration < iterations; iteration++) {
+      await session.post("HeapProfiler.startSampling", {
+        samplingInterval: 16_384,
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: true,
+      });
+      for (let index = 0; index < parses; index++) {
+        parseNativeCpuProfile(json);
+      }
+      const { profile } = await session.post("HeapProfiler.stopSampling");
+      let sampledBytes = 0;
+      const visit = (node: typeof profile.head, owned = false) => {
+        const inOwner = owned || node.callFrame.functionName === "parseNativeCpuProfile";
+        if (inOwner) {
+          sampledBytes += node.selfSize;
+        }
+        for (const child of node.children) {
+          visit(child, inOwner);
+        }
+      };
+      visit(profile.head);
+      reports.push({
+        iteration,
+        parses,
+        nodeCount: nodes,
+        inputBytes: Buffer.byteLength(json),
+        allocationSamples: profile.samples.length,
+        sampledBytesPerParse: sampledBytes / parses,
+      });
+    }
+  } finally {
+    session.disconnect();
+  }
 }
 if (mode === "all" || mode === "sanitize") {
   const profile = syntheticProfile();

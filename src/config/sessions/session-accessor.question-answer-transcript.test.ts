@@ -45,14 +45,13 @@ it.each([
 ] as const)("fences the waiting question's transcript append: %s", async (scenario) => {
   await withQuestionGateway(async (gateway) => {
     const dir = sessionDirs.make();
-    const storePath = path.join(dir, "sessions.sqlite");
     const target = {
       ...createTestUserTurnTranscriptTarget({
         sessionId: "question-transcript",
         sessionKey: "agent:main:question-transcript",
         cwd: dir,
       }),
-      storePath,
+      storePath: path.join(dir, "sessions.sqlite"),
     };
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const recorder = (text: string, id: string) =>
@@ -98,9 +97,6 @@ it.each([
     const writer = await SessionManager.openAsync(target, dir);
     const runStarted = createDeferred();
     const releaseAppend = createDeferred();
-    const providerResumed = vi.fn();
-    const resolved = vi.fn();
-    gateway.onResolved(resolved);
     const run = withPreparedEmbeddedRunToolAuthority(
       { admittedRunContext: host.admittedRunContext },
       { ...attempt, hostCapabilities: host.hostCapabilities },
@@ -118,13 +114,12 @@ it.each([
           isError: answer.status !== "answered",
           timestamp: 4,
         });
-        providerResumed(answer);
-        return entryId;
+        return { entryId, answer };
       },
     );
     const outcome = run.then(
-      (entryId) => ({ entryId, error: undefined }),
-      (error: unknown) => ({ entryId: undefined, error }),
+      (result) => ({ ...result, error: undefined }),
+      (error: unknown) => ({ entryId: undefined, answer: undefined, error }),
     );
     let sourceAnchor: TranscriptEntryAnchor | undefined;
     const answer = async (text: string, id: string) => {
@@ -211,16 +206,13 @@ it.each([
           expect.objectContaining({
             toolCallId: "trip-question",
             isError: false,
-            content: [{ type: "text", text: JSON.stringify(providerResumed.mock.calls[0]?.[0]) }],
+            content: [{ type: "text", text: JSON.stringify(result.answer) }],
           }),
         ]);
-        expect(resolved).toHaveBeenCalledOnce();
-        expect(providerResumed).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            status: "answered",
-            answers: { answers: { destination: ["Lisbon"], budget: ["2000"] } },
-          }),
-        );
+        expect(result.answer).toMatchObject({
+          status: "answered",
+          answers: { answers: { destination: ["Lisbon"], budget: ["2000"] } },
+        });
         expect(messages.filter((message) => message.role === "user")).toHaveLength(
           scenario === "partial-then-complete" ? 3 : 2,
         );
@@ -234,7 +226,6 @@ it.each([
           ),
         });
         expect(toolResults).toHaveLength(0);
-        expect(providerResumed).not.toHaveBeenCalled();
         if (scenario === "closed-authority") {
           expect(revokeAtCommit).toHaveBeenCalledOnce();
         }

@@ -53,6 +53,10 @@ observations, session summaries, and raw context that may still be useful
 later. These are indexed for `memory_search` and `memory_get`, but are not
 injected into the bootstrap prompt on every turn.
 
+Daily-memory maintenance requires valid UTF-8. If decoding fails, the operation
+stops before rewriting that file. Preserve the original and convert a copy to
+UTF-8 before retrying.
+
 Over time, useful material from daily notes is distilled into `MEMORY.md` by
 the default [dreaming](/concepts/dreaming) sweep. The generated workspace
 instructions still encourage the agent to record durable facts as it works,
@@ -155,8 +159,9 @@ The built-in `memory-core` plugin can index and search a PostgreSQL agent databa
 SQLite remains the default. PostgreSQL memory search is supported on the
 [qualified runtime](/gateway/postgresql#support-matrix). Text ranking is
 engine-local, so result ordering and scores can differ from SQLite. PostgreSQL
-calibrates unnormalized cover-density rank `r` as `r / (r + 0.1)` before the
-shared hybrid merge. This gives keywords a useful weight without penalizing
+uses the faster native `ts_rank` function and calibrates its unnormalized rank
+`r` as `r / (r + 0.0027)` before the shared hybrid merge. The calibration is fitted to
+the previous keyword score scale, giving keywords a useful weight without penalizing
 long chunks by their full length. It is not BM25: PostgreSQL's native rank lacks
 corpus-wide inverse document frequency (IDF), so common and mixed-frequency
 queries can still rank differently. Hybrid search retains the same vector/text
@@ -304,29 +309,18 @@ other flush plans are not resolved for sessions that cannot write it. It exposes
 tools, subject to normal tool policies. Those tools receive the source turn's
 memory audience and sandbox state. Missing lookup tools produce a warning but do
 not block a flush that can still persist. The flush is skipped if no valid
-audience or permitted persistence tool is available. It succeeds when a
+audience or permitted persistence tool is available. Source-session and sandbox
+policy denials skip provider flush preparation before a maintenance turn is
+dispatched. These skips are debug diagnostics, not failed lane tasks. Model-specific
+policy and dynamic tool availability are checked by the selected attempt. It succeeds when a
 persistence tool completes without error or the agent returns `NO_REPLY`; lookup
 success alone does not complete the flush. Skipping or failing this optional step
 does not prevent compaction. Plugin authors can find the contract and retry
 identity in [Pre-compaction memory flush](/plugins/sdk-overview/memory-and-context#pre-compaction-memory-flush).
 
-To keep that housekeeping turn on a local model, set an exact override that
-applies only to the memory-flush turn (it does not inherit the active
-session's model fallback chain):
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "compaction": {
-        "memoryFlush": {
-          "model": "ollama/qwen3:8b"
-        }
-      }
-    }
-  }
-}
-```
+The flush uses the active session model and its normal fallback chain. To keep
+memory extraction local, use a local model for the session and configure local
+fallbacks.
 
 <Tip>
 The memory flush gives the agent a chance to save important facts before

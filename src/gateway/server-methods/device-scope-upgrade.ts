@@ -1,7 +1,6 @@
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   ErrorCodes,
-  errorShape,
   validateScopeUpgradeRequest,
   validateScopeUpgradeWait,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -10,6 +9,8 @@ import { normalizeDeviceAuthScopes } from "../../shared/device-auth.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { isOperatorScope } from "../operator-scopes.js";
+import { broadcastRejectedDevicePairing } from "../pairing-events.js";
+import { respondError } from "./response.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -28,16 +29,12 @@ function readUpgradeOwner(client: GatewayClient | null): {
 }
 
 function respondDeviceRequired(respond: RespondFn): void {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_REQUIRED_MESSAGE, {
-      details: {
-        code: ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
-        recommendedNextStep: "reopen_control_ui_securely",
-      },
-    }),
-  );
+  respondError(respond, ErrorCodes.INVALID_REQUEST, DEVICE_REQUIRED_MESSAGE, {
+    details: {
+      code: ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
+      recommendedNextStep: "reopen_control_ui_securely",
+    },
+  });
 }
 
 /** Live operator scope-upgrade request and identity-bound wait handlers. */
@@ -58,13 +55,10 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       }
       const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
       if (!requestedScopes.every(isOperatorScope)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "requested scopes contain an unknown operator scope",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "requested scopes contain an unknown operator scope",
         );
         return;
       }
@@ -77,17 +71,14 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
           allowedScopes: rolePolicy.scopes,
         })
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "requested scopes exceed your assigned operator role; ask a gateway administrator to change your role",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "requested scopes exceed your assigned operator role; ask a gateway administrator to change your role",
         );
         return;
       }
-      const currentScopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+      const currentScopes = client?.connect.scopes ?? [];
       if (
         !roleScopesAllow({
           role: "operator",
@@ -95,13 +86,10 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
           allowedScopes: requestedScopes,
         })
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "requested scopes must include the connection's current scopes",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "requested scopes must include the connection's current scopes",
         );
         return;
       }
@@ -130,28 +118,20 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
           initialApprovedAtMs: paired.approvedAtMs,
         })
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "device scope upgrade is temporarily unavailable", {
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          "device scope upgrade is temporarily unavailable",
+          {
             retryable: true,
-          }),
+          },
         );
         return;
       }
       const resolvedAt = Date.now();
       for (const superseded of pairing.superseded ?? []) {
         coordinator.notify(superseded.requestId, "rejected");
-        context.broadcast(
-          "device.pair.resolved",
-          {
-            requestId: superseded.requestId,
-            deviceId: superseded.deviceId,
-            decision: "rejected",
-            ts: resolvedAt,
-          },
-          { dropIfSlow: true },
-        );
+        broadcastRejectedDevicePairing(context.broadcast, superseded, resolvedAt);
       }
       if (pairing.created) {
         context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
@@ -174,21 +154,14 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       }
       const result = await context.scopeUpgradeCoordinator?.wait(params.requestId, owner);
       if (!result) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "scope upgrade expired or not found"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "scope upgrade expired or not found");
         return;
       }
       if (result.status === "insufficient-scopes") {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "Pairing was approved, but this browser's previously narrowed token still lacks the requested access. Run openclaw dashboard --json on the Gateway host for a fresh one-time owner pairing link. Open its browserUrl in this browser using the same Control UI address and Gateway URL to restore administrator access.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Pairing was approved, but this browser's previously narrowed token still lacks the requested access. Run openclaw dashboard --json on the Gateway host for a fresh one-time owner pairing link. Open its browserUrl in this browser using the same Control UI address and Gateway URL to restore administrator access.",
         );
         return;
       }
@@ -203,13 +176,10 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
             allowedScopes: rolePolicy.scopes,
           })
         ) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "approved scopes exceed your assigned operator role; ask a gateway administrator to change your role",
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "approved scopes exceed your assigned operator role; ask a gateway administrator to change your role",
           );
           return;
         }

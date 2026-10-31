@@ -24,8 +24,9 @@ it("releases discarded backing buffers while capped commands are still running",
   expect(result.error, result.stderr).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual([
-    { mode: "head", retained: false },
-    { mode: "combined-head", retained: false },
-    { mode: "tail", retained: false },
+    { mode: "head", retained: false, poolRetained: false },
+    { mode: "combined-head", retained: false, poolRetained: false },
+    { mode: "tail", retained: false, poolRetained: false },
+    { mode: "combined-tail", retained: false, poolRetained: false },
   ]);
 }, 30_000);

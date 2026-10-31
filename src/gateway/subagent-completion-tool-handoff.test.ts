@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   cancelSubagentCompletionToolHandoff,
   consumeSubagentCompletionToolHandoff,
@@ -86,7 +86,8 @@ it("binds an accepted replay source only within the registered settle cohort", (
 
 it("expires capabilities and removes cancelled capabilities", () => {
   const expiredId = registerSubagentCompletionToolHandoff({ ...registration, nowMs: 1_000 });
-  expect(consume(expiredId, { nowMs: 301_001 })).toBeUndefined();
+  using _ = vi.spyOn(Date, "now").mockReturnValue(301_001);
+  expect(consume(expiredId)).toBeUndefined();
 
   const cancelledId = registerSubagentCompletionToolHandoff(registration);
   expect(cancelSubagentCompletionToolHandoff(cancelledId)).toBe(true);

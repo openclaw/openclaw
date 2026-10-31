@@ -39,10 +39,6 @@ class NativeHookRelayDeadlineError extends Error {
 
 /** Parse and run the internal native relay directly from the process argument vector. */
 export async function runNativeHookRelayCliFromArgv(argv: string[]): Promise<number> {
-  return await runNativeHookRelayCli(parseNativeHookRelayCliOptions(argv));
-}
-
-function parseNativeHookRelayCliOptions(argv: string[]): NativeHookRelayCliOptions {
   const relayIndex = argv.findIndex((arg, index) => arg === "relay" && argv[index - 1] === "hooks");
   if (relayIndex < 0) {
     throw new Error("native hook relay command path is required");
@@ -62,7 +58,7 @@ function parseNativeHookRelayCliOptions(argv: string[]): NativeHookRelayCliOptio
     }
     opts[key] = value;
   }
-  return opts;
+  return await runNativeHookRelayCli(opts);
 }
 
 /** Run one native hook relay invocation from stdin JSON to stdout/stderr response streams. */

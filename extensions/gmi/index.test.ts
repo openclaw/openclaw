@@ -3,6 +3,7 @@ import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-s
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { expect, it } from "vitest";
+import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import plugin from "./index.js";
 
 const gmiModel: Omit<Model<"openai-completions">, "id" | "name"> = {
@@ -86,12 +87,7 @@ it("registers GMI Cloud as an OpenAI-compatible provider", async () => {
     auth: [{ id: "api-key", starterModel: "gmi/openai/gpt-5.6-sol" }],
   });
 
-  const result = await provider.staticCatalog?.run({
-    config: {},
-    env: {},
-    resolveProviderApiKey: () => ({}),
-  } as never);
-  const catalogProvider = result && "provider" in result ? result.provider : undefined;
+  const catalogProvider = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
   expect(catalogProvider?.baseUrl).toBe("https://api.gmi-serving.com/v1");
   expect(catalogProvider?.models?.map((model) => model.id)).toContain("openai/gpt-5.6-sol");
 });

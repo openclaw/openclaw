@@ -20,6 +20,8 @@ import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 type DoctorConfigResult = {
   cfg: OpenClawConfig;
+  /** Captured before config retirement; shared by every heartbeat migration step. */
+  heartbeatMigrationSource?: OpenClawConfig;
   warnings?: string[];
   /** Original authored/resolved pair; retained across every committed Doctor write. */
   referenceSource?: DoctorConfigReferenceSource;
@@ -33,6 +35,7 @@ type DoctorConfigResult = {
   modelBillingRouteWarnings?: readonly string[];
   /** Successful retirement pass awaiting the config-write/no-change boundary. */
   modelRetirementRepairRan?: boolean;
+  retirementOnly?: boolean;
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
@@ -56,9 +59,12 @@ type DoctorConfigResult = {
   stateMigrationStepReceipts?: LegacyStateMigrationStepReceipt[];
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
   postSessionPluginMigrationPlanBound?: boolean;
+  preflightLegacyStateConfig?: OpenClawConfig;
 };
 
 export type DoctorHealthFlowContext = {
+  /** Cleared when a retained owner discovers work requiring the full pass. */
+  retirementOnly?: boolean;
   runtime: RuntimeEnv;
   options: DoctorOptions;
   prompter: DoctorPrompter;

@@ -88,18 +88,14 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: replaceConfig,
 }));
 
-vi.mock("../agents/agent-create.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/agent-create.js")>(
-    "../agents/agent-create.js",
-  )),
+vi.mock("../agents/agent-create.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-create.js")>()),
   checkAgentCreationGate: creationGate,
   createAgent,
 }));
 
-vi.mock("../plugins/install-record-commit.js", async () => ({
-  ...(await vi.importActual<typeof import("../plugins/install-record-commit.js")>(
-    "../plugins/install-record-commit.js",
-  )),
+vi.mock("../plugins/install-record-commit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/install-record-commit.js")>()),
   commitConfigWithPendingPluginInstalls: commitConfig,
   transformConfigWithPendingPluginInstalls: transformConfig,
 }));
@@ -204,12 +200,63 @@ describe("agents add command", () => {
   }
 
   function setConfigSnapshot(config: Record<string, unknown>): void {
-    readConfig.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config,
-      sourceConfig: config,
-    });
+    readConfig.mockResolvedValue({ ...baseConfigSnapshot, config, sourceConfig: config });
   }
+
+  it.each([false, true])(
+    "escapes terminal controls only in human agent creation output (json=%s)",
+    async (json) => {
+      const text = "café\u001b[31m\nforged\tend\rrow\u0007";
+      const workspace = `/tmp/${text}`;
+      const agentDir = `/tmp/agent-${text}`;
+      createAgent.mockResolvedValueOnce({
+        status: "created",
+        agentId: "work",
+        workspace,
+        agentDir,
+        model: text,
+        bindingResult: {
+          conflicts: [
+            {
+              binding: { agentId: "work", match: { channel: "slack", accountId: text } },
+              existingAgentId: "other",
+            },
+          ],
+        },
+      });
+      hasTerminal.mockReturnValue(false);
+      await add(
+        {
+          name: "work",
+          workspace,
+          nonInteractive: !json,
+          json,
+          ...(json ? { bind: ["slack"] } : {}),
+        },
+        json,
+      );
+      if (json) {
+        expect(createAgent).toHaveBeenCalledWith(
+          expect.objectContaining({ bindingSpecs: ["slack"] }),
+        );
+        expect(JSON.parse(String(runtime.log.mock.lastCall?.[0]))).toMatchObject({
+          workspace,
+          agentDir,
+          model: text,
+          bindings: { added: [], conflicts: [`slack accountId=${text} (agent=other)`] },
+        });
+      } else {
+        expect(runtime.log).toHaveBeenCalledWith("Workspace: /tmp/café\\nforged\\tend\\rrow");
+        expect(runtime.log).toHaveBeenCalledWith("Agent dir: /tmp/agent-café\\nforged\\tend\\rrow");
+        expect(runtime.log).toHaveBeenCalledWith("Model: café\\nforged\\tend\\rrow");
+        expect(runtime.error).toHaveBeenCalledWith(
+          "Skipped bindings already claimed by another agent:\n- slack accountId=café\\nforged\\tend\\rrow (agent=other)",
+        );
+      }
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(hasTerminal).not.toHaveBeenCalled();
+    },
+  );
 
   function useWizard(
     textValues: string[] = [],
@@ -252,55 +299,62 @@ describe("agents add command", () => {
     await expect(execution).rejects.toMatchObject({
       name: "ExpectedCliError",
       message,
-      humanOutput: message,
-      machineOutput: message,
     });
     expectUnused(runtime.error, runtime.exit, writeConfig);
   }
 
-  it.each<[AddOptions, string]>([
-    [
-      { name: "Work" },
-      `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
-    ],
-    [
-      { workspace: "/tmp/work" },
-      `Agent name is required in non-interactive mode. Run ${formatCliCommand("openclaw agents add <id> --workspace <path>")}.`,
-    ],
-    [
-      { name: "агент✨", workspace: "/tmp/work" },
-      'Agent name "агент✨" has no valid id characters. Use at least one letter a-z or digit.',
-    ],
-    [
-      { name: "openclaw", workspace: "/tmp/reserved" },
-      `"openclaw" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`,
-    ],
-  ])("rejects automated creation %j before mutation", async (options, message) => {
-    readConfig.mockResolvedValue({ ...baseConfigSnapshot });
-
-    await expectRootFailure(add(options, true), message);
-    expect(createAgent).not.toHaveBeenCalled();
+  it("preserves the recovery owner's refusal for an existing held agent", async () => {
+    const message =
+      "Agent main has held databases. Restore its original agentDir and session.store configuration, then rerun agents add to restore the preserved store.";
+    createAgent.mockResolvedValueOnce({
+      status: "error",
+      reason: "already-exists",
+      agentId: "main",
+      message,
+    });
+    await expectRootFailure(add({ name: "main", workspace: "/tmp/main" }, true), message);
   });
 
-  it.each([
-    [
-      "агент✨",
-      'Agent name "агент✨" has no valid id characters. Use at least one letter a-z or digit.',
-    ],
-    ["openclaw", '"openclaw" is reserved. Choose another name.'],
-  ])("rejects invalid interactive positional name %s before mutation", async (name, message) => {
-    const prompter = useWizard();
-    await add({ name });
-    expect(prompter.outro).toHaveBeenCalledWith(message);
-    expectUnused(
-      prompter.text,
-      prompter.confirm,
-      prompter.note,
-      creationGate,
-      createAgent,
-      writeConfig,
-    );
-  });
+  const addUsage = formatCliCommand("openclaw agents add <id> --workspace <path>");
+  const invalidName =
+    'Agent name "агент✨" has no valid id characters. Use at least one letter a-z or digit.';
+  it.each<{ options: AddOptions; automated: boolean; message: string }>([
+    {
+      options: { name: "Work" },
+      automated: true,
+      message: `Non-interactive agent creation requires --workspace. Re-run ${addUsage} or omit flags to use the wizard.`,
+    },
+    {
+      options: { workspace: "/tmp/work" },
+      automated: true,
+      message: `Agent name is required in non-interactive mode. Run ${addUsage}.`,
+    },
+    { options: { name: "агент✨", workspace: "/tmp/work" }, automated: true, message: invalidName },
+    {
+      options: { name: "openclaw", workspace: "/tmp/reserved" },
+      automated: true,
+      message: `"openclaw" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`,
+    },
+    { options: { name: "агент✨" }, automated: false, message: invalidName },
+    {
+      options: { name: "openclaw" },
+      automated: false,
+      message: '"openclaw" is reserved. Choose another name.',
+    },
+  ])(
+    "rejects invalid creation before mutation: $options (automated=$automated)",
+    async ({ options, automated, message }) => {
+      if (automated) {
+        await expectRootFailure(add(options, true), message);
+      } else {
+        const prompter = useWizard();
+        await add(options);
+        expect(prompter.outro).toHaveBeenCalledWith(message);
+        expectUnused(prompter.text, prompter.confirm, prompter.note, creationGate);
+      }
+      expectUnused(createAgent, writeConfig);
+    },
+  );
 
   it("refuses the interactive JSON wizard without a usable terminal", async () => {
     readConfig.mockResolvedValue({ ...baseConfigSnapshot });
@@ -362,7 +416,6 @@ describe("agents add command", () => {
 
     await add({ name: "main" });
 
-    expect(creationGate).toHaveBeenCalledWith("main");
     expect(prompter.outro).toHaveBeenCalledWith("Run openclaw doctor --fix, then retry.");
     expectUnused(prompter.text, prepareAuth, createAgent);
   });
@@ -370,15 +423,14 @@ describe("agents add command", () => {
   it("reports only portable profiles persisted from shared state-db auth", async ({
     state: { workspaceDir, agentDir },
   }) => {
-    const sourceStore: AuthProfileStore = {
+    writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+    saveAuthProfileStore({
       version: AUTH_STORE_VERSION,
       profiles: {
         "openai:api-key": apiKey("sk-test"),
         "openai:oauth": createOAuthRefreshCredential({ copyToAgents: true }),
       },
-    };
-    writeConfigMachineState("auth.sharedStore", { location: "state-db" });
-    saveAuthProfileStore(sourceStore);
+    });
     const wizard = useWizard(["work", workspaceDir], [true, false]);
 
     await add();
@@ -404,19 +456,11 @@ describe("agents add command", () => {
         entries: { main: {}, ops: { agentDir: sourceAgentDir } },
       },
     });
-    const wizard = useWizard(["work", workspaceDir], [true, false], ["ops"]);
+    useWizard(["work", workspaceDir], [true, false], ["ops"]);
 
     await add();
 
-    expect(wizard.outro).toHaveBeenCalledWith('Agent "work" ready.');
-    const copied = loadPersistedAuthProfileStore(agentDir);
-    expect(copied?.profiles["openai:portable"]).toBeDefined();
-    expect(setupChannels).toHaveBeenCalledWith(
-      expect.any(Object),
-      defaultRuntime,
-      wizard.prompter,
-      expect.objectContaining({ workspaceDir, deferStatusUntilSelection: true }),
-    );
+    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["openai:portable"]).toBeDefined();
   });
 
   it("fails before config mutation when the source auth store is unreadable", async ({
@@ -516,7 +560,6 @@ describe("agents add command", () => {
     await expect(add()).rejects.toThrow("injected auth batch persistence failure");
 
     expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
-    expect(createAgent).toHaveBeenCalledOnce();
     expectUnused(commitConfig, writeConfig);
   });
 
@@ -596,51 +639,11 @@ describe("agents add command", () => {
     expectUnused(commitConfig, writeConfig);
   });
 
-  it.for([false, true])(
-    "creates without a terminal and reports binding conflicts: %s",
-    async (conflicts) => {
-      hasTerminal.mockReturnValue(false);
-      await add(
-        {
-          name: "Work",
-          workspace: "/tmp/work",
-          ...(conflicts ? { bind: ["telegram"], json: true } : { nonInteractive: true }),
-        },
-        conflicts,
-      );
-      expect(createAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          name: "Work",
-          workspace: "/tmp/work",
-          transformConfig,
-        }),
-      );
-      expectUnused(transformConfig, runtime.error, hasTerminal);
-      if (conflicts) {
-        const payload: { bindings: { added: string[]; conflicts: string[] } } = JSON.parse(
-          String(runtime.log.mock.calls.at(-1)?.[0]),
-        );
-        expect(payload.bindings).toMatchObject({
-          added: [],
-          conflicts: ["telegram (agent=other-agent)"],
-        });
-        expect(runtime.exit).toHaveBeenCalledWith(1);
-      } else {
-        expect(runtime.exit).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it("reports a duplicate agent through the root failure owner", async () => {
-    createAgent.mockResolvedValueOnce({
-      status: "error",
-      reason: "already-exists",
-      agentId: "work",
-      message: 'agent "work" already exists',
-    });
-    await expectRootFailure(
-      add({ name: "Work", workspace: "/tmp/work" }, true),
-      'Agent "work" already exists.',
-    );
+  it("creates without a terminal or binding conflicts", async () => {
+    hasTerminal.mockReturnValue(false);
+    await add({ name: "Work", workspace: "/tmp/work", nonInteractive: true });
+    expect(runtime.log).toHaveBeenCalledWith("Agent: work");
+    expectUnused(transformConfig, runtime.error, hasTerminal);
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });

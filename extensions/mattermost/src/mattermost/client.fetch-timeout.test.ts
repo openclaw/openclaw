@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { setImmediate as waitForPostFetchCleanup } from "node:timers/promises";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createMattermostClient,
@@ -14,29 +15,14 @@ const undiciTimers: { reset: () => void } = createRequire(import.meta.url)(
   "undici/lib/util/timers.js",
 );
 
-async function settleWithin(promise: Promise<unknown>, timeoutMs: number) {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise.then(
-        () => ({ status: "resolved" as const }),
-        (error: unknown) => ({ status: "rejected" as const, error }),
-      ),
-      new Promise<{ status: "pending" }>((resolve) => {
-        timeout = setTimeout(() => resolve({ status: "pending" }), timeoutMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function expectTimeoutOutcome(outcome: Awaited<ReturnType<typeof settleWithin>>): void {
-  expect(outcome).toEqual({ status: "rejected", error: expect.any(Error) });
-  expect(outcome).toHaveProperty(
-    "error.name",
-    expect.stringMatching(/^(AbortError|TimeoutError)$/),
-  );
+function expectTimeout(request: Promise<unknown>) {
+  return Promise.all([
+    expect(request).rejects.toBeInstanceOf(Error),
+    expect(request).rejects.toHaveProperty(
+      "name",
+      expect.stringMatching(/^(AbortError|TimeoutError)$/),
+    ),
+  ]);
 }
 
 const clientDefaults = { botToken: "bot-token", allowPrivateNetwork: true };
@@ -45,27 +31,22 @@ async function withHangingServer(
   run: (server: {
     client: ReturnType<typeof createMattermostClient>;
     received: Promise<void>;
-    requestCount: () => number;
   }) => Promise<void>,
-  timeoutMs = 50,
 ): Promise<void> {
-  let requestCount = 0;
   const received = Promise.withResolvers<void>();
   await withServer(
     (request) => {
-      requestCount += 1;
       received.resolve();
       request.resume();
     },
     async (baseUrl) => {
-      // Advance deadlines after real socket I/O; loaded workers may connect after 50ms.
+      // Advance deadlines only after real socket I/O.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       try {
-        const client = createMattermostClient({ ...clientDefaults, baseUrl, timeoutMs });
+        const client = createMattermostClient({ ...clientDefaults, baseUrl });
         await run({
           client,
           received: received.promise,
-          requestCount: () => requestCount,
         });
       } finally {
         undiciTimers.reset();
@@ -77,25 +58,20 @@ async function withHangingServer(
 
 describe("Mattermost REST client fetch timeout", () => {
   afterEach(() => vi.restoreAllMocks());
-  it.each([
-    ["configured client deadline", 50, false],
-    ["caller AbortSignal with a default deadline", 30_000, true],
-  ] as const)("rejects a hanging request through %s", async (_name, timeoutMs, cancel) => {
-    await withHangingServer(async ({ client, received, requestCount }) => {
+  it.each([false, true])("rejects a hanging request (caller cancellation: %s)", async (cancel) => {
+    await withHangingServer(async ({ client, received }) => {
       const controller = new AbortController();
       const request = cancel
         ? client.request("/users/me", { signal: controller.signal })
         : fetchMattermostMe(client);
-      const outcome = settleWithin(request, 750);
+      const outcome = expectTimeout(raceWithTimeout(request, 31_000, () => undefined));
       await Promise.race([received, request]);
       if (cancel) {
         controller.abort();
-      } else {
-        expect(requestCount()).toBe(1);
       }
-      await vi.advanceTimersByTimeAsync(750);
-      expectTimeoutOutcome(await outcome);
-    }, timeoutMs);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await outcome;
+    });
   });
 
   it("preserves caller cancellation through a guarded response body", async () => {
@@ -112,7 +88,7 @@ describe("Mattermost REST client fetch timeout", () => {
           fetchResolved.resolve();
           return result;
         });
-        const client = createMattermostClient({ ...clientDefaults, baseUrl, timeoutMs: 30_000 });
+        const client = createMattermostClient({ ...clientDefaults, baseUrl });
         const controller = new AbortController();
         const reason = new Error("caller stopped after headers");
         const request = client.request("/users/me", { signal: controller.signal });
@@ -120,7 +96,7 @@ describe("Mattermost REST client fetch timeout", () => {
         await fetchResolved.promise;
         await waitForPostFetchCleanup();
         controller.abort(reason);
-        expect(await settleWithin(request, 750)).toEqual({ status: "rejected", error: reason });
+        await expect(raceWithTimeout(request, 750, () => undefined)).rejects.toBe(reason);
       },
     );
   });
@@ -129,16 +105,18 @@ describe("Mattermost REST client fetch timeout", () => {
     await withHangingServer(async ({ client, received }) => {
       const request = createMattermostDirectChannelWithRetry(client, ["bot-user", "dm-user"], {
         maxRetries: 0,
-        timeoutMs: 250,
+        timeoutMs: 60_000,
       });
-      const earlyOutcome = settleWithin(request, 120);
+      const settled = vi.fn();
+      const outcome = expectTimeout(
+        raceWithTimeout(request.finally(settled), 60_002, () => undefined),
+      );
 
       await Promise.race([received, request]);
-      await vi.advanceTimersByTimeAsync(120);
-      expect(await earlyOutcome).toEqual({ status: "pending" });
-      const outcome = settleWithin(request, 600);
-      await vi.advanceTimersByTimeAsync(600);
-      expectTimeoutOutcome(await outcome);
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_001);
+      await outcome;
     });
   });
 });

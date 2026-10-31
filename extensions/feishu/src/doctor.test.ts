@@ -19,7 +19,6 @@ import type { FeishuConfigSchema, z } from "./config-schema.js";
 import { feishuDoctor } from "./doctor.js";
 
 const runFeishuDoctorSequence = feishuDoctor.runConfigSequence!;
-const defaultAgentId = "main";
 const defaultFeishuSessionKey = "agent:main:feishu:direct:ou_user";
 const blankUserMessages = ["", "", ""];
 
@@ -61,16 +60,18 @@ async function seedSession(
   contents: string[] = [],
   params: SeedSessionParams = {},
 ) {
-  const agentId = params.agentId ?? defaultAgentId;
+  const agentId = params.agentId ?? "main";
   const sessionKey = params.sessionKey ?? defaultFeishuSessionKey;
-  const targetStorePath = params.storePath ?? storePath(agentId);
-  await upsertSessionEntry({
+  const session = {
     agentId,
-    storePath: targetStorePath,
+    sessionId,
     sessionKey,
+    storePath: params.storePath ?? storePath(agentId),
+  };
+  await upsertSessionEntry({
+    ...session,
     entry: { sessionId, updatedAt: Date.now(), ...params.entry } as SessionEntry,
   });
-  const session = { agentId, sessionId, sessionKey, storePath: targetStorePath };
   for (const content of contents) {
     await appendSessionTranscriptMessageByIdentity({
       ...session,
@@ -114,21 +115,22 @@ function readStoreEntries(target: string, agentId = "main"): Record<string, Sess
   );
 }
 
-function writeLegacyTranscript(sessionId: string, lines: unknown[], agentId = "main"): string {
-  const target = path.join(sessionsDir(agentId), `${sessionId}.jsonl`);
+function writeLegacyTranscript(sessionId: string, contents: string[]): string {
+  const target = path.join(sessionsDir(), `${sessionId}.jsonl`);
+  const timestamp = new Date(0).toISOString();
+  const lines = [
+    { type: "session", id: sessionId, version: 7, timestamp, cwd: "/tmp" },
+    ...contents.map((content, index) => ({
+      type: "message",
+      id: `msg-${index}`,
+      parentId: null,
+      timestamp,
+      message: { role: "user", content },
+    })),
+  ];
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
   return target;
-}
-
-function userMessage(content: string) {
-  return {
-    type: "message",
-    id: `msg-${content || "blank"}-${Math.random().toString(36).slice(2)}`,
-    parentId: null,
-    timestamp: new Date(0).toISOString(),
-    message: { role: "user", content },
-  };
 }
 
 function backupDir(): string {
@@ -158,9 +160,8 @@ function writeFeishuDedupState(contents: string): void {
   fs.writeFileSync(target, contents);
 }
 
-async function runDoctor(shouldRepair: boolean, cfg: OpenClawConfig = feishuConfig()) {
-  return await runFeishuDoctorSequence({ cfg, env: process.env, shouldRepair });
-}
+const runDoctor = (shouldRepair: boolean, cfg: OpenClawConfig = feishuConfig()) =>
+  runFeishuDoctorSequence({ cfg, env: process.env, shouldRepair });
 
 const webhookNotes = (config: z.input<typeof FeishuConfigSchema>) =>
   runDoctor(false, feishuConfig(config));
@@ -238,16 +239,7 @@ describe("Feishu doctor state repair", () => {
   it("removes only unhealthy Feishu direct sessions while preserving state, config, and other sessions", async () => {
     writeFeishuDedupState(JSON.stringify({ msg1: 1 }));
 
-    const acpTranscriptPath = writeLegacyTranscript("sess-acp-bad", [
-      {
-        type: "session",
-        id: "sess-acp-bad",
-        version: 7,
-        timestamp: new Date(0).toISOString(),
-        cwd: "/tmp",
-      },
-      ...blankUserMessages.map(userMessage),
-    ]);
+    const acpTranscriptPath = writeLegacyTranscript("sess-acp-bad", blankUserMessages);
 
     const session = await seedSession("sess-bad", blankUserMessages);
     const healthy = await seedSession("sess-separated-blanks", ["", "hello", "", "world", ""], {
@@ -460,11 +452,10 @@ describe("Feishu webhook Doctor notes", () => {
       });
     try {
       const result = await webhookNotes({
-        appId: "cli_test",
+        ...webhookBase,
         appSecret: { source: "file", provider: "fixture-file", id: "/app-secret" },
         encryptKey: { source: "env", provider: "fixture-env", id: "FEISHU_DOCTOR_UNUSED_KEY" },
         verificationToken: { source: "exec", provider: "fixture-exec", id: "verification-token" },
-        connectionMode: "webhook",
       });
       expect(result.warningNotes).toEqual([]);
       expect(result.infoNotes).toEqual([

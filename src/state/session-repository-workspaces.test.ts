@@ -17,9 +17,11 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { readOpenClawStateDatabaseCommand } from "./openclaw-state-read-handlers.js";
 import * as stateWorker from "./openclaw-state-worker-store.js";
-import { createSessionRepositoryWorkspaceStore } from "./session-repository-workspaces.js";
+import {
+  createSessionRepositoryWorkspaceStore,
+  findSessionRepositoryWorkspaces,
+} from "./session-repository-workspaces.js";
 import {
   bindSessionRepositoryWorkspaceBaseInDatabase,
   createSessionRepositoryWorkspaceInDatabase,
@@ -246,6 +248,23 @@ it("creates one stable logical-session owner without widening replayed setup int
   expect(await store.create({ ...source, runSetupScript: true })).toEqual(initial);
   expect(initial.runSetupScript).toBe(false);
   expect(initial.branch).toBe(`openclaw/${initial.workspaceId}`);
+  expect((await store.create({ ...source, branchPrefix: "clawson" })).branch).toBe(initial.branch);
+  const prefixed = await store.create({
+    ...source,
+    sessionKey: "agent:main:prefixed",
+    branchPrefix: "clawson",
+  });
+  expect(prefixed.branch).toBe(`clawson/${prefixed.workspaceId}`);
+  const explicit = await store.create({
+    ...source,
+    sessionKey: "agent:main:explicit",
+    branch: "saved/branch",
+    branchPrefix: "changed-prefix",
+  });
+  expect(explicit.branch).toBe("saved/branch");
+  await expect(
+    store.create({ ...source, sessionKey: "agent:main:invalid", branchPrefix: "refs/heads" }),
+  ).rejects.toThrow("branch prefix is invalid");
   await expect(store.create({ ...source, requestedRef: "other" })).rejects.toThrow(
     "different repository",
   );
@@ -256,42 +275,16 @@ it("creates one stable logical-session owner without widening replayed setup int
 
 it("skips empty workspace snapshots and reads owners after first-use creation", async () => {
   const { database, store } = await fixture();
-  const find = (owners: (typeof owner)[]) => {
-    const command = { type: "sessionRepositoryWorkspaces.find" as const, owners };
-    return readOpenClawStateDatabaseCommand(
-      database.db,
-      {
-        context: { environment: { OPENCLAW_STATE_DIR: path.dirname(database.path) } },
-        databasePath: database.path,
-        location: database.path,
-        checkFreshAdmission: false,
-        command,
-      },
-      command,
-      undefined,
-    );
-  };
-  const exec = vi.spyOn(database.db, "exec");
-  const prepare = vi.spyOn(database.db, "prepare");
-  const empty = { type: "sessionRepositoryWorkspaces.find", workspaces: [] };
-  expect(find([])).toEqual(empty);
-  expect(find([owner])).toEqual(empty);
-  expect.soft(exec).not.toHaveBeenCalled();
-  expect.soft(prepare).not.toHaveBeenCalled();
-
+  const find = (owners: (typeof owner)[]) =>
+    findSessionRepositoryWorkspaces(owners, { path: database.path });
+  expect(await find([])).toEqual([]);
+  expect(await find([owner])).toEqual([]);
+  expect(tableExists(database.db, "session_repository_workspaces")).toBe(false);
   const initial = await store.create(source);
   const siblingOwner = { ...owner, sessionKey: "agent:main:sibling" };
   const sibling = await store.create({ ...source, ...siblingOwner });
-  exec.mockClear();
-  prepare.mockClear();
-  expect(find([])).toEqual(empty);
-  expect(exec).not.toHaveBeenCalled();
-  expect(prepare).not.toHaveBeenCalled();
-  expect(find([owner, siblingOwner])).toEqual({
-    type: "sessionRepositoryWorkspaces.find",
-    workspaces: [initial, sibling],
-  });
-  expect(exec.mock.calls.map(([sql]) => sql)).toEqual(["BEGIN", "COMMIT"]);
+  expect(await find([])).toEqual([]);
+  expect(await find([owner, siblingOwner])).toEqual([initial, sibling]);
 });
 
 it("publishes committed workspace revisions, rejects stale checkpoints, and retires prepared guards on close", async () => {

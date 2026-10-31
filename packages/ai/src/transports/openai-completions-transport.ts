@@ -20,6 +20,7 @@ import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { buildCopilotDynamicHeaders } from "../providers/github-copilot-headers.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
 import { createOpenAIProviderClient } from "../providers/openai-provider-client.js";
+import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
 import { toOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
@@ -60,7 +61,6 @@ import {
 } from "./openai-transport-params.js";
 import {
   createOpenAIProviderAcceptanceHook,
-  isOpenAICompletionsThinkingEnabled,
   resolveOpenAIClientBaseUrl,
   resolvePromptCacheKey,
   withOpenAIErrorResponseHook,
@@ -119,16 +119,13 @@ function createSseDoneDetector() {
     lineOverflowed = false;
   };
   const observeText = (text: string) => {
-    for (const char of text) {
-      if (char === "\n" || char === "\r") {
+    for (const [index, segment] of text.split(/[\r\n]/).entries()) {
+      if (index > 0) {
         finishLine();
-        continue;
       }
-      if (!lineOverflowed && line.length < SSE_DONE_MAX_LINE_CHARS) {
-        line += char;
+      if (!lineOverflowed && line.length + segment.length <= SSE_DONE_MAX_LINE_CHARS) {
+        line += segment;
       } else {
-        // Never let truncation turn a suffix of a large data line into a
-        // standalone terminal marker.
         lineOverflowed = true;
       }
     }
@@ -278,12 +275,6 @@ export function streamOpenAICompletionsRequest(
     try {
       const requestContext = await resolveProviderContext(context, options);
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-      const directEmitReasoning = Boolean(
-        mode === "direct" &&
-        model.reasoning &&
-        options?.reasoningEffort &&
-        isOpenAICompletionsThinkingEnabled(options.reasoningEffort),
-      );
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const policy =
         mode === "direct"
@@ -446,10 +437,7 @@ export function streamOpenAICompletionsRequest(
         }
       }
       const contextOutputBudget = resolveCompletionsContextOutputBudget(builtParams, params);
-      const emitReasoning =
-        mode === "direct"
-          ? directEmitReasoning
-          : shouldEmitOpenAICompletionsReasoning(model, options);
+      const emitReasoning = shouldEmitOpenAICompletionsReasoning(model, options, mode);
       firstEventAbort = createFirstStreamEventAbortController(options?.signal);
       const requestOptions =
         mode === "direct"
@@ -545,7 +533,7 @@ export function streamOpenAICompletionsRequest(
                   bufferedBytes += chunkBytes;
                   const chunkFinishReason = chunk?.choices?.[0]?.finish_reason;
                   if (chunkFinishReason) {
-                    finishReason = chunkFinishReason;
+                    finishReason = mapOpenAIStopReason(chunkFinishReason).stopReason;
                   }
                   options?.signal?.throwIfAborted();
                 }

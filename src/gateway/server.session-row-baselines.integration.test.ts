@@ -1,5 +1,6 @@
 import { assert, expect, onTestFinished, test, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { GatewayChatEvents } from "../../ui/src/api/gateway-chat-events.ts";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
@@ -7,6 +8,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import type { SessionEntry } from "../config/sessions/types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
 import {
   emitSessionsChanged,
   flushPendingSessionsChangedEvents,
@@ -20,6 +22,7 @@ import { collectSessionRowFrames } from "./session-row-delta-sockets.test-suppor
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks, rpcReq } from "./test-helpers.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 let harness: Awaited<ReturnType<typeof startGatewayServerHarness>>;
 let kernel: Awaited<ReturnType<typeof captureGatewayKernel>>;
@@ -30,6 +33,7 @@ installGatewayTestHooks({
     kernel = await captureGatewayKernel(async () => {
       harness = await startGatewayServerHarness();
     });
+    await waitForGatewayStartup(harness.port);
   },
   cleanup: async () => harness?.close(),
 });
@@ -111,7 +115,11 @@ test("ordinary fact changes keep warm wire rows across three real sockets", asyn
   const completed = createDeferred();
   dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
     const { dispatcher, replyOptions } = args as Parameters<typeof dispatchInboundMessage>[0];
+    let releaseSource: (() => void) | undefined;
     try {
+      const source = getRpcSource(runId);
+      assert(source, "Expected registered synthetic dispatch source");
+      releaseSource = await claimRpcSourceForTest(source);
       await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
       await drain();
       await replyOptions?.onAgentRunStart?.(runId);
@@ -123,6 +131,7 @@ test("ordinary fact changes keep warm wire rows across three real sockets", asyn
       await lifecycle("end");
       return { queuedFinal, counts: dispatcher.getQueuedCounts() };
     } finally {
+      releaseSource?.();
       completed.resolve();
     }
   });

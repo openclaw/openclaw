@@ -25,10 +25,8 @@ export function createEmbeddedStateSignalBridge() {
   for (const signal of EMBEDDED_STATE_SIGNALS) {
     const handler = () => {
       receivedSignal = signal;
-      if (!controller.signal.aborted) {
-        controller.abort();
-        dispose();
-      }
+      controller.abort();
+      dispose();
     };
     handlers.set(signal, handler);
     process.on(signal, handler);

@@ -36,16 +36,6 @@ function inspectMatrixIngressEvent(raw: MatrixIngressEvent) {
   return { eventId: raw.event.event_id, laneKey: `room:${raw.roomId}` };
 }
 
-function isMessageEvent(event: MatrixRawEvent): boolean {
-  return (
-    event.type === EventType.RoomMessage ||
-    event.type === EventType.RoomMessageEncrypted ||
-    event.type === EventType.Location ||
-    event.type === EventType.Reaction ||
-    isPollEventType(event.type)
-  );
-}
-
 export function createMatrixIngressMonitor(params: {
   accountId: string;
   client: Pick<MatrixClient, "hydrateEvents" | "crypto">;
@@ -130,7 +120,15 @@ export function createMatrixIngressMonitor(params: {
     ];
     for (const [roomId, room] of rooms) {
       for (const event of room.timeline?.events ?? []) {
-        if (!isMessageEvent(event)) {
+        if (
+          !(
+            event.type === EventType.RoomMessage ||
+            event.type === EventType.RoomMessageEncrypted ||
+            event.type === EventType.Location ||
+            event.type === EventType.Reaction ||
+            isPollEventType(event.type)
+          )
+        ) {
           continue;
         }
         // Persist first-login exclusions too, so cached sync cannot revive them

@@ -26,13 +26,11 @@ import {
 import { prepareLocalWorkspaceCheckout } from "./worker-environments/local-workspace-checkout.js";
 import { withLocalWorkspaceProjection } from "./worker-environments/local-workspace-projection.js";
 import type { LocalWorkspaceOwner } from "./worker-environments/local-workspace-types.js";
-import { manifestNodes, sameEntry } from "./worker-environments/workspace-manifest-comparison.js";
-import { applyWorkspaceSourceOverlay } from "./worker-environments/workspace-manifest-overlay.js";
-import { captureWorkspaceSnapshot } from "./worker-environments/workspace-manifest-worker.js";
 import {
-  parseWorkerWorkspaceManifest,
-  serializeWorkerWorkspaceManifest,
-} from "./worker-environments/workspace-manifest.js";
+  captureWorkspaceManifestDocument,
+  prepareWorkspaceBaseRefresh,
+  workspaceSnapshotsEqual,
+} from "./worker-environments/workspace-manifest-worker.js";
 import { localWorkspaceBaseRefreshRef } from "./worker-environments/workspace-result-inventory.js";
 import {
   deleteStagedWorkerWorkspaceResult,
@@ -65,7 +63,9 @@ export async function integrateManagedWorkspaceSource(
       commit: string;
       githubHost: string;
       review: { repository: string; commit: string };
+      projectBase?: { repository: string; branch: string };
       initial: boolean;
+      reviewOnly: boolean;
       emptySource: boolean;
       resuming: boolean;
       accept: () => Promise<void>;
@@ -107,6 +107,12 @@ export async function integrateManagedWorkspaceSource(
       }
     : await prepareGitHubPublicationTarget({
         worktree: owner.worktree,
+        session: {
+          agentId: owner.agentId,
+          sessionKey: owner.sessionKey,
+          sessionId: owner.sessionId,
+          lifecycleRevision: owner.lifecycleRevision,
+        },
         identity,
         assertCurrent,
       });
@@ -116,7 +122,7 @@ export async function integrateManagedWorkspaceSource(
   let pendingStaged: { path: string; indexEntry?: string }[] = [];
   const stagedError =
     "Commit the staged changes in files that also have unstaged changes before refreshing this PR; its existing files and index were preserved.";
-  if (params.source) {
+  if (params.source && !params.source.reviewOnly) {
     if (params.source.resuming) {
       // An accepted transfer may retain a paused runtime. Recover it through its
       // owner before asking that runtime to execute the workspace check.
@@ -148,12 +154,23 @@ export async function integrateManagedWorkspaceSource(
       ) {
         throw new Error("The base refresh sandbox no longer belongs to this workspace.");
       }
+      // A destination change selects a comparison, not a source to merge or stage.
+      if (params.source?.reviewOnly) {
+        previousBase = state.current().base_commit ?? undefined;
+        return {
+          status: "current",
+          repository: target.repository,
+          baseBranch: target.baseBranch,
+          baseCommit: params.source.commit,
+          changedPaths: [],
+          conflictPaths: [],
+        };
+      }
       // This operation prepares an existing private checkout; it never creates a new binding.
       state.current();
       await state.settle();
       previousBase = state.current().base_commit ?? undefined;
       const check = () => {
-        assertCurrent();
         state.current();
       };
       return await withWorktreeGitConfig<SessionGitHubBaseRefreshResult>(
@@ -285,7 +302,7 @@ export async function integrateManagedWorkspaceSource(
               throw new Error(pristineError);
             }
             // A projection may first be captured after unrelated commits already exist.
-            // Only verified PR/base history or the immutable empty source is disposable.
+            // Only verified published history or the immutable empty source is disposable.
             if (source.emptySource) {
               if (initialHead !== (await git(["rev-parse", "refs/heads/main"]))) {
                 throw new Error(pristineError);
@@ -317,32 +334,65 @@ export async function integrateManagedWorkspaceSource(
                 baseCommit,
               ]);
               if (fromBase.code !== 0 && fromHead.code !== 0) {
-                throw new Error(pristineError);
+                // The selected project source may be newer than, or differ from, the PR base.
+                // Verify its recorded branch on the original repository, including forks.
+                if (!source.projectBase) {
+                  throw new Error(pristineError);
+                }
+                const publishedBase = await readGitHubPublicationBaseSha(
+                  run,
+                  source.projectBase.repository,
+                  source.projectBase.branch,
+                  target.githubHost,
+                  identity.env,
+                );
+                await requireGitHubPublicationCommit(
+                  run,
+                  source.projectBase.repository,
+                  publishedBase,
+                  target.githubHost,
+                  cwd,
+                  {
+                    ...identity.env,
+                    GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+                    GIT_CONFIG_SYSTEM: gitNullConfigPath(),
+                  },
+                  `The current repository base ancestry could not be fetched; retry ${action}.`,
+                );
+                const fromPublishedBase = await probe([
+                  "merge-base",
+                  "--is-ancestor",
+                  initialHead,
+                  publishedBase,
+                ]);
+                if (fromPublishedBase.code !== 0) {
+                  throw new Error(pristineError);
+                }
               }
             }
             const buildCacheInputs = new Set(await state.buildCacheInputs());
-            const canonical = await captureWorkspaceSnapshot({
+            const canonical = await captureWorkspaceManifestDocument({
               root: cwd,
               baseCommit: state.current().base_commit,
               includePaths: admittedPaths,
               buildCacheInputs,
               signal: params.signal,
             });
-            const projection = await captureWorkspaceSnapshot({
+            const projection = await captureWorkspaceManifestDocument({
               root: state.current().projection_path,
               baseCommit: state.current().base_commit,
               buildCacheInputs,
               signal: params.signal,
             });
             check();
-            const canonicalNodes = manifestNodes(canonical.manifest);
-            const projectionNodes = manifestNodes(projection.manifest);
-            if (
-              canonicalNodes.size !== projectionNodes.size ||
-              [...canonicalNodes].some(
-                ([file, entry]) => !sameEntry(entry, projectionNodes.get(file)),
-              )
-            ) {
+            const equal = await workspaceSnapshotsEqual(
+              canonical,
+              projection,
+              [...buildCacheInputs],
+              params.signal,
+            );
+            check();
+            if (!equal) {
               throw new Error(pristineError);
             }
           }
@@ -474,7 +524,6 @@ export async function integrateManagedWorkspaceSource(
                 ["commit-tree", "--no-gpg-sign", tree, "-p", sourceHead],
                 "Prepare selected base integration\n",
               );
-              const snapshots = [];
               for (const [name, commit] of [
                 ["before", sourceHead],
                 ["after", mergedCommit],
@@ -489,42 +538,29 @@ export async function integrateManagedWorkspaceSource(
                   signal: new AbortController().signal,
                   assertCurrent: check,
                 });
-                snapshots.push(await captureWorkspaceSnapshot({ root: destination, baseCommit }));
               }
               const buildCacheInputs = await state.buildCacheInputs();
               const baseline = await state.baselineDocument();
-              const accepted = parseWorkerWorkspaceManifest(
-                baseline.rawManifest,
-                baseline.manifestRef,
-                buildCacheInputs,
+              const current = await prepareWorkspaceBaseRefresh(
+                {
+                  beforeRoot: path.join(temporary, "before"),
+                  afterRoot: path.join(temporary, "after"),
+                  baseCommit,
+                  baseRaw: baseline.rawManifest,
+                  baseRef: baseline.manifestRef,
+                  buildCacheInputs,
+                  action,
+                },
+                params.signal,
               );
-              const before = snapshots[0]!.manifest;
-              const current = applyWorkspaceSourceOverlay(before, accepted, snapshots[1]!.manifest);
-              current.buildCacheInputs = [
-                ...new Set([
-                  ...buildCacheInputs,
-                  ...snapshots[1]!.manifest.entries.map((entry) => entry.path),
-                ]),
-              ];
-              const priorNodes = manifestNodes(before);
-              const currentNodes = manifestNodes(current);
-              for (const [file, entry] of manifestNodes(accepted)) {
-                if (!priorNodes.has(file) && !sameEntry(entry, currentNodes.get(file))) {
-                  throw new Error(
-                    `The selected base conflicts with saved workspace data at ${file}; move that saved file before retrying ${action}.`,
-                  );
-                }
-              }
-              const currentRaw = serializeWorkerWorkspaceManifest(current);
               await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
                 root: cwd,
                 stagingRoot: path.join(temporary, "after"),
                 stagedResultRef: stagedRef,
                 baseManifestRef: baseline.manifestRef,
                 baseManifestRaw: baseline.rawManifest,
-                currentManifestRef:
-                  "sha256:" + createHash("sha256").update(currentRaw).digest("hex"),
-                currentManifestRaw: currentRaw,
+                currentManifestRef: current.manifestRef,
+                currentManifestRaw: current.rawManifest,
                 buildCacheInputs: current.buildCacheInputs,
                 assertCurrent: check,
               });
@@ -660,16 +696,19 @@ export async function integrateManagedWorkspaceSource(
       { contents: true, commitPresent: true },
     );
   }
-  return {
-    ...result,
-    review: await prepareManagedWorkspaceReviewBase({
-      owner,
-      sandbox,
-      reviewCommit,
-      previousBase,
-      signal: params.signal,
-      assertCurrent,
-      reviewPreparationError,
-    }),
-  };
+  const review = await prepareManagedWorkspaceReviewBase({
+    owner,
+    sandbox,
+    reviewCommit,
+    previousBase,
+    signal: params.signal,
+    assertCurrent,
+    stageChanges: !params.source?.reviewOnly,
+    reviewPreparationError,
+  });
+  if (params.source?.reviewOnly) {
+    // Keep the old binding retryable until its new comparison is installed.
+    await params.source.accept();
+  }
+  return { ...result, review };
 }

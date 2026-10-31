@@ -69,10 +69,10 @@ openclaw-terminal-panel {
     max-height: min(420px, var(--tp-session-menu-max-height));
     overflow-y: auto;
     padding: var(--menu-padding);
-    border: 1px solid var(--overlay-border);
     border-radius: var(--menu-radius);
-    background: var(--bg-elevated);
-    box-shadow: var(--overlay-shadow);
+    background: var(--menu-surface);
+    box-shadow: var(--menu-shadow);
+    backdrop-filter: var(--menu-backdrop);
   }
   .tp-session-menu--hosted {
     --tp-session-menu-max-height: calc(100% - 8px);
@@ -144,7 +144,9 @@ openclaw-terminal-panel {
     min-width: 0;
   }
   .tp-session-menu--inline .tp-session-refresh:where(:not(.session-panel-rail__button)),
-  .tp-rail__icon {
+  .tp-rail__icon,
+  .tp-composer__attach,
+  .tp-composer__submit {
     display: grid;
     place-items: center;
     flex: none;
@@ -152,9 +154,12 @@ openclaw-terminal-panel {
     height: 28px;
     padding: 0;
     border: 0;
-    border-radius: 6px;
     background: transparent;
     color: var(--muted);
+  }
+  .tp-session-menu--inline .tp-session-refresh:where(:not(.session-panel-rail__button)),
+  .tp-rail__icon {
+    border-radius: 6px;
   }
   .tp-rail:where(:not(.session-panel-rail)) svg,
   .tp-session-refresh:where(:not(.session-panel-rail__button)) svg {
@@ -383,16 +388,7 @@ openclaw-terminal-panel {
   }
   .tp-composer__attach,
   .tp-composer__submit {
-    display: grid;
-    place-items: center;
-    flex: none;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    border: 0;
     border-radius: 50%;
-    background: transparent;
-    color: var(--muted);
   }
   .tp-composer__submit {
     width: 44px;

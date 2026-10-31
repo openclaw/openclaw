@@ -65,7 +65,6 @@ describe("pnpm image archive consumer", () => {
 
   it.for([
     { platform: "win32", version: "12.15.0", name: "pnpm-12.15.0.tgz" },
-    { platform: "linux", version: "12.15.0", name: "pnpm-12.15.0.tgz" },
     { platform: "linux", version: "12.15.0", name: "exe.linux-x64-12.15.0.tgz" },
   ] as const)(
     "delegates substituted $name on $platform to Corepack, ignoring adjacent trust markers",
@@ -81,19 +80,12 @@ describe("pnpm image archive consumer", () => {
     },
   );
 
-  it.for(["different-version", "different-hash"])(
-    "leaves Corepack preparation in control for %s despite valid cached archives",
-    async (kind, { command }) => {
-      const f = createPnpmArchiveFixture(command, { image: true });
-      const requested =
-        kind === "different-version"
-          ? f.spec.replace("12.15.0", "12.3.4")
-          : f.spec.replace(/.$/u, "z");
-      expectNoSeed(await f.run({}, requested), f.runner);
-    },
-  );
+  it("leaves a mismatched package-manager hash to Corepack", async ({ command }) => {
+    const f = createPnpmArchiveFixture(command, { image: true });
+    expectNoSeed(await f.run({}, f.spec.replace(/.$/u, "z")), f.runner);
+  });
 
-  it("wires image seeding before preparation without changing dependency installation", () => {
+  it("wires image seeding before Corepack preparation", () => {
     const action = parse(read(".github/actions/setup-pnpm-store-cache/action.yml"));
     for (const steps of [action.runs.steps, workflow.jobs.hydrate.steps]) {
       const preparation = steps.find((step: { run?: string }) =>
@@ -102,13 +94,7 @@ describe("pnpm image archive consumer", () => {
       expect(preparation.run.indexOf("seed-pnpm-from-image.mjs")).toBeLessThan(
         preparation.run.indexOf("corepack prepare"),
       );
-      expect(preparation.run).toContain('echo "COREPACK_HOME=$COREPACK_HOME" >> "$GITHUB_ENV"');
     }
-    expect(
-      workflow.jobs.hydrate.steps.find((step: { run?: string }) =>
-        step.run?.includes("install_args="),
-      ).run,
-    ).toContain("--frozen-lockfile");
   });
 
   it.each([

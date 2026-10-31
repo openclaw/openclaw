@@ -4,17 +4,6 @@ import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import type { SessionsUsageOverview } from "../../../../src/shared/usage-types.js";
 import type { CostDailyEntry, UsageSessionEntry } from "./usage-state-types.ts";
 
-function csvEscape(value: string, neutralizeFormulas = true): string {
-  const safeValue =
-    neutralizeFormulas && /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(value)
-      ? `'${value}`
-      : value;
-  if (/[",\r\n]/.test(safeValue)) {
-    return `"${safeValue.replaceAll('"', '""')}"`;
-  }
-  return safeValue;
-}
-
 type CsvValue = string | number | undefined | null;
 
 function toCsvRow(values: CsvValue[]): string {
@@ -23,7 +12,15 @@ function toCsvRow(values: CsvValue[]): string {
       if (value === undefined || value === null) {
         return "";
       }
-      return csvEscape(String(value), typeof value === "string");
+      const text = String(value);
+      const safeValue =
+        typeof value === "string" && /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(text)
+          ? `'${text}`
+          : text;
+      if (/[",\r\n]/.test(safeValue)) {
+        return `"${safeValue.replaceAll('"', '""')}"`;
+      }
+      return safeValue;
     })
     .join(",");
 }
@@ -39,13 +36,6 @@ function buildCsv<Entry>(
   ].join("\n");
 }
 
-function usageCsvValue(
-  value: number | undefined,
-  report?: CostDailyEntry["usageReport"],
-): CsvValue {
-  return report?.state === "unavailable" ? undefined : value;
-}
-
 const buildSessionsCsv = (sessions: UsageSessionEntry[]): string =>
   buildCsv(sessions, {
     key: (session) => session.key,
@@ -59,41 +49,41 @@ const buildSessionsCsv = (sessions: UsageSessionEntry[]): string =>
     messages: (session) => session.usage?.messageCounts?.total,
     errors: (session) => session.usage?.messageCounts?.errors,
     toolCalls: (session) => session.usage?.messageCounts?.toolCalls,
-    inputTokens: (session) => usageCsvValue(session.usage?.input, session.usage?.usageReport),
-    outputTokens: (session) => usageCsvValue(session.usage?.output, session.usage?.usageReport),
-    cacheReadTokens: (session) =>
-      usageCsvValue(session.usage?.cacheRead, session.usage?.usageReport),
-    cacheWriteTokens: (session) =>
-      usageCsvValue(session.usage?.cacheWrite, session.usage?.usageReport),
-    totalTokens: (session) => usageCsvValue(session.usage?.totalTokens, session.usage?.usageReport),
-    totalCost: (session) => usageCsvValue(session.usage?.totalCost, session.usage?.usageReport),
+    inputTokens: (session) => session.usage?.input,
+    outputTokens: (session) => session.usage?.output,
+    cacheReadTokens: (session) => session.usage?.cacheRead,
+    cacheWriteTokens: (session) => session.usage?.cacheWrite,
+    totalTokens: (session) => session.usage?.totalTokens,
+    totalCost: (session) => session.usage?.totalCost,
   });
 
 const buildDailyCsv = (daily: CostDailyEntry[]): string =>
   buildCsv(daily, {
     date: (day) => day.date,
-    inputTokens: (day) => usageCsvValue(day.input, day.usageReport),
-    outputTokens: (day) => usageCsvValue(day.output, day.usageReport),
-    cacheReadTokens: (day) => usageCsvValue(day.cacheRead, day.usageReport),
-    cacheWriteTokens: (day) => usageCsvValue(day.cacheWrite, day.usageReport),
-    totalTokens: (day) => usageCsvValue(day.totalTokens, day.usageReport),
-    inputCost: (day) => usageCsvValue(day.inputCost, day.usageReport),
-    outputCost: (day) => usageCsvValue(day.outputCost, day.usageReport),
-    cacheReadCost: (day) => usageCsvValue(day.cacheReadCost, day.usageReport),
-    cacheWriteCost: (day) => usageCsvValue(day.cacheWriteCost, day.usageReport),
-    totalCost: (day) => usageCsvValue(day.totalCost, day.usageReport),
+    inputTokens: (day) => day.input,
+    outputTokens: (day) => day.output,
+    cacheReadTokens: (day) => day.cacheRead,
+    cacheWriteTokens: (day) => day.cacheWrite,
+    totalTokens: (day) => day.totalTokens,
+    inputCost: (day) => day.inputCost,
+    outputCost: (day) => day.outputCost,
+    cacheReadCost: (day) => day.cacheReadCost,
+    cacheWriteCost: (day) => day.cacheWriteCost,
+    totalCost: (day) => day.totalCost,
   });
 
-type QuerySuggestion = {
-  label: string;
-  value: string;
-};
+// The query parser splits on whitespace outside double quotes, so multiword values need quotes.
+const formatQueryToken = (key: string, value: string): string =>
+  /\s/u.test(value) ? `${key}:"${value}"` : `${key}:${value}`;
 
 const buildQuerySuggestions = (
   query: string,
   terms: ReturnType<typeof extractQueryTerms>,
   options: SessionsUsageOverview["filterOptions"],
-): QuerySuggestion[] => {
+): {
+  label: string;
+  value: string;
+}[] => {
   if (!query.trim()) {
     return [];
   }
@@ -132,7 +122,10 @@ const buildQuerySuggestions = (
   }
   return candidates
     .filter((candidate) => !value || normalizeLowercaseStringOrEmpty(candidate).includes(value))
-    .map((candidate) => ({ label: `${key}:${candidate}`, value: `${key}:${candidate}` }));
+    .map((candidate) => ({
+      label: `${key}:${candidate}`,
+      value: formatQueryToken(key, candidate),
+    }));
 };
 
 const applySuggestionToQuery = (query: string, suggestion: string): string => {
@@ -164,7 +157,10 @@ const setQueryTokensForKey = (query: string, key: string, values: string[]): str
       tokens.push(term.raw);
     }
   }
-  const next = [...tokens, ...Array.from(remaining.values(), (value) => `${key}:${value}`)];
+  const next = [
+    ...tokens,
+    ...Array.from(remaining.values(), (value) => formatQueryToken(key, value)),
+  ];
   return next.length ? `${next.join(" ")} ` : "";
 };
 

@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import type { LobsterSchemaCompiler } from "./lobster-schema-compiler.js";
 
 type LobsterInputRequest = {
   type?: "input_request";
@@ -88,13 +89,19 @@ type EmbeddedToolRuntime = {
   }) => Promise<EmbeddedToolEnvelope>;
 };
 
+type EmbeddedToolPackage = EmbeddedToolRuntime & {
+  withSchemaCompiler: <T>(compiler: LobsterSchemaCompiler, callback: () => T) => T;
+};
+
 const workflowExts = new Set([".lobster", ".yaml", ".yml", ".json"]);
 
 export function resolveLobsterCwd(cwdRaw: unknown): string {
   if (typeof cwdRaw !== "string" || !cwdRaw.trim()) {
     return process.cwd();
   }
-  const cwd = cwdRaw.trim();
+  // Keep the caller's literal directory name: its whitespace is part of the
+  // filesystem identity, not decoration to strip before resolution.
+  const cwd = cwdRaw;
   if (path.isAbsolute(cwd)) {
     throw new Error("cwd must be a relative path");
   }
@@ -163,7 +170,8 @@ async function detectWorkflowFile(candidate: string, cwd: string) {
   if (!trimmed || trimmed.includes("|") || !workflowExts.has(path.extname(trimmed).toLowerCase())) {
     return null;
   }
-  const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(cwd, trimmed);
+  // Keep the caller's literal name: its whitespace belongs to the file identity.
+  const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(cwd, candidate);
   try {
     if (!(await stat(resolved)).isFile()) {
       throw new Error("Workflow path is not a file");
@@ -178,21 +186,30 @@ async function detectWorkflowFile(candidate: string, cwd: string) {
 }
 
 async function loadEmbeddedToolRuntimeFromPackage(): Promise<EmbeddedToolRuntime> {
+  const { getRuntimeExecutionProfile } = await import("openclaw/plugin-sdk/runtime-profile");
+  const profile = getRuntimeExecutionProfile();
   // Joined specifier keeps bundlers from statically resolving
   // @clawdbot/lobster/core; the plugin's declared @clawdbot/lobster dependency
   // provides it at runtime, so it is a used direct dependency.
   const coreSpecifier = ["@clawdbot", "lobster", "core"].join("/");
-  return (await import(coreSpecifier)) as EmbeddedToolRuntime;
+  const runtime = (await import(coreSpecifier)) as EmbeddedToolPackage;
+  if (profile !== "embedded-aot") {
+    return runtime;
+  }
+  const { compileLobsterSchema } = await import("./lobster-schema-compiler.js");
+  return {
+    runToolRequest: (params) =>
+      runtime.withSchemaCompiler(compileLobsterSchema, () => runtime.runToolRequest(params)),
+    resumeToolRequest: (params) =>
+      runtime.withSchemaCompiler(compileLobsterSchema, () => runtime.resumeToolRequest(params)),
+  };
 }
 
-export function createEmbeddedLobsterRunner(options?: {
-  loadRuntime?: () => Promise<EmbeddedToolRuntime>;
-}) {
-  const loadRuntime = options?.loadRuntime ?? loadEmbeddedToolRuntimeFromPackage;
+export function createEmbeddedLobsterRunner() {
   let runtimePromise: Promise<EmbeddedToolRuntime> | undefined;
   return {
     async run(params: LobsterRunnerParams) {
-      runtimePromise ??= loadRuntime();
+      runtimePromise ??= loadEmbeddedToolRuntimeFromPackage();
       const runtime = await runtimePromise;
       const controller = new AbortController();
       return await raceWithTimeout(
@@ -210,8 +227,9 @@ export function createEmbeddedLobsterRunner(options?: {
           let envelope: EmbeddedToolEnvelope;
 
           if (params.action === "run") {
-            const pipeline = params.pipeline?.trim() ?? "";
-            if (!pipeline) {
+            // Keep the caller's literal pipeline name; only blank counts as omitted.
+            const pipeline = params.pipeline ?? "";
+            if (!pipeline.trim()) {
               throw new Error("pipeline required");
             }
 

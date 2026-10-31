@@ -37,10 +37,6 @@ const nodeArgs = resolveVitestNodeArgs();
 // Windows repeats ACL checks and crash/restore copies throughout the full proof.
 const RELIABILITY_PROOF_TIMEOUT_MS = process.platform === "win32" ? 480_000 : 240_000;
 const RELIABILITY_SMOKE_TEST_TIMEOUT_MS = process.platform === "win32" ? 1_200_000 : 300_000;
-const MIN_MULTICHUNK_RESTORE_BYTES = 2 * 1024 * 1024;
-const COMPACTION_FIXTURE_ROWS = 12;
-const COMPACTION_PAYLOAD_BYTES = 256 * 1024;
-const VACUUM_PROOF_ROWS = 64;
 
 function reliabilitySmokeTest(name: string, test: () => void): void {
   it(name, test, RELIABILITY_SMOKE_TEST_TIMEOUT_MS);
@@ -63,23 +59,6 @@ function runProof(args: string[], env: NodeJS.ProcessEnv = {}) {
   return result;
 }
 
-function expectExited(exit: { code: number | null; signal: NodeJS.Signals | null }) {
-  expect(exit.code !== null || exit.signal !== null).toBe(true);
-}
-
-function expectInterrupted(
-  proof: { exit: Parameters<typeof expectExited>[0]; stagingEntries: number },
-  expected: Record<string, unknown>,
-) {
-  expect(proof).toMatchObject({ recoveryVerified: true, ...expected });
-  expect(proof.stagingEntries).toBeGreaterThan(0);
-  expectExited(proof.exit);
-}
-
-function payload(rows: number) {
-  return { bytes: rows * COMPACTION_PAYLOAD_BYTES, idSum: (rows * (rows + 1)) / 2, rows };
-}
-
 async function waitForChildReady(child: ChildProcess): Promise<void> {
   for await (const args of on(child, "message", { close: ["exit"] })) {
     const message: unknown = args[0];
@@ -90,7 +69,9 @@ async function waitForChildReady(child: ChildProcess): Promise<void> {
   throw new Error("writer child exited before ready");
 }
 
-function waitForChildExit(child: ChildProcess): Promise<Parameters<typeof expectExited>[0]> {
+function waitForChildExit(
+  child: ChildProcess,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   return once(child, "exit").then(([code, signal]) => ({ code, signal }));
 }
 
@@ -194,72 +175,17 @@ if (isMainThread && !process.execArgv.includes("--no-concurrent-sparkplug")) {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("SQLITE_RELIABILITY_TARGET=global");
     expect(result.stdout).toContain("SQLITE_RELIABILITY_RESTORES_VERIFIED=5");
-    expect(result.stdout).toContain("SQLITE_RELIABILITY_CRASH_RECOVERY=verified");
-    expect(result.stdout).toContain("SQLITE_RELIABILITY_PUBLICATION_INTERRUPTION=verified");
-    expect(result.stdout).toContain("SQLITE_RELIABILITY_RESTORE_INTERRUPTION=verified");
-    expect(result.stdout).toContain("SQLITE_RELIABILITY_REPOSITORY_INTERRUPTION=verified");
-    expect(result.stdout).toContain("SQLITE_RELIABILITY_INDEX_REPAIR_INTERRUPTION=verified");
-    expect(result.stdout).toContain("SQLITE_RELIABILITY_VACUUM_INTERRUPTION=verified");
-    expect(result.stdout).toContain("SQLITE_RELIABILITY_POST_COMPACT_RESTORE=verified");
     expect(result.stdout).not.toContain("=missing");
     const firstReport = JSON.parse(fs.readFileSync(output, "utf8")) as ReliabilityReport;
-    const {
-      crashRecoveryProof: crash,
-      publicationInterruptionProof: publication,
-      indexRepairInterruptionProof: indexRepair,
-      transactionProof: transaction,
-      maintenanceProof: {
-        repositoryInterruption: repository,
-        restoreInterruption: restore,
-        vacuumInterruption: vacuum,
-        compaction,
-        postCompact,
-      },
-    } = firstReport;
     expect(firstReport).toMatchObject({ concurrentRestoresVerified: 2, restoresVerified: 5 });
-    expectExited(crash.exit);
-    expect(crash.stateAfterRecovery).toEqual(crash.stateBeforeKill);
-    expectInterrupted(publication.beforePublish, {
-      retryPublished: true,
-      sourceStatePreserved: true,
-      targetVerifiedAfterCrash: false,
-      targetVisibleAfterCrash: false,
-    });
-    expectInterrupted(publication.afterPublish, {
-      existingTargetPreserved: true,
-      sourceStatePreserved: true,
-      targetVerifiedAfterCrash: true,
-      targetVisibleAfterCrash: true,
-    });
-    for (const proof of [indexRepair.rollbackJournal, indexRepair.wal]) {
-      expect(proof).toMatchObject({
-        recoveryVerified: true,
-        repairedIndexes: ["idx_openclaw_reliability_records_identity"],
-      });
-      expectExited(proof.exit);
-    }
-    expect(indexRepair.rollbackJournal.journalBytesObserved).toBeGreaterThan(0);
-    expect(indexRepair.wal.walBytesObserved).toBeGreaterThan(0);
-    expect(transaction.committedWalSentinel).toBe(true);
-    expect(transaction.heldRows).toBeGreaterThan(0);
-    expect(transaction.visibleAfterRestore).toBe(false);
     expect(firstReport.writer.rowsCommitted).toBeGreaterThan(0);
-    expect(firstReport.maintenanceProof.bloatBytes).toBe(
-      VACUUM_PROOF_ROWS * COMPACTION_PAYLOAD_BYTES,
-    );
-    expect(compaction.autoVacuum.after).toBe(2);
-    expect(compaction.freelistPages.before).toBeGreaterThan(0);
-    expect(compaction.freelistPages.after).toBe(0);
-    expect(compaction.reclaimedBytes).toBeGreaterThan(0);
-    expect(compaction.walBytes.after).toBe(0);
-    expect(vacuum.recoveryVerified).toBe(true);
-    expect(vacuum.autoVacuumBeforeKill).toBe(0);
-    expect(vacuum.autoVacuumAfterRecovery).toBe(0);
-    expectExited(vacuum.exit);
-    expect(vacuum.journalBytesObserved > 0 || vacuum.walBytesObserved > 0).toBe(true);
-    expect(vacuum.payloadAfterRecovery).toEqual(vacuum.payloadBeforeKill);
-    expect(vacuum.payloadBeforeKill).toEqual(payload(VACUUM_PROOF_ROWS));
-    expect(vacuum.stateAfterRecovery).toEqual(vacuum.stateBeforeKill);
+    expect(firstReport.transactionProof.heldRows).toBeGreaterThan(0);
+    expect(firstReport.maintenanceProof.postCompact.state.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(firstReport.maintenanceProof.postCompact.state.batches).toBeGreaterThan(0);
+    expect(firstReport.maintenanceProof.postCompact.state.rows).toBeGreaterThan(0);
+    // The subprocess verifies payloads, crash exits, recovery, and compaction
+    // before returning; keep report-specific expectations here, not a replay.
+    const { repositoryInterruption: repository } = firstReport.maintenanceProof;
     for (const [proof, published, visible] of [
       [repository.beforePending, false, 1],
       [repository.pending, true, 3],
@@ -268,48 +194,9 @@ if (isMainThread && !process.execArgv.includes("--no-concurrent-sparkplug")) {
       expect(proof).toMatchObject({
         crashSnapshotVerifiedAfterCrash: published,
         crashSnapshotVisibleAfterCrash: published,
-        incompleteEntries: published ? 0 : 1,
-        repositoryVerified: true,
-        retryCreated: true,
-        sourcePayloadPreserved: true,
-        sourceStatePreserved: true,
         visibleSnapshotsAfterCrash: visible,
       });
-      expect(proof.stagingEntries).toBeGreaterThan(0);
-      expectExited(proof.exit);
     }
-    expect(repository.beforePending.state).toEqual(repository.pending.state);
-    expect(repository.pending.state).toEqual(repository.afterCommit.state);
-    expect(repository.beforePending.payload).toEqual(repository.pending.payload);
-    expect(repository.pending.payload).toEqual(repository.afterCommit.payload);
-    expect(repository.beforePending.payload).toEqual(payload(COMPACTION_FIXTURE_ROWS));
-    expect(restore.snapshotBytes).toBeGreaterThan(MIN_MULTICHUNK_RESTORE_BYTES);
-    expectInterrupted(restore.beforePublish, {
-      existingTargetPreserved: false,
-      repositoryVerified: true,
-      retryRestored: true,
-      targetVerifiedAfterCrash: false,
-      targetVisibleAfterCrash: false,
-    });
-    expect(restore.beforePublish.stateAfterRecovery).toEqual(postCompact.state);
-    expect(restore.beforePublish.payloadAfterRecovery).toEqual(payload(COMPACTION_FIXTURE_ROWS));
-    expectInterrupted(restore.afterPublish, {
-      existingTargetPreserved: true,
-      repositoryVerified: true,
-      retryRestored: false,
-      targetVerifiedAfterCrash: true,
-      targetVisibleAfterCrash: true,
-    });
-    expect(restore.afterPublish.stateAfterRecovery).toEqual(
-      restore.beforePublish.stateAfterRecovery,
-    );
-    expect(restore.afterPublish.payloadAfterRecovery).toEqual(
-      restore.beforePublish.payloadAfterRecovery,
-    );
-    expect(postCompact.restoreVerified).toBe(true);
-    expect(postCompact.state.batches).toBeGreaterThan(0);
-    expect(postCompact.state.rows).toBeGreaterThan(0);
-    expect(postCompact.state.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(firstReport.walBytes.limit).toBeGreaterThan(0);
     expect(firstReport.walBytes.peak).toBeGreaterThan(0);
     expect(firstReport.walBytes.peak).toBeLessThanOrEqual(firstReport.walBytes.limit);

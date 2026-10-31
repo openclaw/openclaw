@@ -176,14 +176,16 @@ export async function maybeCompactCodexAppServerSession(
         recovery: "missing_thread_binding",
       });
     }
-    if (initialBinding.modelProvider === CODEX_RESPONSES_OAUTH_PROVIDER) {
-      // The pinned manual compact RPC cannot carry the admitted turn generation.
-      // Automatic in-turn summarization carries it and remains authorized.
+    if (
+      initialBinding.modelProvider === CODEX_RESPONSES_OAUTH_PROVIDER ||
+      (params.runtimeAuthPlan ?? params.runtimePlan?.auth)?.selectedAuthMode === "native-command"
+    ) {
+      // Separate compaction cannot preserve these auth boundaries; in-turn compaction stays native.
       return {
         ok: false,
         compacted: false,
         reason:
-          "Manual compaction is unavailable with ChatGPT subscription sharing. Automatic compaction runs during normal turns; continue the conversation or start a new session.",
+          "Manual compaction is unavailable with this native auth mode. Automatic compaction runs during normal turns; continue the conversation or start a new session.",
       };
     }
     if (
@@ -636,6 +638,9 @@ export async function maybeCompactCodexAppServerSession(
                   config: attempt.config,
                   cwd: attempt.workspaceDir,
                   runId: attempt.runId,
+                  provider: attempt.provider ?? binding.modelProvider,
+                  model: attempt.model ?? binding.model,
+                  tokensAfter,
                   threadId: binding.threadId,
                   turnId: completion.turnId,
                   itemId: completion.itemId,

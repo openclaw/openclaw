@@ -8,18 +8,15 @@ const context = { cfg: {} as never, timeoutMs: 30_000 };
 const http = vi.hoisted(() => ({
   assertOkOrThrowHttpError: vi.fn(async () => {}),
   postJsonRequest: vi.fn(),
-  resolveProviderHttpRequestConfig: vi.fn((params: Record<string, unknown>) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.deepinfra.com/v1/openai",
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-    dispatcherPolicy: undefined,
-  })),
+  resolveProviderHttpRequestConfig:
+    vi.fn<typeof import("openclaw/plugin-sdk/provider-http").resolveProviderHttpRequestConfig>(),
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
-  ...http,
-}));
+vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>();
+  http.resolveProviderHttpRequestConfig.mockImplementation(actual.resolveProviderHttpRequestConfig);
+  return { ...actual, ...http };
+});
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/provider-http");

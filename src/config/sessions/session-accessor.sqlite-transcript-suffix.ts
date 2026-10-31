@@ -10,6 +10,7 @@ import {
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { preparePriorWorkspaceRewriteInTransaction } from "./session-accessor.sqlite-prior-workspace.js";
+import { selectActiveTranscriptIdentityRows } from "./session-accessor.sqlite-projection-read.js";
 import {
   readEventTimestamp,
   readTranscriptEventId,
@@ -225,13 +226,7 @@ function prepareIncrementalTranscriptSuffixMutation(
   const anchor = anchorId
     ? executeSqliteQueryTakeFirstSync(
         database.db,
-        db
-          .selectFrom("transcript_event_identities as identity")
-          .innerJoin("session_transcript_active_events as active", (join) =>
-            join
-              .onRef("active.session_id", "=", "identity.session_id")
-              .onRef("active.event_seq", "=", "identity.seq"),
-          )
+        selectActiveTranscriptIdentityRows(database)
           .select(["active.active_position", "identity.event_id"])
           .where("identity.session_id", "=", resolved.sessionId)
           .where("identity.event_id", "=", anchorId),
@@ -269,13 +264,7 @@ function prepareIncrementalTranscriptSuffixMutation(
   const retainedActiveCount = anchor.active_position + 1;
   const activeSuffixRows = executeSqliteQuerySync(
     database.db,
-    db
-      .selectFrom("transcript_event_identities as identity")
-      .innerJoin("session_transcript_active_events as active", (join) =>
-        join
-          .onRef("active.session_id", "=", "identity.session_id")
-          .onRef("active.event_seq", "=", "identity.seq"),
-      )
+    selectActiveTranscriptIdentityRows(database)
       .select(["active.message_position", "identity.event_id"])
       .where("identity.session_id", "=", resolved.sessionId)
       .where("active.active_position", ">=", retainedActiveCount)
@@ -581,5 +570,7 @@ export function replaceSqliteTranscriptSuffixInTransaction(
     projection.onProjectionReconcileNeeded?.();
     scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, projection);
   }
-  touchTranscriptMutationInTransaction(database, resolved.sessionId);
+  touchTranscriptMutationInTransaction(database, resolved.sessionId, {
+    projectionReady: projectionIsHealthy,
+  });
 }

@@ -6,6 +6,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { gatewayWebSocketTransportUrl, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { listen } from "../lib/reactive/listener.ts";
 
 const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR";
 export const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
@@ -50,6 +51,7 @@ export async function probeGatewayReachability(url: string, signal: AbortSignal)
     const response = await fetch(probe, {
       cache: "no-store",
       credentials: "same-origin",
+      headers: { "X-OpenClaw-Reachability-Probe": "1" },
       redirect: "error",
       signal,
     });
@@ -73,7 +75,6 @@ export async function probeGatewayReachability(url: string, signal: AbortSignal)
 export function createBrowserGatewaySocket(
   url: string,
   handlers: GatewayProtocolSocketHandlers,
-  maxPayloadBytes?: () => number | undefined,
 ): GatewayProtocolSocket {
   const socket = new WebSocket(gatewayWebSocketTransportUrl(url));
   const listeners = new AbortController();
@@ -97,7 +98,8 @@ export function createBrowserGatewaySocket(
     handlers.close(code, reason);
   };
 
-  socket.addEventListener(
+  listen(
+    socket,
     "open",
     () => {
       finishOpening();
@@ -105,17 +107,10 @@ export function createBrowserGatewaySocket(
     },
     listenerOptions,
   );
-  socket.addEventListener(
-    "message",
-    (event) => handlers.message(String(event.data ?? "")),
-    listenerOptions,
-  );
-  socket.addEventListener(
-    "close",
-    (event) => finishClose(event.code, event.reason),
-    listenerOptions,
-  );
-  socket.addEventListener(
+  listen(socket, "message", (event) => handlers.message(String(event.data ?? "")), listenerOptions);
+  listen(socket, "close", (event) => finishClose(event.code, event.reason), listenerOptions);
+  listen(
+    socket,
     "error",
     () => {
       finishOpening();
@@ -143,13 +138,7 @@ export function createBrowserGatewaySocket(
 
   return {
     isOpen: () => !listeners.signal.aborted && socket.readyState === WebSocket.OPEN,
-    send: (data) => {
-      const limit = maxPayloadBytes?.();
-      if (limit !== undefined && new TextEncoder().encode(data).byteLength > limit) {
-        throw new GatewayPayloadLimitError();
-      }
-      socket.send(data);
-    },
+    send: (data) => socket.send(data),
     close: (code, reason) => {
       if (listeners.signal.aborted) {
         return;
@@ -162,13 +151,4 @@ export function createBrowserGatewaySocket(
       finishClose(code ?? 1000, reason ?? "");
     },
   };
-}
-
-export class GatewayPayloadLimitError extends Error {
-  constructor() {
-    super(
-      "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
-    );
-    this.name = "GatewayPayloadLimitError";
-  }
 }

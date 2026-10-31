@@ -10,22 +10,3 @@ export function truncateDiagnosticContent(value: string): string {
   // the unredacted remainder to the collector.
   return truncateUtf16Safe(redactSensitiveText(value), MAX_DIAGNOSTIC_CONTENT_CHARS);
 }
-
-export function joinDiagnosticContent(
-  parts: readonly string[],
-  truncationSuffix = "",
-): string | undefined {
-  const contentBudget = MAX_DIAGNOSTIC_CONTENT_CHARS - truncationSuffix.length;
-  // Redaction must see the complete logical content: streamed parts can split
-  // a secret block (e.g. a PEM key) so per-part redaction would miss it, and
-  // per-part length accounting would misread redaction shortening as
-  // truncation and drop later answer parts.
-  const redacted = redactSensitiveText(parts.filter((part) => part).join("\n"));
-  if (!redacted) {
-    return undefined;
-  }
-  if (redacted.length <= contentBudget) {
-    return redacted;
-  }
-  return `${truncateUtf16Safe(redacted, contentBudget)}${truncationSuffix}`;
-}

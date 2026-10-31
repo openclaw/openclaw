@@ -6,14 +6,7 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { QueuedFollowupReplyBatch } from "../../auto-reply/reply/queue/types.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
-import {
-  readTranscriptEventId,
-  readTranscriptEventMessage,
-} from "../../config/sessions/session-accessor.sqlite-read.js";
-import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
-import { findTranscriptEvent } from "../../config/sessions/session-transcript-match.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import { captureChatAbortRegistrationGuard } from "../chat-abort-lifecycle-internal.js";
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
@@ -29,6 +22,7 @@ import {
 import {
   broadcastChatDelta,
   broadcastChatFinal,
+  broadcastChatQueueNotice,
   broadcastChatTerminal,
   isSourceReplyTranscriptMirrorPayload,
 } from "./chat-broadcast.js";
@@ -51,6 +45,7 @@ import {
   type SourceReplyTranscriptMirror,
   type SourceReplyTranscriptRewrite,
 } from "./chat-transcript-persistence.js";
+import { readCommittedSourceReplyContent } from "./chat-transcript-source-reply-owner.js";
 
 function selectChatSendAgentReplyInputs(params: {
   deliveredReplies: readonly DeliveredChatSendReply[];
@@ -82,13 +77,14 @@ export function createChatSendLateReplyFinalizer(
   return async ({
     runId: runtimeRunId,
     clientRunId: runId,
-    payloads,
+    payloads: initialPayloads,
     completion,
     isCurrent: isBatchCurrent,
   }: Pick<QueuedFollowupReplyBatch, "runId" | "payloads" | "completion"> & {
     clientRunId: string;
     isCurrent: () => boolean;
   }): Promise<ChatSendAgentReplyFinalization> => {
+    let payloads = initialPayloads;
     const { context, session } = params;
     const isCurrent = () =>
       isBatchCurrent() && (runId !== session.clientRunId || sourceIsCurrent());
@@ -103,6 +99,36 @@ export function createChatSendLateReplyFinalizer(
     const terminal = completion.kind !== "progress";
     let publicationStarted = false;
     try {
+      if (!terminal) {
+        const queueNotices = payloads.filter(
+          (payload) => getReplyPayloadMetadata(payload)?.queueAdmissionNotice === "queued",
+        );
+        if (queueNotices.length > 0) {
+          const noticeResult = await finalizeChatSendAgentReplyPayloads({
+            ...params,
+            terminalEntry: broadcastParams.terminalEntry,
+            emitFirstAssistantServerTiming: () => {},
+            inputs: queueNotices.map((payload) => ({ kind: "raw", payload })),
+            isCurrent,
+            session: { ...session, clientRunId: runId },
+            publishMessage: (message) => {
+              publicationStarted = true;
+              const text = typeof message?.text === "string" ? message.text : undefined;
+              if (text) {
+                // Keep the existing final delivery checks, but never seed an answer buffer.
+                broadcastChatQueueNotice({ ...broadcastParams, text });
+              }
+              return false;
+            },
+          });
+          payloads = payloads.filter(
+            (payload) => getReplyPayloadMetadata(payload)?.queueAdmissionNotice !== "queued",
+          );
+          if (payloads.length === 0) {
+            return noticeResult;
+          }
+        }
+      }
       const result = await finalizeChatSendAgentReplyPayloads({
         ...params,
         terminalEntry: broadcastParams.terminalEntry,
@@ -284,30 +310,16 @@ async function finalizeChatSendAgentReplyPayloads(
       agentId,
     });
     const committedSourceContent = await Promise.all(
-      agentRunReplyPayloads.map(async (payload) => {
-        const mirror = getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
-        if (!sourceReplyScope || !mirror?.transcriptOwner || !mirror.idempotencyKey) {
-          return undefined;
-        }
-        const found = await findTranscriptEvent(sourceReplyScope, {
-          kind: "idempotency",
-          key: mirror.idempotencyKey,
-          deliveryMirror: true,
-        });
-        mediaScope.assertCurrent();
-        const messageId = found && readTranscriptEventId(found.event);
-        if (!messageId) {
-          return undefined;
-        }
-        const { anchors } = await readSessionTranscriptAnchorsAsync(
-          { ...sourceReplyScope, sessionKey },
-          { entryIds: [messageId] },
-          params.abortSignal,
-        );
-        mediaScope.assertCurrent();
-        const content = readAssistantDisplayContent(readTranscriptEventMessage(found.event));
-        return anchors.length > 0 && content.length > 0 ? content : undefined;
-      }),
+      agentRunReplyPayloads.map(async (payload) =>
+        sourceReplyScope
+          ? readCommittedSourceReplyContent({
+              scope: sourceReplyScope,
+              payload,
+              abortSignal: params.abortSignal,
+              assertCurrent: mediaScope.assertCurrent,
+            })
+          : undefined,
+      ),
     );
     mediaScope.assertCurrent();
     const hasCommittedSourceReply = committedSourceContent.some(Boolean);
@@ -348,8 +360,8 @@ async function finalizeChatSendAgentReplyPayloads(
               broadcastContent: replyBroadcastContent,
             } = await buildContent(inputsByIndex[inputIndex] ?? []);
             const state: SourceReplyContentState = {
-              broadcastContent: replyBroadcastContent ? [...replyBroadcastContent] : [],
-              persistedContent: persistedContent ? [...persistedContent] : [],
+              broadcastContent: replyBroadcastContent ?? [],
+              persistedContent: persistedContent ?? [],
               hasManagedOutgoingContent: hasManagedOutgoingAssistantContent(persistedContent),
               backedManagedOutgoingContent: false,
             };

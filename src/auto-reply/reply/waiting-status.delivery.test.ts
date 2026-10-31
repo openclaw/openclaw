@@ -105,7 +105,7 @@ async function prepare(lane: "ordinary" | "queued" = "ordinary") {
     turn,
     execution: { runId, outcome: context.execution },
     accounting,
-    opts: { ...context.opts, isHeartbeat: context.isHeartbeat },
+    opts: context.opts,
   });
   return decision.kind === "deliver" ? decision.payloads : [];
 }

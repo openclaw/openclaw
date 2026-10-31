@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import nodePath from "node:path";
-import { note as showDoctorNote } from "../../packages/terminal-core/src/note.js";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { shouldSkipLegacyUpdateDoctorConfigWrite } from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
@@ -99,7 +99,7 @@ export async function runWriteConfigHealth(
       renames: providerRenames,
       env: ctx.env,
     });
-    noteDoctorRepairResult(renamedCron, showDoctorNote);
+    noteDoctorRepairResult(renamedCron);
     const renamedSessions = await maybeRepairCodexSessionRoutes({
       cfg: ctx.cfg,
       providerRenames,
@@ -107,7 +107,7 @@ export async function runWriteConfigHealth(
       env: ctx.env,
       shouldRepair: true,
     });
-    noteDoctorRepairResult(renamedSessions, showDoctorNote);
+    noteDoctorRepairResult(renamedSessions);
     if (renamedCron.warnings.length > 0 || renamedSessions.warnings.length > 0) {
       throw new Error(
         "Provider references could not be fully repaired. Config was preserved; rerun openclaw doctor --fix.",
@@ -423,7 +423,6 @@ export async function runWriteConfigHealth(
         keys: [],
       });
       if (error instanceof ConfigMutationConflictError) {
-        const { note } = await import("../../packages/terminal-core/src/note.js");
         note(
           [
             "The config changed after Doctor prepared these repairs.",
@@ -450,7 +449,6 @@ export async function runWriteConfigHealth(
         // The candidate mixed an include-owned repair with root-owned changes; the
         // writer keeps every file intact and names the include boundary, plus its
         // file when the root file authors the directive, to repair first.
-        const { note } = await import("../../packages/terminal-core/src/note.js");
         const targets = error.includeTargets ?? [];
         const includedFile =
           targets.length === 0
@@ -467,7 +465,6 @@ export async function runWriteConfigHealth(
         return false;
       }
       if (isConfigValidationFailedError(error)) {
-        const { note } = await import("../../packages/terminal-core/src/note.js");
         const { formatConfigIssueLines } = await import("../config/issue-format.js");
         const issueLines = formatConfigIssueLines(error.issues, "-", { normalizeRoot: true });
         note(
@@ -485,7 +482,6 @@ export async function runWriteConfigHealth(
       if (!isCronOwnerWriteRefusalError(error)) {
         throw error;
       }
-      const { note } = await import("../../packages/terminal-core/src/note.js");
       note(
         [
           error.message,
@@ -503,11 +499,12 @@ export async function runWriteConfigHealth(
       path: committed.path,
       hash: committed.persistedHash,
     };
+    // A later config commit needs cron repair against that newly durable config.
+    ctx.postConfigWriteRepairsCommitted = false;
     // The atomic write committed: repair panels queued by the config flow are now
     // true statements about disk state, so print them exactly once.
     const pendingChangePanels = ctx.configResult.pendingChangePanels;
     if (pendingChangePanels?.length) {
-      const { note } = await import("../../packages/terminal-core/src/note.js");
       for (const panel of pendingChangePanels) {
         note(panel, "Doctor changes");
         for (const message of panel.split("\n")) {
@@ -544,7 +541,6 @@ export async function runWriteConfigHealth(
   }
   const billingWarnings = ctx.configResult.modelBillingRouteWarnings;
   if (billingWarnings?.length) {
-    const { note } = await import("../../packages/terminal-core/src/note.js");
     const log = createSubsystemLogger("doctor");
     note(billingWarnings.join("\n"), "Billing route changes");
     for (const warning of billingWarnings) {
@@ -560,9 +556,8 @@ export async function runWriteConfigHealth(
   if (ctx.configResult.retiredPhoneControlStateCleanupPending === true) {
     const { finalizeRetiredPhoneControlCleanup } =
       await import("../commands/doctor-retired-phone-control.js");
-    const { note } = await import("../../packages/terminal-core/src/note.js");
     const cleanup = await finalizeRetiredPhoneControlCleanup({ env: ctx.env ?? process.env });
-    noteDoctorRepairResult(cleanup, note);
+    noteDoctorRepairResult(cleanup);
   }
   if (
     (!ctx.prompter.shouldRepair &&
@@ -585,14 +580,17 @@ export async function runWriteConfigHealth(
       ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
       : {}),
     repairRetiredModelRefs: ctx.prompter.shouldRepair,
+    modelReplacements: ctx.options.modelReplacements,
     authProfileIdMap: ctx.configResult.openAICodexAuthProfileIdMap,
     ...(ctx.configResult.blockedCodexModelIdentities?.length
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
       : {}),
   });
   ctx.postConfigWriteRepairsCommitted = true;
-  const { note } = await import("../../packages/terminal-core/src/note.js");
-  noteDoctorRepairResult(result, note);
+  if (result.warnings.length > 0) {
+    ctx.retirementOnly = false;
+  }
+  noteDoctorRepairResult(result);
   return true;
 }
 
@@ -697,25 +695,5 @@ function isDirectoryPath(path: string): boolean {
     return fs.statSync(path).isDirectory();
   } catch {
     return false;
-  }
-}
-
-export async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  const { readDeferredPluginMigrationsAsync } =
-    await import("../infra/deferred-plugin-migrations.js");
-  const deferredPluginMigrations = await readDeferredPluginMigrationsAsync({
-    env: ctx.env ?? process.env,
-  });
-  const finalSnapshot = await readConfigFileSnapshot({
-    skipPluginValidation: isUpdateDoctorRun(ctx.env ?? process.env),
-    preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
-    deferredPluginMigrations,
-  });
-  if (finalSnapshot.exists && !finalSnapshot.valid) {
-    ctx.runtime.error("Invalid config:");
-    for (const issue of finalSnapshot.issues) {
-      ctx.runtime.error(`- ${issue.path || "<root>"}: ${issue.message}`);
-    }
   }
 }

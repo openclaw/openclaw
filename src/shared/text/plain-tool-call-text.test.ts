@@ -1,12 +1,24 @@
 import { afterEach, expect, it, vi } from "vitest";
-import * as toolCallRepair from "../../../packages/tool-call-repair/src/index.js";
+import * as toolCallRepair from "../../../packages/tool-call-repair/src/payload.js";
 import { assistantVisibleTextFilters, plainToolCallTextFilter } from "./assistant-visible-text.js";
-import * as codeRegions from "./code-regions.js";
-import { createTextProjection } from "./text-projection.js";
+import * as codeRegions from "./code-ranges.js";
+import { findCodeRegions } from "./code-regions.js";
+import { createTextProjection, type TextFilter } from "./text-projection.js";
+
+const reference = (text: string) =>
+  toolCallRepair.stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions });
+
+function appendChunks(chunks: readonly string[], filters: readonly TextFilter[]) {
+  const projection = createTextProjection(filters);
+  for (const chunk of chunks) {
+    projection.append(chunk);
+  }
+  return projection;
+}
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each([
+const samples = [
   '[tool:read] {}\n\n[outer [inner]\nmore\nlabel](/url "title\n`x\n[tool:read] {}\nx`")',
   '[tool:read] {}\n\n[id]: /url\r\n"title\r\nmore\r\n`x\r\n[tool:read] {}\r\nx`"',
   "[tool:read] {}\n\n[a\\]b\nmiddle\nrest]: /url\n\nAfter\n\n![example `x\n[tool:read] {}\nx`][a\\]b middle rest]",
@@ -44,46 +56,43 @@ it.each([
   "> ```text\n> [tool:read] {}\n> ```\n\n[tool:read] {}\nDone.",
   "Intro\nHeading\n===\n    [tool:read] {}\n\nDone.",
   "Intro\n\n[reference]:\n    /example\n\n[tool:read] {}\nDone.",
-])("matches the canonical strip while streaming %#", (source) => {
-  for (const chunkSize of [1, 3, 7]) {
-    const projection = createTextProjection([plainToolCallTextFilter]);
-    let accumulated = "";
-    for (let offset = 0; offset < source.length; offset += chunkSize) {
-      accumulated += source.slice(offset, offset + chunkSize);
-      projection.append(source.slice(offset, offset + chunkSize));
-      expect(projection.text).toBe(
-        toolCallRepair.stripPlainTextToolCallBlocks(accumulated, {
-          resolveProtectedRanges: codeRegions.findCodeRegions,
-        }),
-      );
-    }
-  }
-});
+];
+
 it.each([
-  null,
-  '```json\n{"a":{"b":1}}\n```',
-  '```text\n[tool:read] {"path":"a.ts"}\n```',
-  '```text\n[tool:read] {"path":"a.ts"}',
-])("bounds sanitizer work in token-sized deltas %#", (example) => {
-  const sentence = "Ordinary sentence with words and periods.";
-  const source =
-    example === null
-      ? Array.from({ length: 600 }, (_, i) => `[${i + 1}] ${sentence}\n`).join("")
-      : `${example}\n\n${"An ordinary explanation continues here.\n".repeat(128)}`;
-  const spies = [
-    vi.spyOn(toolCallRepair, "stripPlainTextToolCallBlocks"),
-    ...(example === null ? [] : [vi.spyOn(codeRegions, "findCodeRegions")]),
-  ];
-  const projection = createTextProjection(assistantVisibleTextFilters("delivery", true));
-  for (let offset = 0; offset < source.length; offset += 4) {
-    projection.append(source.slice(offset, offset + 4));
-  }
-  expect(projection.text).toBe(source.trimEnd());
-  const parsedCharacters = spies
-    .flatMap((spy) => spy.mock.calls.map(([text]) => text))
-    .reduce((n, text) => n + text.length, 0);
-  expect(parsedCharacters).toBeLessThan(source.length * 8);
+  ["indented code after whitespace", ["    [tool:read] {}\n", "    ", "[tool:write] {}\n"], ""],
+  ["list-owned fence", ["- ```text\n  [tool:read] {}", "\n  [tool:write] {}\n"], "  "],
+] as const)("refreshes protection for a growing %s", (_name, chunks, indent) => {
+  const projection = appendChunks(chunks, [plainToolCallTextFilter]);
+  expect(projection.text).toBe(reference(chunks.join("")));
+  expect(projection.text).toContain(`${indent}[tool:read] {}`);
+  expect(projection.text).toContain(`${indent}[tool:write] {}`);
 });
+
+const citations = Array.from(
+  { length: 600 },
+  (_, i) => `[${i + 1}] Ordinary sentence with words and periods.`,
+).join("\n");
+const continuation = `\n\n${"An ordinary explanation continues here.\n".repeat(128)}`;
+it.each([
+  ["citations", `Here is the summary.\n${citations}\n`, false],
+  ["fenced JSON", '```json\n{"name":"example","deps":{"demo":"1.0"}}\n```' + continuation, true],
+  ["fenced tool call", '```text\n[tool:read] {"path":"a.ts"}\n```' + continuation, true],
+  ["unterminated fence", '```text\n[tool:read] {"path":"a.ts"}' + continuation, true],
+] as const)(
+  "bounds sanitizer work for %s in token-sized deltas",
+  (_name, source, includeRegions) => {
+    const strip = vi.spyOn(toolCallRepair, "stripPlainTextToolCallBlocks");
+    const regions = includeRegions ? vi.spyOn(codeRegions, "findCodeRegions") : undefined;
+    const projection = appendChunks(
+      source.match(/[\s\S]{1,4}/g) ?? [],
+      assistantVisibleTextFilters("delivery", true),
+    );
+    expect(projection.text).toBe(source.trimEnd());
+    const parsed = [...strip.mock.calls, ...(regions?.mock.calls ?? [])];
+    const parsedCharacters = parsed.reduce((total, [text]) => total + text.length, 0);
+    expect(parsedCharacters).toBeLessThan(source.length * 8);
+  },
+);
 
 it("rechecks retired code markers after a source replacement", () => {
   const projection = createTextProjection([plainToolCallTextFilter]);
@@ -93,4 +102,16 @@ it("rechecks retired code markers after a source replacement", () => {
   expect(projection.replace(`${call}\nDone.`).text).toBe("Done.");
   expect(projection.replace(fenced).text).toBe(fenced);
   expect(projection.append(`${call}\nDone.`).text).toBe(`${fenced}Done.`);
+});
+
+it.each(samples)("matches the canonical strip while streaming %#", (source) => {
+  for (const chunkSize of [1, 3, 7]) {
+    const projection = createTextProjection([plainToolCallTextFilter]);
+    let accumulated = "";
+    for (let offset = 0; offset < source.length; offset += chunkSize) {
+      accumulated += source.slice(offset, offset + chunkSize);
+      projection.append(source.slice(offset, offset + chunkSize));
+      expect(projection.text).toBe(reference(accumulated));
+    }
+  }
 });

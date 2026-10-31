@@ -98,6 +98,13 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies = {}) {
   const readDraft = () =>
     readScope() === "personal" ? readGitHubIdentityDraft(undefined) : selectedDraft;
 
+  const canConfigureSharedIdentity = () =>
+    target?.kind === "shared" &&
+    configurable &&
+    !busy() &&
+    !deviceAuthorization.active() &&
+    !confirmationPending;
+
   function queueVerification() {
     if (
       verificationQueued ||
@@ -467,13 +474,7 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies = {}) {
   }
 
   async function configure() {
-    if (
-      target?.kind !== "shared" ||
-      !configurable ||
-      busy() ||
-      deviceAuthorization.active() ||
-      confirmationPending
-    ) {
+    if (!canConfigureSharedIdentity()) {
       return;
     }
     const draft = { ...readDraft() };
@@ -535,13 +536,7 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies = {}) {
   }
 
   async function inherit() {
-    if (
-      target?.kind !== "shared" ||
-      !configurable ||
-      busy() ||
-      deviceAuthorization.active() ||
-      confirmationPending
-    ) {
+    if (!canConfigureSharedIdentity()) {
       return;
     }
     const captured = captureRequest();

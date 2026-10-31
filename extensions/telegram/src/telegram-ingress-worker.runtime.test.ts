@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as telegramTransport from "./fetch.js";
 import type {
   TelegramIngressWorkerCommand,
@@ -14,6 +14,10 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 const emptyPoll = () => jsonResponse(200, { ok: true, result: [] });
+const errorPoll = (error_code: number, description: string, parameters?: unknown) =>
+  jsonResponse(error_code, { ok: false, error_code, description, parameters });
+const expectMessage = (messages: TelegramIngressWorkerMessage[], fields: object) =>
+  expect(messages).toContainEqual(expect.objectContaining(fields));
 
 function createRuntime(
   responses: Response[],
@@ -84,7 +88,13 @@ function createRuntime(
     },
     port,
   });
-  return { calls, pollBodies, messages, done };
+  return {
+    calls,
+    pollBodies,
+    messages,
+    done,
+    elapsed: () => calls.map((calledAt) => calledAt - expectDefined(calls[0], "first poll")),
+  };
 }
 
 async function flushRuntime(): Promise<void> {
@@ -95,195 +105,133 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
-
-describe("telegram ingress worker poll cadence", () => {
-  it("keeps short polling until a getUpdates request succeeds", async () => {
-    vi.useFakeTimers();
-    const runtime = createRuntime(
-      [
-        jsonResponse(502, { ok: false, error_code: 502, description: "Bad Gateway" }),
-        emptyPoll(),
-        emptyPoll(),
-      ],
-      { stopAfterPollSuccesses: 2, timeoutSeconds: 30 },
-    );
-
-    await flushRuntime();
-    expect(runtime.messages).toContainEqual(
-      expect.objectContaining({ type: "poll-error", errorCode: 502 }),
-    );
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flushRuntime();
-    await runtime.done;
-
-    expect(runtime.pollBodies.map((body) => body.timeout)).toEqual([0, 0, 30]);
-    for (const body of runtime.pollBodies) {
-      expect(body.allowed_updates).toEqual(
-        expect.arrayContaining(["message_reaction", "channel_post"]),
-      );
-      expect(body.allowed_updates).not.toContain("stopped_message_generation");
-    }
-    expect(runtime.messages.filter((message) => message.type === "poll-success")).toHaveLength(2);
-  });
-
-  it("backs off consecutive empty polls without hot spinning", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
-    const runtime = createRuntime(Array.from({ length: 9 }, emptyPoll), {
-      stopAfterPollSuccesses: 9,
-    });
-
-    expect(runtime.calls).toHaveLength(1);
-    await flushRuntime();
-    expect(runtime.calls).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(3_550);
-    await runtime.done;
-
-    const firstCall = expectDefined(runtime.calls[0], "first Telegram poll call");
-    expect(runtime.calls.map((calledAt) => calledAt - firstCall)).toEqual([
-      0, 0, 50, 150, 350, 750, 1_550, 2_550, 3_550,
-    ]);
-  });
-
-  it("resets to immediate polling when activity resumes", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
-    const runtime = createRuntime(
-      [
-        emptyPoll(),
-        emptyPoll(),
-        jsonResponse(200, { ok: true, result: [{ update_id: 42 }] }),
-        emptyPoll(),
-      ],
-      { stopAfterPollSuccesses: 4 },
-    );
-
-    await flushRuntime();
-    await vi.advanceTimersByTimeAsync(50);
-    await runtime.done;
-
-    const firstCall = expectDefined(runtime.calls[0], "first Telegram poll call");
-    expect(runtime.calls.map((calledAt) => calledAt - firstCall)).toEqual([0, 0, 50, 50]);
-    expect(runtime.messages).toContainEqual(
-      expect.objectContaining({ type: "spooled", updateId: 42 }),
-    );
-  });
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
 });
 
-describe("telegram ingress worker durable-before-offset", () => {
-  it("advances getUpdates offset only after the whole response is acknowledged", async () => {
-    vi.useFakeTimers();
-    const spoolGate = Promise.withResolvers<number>();
-    const updates = [
-      { update_id: 42, message: { text: "hi" } },
-      { update_id: 44, message: { text: "again" } },
-      { update_id: 42, message: { text: "hi" } },
-    ];
-    const { messages, pollBodies, calls, done } = createRuntime(
-      [jsonResponse(200, { ok: true, result: updates }), emptyPoll()],
-      { stopAfterPollSuccesses: 2, acknowledge: () => spoolGate.promise },
-    );
-
-    await flushRuntime();
-    // The response stays intact while its one spool-ack is held.
-    expect(messages.filter((message) => message.type === "updates")).toEqual([
-      expect.objectContaining({
-        updates,
-        queued: 3,
-      }),
-    ]);
-    expect(messages.some((m) => m.type === "spooled")).toBe(false);
-    expect(calls).toHaveLength(1);
-
-    spoolGate.resolve(44);
-    await flushRuntime();
-    await vi.advanceTimersByTimeAsync(0);
-    await done;
-
-    expect(messages.filter((message) => message.type === "spooled")).toEqual([
-      expect.objectContaining({ type: "spooled", updateId: 44 }),
-    ]);
-    // Second getUpdates must use offset = lastUpdateId + 1 only after spool-ack.
-    expect(pollBodies[1]?.offset).toBe(45);
-    expect(pollBodies.map((body) => body.timeout)).toEqual([0, 1]);
+it("keeps short polling until a getUpdates request succeeds", async () => {
+  const runtime = createRuntime([errorPoll(502, "Bad Gateway"), emptyPoll(), emptyPoll()], {
+    stopAfterPollSuccesses: 2,
+    timeoutSeconds: 30,
   });
+
+  await flushRuntime();
+  expectMessage(runtime.messages, { type: "poll-error", errorCode: 502 });
+  await vi.advanceTimersByTimeAsync(1_000);
+  await flushRuntime();
+  await runtime.done;
+
+  expect(runtime.pollBodies.map((body) => body.timeout)).toEqual([0, 0, 30]);
+  for (const body of runtime.pollBodies) {
+    expect(body.allowed_updates).toEqual(
+      expect.arrayContaining(["message_reaction", "channel_post"]),
+    );
+    expect(body.allowed_updates).not.toContain("stopped_message_generation");
+  }
 });
 
-describe("telegram ingress worker retry policy", () => {
-  it("honors Telegram retry_after for getUpdates 429 responses", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
-    const runtime = createRuntime([
-      jsonResponse(429, {
-        ok: false,
-        error_code: 429,
-        description: "Too Many Requests: retry after 0.05",
-        parameters: { retry_after: 0.05 },
-      }),
+it("backs off idle polls without hot spinning and resets immediately when activity resumes", async () => {
+  const runtime = createRuntime(
+    [
+      ...Array.from({ length: 9 }, emptyPoll),
+      jsonResponse(200, { ok: true, result: [{ update_id: 42 }] }),
       emptyPoll(),
-    ]);
+    ],
+    { stopAfterPollSuccesses: 11 },
+  );
 
-    expect(runtime.calls).toHaveLength(1);
-    await flushRuntime();
-    expect(runtime.messages).toContainEqual(
-      expect.objectContaining({ type: "poll-error", errorCode: 429, retryAfterMs: 50 }),
-    );
-    await vi.advanceTimersByTimeAsync(49);
-    expect(runtime.calls).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1);
-    await runtime.done;
+  await flushRuntime();
+  await vi.advanceTimersByTimeAsync(4_550);
+  await runtime.done;
 
-    expect(runtime.calls).toHaveLength(2);
-    const secondCall = expectDefined(runtime.calls[1], "second Telegram poll call");
-    const firstCall = expectDefined(runtime.calls[0], "first Telegram poll call");
-    expect(secondCall - firstCall).toBe(50);
-    expect(runtime.messages).toContainEqual(
-      expect.objectContaining({ type: "poll-success", count: 0 }),
-    );
-  });
+  expect(runtime.elapsed()).toEqual([0, 0, 50, 150, 350, 750, 1_550, 2_550, 3_550, 4_550, 4_550]);
+  expectMessage(runtime.messages, { type: "spooled", updateId: 42 });
+});
 
-  it.each([
-    {
-      name: "non-JSON",
-      response: () =>
-        new Response("<html>Bad Gateway</html>", {
-          status: 502,
-          headers: { "content-type": "text/html" },
-        }),
-    },
-    { name: "JSON-null", response: () => jsonResponse(502, null) },
-  ])("retries a $name getUpdates 502 response as a server error", async ({ response }) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
-    const runtime = createRuntime([response(), emptyPoll()]);
+it("advances getUpdates offset only after the whole response is acknowledged", async () => {
+  const spoolGate = Promise.withResolvers<number>();
+  const updates = [
+    { update_id: 42, message: { text: "hi" } },
+    { update_id: 44, message: { text: "again" } },
+    { update_id: 42, message: { text: "hi" } },
+  ];
+  const { messages, pollBodies, calls, done } = createRuntime(
+    [jsonResponse(200, { ok: true, result: updates }), emptyPoll()],
+    { stopAfterPollSuccesses: 2, acknowledge: () => spoolGate.promise },
+  );
 
-    expect(runtime.calls).toHaveLength(1);
-    await flushRuntime();
-    expect(runtime.messages).toContainEqual(
-      expect.objectContaining({
-        type: "poll-error",
-        errorCode: 502,
-        message: "Telegram getUpdates failed with HTTP 502",
+  await flushRuntime();
+  // The response stays intact while its one spool-ack is held.
+  expect(messages.filter((message) => message.type === "updates")).toEqual([
+    expect.objectContaining({ updates, queued: 3 }),
+  ]);
+  expect(messages.some((m) => m.type === "spooled")).toBe(false);
+  expect(calls).toHaveLength(1);
+
+  spoolGate.resolve(44);
+  await flushRuntime();
+  await vi.advanceTimersByTimeAsync(0);
+  await done;
+
+  expect(messages.filter((message) => message.type === "spooled")).toEqual([
+    expect.objectContaining({ type: "spooled", updateId: 44 }),
+  ]);
+  // Second getUpdates must use offset = lastUpdateId + 1 only after spool-ack.
+  expect(pollBodies[1]?.offset).toBe(45);
+  expect(pollBodies.map((body) => body.timeout)).toEqual([0, 1]);
+});
+
+it("honors Telegram retry_after for getUpdates 429 responses", async () => {
+  const runtime = createRuntime([
+    errorPoll(429, "Too Many Requests: retry after 0.05", { retry_after: 0.05 }),
+    emptyPoll(),
+  ]);
+
+  expect(runtime.calls).toHaveLength(1);
+  await flushRuntime();
+  expectMessage(runtime.messages, { type: "poll-error", errorCode: 429, retryAfterMs: 50 });
+  await vi.advanceTimersByTimeAsync(49);
+  expect(runtime.calls).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(1);
+  await runtime.done;
+
+  expect(runtime.calls).toHaveLength(2);
+  expect(runtime.elapsed()).toEqual([0, 50]);
+  expectMessage(runtime.messages, { type: "poll-success", count: 0 });
+});
+
+it.each([
+  {
+    name: "non-JSON",
+    response: () =>
+      new Response("<html>Bad Gateway</html>", {
+        status: 502,
+        headers: { "content-type": "text/html" },
       }),
-    );
-    await vi.advanceTimersByTimeAsync(1000);
-    await runtime.done;
+  },
+  { name: "JSON-null", response: () => jsonResponse(502, null) },
+])("retries a $name getUpdates 502 response as a server error", async ({ response }) => {
+  const runtime = createRuntime([response(), emptyPoll()]);
 
-    expect(runtime.calls).toHaveLength(2);
+  expect(runtime.calls).toHaveLength(1);
+  await flushRuntime();
+  expectMessage(runtime.messages, {
+    type: "poll-error",
+    errorCode: 502,
+    message: "Telegram getUpdates failed with HTTP 502",
   });
+  await vi.advanceTimersByTimeAsync(1000);
+  await runtime.done;
 
-  it("propagates getUpdates 409 responses to the parent", async () => {
-    const runtime = createRuntime([
-      jsonResponse(409, {
-        ok: false,
-        error_code: 409,
-        description: "Conflict: terminated by other getUpdates request",
-      }),
-    ]);
+  expect(runtime.calls).toHaveLength(2);
+});
 
-    await expect(runtime.done).rejects.toThrow("Conflict: terminated by other getUpdates request");
-    expect(runtime.messages).toContainEqual(
-      expect.objectContaining({ type: "poll-error", errorCode: 409 }),
-    );
-  });
+it("propagates getUpdates 409 responses to the parent", async () => {
+  const runtime = createRuntime([
+    errorPoll(409, "Conflict: terminated by other getUpdates request"),
+  ]);
+
+  await expect(runtime.done).rejects.toThrow("Conflict: terminated by other getUpdates request");
+  expectMessage(runtime.messages, { type: "poll-error", errorCode: 409 });
 });

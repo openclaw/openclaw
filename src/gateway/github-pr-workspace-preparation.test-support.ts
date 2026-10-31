@@ -32,19 +32,45 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
-import { createRequesterPublicationFixture } from "./github-publication-requester.test-support.js";
+import {
+  createPublicationRepositories,
+  createRequesterPublicationFixture,
+} from "./github-publication-requester.test-support.js";
 import { commandResult, githubPublicationTestMocks } from "./github-publication.test-support.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createContext as createRequestContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import {
   resolveLocalWorkspaceOwner,
   withLocalWorkspaceProjection,
 } from "./worker-environments/local-workspace-projection.js";
+import * as workspaceStore from "./worker-environments/local-workspace-store.js";
+import { isLocalWorkspaceBaseRefreshRef } from "./worker-environments/workspace-result-inventory.js";
 
 export const mocks = githubPublicationTestMocks();
 
+const isolatedGitEnv = (env: NodeJS.ProcessEnv = {}) => ({
+  ...process.env,
+  ...env,
+  GIT_CONFIG_GLOBAL: os.devNull,
+  GIT_CONFIG_SYSTEM: os.devNull,
+  GH_TOKEN: undefined,
+  GITHUB_TOKEN: undefined,
+  GH_CONFIG_DIR: undefined,
+});
+
 export async function fixture(
-  options: { fork?: boolean; empty?: boolean; conflict?: boolean; priorPublication?: boolean } = {},
+  options: {
+    fork?: boolean;
+    empty?: boolean;
+    conflict?: boolean;
+    priorPublication?: boolean;
+    linked?: boolean;
+    newerProjectBase?: boolean;
+    unpublishedProjectWork?: boolean;
+    baseBranch?: string;
+    projectFork?: boolean;
+  } = {},
 ) {
   const original = { ...mocks.findWorktree("session", "unused"), id: randomUUID() };
   mocks.findWorktree.mockImplementation((_kind: string, ownerId: string) => ({
@@ -55,39 +81,63 @@ export async function fixture(
   const local = f.local!;
   const scope = { agentId: "main", sessionKey: f.session.sessionKey };
   const readSession = () => loadSessionEntryReadOnly(scope)!;
+  let priorPublication: Awaited<ReturnType<typeof f.coordinator.requestForSessionV2>> | undefined;
   if (options.priorPublication) {
-    const previous = await f.coordinator.requestForSessionV2(f.request("earlier-pr", f.guest));
-    expect(previous.status).toBe("published");
+    priorPublication = await f.coordinator.requestForSessionV2(f.request("earlier-pr", f.guest));
+    expect(priorPublication.status).toBe("published");
     f.externalWrites.length = 0;
   }
-  await syncCanonicalGitHubIdentity({
-    identity: { accountId: 101, login: "contributor" },
-    authenticationAlias: { kind: "email", email: "publication-guest@example.test" },
-  });
-  const upstream = path.join(path.dirname(local.cwd), "upstream");
-  await local.git("clone", "--no-local", "--branch", "main", local.cwd, upstream);
-  const commonAncestor = await local.git("-C", upstream, "rev-parse", "HEAD");
-  await local.git("-C", upstream, "checkout", "-b", "topic/existing");
-  await fs.writeFile(path.join(upstream, "pr.txt"), "original PR contents\n");
-  if (options.conflict) {
-    await fs.writeFile(path.join(upstream, "artifact.txt"), "original PR change\n");
+  if (options.linked !== false) {
+    await syncCanonicalGitHubIdentity({
+      identity: { accountId: 101, login: "contributor" },
+      authenticationAlias: { kind: "email", email: "publication-guest@example.test" },
+    });
   }
-  await local.git("-C", upstream, "add", "-A");
-  await local.git("-C", upstream, "commit", "-m", "Existing PR work");
-  const headCommit = await local.git("-C", upstream, "rev-parse", "HEAD");
-  await local.git("-C", upstream, "checkout", "main");
-  await fs.writeFile(path.join(upstream, "newer-base.txt"), "base advanced after PR\n");
-  await local.git("-C", upstream, "add", "newer-base.txt");
-  await local.git("-C", upstream, "commit", "-m", "Newer base work");
-  const baseCommit = await local.git("-C", upstream, "rev-parse", "HEAD");
+  const upstream = path.join(path.dirname(local.cwd), "upstream");
+  const upstreamGit = (...args: string[]) => local.git("-C", upstream, ...args);
+  const commitUpstream = async (message: string, files: Record<string, string>) => {
+    for (const [file, contents] of Object.entries(files)) {
+      await fs.writeFile(path.join(upstream, file), contents);
+    }
+    await upstreamGit("add", "-A");
+    await upstreamGit("commit", "-m", message);
+    return upstreamGit("rev-parse", "HEAD");
+  };
+  await local.git("clone", "--no-local", "--branch", "main", local.cwd, upstream);
+  const commonAncestor = await upstreamGit("rev-parse", "HEAD");
+  await upstreamGit("checkout", "-b", "topic/existing");
+  const headCommit = await commitUpstream("Existing PR work", {
+    "pr.txt": "original PR contents\n",
+    ...(options.conflict ? { "artifact.txt": "original PR change\n" } : {}),
+  });
+  await upstreamGit("checkout", "main");
+  const baseCommit = await commitUpstream("Newer base work", {
+    "newer-base.txt": "base advanced after PR\n",
+  });
+  if (options.baseBranch && options.baseBranch !== "main") {
+    await upstreamGit("branch", options.baseBranch, baseCommit);
+  }
+  let projectCommit = baseCommit;
+  if (options.newerProjectBase) {
+    for (let revision = 1; revision <= 5; revision++) {
+      projectCommit = await commitUpstream("Advance published project base", {
+        "published-base.txt": `Published revision ${revision}\n`,
+      });
+    }
+  }
   // The publication harness starts with staged work. A fresh selected-project
   // fixture instead starts at the real, clean project base; prior publications
   // retain their existing work and must be refused by initial preparation.
   if (!options.empty) {
     await local.git("fetch", "--no-write-fetch-head", upstream, "main");
-    await local.git("update-ref", "refs/heads/main", baseCommit);
+    await local.git("update-ref", "refs/heads/main", projectCommit);
     if (!options.priorPublication) {
-      await local.git("reset", "--hard", baseCommit);
+      await local.git("reset", "--hard", projectCommit);
+    }
+    if (options.unpublishedProjectWork) {
+      await fs.writeFile(path.join(local.cwd, "notes.txt"), "unpublished project work\n");
+      await local.git("add", "notes.txt");
+      await local.git("commit", "-m", "Unpublished project work");
     }
   }
   let cwd = local.cwd;
@@ -118,23 +168,13 @@ export async function fixture(
     });
   }
   const git = (...args: string[]) => local.git("-C", cwd, ...args);
-  const baseRepo = {
-    id: 10,
-    full_name: "openclaw/openclaw",
-    private: false,
-    archived: false,
-    owner: { type: "Organization" },
-    permissions: { push: true },
-  };
-  const headRepo = options.fork
-    ? {
-        ...baseRepo,
-        id: 20,
-        full_name: "contributor/openclaw",
-        owner: { type: "User" },
-        permissions: { push: false },
-      }
-    : baseRepo;
+  const { baseRepo, headRepo } = createPublicationRepositories(options.fork);
+  if (options.projectFork) {
+    mocks.resolveRepository.mockResolvedValue({
+      ...(await mocks.resolveRepository(cwd)),
+      originUrl: `https://github.com/${headRepo.full_name}.git`,
+    });
+  }
   const pr = {
     number: 7,
     html_url: "https://github.com/openclaw/openclaw/pull/7",
@@ -143,7 +183,7 @@ export async function fixture(
     draft: false,
     merged: false,
     maintainer_can_modify: true,
-    base: { repo: baseRepo, ref: "main", sha: baseCommit },
+    base: { repo: baseRepo, ref: options.baseBranch ?? "main", sha: baseCommit },
     head: { repo: headRepo, ref: "topic/existing", sha: headCommit },
   };
   const branch = { name: pr.head.ref, commit: { sha: pr.head.sha }, protected: false };
@@ -156,22 +196,46 @@ export async function fixture(
       argv: string[],
       commandOptions?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string },
     ) => {
-      if (argv.includes("push") || (argv[0] === "gh" && !argv.includes("GET"))) {
+      const method = argv.indexOf("--method");
+      if (
+        argv.includes("push") ||
+        (argv[0] === "gh" && method >= 0 && argv[method + 1] !== "GET")
+      ) {
         writes.push(argv);
         throw new Error("PR preparation attempted a GitHub write");
       }
       if (argv[0] === "gh") {
-        const endpoint = argv.at(-1)!;
-        const value =
-          endpoint === "repos/openclaw/openclaw"
-            ? baseRepo
-            : endpoint === "repos/contributor/openclaw"
-              ? headRepo
-              : endpoint === `repos/openclaw/openclaw/pulls/${pr.number}`
-                ? pr
-                : endpoint.includes("/branches/")
-                  ? branch
-                  : undefined;
+        const endpoint = argv.find((arg) => /^(repos|user)\//u.test(arg))!;
+        const reference =
+          /^repos\/((?:openclaw|contributor)\/openclaw)\/git\/ref\/heads\/(.+)$/u.exec(endpoint);
+        if (reference) {
+          const [, repository, ref] = reference;
+          return commandResult(
+            JSON.stringify({
+              ref: `refs/heads/${ref}`,
+              // The fork's main may advance independently of the upstream base.
+              sha:
+                options.projectFork && repository === baseRepo.full_name && ref === "main"
+                  ? baseCommit
+                  : await upstreamGit("rev-parse", ref!),
+            }),
+          );
+        }
+        const reads: Record<string, unknown> = {
+          "repos/openclaw/openclaw": baseRepo,
+          "repos/contributor/openclaw": headRepo,
+          "user/101": { id: 101, login: "contributor" },
+          "repos/openclaw/openclaw/collaborators/contributor/permission": {
+            permission: "read",
+            user: { id: 101, login: "contributor" },
+          },
+          "repos/contributor/openclaw/collaborators/contributor/permission": {
+            permission: "read",
+            user: { id: 101, login: "contributor" },
+          },
+          [`repos/openclaw/openclaw/pulls/${pr.number}`]: pr,
+        };
+        const value = endpoint.includes("/branches/") ? branch : reads[endpoint];
         if (!value) {
           throw new Error(`Unexpected GitHub read: ${endpoint}`);
         }
@@ -188,15 +252,7 @@ export async function fixture(
             ...commandOptions,
             cwd: commandOptions?.cwd ?? cwd,
             timeoutMs: 10_000,
-            env: {
-              ...process.env,
-              ...commandOptions?.env,
-              GIT_CONFIG_GLOBAL: os.devNull,
-              GIT_CONFIG_SYSTEM: os.devNull,
-              GH_TOKEN: undefined,
-              GITHUB_TOKEN: undefined,
-              GH_CONFIG_DIR: undefined,
-            },
+            env: isolatedGitEnv(commandOptions?.env),
           },
         );
       }
@@ -230,18 +286,12 @@ export async function fixture(
               input: stdin,
               signal,
               timeoutMs: 10_000,
-              env: {
-                ...process.env,
-                GIT_CONFIG_GLOBAL: os.devNull,
-                GIT_CONFIG_SYSTEM: os.devNull,
+              env: isolatedGitEnv({
                 GIT_AUTHOR_NAME: "Guest",
                 GIT_AUTHOR_EMAIL: "guest@example.test",
                 GIT_COMMITTER_NAME: "Guest",
                 GIT_COMMITTER_EMAIL: "guest@example.test",
-                GH_TOKEN: undefined,
-                GITHUB_TOKEN: undefined,
-                GH_CONFIG_DIR: undefined,
-              },
+              }),
             },
           );
           if (result.code === null) {
@@ -263,7 +313,17 @@ export async function fixture(
     args: Record<string, unknown> = {},
     prepared: SandboxContext | null = sandbox,
     signal?: AbortSignal,
+    invocation: {
+      requester?: "guest" | "maintainer";
+      caller?: "guest" | "maintainer" | null;
+    } = {},
   ) => {
+    const principal = invocation.requester === "maintainer" ? f.maintainerSource : f.guestSource;
+    const caller = invocation.caller === undefined ? invocation.requester : invocation.caller;
+    const callerSource = caller === "maintainer" ? f.maintainerSource : f.guestSource;
+    const operator =
+      caller === null ? undefined : await captureGatewayOperatorRunAuthority(callerSource);
+    using _ = { [Symbol.dispose]: () => operator?.release() };
     const callGateway: InProcessGatewayCaller = async <T>(
       method: string,
       params: Record<string, unknown>,
@@ -271,8 +331,8 @@ export async function fixture(
       const respond = vi.fn();
       await handleGatewayRequest({
         req: { type: "req", id: randomUUID(), method, params },
-        client: f.guestSource.client,
-        context: Object.assign(createRequestContext(), f.guestSource.context, {
+        client: principal.client,
+        context: Object.assign(createRequestContext(), principal.context, {
           githubPublicationService: f.coordinator,
           workerSessionPlacementService: f.placements,
         }),
@@ -287,19 +347,16 @@ export async function fixture(
       }
       return result as T;
     };
-    const result = await withGatewayToolCallerIdentity(scope, () =>
-      withPublicationToolTransport(callGateway, () =>
-        createGitHubPublishTool({ sandbox: prepared }).execute(
-          "prepare",
-          Object.fromEntries(
-            Object.entries({
-              action: "prepare_pr",
-              pullRequestUrl: pr.html_url,
-              ...args,
-            }).filter(([, value]) => value !== undefined),
+    const toolArgs = { action: "prepare_pr", pullRequestUrl: pr.html_url, ...args };
+    const result = await withGatewayToolCallerIdentity(
+      { ...scope, operatorAuthority: operator?.authority },
+      () =>
+        withPublicationToolTransport(callGateway, () =>
+          createGitHubPublishTool({ sandbox: prepared }).execute(
+            "prepare",
+            Object.fromEntries(Object.entries(toolArgs).filter(([, value]) => value !== undefined)),
           ),
         ),
-      ),
     );
     if ((args.action ?? "prepare_pr") === "prepare_pr") {
       expect(Value.Check(SessionGitHubPullRequestPrepareResultSchema, result.details)).toBe(true);
@@ -307,18 +364,14 @@ export async function fixture(
     return result.details;
   };
   const advanceHead = async (files: Record<string, string>) => {
-    await local.git("-C", upstream, "checkout", "topic/existing");
-    for (const [file, contents] of Object.entries(files)) {
-      await fs.writeFile(path.join(upstream, file), contents);
-    }
-    await local.git("-C", upstream, "add", "-A");
-    await local.git("-C", upstream, "commit", "-m", "Advance existing PR");
-    pr.head.sha = await local.git("-C", upstream, "rev-parse", "HEAD");
+    await upstreamGit("checkout", "topic/existing");
+    pr.head.sha = await commitUpstream("Advance existing PR", files);
     branch.commit.sha = pr.head.sha;
     return pr.head.sha;
   };
   return {
     ...f,
+    priorPublication,
     cwd,
     git,
     guestGit,
@@ -385,4 +438,31 @@ export async function bindFixtureRuntime(f: Awaited<ReturnType<typeof fixture>>)
   // Reconciliation and backend admission stay real; only container I/O is simulated.
   bindLocalSandboxWorkspace(f.sandbox, projection);
   return { projection, isPaused: () => runtimePaused };
+}
+
+export function interruptCanonicalWorkspaceAcceptance(message: string) {
+  const withStore = workspaceStore.withLocalWorkspaceStore;
+  let interrupted = false;
+  const interruption = vi
+    .spyOn(workspaceStore, "withLocalWorkspaceStore")
+    .mockImplementation((params, operation) =>
+      withStore(params, (store) =>
+        operation({
+          ...store,
+          update: async (row, patch, authority, manifest) => {
+            const result = await store.update(row, patch, authority, manifest);
+            if (
+              !interrupted &&
+              patch.pending_target === "projection" &&
+              isLocalWorkspaceBaseRefreshRef(result.pending_ref)
+            ) {
+              interrupted = true;
+              throw new Error(message);
+            }
+            return result;
+          },
+        }),
+      ),
+    );
+  return { interruption, wasInterrupted: () => interrupted };
 }

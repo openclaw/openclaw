@@ -5,7 +5,7 @@ import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import type { CronService } from "../cron/service.js";
 import type { CronServiceDeps } from "../cron/service/state.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
-import type { CronJob, CronPayload } from "../cron/types.js";
+import type { CronJob, CronPayload, CronStoredJob } from "../cron/types.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -23,6 +23,16 @@ type ResolveCronTarget = (opts?: {
   agentId?: string;
   sessionKey?: string;
 };
+
+/** Admits a stored job's occurrence with the agent and config its executors resolve. */
+export async function admitGatewayCronOccurrence(
+  job: CronStoredJob,
+  resolveAgent: (requested?: string | null) => { agentId: string; cfg: OpenClawConfig },
+) {
+  const { agentId, cfg } = resolveAgent(job.agentId);
+  const { admitScheduledOccurrence } = await import("../cron/execution-context-admission.js");
+  return await admitScheduledOccurrence({ cfg, job, agentId, trigger: "cron" });
+}
 
 export async function runGatewayCronSessionEvent(
   request: Parameters<NonNullable<CronServiceDeps["runSessionEvent"]>>[0],

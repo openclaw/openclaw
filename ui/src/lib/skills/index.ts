@@ -185,11 +185,16 @@ function captureSkillsAgentScope(
     state.skillsAgentId === skillsAgentId && state.skillsAgentRevision === skillsAgentRevision;
 }
 
-export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
+export function setSkillsAgentId(
+  state: SkillsState,
+  agentId: string | null,
+  beforeRetarget?: () => void,
+) {
   const nextAgentId = agentId?.trim() || null;
   if (state.skillsAgentId === nextAgentId) {
     return;
   }
+  beforeRetarget?.();
   retireSkillsReads(state);
   state.skillsAgentId = nextAgentId;
   state.skillsAgentRevision++;
@@ -209,6 +214,7 @@ export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
 export function reconcileSkillsAgentId(
   state: SkillsState,
   agentsList: AgentsListResult | null | undefined,
+  beforeRetarget?: () => void,
 ) {
   if (!agentsList) {
     return;
@@ -218,7 +224,7 @@ export function reconcileSkillsAgentId(
     : agentsList.agents.some((agent) => agent.id === agentsList.defaultId)
       ? agentsList.defaultId
       : null;
-  setSkillsAgentId(state, selectedAgentId);
+  setSkillsAgentId(state, selectedAgentId, beforeRetarget);
 }
 
 export async function loadSkills(
@@ -280,6 +286,35 @@ export async function loadSkills(
       error: isCurrent() ? state.skillsError : null,
     });
   }
+}
+
+/**
+ * skills.update answers before the Gateway reloads its config, so the status read behind a
+ * toggle can predate it. The Gateway sends skills.changed once it caught up. A change that
+ * arrives while a read or write is running is replayed when that work settles.
+ */
+export function createSkillsChangeReloader(state: SkillsState) {
+  let queued = false;
+  const reload = () => {
+    if (!state.connected || state.skillsLoading || state.skillOperation) {
+      queued = true;
+      return;
+    }
+    queued = false;
+    void loadSkills(state);
+  };
+  return {
+    onEvent: (event: { event: string }) => {
+      if (event.event === "skills.changed") {
+        reload();
+      }
+    },
+    onStateChange: () => {
+      if (queued) {
+        reload();
+      }
+    },
+  };
 }
 
 export async function refreshSkills(state: SkillsState, loadAgents: () => Promise<void>) {

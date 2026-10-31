@@ -311,7 +311,7 @@ export function createAgentsApiSession(options: {
           const result = await options.executeFunction(call);
           assertCurrent();
           signal.throwIfAborted();
-          const terminate = result.terminate || result.sourceReplyDelivered;
+          const terminate = result.terminate;
           if (terminate) {
             // Fence new input before the acknowledgement can resume native work.
             // Already reserved input remains ahead of that acknowledgement.
@@ -398,6 +398,14 @@ export function createAgentsApiSession(options: {
         nextEvent = events.next();
         void nextEvent.catch(() => {});
       };
+      const disconnectedEvent = (error: unknown): IteratorReturnResult<undefined> => {
+        signal.throwIfAborted();
+        assertCurrent();
+        if (!isAgentsApiTransportDisconnect(error)) {
+          throw error;
+        }
+        return { done: true, value: undefined };
+      };
       const awaitReceipt = async (receipt: Promise<void>) => {
         const acknowledged = receipt.then(
           () => ({ kind: "acknowledged" as const }),
@@ -409,12 +417,7 @@ export function createAgentsApiSession(options: {
           try {
             chunk = await Promise.race([acknowledged, nextEvent]);
           } catch (error) {
-            signal.throwIfAborted();
-            assertCurrent();
-            if (!isAgentsApiTransportDisconnect(error)) {
-              throw error;
-            }
-            chunk = { done: true, value: undefined };
+            chunk = disconnectedEvent(error);
           }
           if ("kind" in chunk) {
             if (chunk.kind === "failed") {
@@ -561,12 +564,7 @@ export function createAgentsApiSession(options: {
               chunk = await nextEvent;
             }
           } catch (error) {
-            signal.throwIfAborted();
-            assertCurrent();
-            if (!isAgentsApiTransportDisconnect(error)) {
-              throw error;
-            }
-            chunk = { done: true, value: undefined };
+            chunk = disconnectedEvent(error);
           }
           if (!chunk) {
             await settleFromSavedState(true);

@@ -116,7 +116,7 @@ type NpmLockPackageDirsResolver = (changedPaths: string[]) => string[];
 type TargetedLintCommand = NonNullable<ReturnType<typeof createTargetedOxlintCommand>>;
 
 const NPM_LOCK_POLICY_PATH_RE =
-  /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-package-lock\.mts|(?:extensions|packages)\/[^/]+(?:\/.*)?\/package\.json)$/u;
+  /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/(?:generate-npm-package-lock\.mts|lib\/(?:npm-lock-package-selection|record-shared)\.(?:mjs|d\.mts))|(?:extensions|packages)\/[^/]+(?:\/.*)?\/package\.json)$/u;
 const PROMPT_SNAPSHOT_CHECK_PATH_RE =
   /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/.+)$/u;
 const PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE =
@@ -142,7 +142,7 @@ const EXTENSION_TEST_CORE_IMPORT_PATH_RE =
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
   /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/(?:control-ui-i18n-[^/]+\.ts|control-ui-i18n-config\.json))$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
 const CONTROL_UI_CONTROLLERS_PATH_RE =
-  /^(?:package\.json$|ui\/src\/|config\/control-ui-\w+-baseline\.txt$|scripts\/(?:check-control-ui-controllers|control-ui-solid-inventory)\.mts$|scripts\/lib\/shrink-ratchet\.mts$|test\/scripts\/check-control-ui-controllers\.test\.ts$)/u;
+  /^(?:package\.json$|ui\/src\/|extensions\/(?:(?:workboard|memory-core|nostr|whatsapp)\/browser\/|(?:clawrouter|x)\/src\/control-ui\.tsx$)|config\/(?:control|plugin)-ui-\w+-baseline\.txt$|scripts\/(?:check-control-ui-controllers|control-ui-solid-inventory)\.mts$|scripts\/lib\/shrink-ratchet\.mts$|test\/scripts\/check-control-ui-controllers\.test\.ts$)/u;
 const SHRINK_RATCHET_OWNER_PATH = "scripts/lib/shrink-ratchet.mts";
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "extensions/tsconfig.json";
@@ -1942,24 +1942,6 @@ export async function main(argv = process.argv.slice(2)) {
         head: args.head,
         staged: args.staged,
       });
-      let typecheckResult: ChangedLaneResult | undefined;
-      if (
-        !args.staged &&
-        !args.noChanges &&
-        args.paths.length === 0 &&
-        !argv.includes("--") &&
-        args.head === "HEAD"
-      ) {
-        const { findTypecheckInertPaths } = await import("./lib/typecheck-inert.mts");
-        const inert = new Set(findTypecheckInertPaths({ paths, base: args.base ?? "origin/main" }));
-        if (inert.size) {
-          typecheckResult = detectChangedLanesForPaths({
-            paths: paths.filter((file) => !inert.has(file)),
-            base: args.base ?? "origin/main",
-            head: args.head,
-          });
-        }
-      }
       if (
         shouldDelegateChangedCheckToCrabbox(argv, process.env, {
           result,
@@ -1980,6 +1962,28 @@ export async function main(argv = process.argv.slice(2)) {
         }
         process.exitCode = delegated.exitCode;
       } else {
+        // Only the executing branch needs trivia classification; remote children
+        // classify their own source instead of discarding a native compiler run here.
+        let typecheckResult: ChangedLaneResult | undefined;
+        if (
+          !args.staged &&
+          !args.noChanges &&
+          args.paths.length === 0 &&
+          !argv.includes("--") &&
+          args.head === "HEAD"
+        ) {
+          const { findTypecheckInertPaths } = await import("./lib/typecheck-inert.mts");
+          const inert = new Set(
+            findTypecheckInertPaths({ paths, base: args.base ?? "origin/main" }),
+          );
+          if (inert.size) {
+            typecheckResult = detectChangedLanesForPaths({
+              paths: paths.filter((file) => !inert.has(file)),
+              base: args.base ?? "origin/main",
+              head: args.head,
+            });
+          }
+        }
         process.exitCode = await runChangedCheck(result, {
           ...args,
           typecheckResult,

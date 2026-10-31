@@ -99,12 +99,17 @@ suite.define(() => {
     }
   });
 
-  it("recovers an empty group catalog after a transient load failure", async () => {
+  it("recovers an empty group catalog and creates another empty group", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.groups.list"],
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.put",
+      ],
       methodResponses: {
         "sessions.list": sessionsListResponse([]),
       },
@@ -127,9 +132,24 @@ suite.define(() => {
           timeout: 10_000,
         })
         .toBe(2);
-      await page.locator('[data-session-section="category:Recovered group"]').waitFor({
+      const recoveredGroup = page.locator('[data-session-section="category:Recovered group"]');
+      await recoveredGroup.waitFor({ state: "visible" });
+
+      // A header-menu-created group stays visible before any session is saved.
+      await recoveredGroup.locator(".sidebar-recent-sessions__head").hover();
+      await recoveredGroup
+        .getByRole("button", { name: "Group options for Recovered group" })
+        .click();
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
+      await submitInputDialog(page, "Second group");
+      await page.locator('[data-session-section="category:Second group"]').waitFor({
         state: "visible",
       });
+      const putRequest = await gateway.waitForRequest("sessions.groups.put");
+      expect(requireRecord(putRequest.params)).toMatchObject({
+        names: ["Recovered group", "Second group"],
+      });
+      await recoveredGroup.waitFor({ state: "visible" });
     } finally {
       await context.close();
     }
@@ -139,9 +159,7 @@ suite.define(() => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const context = await suite.browser.newContext({
       colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
+      ...createControlUiE2eContextOptions(),
     });
     const automationPage: CronJobsListResult = {
       jobs: [
@@ -218,20 +236,18 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
 
-      // A personal rail shortcut leaves its ordinary session row in recency order.
+      // A personal pin moves its one row into Pinned, above the other sessions.
       const sidebarRows = page.locator(".sidebar-recent-session");
       await sidebarRows.first().waitFor({ state: "visible", timeout: 10_000 });
       const pinnedZoneRow = page.locator(
-        '.sidebar-rail [data-sidebar-entry="session:agent:main:release"]',
+        '[data-session-section="pinned"] .sidebar-recent-session[data-session-key="agent:main:release"]',
       );
-      await pinnedZoneRow.getByRole("link", { name: "Release planning", exact: true }).waitFor();
-      expect(await pinnedZoneRow.locator(".sidebar-recent-session").count()).toBe(0);
+      await pinnedZoneRow.getByText("Release planning", { exact: true }).waitFor();
+      expect(await page.locator('.sidebar-rail [data-sidebar-entry^="session:"]').count()).toBe(0);
       const groups = page.locator(".sidebar-recent-sessions__group");
-      await expect.poll(() => groups.count()).toBe(1);
-      await expect
-        .poll(() => groups.first().getAttribute("data-session-section"))
-        .toBe("ungrouped");
-      await expect.poll(() => page.locator('[data-session-section="pinned"]').count()).toBe(0);
+      const sectionIds = () =>
+        groups.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-session-section")));
+      await expect.poll(sectionIds).toEqual(["pinned", "ungrouped"]);
 
       // Chats keep recency order with the open session highlighted in place —
       // selecting a row must not reshuffle the list.
@@ -240,7 +256,7 @@ suite.define(() => {
         chatRows.evaluateAll((rows) =>
           rows.map((row) => row.querySelector(".sidebar-recent-session__name")?.textContent ?? ""),
         );
-      await expect.poll(rowNames).toEqual(["Release planning", "Data migration", "Research notes"]);
+      await expect.poll(rowNames).toEqual(["Data migration", "Research notes"]);
       const sidebarMigration = sidebarRows.filter({ hasText: "Data migration" });
       await expect
         .poll(() =>
@@ -266,6 +282,7 @@ suite.define(() => {
       const patchesBeforeUnpin = (await gateway.getRequests("sessions.patch")).length;
       await sidebarReleasePin.click();
       await expect.poll(() => pinnedZoneRow.count()).toBe(0);
+      await expect.poll(sectionIds).toEqual(["ungrouped"]);
       await sidebarRows
         .filter({ hasText: "Release planning" })
         .getByRole("button", { name: "Pin session", exact: true })
@@ -602,7 +619,10 @@ suite.define(() => {
       // Group by "None" flattens the category sections into the plain list. The
       // confirm left the pointer over the dialog rather than the sidebar; the
       // global toolbar remains available without revealing a section action.
-      const filterAndSortButton = page.getByRole("button", { name: "Filter & sort", exact: true });
+      const filterAndSortButton = page.getByRole("button", {
+        name: /^Filter & sort · /,
+        exact: true,
+      });
       await filterAndSortButton.click();
       await openSidebarMenu(page);
       const showAutomationSessions = page.getByRole("switch", {
@@ -719,7 +739,7 @@ suite.define(() => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
-    const sessions = Array.from({ length: 13 }, (_, index) =>
+    const sessions = Array.from({ length: 18 }, (_, index) =>
       sessionRow(`agent:main:session-${index}`, `Session ${index}`, baseTime - index * 60_000, {
         ...(index === 0 ? { category: "Alpha" } : {}),
         ...(index === 1 ? { category: "Beta" } : {}),
@@ -747,10 +767,10 @@ suite.define(() => {
       await closeSidebarMenu(page);
       const sidebarRows = page.locator(".sidebar-recent-session");
       // Category sections page independently: Alpha and Beta stay visible
-      // alongside the first ten rows in the ungrouped section.
-      await expect.poll(() => sidebarRows.count()).toBe(12);
+      // alongside the first fifteen rows in the ungrouped section.
+      await expect.poll(() => sidebarRows.count()).toBe(17);
       await page.getByRole("button", { name: "Show more" }).click();
-      await expect.poll(() => sidebarRows.count()).toBe(13);
+      await expect.poll(() => sidebarRows.count()).toBe(18);
       await expect.poll(() => page.getByText("All sessions", { exact: true }).count()).toBe(0);
       await captureUiProof(suite, page, "sidebar-all-sessions.png");
 
@@ -807,7 +827,7 @@ suite.define(() => {
       });
       await expect
         .poll(() => ungrouped.locator(".sidebar-recent-session").count(), { timeout: 10_000 })
-        .toBe(10);
+        .toBe(15);
 
       const alpha = page.locator('[data-session-section="category:Alpha"]');
       const alphaToggle = alpha
@@ -847,10 +867,13 @@ suite.define(() => {
             .getAttribute("aria-expanded"),
         )
         .toBe("false");
-      await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
+      await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(16);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
-      const filterAndSortButton = page.getByRole("button", { name: "Filter & sort", exact: true });
+      const filterAndSortButton = page.getByRole("button", {
+        name: /^Filter & sort · /,
+        exact: true,
+      });
       await filterAndSortButton.click();
       await chooseSidebarMenuOption(page, "Group by", "None");
       await closeSidebarMenu(page);
@@ -859,48 +882,6 @@ suite.define(() => {
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-1"]')
         .dragTo(flatSection);
       expect((await gateway.getRequests("sessions.patch")).length).toBe(patchCountBeforeFlatDrag);
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("keeps a new empty group visible before the first saved session", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([]),
-      },
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "sessions.groups.list",
-        "sessions.groups.put",
-      ],
-      sessionKey: "agent:main:main",
-      // Stored-but-empty catalog groups stay visible as sections/move targets.
-      sessionGroups: ["First group"],
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await chooseSidebarMenuOption(page, "Status", "All");
-      await closeSidebarMenu(page);
-      const firstGroup = page.locator('[data-session-section="category:First group"]');
-      await firstGroup.waitFor({ state: "visible" });
-
-      // A header-menu-created group starts empty and still gets a section.
-      await firstGroup.locator(".sidebar-recent-sessions__head").hover();
-      await firstGroup.getByRole("button", { name: "Group options for First group" }).click();
-      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
-      await submitInputDialog(page, "Second group");
-      await page.locator('[data-session-section="category:Second group"]').waitFor({
-        state: "visible",
-      });
-      const putRequest = await gateway.waitForRequest("sessions.groups.put");
-      expect(requireRecord(putRequest.params)).toMatchObject({
-        names: ["First group", "Second group"],
-      });
     } finally {
       await context.close();
     }

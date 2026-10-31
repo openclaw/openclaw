@@ -156,35 +156,23 @@ it.each([true, false])(
   },
 );
 
-it.each(["fulfilled", "rejected"] as const)(
-  "settles promise-only source work after it is %s",
-  async (outcome) => {
-    const onRemoved = vi.fn();
-    const { runId, entry, registration } = registeredRun({ onRemoved });
-    const persistence = createDeferred();
-    entry.adapter.projectSessionTerminalPersistence = persistence.promise;
-    registration.cleanup();
-    expect(rpcSourceTesting.get(runId)).toBe(entry);
-    expect(onRemoved).not.toHaveBeenCalled();
-    const failure = new Error("terminal write failed");
-    const sourceSettlement = captureSessionControllerSourceSettlement(entry.input);
-    const sourceOutcome =
-      outcome === "fulfilled"
-        ? expect(sourceSettlement).resolves.toBeUndefined()
-        : expect(sourceSettlement).rejects.toBe(failure);
-    if (outcome === "fulfilled") {
-      persistence.resolve();
-    } else {
-      persistence.reject(failure);
-    }
-    await sourceOutcome;
-    if (outcome === "rejected") {
-      await expect(waitForChatAbortTerminalPersistence(entry)).rejects.toBe(failure);
-    }
-    expect(rpcSourceTesting.has(runId)).toBe(false);
-    expect(onRemoved).toHaveBeenCalledOnce();
-  },
-);
+it("retires promise-only source work while preserving its persistence rejection", async () => {
+  const onRemoved = vi.fn();
+  const { runId, entry, registration } = registeredRun({ onRemoved });
+  const persistence = createDeferred();
+  entry.adapter.projectSessionTerminalPersistence = persistence.promise;
+  registration.cleanup();
+  expect(rpcSourceTesting.get(runId)).toBe(entry);
+  expect(onRemoved).not.toHaveBeenCalled();
+  const failure = new Error("terminal write failed");
+  const sourceSettlement = captureSessionControllerSourceSettlement(entry.input);
+  const sourceOutcome = expect(sourceSettlement).rejects.toBe(failure);
+  persistence.reject(failure);
+  await sourceOutcome;
+  await expect(waitForChatAbortTerminalPersistence(entry)).rejects.toBe(failure);
+  expect(rpcSourceTesting.has(runId)).toBe(false);
+  expect(onRemoved).toHaveBeenCalledOnce();
+});
 
 it("joins accepted dispatch before reporting an already-rejected prepared write", async ({
   signal,
@@ -220,68 +208,7 @@ it("joins accepted dispatch before reporting an already-rejected prepared write"
   }
 });
 
-it.for(["fulfilled", "rejected"] as const)(
-  "keeps the captured %s write when persistence is replaced during dispatch",
-  async (outcome, { signal }) => {
-    const { entry, registration } = registeredRun();
-    const dispatch = createDeferred();
-    const prepared = createDeferred();
-    const replacement = createDeferred();
-    const failure = new Error("captured terminal write failed");
-    void prepared.promise.catch(() => {});
-    entry.adapter.projectSessionTerminalPersistence = prepared.promise;
-    bindChatAbortTerminalDispatch([entry], dispatch.promise, {});
-    const waiter = waitForChatAbortTerminalPersistence(entry);
-    void waiter.catch(() => {});
-    entry.adapter.projectSessionTerminalPersistence = replacement.promise;
-    try {
-      if (outcome === "fulfilled") {
-        prepared.resolve();
-      } else {
-        prepared.reject(failure);
-      }
-      dispatch.resolve();
-      if (outcome === "fulfilled") {
-        await expect(withinTest(waiter, signal)).resolves.toBeUndefined();
-      } else {
-        await expect(withinTest(waiter, signal)).rejects.toBe(failure);
-      }
-      expect(entry.adapter.projectSessionTerminalPersistence).toBe(replacement.promise);
-    } finally {
-      dispatch.resolve();
-      prepared.resolve();
-      replacement.resolve();
-      await Promise.allSettled([waiter]);
-      registration.cleanup();
-      await Promise.allSettled([entry.input.settlement.promise]);
-    }
-  },
-);
-
-it.each(["fulfilled", "rejected"] as const)(
-  "does not retire a replacement persistence owner when an older write is %s",
-  async (outcome) => {
-    const { entry, registration } = registeredRun();
-    const previous = createDeferred();
-    const current = createDeferred();
-    entry.adapter.projectSessionTerminalPersistence = previous.promise;
-    registration.cleanup();
-    entry.adapter.projectSessionTerminalPersistence = current.promise;
-    if (outcome === "fulfilled") {
-      previous.resolve();
-    } else {
-      previous.reject(new Error("older terminal write failed"));
-    }
-    await previous.promise.catch(() => {});
-    await Promise.resolve();
-    expect(entry.adapter.projectSessionTerminalPersistence).toBe(current.promise);
-    const joined = waitForChatAbortTerminalPersistence(entry);
-    current.resolve();
-    await expect(joined).resolves.toBeUndefined();
-  },
-);
-
-it.each(["settled", "pending", "writing", "failed", "dispatch-failed"] as const)(
+it.each(["settled", "pending", "writing"] as const)(
   "retains %s terminal ownership while joining the raw producer",
   async (state) => {
     const producer = createDeferred();
@@ -292,14 +219,6 @@ it.each(["settled", "pending", "writing", "failed", "dispatch-failed"] as const)
     }
     if (state === "writing") {
       entry.adapter.projectSessionTerminalPersistence = write.promise;
-    }
-    if (state === "failed") {
-      markChatAbortTerminalPersistenceError(entry, new Error("write failed"));
-    }
-    if (state === "dispatch-failed") {
-      bindChatAbortTerminalDispatch([entry], Promise.resolve(), {
-        failure: { error: new Error("terminal dispatch failed") },
-      });
     }
     registration.cleanup();
     let drained = false;

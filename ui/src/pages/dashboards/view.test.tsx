@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, flush } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DashboardsView, type DashboardGalleryFilters, type DashboardsRouteData } from "./view.tsx";
 
 const filters: DashboardGalleryFilters = { query: "", ownerId: "", sort: "updated" };
@@ -37,11 +38,15 @@ it.each([
   ["gallery", "[data-dashboard-session]", "Release health"],
   ["empty", "[data-dashboards-empty]", "No dashboards yet"],
   ["error", '[role="alert"]', "Dashboard service unavailable"],
-])("resolves the accessible dashboard skeleton to %s", (outcome, selector, message) => {
+])("resolves the accessible dashboard skeleton to %s", async (outcome, selector, message) => {
   const [value, setValue] = createSignal<DashboardsRouteData>();
-  const { container } = mountSolid(() => (
-    <DashboardsView data={value()} filters={filters} handlers={handlers} />
-  ));
+  const pending = Promise.withResolvers<void>();
+  const { container } = mountSolid(() => {
+    const ready = createMemo(() => pending.promise);
+    return (
+      <DashboardsView data={value()} readReady={ready} filters={filters} handlers={handlers} />
+    );
+  });
 
   const busy = container.querySelector('[aria-busy="true"]');
   expect(busy).not.toBeNull();
@@ -65,10 +70,16 @@ it.each([
     data.error = "Dashboard service unavailable";
   }
   setValue(data);
-  flush();
+  if (outcome === "error") {
+    pending.reject(new Error(data.error!));
+  } else {
+    pending.resolve();
+  }
 
-  expect(container.querySelector('[aria-busy="true"], .skeleton')).toBeNull();
-  expect(container.querySelector(selector)?.textContent).toContain(message);
+  await waitForSolid(() => {
+    expect(container.querySelector('[aria-busy="true"], .skeleton')).toBeNull();
+    expect(container.querySelector(selector)?.textContent).toContain(message);
+  });
   if (outcome === "empty") {
     expect(container.querySelector(selector)?.textContent).toContain(
       "Dashboards created in your tasks will appear here",
@@ -84,6 +95,7 @@ it.each(["", "/openclaw"])("navigates dashboard links with base path %s", (baseP
   const { container } = mountSolid(() => (
     <DashboardsView
       data={routeData([dashboard], basePath)}
+      readReady={() => undefined}
       filters={filters}
       handlers={{ ...handlers, onNavigate }}
     />
@@ -107,16 +119,8 @@ it.each(["", "/openclaw"])("navigates dashboard links with base path %s", (baseP
     search: "?__openclawSessionKey=agent%3Amain%3Adashboard%3A12345678-90ab-cdef-1234-567890abcdef",
   });
 
-  for (const activation of [
-    { ctrlKey: true },
-    { metaKey: true },
-    { shiftKey: true },
-    { altKey: true },
-    { button: 1 },
-  ]) {
-    link.dispatchEvent(click(activation));
-    expect(intercepted).toBe(false);
-  }
+  link.dispatchEvent(click({ ctrlKey: true }));
+  expect(intercepted).toBe(false);
   const handled = click();
   handled.preventDefault();
   link.dispatchEvent(handled);

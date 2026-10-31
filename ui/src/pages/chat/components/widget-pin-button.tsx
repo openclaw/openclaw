@@ -1,9 +1,13 @@
+import { createErrorBoundary } from "@solidjs/signals";
 import { action, createMemo, createOptimistic, createSignal, refresh } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { projectSource } from "../../../lib/reactive/projection.ts";
+import { projectBoardWidgetNames } from "../../../lib/reactive/board-pins.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
+
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 export type WidgetPinTarget = {
   board: BoardProvider;
@@ -13,31 +17,29 @@ export type WidgetPinTarget = {
 };
 
 export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string }) {
-  const ownerPinned = createMemo(() =>
-    projectSource(props.target.board.snapshot$, {
-      read: (snapshot) =>
-        snapshot.value.widgets.some((widget) => widget.name === props.target.name),
-      subscribe: (snapshot, notify) => snapshot.subscribe(notify),
-      equality: Object.is,
-    }),
-  );
-  const [pinned, setPinned] = createOptimistic(() => ownerPinned().read());
+  const names = createMemo(() => projectBoardWidgetNames(props.target.board.snapshot$));
+  const isPinned = () => names().read().has(props.target.name);
+  const ownerPinned = createMemo(isPinned);
+  const [pinned, setPinned] = createOptimistic(ownerPinned);
   const [saving, setSaving] = createOptimistic(false);
-  const [failed, setFailed] = createSignal(false);
+  const [attempt, setAttempt] = createSignal<Promise<void> | undefined>(() => {
+    // Authoritative pin changes retire feedback from an earlier attempt.
+    ownerPinned();
+    return undefined;
+  });
   let admitted = false;
   let button!: HTMLButtonElement;
   const present = action(function* (completion: Promise<void>) {
     setSaving(true);
     setPinned(true);
-    setFailed(false);
     try {
       yield completion;
       yield refresh(pinned);
-    } catch {
-      setFailed(true);
+    } catch (error) {
       if (button.isConnected) {
         showToast({ message: t("chat.toolCards.pinToDashboardFailed") });
       }
+      throw error;
     }
   });
   const label = () =>
@@ -48,6 +50,18 @@ export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string
           ? "chat.toolCards.pinnedToDashboard"
           : "chat.toolCards.pinToDashboard",
     );
+  const failed = createMemo(() => {
+    const completion = attempt();
+    const outcome = createMemo(() => completion, { loadingValue: undefined });
+    // Only the native title's failure fact belongs to this boundary, not its optimistic label.
+    return createErrorBoundary(
+      () => {
+        outcome();
+        return false;
+      },
+      () => true,
+    );
+  });
   return (
     <button
       ref={(element) => (button = element)}
@@ -57,24 +71,28 @@ export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string
       disabled={saving() || pinned()}
       data-pinned={!saving() && pinned() ? "" : undefined}
       title={
-        !saving() && !pinned() && failed() ? t("chat.toolCards.pinToDashboardFailed") : label()
+        !saving() && !pinned() && failed()() ? t("chat.toolCards.pinToDashboardFailed") : label()
       }
       aria-label={label()}
       onClick={() => {
         // Solid writes flush later; admission still prevents two same-task clicks.
-        if (admitted || ownerPinned().read()) {
+        const target = props.target;
+        if (admitted || projectBoardWidgetNames(target.board.snapshot$).read().has(target.name)) {
           return;
         }
         admitted = true;
-        const target = props.target;
         const title = props.title?.trim();
         const identity = { name: target.name, ...(title ? { title } : {}) };
         const completion = target.mcpApp
           ? target.board.pinMcpApp({ ...identity, viewId: target.viewId })
           : target.board.pinWidget({ ...identity, docId: target.viewId });
-        void present(completion).finally(() => {
-          admitted = false;
-        });
+        const result = present(completion);
+        void setAttempt(result);
+        void result
+          .finally(() => {
+            admitted = false;
+          })
+          .catch(() => undefined);
       }}
     >
       <Icon name="pin" />

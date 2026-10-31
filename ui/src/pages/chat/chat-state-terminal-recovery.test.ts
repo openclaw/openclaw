@@ -7,7 +7,7 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   createSessionEventState,

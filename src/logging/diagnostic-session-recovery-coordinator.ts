@@ -1,25 +1,34 @@
 import { emitInternalDiagnosticEvent as emitDiagnosticEvent } from "../infra/diagnostic-events.js";
-import { captureDiagnosticSessionOperation } from "./diagnostic-controller-projection.js";
 import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
 import type {
   StuckSessionRecoveryOutcome,
   StuckSessionRecoveryRequest,
 } from "./diagnostic-session-recovery.js";
+import { isDiagnosticSessionStateCurrent } from "./diagnostic-session-state.js";
 
 export type RecoverStuckSession = (
   params: StuckSessionRecoveryRequest,
 ) => void | StuckSessionRecoveryOutcome | Promise<void | StuckSessionRecoveryOutcome>;
 
-type RequestStuckSessionRecoveryParams = {
+export function requestStuckSessionRecovery(params: {
   recover: RecoverStuckSession;
-  request: StuckSessionRecoveryRequest;
+  request: StuckSessionRecoveryRequest & { operation: StuckSessionRecoveryRequest["operation"] };
   classification: SessionAttentionClassification;
-};
-
-export function requestStuckSessionRecovery(params: RequestStuckSessionRecoveryParams): void {
-  // Capture before the runtime's lazy import/first await, never adopt a later occupant.
-  const operation = params.request.operation ?? captureDiagnosticSessionOperation(params.request);
-  const request = { ...params.request, ...(operation ? { operation } : {}) };
+}): void {
+  // The producer captures before logging or awaiting; absence never adopts a later occupant.
+  const operation = params.request.operation;
+  if (!operation && params.classification.eventType !== "session.stuck") {
+    return;
+  }
+  const decision = operation?.watchdog.decide();
+  if (decision && decision.action !== "stop" && decision.action !== "expire_cleanup") {
+    return;
+  }
+  const request = {
+    ...params.request,
+    operation,
+    allowActiveAbort: decision?.action === "stop",
+  };
   const sessionFields = {
     sessionId: request.sessionId,
     sessionKey: request.sessionKey,
@@ -31,7 +40,7 @@ export function requestStuckSessionRecovery(params: RequestStuckSessionRecoveryP
   emitDiagnosticEvent({
     type: "session.recovery.requested",
     ...sessionFields,
-    reason: params.classification.reason,
+    reason: decision?.reason ?? "stale_session_state",
     activeWorkKind: params.classification.activeWorkKind,
     allowActiveAbort: request.allowActiveAbort,
   });
@@ -48,7 +57,13 @@ export function requestStuckSessionRecovery(params: RequestStuckSessionRecoveryP
       action: outcome.action,
       outcomeReason: "reason" in outcome ? outcome.reason : undefined,
       released: "released" in outcome ? outcome.released || undefined : undefined,
-      stale: request.operation ? !request.operation.watchdog.snapshot().current : true,
+      stale: operation
+        ? !operation.watchdog.snapshot().current
+        : !isDiagnosticSessionStateCurrent({
+            ...request,
+            generation: request.stateGeneration,
+            state: request.expectedState,
+          }),
     });
   };
   const failed = (error: unknown) =>

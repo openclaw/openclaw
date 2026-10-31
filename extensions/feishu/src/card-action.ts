@@ -224,7 +224,7 @@ export async function handleFeishuCardAction(params: {
     );
     return;
   }
-  const decoded = decodeFeishuCardAction({ event });
+  const decoded = decodeFeishuCardAction(event);
   const now = Date.now();
   pruneExpiredCardEntries(processedCardActions, now);
   const tokenKey = `${account.accountId}:${normalizedToken}`;

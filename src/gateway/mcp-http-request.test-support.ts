@@ -20,34 +20,24 @@ export async function json(response: Response): Promise<unknown> {
 }
 
 export function probeTools(name: string, execute: AnyAgentTool["execute"]) {
-  return {
-    agentId: "main",
-    tools: [
-      {
-        name,
-        label: name,
-        description: name,
-        parameters: { type: "object", properties: {} },
-        execute,
-      },
-    ],
+  const tool = {
+    name,
+    label: name,
+    description: name,
+    parameters: { type: "object", properties: {} },
+    execute,
   };
+  return { agentId: "main", tools: [tool] };
 }
 
-type AdmissionOptions = Pick<
-  Parameters<typeof prepareAgentRunAdmission>[0],
-  "cfg" | "operatorAuthority"
->;
+type AdmissionOptions = Partial<
+  Pick<Parameters<typeof prepareAgentRunAdmission>[0], "cfg" | "operatorAuthority">
+> & { agentId?: string; kind?: "system" | "schedule" };
 
 export function prepareAdmission(
   runId: string,
   boundary: string,
-  {
-    cfg = {},
-    agentId = "main",
-    kind = "system",
-    ...options
-  }: Partial<AdmissionOptions> & { agentId?: string; kind?: "system" | "schedule" } = {},
+  { cfg = {}, agentId = "main", kind = "system", ...options }: AdmissionOptions = {},
 ) {
   return prepareAgentRunAdmission({
     cfg,

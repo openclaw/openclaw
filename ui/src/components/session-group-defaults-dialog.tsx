@@ -9,6 +9,7 @@ import {
   Loading,
   onSettled,
   Reveal,
+  Show,
 } from "solid-js";
 import type {
   FsListDirResult,
@@ -31,7 +32,7 @@ import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 registerEnglishCatalog(registerSessionOrganizationEnglish);
 registerEnglishCatalog(registerNewSessionSetupEnglish);
 
-export type SessionGroupDefaults = { cwd: string; worktree: boolean };
+type SessionGroupDefaults = { cwd: string; worktree: boolean };
 type RepositoryStatus = WorktreeRepositoryStatus | "checking" | "restricted";
 
 type Options = {
@@ -60,39 +61,41 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     // Admission stays synchronous while the signals publish the visible status.
     let submitting = false;
     const [saving, setSaving] = createOptimistic(false);
-    const [failure, setFailure] = createSignal<string | null>(null);
+    const [attempt, setAttempt] = createSignal<{ result: Promise<void> }>();
     const [browserVisible, setBrowserVisible] = createSignal(false);
     let folderPopover: PopoverHandle | undefined;
     const browser = new PlaceBrowserState(options.listDirectory, () => publishBrowser(browser));
     const [browserView, publishBrowser] = createSignal(browser, { equals: false });
 
-    const handleSubmit = action(async function* (event: Event) {
+    const performSubmit = action(function* () {
+      setSaving(true);
+      try {
+        const errorMessage: string | null = yield options.submit({
+          cwd: cwd().trim(),
+          worktree: repositoryStatus === "git" && worktree(),
+        });
+        if (modal.settled) {
+          return;
+        }
+        if (errorMessage) {
+          throw new Error(errorMessage);
+        }
+        finish();
+      } finally {
+        submitting = false;
+      }
+    });
+    const handleSubmit = (event: Event) => {
       event.preventDefault();
       if (submitting || (repositoryStatus !== "git" && repositoryStatus !== "not_git")) {
         return;
       }
       submitting = true;
-      setSaving(true);
-      let errorMessage: string | null;
-      try {
-        errorMessage = await options.submit({
-          cwd: cwd().trim(),
-          worktree: repositoryStatus === "git" && worktree(),
-        });
-      } catch (error) {
-        errorMessage = formatUiError(error);
-      }
-      yield;
-      if (modal.settled) {
-        return;
-      }
-      if (!errorMessage) {
-        finish();
-        return;
-      }
-      submitting = false;
-      setFailure(errorMessage);
-    });
+      const result = performSubmit();
+      setAttempt({ result });
+      // The modal can retire before its error slot observes the admitted save.
+      void result.catch(() => {});
+    };
 
     const closePicker = () => {
       folderPopover?.overlay.request(false, "return");
@@ -115,7 +118,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       const requestToken = ++repositoryRequestToken;
       repositoryStatus = "checking";
       setWorktree(false);
-      setFailure(null);
+      setAttempt(undefined);
       const result = (async () => {
         let status: RepositoryStatus;
         try {
@@ -138,7 +141,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
 
     const selectWorktree = (value: boolean) => {
       setWorktree(value);
-      setFailure(null);
+      setAttempt(undefined);
     };
 
     const showBrowser = () => {
@@ -202,6 +205,9 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
           ),
         })),
       );
+      const outcome = createMemo(() => attempt()?.result.then(() => null), {
+        loadingValue: undefined,
+      });
       const repositoryRead = createMemo(
         () => inspection() ?? Promise.resolve<RepositoryStatus>("checking"),
       );
@@ -387,10 +393,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
             }
           }}
         >
-          <form
-            class="exec-approval-card session-group-defaults"
-            onSubmit={(event) => void handleSubmit(event)}
-          >
+          <form class="exec-approval-card session-group-defaults" onSubmit={handleSubmit}>
             <div class="exec-approval-header">
               <div>
                 <div class="exec-approval-title">
@@ -471,11 +474,17 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                     <Environment status={repository()} />
                   </Loading>
                 </div>
-                {failure() && !saving() ? (
-                  <div class="exec-approval-error" role="alert">
-                    {failure()}
-                  </div>
-                ) : undefined}
+                <Show when={!saving()}>
+                  <Errored
+                    fallback={(error) => (
+                      <div class="exec-approval-error" role="alert">
+                        {formatUiError(error())}
+                      </div>
+                    )}
+                  >
+                    {outcome()}
+                  </Errored>
+                </Show>
                 <openclaw-modal-actions class="exec-approval-actions">
                   <button type="button" class="btn" disabled={saving()} onClick={() => finish()}>
                     {t("common.cancel")}

@@ -1,3 +1,4 @@
+import type { RecoveryDiskUsage } from "./recovery-disk-usage.js";
 import type { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
 import type { StatusDatabaseEngines } from "./status-database-engines.js";
 import type { NodeOnlyGatewayInfo } from "./status.node-mode.js";
@@ -26,4 +27,5 @@ export type StatusOverviewSurface = Omit<
 > & {
   nodeOnlyGateway?: NodeOnlyGatewayInfo | null;
   databaseEngines?: StatusDatabaseEngines;
+  recoveryCopies?: RecoveryDiskUsage;
 };

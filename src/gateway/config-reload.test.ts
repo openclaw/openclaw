@@ -9,6 +9,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
+  applyConfigEnvVars,
   initializePublishedConfigRuntimeEnv,
   prepareConfigRuntimeEnv,
 } from "../config/config-env-vars.js";
@@ -93,6 +94,7 @@ import {
   makeZeroDebounceHookWrite,
   ownedConfigReloadOptions,
   prepareConfigReloadTest,
+  registerReverseHotReloadTest,
   startGatewayConfigReloader,
   waitForReloadState,
 } from "./config-reload.test-support.js";
@@ -122,15 +124,14 @@ const commitPluginRuntime =
 
 function prepareOwnedEnv(
   env: NodeJS.ProcessEnv,
-  key: string,
   previousConfig: OpenClawConfig,
   nextConfig: OpenClawConfig,
 ) {
+  applyConfigEnvVars(previousConfig, env, { lowerPrecedenceEnv: previousConfig.env?.vars });
   return prepareConfigRuntimeEnv({
     env,
     previousConfig,
     nextConfig,
-    previousOwnedEnv: { [key]: previousConfig.env?.vars?.[key] ?? "" },
   });
 }
 
@@ -1934,67 +1935,7 @@ describe("startGatewayConfigReloader", () => {
     },
   );
 
-  it("plans the reverse hot reload when config A commits before config B supersedes its tail", async () => {
-    const initialConfig = configWithReload({
-      hooks: { enabled: true, token: "test-token", path: "/old" },
-    }) satisfies OpenClawConfig;
-    const configA = {
-      ...initialConfig,
-      hooks: { ...initialConfig.hooks, path: "/a" },
-    } satisfies OpenClawConfig;
-    const readSnapshot = vi
-      .fn<() => Promise<ConfigFileSnapshot>>()
-      .mockResolvedValueOnce(snapshotOf(configA, "post-commit-a"))
-      .mockResolvedValue(snapshotOf(initialConfig, "reverse-b"));
-    const { promise: committed, resolve: recordCommitted } = createDeferred();
-    const { promise: tailGate, resolve: releaseTail } = createDeferred();
-    const onHotReload = vi.fn(
-      async (
-        plan: GatewayReloadPlan,
-        nextConfig: OpenClawConfig,
-        ownership: GatewayConfigReloadTransactionOwnership,
-      ) => {
-        ownership.markRuntimeCommitted(nextConfig, plan);
-        if (nextConfig === configA) {
-          recordCommitted?.();
-          await tailGate;
-        }
-        return "applied" as const;
-      },
-    );
-    const promoteSnapshot = vi.fn(async (_snapshot: ConfigFileSnapshot, _reason: string) => true);
-    const harness = await createReadyReloader(readSnapshot, {
-      initialConfig,
-      onHotReload,
-      promoteSnapshot,
-    });
-
-    harness.watcher.emit("change");
-    await vi.advanceTimersByTimeAsync(0);
-    await committed;
-
-    harness.watcher.emit("change");
-    releaseTail();
-    await flushReload(harness.reloader);
-
-    expect(onHotReload).toHaveBeenCalledTimes(2);
-    expect(onHotReload.mock.calls.map(([, config]) => config)).toEqual([configA, initialConfig]);
-    expect(onHotReload.mock.calls[1]?.[0].hotReasons).toContain("hooks.path");
-    expect(harness.onConfigAccepted).toHaveBeenCalledTimes(2);
-    expect(harness.onConfigAccepted.mock.calls.map((call) => call[0])).toEqual([
-      configA,
-      initialConfig,
-    ]);
-    expect(harness.onConfigApplied).toHaveBeenCalledTimes(2);
-    expect(harness.onConfigApplied.mock.calls.map(([, config]) => config)).toEqual([
-      configA,
-      initialConfig,
-    ]);
-    expect(promoteSnapshot.mock.calls.map(([snapshot]) => snapshot.hash)).toEqual([
-      "post-commit-a",
-      "reverse-b",
-    ]);
-  });
+  registerReverseHotReloadTest();
 
   it("prepares a superseding config against the env owner committed at the runtime edge", async () => {
     const envKey = "OPENCLAW_TEST_COMMITTED_ENV_SOURCE";
@@ -2019,7 +1960,7 @@ describe("startGatewayConfigReloader", () => {
       prepareConfigCandidate: async ({ runtimeConfig, sourceConfig, previousSourceConfig }) => ({
         runtimeConfig,
         compareConfig: { ...sourceConfig, env: initialConfig.env },
-        runtimeEnv: prepareOwnedEnv(targetEnv, envKey, previousSourceConfig, sourceConfig),
+        runtimeEnv: prepareOwnedEnv(targetEnv, previousSourceConfig, sourceConfig),
       }),
       onHotReload: async (plan, nextConfig, ownership) => {
         preparedEnvValues.push(ownership.runtimeEnv?.env[envKey]);
@@ -2449,7 +2390,7 @@ describe("startGatewayConfigReloader", () => {
       ...nextConfig,
       env: initialConfig.env,
     } satisfies OpenClawConfig;
-    const runtimeEnv = prepareOwnedEnv(targetEnv, envKey, initialConfig, nextConfig);
+    const runtimeEnv = prepareOwnedEnv(targetEnv, initialConfig, nextConfig);
     const harness = await createReadyWriteReloader({
       initialConfig,
       onHotReload: async (plan, runtimeConfig, ownership) => {
@@ -2482,14 +2423,14 @@ describe("startGatewayConfigReloader", () => {
     const configA = makeConfig("a", 18_789);
     const configB = makeConfig("b", 19_001);
     const configC = makeConfig("c", 19_002);
-    const staleRuntimeEnv = prepareOwnedEnv(targetEnv, envKey, configA, configB);
+    const staleRuntimeEnv = prepareOwnedEnv(targetEnv, configA, configB);
     const readSnapshot = vi.fn(async () => snapshotOf(configC, "env-c"));
     const harness = await createReadyReloader(readSnapshot, {
       initialConfig: configA,
       prepareConfigCandidate: async ({ runtimeConfig, sourceConfig, previousSourceConfig }) => ({
         runtimeConfig,
         compareConfig: sourceConfig,
-        runtimeEnv: prepareOwnedEnv(targetEnv, envKey, previousSourceConfig, sourceConfig),
+        runtimeEnv: prepareOwnedEnv(targetEnv, previousSourceConfig, sourceConfig),
       }),
     });
 

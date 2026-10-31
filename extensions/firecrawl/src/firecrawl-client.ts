@@ -13,10 +13,8 @@ import {
   readProviderJsonObjectResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import {
-  DEFAULT_CACHE_TTL_MINUTES,
   markdownToText,
   readResponseText,
-  resolveCacheTtlMs,
   resolvePositiveTimeoutSeconds,
   withSelfHostedWebToolsEndpoint,
   withStrictWebToolsEndpoint,
@@ -24,6 +22,7 @@ import {
 import {
   externalContentStamp,
   readCachedSearchPayload,
+  resolveSearchCacheTtlMs,
   resolveSiteName,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
@@ -74,37 +73,6 @@ type FirecrawlEndpointMode = "selfHosted" | "strict";
 type FirecrawlResolvedEndpoint = {
   url: string;
   mode: FirecrawlEndpointMode;
-};
-
-type FirecrawlSearchParams = {
-  cfg?: OpenClawConfig;
-  query: string;
-  count?: number;
-  timeoutSeconds?: number;
-  sources?: string[];
-  categories?: string[];
-  scrapeResults?: boolean;
-  includeDomains?: string[];
-  excludeDomains?: string[];
-  tbs?: string;
-  location?: string;
-  country?: string;
-  access?: "credential" | "keyless";
-  signal?: AbortSignal;
-};
-
-type FirecrawlScrapeParams = {
-  cfg?: OpenClawConfig;
-  url: string;
-  extractMode: "markdown" | "text";
-  access?: "credential" | "keyless";
-  maxChars?: number;
-  onlyMainContent?: boolean;
-  maxAgeMs?: number;
-  proxy?: "auto" | "basic" | "stealth";
-  storeInCache?: boolean;
-  timeoutSeconds?: number;
-  signal?: AbortSignal;
 };
 
 type FirecrawlFetchConfig = {
@@ -402,9 +370,22 @@ function resolveSearchItems(payload: Record<string, unknown>, count: number) {
   return items;
 }
 
-export async function runFirecrawlSearch(
-  params: FirecrawlSearchParams,
-): Promise<Record<string, unknown>> {
+export async function runFirecrawlSearch(params: {
+  cfg?: OpenClawConfig;
+  query: string;
+  count?: number;
+  timeoutSeconds?: number;
+  sources?: string[];
+  categories?: string[];
+  scrapeResults?: boolean;
+  includeDomains?: string[];
+  excludeDomains?: string[];
+  tbs?: string;
+  location?: string;
+  country?: string;
+  access?: "credential" | "keyless";
+  signal?: AbortSignal;
+}): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
   const keyless = params.access === "keyless";
   const providerId = keyless ? "firecrawl-free" : "firecrawl";
@@ -447,10 +428,7 @@ export async function runFirecrawlSearch(
     country,
     scrapeResults,
   });
-  const cacheTtlMs = resolveCacheTtlMs(
-    params.cfg?.tools?.web?.search?.cacheTtlMinutes,
-    DEFAULT_CACHE_TTL_MINUTES,
-  );
+  const cacheTtlMs = resolveSearchCacheTtlMs(params.cfg?.tools?.web?.search);
   const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;
@@ -528,7 +506,19 @@ export async function runFirecrawlSearch(
   return result;
 }
 
-export async function runFirecrawlScrape(params: FirecrawlScrapeParams) {
+export async function runFirecrawlScrape(params: {
+  cfg?: OpenClawConfig;
+  url: string;
+  extractMode: "markdown" | "text";
+  access?: "credential" | "keyless";
+  maxChars?: number;
+  onlyMainContent?: boolean;
+  maxAgeMs?: number;
+  proxy?: "auto" | "basic" | "stealth";
+  storeInCache?: boolean;
+  timeoutSeconds?: number;
+  signal?: AbortSignal;
+}) {
   params.signal?.throwIfAborted();
   assertFirecrawlScrapeTargetAllowed(params.url);
 

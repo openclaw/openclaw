@@ -8,7 +8,8 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { SessionDeleteBatchResult } from "../lib/sessions/session-capability.ts";
-import { requestSessionPatchMany } from "../lib/sessions/session-requests.ts";
+import { requestSessionPatchMany } from "../lib/sessions/session-mutation-operations.runtime.ts";
+import { createNavigationPreferencesFixture } from "../test-helpers/application-context-fixtures.ts";
 import { SESSION_MUTATION_TEST_METHODS } from "../test-helpers/gateway-methods.ts";
 import type {
   SidebarRecentSession,
@@ -49,27 +50,30 @@ export function createHarness(
   let requestCount = 0;
   // Reconnect retires the dialog's signal; renewal models beginSessionMutation().
   let abortController = new AbortController();
-  const request = vi.fn(async (_method: string, rawParams?: unknown, _options?: unknown) => {
-    const patchParams = rawParams as SessionsPatchManyParams;
-    const requestFailure = params.requestFailure;
-    requestCount += 1;
-    if (requestFailure && requestCount === requestFailure.at) {
-      throw requestFailure.error;
-    }
-    const result = {
-      outcomes: patchParams.targets.map((target) => {
-        if (params.failedKeys?.includes(target.key)) {
-          const error = { code: "INVALID_REQUEST" as const, message: `failed ${target.key}` };
-          return Object.assign(targetIdentity(target), { ok: false as const, error });
-        }
-        return Object.assign(targetIdentity(target), { ok: true as const });
-      }),
-    } satisfies SessionsPatchManyResult;
-    if (requestCount === params.staleAfterRequest) {
-      current = false;
-    }
-    return result;
-  });
+  // Gateway requests are generic over method results; tests may answer other methods.
+  const request = vi.fn(
+    async (_method: string, rawParams?: unknown, _options?: unknown): Promise<unknown> => {
+      const patchParams = rawParams as SessionsPatchManyParams;
+      const requestFailure = params.requestFailure;
+      requestCount += 1;
+      if (requestFailure && requestCount === requestFailure.at) {
+        throw requestFailure.error;
+      }
+      const result = {
+        outcomes: patchParams.targets.map((target) => {
+          if (params.failedKeys?.includes(target.key)) {
+            const error = { code: "INVALID_REQUEST" as const, message: `failed ${target.key}` };
+            return Object.assign(targetIdentity(target), { ok: false as const, error });
+          }
+          return Object.assign(targetIdentity(target), { ok: true as const });
+        }),
+      } satisfies SessionsPatchManyResult;
+      if (requestCount === params.staleAfterRequest) {
+        current = false;
+      }
+      return result;
+    },
+  );
   const client = { request } as unknown as GatewayBrowserClient;
   const snapshot = {
     client,
@@ -88,6 +92,7 @@ export function createHarness(
   const finishArchive = vi.fn();
   const mocks = {
     finishArchive,
+    acknowledgeHiddenRuns: vi.fn(async () => []),
     beginArchive: vi.fn(() => finishArchive),
     patch: vi.fn(async (key: string) => ({ ok: true, key })),
     reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
@@ -108,6 +113,7 @@ export function createHarness(
   const scope = {
     epoch: 1,
     context: {
+      navigation: createNavigationPreferencesFixture(),
       agents: { state: { agentsList: null } },
       theme: { refresh: mocks.refreshTheme },
       placementStartup: { pause: vi.fn() },
@@ -118,6 +124,7 @@ export function createHarness(
       captureConnectionScope: () => connection,
       isConnectionScopeCurrent: () => current,
       patch: mocks.patch,
+      acknowledgeHiddenRuns: mocks.acknowledgeHiddenRuns,
       patchMany: (
         targets: SessionsPatchManyParams["targets"],
         patchParams: SessionsPatchManyParams["patch"],

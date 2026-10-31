@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
+import { createImageProcessor } from "../../media/media-services.js";
+import { loadWebMedia } from "../../media/web-media.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -16,7 +20,6 @@ import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 const storeSpy = vi.hoisted(() => ({
   onMove: null as ((from: string, to: string, rootDir: string) => void) | null,
 }));
-
 vi.mock("@openclaw/fs-safe/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/fs-safe/store")>();
   return {
@@ -204,59 +207,58 @@ it("reclaims stale partial writes but ignores foreign files and symlinks", async
   expect(await fs.readFile(source, "utf8")).toBe("opus-bytes");
 });
 
-it("expires abandoned stages and rejects a producer that resumes too late", async () => {
+it("expires abandoned stages before or after file publication without rescanning quiet inventory", async () => {
+  await pruneOrphanedDeliveryQueueMedia({ stateDir });
+  using requests = vi.spyOn(Worker.prototype, "postMessage");
+  await pruneOrphanedDeliveryQueueMedia({ stateDir });
+  expect(requests).not.toHaveBeenCalled();
+  expect(existsSync(spoolRoot)).toBe(false);
+
   const staged = await stage({ payloads: [{ mediaUrl: source, audioAsVoice: true }] });
-
-  // Expired staging custody must win against a resumed producer.
-  await pruneOrphanedDeliveryQueueMedia({ stateDir, nowMs: Date.now() + 2 * DAY_MS });
-
-  await expect(fs.stat(staged.artifacts[0] as string)).rejects.toThrow();
-  await expect(enqueue(staged.payloads, staged.mediaStageId)).rejects.toThrow(
-    "media stage expired before enqueue",
+  const artifact = path.join(spoolRoot, ARTIFACT_A);
+  const mediaStageId = await createDeliveryQueueMediaRetention(
+    [artifact],
+    "outbound-media-stage",
+    stateDir,
   );
+  requests.mockClear();
+  await pruneOrphanedDeliveryQueueMedia({ stateDir });
+  expect(requests).not.toHaveBeenCalled();
+  expect(existsSync(artifact)).toBe(false);
+  await pruneOrphanedDeliveryQueueMedia({ stateDir, nowMs: Date.now() + 2 * DAY_MS });
+  for (const entry of [staged, { payloads: [{ mediaUrl: artifact }], mediaStageId }]) {
+    assert(entry.mediaStageId);
+    expect(
+      loadDeliveryQueueEntry(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, entry.mediaStageId, stateDir),
+    ).toBeNull();
+    await expect(enqueue(entry.payloads, entry.mediaStageId)).rejects.toThrow(
+      "media stage expired before enqueue",
+    );
+  }
+  await expect(fs.stat(staged.artifacts[0] as string)).rejects.toThrow();
   expect(await loadPendingDeliveries(stateDir)).toEqual([]);
 });
 
-it("skips quiet inventories but expires a new stage even when its producer never wrote a file", async () => {
-  await pruneOrphanedDeliveryQueueMedia({ stateDir });
-  const requests = vi.spyOn(Worker.prototype, "postMessage");
-  try {
-    await pruneOrphanedDeliveryQueueMedia({ stateDir });
-    expect(requests).not.toHaveBeenCalled();
-
-    const artifact = path.join(spoolRoot, ARTIFACT_A);
-    const mediaStageId = await createDeliveryQueueMediaRetention(
-      [artifact],
-      "outbound-media-stage",
-      stateDir,
-    );
-    requests.mockClear();
-    await pruneOrphanedDeliveryQueueMedia({ stateDir });
-    expect(requests).not.toHaveBeenCalled();
-    expect(existsSync(spoolRoot)).toBe(false);
-
-    await pruneOrphanedDeliveryQueueMedia({ stateDir, nowMs: Date.now() + 2 * DAY_MS });
-    expect(
-      loadDeliveryQueueEntry(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, mediaStageId, stateDir),
-    ).toBeNull();
-    await expect(enqueue([{ mediaUrl: artifact }], mediaStageId)).rejects.toThrow(
-      "media stage expired before enqueue",
-    );
-  } finally {
-    requests.mockRestore();
-  }
-});
-
-it("releases versioned artifacts without touching paths outside the spool", async () => {
+it("reports failed releases, continues cleanup, and ignores missing or outside paths", async () => {
   const generationFinal = await seedArtifact(`g1-${ARTIFACT_A}`, 0);
   const generationPartial = await seedArtifact(`g1-${PART_ARTIFACT}`, 0);
-
-  await releaseSpoolArtifacts(
-    [generationFinal, generationPartial, source, path.join(spoolRoot, "..", "escape.ogg")],
-    stateDir,
-  );
-
-  expectArtifacts([source], [generationFinal, generationPartial]);
+  const stuck = path.join(spoolRoot, ARTIFACT_A);
+  await fs.mkdir(stuck);
+  await fs.writeFile(path.join(stuck, "retained.txt"), "keep");
+  const capture = createWarnLogCapture("spool-release");
+  try {
+    await releaseSpoolArtifacts(
+      [stuck, generationFinal, generationPartial, path.join(spoolRoot, ARTIFACT_B), source],
+      stateDir,
+    );
+    expectArtifacts([source, stuck], [generationFinal, generationPartial]);
+    expect(
+      await capture.findText(`failed to remove delivery queue media artifact ${ARTIFACT_A}:`),
+    ).toBeDefined();
+    expect(await capture.findText(ARTIFACT_B)).toBeUndefined();
+  } finally {
+    capture.cleanup();
+  }
 });
 it("stages local media while a competing writer needs the host to release its lock", async () => {
   const database = openOpenClawStateDatabase({
@@ -284,35 +286,73 @@ it("stages local media while a competing writer needs the host to release its lo
   }
 });
 
+it("replays converted PNG bytes with a matching public name and unchanged spool custody", async () => {
+  const sourceBytes = (
+    await createImageProcessor().encode(
+      createSolidPngBuffer(2050, 2, { r: 40, g: 90, b: 180, a: 96 }),
+      { format: "webp" },
+    )
+  ).data;
+  expect(sourceBytes.toString("ascii", 8, 12)).toBe("WEBP");
+  const imagePath = path.join(sourceDir, "transparent.webp");
+  await fs.writeFile(imagePath, sourceBytes);
+  const staged = await stage({ payloads: [{ mediaUrl: imagePath }] });
+  await enqueue(staged.payloads, staged.mediaStageId);
+  await fs.rm(imagePath);
+
+  const queued = (await loadPendingDeliveries(stateDir))[0]?.preparedBatch.entries[0];
+  expect(queued?.status).toBe("accepted");
+  if (!queued || queued.status !== "accepted" || !queued.payload.mediaUrl) {
+    throw new Error("Expected queued image artifact");
+  }
+  const replayPath = queued.payload.mediaUrl;
+  expect(replayPath).toBe(staged.artifacts[0]);
+  // SQLite owns this preplanned path; only public image metadata changes.
+  expect(path.extname(replayPath)).toBe(".webp");
+  const encodedBytes = await fs.readFile(replayPath);
+  expect(encodedBytes.subarray(0, 8)).toEqual(
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  );
+
+  const replayed = await loadWebMedia(replayPath, {
+    maxBytes: 1024 * 1024,
+    localRoots: [spoolRoot],
+  });
+  expect([replayed.kind, replayed.contentType, replayed.fileName]).toEqual([
+    "image",
+    "image/png",
+    `${path.basename(replayPath, ".webp")}.png`,
+  ]);
+  expect(replayed.buffer).toEqual(encodedBytes);
+  expect(await fs.readFile(replayPath)).toEqual(encodedBytes);
+});
+
 it("uses the live send's local-read capability", async () => {
   const mediaAccess = { localRoots: [path.join(stateDir, "elsewhere")] };
   await expect(rawStage({ mediaAccess })).rejects.toThrow();
 });
 
-it.each([undefined, "session-generation-v1", "command-owner-v1"] as const)(
+it.each([
+  [undefined, ""],
+  ["session-generation-v1", "g1-"],
+  ["command-owner-v1", "c1-"],
+] as const)(
   "publishes complete media with older-reader-compatible custody (%s)",
-  async (artifactFormat) => {
-    const atMove: { finalExisted: boolean; partSize: number }[] = [];
+  async (artifactFormat, prefix) => {
+    const atMove: [boolean, number][] = [];
     storeSpy.onMove = (from, to, rootDir) => {
       const knownToPublishedReader = artifactFormat === undefined;
       expect(PUBLISHED_ARTIFACT_NAME_RE.test(from)).toBe(knownToPublishedReader);
       expect(PUBLISHED_ARTIFACT_NAME_RE.test(to)).toBe(knownToPublishedReader);
       expect(from).toBe(`${to}.part`);
       if (artifactFormat) {
-        expect(to).toMatch(
-          artifactFormat === "command-owner-v1"
-            ? /^c1-[0-9a-f-]{36}\.ogg$/
-            : /^g1-[0-9a-f-]{36}\.ogg$/,
-        );
+        expect(to).toMatch(new RegExp(`^${prefix}[0-9a-f-]{36}\\.ogg$`));
       }
-      atMove.push({
-        finalExisted: existsSync(path.join(rootDir, to)),
-        partSize: statSync(path.join(rootDir, from)).size,
-      });
+      atMove.push([existsSync(path.join(rootDir, to)), statSync(path.join(rootDir, from)).size]);
     };
 
     await stage({ artifactFormat });
-    expect(atMove).toEqual([{ finalExisted: false, partSize: "opus-bytes".length }]);
+    expect(atMove).toEqual([[false, "opus-bytes".length]]);
     expect(await fs.readdir(spoolRoot)).toHaveLength(1);
   },
 );

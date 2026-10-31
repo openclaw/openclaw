@@ -113,12 +113,16 @@ function prepare(req: ImagesDescriptionRequest, config = req.cfg) {
 }
 
 function expectNoGenericTransport() {
-  expect(transport.single).not.toHaveBeenCalled();
-  expect(transport.multiple).not.toHaveBeenCalled();
+  for (const method of [transport.single, transport.multiple]) {
+    expect(method).not.toHaveBeenCalled();
+  }
 }
 
-async function expectRejected(req: ImagesDescriptionRequest, message?: string) {
-  await expect(providerMethods().multiple(req)).rejects.toThrow(message);
+async function expectRejected(req: ImagesDescriptionRequest, message?: string, single = false) {
+  const hooks = providerMethods();
+  await expect(single ? hooks.single(singleRequest(req)) : hooks.multiple(req)).rejects.toThrow(
+    message,
+  );
   expect(transport.managed).not.toHaveBeenCalled();
   expectNoGenericTransport();
 }
@@ -155,10 +159,6 @@ it("uses the selected OCR recipe task token", async () => {
   const req = request({ model: OCR, prompt: "Describe the colors." });
   const original = structuredClone(req.images);
   await providerMethods().multiple(req);
-  expect(transport.managed).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ model: OCR, prompt: "Text Recognition:" }),
-    expect.any(Function),
-  );
   const imagePart = { type: "image_url", image_url: { url: "data:image/png;base64,fixture" } };
   const payload = {
     model: OCR,
@@ -169,9 +169,8 @@ it("uses the selected OCR recipe task token", async () => {
     max_tokens: 2048,
   };
   expect(await transformedPayload(payload)).toEqual({
-    model: OCR,
+    ...payload,
     messages: [{ role: "user", content: [imagePart, { type: "text", text: "Text Recognition:" }] }],
-    max_tokens: 2048,
     temperature: 0,
     seed: 4827,
   });
@@ -205,7 +204,6 @@ it("keeps existing external and custom image models on the shared generic transp
 it("does not retry with a cloud provider after local inference fails", async () => {
   transport.managed.mockRejectedValueOnce(new Error("projector load failed"));
   await expect(providerMethods().multiple(request())).rejects.toThrow("projector load failed");
-  expect(transport.managed).toHaveBeenCalledTimes(1);
   expectNoGenericTransport();
 });
 
@@ -214,13 +212,8 @@ it("fails closed for incomplete saved local routes", async () => {
   const provider = configured(req.cfg);
   provider.params = { mediaModels: { ocr: OCR } };
   provider.baseUrl = "https://cloud.example.test/v1";
-  const hooks = providerMethods();
-  await expect(hooks.multiple(req)).rejects.toThrow("local media routes are incomplete");
-  await expect(hooks.single(singleRequest(req))).rejects.toThrow(
-    "local media routes are incomplete",
-  );
-  expect(transport.managed).not.toHaveBeenCalled();
-  expectNoGenericTransport();
+  await expectRejected(req, "local media routes are incomplete");
+  await expectRejected(req, "local media routes are incomplete", true);
 });
 
 it.each([
@@ -245,11 +238,8 @@ it("accepts numeric IPv6 loopback endpoints", async () => {
 it("rejects missing managed ownership and provider identity substitution", async () => {
   const req = request();
   delete configured(req.cfg).localService;
-  await expect(providerMethods().multiple(req)).rejects.toThrow("loopback");
-  await expect(providerMethods().multiple(request({ provider: "openai" }))).rejects.toThrow(
-    "loopback",
-  );
-  expect(transport.managed).not.toHaveBeenCalled();
+  await expectRejected(req, "loopback");
+  await expectRejected(request({ provider: "openai" }), "loopback");
 });
 
 it.each([

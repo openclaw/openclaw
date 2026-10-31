@@ -1,13 +1,12 @@
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
-import type { registerYieldedRequesterBatchCase } from "./subagent-spawn.requester-yield.test-support.js";
+import type { NativePluginSpawnTestOptions } from "./subagent-spawn.production-boundary.test-support.js";
 
-type BoundaryOptions = Parameters<typeof registerYieldedRequesterBatchCase>[0];
 export type BoundaryHarness = Pick<
-  BoundaryOptions,
+  NativePluginSpawnTestOptions,
   "createBoundGateway" | "closeBoundGateway" | "throwBoundFailures" | "runEmbeddedAgent"
 >;
-export type WaitForEmbeddedRun = BoundaryOptions["waitForEmbeddedRun"];
+export type WaitForEmbeddedRun = NativePluginSpawnTestOptions["waitForEmbeddedRun"];
 
 export function sessionReader(storePath: string) {
   return (sessionKey: string) => loadSessionEntry({ storePath, sessionKey });

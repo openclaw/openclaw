@@ -1,6 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
+  getPreparedModelRuntimeMocks,
   getPreparedModelRuntimeTestApi,
   usePreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
@@ -34,6 +35,17 @@ import {
 import * as pluginLifetime from "./prepared-model-runtime.plugin-lifetime.js";
 import type { PreparedModelRuntimeOwner } from "./prepared-model-runtime.types.js";
 
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
+  return {
+    ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+    createSubsystemLogger: (subsystem: string) =>
+      createMockSubsystemLogger(subsystem, {
+        warn: (...args) => getPreparedModelRuntimeMocks().warn(...args),
+      }),
+  };
+});
+
 const fixture = usePreparedModelRuntimeHarness(undefined, () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -60,11 +72,11 @@ function setCatalogApiKey(
   });
 }
 
-function holdCatalogWrite(agentDir: string) {
+function holdCatalogWrite() {
   const started = createDeferred();
-  const result = createDeferred<{ agentDir: string; wrote: false }>();
+  const result = createDeferred<Record<string, never>>();
   const pending: Promise<unknown>[] = [];
-  const release = () => result.resolve({ agentDir, wrote: false });
+  const release = () => result.resolve({});
   mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
     started.resolve();
     return await result.promise;
@@ -143,8 +155,8 @@ describe("prepared catalog owner lifecycle", () => {
     const workspaceDir = "/tmp/fresh-workspace";
     mocks.configuredWorkspaces.set("alpha", workspaceDir);
     const config = { plugins: {} };
-    await using source = holdCatalogWrite(agentDir);
-    await using auth = holdCatalogWrite(agentDir);
+    await using source = holdCatalogWrite();
+    await using auth = holdCatalogWrite();
     const phases: string[] = [];
     const unregister = registerPreparedModelRuntimePublicationListener(({ phase }) =>
       phases.push(phase),
@@ -199,7 +211,7 @@ describe("prepared catalog owner lifecycle", () => {
     mocks.configuredAgentIds = ["beta"];
     mocks.configuredAgentDirs.set("beta", agentDir);
     const freshInput = { ...input, config: { plugins: {} } };
-    await using source = holdCatalogWrite(agentDir);
+    await using source = holdCatalogWrite();
     const fresh = source.track(publishPreparedModelRuntimeSnapshot(freshInput, { force: true }));
     void fresh.catch(() => undefined);
     await source.started;
@@ -283,20 +295,15 @@ describe("prepared build candidate lifetime", () => {
       const input = { config: {}, agentDir: fixture.state.agentDir("timeout") };
       const started = createDeferred();
       const finish = createDeferred();
-      const wait = async () => {
+      const pausedBuild = async () => {
         started.resolve();
         await finish.promise;
+        return {};
       };
       if (admission) {
-        mocks.resolveAmbientCredentials.mockImplementationOnce(async () => {
-          await wait();
-          return {};
-        });
+        mocks.resolveAmbientCredentials.mockImplementationOnce(pausedBuild);
       } else {
-        mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
-          await wait();
-          return { agentDir: input.agentDir, wrote: false };
-        });
+        mocks.ensureOpenClawModelsJson.mockImplementationOnce(pausedBuild);
       }
       using builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
       const first = admission
@@ -347,7 +354,7 @@ describe("prepared build candidate lifetime", () => {
     "serializes conflicting %s publications for one catalog owner",
     async (kind) => {
       const agentDir = fixture.state.agentDir("serial-publication");
-      await using write = holdCatalogWrite(agentDir);
+      await using write = holdCatalogWrite();
       const workspace = kind === "workspace";
       const firstInput = {
         config: {},
@@ -374,11 +381,7 @@ describe("prepared build candidate lifetime", () => {
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
       if (workspace) {
         expect(await reader).toBe(initial);
-        expect(mocks.ensureOpenClawModelsJson).toHaveBeenLastCalledWith(
-          firstInput.config,
-          agentDir,
-          expect.objectContaining({ workspaceDir: "/tmp/workspace-new" }),
-        );
+        expect(next?.workspaceDir).toBe("/tmp/workspace-new");
         expect(await prepareModelRuntimeSnapshot(nextInput)).toBe(next);
       } else {
         expect(initial?.config).toBe(firstInput.config);
@@ -691,7 +694,9 @@ describe("legacy provider catalog retention", () => {
 });
 
 it("preserves the primary publication error when terminal generation cleanup also fails", async () => {
-  const primary = new Error("plugin generation retired before publication");
+  const primary = new Error("plugin generation retired before publication", {
+    cause: { generation: "superseded" },
+  });
   const cleanup = new Error("registration cleanup failed");
   let failedOwner: PreparedModelRuntimeOwner | undefined;
   vi.spyOn(pluginLifetime, "publishPreparedPluginGeneration").mockImplementationOnce((owner) => {
@@ -720,7 +725,12 @@ it("preserves the primary publication error when terminal generation cleanup als
   ).catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(SuppressedError);
   expect(failure).toMatchObject({ error: cleanup, suppressed: primary });
-  expect(failedOwner?.refreshError).toBe(primary);
+  expect(failedOwner?.refreshError).not.toBe(primary);
+  expect(failedOwner?.refreshError).toMatchObject({
+    message: primary.message,
+    stack: primary.stack,
+  });
+  expect(failedOwner?.refreshError?.cause).toBeUndefined();
   expect(failedOwner?.pending).toBeUndefined();
 });
 

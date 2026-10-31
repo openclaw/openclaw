@@ -1,17 +1,13 @@
-import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { createServer, type Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.js";
-import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { withinTest } from "../helpers/promise.js";
-
-type ScriptResult = {
-  status: number | null;
-  signal: NodeJS.Signals | null;
-  stdout: string;
-  stderr: string;
-};
+import { runNodeScript } from "../helpers/run-node-script.js";
 
 type GatewayFrame = {
   id: string;
@@ -27,20 +23,28 @@ type PayloadMode = "empty" | "invalid-payload-json" | "primitive-device-info" | 
 
 let server: Server | undefined;
 let wss: WebSocketServer | undefined;
+const lifetime = createFixtureLifetime();
 
-afterEach(async () => {
-  if (wss) {
-    await new Promise<void>((resolve) => {
-      wss?.close(() => resolve());
-    });
+it.aroundEach(async (runTest) => {
+  try {
+    await runTest();
+  } finally {
+    // Timeout can finish the test before its body unwinds. Join the child and
+    // output pipes before closing the WebSocket it may still be using.
+    await lifetime.cleanup();
+    if (wss) {
+      await new Promise<void>((resolve) => {
+        wss?.close(() => resolve());
+      });
+    }
+    wss = undefined;
+    if (server) {
+      await new Promise<void>((resolve, reject) => {
+        server?.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+    server = undefined;
   }
-  wss = undefined;
-  if (server) {
-    await new Promise<void>((resolve, reject) => {
-      server?.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
-  server = undefined;
 });
 
 function invokePayload(command: string, mode: PayloadMode): unknown {
@@ -122,46 +126,52 @@ async function runGateway(mode: PayloadMode, signal: AbortSignal, status: number
 
 const gatewayArgs = (url = "ws://127.0.0.1:9") => ["--url", url, "--token", "token", "--json"];
 
-async function runScriptRaw(args: readonly string[], signal: AbortSignal): Promise<ScriptResult> {
-  const child = spawn(
-    process.execPath,
-    ["--import", "tsx", "scripts/dev/ios-node-e2e.ts", ...args],
-    { stdio: "pipe" },
+async function runScriptRaw(args: readonly string[], signal: AbortSignal) {
+  let child: ChildProcess | undefined;
+  const result = await lifetime.track(
+    runNodeScript(
+      ["--import", "tsx", "scripts/dev/ios-node-e2e.ts", ...args],
+      process.env,
+      undefined,
+      // No maxBuffer: retain the existing independent 128 KiB output tails.
+      {
+        signal,
+        executable: process.execPath,
+        onReady: (process) => {
+          child = process;
+        },
+      },
+    ),
   );
-  const stdout = createBoundedChildOutput();
-  const stderr = createBoundedChildOutput();
-  child.stdout.on("data", (chunk) => stdout.append(chunk));
-  child.stderr.on("data", (chunk) => stderr.append(chunk));
-  let spawnError: Error | undefined;
-  child.once("error", (error) => {
-    spawnError = error;
-  });
-  // Retain close from launch so abort cleanup joins the process and both output pipes.
-  const closed = new Promise<ScriptResult>((resolve) => {
-    child.once("close", (status, childSignal) => {
-      resolve({
-        status,
-        signal: childSignal,
-        stdout: stdout.text(),
-        stderr: stderr.text(),
-      });
-    });
-  });
-  try {
-    const result = await withinTest(closed, signal);
-    if (spawnError) {
-      throw spawnError;
-    }
-    return result;
-  } finally {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-    }
-    await closed;
+  if (result.error) {
+    throw toErrorObject(result.error, "iOS node CLI failed");
   }
+  return {
+    status: child?.exitCode ?? null,
+    signal: child?.signalCode ?? null,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
 }
 
 describe("ios-node-e2e", () => {
+  it("joins a cancelled CLI while its WebSocket is open", async ({ signal }) => {
+    const controller = new AbortController();
+    const url = await listenGateway({ mode: "valid", invokeParams: [] });
+    let closed: Promise<unknown> | undefined;
+    wss!.once("connection", (socket) => {
+      closed = once(socket, "close");
+      controller.abort();
+    });
+    await expect(
+      runScriptRaw(gatewayArgs(url), AbortSignal.any([signal, controller.signal])),
+    ).rejects.toMatchObject({ code: "ABORT_ERR" });
+    expect(closed).toBeDefined();
+    await withinTest(closed!, signal);
+    expect(wss!.clients.size).toBe(0);
+    expect(server?.listening).toBe(true);
+  });
+
   it.for([
     [[...gatewayArgs(), "--wat"], "Unknown argument: --wat"],
     [["--url", "-h", "--token", "token"], "--url requires a value"],

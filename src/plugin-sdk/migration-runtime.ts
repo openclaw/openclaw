@@ -88,14 +88,7 @@ export function withCachedMigrationConfigRuntime(
       ...runtime.config,
       current,
       mutateConfigFile: async (params) => {
-        const result = await configApi.mutateConfigFile({
-          ...params,
-          mutate: async (draft, context) => {
-            const mutationResult = await params.mutate(draft, context);
-            cachedConfig = cloneConfigWithResolutionFacts(draft);
-            return mutationResult;
-          },
-        });
+        const result = await configApi.mutateConfigFile(params);
         cachedConfig = cloneConfigWithResolutionFacts(result.nextConfig);
         return result;
       },

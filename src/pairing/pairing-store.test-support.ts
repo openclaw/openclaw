@@ -42,10 +42,9 @@ export function pairingStoreFixture(
     add: (entry: string, targetEnv = env) =>
       addChannelAllowFromStoreEntry({ ...scope, entry, env: targetEnv }),
     remove: (entry: string) => removeChannelAllowFromStoreEntry({ ...scope, entry }),
-    dismiss: (requestId: string) => dismissChannelPairingRequest({ ...scope, requestId }),
+    dismiss: (requestId: string) => dismissChannelPairingRequest({ channel, accountId, requestId }),
     approveRequest: (requestId: string, account: string, requestChannel = channel) =>
       approveChannelPairingRequest({
-        ...scope,
         requestId,
         accountId: account,
         channel: requestChannel,

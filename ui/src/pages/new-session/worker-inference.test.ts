@@ -1,15 +1,10 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { nativeRuntime } from "../../test-helpers/chat-model.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 
-const runtime = {
-  id: "openclaw",
-  source: "model" as const,
-  cloudPlacementSupported: true,
-  cloudPlacementExecutionMode: "worker-turn" as const,
-  devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-};
+const runtime = nativeRuntime();
 
 async function fixture(reason: "missing-auth" | "auth-failed" = "missing-auth") {
   const result = createDraftFixture({

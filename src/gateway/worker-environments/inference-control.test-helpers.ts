@@ -10,13 +10,14 @@ import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 export function createWorkerInferenceDrainService(
   startDrain: (sessionId: string) => WorkerInferenceSessionDrain,
   service: object = {},
+  hasSession: (sessionId: string, runId?: string) => boolean = () => false,
 ) {
   const registered = {
     get: () => undefined,
     ...service,
   };
   registerWorkerInferenceSessionControl(registered, {
-    hasSession: () => false,
+    hasSession,
     reserveSessionDrain: (sessionId) => {
       const completed = createDeferred();
       let drain: WorkerInferenceSessionDrain | undefined;
@@ -34,7 +35,12 @@ export function createWorkerInferenceDrainService(
         }),
       };
     },
-    captureSessionCancellation: () => ({ runIds: [], cancel: async () => [] }),
+    captureSessionCancellation: () => ({
+      runIds: [],
+      settled: Promise.resolve(),
+      executing: false,
+      cancel: async () => [],
+    }),
     resolveSessionTargetForRunId: () => undefined,
   });
   return registered;
@@ -60,6 +66,8 @@ export function createWorkerInferenceCancellationService(
         candidate === sessionId ? runIds.filter((id) => runId === undefined || id === runId) : [];
       return {
         runIds: captured,
+        settled: Promise.resolve(),
+        executing: false,
         cancel: async (control) => {
           if (!captured.length) {
             return [];
@@ -106,6 +114,7 @@ export function createWorkerInferenceServiceStub(): WorkerEnvironmentServiceCont
     prepare: unexpected,
     create: unexpected,
     destroy: unexpected,
+    reclaim: unexpected,
     destroyUnattached: unexpected,
     observeDesktop: unexpected,
     launchDesktopApp: unexpected,

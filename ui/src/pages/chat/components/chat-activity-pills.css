@@ -33,12 +33,10 @@
   width: max-content;
   min-width: 100%;
   padding: 4px 2px;
-  box-sizing: border-box;
 }
 .chat-activity-pills .activity-pill {
   position: relative;
   isolation: isolate;
-  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -154,7 +152,6 @@
   color: var(--danger);
 }
 .chat-activity-pills .activity-pill__spinner {
-  box-sizing: border-box;
   display: inline-block;
   width: 14px;
   height: 14px;
@@ -163,7 +160,7 @@
   border: 1.5px solid color-mix(in srgb, currentColor 28%, transparent);
   border-top-color: currentColor;
   border-radius: 999px;
-  animation: activity-pill-spin 1.6s linear infinite;
+  animation: btn-spinner-spin 1.6s linear infinite;
 }
 .chat-activity-pills .activity-pill__badge .activity-pill__spinner {
   width: 9px;
@@ -221,7 +218,6 @@
 }
 .chat-activity-pills .activity-pill__avatar {
   position: relative;
-  box-sizing: border-box;
   display: grid;
   place-items: center;
   width: 23px;
@@ -338,11 +334,6 @@
   ) {
   animation-play-state: paused;
   will-change: auto;
-}
-@keyframes activity-pill-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 @keyframes activity-pill-shimmer {
   from {

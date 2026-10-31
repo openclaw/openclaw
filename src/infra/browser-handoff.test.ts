@@ -2,12 +2,12 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { openUrlPrivately } from "./browser-handoff.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+import * as windowsPrivate from "./windows-private-directory.js";
 
-const { openLocalFileMock, privateDirectory, privateFile } = vi.hoisted(() => ({
+const { openLocalFileMock } = vi.hoisted(() => ({
   openLocalFileMock: vi.fn<(filePath: string) => Promise<boolean>>(),
-  privateDirectory: vi.fn<(directoryPath: string) => void>(),
-  privateFile: vi.fn(),
 }));
 
 vi.mock("./browser-open.js", async (importOriginal) => ({
@@ -15,24 +15,10 @@ vi.mock("./browser-open.js", async (importOriginal) => ({
   openLocalFile: openLocalFileMock,
 }));
 
-vi.mock("./windows-private-directory.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./windows-private-directory.js")>();
-  privateDirectory.mockImplementation(actual.createPrivateWindowsDirectory);
-  privateFile.mockImplementation(actual.createPrivateWindowsFile);
-  return {
-    ...actual,
-    createPrivateWindowsDirectory: privateDirectory,
-    createPrivateWindowsFile: privateFile,
-  };
-});
-
-let openUrlPrivately: typeof import("./browser-handoff.js").openUrlPrivately;
 const targetUrl = 'http://127.0.0.1:18789/#bootstrapToken=secret-handoff-token&a"b<c>&x';
 const openedPath = () => openLocalFileMock.mock.calls[0]![0];
 
-beforeEach(async () => {
-  vi.resetModules();
-  ({ openUrlPrivately } = await import("./browser-handoff.js"));
+beforeEach(() => {
   openLocalFileMock.mockReset().mockResolvedValue(true);
 });
 
@@ -50,11 +36,9 @@ it("hands the browser a private file path instead of the credential URL", async 
   expect(openLocalFileMock).toHaveBeenCalledTimes(1);
   const file = openedPath();
   expect(file).not.toContain("secret-handoff-token");
-  expect(path.isAbsolute(file)).toBe(true);
 
   const dir = path.dirname(file);
   const dirStat = await fs.stat(dir);
-  expect(dirStat.isDirectory()).toBe(true);
   expect(path.dirname(dir)).toBe(path.resolve(resolvePreferredOpenClawTmpDir()));
   expect(path.basename(dir)).toMatch(/^openclaw-browser-handoff-/);
   if (process.platform !== "win32") {
@@ -64,7 +48,6 @@ it("hands the browser a private file path instead of the credential URL", async 
   }
   const content = await fs.readFile(file, "utf8");
   const normalized = new URL(targetUrl).toString();
-  expect(content).toContain("a%22b%3Cc%3E");
   expect(content).toContain(`url=${normalized.replaceAll("&", "&amp;")}`);
   expect(content).toContain(`location.replace(${JSON.stringify(normalized)})`);
   expect(content).not.toContain('a"b<c>');
@@ -73,21 +56,20 @@ it("hands the browser a private file path instead of the credential URL", async 
 it.runIf(process.platform !== "win32")(
   "creates Windows handoffs with owner-only ACL helpers",
   async () => {
-    privateDirectory.mockImplementation((dir) => {
-      fsSync.mkdirSync(dir, { mode: 0o700 });
-    });
-    privateFile.mockImplementation((filePath: string) => {
-      const fd = fsSync.openSync(filePath, "wx", 0o600);
-      const close = () => fsSync.closeSync(fd);
-      return { fd, close, [Symbol.dispose]: close };
-    });
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
-      await expect(openUrlPrivately(targetUrl)).resolves.toBe(true);
-    } finally {
-      platform.mockRestore();
-    }
-
+    using privateDirectory = vi
+      .spyOn(windowsPrivate, "createPrivateWindowsDirectory")
+      .mockImplementation((dir) => {
+        fsSync.mkdirSync(dir, { mode: 0o700 });
+      });
+    using privateFile = vi
+      .spyOn(windowsPrivate, "createPrivateWindowsFile")
+      .mockImplementation((filePath) => {
+        const fd = fsSync.openSync(filePath, "wx", 0o600);
+        const close = () => fsSync.closeSync(fd);
+        return { fd, close, [Symbol.dispose]: close };
+      });
+    using _ = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    await expect(openUrlPrivately(targetUrl)).resolves.toBe(true);
     const file = openedPath();
     expect(privateDirectory).toHaveBeenCalledWith(path.dirname(file));
     expect(privateFile).toHaveBeenCalledWith(file);

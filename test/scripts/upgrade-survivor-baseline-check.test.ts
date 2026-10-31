@@ -7,7 +7,7 @@ import * as io from "./upgrade-survivor-shard.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scenarios = ["legacy-operator-state", "base"];
 const read = (file: string) => readFileSync(file, "utf8");
-type Install = { args: string[]; prefix: string };
+type Install = { prefix: string };
 const baseline = (version: number, status: string) => ({
   baseline: `openclaw@2026.8.${version}`,
   status,
@@ -83,16 +83,17 @@ it("checks each pinned recovery driver once before scheduling exact rows", () =>
 it.each(["version", "runtime"] as const)("skips unusable %s baselines with evidence", (failure) => {
   const fixture = runFixture(failure);
   expect(fixture.result.status, fixture.result.stderr).toBe(0);
-  const groups = JSON.parse(fixture.result.stdout);
-  expect(groups).toEqual([
-    ...scenarios.map((scenario, index) => ({
-      docker_lanes: "published-upgrade-survivor",
-      label: `published-upgrade-survivor-2026.8.34-scenarios-${index + 1}`,
-      published_upgrade_survivor_baselines: "openclaw@2026.8.34",
-      published_upgrade_survivor_scenarios: scenario,
-      timeout_minutes: 90,
-    })),
-    { docker_lanes: "onboard", label: "onboard" },
+  // Label and timeout policy belong to targeted-docker-lane-groups.test.ts.
+  const groups: Array<Record<string, unknown>> = JSON.parse(fixture.result.stdout);
+  expect(
+    groups.map((group) => [
+      group.docker_lanes,
+      group.published_upgrade_survivor_baselines,
+      group.published_upgrade_survivor_scenarios,
+    ]),
+  ).toEqual([
+    ...scenarios.map((scenario) => ["published-upgrade-survivor", "openclaw@2026.8.34", scenario]),
+    ["onboard", undefined, undefined],
   ]);
   expect(fixture.report.baselines).toHaveLength(2);
   expect(fixture.report.baselines).toEqual(
@@ -108,15 +109,6 @@ it.each(["version", "runtime"] as const)("skips unusable %s baselines with evide
   const installs = io.readJsonLines<Install>(fixture.installs);
   expect(installs).toHaveLength(2);
   for (const install of installs) {
-    expect(install.args).toEqual([
-      "install",
-      "-g",
-      "--prefix",
-      install.prefix,
-      expect.stringMatching(/^openclaw@/),
-      "--no-fund",
-      "--no-audit",
-    ]);
     expect(() => readFileSync(path.join(install.prefix, "bin", "openclaw"))).toThrow();
   }
   const summary = read(path.join(fixture.evidence, "summary.md"));

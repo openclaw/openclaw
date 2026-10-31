@@ -25,3 +25,18 @@ export async function initializeGitFixture(root: string, name: string, file: str
   await git(repo, "commit", "-m", "initial");
   return repo;
 }
+
+export function isWorktreeAdd(argv: readonly string[]): boolean {
+  if (argv[0] !== "git") {
+    return false;
+  }
+  let command = 1;
+  while (argv[command] === "-c" || argv[command] === "-C") {
+    command += 2;
+  }
+  return argv[command] === "worktree" && argv[command + 1] === "add";
+}
+
+export function isWorktreeHydration(argv: readonly string[]): boolean {
+  return argv[0] === "git" && argv.includes("read-tree") && argv.includes("-u");
+}

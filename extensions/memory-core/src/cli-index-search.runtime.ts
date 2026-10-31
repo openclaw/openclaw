@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { readMemorySearchManagerStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   defaultRuntime,
@@ -14,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
 import {
   emitMemoryCoreSidecarNotice,
@@ -85,16 +87,20 @@ export async function runMemoryIndex(
           const requestedProvider = status.requestedProvider ?? status.provider;
           const modelLabel = status.model ?? status.provider;
           const lines = [
-            `${heading("Memory Index")} ${muted(`(${agentId})`)}`,
-            `${label("Provider")} ${info(status.provider)} ${muted(
-              `(requested: ${requestedProvider})`,
+            `${heading("Memory Index")} ${muted(terminalText`(${agentId})`)}`,
+            `${label("Provider")} ${info(terminalText`${status.provider}`)} ${muted(
+              terminalText`(requested: ${requestedProvider})`,
             )}`,
-            `${label("Model")} ${info(modelLabel)}`,
-            sourceLabels.length ? `${label("Sources")} ${info(sourceLabels.join(", "))}` : null,
-            extraPaths.length ? `${label("Extra paths")} ${info(extraPaths.join(", "))}` : null,
+            `${label("Model")} ${info(terminalText`${modelLabel}`)}`,
+            sourceLabels.length
+              ? `${label("Sources")} ${info(terminalText`${sourceLabels.join(", ")}`)}`
+              : null,
+            extraPaths.length
+              ? `${label("Extra paths")} ${info(terminalText`${extraPaths.join(", ")}`)}`
+              : null,
           ].filter(Boolean) as string[];
           if (status.fallback) {
-            lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
+            lines.push(`${label("Fallback")} ${warn(terminalText`${status.fallback.from}`)}`);
           }
           defaultRuntime.log(lines.join("\n"));
           defaultRuntime.log("");
@@ -129,17 +135,17 @@ export async function runMemoryIndex(
           postIndexStatus.vector?.available ??
           postIndexStatus.vector?.storeAvailable;
         const vectorLoadErr = postIndexStatus.vector?.loadError;
-        defaultRuntime.log(outcome);
+        defaultRuntime.log(terminalText`${outcome}`);
         if (vectorEnabled && vectorAvailable === false) {
           // Indexing still persisted chunks/FTS state; keep the command successful but
           // emit a stderr warning so operators and scripts can detect degraded recall.
           defaultRuntime.error(
-            `Memory index WARNING (${agentId}): chunks_vec not updated — ${formatMemoryVectorDegradedWriteReason(vectorLoadErr)}. Vector recall degraded.`,
+            terminalText`Memory index WARNING (${agentId}): chunks_vec not updated — ${formatMemoryVectorDegradedWriteReason(vectorLoadErr)}. Vector recall degraded.`,
           );
         }
       } catch (err) {
         const message = formatErrorMessage(err);
-        defaultRuntime.error(`Memory index failed (${agentId}): ${message}`);
+        defaultRuntime.error(terminalText`Memory index failed (${agentId}): ${message}`);
         process.exitCode = 1;
       }
     },
@@ -193,7 +199,7 @@ export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
       return;
     }
     const lines = [
-      `${heading(report.dryRun ? "Memory Deletion Preview" : "Memory Deletion")} ${muted(`(${agentId})`)}`,
+      `${heading(report.dryRun ? "Memory Deletion Preview" : "Memory Deletion")} ${muted(terminalText`(${agentId})`)}`,
       `${muted("Source sessions:")} ${report.sessionIds.length}`,
       `${muted("Source transcripts retained:")} ${report.sessionIds.length}`,
       `${muted("Deleted entries:")} ${report.entryKeys.length}`,
@@ -207,31 +213,35 @@ export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
       `${muted("Origin rows:")} ${report.artifacts.originRows}`,
     ];
     if (report.sessionIds.length > 0) {
-      lines.push(`${muted("Session IDs:")} ${report.sessionIds.join(", ")}`);
+      lines.push(`${muted("Session IDs:")} ${terminalText`${report.sessionIds.join(", ")}`}`);
     }
     for (const session of report.sessionResolutions) {
-      lines.push(`${muted("Session resolution:")} ${session.sessionId} (${session.source})`);
+      lines.push(
+        `${muted("Session resolution:")} ${terminalText`${session.sessionId} (${session.source})`}`,
+      );
     }
     for (const match of report.participantMatches) {
       lines.push(
-        `${muted("Raw participant selector:")} ${match.actorId}: ${match.identities.map((identity) => JSON.stringify(identity)).join(", ") || "no live match"}. Matches select whole sessions across identity namespaces.`,
+        `${muted("Raw participant selector:")} ${terminalText`${match.actorId}: ${match.identities.map((identity) => JSON.stringify(identity)).join(", ") || "no live match"}. Matches select whole sessions across identity namespaces.`}`,
       );
     }
     if (report.mixedLineageEntryKeys.length > 0) {
       lines.push(
-        `${muted("Mixed-lineage entry keys:")} ${report.mixedLineageEntryKeys.join(", ")}`,
+        `${muted("Mixed-lineage entry keys:")} ${terminalText`${report.mixedLineageEntryKeys.join(", ")}`}`,
       );
     }
     if (report.untargetableEntryKeys.length > 0) {
-      lines.push(`${muted("Untargetable entry keys:")} ${report.untargetableEntryKeys.join(", ")}`);
+      lines.push(
+        `${muted("Untargetable entry keys:")} ${terminalText`${report.untargetableEntryKeys.join(", ")}`}`,
+      );
     }
     for (const curatedWrite of report.curatedWrites) {
       lines.push(
-        `${muted("Curated write retained:")} ${curatedWrite.relativePath} (${new Date(curatedWrite.observedAt).toISOString()})`,
+        `${muted("Curated write retained:")} ${terminalText`${curatedWrite.relativePath} (${new Date(curatedWrite.observedAt).toISOString()})`}`,
       );
     }
     for (const refusal of report.refusals) {
-      lines.push(warn(`Refused: ${refusal}`));
+      lines.push(warn(terminalText`Refused: ${refusal}`));
     }
     if (report.dryRun) {
       lines.push(muted("Dry run: no memory files, index rows, or plugin state were changed."));
@@ -250,14 +260,14 @@ function matchesPromotionSelector(
   },
   selector: string,
 ): boolean {
-  const trimmed = selector.trim().toLowerCase();
+  const trimmed = selector.trim().toLowerCase().normalize("NFC");
   if (!trimmed) {
     return false;
   }
   return (
-    candidate.key.toLowerCase().includes(trimmed) ||
-    candidate.path.toLowerCase().includes(trimmed) ||
-    candidate.snippet.toLowerCase().includes(trimmed)
+    candidate.key.toLowerCase().normalize("NFC").includes(trimmed) ||
+    candidate.path.toLowerCase().normalize("NFC").includes(trimmed) ||
+    candidate.snippet.toLowerCase().normalize("NFC").includes(trimmed)
   );
 }
 async function runMemoryPromotion(
@@ -332,12 +342,12 @@ async function runMemoryPromotion(
           return;
         }
         const lines = [
-          `${heading("Promotion Explain")} ${muted("(" + agentId + ")")}`,
-          accent(candidate.key),
+          `${heading("Promotion Explain")} ${muted(terminalText`(${agentId})`)}`,
+          accent(terminalText`${candidate.key}`),
           muted(
-            `${shortenHomePath(candidate.path)}:${String(candidate.startLine)}-${String(candidate.endLine)}`,
+            terminalText`${shortenHomePath(candidate.path)}:${String(candidate.startLine)}-${String(candidate.endLine)}`,
           ),
-          candidate.snippet,
+          terminalText`${candidate.snippet}`,
           muted(
             `score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
           ),
@@ -349,7 +359,7 @@ async function runMemoryPromotion(
           ),
         ];
         if (candidate.conceptTags.length > 0) {
-          lines.push(muted(`concepts=${candidate.conceptTags.join(", ")}`));
+          lines.push(muted(terminalText`concepts=${candidate.conceptTags.join(", ")}`));
         }
         defaultRuntime.log(lines.join("\n"));
         return;
@@ -364,6 +374,7 @@ async function runMemoryPromotion(
             agentId,
             workspaceAgentIds,
             workspaceDir,
+            workspaceFileMode: resolveAgentConfig(cfg, agentId)?.workspaceFileMode,
             candidates,
             limit: opts.limit,
             minScore: opts.minScore ?? dreaming.minScore,
@@ -425,21 +436,23 @@ async function runMemoryPromotion(
       }
       if (candidates.length === 0) {
         defaultRuntime.log("No short-term recall candidates.");
-        defaultRuntime.log(`Recall store: ${shortenHomePath(storePath)}`);
+        defaultRuntime.log(terminalText`Recall store: ${shortenHomePath(storePath)}`);
         if (audit.issues.length > 0) {
           for (const issue of audit.issues) {
-            defaultRuntime.log(issue.message);
+            defaultRuntime.log(terminalText`${issue.message}`);
           }
         }
         return;
       }
       const lines: string[] = [];
-      lines.push(`${heading("Short-Term Promotion Candidates")} ${muted(`(${agentId})`)}`);
-      lines.push(`${muted("Recall store:")} ${shortenHomePath(storePath)}`);
+      lines.push(
+        `${heading("Short-Term Promotion Candidates")} ${muted(terminalText`(${agentId})`)}`,
+      );
+      lines.push(`${muted("Recall store:")} ${terminalText`${shortenHomePath(storePath)}`}`);
       lines.push(muted(`Store health: ${formatAuditCounts(audit)}`));
       for (const candidate of outputCandidates) {
         lines.push(
-          `${success(candidate.score.toFixed(3))} ${accent(`${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`)}`,
+          `${success(candidate.score.toFixed(3))} ${accent(terminalText`${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`)}`,
         );
         lines.push(
           muted(
@@ -447,17 +460,17 @@ async function runMemoryPromotion(
           ),
         );
         if (candidate.conceptTags.length > 0) {
-          lines.push(muted(`concepts=${candidate.conceptTags.join(", ")}`));
+          lines.push(muted(terminalText`concepts=${candidate.conceptTags.join(", ")}`));
         }
         if (candidate.snippet) {
-          lines.push(muted(candidate.snippet));
+          lines.push(muted(terminalText`${candidate.snippet}`));
         }
         lines.push("");
       }
       if (audit.issues.length > 0) {
         lines.push(warn("Audit issues:"));
         for (const issue of audit.issues) {
-          lines.push((issue.severity === "error" ? warn : muted)(issue.message));
+          lines.push((issue.severity === "error" ? warn : muted)(terminalText`${issue.message}`));
         }
         lines.push("");
       }
@@ -465,12 +478,12 @@ async function runMemoryPromotion(
         for (const rejection of rejectedCandidates) {
           const candidate = rejection.candidate;
           const source = `${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`;
-          lines.push(warn(`Skipped ${source}: ${rejection.reason}.`));
+          lines.push(warn(terminalText`Skipped ${source}: ${rejection.reason}.`));
         }
         if (applyResult.applied > 0) {
           lines.push(
             success(
-              `Processed ${applyResult.applied} candidate(s) for ${shortenHomePath(applyResult.memoryPath)}.`,
+              terminalText`Processed ${applyResult.applied} candidate(s) for ${shortenHomePath(applyResult.memoryPath)}.`,
             ),
           );
           lines.push(

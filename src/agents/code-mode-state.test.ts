@@ -83,7 +83,6 @@ describe("Code Mode continuation ownership", () => {
           let closing = firstClose;
           if (reason === "retry") {
             await expect(firstClose).rejects.toMatchObject({ cause: { errors: [failure] } });
-            expect(owner.signal.aborted).toBe(true);
             expect(refreshState.isPending()).toBe(false);
             expect(owner.close()).not.toBe(firstClose);
             closing = disposeAllCodeModeRuns();

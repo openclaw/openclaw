@@ -1,4 +1,5 @@
 import { createComponent } from "solid-js";
+import { vi } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
@@ -25,4 +26,23 @@ export function mountView(props: Parameters<typeof McpAppView>[0], context: obje
     wrapper: provider.wrapper,
   });
   return { ...mounted, view: mounted.container.querySelector<McpAppViewElement>("mcp-app-view")! };
+}
+
+export function mockMcpSandboxProxyReady() {
+  vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(window);
+  const frameSource = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "src")!;
+  vi.spyOn(HTMLIFrameElement.prototype, "src", "set").mockImplementation(function (
+    this: HTMLIFrameElement,
+    value,
+  ) {
+    frameSource.set!.call(this, value);
+    queueMicrotask(() =>
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: window,
+          data: { method: "ui/notifications/sandbox-proxy-ready" },
+        }),
+      ),
+    );
+  });
 }

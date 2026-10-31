@@ -30,6 +30,7 @@ import {
 } from "./openclaw-state-db.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 
@@ -78,6 +79,7 @@ function createV17PublicationState(options: { populated?: boolean; deferred?: bo
   const databasePath = initial.path;
   closeOpenClawStateDatabaseForTest();
   using legacy = openNodeSqliteDatabase(databasePath);
+  restorePreTemplateStateIdentifiersForTest(legacy);
   addPreCutoverClientCredentialTablesForTest(legacy);
   if (options.populated !== false) {
     for (const table of authorityTables) {
@@ -85,45 +87,31 @@ function createV17PublicationState(options: { populated?: boolean; deferred?: bo
         legacy.exec(`ALTER TABLE ${table} DROP COLUMN requester_authority_json;`);
       }
     }
-    for (const status of ["requested", "published"] as const) {
-      const url = status === "published" ? "https://github.com/example/project/pull/1" : null;
-      legacy
-        .prepare(`INSERT INTO github_publication_requests (
+    // Authority migration adds columns without inspecting receipt status.
+    legacy.exec(`INSERT INTO github_publication_requests (
           request_id, idempotency_key, request_digest, session_id, session_key, agent_id,
           worktree_id, repository_fingerprint, identity_source, identity_profile_id,
           identity_account_id, identity_login, status, repository, branch, base_branch,
           head_commit, pull_request_url, created_at_ms, updated_at_ms
-        ) VALUES (?, ?, 'digest', 'session', 'agent:main:publication', 'main',
+        ) VALUES ('local-published', 'published', 'digest', 'session', 'agent:main:publication', 'main',
           'worktree', 'fingerprint', 'system-configured', 'publisher-profile',
-          42, 'publisher', ?, 'example/project', 'changes', 'main', ?, ?, 10, 20)`)
-        .run(`local-${status}`, status, status, "a".repeat(40), url);
-      legacy
-        .prepare(`INSERT INTO github_publication_session_lifecycles
+          42, 'publisher', 'published', 'example/project', 'changes', 'main',
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'https://github.com/example/project/pull/1', 10, 20);
+        INSERT INTO github_publication_session_lifecycles
           (publication_kind, request_id, lifecycle_revision)
-          VALUES ('shared', ?, 'original-lifecycle')`)
-        .run(`local-${status}`);
-      legacy
-        .prepare(`INSERT INTO github_repository_publication_requests (
+          VALUES ('shared', 'local-published', 'original-lifecycle');
+        INSERT INTO github_repository_publication_requests (
           request_id, idempotency_key, request_digest, session_id, session_lifecycle_revision,
           session_key, agent_id, workspace_id, identity_source, identity_profile_id,
           identity_account_id, identity_login, status, push_repository, repository,
           branch, base_branch, head_commit, pull_request_url, last_effect, effect_state,
           created_at_ms, updated_at_ms
-        ) VALUES (?, ?, 'digest', 'session', 'original-lifecycle',
+        ) VALUES ('repository-published', 'published', 'digest', 'session', 'original-lifecycle',
           'agent:main:publication', 'main', 'workspace', 'system-configured', 'publisher-profile',
-          42, 'publisher', ?, 'example/project', 'example/project',
-          'changes', 'main', ?, ?, ?, ?, 10, 20)`)
-        .run(
-          `repository-${status}`,
-          status,
-          status,
-          "a".repeat(40),
-          url,
-          url ? "pull_request" : null,
-          url ? "observed" : null,
-        );
-    }
-    legacy.exec(`INSERT INTO github_publication_session_lifecycles
+          42, 'publisher', 'published', 'example/project', 'example/project', 'changes', 'main',
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'https://github.com/example/project/pull/1',
+          'pull_request', 'observed', 10, 20);
+        INSERT INTO github_publication_session_lifecycles
         (publication_kind, request_id, lifecycle_revision) VALUES ('personal', 'personal-history', NULL);`);
   }
   legacy.exec("PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;");
@@ -183,33 +171,18 @@ describe("GitHub publication requester authority schema migration", () => {
     "preserves receipts and unknown requesters through captured $via (deferred: $deferred)",
     async ({ via, deferred }) => {
       const { options, databasePath, before } = createV17PublicationState({ deferred });
-      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
-        { kind: "github-publication-requester-authority-v18", path: databasePath },
-        { kind: "predicate-columns-v21", path: databasePath },
-        { kind: "portable-identity-columns-v22", path: databasePath },
-        { kind: "meeting-transcript-start-time", path: databasePath },
-        { kind: "task-run-indexes-v24", path: databasePath },
-        { kind: "subagent-operator-recovery-v25", path: databasePath },
-        { kind: "session-state-head-layout-v26", path: databasePath },
-        { kind: "state-write-indexes-v27", path: databasePath },
-        { kind: "github-publication-draft-v28", path: databasePath },
-        { kind: "local-client-credentials-v29", path: databasePath },
-        { kind: "automation-policy-fence-v30", path: databasePath },
-        { kind: "local-workspace-manifests-v31", path: databasePath },
-      ]);
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+        kind: "github-publication-requester-authority-v18",
+        path: databasePath,
+      });
       if (via === "doctor repair") {
         expect(
-          await withStateMigrationBackupForTest(options, () =>
-            repairOpenClawStateDatabaseSchema(options),
-          ),
-        ).toEqual({
-          changes: [
-            "Added original requester authority to GitHub publication receipts (v18)",
-            "Replaced retained task indexes with ordered cron history indexes (v24)",
-            "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
-          ],
-          warnings: [],
-        });
+          (
+            await withStateMigrationBackupForTest(options, () =>
+              repairOpenClawStateDatabaseSchema(options),
+            )
+          ).warnings,
+        ).toEqual([]);
       }
       await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
       const { db } = openOpenClawStateDatabase(options);

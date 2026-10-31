@@ -19,6 +19,7 @@ import {
 import {
   createAgentDatabaseAdmissionErrorShape,
   readAgentDatabaseAdmissionRefusal,
+  readAgentDatabaseReadAdmissionRefusal,
 } from "../state/agent-database-admission.js";
 import { invalidSessionRequest } from "./session-request-error.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
@@ -38,8 +39,14 @@ export function resolveChatSendSessionKey(
     : sessionKey;
 }
 
-function admitRequestedAgent(agentId: string): RequestedSessionAgentIdResolution {
-  const refusal = readAgentDatabaseAdmissionRefusal(agentId);
+function admitRequestedAgent(
+  agentId: string,
+  admission: "read" | "write",
+): RequestedSessionAgentIdResolution {
+  const refusal =
+    admission === "read"
+      ? readAgentDatabaseReadAdmissionRefusal(agentId)
+      : readAgentDatabaseAdmissionRefusal(agentId);
   return refusal
     ? {
         ok: false,
@@ -138,6 +145,7 @@ export function resolveRequestedSessionAgentId(
   cfg: OpenClawConfig,
   key: string | undefined,
   explicitAgentId?: string,
+  admission: "read" | "write" = "write",
 ): RequestedSessionAgentIdResolution {
   const input = resolveRequestedSessionAgentInput(key, explicitAgentId);
   if (!input.ok) {
@@ -164,7 +172,7 @@ export function resolveRequestedSessionAgentId(
       );
     }
     if (!keyIsGlobalMainAlias || !normalizedRequestedAgentId) {
-      return admitRequestedAgent(keyAgentId);
+      return admitRequestedAgent(keyAgentId, admission);
     }
     // Explicit targets must also match the fixed store after losing their prefix.
     ownerKey = "global";
@@ -185,11 +193,11 @@ export function resolveRequestedSessionAgentId(
         `agent "${explicitAgentId}" does not match session key agent "${persistedStoreOwner.agentId}"`,
       );
     }
-    return admitRequestedAgent(normalizedRequestedAgentId);
+    return admitRequestedAgent(normalizedRequestedAgentId, admission);
   }
   const inferredAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, key);
   if (inferredAgentId) {
-    return admitRequestedAgent(inferredAgentId);
+    return admitRequestedAgent(inferredAgentId, admission);
   }
   const selectionError = new AgentSelectionRequiredError(configuredAgentIds, {
     surface: `session key "${key}"`,

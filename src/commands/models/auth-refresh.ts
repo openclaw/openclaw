@@ -8,7 +8,6 @@ import {
 import { isGatewayTransportError } from "../../gateway/transport-error.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
-export type ModelAuthRefreshOperation = "login" | "logout" | "update";
 export type ModelAuthRefreshOutcome = "refreshed" | "gateway-rejected" | "gateway-unreachable";
 
 export async function refreshProviderAuthAfterLogin(params: {
@@ -31,9 +30,22 @@ export async function refreshProviderAuthAfterLogin(params: {
   }
 }
 
+/** Best-effort publication of committed credentials; the settings failure stays the reported result. */
+export async function refreshSavedAuthAfterSettingsFailure(
+  login: Parameters<typeof refreshProviderAuthAfterLogin>[0],
+): Promise<void> {
+  try {
+    login.signal?.throwIfAborted();
+    login.assertCurrent?.();
+    await refreshProviderAuthAfterLogin(login);
+  } catch {
+    // Ended authority publishes nothing and must not replace the settings failure.
+  }
+}
+
 export async function refreshRunningGatewayAuthState(
   agentId: string | undefined,
-  operation: ModelAuthRefreshOperation,
+  operation: "login" | "logout" | "update",
   runtime: Pick<RuntimeEnv, "error">,
 ): Promise<ModelAuthRefreshOutcome> {
   let gatewayConnected = false;

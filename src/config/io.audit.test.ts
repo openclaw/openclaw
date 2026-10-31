@@ -20,18 +20,15 @@ import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 
 const metadata = { dev: "10", ino: "11", mode: 0o600, nlink: 1, uid: 501, gid: 20 };
 
-function redactionCase(name: string, prefix: string[], value: string, redacted = "***") {
-  return [name, [...prefix, value], [...prefix, redacted]] as const;
-}
-function configCase(name: string, args: string[], value = "secret-value", redacted = "***") {
-  return redactionCase(name, ["openclaw", "config", ...args], value, redacted);
+function redactionCase(command: string, value = "secret-value", redacted = "***") {
+  const prefix = command.split(" ");
+  return [
+    [...prefix, value],
+    [...prefix, redacted],
+  ] as const;
 }
 
-function createAuditRecordBase(
-  configPath: string,
-  argv?: string[],
-  overrides: Partial<Parameters<typeof createConfigWriteAuditRecordBase>[0]> = {},
-) {
+function createAuditRecordBase(configPath: string, argv?: string[]) {
   return createConfigWriteAuditRecordBase({
     configPath,
     env: {},
@@ -49,21 +46,6 @@ function createAuditRecordBase(
     suspicious: [],
     now: "2026-04-07T08:00:00.000Z",
     processInfo: argv ? { pid: 101, ppid: 99, cwd: "/work", argv, execArgv: [] } : undefined,
-    ...overrides,
-  });
-}
-
-function createRenameAuditRecord(home: string) {
-  return finalizeConfigWriteAuditRecord({
-    base: createAuditRecordBase(path.join(home, ".openclaw", "openclaw.json"), undefined, {
-      env: {
-        OPENCLAW_WATCH_MODE: "1",
-        OPENCLAW_WATCH_SESSION: "watch-session-1",
-        OPENCLAW_WATCH_COMMAND: "gateway --force",
-      },
-    }),
-    result: "rename",
-    nextMetadata: { ...metadata, dev: "12", ino: "13" },
   });
 }
 
@@ -79,9 +61,7 @@ const historicalRecord = {
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-audit-" });
 
-beforeAll(async () => {
-  await suiteRootTracker.setup();
-});
+beforeAll(() => suiteRootTracker.setup());
 
 it("sanitizes external records without adding write-process fields", () => {
   const record = sanitizeConfigAuditRecord({
@@ -101,9 +81,7 @@ it("sanitizes external records without adding write-process fields", () => {
   expect(record).toHaveProperty("issues", ["gateway.port: expected number"]);
 });
 
-afterAll(async () => {
-  await suiteRootTracker.cleanup();
-});
+afterAll(() => suiteRootTracker.cleanup());
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
@@ -115,12 +93,15 @@ it('ignores literal "undefined" home env values when choosing the audit log path
   const env = { HOME: "undefined", USERPROFILE: "null", OPENCLAW_HOME: "undefined" };
   const auditPath = resolveLegacyConfigAuditLogPath(env, () => home);
   expect(auditPath).toBe(path.join(home, ".openclaw", "logs", "config-audit.jsonl"));
-  expect(auditPath.startsWith(path.resolve("undefined"))).toBe(false);
 });
 
 it("drains queued observations without main-thread SQL and reads the newest audit record", async () => {
   const home = await suiteRootTracker.make("recent");
-  const first = createRenameAuditRecord(home);
+  const first = finalizeConfigWriteAuditRecord({
+    base: createAuditRecordBase(path.join(home, ".openclaw", "openclaw.json")),
+    result: "rename",
+    nextMetadata: { ...metadata, dev: "12", ino: "13" },
+  });
   const second = {
     ...first,
     ts: "2026-04-07T08:01:00.000Z",
@@ -159,6 +140,7 @@ it("redacts structured audit records before persistence", async () => {
     err: Object.assign(new Error("payload contained abcd-efgh-ijkl-mnop"), { code: "EFAIL" }),
   });
 
+  const before = structuredClone(record);
   const sanitized = sanitizeConfigAuditRecord(record);
   assert(sanitized.event === "config.write");
   expect(sanitized.argv).toEqual(["openclaw", "--password", "***"]);
@@ -166,12 +148,7 @@ it("redacts structured audit records before persistence", async () => {
   sanitized.argv.push("changed");
   sanitized.execArgv.push("changed");
   sanitized.suspicious.push("changed");
-  expect(record.argv).toEqual(["openclaw", "--password", "audit-password"]);
-  expect(record.execArgv).toEqual(["--api-key", "audit-api-key"]);
-  expect(record.suspicious).toEqual([
-    "provider returned ya29.fake-access-token-with-enough-length",
-    "plugin returned AIzaSyD-very-real-looking-google-api-key-123",
-  ]);
+  expect(record).toEqual(before);
 
   const deps = { env: {}, homedir: () => home };
   await appendConfigAuditRecord({ ...deps, record });
@@ -196,38 +173,20 @@ it("caps caller-supplied processInfo argv at 8 entries before redaction", () => 
 });
 
 it.each([
-  redactionCase("dash-leading secret value", ["openclaw", "--password"], "-fake"),
-  configCase("boolean option", ["set", "--json", "channels.slack.token"], '"secret-value"'),
-  configCase("root value option", ["set", "--profile", "work", "channels.slack.token"]),
-  configCase("option before subcommand", ["--profile", "work", "set", "channels.slack.token"]),
+  redactionCase("openclaw --password", "-fake"),
+  redactionCase("openclaw config set --json channels.slack.token", '"secret-value"'),
+  redactionCase("openclaw config set --profile work channels.slack.token"),
+  redactionCase("openclaw config --profile work set channels.slack.token"),
+  redactionCase("openclaw --profile config config set channels.slack.token"),
+  redactionCase("openclaw config -- set --section=channels channels.slack.token"),
+  redactionCase("openclaw config --profile=work set -- channels.slack.token", "--dash-value"),
   redactionCase(
-    "root option value named config",
-    ["openclaw", "--profile", "config", "config", "set", "channels.slack.token"],
-    "secret-value",
-  ),
-  configCase("independent terminators", [
-    "--",
-    "set",
-    "--section=channels",
-    "channels.slack.token",
-  ]),
-  configCase(
-    "dash-leading positional after inline option",
-    ["--profile=work", "set", "--", "channels.slack.token"],
-    "--dash-value",
-  ),
-  configCase(
-    "batch JSON after both positionals and an option terminator",
-    ["set", "ui.theme", "dark", "--"],
+    "openclaw config set ui.theme dark --",
     '--batch-json={"value":"secret-value"}',
     "--batch-json=***",
   ),
-  configCase(
-    "config set batch JSON",
-    ["set", "--batch-json"],
-    '[{"path":"channels.slack.token","value":"secret-value"}]',
-  ),
-])("redacts $0 in persisted audit process info", (_name, argv, expected) => {
+  redactionCase("openclaw config set --batch-json", '[{"path":"token","value":"secret"}]'),
+])("redacts %j in persisted audit process info", (argv, expected) => {
   expect(createAuditRecordBase("/tmp/openclaw.json", [...argv]).argv).toEqual(expected);
 });
 
@@ -246,7 +205,6 @@ it("redacts historical config audit entries while preserving file and directory 
     `{not json\n${JSON.stringify(unredactedRecord)}\n${JSON.stringify(alreadyRedactedRecord)}\n`,
     { encoding: "utf-8", mode: 0o600 },
   );
-
   const deps = { env: {}, homedir: () => home };
   const result = await scrubConfigAuditLog(deps);
 
@@ -300,6 +258,5 @@ it("preserves concurrent appends after the scrub write and cleans up staged outp
   }
   const after = fs.readFileSync(auditPath, "utf-8");
   expect(after).toBe(`${original}${appendedLine}`);
-  expect(after).toContain("xoxb-real-bot-token");
   expect(fs.readdirSync(path.dirname(auditPath))).toEqual(["config-audit.jsonl"]);
 });

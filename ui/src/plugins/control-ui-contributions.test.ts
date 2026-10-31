@@ -15,7 +15,10 @@ import {
 } from "../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../test-helpers/solid-application-context.tsx";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import { PluginManager } from "./control-ui-manager.solid.tsx";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
@@ -39,7 +42,7 @@ it("renders customization inline and recovers reload controls after failure or s
   const diagnostics: PluginControlUiDiagnostic[] = [
     {
       pluginId: "custom-review",
-      message: "Disabled by Labs",
+      message: "Disabled by Gateway configuration",
       code: "custom-plugin-ui-disabled",
     },
   ];
@@ -64,6 +67,7 @@ it("renders customization inline and recovers reload controls after failure or s
   // SAFETY: this fixture supplies the application services consumed by the manager.
   const provider = createSolidApplicationContextProvider({
     plugins,
+    gateway: createApplicationGateway().gateway,
     basePath: "/console",
     navigate,
   } as unknown as ApplicationContext);
@@ -82,10 +86,11 @@ it("renders customization inline and recovers reload controls after failure or s
     await vi.waitFor(() => expect(manager.querySelector("select")).not.toBeNull());
     expect(manager.querySelector('[role="alert"]')).toBeNull();
     expect(manager.querySelector('[role="status"]')?.textContent).toContain("custom-review");
-    const labs = manager.querySelector<HTMLAnchorElement>('a[href="/console/settings/labs"]');
-    expect(labs?.textContent?.trim()).toBe("Open Labs");
-    labs?.click();
-    expect(navigate).toHaveBeenCalledExactlyOnceWith("labs");
+    expect(manager.querySelector('a[href="/console/settings/labs"]')).toBeNull();
+    expect(manager.querySelector('[role="status"]')?.textContent).toContain(
+      "Disabled by the Gateway configuration",
+    );
+    expect(navigate).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(manager.querySelector("select")).not.toBeNull());
 
     const select = manager.querySelector<HTMLSelectElement>("select");

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
   isHeartbeatAcknowledgementText,
-  isHeartbeatContentEffectivelyEmpty,
   resolveHeartbeatPromptForResponseTool,
   stripHeartbeatToken,
 } from "./heartbeat.js";
@@ -63,29 +62,6 @@ describe("isHeartbeatAcknowledgementText", () => {
       expect(isHeartbeatAcknowledgementText(text, undefined, true)).toBe(false);
     },
   );
-});
-
-describe("isHeartbeatContentEffectivelyEmpty", () => {
-  it.each([
-    undefined,
-    null,
-    "Reminder <!-- not scaffolding -->",
-    "```markdown\n# Keep this scratch empty when you want to skip.\n\n- Check email\n```\n",
-  ])("keeps missing or substantive scratch: %j", (content) => {
-    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
-  });
-
-  it.each([
-    "# Header\n# Another comment",
-    "## Subheader\n### Another",
-    "<!-- Template -->",
-    "<!--\nHeartbeat template.\nKeep quiet.\n-->",
-    "<!--\ntasks:\n  - name: inbox\n    interval: 30m\n    prompt: Check inbox\n-->",
-    "<!-- One --> <!-- Two -->",
-    "<!-- One -->\n# Header",
-  ])("ignores scaffolding: %j", (content) => {
-    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
-  });
 });
 
 describe("resolveHeartbeatPromptForResponseTool", () => {

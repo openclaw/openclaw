@@ -1,3 +1,4 @@
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig, TtsConfig } from "../config/types.js";
 import { mergeDeep } from "../infra/deep-merge.js";
 import {
@@ -12,12 +13,7 @@ import { createSpeechProviderRegistry } from "./provider-registry-core.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
 import type { TtsDirectiveOverrides, TtsDirectiveParseResult } from "./provider-types.js";
 import { resolveTtsProvider, resolveTtsProviderAsync } from "./tts-provider-resolution.js";
-import {
-  resolveTtsConfig,
-  resolveTtsPrefsPath,
-  resolveTtsPrefsPathAsync,
-  resolveTtsRuntimeConfig,
-} from "./tts-settings.js";
+import { resolveTtsConfig, resolveTtsPrefsPath, resolveTtsPrefsPathAsync } from "./tts-settings.js";
 
 type PreparedTtsRequest = {
   cfg: OpenClawConfig;
@@ -81,7 +77,7 @@ type ExplicitTtsOverrideParams = {
 };
 
 function prepareExplicitTtsOverrides(params: ExplicitTtsOverrideParams) {
-  const cfg = resolveTtsRuntimeConfig(params.cfg);
+  const cfg = selectLiveRuntimeConfig(params.cfg);
   const providerInput = params.provider?.trim();
   const modelId = params.modelId?.trim();
   const voiceId = params.voiceId?.trim();
@@ -116,10 +112,14 @@ export async function resolveExplicitTtsOverridesAsync(
 ): Promise<TtsDirectiveOverrides> {
   const prepared = prepareExplicitTtsOverrides(params);
   const { cfg, providerInput, modelId, voiceId, config } = prepared;
-  const prefsPath = params.prefsPath ?? (await resolveTtsPrefsPathAsync(config));
   const selectedProvider =
     canonicalizeSpeechProviderId(providerInput, cfg) ??
-    (modelId || voiceId ? await resolveTtsProviderAsync(config, prefsPath) : undefined);
+    (modelId || voiceId
+      ? await resolveTtsProviderAsync(
+          config,
+          params.prefsPath ?? (await resolveTtsPrefsPathAsync(config)),
+        )
+      : undefined);
   return resolveExplicitTtsOverridesForProvider(prepared, selectedProvider);
 }
 

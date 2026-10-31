@@ -1,6 +1,5 @@
 // @vitest-environment node
 import { expect, it } from "vitest";
-import { updateChatRunProgressSnapshot } from "../../../../src/gateway/server-chat-progress-snapshot.js";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { materializeVisibleAssistantStreamMessages } from "./chat-history-stream.ts";
 import { activeHistory, createState, emit, event } from "./chat-history.inflight.test-support.ts";
@@ -34,17 +33,12 @@ it.each([
   const text = () =>
     materializeVisibleAssistantStreamMessages(state.chatMessages, state).map(extractText);
   if (reconnect) {
-    const snapshot = updateChatRunProgressSnapshot(
-      updateChatRunProgressSnapshot(undefined, recovery),
-      event(3, "assistant", { text: "The resumed answer." }),
-    );
-    expect(snapshot?.events).toEqual([event(3, "assistant", {})]);
     state.chatRunId = "run-live";
     handleAgentEvent(state, recovery);
     expect(label()).toBe(expectedLabel);
     state.connectionEpoch += 1;
     history.inFlightRun!.text = "The resumed answer.";
-    history.inFlightRun!.events = snapshot!.events;
+    history.inFlightRun!.events = [event(3, "assistant", {})];
   } else {
     history.inFlightRun!.text = "I finished the first step.";
     history.inFlightRun!.events = [
@@ -76,4 +70,17 @@ it.each([
     expect(state.chatRunId).toBeNull();
     expect(label()).toBeUndefined();
   }
+});
+
+it("keeps the current model wait when compact history omits its replay events", async () => {
+  const state = createState(activeHistory("run-live"));
+  await loadChatHistory(state);
+  handleAgentEvent(state, event(1, "lifecycle", { phase: "start" }));
+  handleAgentEvent(state, event(2, "run_status", { phase: "waiting_for_model", reason: "slot" }));
+
+  await loadChatHistory(state);
+
+  expect(chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null)).toBe(
+    "Waiting for a free model slot",
+  );
 });

@@ -412,6 +412,10 @@ vi.mock("node:child_process", async () => {
     },
     spawn: (...args: Parameters<typeof actual.spawn>) => {
       const brokerArgv = resolveRuntimeWorkerArgv(brokerUrl);
+      const directoryWatchArgv = [
+        ...resolveRuntimeWorkerArgv(resolveRuntimeProcessEntrypointUrl("directoryWatchHost")),
+        String(process.pid),
+      ];
       const childArgs = Array.isArray(args[1]) ? args[1] : [];
       if (
         args[0] === process.execPath &&
@@ -424,6 +428,9 @@ vi.mock("node:child_process", async () => {
       if (
         remapSqliteChild(args) ||
         (args[0] === process.execPath &&
+          childArgs.length === directoryWatchArgv.length &&
+          childArgs.every((arg, index) => arg === directoryWatchArgv[index])) ||
+        (args[0] === process.execPath &&
           childArgs.length === 3 &&
           childArgs[0] === "-e" &&
           childArgs[2] === String(process.pid))
@@ -433,6 +440,38 @@ vi.mock("node:child_process", async () => {
       return isMacosAclInspection(args[0], childArgs) || isPlistStdinConversion(args[0], childArgs)
         ? actual.spawn(...args)
         : spawn(...args);
+    },
+  };
+});
+
+// Synthetic CLI packages omit the candidate worker; native delegation is covered separately.
+// Keep compensation on its real live owner while replacing only the process adapter.
+vi.mock("./update-cli/update-command-cohort.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./update-cli/update-command-cohort.js")>();
+  return {
+    ...actual,
+    settleUpdatePluginCohortInCandidate: async (
+      params: Parameters<typeof actual.settleUpdatePluginCohortInCandidate>[0],
+    ) => {
+      const { settleUpdatePluginCohort } = await import("../plugins/update-cohort-recovery.js");
+      const { readUpdateConfigSnapshot } =
+        await import("./update-cli/update-command-config-snapshot.js");
+      params.configRestoration.assertCurrent();
+      const settled = await settleUpdatePluginCohort({
+        runId: params.run.runId,
+        env: params.env,
+        fence: expectDefined(params.run.executorFence, "live fixture update executor"),
+        action: "rollback",
+      });
+      params.configRestoration.assertCurrent();
+      for (const file of params.configRestoration.files) {
+        if (settled.configPaths.includes(file.path)) {
+          const snapshot = await readUpdateConfigSnapshot(file.path);
+          params.configRestoration.assertCurrent();
+          params.configRestoration.expectedHashes.set(file.path, snapshot.hash);
+        }
+      }
+      return settled;
     },
   };
 });

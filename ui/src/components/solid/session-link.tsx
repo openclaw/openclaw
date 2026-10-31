@@ -1,5 +1,5 @@
 import { onSettled } from "solid-js";
-import { registerSessionTitleTarget } from "../session-title-target-registration.ts";
+import { registerSessionTitleTarget } from "../markdown-link-display.ts";
 
 export function SessionLink(props: {
   sessionKey?: string;

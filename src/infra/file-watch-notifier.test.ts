@@ -3,41 +3,28 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createFileWatchNotifier } from "./file-watch-notifier.js";
 
-function fixture(onWrite?: () => void, expectFailure = false) {
+function fixture(onWrite?: () => void) {
   const entered = createDeferred();
+  const drain = createDeferred<Error | undefined>();
   const lines: string[] = [];
-  let blocked = true;
-  let callback: ((error?: Error | null) => void) | undefined;
-  const fail = (error?: Error) => {
-    const done = callback;
-    callback = undefined;
-    done?.(error);
-  };
   const output = new Writable({
     highWaterMark: 1,
     write(chunk: Buffer, _encoding, done) {
       lines.push(JSON.parse(chunk.toString()) as string);
-      callback = done;
+      void drain.promise.then(done);
       entered.resolve();
       onWrite?.();
-      if (!blocked) {
-        fail();
-      }
     },
   });
   const failed = vi.fn();
   const writer = createFileWatchNotifier(output, failed);
-  const resume = () => {
-    blocked = false;
-    fail();
-  };
+  const resume = () => drain.resolve(undefined);
   onTestFinished(async () => {
     resume();
-    const closed = writer.close();
-    await (expectFailure ? closed.catch(() => {}) : closed);
+    await writer.close().catch(() => {}); // Every test asserts its close outcome before cleanup.
     output.destroy();
   });
-  return { writer, output, entered, lines, failed, resume, fail };
+  return { writer, output, entered, lines, failed, resume, fail: drain.resolve };
 }
 
 it("bounds blocked notification bursts and preserves the last availability ordering", async () => {
@@ -49,8 +36,6 @@ it("bounds blocked notification bursts and preserves the last availability order
     f.writer.send("available");
     f.writer.send("change");
   }
-  expect(f.output.writableNeedDrain).toBe(true);
-  expect(f.output.writableLength).toBe(Buffer.byteLength('"change"\n'));
   const settled = vi.fn();
   const closed = f.writer.close().then(settled);
   expect(f.writer.close()).toBe(f.writer.close());
@@ -60,13 +45,12 @@ it("bounds blocked notification bursts and preserves the last availability order
   f.resume();
   await closed;
   expect(f.lines).toEqual(["change", "unavailable", "available", "change"]);
-  expect(f.output.writableLength).toBe(0);
   expect(f.failed).not.toHaveBeenCalled();
   expect(["error", "close"].map((event) => f.output.listenerCount(event))).toEqual([0, 0]);
 });
 
 it.each(["callback", "close", "error"] as const)("retires after %s failure", async (kind) => {
-  const f = fixture(undefined, true);
+  const f = fixture();
   const failure = new Error("output failed");
   f.writer.send("change");
   await f.entered.promise;

@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { createEnteredGate as gate } from "../agents/entered-gate.test-support.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
@@ -11,9 +12,8 @@ import {
   collectSessionControllerTargets,
   consumeSessionEffectHandoff as consumeHandoff,
   getSessionControllerWorkCount,
-  getCompetingSessionWorkAdmissionRelease as getCompetingRelease,
   captureSessionControllerSettlement as getRelease,
-  interruptSessionControllerEffects as interrupt,
+  waitForSessionControllerSettlement,
   isCompetingSessionControllerWorkActive as competingActive,
   isSessionControllerWorkActive as workActive,
   observeSessionControllerProtectionReleases,
@@ -29,18 +29,6 @@ function makeTarget<T extends string[]>(scope: string, ...identities: T) {
 }
 function ownedTarget(scope: string, ...identities: string[]) {
   return { ...makeTarget(scope, ...identities), owner: Symbol(scope), serializeOwner: true };
-}
-function gate() {
-  const entered = createDeferred();
-  const release = createDeferred();
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
 }
 function admissionOutcome(pending: ReturnType<typeof beginAdmission>) {
   return pending.then(
@@ -414,14 +402,13 @@ it("interrupts a preexisting non-chat pending attempt without classifying it as 
     ).toBe(false);
     expect(competingActive(scope, identities)).toBe(false);
     expect(getRelease({ scope, identities })).toBeUndefined();
-    const competingRelease = getCompetingRelease({ scope, identities });
-    expect(competingRelease).toBeDefined();
     expect(collectSessionControllerTargets().get(scope)).toBeUndefined();
     expect(getSessionControllerWorkCount()).toBe(0);
     const reason = createAgentRunDirectAbortError();
-    expect(await interrupt({ scope, identities, reason, timeoutMs: 1000 })).toBe(true);
+    const { released } = startInterruption({ scope, identities, reason });
+    expect(await waitForSessionControllerSettlement(released, 1000)).toBe(true);
     expect(await pending).toBe(reason);
-    await expect(competingRelease).resolves.toBeUndefined();
+    await expect(released).resolves.toBeUndefined();
     expect(interrupted).toHaveBeenCalledExactlyOnceWith(reason);
     expect(validate).not.toHaveBeenCalled();
   } finally {

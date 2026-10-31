@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isMissingPathError } from "../infra/errors.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -138,7 +139,9 @@ async function readRetiredArmStates(env: NodeJS.ProcessEnv) {
   let legacyStateValid = false;
   if (legacyInspection.status === "file") {
     try {
-      legacyState = JSON.parse(await fs.readFile(legacyPath, "utf8")) as unknown;
+      legacyState = JSON.parse(
+        decodeUtf8Input(await fs.readFile(legacyPath), legacyPath),
+      ) as unknown;
       legacyStateValid = isRetiredArmState(legacyState);
       if (!legacyStateValid) {
         warnings.push(`Retired Phone Control lease state at ${legacyPath} is malformed.`);

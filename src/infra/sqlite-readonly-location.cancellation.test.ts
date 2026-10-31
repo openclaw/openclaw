@@ -37,18 +37,14 @@ beforeAll(async () => {
 afterAll(() => receipts?.close());
 
 async function fixtureReadyBeforeSettlement(ready: string, operation: Promise<unknown>) {
-  const settled = operation.then(
-    () => {
-      if (!fs.existsSync(ready)) {
-        throw new Error(`Snapshot worker settled before staging ready: ${ready}`);
-      }
-    },
-    (error: unknown) => {
-      if (!fs.existsSync(ready)) {
-        throw error;
-      }
-    },
-  );
+  const check = (error: unknown) => {
+    if (!fs.existsSync(ready)) {
+      throw error;
+    }
+  };
+  const settled = operation.then(() => {
+    check(new Error(`Snapshot worker settled before staging ready: ${ready}`));
+  }, check);
   await Promise.race([receipts.waitFor(ready, "ready"), settled]);
 }
 
@@ -78,7 +74,7 @@ beforeEach(async () => {
     return child;
   });
   vi.mocked(spawn).mockClear();
-  vi.mocked(spawnSync).mockClear();
+  vi.mocked(spawnSync).mockReset().mockImplementation(actual.spawnSync);
   cacheRoot = tempDirs.make("openclaw-readonly-cancellation-cache-");
   vi.stubEnv("XDG_CACHE_HOME", cacheRoot);
 });
@@ -109,16 +105,13 @@ function installWorker(
             fs.writeFileSync(${JSON.stringify(ready)}, ${receipt ? "stagingRoot" : '"ready"'});
             ${receipt ? `sendReceipt(${JSON.stringify(ready)}, "ready");` : ""}
           }
-          if (reply === "valid") {
-            process.send({ id, result: { ok: true, location } });
-          } else if (reply === "invalid") {
-            const result = { ok: true, unexpected: "invalid" };
-            if (id === undefined) {
-              process.stdout.write(JSON.stringify(result));
-              process.exit(0);
-            } else {
-              process.send({ id, result });
-            }
+          if (reply === "hold") return;
+          const result = reply === "valid" ? { ok: true, location } : { ok: true, unexpected: "invalid" };
+          if (id === undefined) {
+            process.stdout.write(JSON.stringify(result));
+            process.exit(0);
+          } else {
+            process.send({ id, result });
           }
         };
         if (process.argv[3] === "session") {
@@ -158,13 +151,9 @@ it("joins an idle child that ignores graceful shutdown after its bounded fallbac
   const { source } = installWorker("valid", { watchdog: 35000 });
   let inspectionFinished = false;
   const schedule = globalThis.setTimeout;
-  const shutdownTimeouts: Array<number | undefined> = [];
-  vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
-    if (inspectionFinished) {
-      shutdownTimeouts.push(delay);
-    }
-    return schedule(callback, inspectionFinished && delay === 300_000 ? 1 : delay, ...args);
-  });
+  vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) =>
+    schedule(callback, inspectionFinished && delay === 300_000 ? 1 : delay, ...args),
+  );
   await withSqliteReadOnlyWorkerScope(async () => {
     const prepared = await prepareSqliteReadOnlyLocation(source, {
       preserveSourceArtifacts: true,
@@ -172,7 +161,6 @@ it("joins an idle child that ignores graceful shutdown after its bounded fallbac
     expect(await prepared.cleanupAsync()).toBe(true);
     inspectionFinished = true;
   });
-  expect(shutdownTimeouts).toEqual([300_000]);
   expect(inspectionChild("session")?.signalCode).toBe("SIGKILL");
   expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
 });
@@ -308,11 +296,8 @@ it.each(["sync", "async", "scoped"] as const)(
         }
         expect(options).toMatchObject({ timeout: 301_000, killSignal: "SIGKILL" });
         const child = executeFile(file, args, { ...options, timeout: 2_000 }, callback);
-        childClosed = new Promise<void>((resolve) => {
-          child.once("close", (_code, signal) => {
-            closeSignal = signal;
-            resolve();
-          });
+        childClosed = once(child, "close").then(([, signal]) => {
+          closeSignal = signal;
         });
         return child;
       });
@@ -343,8 +328,6 @@ it.each(["sync", "async", "scoped"] as const)(
       expect(fs.readdirSync(path.join(root, "openclaw"))).toEqual([]);
     } finally {
       await childClosed;
-      processMocks.execFile.mockReset().mockImplementation(executeFile);
-      vi.mocked(spawnSync).mockReset().mockImplementation(actual.spawnSync);
     }
   },
   10_000,

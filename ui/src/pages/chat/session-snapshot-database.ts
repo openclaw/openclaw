@@ -7,7 +7,7 @@ import {
   type SnapshotInvalidation,
 } from "./session-snapshot-invalidation-events.ts";
 
-export const CHAT_SNAPSHOT_DB_NAME = "openclaw-chat-snapshots";
+const CHAT_SNAPSHOT_DB_NAME = "openclaw-chat-snapshots";
 export const CHAT_SNAPSHOT_STORE_NAME = "snapshots";
 export const CHAT_SNAPSHOT_METADATA_STORE_NAME = "snapshotMetadata";
 export const SIDEBAR_SNAPSHOT_STORE_NAME = "sidebarSnapshots";

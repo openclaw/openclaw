@@ -76,3 +76,11 @@ export {
   createBoundedRemoteFileReader,
   type RemoteWorkspaceFileReader,
 } from "../media/remote-workspace-file.js";
+
+export {
+  listDirectoryTreeStrict,
+  listDirectoryTreeStrictSync,
+  DirectoryWalkLimitError,
+  type DirectoryWalkEntry,
+  type DirectoryWalkOptions,
+} from "../infra/directory-walk.js";

@@ -377,7 +377,7 @@ function summaryMatches(summary: PiSessionSummary, needle?: string): boolean {
     return true;
   }
   return [summary.threadId, summary.name, summary.cwd].some((field) =>
-    field?.toLocaleLowerCase().includes(needle),
+    field?.toLocaleLowerCase().normalize("NFC").includes(needle),
   );
 }
 
@@ -411,7 +411,7 @@ export async function listPiSummaryPage(
   }
   const target = params.offset + params.limit + 1;
   const matches: PiSessionSummary[] = [];
-  const needle = params.searchTerm?.toLocaleLowerCase();
+  const needle = params.searchTerm?.toLocaleLowerCase().normalize("NFC");
   for await (const summary of scanPiSummaries(candidates)) {
     if (summaryMatches(summary, needle)) {
       matches.push(summary);

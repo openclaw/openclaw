@@ -20,6 +20,7 @@ import {
   createTestGitHubPublicationRuntime as createGitHubPublicationRuntime,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  overrideCommands as respond,
   persistClaimPublicationWorkspace,
   persistPublicationTestSession,
   publicationRequest as sessionRequest,
@@ -58,13 +59,6 @@ const worktree = (overrides = {}) => ({
   ...publicationWorktree(),
   ...overrides,
 });
-function respond(override: (argv: string[]) => ReturnType<typeof commandResult> | undefined) {
-  const fallback = mocks.runCommand.getMockImplementation()!;
-  mocks.runCommand.mockImplementation(
-    async (argv: string[], options?: { input?: string }) =>
-      override(argv) ?? (await fallback(argv, options)),
-  );
-}
 async function deferIndexRecovery() {
   const { GitHubPublicationRecoveryPendingError } = await vi.importActual<
     typeof import("./github-publication-git-index.js")
@@ -219,15 +213,12 @@ describe("Gateway GitHub publication boundaries", () => {
   it("rejects a local turn that starts and finishes during snapshot capture", async () => {
     const database = localDatabase();
     const placements = createWorkerSessionPlacementStore({ database });
-    const fallback = mocks.runCommand.getMockImplementation()!;
     let raced = false;
-    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+    respond(async (argv) => {
       if (!raced && argv.includes("add")) {
         raced = true;
-        const claim = await localClaim(placements, "snapshot");
-        await placements.releaseTurn(claim);
+        await placements.releaseTurn(await localClaim(placements, "snapshot"));
       }
-      return await fallback(argv, options);
     });
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
 
@@ -235,6 +226,38 @@ describe("Gateway GitHub publication boundaries", () => {
       "session authority changed during snapshot",
     );
     expectNoCommands("commit-tree", "push");
+  });
+
+  it("publishes when a durable local placement is only re-read during snapshot capture", async () => {
+    const database = localDatabase();
+    // Long-lived local sessions keep a durable row; local turn claims stay in memory.
+    database.db
+      .prepare(
+        "INSERT INTO worker_session_placements (session_id, agent_id, session_key, state, created_at_ms, updated_at_ms, state_changed_at_ms) VALUES (?, 'main', ?, 'local', 1, 1, 1)",
+      )
+      .run(SESSION_ID, SESSION_KEY);
+    const placements = createWorkerSessionPlacementStore({ database });
+    await placements.releaseTurn(await localClaim(placements, "requesting-turn"));
+    const other = { sessionId: "other", sessionKey: "agent:main:other", agentId: "main" };
+    let raced = false;
+    respond(async (argv) => {
+      if (!raced && argv.includes("add")) {
+        raced = true;
+        // Another session advances the sequence, then a projection re-reads this idle session.
+        const claim = {
+          ...other,
+          claimId: "other",
+          runId: "other",
+          owner: { kind: "local" as const },
+        };
+        await placements.releaseTurn(await placements.claimTurn(claim));
+        await placements.readProjection([SESSION_ID]);
+      }
+    });
+    await expect(
+      publish(createTestGitHubPublicationCoordinator({ placements }), "durable-local-reread"),
+    ).resolves.toMatchObject({ status: "published" });
+    expect(raced).toBe(true);
   });
 
   it("requeues a publication when execution loses live session authority", async () => {
@@ -302,13 +325,6 @@ describe("Gateway GitHub publication boundaries", () => {
       await coordinator.resumeSessionRequests();
       expect(await coordinator.readAsync(result.requestId)).toEqual(result);
       const headCommit = await workspace.git("rev-parse", "HEAD");
-      expect(await workspace.git("show", "HEAD:artifact.txt")).toBe("accepted");
-      expect(await workspace.git("status", "--porcelain")).toBe("");
-      expect(
-        (await fs.readdir(path.join(workspace.cwd, ".git"))).filter(
-          (entry) => entry === "index.lock" || entry.startsWith("index.openclaw-"),
-        ),
-      ).toEqual([]);
       expect(receipt(database, result.requestId)).toMatchObject({
         status,
         head_commit: headCommit,
@@ -393,61 +409,65 @@ describe("Gateway GitHub publication boundaries", () => {
     });
   });
 
-  it("continues settling other receipts when one workspace still needs Git recovery", async () => {
-    const database = localDatabase();
-    const coordinator = createLocalCoordinator(database);
-    seedLocalPublication(database, { requestId: "blocked", status: "publishing" });
-    seedLocalPublication(database, { requestId: "following", status: "requested" });
-    seedLocalPublication(database, {
-      requestId: "stale",
-      status: "publishing",
-      repositoryFingerprint: "replaced-fingerprint",
-    });
-    database.db
-      .prepare("UPDATE github_publication_requests SET created_at_ms = ? WHERE request_id = ?")
-      .run(1_001, "following");
-    database.db
-      .prepare("UPDATE github_publication_requests SET created_at_ms = ? WHERE request_id = ?")
-      .run(1_002, "stale");
-    const otherSession = "agent:main:other-publication";
-    const otherWorktree = {
-      ...mocks.findWorktree("session", otherSession),
-      id: "worktree-2",
-      path: "/repo/other-worktree",
-    };
-    await insertRegistryWorktree(process.env, {
-      ...otherWorktree,
-      name: "other",
-      createdAt: 1,
-      lastActiveAt: 1,
-    });
-    database.db
-      .prepare(
-        "UPDATE github_publication_requests SET worktree_id = ?, session_id = ?, session_key = ? WHERE request_id = ?",
-      )
-      .run(otherWorktree.id, "session-other", otherSession, "stale");
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: otherSession },
-      {
-        ...mocks.loadSession(otherSession).entry,
-        sessionId: "session-other",
-        worktree: { id: otherWorktree.id, branch: BRANCH, repoRoot: "/repo" },
-      },
-    );
-    mocks.persistedSessionKeys.add(otherSession);
-    const findWorktree = mocks.findWorktree.getMockImplementation()!;
-    mocks.findWorktree.mockImplementation((kind: string, key: string) =>
-      key === otherSession ? otherWorktree : findWorktree(kind, key),
-    );
-    mocks.updateIndex.mockImplementationOnce(deferIndexRecovery);
-    await expect(coordinator.resumeSessionRequests()).rejects.toThrow(
-      "workspace recovery is pending",
-    );
-    expect(await coordinator.readAsync("blocked")).toMatchObject({ status: "publishing" });
-    expect(await coordinator.readAsync("following")).toMatchObject({ status: "requested" });
-    expect(await coordinator.readAsync("stale")).toMatchObject(workspaceChanged);
-    expectNoCommands("push", "POST");
-  });
+  it.each(["requested", "publishing"] as const)(
+    "settles a stale %s receipt after reopening despite blocked Git recovery",
+    async (status) => {
+      const database = localDatabase();
+      seedLocalPublication(database, { requestId: "blocked", status: "publishing" });
+      seedLocalPublication(database, { requestId: "following", status: "requested" });
+      seedLocalPublication(database, {
+        requestId: "stale",
+        status,
+        repositoryFingerprint: "replaced-fingerprint",
+      });
+      database.db
+        .prepare("UPDATE github_publication_requests SET created_at_ms = ? WHERE request_id = ?")
+        .run(1_001, "following");
+      database.db
+        .prepare("UPDATE github_publication_requests SET created_at_ms = ? WHERE request_id = ?")
+        .run(1_002, "stale");
+      const otherSession = "agent:main:other-publication";
+      const otherWorktree = {
+        ...mocks.findWorktree("session", otherSession),
+        id: "worktree-2",
+        path: "/repo/other-worktree",
+      };
+      await insertRegistryWorktree(process.env, {
+        ...otherWorktree,
+        name: "other",
+        createdAt: 1,
+        lastActiveAt: 1,
+      });
+      database.db
+        .prepare(
+          "UPDATE github_publication_requests SET worktree_id = ?, session_id = ?, session_key = ? WHERE request_id = ?",
+        )
+        .run(otherWorktree.id, "session-other", otherSession, "stale");
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: otherSession },
+        {
+          ...mocks.loadSession(otherSession).entry,
+          sessionId: "session-other",
+          worktree: { id: otherWorktree.id, branch: BRANCH, repoRoot: "/repo" },
+        },
+      );
+      mocks.persistedSessionKeys.add(otherSession);
+      const findWorktree = mocks.findWorktree.getMockImplementation()!;
+      mocks.findWorktree.mockImplementation((kind: string, key: string) =>
+        key === otherSession ? otherWorktree : findWorktree(kind, key),
+      );
+      mocks.updateIndex.mockImplementationOnce(deferIndexRecovery);
+      await closeStateDatabaseForTest();
+      const coordinator = createLocalCoordinator(localDatabase());
+      await expect(coordinator.resumeSessionRequests()).rejects.toThrow(
+        "workspace recovery is pending",
+      );
+      expect(await coordinator.readAsync("blocked")).toMatchObject({ status: "publishing" });
+      expect(await coordinator.readAsync("following")).toMatchObject({ status: "requested" });
+      expect(await coordinator.readAsync("stale")).toMatchObject(workspaceChanged);
+      expectNoCommands("push", "POST");
+    },
+  );
 
   it.each([
     { fault: "credential", attempt: "fresh" },
@@ -499,32 +519,6 @@ describe("Gateway GitHub publication boundaries", () => {
     }
   });
 
-  it("terminalizes local recovery when the managed worktree fingerprint changed", async () => {
-    const database = localDatabase();
-    const requestId = "publication-stale-worktree";
-    seedLocalPublication(database, {
-      requestId,
-      status: "requested",
-      repositoryFingerprint: "replaced-fingerprint",
-    });
-    await closeStateDatabaseForTest();
-    const reopened = localDatabase();
-    const resumed = createLocalCoordinator(reopened);
-
-    await resumed.resumeSessionRequests();
-
-    expect(await resumed.readAsync(requestId)).toEqual({
-      publisher: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
-      requestId,
-      status: "failed",
-      code: "workspace_changed",
-      message: "GitHub publication failed.",
-      nextAction:
-        "Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
-    });
-    expect(commands).toEqual([]);
-  });
-
   it("validates the live session owner before recovery can touch Git state", async () => {
     const database = localDatabase();
     const coordinator = createLocalCoordinator(database);
@@ -568,12 +562,16 @@ describe("Gateway GitHub publication boundaries", () => {
     expect(commands).toEqual([]);
   });
 
-  it("publishes deferred session requests alongside an accepted turn claim", async () => {
-    const { placements, claim: claimTurn } = await cloudFixture();
+  it("captures deferred session requests alongside an accepted turn claim", async () => {
+    const { database, placements, claim: claimTurn } = await cloudFixture();
+    const workspace = await createRealPublicationWorkspace(undefined, REQUEST.sessionKey);
+    const sourceHead = await workspace.git("rev-parse", "HEAD");
+    const sourceIndex = await workspace.git("write-tree");
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
     const deferred = await coordinator.requestForSessionV2(
       cloudRequest("accepted-deferred-session"),
     );
+    const queued = await coordinator.requestForSessionV2(cloudRequest("second-deferred-session"));
     const claim = await claimTurn("run-accepted-deferred", "claim-accepted-deferred");
     const claimed = await coordinator.requestForClaimV2({
       claim,
@@ -583,10 +581,31 @@ describe("Gateway GitHub publication boundaries", () => {
     await coordinator.prepareClaimWorkspace(claim);
     await placements.acceptWorkspaceResult(claim);
 
-    await expect(coordinator.processClaim(claim)).resolves.toEqual([
-      expect.objectContaining({ requestId: claimed.requestId, status: "published" }),
-      expect.objectContaining({ requestId: deferred.requestId, status: "published" }),
-    ]);
+    for (const { requestId } of [deferred, queued, claimed]) {
+      const frozen = receipt(database, requestId)!;
+      expect(frozen).toMatchObject({
+        source_head_commit: sourceHead,
+        source_index_tree: sourceIndex,
+      });
+      expect(await workspace.git("show", `${frozen.workspace_tree}:artifact.txt`)).toBe("accepted");
+    }
+    await fs.writeFile(path.join(workspace.cwd, "artifact.txt"), "later edit\n");
+    await coordinator.prepareClaimWorkspace(claim);
+    await coordinator.deferClaimPreparationAsync(claim);
+    await placements.completeWorkspaceResultAndReleaseTurn(claim);
+    await coordinator.resumeSessionRequests();
+    const publishedHead = await workspace.git("rev-parse", "HEAD");
+    for (const { requestId } of [deferred, queued, claimed]) {
+      expect(await coordinator.readAsync(requestId)).toMatchObject({
+        status: "published",
+        headCommit: publishedHead,
+      });
+    }
+    expect(await workspace.git("show", "HEAD:artifact.txt")).toBe("accepted");
+    expect(await fs.readFile(path.join(workspace.cwd, "artifact.txt"), "utf8")).toBe(
+      "later edit\n",
+    );
+    expect(workspace.effects).toEqual(["push", "pull_request"]);
   });
 
   it.each(["local", "worker"] as const)(

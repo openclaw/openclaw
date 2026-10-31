@@ -11,7 +11,10 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
+import {
+  createGatewayActiveWorkSnapshot,
+  waitForGatewayActiveWork,
+} from "../infra/gateway-active-work.js";
 import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -19,6 +22,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   setupPersistentSessionCreateTestHarness,
   chatSendOwner,
+  sessionCreateRuntimeClient,
 } from "./server.sessions.create.test-support.js";
 import { readSessionGroupCatalog } from "./session-group-catalog.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
@@ -166,7 +170,12 @@ test.for([
       error: { message: "Runtime unavailable" },
     });
     expect(await successor).toMatchObject({ ok: true });
-    expect(createGatewayActiveWorkSnapshot()).toMatchObject({ idle: true, blockers: [] });
+    expect(createGatewayActiveWorkSnapshot().counts.sessionMutations).toBe(0);
+    // Client closure does not settle detached connect work.
+    expect(await waitForGatewayActiveWork(5_000)).toMatchObject({
+      drained: true,
+      snapshot: { idle: true, blockers: [] },
+    });
   },
 );
 
@@ -179,16 +188,7 @@ test("sessions.create registers a category only after the session commit succeed
       context: {
         validateAgentRuntimeApprovalAuthority: () => ++validations < 3,
       },
-      client: {
-        connect: { scopes: ["operator.write"] },
-        internal: {
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
-            agentId: "main",
-            sessionKey: "agent:main:main",
-          },
-        },
-      } as never,
+      client: sessionCreateRuntimeClient(["operator.write"]) as never,
     },
   );
   expect(failed.ok).toBe(false);

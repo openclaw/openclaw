@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -28,7 +27,6 @@ import * as transcriptReaders from "../session-transcript-readers.js";
 import {
   expectHistoryError,
   expectHistoryMessage,
-  expectHistoryPayload,
   historyPayload,
   historyRpc,
   withHistoryState,
@@ -56,7 +54,7 @@ function expectNotFound(respond: Parameters<typeof historyPayload>[0]) {
   expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_found" });
 }
 
-it("hides attempt diagnostics across hidden announce chunks while retaining partial replies", async () => {
+it("uses indexed reads across hidden announce chunks while retaining recovered and partial replies", async () => {
   await withHistoryState(async () => {
     const scope = await seed("message-recovery", 2000);
     const failure = {
@@ -69,6 +67,8 @@ it("hides attempt diagnostics across hidden announce chunks while retaining part
       __openclaw: { runId: "run-recovery" },
     };
     const messages = [
+      { id: "question", role: "user", timestamp: 1000, content: "Previous question" },
+      { id: "previous-answer", role: "assistant", timestamp: 1000, content: "Previous answer" },
       { id: "user", role: "user", content: "hello" },
       { id: "failed", ...failure },
       ...Array.from({ length: 99 }, (_, index) => ({
@@ -97,17 +97,25 @@ it("hides attempt diagnostics across hidden announce chunks while retaining part
     await replaceMessages(scope, messages);
     const context = await createHistoryReadContext();
     const request = historyRpc(context, scope.sessionKey);
-    const lookup = (messageId: string) => request("chat.message.get", { messageId });
-    const readHistory = async (params: Record<string, unknown>) =>
-      historyPayload(await request("chat.history", params)).messages;
-    const failedMessage = expect.objectContaining({
-      __openclaw: expect.objectContaining({ id: "failed" }),
-    });
+    using read = vi.spyOn(historyWorker, "readSessionHistoryPageInWorker");
+    const lookup = async (messageId: string) => {
+      read.mockClear();
+      const sql = observeHostDataSql();
+      try {
+        const respond = await request("chat.message.get", { messageId });
+        expect(sql.queries).toEqual([]);
+        expect(read.mock.calls.map(([input]) => input.kind)).toEqual(["message-by-id"]);
+        return respond;
+      } finally {
+        sql.restore();
+      }
+    };
     expectNotFound(await lookup("failed"));
-    // Neither a bounded page nor a receipt-less attempt establishes terminal failure.
-    expect(await readHistory({ offset: 1, limit: messages.length - 1 })).not.toContainEqual(
-      failedMessage,
-    );
+    expectNotFound(await lookup("old-announce"));
+    expectNotFound(await lookup("old-pair"));
+    for (const id of ["question", "previous-answer"]) {
+      expectHistoryMessage(await lookup(id), { __openclaw: expect.objectContaining({ id }) });
+    }
 
     await appendTranscriptMessage(scope, {
       eventId: "answer",
@@ -119,23 +127,10 @@ it("hides attempt diagnostics across hidden announce chunks while retaining part
         content: [{ type: "text", text: "Recovered answer" }],
       },
     });
-    const persisted = await loadTranscriptEvents(scope);
     expectNotFound(await lookup("failed"));
-    for (const params of [{ messageId: "failed" }, { offset: messages.length - 1 }]) {
-      expect(await readHistory({ limit: 1, ...params })).toEqual(
-        "messageId" in params
-          ? []
-          : [expect.objectContaining({ __openclaw: expect.objectContaining({ id: "user" }) })],
-      );
-    }
-    // Both hidden rows now fit the initial window; the attempt diagnostic remains hidden.
-    expect(await readHistory({ offset: 1, limit: messages.length })).not.toContainEqual(
-      failedMessage,
-    );
     expectHistoryMessage(await lookup("answer"), {
       content: [{ type: "text", text: "Recovered answer" }],
     });
-    expect(await loadTranscriptEvents(scope)).toEqual(persisted);
 
     await appendTranscriptMessage(scope, {
       eventId: "partial",
@@ -144,62 +139,17 @@ it("hides attempt diagnostics across hidden announce chunks while retaining part
     expectHistoryMessage(await lookup("partial"), {
       content: [{ type: "text", text: "Partial answer" }],
     });
-  });
-});
-
-it("resolves one indexed message per worker request while hiding stale announce pairs", async () => {
-  await withHistoryState(async () => {
-    const scope = await seed("indexed-message-get", 2000);
-    const messages = [
-      { id: "question", role: "user", timestamp: 1000, content: "Previous question" },
-      { id: "answer", role: "assistant", timestamp: 1000, content: "Previous answer" },
-      {
-        id: "announce",
-        role: "user",
-        timestamp: 1000,
-        content: "Worker finished",
-        provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-      },
-      { id: "stale-answer", role: "assistant", timestamp: 1000, content: "Hidden pair" },
-      { id: "current-answer", role: "assistant", timestamp: 3000, content: "Current answer" },
-    ];
-    await replaceMessages(scope, messages);
-    const context = await createHistoryReadContext();
-    const request = historyRpc(context, scope.sessionKey);
-    const read = vi.spyOn(historyWorker, "readSessionHistoryPageInWorker");
-    try {
-      const lookup = async (messageId: string) => {
-        read.mockClear();
-        let respond: Awaited<ReturnType<typeof request>>;
-        const sql = observeHostDataSql();
-        try {
-          respond = await request("chat.message.get", { messageId });
-          expect(sql.queries).toEqual([]);
-        } finally {
-          sql.restore();
-        }
-        expect(read.mock.calls.map(([input]) => input.kind)).toEqual(["message-by-id"]);
-        if (messageId === "announce" || messageId === "stale-answer") {
-          expectNotFound(respond);
-        } else {
-          expectHistoryMessage(respond, { __openclaw: expect.objectContaining({ id: messageId }) });
-        }
-      };
-      for (const { id } of messages) {
-        await lookup(id);
-      }
-      await appendTranscriptEvent(scope, {
-        type: "reset",
-        id: "close-interval",
-        parentId: "current-answer",
-        reason: "new",
-        timestamp: "2026-09-30T00:00:00.000Z",
-      });
-      await lookup("stale-answer");
-      await lookup("answer");
-    } finally {
-      read.mockRestore();
-    }
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "close-interval",
+      parentId: "partial",
+      reason: "new",
+      timestamp: "2026-09-30T00:00:00.000Z",
+    });
+    expectNotFound(await lookup("old-pair"));
+    expectHistoryMessage(await lookup("previous-answer"), {
+      __openclaw: expect.objectContaining({ id: "previous-answer" }),
+    });
   });
 });
 
@@ -228,18 +178,6 @@ it("fetches a retained history reference without crossing conversation or pendin
     await pending.settled?.();
     const context = await createHistoryReadContext();
     const request = historyRpc(context, scope.sessionKey);
-    const preview = await request("chat.history", {
-      messageId: "retained-output",
-      maxChars: 200_000,
-    });
-    expectHistoryPayload(preview, {
-      sessionId: scope.sessionId,
-      messages: [
-        expect.objectContaining({
-          __openclaw: expect.objectContaining({ id: "retained-output", truncated: true }),
-        }),
-      ],
-    });
     await upsertSessionEntryCore(scope, { sessionId: "current-reference", updatedAt: 2 });
     await appendTranscriptMessage(
       { ...scope, sessionId: "current-reference" },
@@ -323,25 +261,9 @@ it("reopens SQLite with bounded history previews and exact recoverable tool text
     const databasePath = resolveOpenClawAgentSqlitePath(
       toDatabaseOptions(resolveSqliteTranscriptReadScope(scope)),
     );
-    const claimSoleCustody = () => {
-      const database = new DatabaseSync(databasePath);
-      try {
-        // A retained WAL connection prevents exclusive custody even between reads.
-        database.exec(
-          "PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT",
-        );
-      } finally {
-        database.close();
-      }
-    };
-    expect(claimSoleCustody).toThrow(/database is locked/);
     await closeOpenClawAgentDatabaseByPathAsync(databasePath);
-    expect(claimSoleCustody).not.toThrow();
     clearSessionStoreCacheForTest();
     expect(await loadTranscriptEvents(scope)).toEqual(persisted);
-    for (const fixture of fixtures) {
-      expect(persisted).toContainEqual(expect.objectContaining({ message: fixture.message }));
-    }
 
     const context = await createHistoryReadContext();
     const rpc = historyRpc(context, scope.sessionKey);

@@ -317,39 +317,32 @@ it.each([
   },
 );
 
-it("runs default-phase detectors only when completion certification has a consumer", async () => {
-  const env = await repairEnv();
-  const detected: string[] = [];
-  controls.entries = (["default", "after-session-repair"] as const).map((phase) =>
-    Object.assign(
-      entry("owner", `${phase}-action`, {
-        ...(phase === "after-session-repair" ? { phase } : {}),
+it.each([false, true])(
+  "runs default-phase detectors only for a completion consumer (%s)",
+  async (consumer) => {
+    const env = await repairEnv();
+    const detected: string[] = [];
+    controls.entries = (["default", "after-session-repair"] as const).map((phase) =>
+      postEntry("owner", `${phase}-action`, {
+        phase: phase === "default" ? undefined : phase,
         detectLegacyState: () => {
           detected.push(phase);
           return null;
         },
       }),
-      { trustedForDurableStores: false },
-    ),
-  );
-  const params = repairParams(env);
-
-  // Nothing deferred and no retained sources: the fresh-install shape.
-  const uncertified = await repairPluginState(params);
-
-  expect(detected).toEqual(["after-session-repair"]);
-  expect(uncertified).toEqual({
-    changes: [],
-    completedPluginIds: undefined,
-    requiredPluginIds: ["owner"],
-    warnings: [],
-  });
-
-  const certified = await repairPluginState({
-    ...params,
-    beforeCompletion: async () => {},
-  });
-
-  expect(detected).toEqual(["after-session-repair", "after-session-repair", "default"]);
-  expect(certified.completedPluginIds).toEqual(["owner"]);
-});
+    );
+    const result = await repairPluginState({
+      ...repairParams(env),
+      ...(consumer ? { beforeCompletion: async () => {} } : {}),
+    });
+    expect(detected).toEqual(
+      consumer ? ["after-session-repair", "default"] : ["after-session-repair"],
+    );
+    expect(result).toEqual({
+      changes: [],
+      completedPluginIds: consumer ? ["owner"] : undefined,
+      requiredPluginIds: ["owner"],
+      warnings: [],
+    });
+  },
+);

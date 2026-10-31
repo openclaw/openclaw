@@ -8,11 +8,18 @@ import {
   isPending,
   latest,
   Loading,
+  Show,
   omit,
   type Accessor,
 } from "solid-js";
 import { resolveNodeIdFromCandidates } from "../../../../src/shared/node-match.js";
-import { SettingsRow, SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
+import {
+  SettingsRow,
+  SettingsSection,
+  SettingsPage,
+  SettingsLoadingSkeleton,
+} from "../../components/solid/settings-ui.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../styles/devices.css";
@@ -31,7 +38,8 @@ export function DevicesView(props: DevicesProps) {
   );
   return (
     <SettingsPage wide={true}>
-      <>
+      {/* Inventory belongs above policy; wait for its first snapshot before painting either. */}
+      <Show when={props.initialInventoryReady} fallback={<SettingsLoadingSkeleton />}>
         {props.connected && (!props.canManagePairing || !props.canAdmin) ? (
           <div class="callout info" role="note">
             {t(
@@ -72,7 +80,7 @@ export function DevicesView(props: DevicesProps) {
             />
           )}
         </PolicyRead>
-      </>
+      </Show>
     </SettingsPage>
   );
 }
@@ -238,8 +246,7 @@ function BindingSelect(props: BindingState & { agent: BindingAgent | null }) {
   });
 
   return (
-    <select
-      class="settings-select"
+    <SettingsSelect
       aria-label={t(isDefault() ? "devices.binding.node" : "devices.binding.binding")}
       value={selected()}
       disabled={props.disabled || (props.nodes.length === 0 && selected() === sentinel())}
@@ -251,18 +258,18 @@ function BindingSelect(props: BindingState & { agent: BindingAgent | null }) {
           props.onBindAgent(props.agent.id, value === "__default__" ? null : value);
         }
       }}
-    >
-      <option value={sentinel()} selected={selected() === sentinel()}>
-        {t(isDefault() ? "devices.binding.anyNode" : "devices.binding.useDefault")}
-      </option>
-      <For each={options()} keyed={(node) => node.id}>
-        {(node) => (
-          <option value={node().id} selected={selected() === node().id} disabled={node().disabled}>
-            {node().label}
-          </option>
-        )}
-      </For>
-    </select>
+      options={[
+        {
+          value: sentinel(),
+          label: t(isDefault() ? "devices.binding.anyNode" : "devices.binding.useDefault"),
+        },
+        ...options().map((node) => ({
+          value: node.id,
+          label: node.label,
+          disabled: node.disabled,
+        })),
+      ]}
+    />
   );
 }
 

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { invalidateConfigGetResponseCache } from "../config-get-response.js";
+import { SerializedJsonPayload, serializeGatewayFrame } from "../serialized-json.js";
 import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   read: vi.fn(),
   readForWrite: vi.fn(),
   commit: vi.fn(),
+  schema: { schema: { title: "First schema" }, uiHints: undefined },
 }));
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
@@ -34,7 +36,7 @@ vi.mock("../../secrets/runtime.js", () => ({
 vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/runtime-schema.js")>()),
   loadGatewayConfigRedactionHints: () => undefined,
-  loadGatewayRuntimeConfigSchema: () => ({ schema: {}, uiHints: undefined }),
+  loadGatewayRuntimeConfigSchema: () => mocks.schema,
 }));
 
 let storedConfig: OpenClawConfig;
@@ -62,6 +64,7 @@ beforeEach(() => {
   storedConfig = { logging: { level: "info" } };
   storedHash = "base-hash";
   mocks.read.mockImplementation(async () => readSnapshot().snapshot);
+  mocks.schema = { schema: { title: "First schema" }, uiHints: undefined };
   mocks.readForWrite.mockImplementation(async () => readSnapshot());
   mocks.commit.mockImplementation(
     async (input: { snapshot: { hash: string }; nextConfig: OpenClawConfig }) => {
@@ -79,6 +82,45 @@ beforeEach(() => {
     },
   );
 });
+
+it.each(["config.get", "config.schema"] as const)(
+  "%s reuses snapshot bytes across wire callers and retires them with the owner",
+  async (method) => {
+    const reader = createConfigHandlerHarness({
+      method,
+      contextOverrides: { getConfigReloaderHotReloadStatus: () => "active" },
+    });
+    const handler = expectDefined(configHandlers[method], `registered ${method}`);
+    await handler(reader.options);
+    const original = reader.respond.mock.calls.at(-1)?.[1];
+    const wireOptions = { ...reader.options, acceptsSerializedJson: true };
+    await handler(wireOptions);
+    const encoded = reader.respond.mock.calls.at(-1)?.[1];
+    expect(encoded).toBeInstanceOf(SerializedJsonPayload);
+    expect(serializeGatewayFrame({ type: "res", id: "one", payload: encoded }).toString()).toBe(
+      JSON.stringify({ type: "res", id: "one", payload: original }),
+    );
+    await handler(wireOptions);
+    expect(reader.respond.mock.calls.at(-1)?.[1]).toBe(encoded);
+
+    if (method === "config.get") {
+      externalEdit();
+      invalidateConfigGetResponseCache();
+    } else {
+      mocks.schema = { schema: { title: "Changed schema" }, uiHints: undefined };
+    }
+    await handler(wireOptions);
+    const changed = reader.respond.mock.calls.at(-1)?.[1];
+    expect(changed).not.toBe(encoded);
+    await handler(reader.options);
+    const current = reader.respond.mock.calls.at(-1)?.[1];
+    expect(current).not.toBeInstanceOf(SerializedJsonPayload);
+    expect(serializeGatewayFrame({ type: "res", id: "two", payload: changed }).toString()).toBe(
+      JSON.stringify({ type: "res", id: "two", payload: current }),
+    );
+    expect(current).not.toEqual(original);
+  },
+);
 afterEach(() => {
   invalidateConfigGetResponseCache();
   vi.clearAllMocks();

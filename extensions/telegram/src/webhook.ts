@@ -170,7 +170,6 @@ export async function startTelegramWebhook(opts: {
   abortSignal?: AbortSignal;
   publicUrl?: string;
   webhookCertPath?: string;
-  webhookRegistrationRetryPolicy?: BackoffPolicy;
   stateDir?: string;
   setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }) {
@@ -220,10 +219,8 @@ export async function startTelegramWebhook(opts: {
   }
   const status = createTelegramStatusPublisher("webhook", opts.setStatus);
   status.noteStart();
-  const webhookRegistrationRetryPolicy =
-    opts.webhookRegistrationRetryPolicy ?? TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY;
   const retryDelay = (operation: "getMe" | "setWebhook", attempt: number) => {
-    const delayMs = computeBackoff(webhookRegistrationRetryPolicy, attempt);
+    const delayMs = computeBackoff(TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY, attempt);
     runtime.log?.(
       `telegram ${operation} retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}`,
     );

@@ -36,11 +36,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
 import { resolveIMessageGroupSystemPrompt } from "../group-policy.js";
-import {
-  isKnownFromMeIMessageMessageId,
-  isKnownFromMeIMessageTarget,
-  rememberIMessageReplyCache,
-} from "../monitor-reply-cache.js";
+import { isKnownFromMeIMessageTarget, rememberIMessageReplyCache } from "../monitor-reply-cache.js";
 import { getIMessageRuntime } from "../runtime.js";
 import {
   formatIMessageChatTarget,
@@ -59,8 +55,6 @@ import {
 import { detectReflectedContent } from "./reflection-guard.js";
 import type { SelfChatCache } from "./self-chat-cache.js";
 import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
-
-export { resolveIMessageReactionContext };
 
 type IMessageReactionNotificationMode = "off" | "own" | "all";
 
@@ -321,15 +315,12 @@ export async function resolveIMessageInboundDecision(params: {
   allowLegacyConversationAllowFromForGroup?: boolean;
   groupPolicy: string;
   dmPolicy: string;
-  storeAllowFrom: string[];
+  readStoreAllowFrom: () => Promise<string[]>;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   echoCache?: IMessageEchoCache;
   selfChatCache?: SelfChatCache;
   reactionNotifications?: IMessageReactionNotificationMode;
-  isKnownFromMeMessageId?: (
-    ...args: Parameters<typeof isKnownFromMeIMessageMessageId>
-  ) => boolean | Promise<boolean>;
 }): Promise<IMessageInboundDecision> {
   const senderRaw = params.message.sender ?? "";
   const sender = senderRaw.trim();
@@ -398,12 +389,12 @@ export async function resolveIMessageInboundDecision(params: {
   // Outbound sends persist one target shape; inbound rows must probe every
   // equivalent shape so a GUID-keyed send also matches a chat_id-bearing echo.
   const echoScope: string[] = [];
-  if (isGroup) {
-    const chatIdScope = formatIMessageChatTarget(chatId);
-    if (chatIdScope) {
-      echoScope.push(`${params.accountId}:${chatIdScope}`);
-    }
-  } else {
+  // Only self-chats need direct chat_id echo lookup; ordinary DMs keep handle scopes.
+  const chatIdScope = formatIMessageChatTarget(chatId);
+  if (chatIdScope && (isGroup || isSelfChat)) {
+    echoScope.push(`${params.accountId}:${chatIdScope}`);
+  }
+  if (!isGroup) {
     echoScope.push(`${params.accountId}:imessage:${sender}`);
   }
   if (chatGuid) {
@@ -456,12 +447,13 @@ export async function resolveIMessageInboundDecision(params: {
     sender,
     chatId,
   });
+  let storeAllowFrom: Promise<string[]> | undefined;
   const ingressResolver = getIMessageRuntime().channel.inbound.ingress.createResolver({
     channelId: "imessage",
     accountId: params.accountId,
     identity: imessageIngressIdentity,
     cfg: params.cfg,
-    readStoreAllowFrom: async () => params.storeAllowFrom,
+    readStoreAllowFrom: () => (storeAllowFrom ??= params.readStoreAllowFrom()),
   });
   const resolveChannelIngress = (contextBinding?: ChannelIngressContextBinding) =>
     ingressResolver.message({
@@ -549,7 +541,6 @@ export async function resolveIMessageInboundDecision(params: {
           chatId,
           chatGuid,
           chatIdentifier,
-          isKnownFromMeMessageId: params.isKnownFromMeMessageId,
         }))),
     );
     if (notificationMode === "own" && !targetIsOwn) {
@@ -700,7 +691,6 @@ export async function resolveIMessageInboundDecision(params: {
       isGroup,
       message: params.message,
       requireMentionOverride: params.opts?.requireMention,
-      isKnownFromMeMessageId: params.isKnownFromMeMessageId,
     });
   // An explicit bot-thread requirement remains enforced when patterns are disabled.
   const canDetectMention = mentionRegexes.length > 0 || enforceMentionRequirement;

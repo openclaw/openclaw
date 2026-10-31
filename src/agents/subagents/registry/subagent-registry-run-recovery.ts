@@ -233,11 +233,11 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       // A paused row is terminal by construction; adoption is exactly the case the
       // ended-source gate exists to keep out of unrelated replacement callers.
       allowEndedSource: true,
+      refreshCompletionAuthority: true,
       // The original requester is idle behind its own yield, so its wake credential
       // is the only path back to it once this follow-up settles.
       preserveRequesterSettleWake: true,
-      // Persist the follow-up text so restart recovery cannot reissue the task that
-      // the child already yielded on.
+      // The explicit follow-up becomes this task's current prompt.
       task: params.task,
       ...(params.gatewayContextResolver
         ? { gatewayContextResolver: params.gatewayContextResolver }
@@ -312,6 +312,10 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     allowEndedSource?: boolean;
     /** Ordinary next turns retain the completed execution's independent delivery. */
     preserveCompletedRun?: boolean;
+    /** An explicitly admitted paused follow-up owns fresh completion authority. */
+    refreshCompletionAuthority?: true;
+    /** Current admitted child identity for a new task, never a historical task rebind. */
+    sessionEntry?: SubagentRunRecord["childSessionIdentity"];
     preserveFrozenResultFallback?: boolean;
     // A follow-up that continues a paused run inherits the original requester's
     // wake credential. An operator steer intentionally drops it: the operator is
@@ -351,7 +355,9 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       return false;
     }
     const preserveCompletedRun = replaceParams.preserveCompletedRun === true;
-    const authority = preserveCompletedRun
+    const refreshCompletionAuthority =
+      preserveCompletedRun || replaceParams.refreshCompletionAuthority === true;
+    const authority = refreshCompletionAuthority
       ? await captureOperatorToolGatewayContinuationContext()
       : undefined;
     let custodyTransferred = false;
@@ -456,16 +462,23 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
                 }
               : {}),
           });
+          // A reused key must not transfer the old controller's custody to a different child.
+          const admittedChild =
+            preserveCompletedRun &&
+            replaceParams.sessionEntry?.sessionId === source.childSessionIdentity?.sessionId
+              ? replaceParams.sessionEntry
+              : undefined;
+          const childSessionIdentity =
+            admittedChild ?? absorbed?.childSessionIdentity ?? source.childSessionIdentity;
+          const childAuthority = resolveSubagentChildAuthority(
+            preserveCompletedRun ? { ...source, childSessionIdentity } : (absorbed ?? source),
+          );
           const next: SubagentRunRecord = normalizeSubagentRunState({
             ...source,
             runId: nextRunId,
             // Completed follow-ups start a new task; steer retains its task's lineage.
             taskRunId: preserveCompletedRun ? nextRunId : (source.taskRunId ?? source.runId),
             requesterTurnRunId: preserveCompletedRun ? undefined : source.requesterTurnRunId,
-            // A new task has a fresh caller; it cannot recover under the completed task's grant.
-            operatorRecoverySource: preserveCompletedRun
-              ? undefined
-              : source.operatorRecoverySource,
             requesterTurnYielded: preserveCompletedRun ? undefined : source.requesterTurnYielded,
             retireAfterRequesterTurn: preserveCompletedRun
               ? undefined
@@ -473,12 +486,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             task: nextTask,
             generation,
             createdAt: now,
-            ...(absorbed
-              ? {
-                  childSessionIdentity:
-                    absorbed.childSessionIdentity ?? source.childSessionIdentity,
-                }
-              : {}),
+            ...(childSessionIdentity ? { childSessionIdentity } : {}),
             sessionStartedAt,
             accumulatedRuntimeMs,
             endedReason: undefined,
@@ -497,7 +505,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
                 lifecycleGeneration,
                 transcriptTarget: replaceParams.transcriptTarget,
               }),
-              ...(resolveSubagentChildAuthority(absorbed ?? source).status === "legacy-unverified"
+              ...(childAuthority.status === "legacy-unverified"
                 ? { suppressSessionEffects: true }
                 : {}),
             },
@@ -514,7 +522,6 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             cleanupCompletedAt: undefined,
             cleanupHandled: false,
             suppressAnnounceReason: undefined,
-            terminalOwner: undefined,
             killReconciliation: undefined,
             killIntent: undefined,
             suppressCompletionDelivery: undefined,
@@ -573,20 +580,38 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             replaceParams.retainAdmission?.(
               this.captureAdmissionRejection(next, replaceParams.admissionSessionEffects),
             );
-            if (preserveCompletedRun) {
-              if (authority) {
-                subagentRuns.bindCompletionAuthority(next, authority);
-                custodyTransferred = true;
-              }
-            } else {
+            if (!preserveCompletedRun) {
               subagentRuns.transferCompletionAuthority(value.source, next);
+            }
+            if (refreshCompletionAuthority && authority) {
+              // The newly admitted caller replaces predecessor custody, including
+              // a retired legacy source; persisted rows alone never grant it.
+              const sameRequesterTask =
+                !preserveCompletedRun &&
+                (next.taskRunId ?? next.runId) === (value.source.taskRunId ?? value.source.runId) &&
+                next.requesterSessionKey === value.source.requesterSessionKey &&
+                next.requesterAgentId === value.source.requesterAgentId &&
+                next.requesterStorePath === value.source.requesterStorePath &&
+                next.requesterTurnRunId === value.source.requesterTurnRunId;
+              // Transfer keeps accounting metadata for this task, never its predecessor's permission.
+              const requesterRunInstance = sameRequesterTask
+                ? subagentRuns.getRequesterRunInstance(next)
+                : undefined;
+              subagentRuns.bindCompletionAuthority(
+                next,
+                authority,
+                requesterRunInstance?.runId === next.requesterTurnRunId
+                  ? requesterRunInstance
+                  : undefined,
+              );
+              custodyTransferred = true;
             }
             subagentRuns.commitOwnership(next);
             if (replaceParams.successor) {
               subagentRuns.releaseCompletionAuthority(replaceParams.successor);
             }
             if (!preserveCompletedRun && previousRunId !== nextRunId) {
-              // Remapped cohorts must not queue behind their restored, now-unbound input.
+              // Remapped cohorts must not queue behind their replaced input.
               retireSubagentControllerInputs(value.source);
             }
             replaceParams.onPublished?.(next);
@@ -594,7 +619,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
         },
       );
     } catch (error) {
-      log.warn("failed to persist replacement subagent recovery run", {
+      log.warn("failed to persist replacement subagent run", {
         error,
         previousRunId,
         nextRunId,

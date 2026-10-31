@@ -11,6 +11,7 @@ import {
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import {
   listWhatsAppSendResultMessageIds,
   mergeWhatsAppAcceptedSendError,
@@ -21,7 +22,6 @@ import {
   type WhatsAppSendResult,
 } from "../inbound/send-result.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
-import { loadWebMedia } from "../media.js";
 import {
   type DeliverableWhatsAppOutboundPayload,
   normalizeWhatsAppOutboundPayload,

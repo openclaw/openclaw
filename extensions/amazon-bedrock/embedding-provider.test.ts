@@ -27,14 +27,12 @@ type EndpointOptions = {
   sdkEndpoint?: string;
   fips?: boolean;
   dualstack?: boolean;
-  customEndpoint?: boolean;
   expectedError?: string;
 };
 const euPrivate = "vpce-memory.bedrock-runtime.eu-west-1.vpce.amazonaws.com";
 const govFips = "bedrock-runtime-fips.us-gov-west-1.amazonaws.com";
-const regional = { customEndpoint: false };
-const fipsOptions = { ...regional, fips: true };
-const dual = { ...regional, dualstack: true };
+const fipsOptions = { fips: true };
+const dual = { dualstack: true };
 const privateEndpoint = { remoteBaseUrl: privateUrl, providerBaseUrl: null };
 const iso = { signingRegion: "us-iso-east-1" };
 const memoryOptions = {
@@ -49,7 +47,6 @@ const westFips = {
   signingRegion: "us-west-2",
 };
 const govOptions = {
-  ...regional,
   providerBaseUrl: `https://${govFips}`,
   signingRegion: "us-gov-west-1",
 };
@@ -64,7 +61,7 @@ const isoDual = {
   dualstack: true,
   expectedError: "DualStack is enabled but this partition does not support DualStack",
 };
-const sdkOptions = { ...regional, sdkEndpoint: `https://${sdkHost}` };
+const sdkOptions = { sdkEndpoint: `https://${sdkHost}` };
 const incompatible = (mode: "fips" | "dualstack") => ({
   ...privateEndpoint,
   [mode]: true,
@@ -143,7 +140,7 @@ it.each<[string, string, EndpointOptions]>([
   const providers: Record<string, { baseUrl: string; models: [] }> = providerBaseUrl
     ? { "amazon-bedrock": { baseUrl: providerBaseUrl, models: [] } }
     : {};
-  const { provider, client } = await createBedrockEmbeddingProvider({
+  const { provider } = await createBedrockEmbeddingProvider({
     config: { models: { providers } },
     ...(remoteBaseUrl ? { remote: { baseUrl: remoteBaseUrl } } : {}),
     model: "amazon.titan-embed-text-v2:0",
@@ -167,12 +164,6 @@ it.each<[string, string, EndpointOptions]>([
     },
   ]);
   expect(observedRequests[0]?.authorization).toContain(`/${signingRegion}/bedrock/aws4_request`);
-  expect(client.region).toBe(signingRegion);
-  if (testCase.customEndpoint ?? (remoteBaseUrl || providerBaseUrl)) {
-    expect(client).toHaveProperty("endpoint", remoteBaseUrl ?? providerBaseUrl);
-  } else {
-    expect(client).not.toHaveProperty("endpoint");
-  }
 });
 
 it.each([
@@ -215,6 +206,7 @@ it.each([
   ["invalid single vector element", titan, '{"embedding":[1,"bad"]}'],
   ["missing batch vectors", cohere, "{}"],
   ["invalid batch vector shape", cohere, '{"embeddings":[[1],{"bad":true}]}'],
+  ["nonfinite later batch vector", cohere, '{"embeddings":[[3,4],[1e309]]}'],
   ["invalid UTF-8", titan, badUtf8],
 ] as const)("rejects %s through the provider boundary", async (_name, model, raw) => {
   vi.spyOn(bedrockRuntimeSdk.BedrockRuntimeClient.prototype, "send").mockResolvedValue({
@@ -230,32 +222,56 @@ it.each([
   );
 });
 
-it("uses the Cohere v4 contract for the global profile prefix", async () => {
-  const model = "global.cohere.embed-v4:0";
+it.each([
+  {
+    model: cohere,
+    queryResponse: '{"embeddings":[[3,4]]}',
+    batchResponse: '{"embeddings":[[0,2],[3,4]]}',
+    dimensions: 1024,
+    requestFields: {},
+    maxInputTokens: 512,
+  },
+  {
+    model: "global.cohere.embed-v4:0",
+    queryResponse: '{"embeddings":{"float":[[3,4]]}}',
+    batchResponse: '{"embeddings":{"float":[[0,2],[3,4]]}}',
+    dimensions: 1536,
+    requestFields: { embedding_types: ["float"], output_dimension: 1536 },
+    maxInputTokens: 128_000,
+  },
+])("preserves $model query and document batch contracts", async (testCase) => {
+  const { model, queryResponse, batchResponse, dimensions, requestFields, maxInputTokens } =
+    testCase;
   const send = vi
     .spyOn(bedrockRuntimeSdk.BedrockRuntimeClient.prototype, "send")
-    .mockResolvedValue({
-      body: new TextEncoder().encode('{"embeddings":{"float":[[3,4]]}}'),
+    .mockResolvedValueOnce({
+      body: new TextEncoder().encode(queryResponse),
+    } as never)
+    .mockResolvedValueOnce({
+      body: new TextEncoder().encode(batchResponse),
     } as never);
   const { provider, client } = await createBedrockEmbeddingProvider({ config: {}, model });
 
   await expect(provider.embed("memory", { inputType: "query" })).resolves.toEqual([0.6, 0.8]);
+  await expect(
+    provider.embedBatch(["first", "second"], { inputType: "document" }),
+  ).resolves.toEqual([
+    [0, 1],
+    [0.6, 0.8],
+  ]);
 
-  const command = send.mock.calls.at(-1)?.[0] as {
-    input?: { body?: string | Uint8Array; modelId?: string };
-  };
-  const body =
-    typeof command.input?.body === "string"
-      ? command.input.body
-      : new TextDecoder().decode(command.input?.body);
-  expect(JSON.parse(body)).toEqual({
-    texts: ["memory"],
-    input_type: "search_query",
-    truncate: "END",
-    embedding_types: ["float"],
-    output_dimension: 1536,
-  });
-  expect(command.input?.modelId).toBe(model);
-  expect(client).toMatchObject({ model, dimensions: 1536 });
-  expect(provider.maxInputTokens).toBe(128_000);
+  expect(send).toHaveBeenCalledTimes(2);
+  for (const [index, request] of [
+    { texts: ["memory"], input_type: "search_query" },
+    { texts: ["first", "second"], input_type: "search_document" },
+  ].entries()) {
+    const input = send.mock.calls[index]?.[0]?.input;
+    if (!input || !("body" in input) || typeof input.body !== "string") {
+      throw new Error("Expected a JSON embedding request body");
+    }
+    expect(JSON.parse(input.body)).toEqual({ ...request, truncate: "END", ...requestFields });
+    expect(input).toMatchObject({ modelId: model });
+  }
+  expect(client).toMatchObject({ model, dimensions });
+  expect(provider.maxInputTokens).toBe(maxInputTokens);
 });

@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupDetectResult, ModelAuthStatusResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   configuredDetection,
@@ -18,10 +19,11 @@ import {
   authOption,
   mountDetection,
   createFirstRunContext,
-  configSnapshot,
   candidate,
   callsFor,
   mockRequests,
+  answerWizard,
+  requestParameters,
 } from "./model-setup-first-run.test-support.ts";
 import {
   createContext,
@@ -174,7 +176,7 @@ describe("ModelSetupPage catalog icons", () => {
     mockRequests(request, {
       "config.get": () => {
         order.push("config.get");
-        return configSnapshot(config, hash);
+        return sourceConfigSnapshot(config, hash);
       },
       "config.set": (params) => {
         order.push("config.set");
@@ -212,7 +214,7 @@ describe("ModelSetupPage catalog icons", () => {
     const { context, client, request, runtimeConfig, snapshot } = createContext();
     const configSet = createDeferred<{ hash: string }>();
     mockRequests(request, {
-      "config.get": () => configSnapshot(),
+      "config.get": () => sourceConfigSnapshot(),
       "config.set": () => configSet.promise,
     });
     await runtimeConfig.ensureLoaded();
@@ -243,7 +245,7 @@ describe("ModelSetupPage catalog icons", () => {
     request.mockImplementation(async (method: string) => {
       if (method === "config.get") {
         order.push("config.get");
-        return configSnapshot();
+        return sourceConfigSnapshot();
       }
       order.push(method);
       if (method === "openclaw.setup.auth.start") {
@@ -263,7 +265,7 @@ describe("ModelSetupPage catalog icons", () => {
         });
       }
       if (method === "wizard.cancel") {
-        return {};
+        return { status: "running" };
       }
       if (method === "openclaw.setup.detect") {
         return configuredDetection("provider/model");
@@ -286,6 +288,8 @@ describe("ModelSetupPage catalog icons", () => {
 
     pageButton(page, "openclaw-modal-dialog .btn")?.click();
     await page.updateComplete;
+    await waitForText(page, "finishing");
+    expect(page.querySelector(".wizard-step__progress")).not.toBeNull();
     await Promise.resolve();
     expect(order).not.toContain("competing-mutation");
 
@@ -293,6 +297,65 @@ describe("ModelSetupPage catalog icons", () => {
     await competingMutation;
     expect(order.indexOf("competing-mutation")).toBeGreaterThan(order.indexOf("config.get"));
     runtimeConfig.dispose();
+  });
+
+  it("keeps wizard input busy through reconciliation and retains a rejected draft", async () => {
+    const startEntered = createDeferred();
+    const releaseStart = createDeferred();
+    const initialRefresh = createDeferred();
+    const answerRefresh = createDeferred();
+    let refreshes = 0;
+    const { context, client, request } = createFirstRunContext(undefined, () =>
+      ++refreshes === 1 ? initialRefresh.promise : answerRefresh.promise,
+    );
+    const step = { id: "provider-key", type: "text" as const, message: "Provider key" };
+    mockRequests(request, {
+      "openclaw.setup.auth.start": async () => {
+        startEntered.resolve();
+        await releaseStart.promise;
+        return { sessionId: "wizard-session", done: false, status: "running" };
+      },
+      "wizard.next": (params) => ({
+        ...runningStep(step),
+        ...("answer" in requestParameters(params)
+          ? { error: "Try a different provider key." }
+          : {}),
+      }),
+    });
+    const { page } = await mountSettings(context, client, {
+      authOptions: [authOption("provider-auth")],
+    });
+    authButton(page, "provider-auth")!.click();
+    await startEntered.promise;
+    await waitForFast(() =>
+      expect(page.querySelector<HTMLDialogElement>("openclaw-modal-dialog dialog")?.open).toBe(
+        true,
+      ),
+    );
+    releaseStart.resolve();
+    await waitForText(page, "Provider key");
+    const input = page.querySelector<HTMLInputElement>("#model-setup-wizard-text-input")!;
+    await waitForFast(() => {
+      expect(input.disabled).toBe(true);
+      expect(page.querySelector<HTMLDialogElement>("openclaw-modal-dialog dialog")?.open).toBe(
+        true,
+      );
+    });
+    initialRefresh.resolve();
+    await waitForFast(() => expect(input.disabled).toBe(false));
+
+    await answerWizard(page, "draft-key");
+    await waitForText(page, "Try a different provider key.");
+    expect(page.querySelector("#model-setup-wizard-text-input")).toBe(input);
+    expect(input.value).toBe("draft-key");
+    expect(input.disabled).toBe(true);
+    page
+      .querySelector<HTMLFormElement>("openclaw-modal-dialog form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    expect(callsFor(request, "wizard.next")).toHaveLength(2);
+    answerRefresh.resolve();
+    await waitForFast(() => expect(input.disabled).toBe(false));
+    expect(input.value).toBe("draft-key");
   });
 
   it("does not activate a stale candidate through a replacement connection", async () => {
@@ -372,7 +435,8 @@ describe("Model setup account connections", () => {
         apiKeySupported: false,
         quickApiKeySetup: false,
         loginOptions: [
-          { ...authOption("radius/radius", "Radius account"), kind: "oauth", brandId: "radius" },
+          // Qualified choice ids never name the brand; the badge must use brandId.
+          { ...authOption("radius/radius", "Radius account"), kind: "oauth", brandId: "meta" },
         ],
       },
     ],
@@ -380,7 +444,7 @@ describe("Model setup account connections", () => {
 
   const setup = {
     ...detection,
-    authOptions: [{ ...authOption("setup-only", "Setup-only account"), brandId: "setup-only" }],
+    authOptions: [{ ...authOption("setup-only", "Setup-only account"), brandId: "meta" }],
   };
   let fixture: ReturnType<typeof createContext>;
   beforeEach(() => {
@@ -389,7 +453,7 @@ describe("Model setup account connections", () => {
   function configureRequests(handlers: Parameters<typeof mockRequests>[1]) {
     mockRequests(fixture.request, {
       "models.authStatus": () => authStatus,
-      "config.get": () => configSnapshot({}, "unchanged"),
+      "config.get": () => sourceConfigSnapshot({}, "unchanged"),
       "openclaw.setup.detect": () => setup,
       ...handlers,
     });
@@ -400,10 +464,11 @@ describe("Model setup account connections", () => {
   const labelFor = (operation: "connect" | "setup") =>
     operation === "connect" ? "Radius account" : "Setup-only account";
   const modalTitle = (page: ParentNode) => page.querySelector("h2")?.textContent?.trim();
-  const waiting = "Waiting for approval in your browser…";
-  const waitForSignIn = (page: ParentNode) =>
+  const waitForSignIn = (page: ParentNode, operation: "connect" | "setup") =>
     waitForFast(() =>
-      expect(page.querySelector(".wizard-step__sign-in")?.textContent).toContain(waiting),
+      expect(page.querySelector('.wizard-sign-in [role="status"]')?.textContent).toBe(
+        "Waiting for " + labelFor(operation) + "…",
+      ),
     );
 
   async function startSignIn(page: TestModelSetupPage, operation: "connect" | "setup") {
@@ -415,7 +480,7 @@ describe("Model setup account connections", () => {
     await waitForFast(() =>
       expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain("Radius account"),
     );
-    pageButton(page, '[data-models-login-provider="radius"]')!.click();
+    pageButton(page, '[data-models-login-provider="meta"]')!.click();
     await page.updateComplete;
     [...page.querySelectorAll<HTMLButtonElement>("[data-models-login-choice] button")]
       .find((button) => button.textContent?.includes("Radius account"))!
@@ -515,9 +580,16 @@ describe("Model setup account connections", () => {
       const { page } = await mountDetection(context, client, setup, false);
       const setupButton = authButton(page, "setup-only")!;
       await startSignIn(page, operation);
-      await waitForSignIn(page);
+      await waitForSignIn(page, operation);
       const modal = page.querySelector("openclaw-modal-dialog")!;
-      expect(modalTitle(modal)).toBe(labelFor(operation));
+      expect(modal.querySelector(".wizard-sign-in__lead")?.textContent).toContain(
+        labelFor(operation) + " is open in a new tab.",
+      );
+      expect(
+        modal
+          .querySelector(".wizard-sign-in__badge [data-provider-icon]")
+          ?.getAttribute("data-provider-icon"),
+      ).toBe("meta");
       if (failed) {
         expect(modal.textContent).not.toContain(guidance);
         expect(modal.textContent).not.toContain(url);
@@ -533,7 +605,7 @@ describe("Model setup account connections", () => {
           ),
         );
         expect(modalTitle(modal)).toBe(labelFor(operation));
-        expect(modal.querySelector(".wizard-step__sign-in")).toBeNull();
+        expect(modal.querySelector(".wizard-sign-in")).toBeNull();
         const alert = modal.querySelector("[role=alert]")!;
         expect(alert.textContent).toContain(guidance);
         expect(alert.textContent).toContain(url);

@@ -7,6 +7,8 @@ import type { DiagnosticPhaseSnapshot } from "../../infra/diagnostic-events.js";
 import { withWorktreePreparationTiming } from "../worktrees/preparation-timing.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { prepareLocalSandboxWorkspace } from "./local-workspace.js";
+import { withSandboxRuntimePrune } from "./registry-lifecycle.js";
+import { useSandboxRegistryState } from "./registry.test-support.js";
 
 type Projection = Pick<ReturnType<typeof projectionOperations>, "reuse" | "prepare">;
 const fixture = vi.hoisted(() => {
@@ -48,10 +50,20 @@ const fixture = vi.hoisted(() => {
 // mock-isolation: Exercise preparation selection without opening the projection state database.
 vi.mock("../../gateway/worker-environments/local-workspace-projection.js", () => ({
   resolveLocalWorkspaceOwner: () => fixture.owner,
+  withLocalWorkspacePreparation: (
+    _owner: LocalWorkspaceOwner,
+    _options: unknown,
+    prepare: (beginCapture: () => void) => Promise<string>,
+  ) => prepare(() => {}),
+  reuseLocalWorkspaceProjection: () => fixture.reuse(),
   withLocalWorkspaceProjection: async <T>(
     _owner: LocalWorkspaceOwner,
     run: (state: Projection) => Promise<T>,
   ) => run({ reuse: fixture.reuse, prepare: fixture.prepare }),
+}));
+// mock-isolation: This timing fixture supplies a synthetic projection without state storage.
+vi.mock("../../gateway/worker-environments/local-workspace-checkout.js", () => ({
+  localWorkspaceProjectionPath: () => "/projection/fixture",
 }));
 // mock-isolation: Neither covered flow should acquire allocation custody.
 vi.mock("../worktrees/allocation.js", () => ({ withWorktreeAllocationLease: fixture.allocate }));
@@ -65,6 +77,39 @@ vi.mock("../../logging/subsystem.js", () => ({
 }));
 
 afterEach(() => vi.clearAllMocks());
+useSandboxRegistryState("sandbox-preparation-prune-");
+
+it("protects managed preparation and retained cleanup from pruning", async () => {
+  const remove = vi.fn(async () => {});
+  const prune = () =>
+    withSandboxRuntimePrune(
+      { sessionKey: "synthetic-scope", workspaceDir: "/projection/fixture" },
+      remove,
+    );
+  fixture.reuse.mockImplementation(async () => {
+    await prune();
+    expect(remove).not.toHaveBeenCalled();
+    return "/projection/fixture";
+  });
+  const workspace = await prepareLocalSandboxWorkspace({
+    cfg: {},
+    agentId: fixture.owner.agentId,
+    sessionKey: fixture.owner.sessionKey,
+    sandbox: resolveSandboxConfigForAgent({}, fixture.owner.agentId),
+  });
+  const release = workspace!.retain();
+  await workspace!.protectRuntimeScope("synthetic-scope");
+  workspace![Symbol.dispose]();
+  try {
+    await prune();
+    await withSandboxRuntimePrune({ sessionKey: "synthetic-scope" }, remove);
+    expect(remove).not.toHaveBeenCalled();
+  } finally {
+    release();
+  }
+  await prune();
+  expect(remove).toHaveBeenCalledOnce();
+});
 
 it.each([
   { name: "an existing projection", existing: "/projection/fixture", acceleration: true },

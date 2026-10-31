@@ -45,7 +45,9 @@ export async function fetchCopilotUsage(
     });
   }
 
-  const payload = await readProviderJsonResponse<unknown>(res, "github-copilot-usage");
+  const payload = await readProviderJsonResponse<unknown>(res, "github-copilot-usage", {
+    malformedResponseError: "Copilot returned unreadable usage data. Try refreshing usage later.",
+  });
   const data = isRecord(payload) ? (payload as CopilotUsageResponse) : {};
   const windows: UsageWindow[] = [];
 
