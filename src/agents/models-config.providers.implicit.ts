@@ -9,9 +9,6 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { raceWithTimeout } from "@openclaw/retry";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isUnresolvedSecretInputError } from "../config/types.secrets.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   withProviderCatalogExpiry,
@@ -58,8 +55,7 @@ import {
   createProviderAuthResolver,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secrets.js";
-
-const log = createSubsystemLogger("agents/model-providers");
+import { isRequestWideFailure, skipFailedProvider } from "./provider-failure-isolation.js";
 
 type ImplicitProviderParams = {
   agentDir: string;
@@ -388,17 +384,15 @@ export async function runProviderCatalogWithTimeout(
       { ref: false },
     );
   } catch (error) {
-    if (isUnresolvedSecretInputError(error)) {
-      throw error;
-    }
-    if (await reportProviderCatalogSecretFailure(error, params)) {
+    if (!isRequestWideFailure(error) && (await reportProviderCatalogSecretFailure(error, params))) {
       return undefined;
     }
     // A failing hook owns only its selected providers, not the healthy siblings in this batch.
-    for (const provider of params.providerIds ?? [params.provider.id]) {
-      params.reportCatalogOutcome?.({ provider, status: "unavailable" });
-    }
-    log.warn(`${formatErrorMessage(error)}; skipping provider discovery`);
+    skipFailedProvider(error, {
+      providerIds: params.providerIds ?? [params.provider.id],
+      stage: "provider discovery",
+      reportCatalogOutcome: params.reportCatalogOutcome,
+    });
     return undefined;
   } finally {
     // A timed-out hook can still finish; its late reports no longer own this publication.
