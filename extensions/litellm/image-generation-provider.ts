@@ -88,7 +88,11 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
       const form = new FormData();
       form.set("model", model);
       form.set("prompt", req.prompt);
-      form.set("n", String(count));
+      // LiteLLM's edits API defaults n to 1; some backends (e.g. Gemini image
+      // models) reject an explicit n=1, so only send n for multi-image requests.
+      if (count > 1) {
+        form.set("n", String(count));
+      }
       form.set("size", req.size ?? DEFAULT_SIZE);
       // OpenAI-compatible edits take repeated `image[]` parts when more than one
       // reference is supplied, and a single `image` part otherwise.

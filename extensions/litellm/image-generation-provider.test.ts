@@ -39,15 +39,14 @@ beforeEach(() => {
   postMultipartRequestMock.mockImplementation(pngResponse);
 });
 
-it("forwards count and size overrides on generation requests", async () => {
-  const body = { model: "dall-e-3", prompt: "two landscape variants", n: 2, size: "3840x2160" };
-  const { n: count, ...request } = body;
-  await generate({ ...request, count });
+it.each([1, 2])("preserves generation count %i and size overrides", async (count) => {
+  const request = { model: "dall-e-3", prompt: "landscape variants", size: "3840x2160" };
+  await generate({ ...request, ...(count > 1 ? { count } : {}) });
   expect(mockObjectArg(postJsonRequestMock)).toMatchObject({
     url: "http://localhost:4000/images/generations",
     allowPrivateNetwork: true,
   });
-  expect(mockObjectArg(postJsonRequestMock).body).toEqual(body);
+  expect(mockObjectArg(postJsonRequestMock).body).toEqual({ ...request, n: count });
 });
 
 it.each([1, 2])("uploads %i reference images as multipart", async (count) => {
@@ -63,6 +62,7 @@ it.each([1, 2])("uploads %i reference images as multipart", async (count) => {
   const form = request.body as FormData;
   expect(form.get("model")).toBe("gpt-image-2");
   expect(form.get("prompt")).toBe("refine the hero");
+  expect(form.has("n")).toBe(false);
   expect(form.getAll(count === 1 ? "image[]" : "image")).toHaveLength(0);
   const images = form.getAll(count === 1 ? "image" : "image[]");
   expect(
@@ -73,6 +73,14 @@ it.each([1, 2])("uploads %i reference images as multipart", async (count) => {
       }),
     ),
   ).toEqual(inputImages);
+});
+
+it("preserves explicit multi-image edit counts", async () => {
+  await generate({
+    count: 2,
+    inputImages: [{ buffer: Buffer.from("input"), mimeType: "image/png" }],
+  });
+  expect((mockObjectArg(postMultipartRequestMock).body as FormData).get("n")).toBe("2");
 });
 
 it.each([
