@@ -101,7 +101,6 @@ function git(directory: string, ...args: string[]) {
 
 function runShell(script: string, env: NodeJS.ProcessEnv, cwd?: string) {
   return runWorkflowCommand("bash", ["--noprofile", "--norc", "-c", script], {
-    encoding: "utf8",
     cwd,
     env: { ...process.env, ...env },
   });

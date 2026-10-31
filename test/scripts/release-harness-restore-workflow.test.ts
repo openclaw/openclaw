@@ -124,7 +124,6 @@ function fixture(file: string, jobName: string, fault: Fault) {
   );
   const result = runWorkflowCommand("bash", ["--noprofile", "--norc", "-c", script], {
     cwd: root,
-    encoding: "utf8",
     env: {
       ...env,
       PATH: bin + delimiter + originalPath,
