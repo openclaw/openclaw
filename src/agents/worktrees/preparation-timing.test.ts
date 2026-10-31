@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { GitCommandTimeoutError } from "../../infra/git-exec.js";
 import {
   markManagedWorktreePreparation,
   setWorktreePreparationTemplate,
@@ -21,7 +22,7 @@ afterEach(vi.resetAllMocks);
 it("attributes nested preparation once per owner and retains failed phase time", async () => {
   let clock = 0;
   vi.spyOn(performance, "now").mockImplementation(() => clock);
-  const failure = new Error("synthetic private setup output");
+  const failure = new GitCommandTimeoutError("synthetic private setup output");
   const warm = Object.freeze({ reason: "ready", backend: "btrfs", cloneBytes: 42 });
   const phases = { templateApply: 52, containerStart: 8 };
   await expect(
@@ -34,10 +35,12 @@ it("attributes nested preparation once per owner and retains failed phase time",
           timeWorktreePreparationPhase("checkout", async () => (clock += 40)),
         );
       });
-      await timeWorktreePreparationPhase("containerStart", async () => {
-        clock += 8;
-        throw failure;
-      });
+      await timeWorktreePreparationPhase("baseWait", () =>
+        timeWorktreePreparationPhase("containerStart", async () => {
+          clock += 8;
+          throw failure;
+        }),
+      );
     }),
   ).rejects.toBe(failure);
   expect(event.mock.calls[0]?.[0]).toMatchObject({
@@ -52,12 +55,19 @@ it("attributes nested preparation once per owner and retains failed phase time",
       kind: "sandbox",
       template: "warm",
       outcome: "threw",
+      errorClass: "GitCommandTimeoutError",
+      errorPhase: "containerStart",
       unattributedMs: 0,
       ...phases,
       ...Object.fromEntries(Object.entries(warm).map(([key, value]) => [`template.${key}`, value])),
     },
   });
   expect(JSON.stringify(log.mock.calls)).not.toContain(failure.message);
+  expect(log.mock.calls[1]?.[1]).toMatchObject({
+    errorClass: "GitCommandTimeoutError",
+    errorPhase: "containerStart",
+  });
+  expect(log.mock.calls[1]?.[1].consoleMessage).toContain('"errorPhase":"containerStart"');
 });
 
 it("omits unmanaged sandboxes and preserves results if a diagnostics sink fails", async () => {
