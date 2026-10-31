@@ -15,7 +15,7 @@ openclaw-modal-dialog {
   max-height: var(--openclaw-modal-height-limit);
   margin: auto;
   padding: 0;
-  overflow: clip;
+  overflow: visible;
   border: 0;
   border-radius: var(--overlay-modal-radius);
   background: var(--overlay-modal-surface);
@@ -34,7 +34,7 @@ openclaw-modal-dialog {
 .oc-modal-dialog:has(
   > .oc-modal-dialog__body > .exec-approval-modal-stack:not(.exec-approval-card)
 ) {
-  overflow: visible;
+  border-radius: 0;
   background: transparent;
   box-shadow: none;
 }
@@ -91,6 +91,7 @@ openclaw-modal-dialog {
   min-height: 0;
   padding: 0;
   overflow: auto;
+  border-radius: inherit;
 }
 
 .oc-modal-dialog__overlay-content {
@@ -232,7 +233,8 @@ openclaw-modal-dialog.drawer--floating > .oc-modal-dialog {
 }
 
 @supports (corner-shape: superellipse(1.5)) {
-  .oc-modal-dialog {
+  .oc-modal-dialog,
+  .oc-modal-dialog__body {
     corner-shape: superellipse(1.5);
   }
 }
