@@ -1626,6 +1626,41 @@ async function runWorker() {
                 const state = Reflect.get(window, "__wireReadiness").state;
                 return state.transcriptMs !== null && state.composerMs !== null;
               });
+              // Route visits may retain Dashboard; reconnect compares the same chat layout.
+              const activePane = page.locator(".chat-pane-cache__pane--active");
+              const closeDashboard = activePane.getByRole("button", {
+                name: "Close Dashboard",
+                exact: true,
+              });
+              if (await closeDashboard.isVisible()) {
+                await closeDashboard.click();
+              }
+              const reconnectLayoutHandle = await page.waitForFunction(() => {
+                const pane = document.querySelector(".chat-pane-cache__pane--active");
+                const region = pane?.querySelector<HTMLElement>(".sidebar-region");
+                const conversation = region?.querySelector<HTMLElement>(".sidebar-region__primary");
+                const dashboard = region?.querySelector<HTMLElement>(
+                  '[data-panel-slot="dashboard"]',
+                );
+                if (!region || !conversation?.checkVisibility() || dashboard?.checkVisibility()) {
+                  return null;
+                }
+                const regionBounds = region.getBoundingClientRect();
+                const conversationBounds = conversation.getBoundingClientRect();
+                if (
+                  regionBounds.width <= 0 ||
+                  Math.abs(regionBounds.left - conversationBounds.left) > 1 ||
+                  Math.abs(regionBounds.right - conversationBounds.right) > 1
+                ) {
+                  return null;
+                }
+                return {
+                  regionWidth: regionBounds.width,
+                  conversationWidth: conversationBounds.width,
+                };
+              });
+              const reconnectLayout = await reconnectLayoutHandle.jsonValue();
+              await reconnectLayoutHandle.dispose();
               const outageStartedAtMs = performance.now();
               proxy.setOffline(true);
               try {
@@ -1637,7 +1672,7 @@ async function runWorker() {
                 await page.waitForTimeout(
                   Math.max(0, 5_000 - (performance.now() - outageStartedAtMs)),
                 );
-                const reconnectDetails = { outageMs: 0 };
+                const reconnectDetails = { outageMs: 0, layout: reconnectLayout };
                 await capture(
                   "reconnect",
                   async () => {

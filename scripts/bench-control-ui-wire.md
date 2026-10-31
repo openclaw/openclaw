@@ -88,8 +88,11 @@ and requires an enabled theme control. All three require the matching settled
 route as well as their visible ready state. These are first visits in the
 existing browser context, not cold direct navigations.
 
-For reconnect, the proxy destroys existing connections and rejects new ones for
-five seconds. The runner confirms the app enters its reconnecting phase.
+For reconnect, the runner first closes any retained Dashboard through its UI
+control and verifies that the conversation fills the sidebar region. It records
+both widths so the compared samples have the same layout. The proxy then destroys
+existing connections and rejects new ones for five seconds. The runner confirms
+the app enters its reconnecting phase.
 `outageMs` records the actual outage; readiness timing starts at link restoration
 and excludes that interval. Readiness requires the connected phase, a fresh
 canonical session roster, and the visible transcript and enabled composer.
