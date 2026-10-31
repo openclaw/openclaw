@@ -107,7 +107,21 @@ it.each([
   [["apps/linux/ui/index.html"], true],
   [["apps/linux/src-tauri/resources/README.md"], true],
   [["scripts/stage-openclaw-bun.sh"], true],
+  [["test/scripts/stage-openclaw-bun.test.ts"], false],
+  [["test/scripts/actions-artifact-zip.test-support.ts"], false],
+  [
+    [
+      "test/scripts/stage-openclaw-bun.test.ts",
+      "test/scripts/actions-artifact-zip.test-support.ts",
+    ],
+    false,
+  ],
+  [["test/scripts/stage-openclaw-bun.test.ts", "scripts/stage-openclaw-bun.sh"], true],
+  [["test/scripts/stage-openclaw-bun.test.ts", "scripts/lib/openclaw-bun.json"], true],
+  [["test/scripts/stage-openclaw-bun.test.ts", "apps/linux/scripts/test-stage-runtime.mjs"], true],
+  [["test/scripts/stage-openclaw-bun.test.ts", "apps/linux/src-tauri/src/main.rs"], true],
   [[".github/workflows/linux-app.yml"], true],
+  [[".github/workflows/linux-app-release.yml"], true],
 ] as const)("selects Linux app CI for %j: %s", (files, expected) => {
   const patterns: string[] = workflow.on.pull_request.paths;
   const selected = files.some((file) =>

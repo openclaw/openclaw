@@ -513,9 +513,7 @@ suite.define(() => {
                   effortBox.width >= 44 &&
                   modelBox.x >= composerBox.x &&
                   modelBox.x + modelBox.width <= effortBox.x + 1 &&
-                  (effortBox.x + effortBox.width <= actionsBox.x + 1 ||
-                    effortBox.y + effortBox.height <= actionsBox.y + 1) &&
-                  effortBox.x + effortBox.width <= composerBox.x + composerBox.width + 1 &&
+                  effortBox.x + effortBox.width <= actionsBox.x + 1 &&
                   actionsBox.x + actionsBox.width <= composerBox.x + composerBox.width + 1,
                 );
               },
@@ -556,6 +554,11 @@ suite.define(() => {
         await page.setViewportSize({ width: 393, height: 852 });
         await page.emulateMedia({ reducedMotion: "no-preference" });
         await composer.locator("textarea").click();
+        // Re-entering mobile editing animates the toolbar before it can be clicked.
+        await expect.poll(() => composer.getAttribute("data-composer-layout")).toBeNull();
+        await composer.evaluate(async (input) => {
+          await Promise.all(input.getAnimations().map((animation) => animation.finished));
+        });
         const needle = effort.locator(".chat-controls__effort-gauge-needle");
         const needleAngle = () =>
           needle.evaluate((node) => {
@@ -737,10 +740,7 @@ suite.define(() => {
         expect(effortBox).not.toBeNull();
         expect(actionsBox).not.toBeNull();
         expect(modelBox!.x + modelBox!.width).toBeLessThanOrEqual(effortBox!.x + 1);
-        expect(
-          effortBox!.x + effortBox!.width <= actionsBox!.x + 1 ||
-            effortBox!.y + effortBox!.height <= actionsBox!.y + 1,
-        ).toBe(true);
+        expect(effortBox!.x + effortBox!.width).toBeLessThanOrEqual(actionsBox!.x + 1);
         expect(effortBox!.width).toBeGreaterThanOrEqual(44);
         await effort.click();
         expect(await composer.locator("[data-chat-thinking-slider]").count()).toBe(0);

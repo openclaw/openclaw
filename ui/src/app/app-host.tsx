@@ -492,11 +492,13 @@ export class ShellOwner
     }
     this.syncDocumentTitle();
     // Theme and breakpoint owners sync their changes; route/runtime changes
-    // can change whether the committed shell uses the chat background.
+    // can change whether the committed shell exposes its content canvas. The
+    // mounted session workbench covers it with the --bg chat surface.
     syncControlUiSystemChrome(
       false,
       this.shellElement?.isConnected === true &&
-        this.shellElement.classList.contains("shell--chat"),
+        this.shellElement.classList.contains("shell--chat") &&
+        this.contentElement?.classList.contains("content--workbench") !== true,
     );
     // Render-gated pending lazy actions replay on the update that first
     // renders their element, independent of further context updates.

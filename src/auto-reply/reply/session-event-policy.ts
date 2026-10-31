@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveAgentEntry } from "../../agents/agent-scope-config.js";
 import { resolveModelProviderAuthConfig } from "../../agents/model-auth-provider-route.js";
+import { buildAllowedModelSet } from "../../agents/model-selection-shared.js";
 import {
   resolveProviderAuthAliasMap,
   resolveProviderIdForAuth,
@@ -119,15 +120,50 @@ export function captureScheduledSessionEventConfigPolicy(
         .map(([id]) => id),
     );
   const capturedProfileIds = selection ? profileIds(captured) : new Set<string>();
+  const sameModelPolicy = (before: OpenClawConfig, after: OpenClawConfig) => {
+    const policy = (value: OpenClawConfig) => [
+      value.agents?.defaults?.modelPolicy,
+      resolveAgentEntry(value, agentId)?.modelPolicy,
+    ];
+    if (!selection || isDeepStrictEqual(policy(before), policy(after))) {
+      return true;
+    }
+    const allows = (cfg: OpenClawConfig) =>
+      buildAllowedModelSet({
+        cfg,
+        agentId,
+        catalog: [],
+        defaultProvider: selection.provider,
+      }).allows(selection);
+    return allows(before) === allows(after);
+  };
   return (current: OpenClawConfig, routeChannels: Array<string | undefined>) => {
     const channels = [
       ...new Set([creatorChannel, ...routeChannels].filter((id): id is string => Boolean(id))),
     ];
     const project = (
-      { agents, auth, channels: channelConfig, meta: _meta, ...global }: OpenClawConfig,
+      {
+        agents,
+        auth,
+        models,
+        channels: channelConfig,
+        logging: _logging,
+        meta: _meta,
+        ...global
+      }: OpenClawConfig,
       profiles: ReadonlySet<string>,
     ) => ({
       ...global,
+      models: selection
+        ? {
+            ...models,
+            providers: Object.fromEntries(
+              Object.entries(models?.providers ?? {}).filter(([provider]) =>
+                relevantAuthProvider(provider),
+              ),
+            ),
+          }
+        : models,
       auth: selection
         ? {
             profiles: Object.fromEntries(
@@ -142,8 +178,14 @@ export function captureScheduledSessionEventConfigPolicy(
         : auth,
       agents: {
         ownership: agents?.ownership,
-        defaults: agents?.defaults,
-        agent: resolveAgentEntry({ agents }, agentId),
+        defaults: {
+          ...agents?.defaults,
+          modelPolicy: selection ? undefined : agents?.defaults?.modelPolicy,
+        },
+        agent: {
+          ...resolveAgentEntry({ agents }, agentId),
+          modelPolicy: selection ? undefined : resolveAgentEntry({ agents }, agentId)?.modelPolicy,
+        },
       },
       channels: {
         defaults: channelConfig?.defaults,
@@ -157,6 +199,12 @@ export function captureScheduledSessionEventConfigPolicy(
     });
     const relevantPath = (path: string, profiles: ReadonlySet<string>) => {
       const tokens = parseConcreteConfigPathTokens(path);
+      if (tokens?.[0] === "logging") {
+        return false;
+      }
+      if (tokens?.[0] === "models" && tokens[1] === "providers" && selection) {
+        return typeof tokens[2] !== "string" || relevantAuthProvider(tokens[2]);
+      }
       if (tokens?.[0] === "auth" && selection) {
         const key = tokens[2];
         return (
@@ -196,9 +244,16 @@ export function captureScheduledSessionEventConfigPolicy(
     // The config owner supplies immutable publication/source pairs, including in-place
     // republishes. No fingerprint or second mutable config cache belongs to this turn.
     const candidate = captureRuntimeConfig(current);
-    return isDeepStrictEqual(
-      pair(captured, capturedProfileIds),
-      pair(candidate, selection ? profileIds(candidate) : capturedProfileIds),
+    return (
+      isDeepStrictEqual(
+        pair(captured, capturedProfileIds),
+        pair(candidate, selection ? profileIds(candidate) : capturedProfileIds),
+      ) &&
+      sameModelPolicy(captured, candidate) &&
+      sameModelPolicy(
+        getRuntimeConfigCapture(captured)?.source ?? captured,
+        getRuntimeConfigCapture(candidate)?.source ?? candidate,
+      )
     );
   };
 }

@@ -98,12 +98,12 @@ export function Skills(props: SkillsProps) {
       props.state.skillsStatusFilter === "all"
         ? items
         : items.filter((skill) => skillStatus(skill) === props.state.skillsStatusFilter);
-    const filter = normalizeLowercaseStringOrEmpty(props.state.skillsFilter);
+    const filter = normalizeLowercaseStringOrEmpty(props.state.skillsFilter).normalize("NFC");
     return filter
       ? afterStatus.filter((skill) =>
-          normalizeLowercaseStringOrEmpty(
-            [skill.name, skill.description, skill.source].join(" "),
-          ).includes(filter),
+          normalizeLowercaseStringOrEmpty([skill.name, skill.description, skill.source].join(" "))
+            .normalize("NFC")
+            .includes(filter),
         )
       : afterStatus;
   };

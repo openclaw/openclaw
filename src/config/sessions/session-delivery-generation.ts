@@ -2,13 +2,17 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
-import { retainSqliteDatabaseAdmissionForPath } from "../../infra/sqlite-database-admission.js";
+import {
+  canShareSqliteDatabaseAdmissions,
+  retainSqliteDatabaseAdmissionForPath,
+} from "../../infra/sqlite-database-admission.js";
 import { hasPendingSqliteNativeExecution } from "../../infra/sqlite-native-observer.js";
 import {
   readSqliteNativeMutationRevision,
   registerSqliteSchemaMutationListener,
 } from "../../infra/sqlite-schema-facts.js";
 import {
+  assertDatabasePathIdentity,
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
@@ -469,10 +473,12 @@ async function prepareSessionGenerationLease(
         },
       );
     }
-    const admission = source && retainSqliteDatabaseAdmissionForPath(source.path);
+    const sharedAdmission = canShareSqliteDatabaseAdmissions();
+    const admission =
+      sharedAdmission && source && retainSqliteDatabaseAdmissionForPath(source.path);
     if (admission) {
       releases.push(admission.release);
-    } else if (source?.identity.key.startsWith("file:")) {
+    } else if (sharedAdmission && source?.identity.key.startsWith("file:")) {
       throw new SessionDeliveryGenerationUnavailableError();
     }
     const readCurrent = () => {
@@ -480,7 +486,10 @@ async function prepareSessionGenerationLease(
       if (!source || (admission && !admission.isCurrent())) {
         throw new SessionDeliveryGenerationUnavailableError();
       }
-      // Admission owns file identity; retained guards never poll its pathname.
+      // Unhosted workers cannot share admission and retain their native source checks.
+      if (!sharedAdmission) {
+        assertDatabasePathIdentity(source.path, source.identity);
+      }
       const entry = checkEntry(retained?.readCurrent());
       assertNativeCurrent(entry);
       return entry;

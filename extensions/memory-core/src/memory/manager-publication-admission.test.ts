@@ -263,9 +263,9 @@ it("preserves memory schema admission when a fresh handle reuses repair then rep
   });
 });
 
-it.each(["clean", "unclean"])(
-  "retains reindexed memory admission across a %s restart without skipping required integrity",
-  async (shutdown) => {
+it.each(["valid", "invalid"])(
+  "retains reindexed memory admission with a %s seal without skipping required integrity",
+  async (seal) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
       const target = openOpenClawAgentDatabase({
         agentId: "main",
@@ -337,18 +337,20 @@ it.each(["clean", "unclean"])(
         backend.close();
       }
       await closeOpenClawAgentDatabasesAsync();
-      expect(fs.existsSync(`${target.path}.seal`)).toBe(true);
-      if (shutdown === "unclean") {
-        fs.unlinkSync(`${target.path}.seal`);
+      const { payload } = JSON.parse(fs.readFileSync(`${target.path}.seal`, "utf8"));
+      const { verifiedAt } = JSON.parse(payload);
+      if (seal === "invalid") {
+        fs.writeFileSync(`${target.path}.seal`, "interrupted seal write");
       }
       // Same-process reopen deliberately retains physical proof; only a new process tests the seal.
       const { stdout } = await promisify(execFile)(process.execPath, [
         ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(memoryAdmissionRestartEntrypoint)),
         target.path,
+        String(verifiedAt),
       ]);
       expect(JSON.parse(stdout)).toEqual({
-        integrityChecked: shutdown === "unclean",
-        // A missing seal requires integrity verification, but the published schema is still valid.
+        integrityChecked: seal === "invalid",
+        // An invalid seal requires full verification, but the published schema is still valid.
         schemaRebuilt: false,
         ftsAvailable: true,
       });
