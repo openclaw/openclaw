@@ -55,6 +55,7 @@ backup and its matching build, not just reinstalling the older package.
 | 36      | Indexed PostgreSQL exact-path memory candidates with unchanged ranking; metadata-only SQLite advance                                                                                                                                                   | `Unreleased` |
 | 37      | Ordered cold transcript archive chunks with a 64 MiB uncompressed bound per file                                                                                                                                                                       | `Unreleased` |
 | 38      | PostgreSQL full-text search splits punctuation-joined tokens like SQLite FTS5 ([#183547](https://github.com/openclaw/openclaw/pull/183547)); metadata-only SQLite advance                                                                              | `Unreleased` |
+| 39      | Retained cold transcript navigation for bounded history reads without restoration                                                                                                                                                                      | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
@@ -74,6 +75,32 @@ including shared agent registration. Run `openclaw doctor --fix` with OpenClaw
 be verified, follow the explicit agent-restoration instructions it reports, then
 rerun Doctor before upgrading the copy. Schema-8 and later session migrations
 remain supported.
+
+### Agent schema 39
+
+Schema 39 permits cold transcript payload references in `transcript_events`.
+Archival retains compact navigation, identities, active-path positions, and index
+state while the immutable archive remains the canonical payload. Bounded history
+pages and initial message subscriptions select through those rows and verify only
+the archive chunks containing their selected payloads. They do not restore the
+transcript or wait for writer admission. Branch, reset, visibility, and cursor
+rules remain with the existing history owner.
+
+Doctor backfills existing archives independently under maintenance custody,
+preserving a verified backup first. Each archive's navigation commits atomically;
+an interrupted or failed archive remains pending for the next Doctor pass while
+other archives can finish. An archive awaiting qualification retains its existing
+restore behavior. The update-time Doctor runs the same repair. Direct package
+replacements should run `openclaw doctor --fix` before ordinary startup.
+
+Retained navigation increases the working database's storage cost. Headers and
+exceptional imported envelopes whose native interpretation cannot be represented
+by bounded navigation keep their original inline bytes. Restoration still serves
+write-capable continuations, and full-history deletion removes both navigation
+and payload archives. No new retention setting or archive format is introduced.
+SQLite rebuilds the payload constraint without changing existing rows; PostgreSQL
+updates the equivalent constraint. Older builds refuse schema 39. Rollback needs
+the verified pre-upgrade database and archive backup with its matching binary.
 
 ### Agent schema 38
 
