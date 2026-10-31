@@ -43,6 +43,8 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   private failure: Error | undefined;
   private outcomeUnknown = true;
   private readOnlyTransaction = false;
+  // A read-only BEGIN takes no snapshot, so it travels with the transaction's first statement.
+  private deferredBegin: string | undefined;
   // Read handles can share an anchor, but only its writing handle may settle the receipt.
   private pendingWrite = false;
   private readonly mainThread = threadId === 0;
@@ -100,6 +102,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   }
 
   readRecoveryGeneration(lock = false): string {
+    this.flushDeferredBegin();
     return this.request(
       { operation: "recovery-generation", schema: this.schema, storeId: this.storeId, lock },
       false,
@@ -244,13 +247,28 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     readBigInts: boolean,
   ) {
     validatePostgresBindings(parameters);
+    const begin = this.deferredBegin;
+    this.deferredBegin = undefined;
+    if (!this.isTransaction && /^\s*BEGIN\b[^;]*\bREAD\s+ONLY\b[^;]*;?\s*$/i.test(sql)) {
+      this.assertOpen();
+      this.deferredBegin = sql;
+      this.isTransaction = true;
+      this.readOnlyTransaction = true;
+      return { rows: [], rowCount: 0, columns: [] };
+    }
+    if (begin !== undefined && /^\s*ROLLBACK\s*;?\s*$/i.test(sql)) {
+      // The snapshot ran no statement, so the server never opened it.
+      this.isTransaction = false;
+      this.readOnlyTransaction = false;
+      return { rows: [], rowCount: 0, columns: [] };
+    }
     const wasTransaction = this.isTransaction;
     // A later statement in a combined BEGIN request can fail after BEGIN succeeded.
     if (/^\s*BEGIN\b/i.test(sql)) {
       this.isTransaction = true;
     }
     const result = this.request(
-      { operation: "query", schema: this.schema, sql, parameters },
+      { operation: "query", schema: this.schema, sql, parameters, ...(begin ? { begin } : {}) },
       !wasTransaction || /^\s*COMMIT\b/i.test(sql),
     );
     const readOnly = this.readOnlyTransaction;
@@ -293,6 +311,21 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
 
   exec(sql: string): void {
     this.query(sql);
+  }
+
+  private flushDeferredBegin(): void {
+    const begin = this.deferredBegin;
+    if (begin !== undefined) {
+      this.deferredBegin = undefined;
+      const { inTransaction } = this.request({
+        operation: "query",
+        schema: this.schema,
+        sql: begin,
+        parameters: [],
+      });
+      this.isTransaction = inTransaction;
+      this.readOnlyTransaction = inTransaction;
+    }
   }
 
   prepare(sql: string): SqlStatement {
@@ -358,6 +391,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       this.finishWrite();
       this.isOpen = false;
       this.isTransaction = false;
+      this.deferredBegin = undefined;
       this.bridge?.port.close();
       this.bridge = undefined;
     }

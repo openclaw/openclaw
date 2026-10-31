@@ -6,6 +6,7 @@ import { readSqliteNativeMutationRevision as readRevision } from "../sqlite-sche
 import {
   runSqliteImmediateTransaction as prepared,
   runSqliteImmediateTransactionSync as immediate,
+  runSqliteReadSnapshotSync as snapshot,
   runSqliteReservedTransactionSync as reserved,
   runSqliteWorkerTransactionSync as worker,
 } from "../sqlite-transaction.js";
@@ -189,6 +190,37 @@ it.each([0, 999, 1000, 1001])("validates reuse after %d idle ms", (idleMs) => {
     vi.advanceTimersByTime(3 * 60_000);
     vi.useRealTimers();
   }
+});
+
+it("sends a read-only BEGIN with the snapshot's first statement and skips empty snapshots", () => {
+  const fixture = transportFixture("normal");
+  const begin = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY";
+  withEngineStoreAdmission(() => {
+    expect(snapshot(fixture.db, () => fixture.db.prepare("SELECT 7 AS value").get())).toEqual({
+      value: 7,
+    });
+    expect(snapshot(fixture.db, () => "empty")).toBe("empty");
+  });
+  expect(fixture.sent.mock.calls.map(([request]) => [request.sql, request.begin])).toEqual([
+    ["SELECT 7 AS value", begin],
+    ["ROLLBACK", undefined],
+  ]);
+  expect(fixture.db.isTransaction).toBe(false);
+});
+
+it("rolls back a deferred read snapshot whose first statement fails", () => {
+  const fixture = transportFixture("normal");
+  fixture.rejectQuery({ name: "error", message: "statement timeout", code: "57014" });
+  expect(() =>
+    withEngineStoreAdmission(() =>
+      snapshot(fixture.db, () => fixture.db.prepare("SELECT 7 AS value").get()),
+    ),
+  ).toThrow("statement timeout");
+  const queries = fixture.sent.mock.calls.filter(([request]) => request.operation === "query");
+  expect(queries.map(([request]) => [request.sql, request.begin])).toEqual([
+    ["SELECT 7 AS value", "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"],
+    ["ROLLBACK", undefined],
+  ]);
 });
 
 it("checks transport status after a query error instead of reusing an earlier idle reply", () => {

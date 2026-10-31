@@ -269,6 +269,9 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
             request.reconnectIfIdle === true,
             request.validateIfIdle === true,
           );
+          if (request.begin) {
+            await client.query(request.begin);
+          }
           const results = await statements.query(request.sql, request.parameters);
           const result: QueryResult = Array.isArray(results) ? results.at(-1)! : results;
           // A trailing SELECT must not hide an earlier write in the same SQL batch.
