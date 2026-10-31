@@ -1594,7 +1594,6 @@ span.new-session-page__select {
 }
 
 .new-session-page__cloud-config-card {
-  --openclaw-tooltip-background-color: var(--bg-elevated);
   --openclaw-tooltip-max-width: min(510px, calc(100vw - 24px));
 }
 

@@ -9,10 +9,12 @@
   overflow: auto;
   color: var(--text);
   font-family: var(--font-body);
-  background: var(--card);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--overlay-shadow);
+  border: 0;
+  border-radius: var(--menu-radius);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
+  corner-shape: superellipse(1.5);
   pointer-events: auto;
 }
 
@@ -104,4 +106,13 @@ a.link-hovercard__open {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+@media (forced-colors: active) {
+  .link-hovercard {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
 }

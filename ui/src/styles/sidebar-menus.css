@@ -99,11 +99,7 @@
 .session-menu__snooze-picker {
   width: 300px;
   padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
   color: var(--text);
-  box-shadow: var(--shadow-lg);
 }
 
 .session-menu__snooze-picker .field {
