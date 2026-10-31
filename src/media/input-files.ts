@@ -97,7 +97,7 @@ const DEFAULT_INPUT_PDF_MAX_PIXELS = 4_000_000;
 /** Default text threshold before PDF extraction keeps text-only output. */
 const DEFAULT_INPUT_PDF_MIN_TEXT_CHARS = 200;
 const NORMALIZED_INPUT_IMAGE_MIME = "image/jpeg";
-const HEIC_INPUT_IMAGE_MIMES = new Set(["image/heic", "image/heif"]);
+const CONVERT_TO_JPEG_INPUT_MIMES = new Set(["image/heic", "image/heif", "image/avif"]);
 
 function parseContentType(value: string | undefined): {
   mimeType?: string;
@@ -261,11 +261,11 @@ export async function normalizeInputImageBuffer(params: {
     throw new Error(`Unsupported image MIME type: ${sourceMime}`);
   }
 
-  if (!HEIC_INPUT_IMAGE_MIMES.has(sourceMime)) {
+  if (!CONVERT_TO_JPEG_INPUT_MIMES.has(sourceMime)) {
     return { buffer: params.buffer, mimeType: sourceMime };
   }
 
-  // Normalize HEIC/HEIF to JPEG because downstream model and channel surfaces expect common images.
+  // Normalize HEIC/HEIF/AVIF to JPEG because downstream model and channel surfaces expect common images.
   const normalizedBuffer = await convertHeicToJpeg(params.buffer);
   if (normalizedBuffer.byteLength > params.limits.maxBytes) {
     throw new Error(
