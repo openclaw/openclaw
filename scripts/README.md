@@ -331,6 +331,9 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
   --bundle-dir dist/control-ui --pairs 10 --viewport both
 ```
 
+The opt-in [`chat-actions` census](bench-control-ui-chat-actions.md) covers command
+and mention menus, message actions, attachments, transcript search, and side panels.
+
 Use `--steps chat-typing,session-switch` for focused comparisons and `--trace`
 for separate Playwright/Inspector attribution runs. `--compare-bundle-dir` and
 `--control-bundle-dir` add candidate and A/A control builds. Repeat the control

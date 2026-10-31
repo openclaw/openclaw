@@ -118,8 +118,6 @@ function authOrder(provider: string, ...profiles: string[]): OpenClawConfig {
 }
 
 function mockRefreshFailure(message = "synthetic OAuth refresh failure") {
-  // Diagnostic hints are independent of refresh selection and load the full runtime.
-  vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(undefined);
   return vi
     .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
     .mockRejectedValue(new Error(message));
@@ -298,10 +296,6 @@ describe("Provider model discovery auth preparation", () => {
       }
       await state.writeAuthProfiles(store);
       const events: string[] = [];
-      // Diagnostic copy is independent of refresh selection and loads the full plugin runtime.
-      vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(
-        undefined,
-      );
       const refresh = vi
         .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
         .mockImplementation(async ({ credential }) => {
@@ -558,9 +552,6 @@ describe("Provider model discovery auth preparation", () => {
         createDeferredCore<
           Awaited<ReturnType<typeof providerRuntime.resolveProviderOAuthCredentialWithPlugin>>
         >();
-      vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(
-        undefined,
-      );
       const refresh = vi
         .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
         .mockImplementation(async ({ credential }) => {

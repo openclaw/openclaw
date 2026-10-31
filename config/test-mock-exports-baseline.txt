@@ -5859,7 +5859,6 @@
 ["src/plugins/provider-runtime.synthetic-auth-discovery.test.ts","./providers.js","02c9cf635152d0d3a8fdc61ea44c977a169587c47f808df300ec7e383c6a6345",1]
 ["src/plugins/provider-runtime.test.ts","../logging/subsystem.js","8f5744ba10f27896f81604c1ed72b4f342f8f26b18bf7ff8da96222f2cff1d22",1]
 ["src/plugins/provider-runtime.test.ts","./provider-external-auth.js","3eb7675306f3a768d7392a9c8eec919395af7883ae869af98e00d53ec3e7a079",1]
-["src/plugins/provider-runtime.test.ts","./provider-hook-runtime.js","c0c26e959478ec353fb390af801b89815ea99dabbfd0e2046445563a3be82b93",1]
 ["src/plugins/provider-runtime.test.ts","./provider-public-artifacts.js","b60f079a1cb52f1785245b50f72b5c97310ca9212b59b86446ecaed3181bfc62",1]
 ["src/plugins/provider-self-hosted-discovery.test.ts","../infra/net/fetch-guard.js","fdadfeec534de4036616e568f0a72048f5184e58a33412d299614865ab03ebed",1]
 ["src/plugins/provider-self-hosted-setup.interactive.test.ts","../agents/auth-profiles/upsert-with-lock.js","96a8fa192abb6a15db3ce37a712fe4069d5fdef0f08b732fbbde33214edd473e",1]
