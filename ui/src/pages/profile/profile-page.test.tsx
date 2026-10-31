@@ -5,11 +5,11 @@ import type { UserProfile } from "../../../../packages/gateway-protocol/src/inde
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
+import type { AuthenticatedUser } from "../../app/user-profile.ts";
 // These tests own identity loading, not the lazy preference reader; settle that module at setup
 // so its cold transform cannot consume the one-second UI waits on a loaded CI runner.
 import "../../app/user-prefs-request.ts";
-import type { AuthenticatedUser } from "../../app/user-profile.ts";
-import { i18n, t } from "../../i18n/index.ts";
+import { i18n, t, translateActive } from "../../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -42,6 +42,7 @@ const modelAccountStep = {
   message: "Paste the redirect URL or wait for sign-in to finish.",
   externalUrl: "https://auth.openai.com/oauth/authorize?state=s",
 };
+
 function stubProfileAvatarProcessing(decode = vi.fn<() => Promise<void>>(async () => undefined)) {
   class StubUrl extends URL {
     static override createObjectURL = vi.fn(() => "blob:avatar");
@@ -120,6 +121,9 @@ it("refreshes translated copy when the locale changes while mounted", async () =
   const englishNote = note?.textContent?.trim();
 
   await i18n.setLocale("de");
+  expect(i18n.getLocale()).toBe("de");
+  expect(translateActive("profilePage.offline")).toBeDefined();
+  expect(translateActive("profilePage.offline")).not.toBe(englishNote);
   flush();
 
   expect(note?.textContent?.trim()).toBe(t("profilePage.offline"));
@@ -264,12 +268,12 @@ it("falls back to the text avatar when the hero image fails to load", async () =
   const avatar = page.querySelector(".profile-hero__avatar .identity-avatar--agent")!;
   const image = avatar.querySelector("img");
   expect(image?.getAttribute("src")).toBe("data:image/png;base64,unloadable");
+  expect(avatar.getAttribute("data-avatar-state")).toBe("loaded");
   expect(avatar.classList).not.toContain("is-pending");
 
   image?.dispatchEvent(new Event("error"));
   await waitForFast(() => expect(avatar.classList).toContain("is-fallback"));
 
-  // The shared avatar owner hides its retained image when it reveals the fallback.
   expect(avatar.querySelector(".identity-avatar__image")).toBe(image);
   expect(avatar.getAttribute("data-avatar-state")).toBe("failed");
   expect(avatar.classList).toContain("is-fallback");
@@ -329,9 +333,20 @@ it("fetches a protected hero avatar with the current Control UI credential", asy
 it("keeps identity refresh single-flight and allows retry after settlement", async () => {
   const profile = modelAccountProfile;
   const firstIdentity = createDeferred<never>();
-  const request = mockRpc({
-    "users.prefs.get": () => ({ status: "ok", entries: {} }),
-    "users.self": () => (request.mock.calls.length === 1 ? firstIdentity.promise : { profile }),
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.prefs.get") {
+      return { status: "ok", entries: {} };
+    }
+    if (method === "users.listModelAccounts") {
+      return { profileId: profile.id, accounts: [], links: [] };
+    }
+    if (method !== "users.self") {
+      throw new Error(`unexpected method: ${method}`);
+    }
+    if (request.mock.calls.length === 1) {
+      return await firstIdentity.promise;
+    }
+    return { profile };
   });
   const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
     id: profile.id,
@@ -548,7 +563,10 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   input!.value = "Augusta Ada";
   input!.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
-  page.querySelector<HTMLButtonElement>('.identity-name-control button[type="submit"]')?.click();
+  const saveButton = page.querySelector<HTMLButtonElement>(
+    '.identity-name-control button[type="submit"]',
+  );
+  saveButton?.click();
 
   await waitForFast(() =>
     expect(request.mock.calls.some(([method]) => method === "users.setDisplayName")).toBe(true),
@@ -904,4 +922,37 @@ it("reconnects through the connection owner while retaining the last access summ
   harness.emitHello(gatewayHelloForMethods([], ["operator.sessions.read"]));
   flush();
   expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.sessions.read");
+});
+
+it("preserves an unsaved display-name draft when unrelated negotiated scopes change", async () => {
+  const reload = createDeferred<{ profile: typeof modelAccountProfile }>();
+  let selfReads = 0;
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      return ++selfReads === 1 ? { profile: modelAccountProfile } : reload.promise;
+    }
+    if (method === "users.listModelAccounts") {
+      return { profileId: modelAccountProfile.id, accounts: [], links: [] };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request, {
+    id: modelAccountProfile.id,
+    name: modelAccountProfile.displayName ?? undefined,
+  });
+  harness.emitHello(gatewayHelloForMethods([], ["operator.admin"]));
+  const page = mountProfilePage(harness.context);
+
+  const input = () => page.querySelector<HTMLInputElement>(".identity-name-control input");
+  const refresh = () => page.querySelector<HTMLButtonElement>(".profile-refresh");
+  await waitForFast(() => expect(input()?.value).toBe(modelAccountProfile.displayName));
+  input()!.value = "Unsaved profile draft";
+  input()!.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+
+  harness.emitHello(gatewayHelloForMethods([], ["operator.admin", "operator.read"]));
+  await waitForFast(() => expect(selfReads).toBe(2));
+  reload.resolve({ profile: modelAccountProfile });
+  await waitForFast(() => expect(refresh()?.disabled).toBe(false));
+  expect(input()?.value).toBe("Unsaved profile draft");
 });

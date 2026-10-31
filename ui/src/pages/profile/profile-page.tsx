@@ -49,6 +49,7 @@ import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import { ModelAccounts } from "./model-accounts.tsx";
 import { PersonalInstructions } from "./personal-instructions.tsx";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
+import { ProfileChannelIdentities } from "./profile-channel-identities.tsx";
 import { ProfileHero } from "./profile-hero.tsx";
 import { type IdentityChange, ProfileState } from "./profile-state.ts";
 
@@ -94,6 +95,7 @@ export function ProfilePage() {
     return state;
   };
   const canWrite = createMemo(() => view().canWrite);
+  const canManageChannelIdentities = createMemo(() => view().canManageChannelIdentities());
   const identityScope = createMemo(() => view().identityScope);
   const presentation = createMemo(() => {
     const scope = identityScope();
@@ -471,7 +473,12 @@ export function ProfilePage() {
           <Show when={view().connected}>
             <button
               class="btn profile-refresh"
-              disabled={!view().identityReady || view().identityLoading || identityBusy() !== null}
+              disabled={
+                !view().identityReady ||
+                view().identityLoading ||
+                identityBusy() !== null ||
+                view().channelIdentityBusy
+              }
               onClick={() => state.refreshManually()}
             >
               {view().identityLoading ? t("common.refreshing") : t("common.refresh")}
@@ -514,7 +521,7 @@ export function ProfilePage() {
                     <button
                       type="button"
                       class="btn"
-                      disabled={identityBusy() !== null}
+                      disabled={identityBusy() !== null || view().channelIdentityBusy}
                       onClick={() => context.gateway.connect()}
                     >
                       {t("profilePage.access.reconnect")}
@@ -590,6 +597,10 @@ export function ProfilePage() {
                 <IdentityContent pending={isPending(identityRead)} />
               </Loading>
             </Errored>
+            <ProfileChannelIdentities
+              getState={view}
+              canManage={() => latest(canManageChannelIdentities)}
+            />
           </Show>
           <PersonalInstructions
             hidden={

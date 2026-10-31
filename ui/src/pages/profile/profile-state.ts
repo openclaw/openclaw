@@ -1,7 +1,10 @@
 import type {
   UserProfile,
+  UsersLinkChannelIdentityResult,
+  UsersListChannelIdentitiesResult,
   UsersSetAvatarResult,
   UsersSetDisplayNameResult,
+  UsersUnlinkChannelIdentityResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import {
   GATEWAY_OWNER_PROFILE_ID,
@@ -21,6 +24,25 @@ import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import type { ModelAccountsTargetSource } from "./model-accounts-state.ts";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
+import { sameConnectionScopes } from "./profile-connection-scopes.ts";
+
+type ChannelIdentityLink = UsersListChannelIdentitiesResult["links"][number];
+type ChannelIdentity = ChannelIdentityLink["identity"];
+type ChannelIdentityMutation = {
+  kind: "link" | "unlink";
+  profileId: string;
+  identity: ChannelIdentity;
+};
+type ChannelIdentityTarget = {
+  client: GatewayBrowserClient;
+  profileId: string;
+  identityRequestId: number;
+};
+
+const sameChannelIdentity = (left: ChannelIdentity, right: ChannelIdentity) =>
+  left.channelId === right.channelId &&
+  left.accountId === right.accountId &&
+  left.senderId === right.senderId;
 
 export type IdentityChange =
   | { kind: "display-name" }
@@ -29,6 +51,8 @@ export type IdentityChange =
 
 export class ProfileState {
   private publishTarget?: () => void;
+  private channelIdentityListRequestId = 0;
+  private channelIdentityMutationId = 0;
   readonly modelAccountsTarget: ModelAccountsTargetSource = {
     read: () => ({
       gateway: this.context.gateway.snapshot,
@@ -63,6 +87,28 @@ export class ProfileState {
   presentationLifetime = Promise.withResolvers<void>();
   identityReceipt = { result: Promise.resolve() };
   hello: ApplicationGatewaySnapshot["hello"] | undefined;
+  channelIdentityProfileId: string | null = null;
+  channelIdentityProfileReady = false;
+  channelIdentityLinks: ChannelIdentityLink[] | null = null;
+  channelIdentityLoading = false;
+  channelIdentityError: string | null = null;
+  channelIdentityStatus: string | null = null;
+  channelIdentityMutation: ChannelIdentityMutation | null = null;
+  channelId = "";
+  accountId = "";
+  senderId = "";
+
+  get channelIdentityBusy() {
+    return this.channelIdentityLoading || this.channelIdentityMutation !== null;
+  }
+  get channelIdentityFormDisabled() {
+    return (
+      this.channelIdentityBusy ||
+      this.identityLoading ||
+      this.identityBusy !== null ||
+      this.channelIdentityLinks === null
+    );
+  }
 
   constructor(
     readonly context: ApplicationContext,
@@ -80,6 +126,8 @@ export class ProfileState {
     this.publishTarget = undefined;
     this.retirePresentation();
     this.identityRequestId += 1;
+    this.resetChannelIdentityState(true);
+    this.channelIdentityProfileId = null;
     this.client = null;
     this.connected = false;
     this.identityReady = false;
@@ -104,7 +152,16 @@ export class ProfileState {
     const selfProfileChanged =
       nextSelfUser?.id !== this.selfUser?.id ||
       nextSelfUser?.identity?.id !== this.selfUser?.identity?.id;
+    const identityTargetChanged =
+      clientChanged ||
+      nextConnected !== this.connected ||
+      identityReady !== this.identityReady ||
+      selfProfileChanged;
     const readAccessLost = nextConnected && this.canRead && !nextCanRead;
+    const nextConnectionScopes = snapshot.hello?.auth?.scopes ?? null;
+    const connectionScopesChanged =
+      (nextConnected || clientChanged) &&
+      !sameConnectionScopes(this.connectionScopes, nextConnected ? nextConnectionScopes : null);
     const identitySourceChanged = clientChanged || selfProfileChanged || readAccessLost;
     this.client = snapshot.client;
     this.connected = nextConnected;
@@ -119,7 +176,7 @@ export class ProfileState {
         ? (snapshot.hello?.auth?.scopes ?? null)
         : this.connectionScopes;
     this.selfUser = nextSelfUser;
-    if (identitySourceChanged || connectionChanged) {
+    if (identitySourceChanged || connectionChanged || connectionScopesChanged) {
       this.retirePresentation();
       this.identityRequestId += 1;
       this.identityScope = {};
@@ -127,6 +184,11 @@ export class ProfileState {
       this.identityLoading = false;
       this.identityBusy = null;
       this.identityError = null;
+      this.channelIdentityProfileReady = false;
+      this.resetChannelIdentityState(identityTargetChanged, connectionScopesChanged);
+      if (identityTargetChanged) {
+        this.channelIdentityProfileId = null;
+      }
     }
     if (identitySourceChanged) {
       this.ownProfile = null;
@@ -160,6 +222,8 @@ export class ProfileState {
       currentProfile !== null && displayNameDraft.trim() !== (currentProfile.displayName ?? "");
     this.identityLoading = true;
     this.identityError = null;
+    this.channelIdentityProfileReady = false;
+    this.resetChannelIdentityState(false);
     const result = this.readIdentity(client, requestId, hasUnsavedDisplayName, displayNameDraft);
     this.identityReceipt = { result };
     this.publish();
@@ -176,25 +240,33 @@ export class ProfileState {
       if (requestId !== this.identityRequestId) {
         return;
       }
+      if (profile?.id !== this.channelIdentityProfileId) {
+        this.resetChannelIdentityState(true);
+      }
       this.ownProfile = profile;
+      this.channelIdentityProfileId = profile?.id ?? null;
+      this.channelIdentityProfileReady = true;
       if (!profile) {
+        this.publish();
         return;
       }
       this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
       this.gitCoauthorEnabled = true;
       this.prAttributionEnabled = false;
       this.publish();
+      void this.loadChannelIdentityLinks();
       // Consent belongs to the person, not to a display-primary GitHub account.
       const { loadUserPreferences } = await import("../../app/user-prefs-request.ts");
       if (requestId !== this.identityRequestId) {
         return;
       }
-      const preferences = await loadUserPreferences(client, profile.id, {
+      const preferencesPromise = loadUserPreferences(client, profile.id, {
         keys:
           profile.id === GATEWAY_OWNER_PROFILE_ID
             ? [PR_ATTRIBUTION_PREFERENCE_KEY]
             : [GIT_COAUTHOR_PREFERENCE_KEY, PR_ATTRIBUTION_PREFERENCE_KEY],
       });
+      const preferences = await preferencesPromise;
       if (requestId !== this.identityRequestId) {
         return;
       }
@@ -336,11 +408,305 @@ export class ProfileState {
   }
 
   refreshManually() {
-    if (this.identityReady && !this.identityBusy && !this.identityLoading) {
+    if (
+      this.identityReady &&
+      !this.identityBusy &&
+      !this.identityLoading &&
+      !this.channelIdentityBusy
+    ) {
       if (this.client) {
         invalidateUserPreferences(this.client);
       }
       this.loadIdentity();
+    }
+  }
+
+  canManageChannelIdentities() {
+    return (
+      this.connected &&
+      this.identityReady &&
+      this.canRead &&
+      this.client !== null &&
+      this.connectionScopes?.includes("operator.admin") === true &&
+      this.ownProfile !== null &&
+      this.ownProfile.id === this.channelIdentityProfileId &&
+      this.ownProfile.id !== GATEWAY_OWNER_PROFILE_ID
+    );
+  }
+
+  isRemovingChannelIdentity(link: ChannelIdentityLink) {
+    return (
+      this.channelIdentityMutation?.kind === "unlink" &&
+      sameChannelIdentity(this.channelIdentityMutation.identity, link.identity)
+    );
+  }
+
+  setChannelIdentityDraft(field: "channelId" | "accountId" | "senderId", value: string) {
+    this[field] = value;
+    this.publish();
+  }
+
+  async loadChannelIdentityLinks() {
+    const target = this.currentChannelIdentityTarget();
+    if (!target || this.channelIdentityMutation) {
+      return;
+    }
+    const requestId = ++this.channelIdentityListRequestId;
+    this.channelIdentityLoading = true;
+    this.channelIdentityError = null;
+    this.channelIdentityStatus = null;
+    this.publish();
+    try {
+      const result = await target.client.request<UsersListChannelIdentitiesResult>(
+        "users.listChannelIdentities",
+        { profileId: target.profileId },
+      );
+      if (
+        !this.isCurrentChannelIdentityTarget(target) ||
+        requestId !== this.channelIdentityListRequestId
+      ) {
+        return;
+      }
+      this.channelIdentityLinks = result.links.filter(
+        (link) => link.profileId === target.profileId,
+      );
+    } catch (error) {
+      if (
+        this.isCurrentChannelIdentityTarget(target) &&
+        requestId === this.channelIdentityListRequestId
+      ) {
+        this.channelIdentityError = formatUiError(
+          error,
+          t("profilePage.channelIdentities.loadFailed"),
+        );
+      }
+    } finally {
+      if (
+        this.isCurrentChannelIdentityTarget(target) &&
+        requestId === this.channelIdentityListRequestId
+      ) {
+        this.channelIdentityLoading = false;
+        this.publish();
+      }
+    }
+  }
+
+  async linkChannelIdentity() {
+    const target = this.currentChannelIdentityTarget();
+    const identity: ChannelIdentity = {
+      channelId: this.channelId,
+      accountId: this.accountId,
+      senderId: this.senderId,
+    };
+    if (
+      !target ||
+      this.identityLoading ||
+      this.identityBusy ||
+      this.channelIdentityLoading ||
+      this.channelIdentityLinks === null ||
+      this.channelIdentityMutation ||
+      !identity.channelId.trim() ||
+      !identity.accountId.trim() ||
+      !identity.senderId.trim()
+    ) {
+      return;
+    }
+    const mutationId = ++this.channelIdentityMutationId;
+    this.channelIdentityListRequestId += 1;
+    let mutationStatus: string | null = null;
+    let mutationError: string | null = null;
+    this.channelIdentityMutation = { kind: "link", profileId: target.profileId, identity };
+    this.channelIdentityError = null;
+    this.channelIdentityStatus = null;
+    this.publish();
+    try {
+      const result = await target.client.request<UsersLinkChannelIdentityResult>(
+        "users.linkChannelIdentity",
+        { profileId: target.profileId, identity },
+      );
+      const currentTarget = await this.waitForCurrentChannelIdentityTarget(target);
+      if (
+        mutationId !== this.channelIdentityMutationId ||
+        !currentTarget ||
+        !this.isCurrentChannelIdentityTarget(currentTarget)
+      ) {
+        return;
+      }
+      if (
+        result.profileId !== target.profileId ||
+        !sameChannelIdentity(result.identity, identity)
+      ) {
+        throw new Error(t("profilePage.channelIdentities.linkFailed"));
+      }
+      const links = this.channelIdentityLinks ?? [];
+      this.channelIdentityLinks = links.some((link) => sameChannelIdentity(link.identity, identity))
+        ? links
+        : [...links, result];
+      this.channelId = "";
+      this.accountId = "";
+      this.senderId = "";
+      mutationStatus = t("profilePage.channelIdentities.linked");
+    } catch (error) {
+      const currentTarget = await this.waitForCurrentChannelIdentityTarget(target);
+      if (mutationId === this.channelIdentityMutationId && currentTarget) {
+        mutationError = formatUiError(error, t("profilePage.channelIdentities.linkFailed"));
+      }
+    } finally {
+      if (mutationId === this.channelIdentityMutationId && target.client === this.client) {
+        const reloadTarget = this.currentChannelIdentityTarget();
+        this.channelIdentityMutation = null;
+        if (reloadTarget) {
+          await this.loadChannelIdentityLinks();
+        }
+        if (
+          mutationId === this.channelIdentityMutationId &&
+          reloadTarget &&
+          this.isCurrentChannelIdentityTarget(reloadTarget)
+        ) {
+          if (mutationStatus) {
+            this.channelIdentityStatus = mutationStatus;
+          }
+          if (mutationError) {
+            this.channelIdentityError = mutationError;
+          }
+          this.publish();
+        }
+      }
+    }
+  }
+
+  async unlinkChannelIdentity(link: ChannelIdentityLink) {
+    const target = this.currentChannelIdentityTarget();
+    if (
+      !target ||
+      link.profileId !== target.profileId ||
+      this.identityLoading ||
+      this.identityBusy ||
+      this.channelIdentityLoading ||
+      this.channelIdentityMutation
+    ) {
+      return;
+    }
+    const mutationId = ++this.channelIdentityMutationId;
+    this.channelIdentityListRequestId += 1;
+    let mutationStatus: string | null = null;
+    let mutationError: string | null = null;
+    this.channelIdentityMutation = {
+      kind: "unlink",
+      profileId: target.profileId,
+      identity: link.identity,
+    };
+    this.channelIdentityError = null;
+    this.channelIdentityStatus = null;
+    this.publish();
+    try {
+      await target.client.request<UsersUnlinkChannelIdentityResult>("users.unlinkChannelIdentity", {
+        profileId: target.profileId,
+        identity: link.identity,
+      });
+      const currentTarget = await this.waitForCurrentChannelIdentityTarget(target);
+      if (
+        mutationId !== this.channelIdentityMutationId ||
+        !currentTarget ||
+        !this.isCurrentChannelIdentityTarget(currentTarget)
+      ) {
+        return;
+      }
+      if (this.channelIdentityLinks !== null) {
+        this.channelIdentityLinks = this.channelIdentityLinks.filter(
+          (candidate) => !sameChannelIdentity(candidate.identity, link.identity),
+        );
+      }
+      mutationStatus = t("profilePage.channelIdentities.unlinked");
+    } catch (error) {
+      const currentTarget = await this.waitForCurrentChannelIdentityTarget(target);
+      if (mutationId === this.channelIdentityMutationId && currentTarget) {
+        mutationError = formatUiError(error, t("profilePage.channelIdentities.unlinkFailed"));
+      }
+    } finally {
+      if (mutationId === this.channelIdentityMutationId && target.client === this.client) {
+        const reloadTarget = this.currentChannelIdentityTarget();
+        this.channelIdentityMutation = null;
+        if (reloadTarget) {
+          await this.loadChannelIdentityLinks();
+        }
+        if (
+          mutationId === this.channelIdentityMutationId &&
+          reloadTarget &&
+          this.isCurrentChannelIdentityTarget(reloadTarget)
+        ) {
+          if (mutationStatus) {
+            this.channelIdentityStatus = mutationStatus;
+          }
+          if (mutationError) {
+            this.channelIdentityError = mutationError;
+          }
+          this.publish();
+        }
+      }
+    }
+  }
+
+  private currentChannelIdentityTarget(): ChannelIdentityTarget | null {
+    const profile = this.ownProfile;
+    const client = this.client;
+    if (
+      !client ||
+      !this.canManageChannelIdentities() ||
+      !this.canRead ||
+      !this.channelIdentityProfileReady ||
+      !profile
+    ) {
+      return null;
+    }
+    return { client, profileId: profile.id, identityRequestId: this.identityRequestId };
+  }
+
+  private async waitForCurrentChannelIdentityTarget(
+    target: ChannelIdentityTarget,
+  ): Promise<ChannelIdentityTarget | null> {
+    if (this.isCurrentChannelIdentityTarget(target)) {
+      return target;
+    }
+    if (target.client !== this.client || this.ownProfile?.id !== target.profileId) {
+      return null;
+    }
+    const requestId = this.identityRequestId;
+    if (this.identityLoading) {
+      await this.identityReceipt.result;
+    }
+    if (requestId !== this.identityRequestId) {
+      return null;
+    }
+    const current = this.currentChannelIdentityTarget();
+    return current?.client === target.client && current.profileId === target.profileId
+      ? current
+      : null;
+  }
+
+  private isCurrentChannelIdentityTarget(target: ChannelIdentityTarget) {
+    const current = this.currentChannelIdentityTarget();
+    return (
+      current?.client === target.client &&
+      current.profileId === target.profileId &&
+      current.identityRequestId === target.identityRequestId
+    );
+  }
+
+  private resetChannelIdentityState(targetChanged: boolean, retireMutation = false) {
+    this.channelIdentityListRequestId += 1;
+    this.channelIdentityLinks = null;
+    this.channelIdentityLoading = false;
+    this.channelIdentityError = null;
+    this.channelIdentityStatus = null;
+    if (targetChanged || retireMutation) {
+      this.channelIdentityMutationId += 1;
+      this.channelIdentityMutation = null;
+    }
+    if (targetChanged) {
+      this.channelId = "";
+      this.accountId = "";
+      this.senderId = "";
     }
   }
 }

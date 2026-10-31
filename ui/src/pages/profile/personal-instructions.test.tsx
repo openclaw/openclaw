@@ -2,16 +2,23 @@
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { PersonalInstructions } from "./personal-instructions.tsx";
-import { createConnectedContext } from "./profile-page.test-support.tsx";
+import {
+  createConnectedContext,
+  modelAccountProfile,
+  mountProfilePage,
+} from "./profile-page.test-support.tsx";
+import { disconnectedGitHub, mockRpc } from "./profile-rpc.test-support.ts";
 
 const file = {
   agentId: "main",
@@ -33,8 +40,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function mount(
-  request: GatewayBrowserClient["request"],
+function createContext(
+  request: GatewayRequestHandler,
   signedIn = true,
   multipleProfiles = true,
   scopes: string[] = hello.auth.scopes,
@@ -43,22 +50,36 @@ function mount(
     request,
     signedIn ? { id: "profile-1", name: "Ada" } : null,
   );
-  const { context } = harness;
+  const base = harness.context;
   harness.emitHello({
     ...hello,
     auth: { ...hello.auth, scopes },
     policy: { hasMultipleSessionSharingIdentities: multipleProfiles },
   });
-  context.agents.state.agentsList = makeBootRoster({
+  const agents = base.agents;
+  agents.state.agentsList = makeBootRoster({
     agents: ["main", "other"].map((id) => ({ id })),
   });
-  const selection = context.settingsAgentSelection;
+  const selection = base.settingsAgentSelection;
   selection.set("main");
-  const provider = createSolidApplicationContextProvider(context);
+  return {
+    context: base,
+    selection,
+    emit: (patch: Parameters<typeof harness.emitSnapshot>[0]) => harness.emitSnapshot(patch),
+  };
+}
+function mount(
+  request: GatewayRequestHandler,
+  signedIn = true,
+  multipleProfiles = true,
+  scopes: string[] = hello.auth.scopes,
+) {
+  const harness = createContext(request, signedIn, multipleProfiles, scopes);
+  const provider = createSolidApplicationContextProvider(harness.context);
   const { container: element } = mountSolid(() => <PersonalInstructions />, {
     wrapper: provider.wrapper,
   });
-  return { selection, emit: harness.emitSnapshot.bind(harness), element };
+  return { ...harness, element };
 }
 type PersonalFile = Omit<typeof file, "hash"> & { hash: string | null };
 function replies(...results: (Partial<PersonalFile> | Promise<PersonalFile> | Error)[]) {
@@ -373,4 +394,33 @@ it("retains drafts privately while offline and restores them only for the same p
   });
   await idle(element);
   expect(value(element)).toBe("Other person");
+});
+
+it("keeps the actual Profile editor mounted across an offline transition", async () => {
+  const request = mockRpc({
+    "users.self": () => ({ profile: modelAccountProfile }),
+    "users.personalFile.get": () => file,
+    "users.listModelAccounts": () => ({
+      profileId: modelAccountProfile.id,
+      accounts: [],
+      links: [],
+    }),
+    "users.prefs.get": () => ({ status: "ok", entries: {} }),
+    "users.github.status": () => disconnectedGitHub,
+  });
+  const { context, emit } = createContext(request);
+  const page = mountProfilePage(context);
+  flush();
+  const editor = page.querySelector<HTMLElement>("openclaw-personal-instructions")!;
+  await idle(editor);
+  await input(editor, "Keep this draft across a network interruption");
+  emit({ phase: "reconnecting" });
+  flush();
+  expect(page.querySelector("openclaw-personal-instructions")).toBe(editor);
+  emit({ phase: "connected" });
+  flush();
+  await idle(editor);
+  expect(editor.querySelector("textarea")?.value).toBe(
+    "Keep this draft across a network interruption",
+  );
 });
