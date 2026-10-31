@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Check } from "typebox/value";
 import type { VaultAccess } from "./access.js";
 import { BatchInput } from "./ingestion-contract.js";
@@ -429,11 +430,11 @@ export class StorageIngestion extends StorageLifecycle {
       shown[outcome] = (shown[outcome] ?? 0) + 1;
       examples.push({
         id: plan.record.id,
-        title: plan.record.title.slice(0, 200),
+        title: truncateUtf16Safe(plan.record.title, 200),
         outcome,
         ...(plan.tier ? { tier: plan.tier } : {}),
         ...(plan.subject
-          ? { subject: { id: plan.subject.id, title: plan.subject.title.slice(0, 200) } }
+          ? { subject: { id: plan.subject.id, title: truncateUtf16Safe(plan.subject.title, 200) } }
           : {}),
         ...(plan.reason ? { reason: plan.reason } : {}),
       });

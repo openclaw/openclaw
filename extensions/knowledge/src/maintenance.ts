@@ -1,4 +1,5 @@
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Check } from "typebox/value";
 import { nextRun, parseCron, type Cron } from "./cron.js";
 import {
@@ -121,7 +122,7 @@ export class Maintenance {
     for (const target of await this.stores.maintenanceTargets()) {
       const result: MaintenanceVault = {
         binding: target.binding,
-        label: target.label.slice(0, 160),
+        label: truncateUtf16Safe(target.label, 160),
         outcome: "ok",
         partitions: 0,
         scanned: 0,
@@ -175,7 +176,7 @@ export class Maintenance {
         }
         result.outcome = "failed";
         // SAFETY: the store runtime and storage client reject only with Error objects.
-        result.message = (e as Error).message.slice(0, 1000);
+        result.message = truncateUtf16Safe((e as Error).message, 1000);
       }
     }
     await this.stores.releaseIdle();

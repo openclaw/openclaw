@@ -5,6 +5,7 @@ import type {
   FeatureInvocationContext,
 } from "openclaw/plugin-sdk/feature-plugin";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Check } from "typebox/value";
 import { featurePrincipal, toolGrant, type VaultAccess } from "./access.js";
 import { attachWorkspaceFile } from "./attachment-file.js";
@@ -454,7 +455,7 @@ export function createKnowledgeService(
           ontologyAvailable: false,
           ontologyFingerprint: "",
           issues: 0,
-          message: message.slice(0, 300),
+          message: truncateUtf16Safe(message, 300),
         });
         if (opened.kind !== "ready") {
           return notReady(opened.agentId, opened.kind, opened.message);
