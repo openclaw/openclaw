@@ -20,42 +20,54 @@ Retained candidates:
 - Blobster JSON examples are discovered by the renderer suite; two also supply production prompt examples.
 - Short script guards for release, architecture, and platform contracts remain independent proof.
 
-Completed read-only package lanes (no runtime baseline claimed):
+All 471 package suites have been read. Completed read-only package lanes
+(no runtime baseline claimed for retained areas):
 
-| Packages                                              | Suites retained | Independent contracts                                                                                                                |
-| ----------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `normalization-core`                                  | 26              | Unicode/grapheme, normalization, format, and public export contracts; all support remains used.                                      |
-| `retry`, `tool-call-repair`                           | 8               | Retry policy; parser bounds, fences, protection, and stream-terminal invalidation.                                                   |
-| `media-understanding-common`, `media-generation-core` | 5               | Caption/order, size admission, catalog/model references, dimensions, duration, and override precedence.                              |
-| `net-policy`                                          | 4               | IP/URL parsing, custom-bind validation, SSRF vectors, and redaction secrecy with byte preservation.                                  |
-| `plugin-sdk`, `workboard-contract`                    | 2               | Public package resolution/redaction and canonical persisted/type representations.                                                    |
-| `session-url-contract`                                | 3               | Exact URL bytes, routing/escaping, opaque tokens, focus targets, and base-path isolation; prior parser replays already consolidated. |
-| `acp-core`, `worker-runtime`                          | 11              | Redacted diagnostics, metadata/session identity, cancellation, async context, worker capacity, and retirement ordering.              |
-| `media-core`, `llm-core`                              | 15              | Framing/MIME/allocations, stream ordering/retention, iterator language semantics, and dynamic/AOT validation.                        |
-| `model-catalog-core`, `terminal-core`                 | 21              | Wire sanitation, billing/identity/aliases, streaming ANSI, actual CLI stack, terminal cleanup, and broken-pipe handling.             |
-| `markdown-core`                                       | 11              | Exact bytes/offsets, independent parser parity, metadata isolation, rendered budgets, and avoided parse work.                        |
-| `gateway-client`                                      | 20              | Node/browser transport boundaries, credential persistence, FIFO/retry identity, projection, subscription, and retirement contracts.  |
-| `agent-core`                                          | 25              | Actual tool execution, FIFO/cancellation, exact prompt bytes, retention, and separate transcript/request/persisted-summary bounds.   |
-| `gateway-protocol`                                    | 88              | Wire/schema, generated-language, diagnostic, type, and native fixture contracts; deeper domain-owner closure remains partial.        |
-| `ai` provider suites                                  | 57              | Provider request bytes, schema publication, authentication, replay, billing, cancellation, and stream-terminal integrity.            |
+| Packages                                              | Suites retained | Independent contracts                                                                                                                 |
+| ----------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `normalization-core`                                  | 26              | Unicode/grapheme, normalization, format, and public export contracts; all support remains used.                                       |
+| `retry`, `tool-call-repair`                           | 8               | Retry policy; parser bounds, fences, protection, and stream-terminal invalidation.                                                    |
+| `media-understanding-common`, `media-generation-core` | 5               | Caption/order, size admission, catalog/model references, dimensions, duration, and override precedence.                               |
+| `net-policy`                                          | 4               | IP/URL parsing, custom-bind validation, SSRF vectors, and redaction secrecy with byte preservation.                                   |
+| `plugin-sdk`, `workboard-contract`                    | 2               | Public package resolution/redaction and canonical persisted/type representations.                                                     |
+| `session-url-contract`                                | 3               | Exact URL bytes, routing/escaping, opaque tokens, focus targets, and base-path isolation; prior parser replays already consolidated.  |
+| `acp-core`, `worker-runtime`                          | 11              | Redacted diagnostics, metadata/session identity, cancellation, async context, worker capacity, and retirement ordering.               |
+| `media-core`, `llm-core`                              | 15              | Framing/MIME/allocations, stream ordering/retention, iterator language semantics, and dynamic/AOT validation.                         |
+| `model-catalog-core`, `terminal-core`                 | 21              | Wire sanitation, billing/identity/aliases, streaming ANSI, actual CLI stack, terminal cleanup, and broken-pipe handling.              |
+| `markdown-core`                                       | 11              | Exact bytes/offsets, independent parser parity, metadata isolation, rendered budgets, and avoided parse work.                         |
+| `gateway-client`                                      | 20              | Node/browser transport boundaries, credential persistence, FIFO/retry identity, projection, subscription, and retirement contracts.   |
+| `agent-core`                                          | 25              | Actual tool execution, FIFO/cancellation, exact prompt bytes, retention, and separate transcript/request/persisted-summary bounds.    |
+| `gateway-protocol`                                    | 88              | Wire/schema, generated-language, diagnostic, type, and native fixture contracts; deeper domain-owner closure remains partial.         |
+| `ai`                                                  | 172             | Provider request bytes, schema publication, authentication, replay, billing, cancellation, compaction, and stream-terminal integrity. |
 
 Routing and pairing: all 19 suites retained after reading the tests, local support,
 owners, relevant callers, history, and CI routing. Inbound routing, outbound
 account selection, diagnostics, read-worker refusal, and write settlement remain distinct.
+Utility/support areas: all declarations in 35 active suites retained; one unreachable
+71-line target-resolution helper and its private SDK facade await coherent retirement.
+Poll/startup/model-picker: eight suites retained for public input, TLS/compiler,
+durable selection, authority, conflict, and publication-order contracts.
+LLM host: 22 suites read; retain 126 declarations and repair one SSRF proof that
+currently accepts unrelated setup errors. The causal-proof repair remains pending.
+Logging: all 465 declarations in 64 suites retained; raw-hook absence, egress
+redaction, recovery, and profile custody remain separate contracts. No orphan support.
 
 Package batch starting at `a63bba630e2`: the memory host's 48 suites have been read.
-One repeated surrogate-pair block is covered by the stronger `chunk-budget.test.ts`
-matrix; a separate large-delete test silently returns when FTS admission fails.
-Independent preservation review supports removing the repeated block and requiring
-FTS admission. Baseline execution is pending; neither candidate is applied yet.
+Remove the repeated surrogate-pair block covered by `chunk-budget.test.ts`'s
+identical-input matrix; retain the distinct coarse-boundary regression and require
+complete mixed-text reconstruction. Require FTS admission before large-delete proof.
+A real SQLite view-collision control passed the old test and failed the strengthened
+assertion. The temporary fault was restored. No production or support change.
 
-SDK: all 11 suites and support read. One unmodified replay candidate in `index.test.ts`
-may be covered by the real Gateway superseded-writer test in `terminal-outcome.e2e.test.ts`.
-Independent preservation review supports the removal; keeper runtime proof remains
-pending. All other declarations retained.
+SDK: all 11 suites and support read. Remove the replay-only superseded-writer case
+in `index.test.ts`; `terminal-outcome.e2e.test.ts` proves actual writer takeover,
+persisted ownership, SDK events, and waits through an isolated Gateway.
+Independent preservation reviews supported both reductions. Untouched baselines:
+105 tests passed across five suites, including the real Gateway keeper.
+Final candidate checks and landing: [PR #189143](https://github.com/openclaw/openclaw/pull/189143).
 
 The full CI planning suite and its manifest/workflow/Git-owner support were read.
 Other routing, admission, frozen-target, and gate layers retain distinct contracts.
 
-Remaining: declaration-level review across core, plugins, packages, UI, native apps,
-root/script suites, and their shared fixtures; validate and land subsequent owner batches.
+Remaining: declaration-level review across remaining core, plugins, UI, native apps,
+root/script suites and shared fixtures; close owner-reading gaps and land subsequent batches.
