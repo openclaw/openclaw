@@ -517,13 +517,21 @@ it.each([false, true])(
     const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance");
     let runtimeStartedAt = 0;
     let runtimeTimeoutMs = 0;
+    let publicationStartedAt = 0;
+    let publicationReturnedAt = 0;
+    const preparationElapsedMs = 1_000;
     vi.mocked(updateCheck.resolveUpdateInstallKind).mockResolvedValue("git");
     const afterPublication = new Error("Synthetic Doctor failure after runtime publication");
     vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockImplementationOnce(
       async ({ beforePublication, timeoutMs }) => {
         runtimeStartedAt = Date.now();
         runtimeTimeoutMs = timeoutMs;
-        await beforePublication?.();
+        native.elapsedMs += preparationElapsedMs;
+        // Bracket the synchronous deadline conversion before awaiting the managed stop.
+        publicationStartedAt = Date.now();
+        const publication = beforePublication?.();
+        publicationReturnedAt = Date.now();
+        await publication;
         if (!native.stopped) {
           throw new Error("Runtime artifacts require an offline Gateway");
         }
@@ -553,6 +561,8 @@ it.each([false, true])(
     expect(maintenance).toHaveBeenCalledTimes(1);
     const inspectionDeadline = maintenance.mock.calls[0]?.[0].serviceInspectionDeadlineAtMs;
     expect(inspectionDeadline).toBeGreaterThan(runtimeStartedAt);
-    expect(inspectionDeadline).toBeLessThanOrEqual(runtimeStartedAt + runtimeTimeoutMs);
+    const remainingRuntimeMs = runtimeTimeoutMs - preparationElapsedMs;
+    expect(inspectionDeadline).toBeGreaterThanOrEqual(publicationStartedAt + remainingRuntimeMs);
+    expect(inspectionDeadline).toBeLessThanOrEqual(publicationReturnedAt + remainingRuntimeMs);
   },
 );

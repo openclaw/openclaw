@@ -100,6 +100,8 @@ export function useSessionMenuEntries(
   });
   const separator = (id: string) =>
     content(id, <div class="session-menu__separator" role="separator" />);
+  const communicationDivider = separator("communication-divider");
+  const involvementDivider = separator("involvement-divider");
   const deleteDivider = separator("delete-divider");
   const item = (entry: ItemOptions): MenuItem => ({
     id: entry.kind,
@@ -256,7 +258,8 @@ export function useSessionMenuEntries(
     );
   function body(view: CompactSessionMenuView): MenuEntry[] {
     switch (view) {
-      case "advanced":
+      case "advanced": {
+        const involvementEntries = state.involvingMeContext ? [] : involvement();
         return [
           submenu({
             view: "icon",
@@ -285,12 +288,14 @@ export function useSessionMenuEntries(
                 }),
               ]
             : []),
+          communicationDivider,
           ...details.communication(),
           details.readStatus,
-          ...(!state.involvingMeContext ? involvement() : []),
+          ...(involvementEntries.length ? [involvementDivider, ...involvementEntries] : []),
           deleteDivider,
           deleteAction(),
         ];
+      }
       case "snooze":
         return snoozeEntries()();
       case "copy":
@@ -322,6 +327,25 @@ export function useSessionMenuEntries(
         return [content("appearance", appearanceContent())];
       case "group":
         return groupOptions();
+      case "collections":
+        return [
+          ...actions.personalGroups.map((group): MenuItem => ({
+            id: "personal-collection:" + group.id,
+            label: group.label,
+            class: "session-menu__item",
+            labelClass: "session-menu__text",
+            disabled: state.disabled || group.sessionKeys.includes(state.session.target?.key ?? ""),
+            icon: icon("layers"),
+          })),
+          {
+            id: "personal-collection:new",
+            label: t("sessionsView.personalGroupNew"),
+            class: "session-menu__item",
+            labelClass: "session-menu__text",
+            disabled: state.disabled,
+            icon: icon("plus"),
+          },
+        ];
       case "assign-owner":
         return details.ownerOptions();
       case "root":
@@ -418,6 +442,16 @@ export function useSessionMenuEntries(
         disabled: actions.actionDisabled("move-to-group"),
         title: state.actionDisabledReasons["move-to-group"],
       }),
+      ...(actions.collectionTarget
+        ? [
+            submenu({
+              view: "collections",
+              label: t("sessionsView.personalGroupAdd"),
+              icon: "layers",
+              disabled: state.disabled,
+            }),
+          ]
+        : []),
       ...(!batch() && state.session.isChild
         ? [
             item({

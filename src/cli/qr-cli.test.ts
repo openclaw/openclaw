@@ -211,6 +211,24 @@ describe("registerQrCli", () => {
   });
 
   it.each([
+    { profile: "", container: "", command: "openclaw" },
+    { profile: "work", container: "", command: "openclaw --profile work" },
+    { profile: "work", container: "demo", command: "openclaw --container demo" },
+  ])("prints approval hints for $command", async ({ profile, container, command }) => {
+    vi.stubEnv("OPENCLAW_PROFILE", profile);
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
+    loadConfig.mockReturnValue(createTokenGatewayConfig());
+
+    await runQr(["--no-ascii"]);
+
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `  ${command} devices list\n  ${command} devices approve <requestId>`,
+      ),
+    );
+  });
+
+  it.each([
     { args: [], profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE, access: "full" },
     {
       args: ["--voice-node"],

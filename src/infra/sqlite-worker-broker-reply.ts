@@ -116,7 +116,10 @@ export async function dispatchSqliteWorkerJob(
       const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
       job.settleNative = settlement.resolve;
       const retained: ReturnType<SqliteWorkerAdmissionFactory> = job.createAdmission
-        ? job.createAdmission({ settled: settlement.promise })
+        ? job.createAdmission({
+            settled: settlement.promise,
+            nativeStopped: actor?.nativeStopped ?? slot.exit,
+          })
         : {
             admission: createSqliteWorkerOperationAdmission(() => {
               throw new SqliteWorkerError(
@@ -127,6 +130,7 @@ export async function dispatchSqliteWorkerJob(
             nativeLocations: databasePath ? [databasePath] : [],
           };
       try {
+        retained.admission.requestClass = job.observation.requestClass;
         if (retained.databaseIdentity) {
           const existing = job.request.databaseIdentity;
           if (

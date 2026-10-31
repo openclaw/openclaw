@@ -21,6 +21,7 @@ import {
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest as withBackup,
 } from "./openclaw-state-schema.test-support.js";
 
@@ -64,6 +65,7 @@ function createLegacyWorkers(version = 16, publicationDeferred = false) {
   }
   closeState();
   using legacy = openNodeSqliteDatabase(databasePath);
+  restorePreTemplateStateIdentifiersForTest(legacy);
   addPreCutoverClientCredentialTablesForTest(legacy);
   removePreparedWorkerOwnershipColumns(legacy);
   legacy.exec(`

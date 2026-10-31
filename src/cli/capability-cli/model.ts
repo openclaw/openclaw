@@ -181,6 +181,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
         const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
         const { canonicalizeCaseOnlyCatalogModelRef } =
           await import("../../agents/model-selection.js");
+        const { hasObservedModelUsage, normalizeUsage } = await import("../../agents/usage.js");
         const explicitModelOverride = requireProviderModelOverride(requestedModel);
         const cfg =
           transport === "local"
@@ -337,12 +338,18 @@ export function registerModelCapabilityCommands(capability: Command): void {
                       `Model run ${result.stopReason === "aborted" ? "aborted" : "failed"} ${target}`,
                     );
                   }
+                  const normalizedUsage = normalizeUsage(result.usage);
+                  const usage = hasObservedModelUsage(normalizedUsage)
+                    ? normalizedUsage
+                    : undefined;
                   return {
                     ok: true,
                     capability: "model.run",
                     transport: "local" as const,
                     provider: prepared.selection.provider,
                     model: prepared.selection.modelId,
+                    usage,
+                    lastCallUsage: usage,
                     attempts: [],
                     ...inputs,
                     outputs: [
@@ -416,13 +423,21 @@ export function registerModelCapabilityCommands(capability: Command): void {
               `Gateway model run ${response.status}.`,
           );
         }
+        const agentMeta = response.result?.meta?.agentMeta;
         return {
           ok: true,
           capability: "model.run",
           transport: "gateway" as const,
-          provider: response?.result?.meta?.agentMeta?.provider,
-          model: response?.result?.meta?.agentMeta?.model,
-          attempts: response?.result?.meta?.agentMeta?.fallbackAttempts ?? [],
+          provider: agentMeta?.provider,
+          model: agentMeta?.model,
+          usage:
+            agentMeta?.usage?.costStatus !== undefined || hasObservedModelUsage(agentMeta?.usage)
+              ? agentMeta?.usage
+              : undefined,
+          lastCallUsage: hasObservedModelUsage(agentMeta?.lastCallUsage)
+            ? agentMeta.lastCallUsage
+            : undefined,
+          attempts: agentMeta?.fallbackAttempts ?? [],
           outputs: (response?.result?.payloads ?? []).map((payload) => ({
             text: payload.text,
             mediaUrl: payload.mediaUrl,

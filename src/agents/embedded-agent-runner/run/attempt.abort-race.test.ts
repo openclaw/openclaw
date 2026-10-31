@@ -39,7 +39,6 @@ it.each(["projection", "construction"])("joins cleanup after %s fails", async (s
       attemptOverrides: {
         oneShotCliRun: true,
         disableTools: false,
-        forceRestartSafeTools: stage === "projection",
       },
     }),
   );

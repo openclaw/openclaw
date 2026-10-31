@@ -162,6 +162,7 @@ jobs:
       run_skills_python_job: ${{ steps.manifest.outputs.run_skills_python_job }}
       run_windows: ${{ steps.manifest.outputs.run_windows }}
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
+      run_built_source_verifiers: ${{ steps.manifest.outputs.run_built_source_verifiers }}
       run_proof_tier: ${{ steps.manifest.outputs.run_proof_tier }}
       run_browser_native_host: ${{ steps.manifest.outputs.run_browser_native_host }}
       run_doctor_plugin_index: ${{ steps.manifest.outputs.run_doctor_plugin_index }}
@@ -666,7 +667,11 @@ jobs:
                       if deadline is not None and time.monotonic() >= deadline:
                           timed_out = True
                           raise FetchTimeout()
-                      time.sleep(0.05)
+                      # Wake on Git exit without delaying cancellation/deadline checks beyond 50ms.
+                      try:
+                          child.wait(timeout=0.05)
+                      except subprocess.TimeoutExpired:
+                          pass
               finally:
                   # Failed inspection/cleanup permanently fences this policy process. Only
                   # verified extinction permits another command, even after a caught error.
@@ -786,6 +791,10 @@ jobs:
                   "scripts/generate-npm-package-lock.mts",
                   "scripts/changed-lanes.mts",
                   "scripts/lib/merge-head-diff-base.mjs",
+                  "scripts/lib/npm-lock-package-selection.mjs",
+                  "scripts/lib/npm-lock-package-selection.d.mts",
+                  "scripts/lib/record-shared.mjs",
+                  "scripts/lib/record-shared.d.mts",
               )
               linux_node_scripts = (
                   *upgrade_scripts, *npm_lock_scripts, "scripts/ci-additional-checks.sh",
@@ -1868,6 +1877,15 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
 
+      # This build already seals SDK-only records that the full warmer does not emit.
+      - name: Save build-all cache
+        if: ${{ success() && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && github.event_name == 'schedule' && !inputs.release_gate && needs.preflight.outputs.candidate_trust == 'main' && needs.preflight.outputs.cache_write_allowed == 'true' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true' && needs.preflight.outputs.compatibility_target != 'true' && steps.dist_build.outcome == 'success' && steps.node_setup.outputs.build-all-cache-key != '' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/build-all-cache
+          key: ${{ steps.node_setup.outputs.build-all-cache-key }}
+
       # Reuse the public build before singleton/watch checks mutate its outputs.
       - name: Install Playwright Chromium for public-build browser tests
         id: browser_chromium
@@ -1883,6 +1901,7 @@ jobs:
           OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
           OPENCLAW_BROWSER_EXTENSION_E2E: "1"
           OPENCLAW_E2E_WORKERS: "1"
+          OPENCLAW_VITEST_WORKER_CACHE: "1"
         run: |
           node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium
           node scripts/run-vitest.mjs run \
@@ -1894,6 +1913,7 @@ jobs:
         if: ${{ !cancelled() && needs.preflight.outputs.reuse_browser_extension_build == 'true' && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') && steps.browser_chromium.outcome == 'success' && needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}
         env:
           OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
+          OPENCLAW_VITEST_WORKER_CACHE: "1"
           OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT: ${{ github.workspace }}/dist/control-ui
           OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/production-artifact-attempt-${{ github.run_attempt }}
         run: |
@@ -2065,6 +2085,19 @@ jobs:
           console.log(JSON.stringify({ proof: "browser-native-host", fullNames: expectedNames, passed: expectedNames.length, failed: 0, pending: 0 }));
           BROWSER_PROOF_REPORT
 
+      # Only this producer consumes a full worker generation captured after build.
+      # Runtime checks use separate slots and cannot replace the restored full seed.
+      - name: Restore built-source compiled Vitest workers
+        id: built_worker_cache
+        if: ${{ !cancelled() && needs.preflight.outputs.cache_mode != 'off' && runner.os == 'Linux' && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') && ((needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true') || needs.preflight.outputs.run_checks_node_core_dist == 'true' || needs.preflight.outputs.run_built_source_verifiers == 'true') }}
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/vitest-worker-cache/run-cache-0
+          key: ${{ github.repository }}-vitest-workers-built-v1-protected-${{ steps.node_setup.outputs.node-toolchain-cache-key }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ github.repository }}-vitest-workers-built-v1-protected-${{ steps.node_setup.outputs.node-toolchain-cache-key }}-
+
       - name: Run built artifact checks
         if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
         id: built_artifact_checks
@@ -2073,12 +2106,13 @@ jobs:
           PARALLEL_BUILT_VERIFIERS: ${{ runner.environment != 'github-hosted' && 'true' || 'false' }}
           # Hosted Linux has a higher RSS baseline; keep Blacksmith tighter.
           OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '400' }}
-          RUN_CHANNELS: ${{ needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true' }}
+          RUN_CHANNELS: ${{ (needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true') || needs.preflight.outputs.run_built_source_verifiers == 'true' }}
           CHANNEL_NODE_OPTIONS: ${{ fromJSON(needs.preflight.outputs.source_channel_test_env_json).NODE_OPTIONS }}
           CHANNEL_MAX_WORKERS: ${{ fromJSON(needs.preflight.outputs.source_channel_test_env_json).OPENCLAW_VITEST_MAX_WORKERS }}
+          SOURCE_VERIFIER_CACHE: ${{ steps.built_worker_cache.outputs.cache-matched-key != '' && '1' || '0' }}
           RUN_DOCTOR_PLUGIN_INDEX: ${{ needs.preflight.outputs.run_doctor_plugin_index }}
           RUN_DISCORD_COMPONENT_PROOF: ${{ needs.preflight.outputs.run_discord_component_proof }}
-          RUN_CORE_SUPPORT_BOUNDARY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
+          RUN_CORE_SUPPORT_BOUNDARY: ${{ needs.preflight.outputs.run_checks_node_core_dist == 'true' || needs.preflight.outputs.run_built_source_verifiers == 'true' }}
           RUN_GATEWAY_WATCH: ${{ needs.preflight.outputs.run_gateway_watch }}
           RUN_SQLITE_SESSION_LIFECYCLE: ${{ needs.preflight.outputs.run_sqlite_session_lifecycle }}
           RUN_TUI_PTY: ${{ needs.preflight.outputs.run_tui_pty }}
@@ -2093,6 +2127,7 @@ jobs:
           declare -A results=(
             ["channels"]="skipped"
             ["core-support-boundary"]="skipped"
+            ["source-support"]="skipped"
             ["discord-component-attachments"]="skipped"
             ["doctor-plugin-index"]="skipped"
             ["gateway-watch"]="skipped"
@@ -2157,7 +2192,7 @@ jobs:
               return 0
             fi
             rm -f "${RUNNER_TEMP}/discord-component-attachments.json" || return
-            env OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_E2E_WORKERS=1 OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1 \
+            env OPENCLAW_VITEST_WORKER_CACHE=1 OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_E2E_WORKERS=1 OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1 \
               node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts \
               "$test_file" \
               --testNamePattern "preserves component attachment filenames through the public Gateway message action" \
@@ -2241,18 +2276,25 @@ jobs:
               test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts
           fi
 
-          if [ "$RUN_CHANNELS" = "true" ]; then
-            start_check "channels" env \
-              NODE_OPTIONS="$CHANNEL_NODE_OPTIONS" \
-              OPENCLAW_VITEST_MAX_WORKERS="$CHANNEL_MAX_WORKERS" \
-              pnpm test:channels
-          fi
+          if [ "$RUN_CHANNELS" = "true" ] && [ "$RUN_CORE_SUPPORT_BOUNDARY" = "true" ] && [ "$CHANNEL_NODE_OPTIONS" = "--max-old-space-size=8192" ] && [[ -f scripts/test-built-source-verifiers.mts ]]; then
+            start_check "source-support" env OPENCLAW_VITEST_WORKER_CACHE="$SOURCE_VERIFIER_CACHE" \
+              node --import ./scripts/tsx.mjs scripts/test-built-source-verifiers.mts
+          else
+            if [ "$RUN_CHANNELS" = "true" ]; then
+              start_check "channels" env \
+                OPENCLAW_VITEST_WORKER_CACHE="$SOURCE_VERIFIER_CACHE" \
+                NODE_OPTIONS="$CHANNEL_NODE_OPTIONS" \
+                OPENCLAW_VITEST_MAX_WORKERS="$CHANNEL_MAX_WORKERS" \
+                pnpm test:channels
+            fi
 
-          if [ "$RUN_CORE_SUPPORT_BOUNDARY" = "true" ]; then
-            start_check "core-support-boundary" env \
-              NODE_OPTIONS=--max-old-space-size=8192 \
-              OPENCLAW_VITEST_MAX_WORKERS=2 \
-              node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
+            if [ "$RUN_CORE_SUPPORT_BOUNDARY" = "true" ]; then
+              start_check "core-support-boundary" env \
+                OPENCLAW_VITEST_WORKER_CACHE="$SOURCE_VERIFIER_CACHE" \
+                NODE_OPTIONS=--max-old-space-size=8192 \
+                OPENCLAW_VITEST_MAX_WORKERS=2 \
+                node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
+            fi
           fi
 
           if [ "$RUN_DISCORD_COMPONENT_PROOF" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" = "true" ]; then
@@ -2299,7 +2341,7 @@ jobs:
             echo "::error title=startup assets failed::cli startup asset build failed"
             failures=1
           fi
-          for name in channels core-support-boundary discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton sqlite-session-lifecycle startup-memory tui-pty; do
+          for name in channels core-support-boundary source-support discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton sqlite-session-lifecycle startup-memory tui-pty; do
             if [ "${results[$name]}" = "failure" ]; then
               echo "::error title=${name} failed::${name} failed"
               failures=1
@@ -2568,15 +2610,9 @@ jobs:
 
       - *install_playwright_chromium
 
-      - name: Test Control UI end-to-end
+      - name: Decode Control UI E2E selection
         if: matrix.task == 'control-ui'
-        # Fail the step before the job deadline so progress diagnostics can upload.
-        timeout-minutes: 20
         env:
-          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
-          VITEST_SHARD_INDEX: ${{ matrix.shard }}
-          VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
-          OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers || 2 }}
           OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}
         run: |
           if [[ -n "${OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:-}" ]]; then
@@ -2592,14 +2628,28 @@ jobs:
           }
           NODE
           )"
-            export OPENCLAW_VITEST_INCLUDE_FILE
+            printf 'OPENCLAW_VITEST_INCLUDE_FILE=%s\n' "$OPENCLAW_VITEST_INCLUDE_FILE" >> "$GITHUB_ENV"
           fi
+
+      - name: Discover Control UI E2E requirements
+        id: ui_e2e_requirements
+        if: matrix.task == 'control-ui'
+        timeout-minutes: 20
+        env:
+          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          VITEST_SHARD_INDEX: ${{ matrix.shard }}
+          VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
+          OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers || 2 }}
+        run: |
           requirements="$(node --input-type=module <<'NODE'
           import { existsSync } from "node:fs";
           import { resolve } from "node:path";
           const webkitSuites = new Set([
             resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts"),
+            resolve("ui/src/e2e/chat-composer-picker-layout.e2e.test.ts"),
             resolve("ui/src/e2e/tooltip-first-activation.e2e.test.ts"),
+            resolve("ui/src/e2e/logs-scroll.e2e.test.ts"),
+            resolve("ui/src/e2e/chat-composer-picker-layout.e2e.test.ts"),
           ].filter(existsSync));
           const runtimeSuite = resolve("ui/src/e2e/stale-build-recovery.production.e2e.test.ts");
           let requiresWebkit = false;
@@ -2625,15 +2675,30 @@ jobs:
           process.stdout.write([requiresWebkit && "webkit", requiresRuntime && "runtime"].filter(Boolean).join(" "));
           NODE
           )"
-          if [[ "$requirements" == *webkit* ]]; then
-            pnpm --dir ui exec playwright install --with-deps webkit
-          fi
-          if [[ "$requirements" == *runtime* ]]; then
-            # Run the helper's cold preparation before Vitest starts its subprocess budget.
-            preparation_started=$SECONDS
-            VITEST=1 node scripts/run-node.mjs --help
-            echo "Control UI Gateway runtime preparation: $((SECONDS - preparation_started))s"
-          fi
+          printf 'requirements=%s\n' "$requirements" >> "$GITHUB_OUTPUT"
+
+      - name: Install selected Control UI E2E WebKit
+        if: matrix.task == 'control-ui' && contains(steps.ui_e2e_requirements.outputs.requirements, 'webkit')
+        run: pnpm --dir ui exec playwright install --with-deps webkit
+
+      - name: Prepare selected Control UI E2E Gateway runtime
+        if: matrix.task == 'control-ui' && contains(steps.ui_e2e_requirements.outputs.requirements, 'runtime')
+        run: |
+          # Run the helper's cold preparation before Vitest starts its subprocess budget.
+          preparation_started=$SECONDS
+          VITEST=1 node scripts/run-node.mjs --help
+          echo "Control UI Gateway runtime preparation: $((SECONDS - preparation_started))s"
+
+      - name: Test Control UI end-to-end
+        if: matrix.task == 'control-ui'
+        # Fail the step before the job deadline so progress diagnostics can upload.
+        timeout-minutes: 20
+        env:
+          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          VITEST_SHARD_INDEX: ${{ matrix.shard }}
+          VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
+          OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers || 2 }}
+        run: |
           node scripts/run-vitest.mjs run \
             --config test/vitest/vitest.ui-e2e.config.ts \
             --configLoader runner \
@@ -3533,9 +3598,13 @@ jobs:
       - name: Run Node 24 minimum compatibility
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          CI_COMPAT_FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
         run: |
           pnpm build
-          pnpm ui:build
+          # Frozen targets may predate the full build's UI phase.
+          if [[ "${CI_COMPAT_FROZEN_TARGET:-}" != "false" ]]; then
+            pnpm ui:build
+          fi
           node openclaw.mjs --help
           node openclaw.mjs status --json --timeout 1
           pnpm test:build:singleton
@@ -3586,6 +3655,7 @@ jobs:
           semantic-checks: "true"
           cache-mode: *cache_mode
           node-version: "${{ (matrix.runner == 'runson-c8i-8xlarge' || startsWith(matrix.check_name, 'checks-node-runson-cron-')) && env.NODE_VERSION || matrix.node_version || '24.22.1' }}"
+          native-secret-service: ${{ matrix.requires_native_secret_service == true && 'true' || 'false' }}
           install-bun: "false"
           # Only Node 24 consumes the trusted compile seed.
           dependency-cache: ${{ matrix.runner != 'runson-c8i-8xlarge' && (matrix.node_version == null || matrix.node_version == '24.x') && (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github' && runner.environment == 'self-hosted' && (github.event_name != 'workflow_dispatch' || ((needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1)) && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
@@ -3607,7 +3677,7 @@ jobs:
         if: matrix.requires_go == true
         uses: actions/setup-go@90ad2b35f69faf97585ad74d28fa006d2739b7af # v7.0.0 + post-release fixes
         with:
-          go-version: "1.27.2"
+          go-version: "1.27.3"
           cache: false
 
       - name: Resolve docs i18n Go cache
@@ -3641,7 +3711,7 @@ jobs:
 
       - name: Verify docs i18n Go toolchain
         if: matrix.requires_go == true
-        run: test "$(go env GOVERSION)" = "go1.27.2"
+        run: test "$(go env GOVERSION)" = "go1.27.3"
 
       - name: Checkout trusted Node shard runner
         if: ${{ hashFiles('scripts/ci-run-node-test-shard.mts') == '' }}
@@ -4911,6 +4981,9 @@ jobs:
           }
           const result = spawnSync(process.execPath, [
             "--import", "./scripts/tsx.mjs", "scripts/test-projects.mts", ...targets, "--fileParallelism",
+            "--reporter=verbose",
+            "--reporter=github-actions",
+            "--reporter=./scripts/lib/vitest-resource-reporter.mts",
           ], { stdio: "inherit" });
           if (result.error) throw result.error;
           process.exit(result.status ?? 1);
@@ -5548,7 +5621,8 @@ jobs:
       - *apple_mermaid_cache_key
       - *apple_mermaid_cache_restore
 
-      - name: Identify iOS native cache inputs
+      - &ios_native_cache_inputs
+        name: Identify iOS native cache inputs
         id: ios-cache-inputs
         if: env.HISTORICAL_TARGET != 'true' && needs.preflight.outputs.frozen_target != 'true' && hashFiles('apps/shared/OpenClawWatchRTC/build.sh') != ''
         run: |
@@ -5568,7 +5642,7 @@ jobs:
         id: watch-rtc-cache
         if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
+        with: &watch_rtc_cache_inputs
           path: &watch_rtc_cache_paths |
             ~/.cargo/registry
             ${{ runner.temp }}/openclaw-watch-rtc-libraries
@@ -5876,6 +5950,7 @@ jobs:
             -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
             -only-testing:OpenClawTests/ChatTypingFocusTests
             -only-testing:OpenClawTests/ChatSendHydrationTests
+            -only-testing:OpenClawTests/ChatComposerTextViewIOSTests
             -only-testing:OpenClawTests/GatewayIngressControllerTests
             -only-testing:OpenClawTests/GatewayIngressLoginPreparationTests
             -only-testing:OpenClawTests/GatewayConnectionControllerTests
@@ -6057,13 +6132,18 @@ jobs:
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('xcode-27-xlarge'))) || ('xcode-27-xlarge') }}
     timeout-minutes: 90
     env:
+      HISTORICAL_TARGET: *historical_target
       BUNDLE_DEPLOYMENT: "true"
       BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile
     steps:
+      - name: Reserve host CPU for screenshots
+        timeout-minutes: 2
+        run: sudo -n /usr/bin/mdutil -i off /System/Volumes/Data
+
       - *platform_checkout_step
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
+        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
           ruby-version: "4.0.7"
           bundler: "4.0.23"
@@ -6097,6 +6177,26 @@ jobs:
           "$swift_tools_dir/swiftlint" version
 
       - *install_watch_rust_toolchain
+
+      - *ios_native_cache_inputs
+
+      - name: Restore Watch RTC build inputs
+        id: watch-rtc-cache
+        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with: *watch_rtc_cache_inputs
+
+      - name: Restore screenshot source packages
+        id: ios-packages-cache
+        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &ios_screenshot_packages_cache_path apps/ios/build/SnapshotDerivedData/SourcePackages
+          key: ios-screenshot-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/ios/**/Package.resolved', 'apps/ios/project.yml', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}
 
       # The default lane builds the simulator target once for all three families.
       - name: Capture iPhone, iPad, and Watch screenshots
@@ -6170,6 +6270,15 @@ jobs:
             apps/ios/build/screenshot-diagnostics.json
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Save screenshot source packages
+        if: steps.ios-cache-inputs.outputs.xcode != '' && steps.ios-packages-cache.outputs.cache-hit != 'true' && needs.preflight.outputs.cache_write_allowed == 'true' && needs.preflight.outputs.candidate_trust == 'main' && github.ref == 'refs/heads/main' && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name)
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *ios_screenshot_packages_cache_path
+          key: ${{ steps.ios-packages-cache.outputs.cache-primary-key }}
 
   ios-screenshot-evidence:
     permissions:
@@ -6577,7 +6686,7 @@ jobs:
           cache-mode: *cache_mode
           install-bun: "false"
 
-      - name: Run packaged Access crypto on Android
+      - name: Run packaged Access crypto and production TLS on Android
         shell: bash
         env:
           EXPECTED_PAGE_SIZE: ${{ matrix.page-size }}
@@ -6595,23 +6704,58 @@ jobs:
           printf 'no\n' | avdmanager create avd --name openclaw-access --package "$SYSTEM_IMAGE" --device pixel_6
           emulator -avd openclaw-access -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
           emulator_pid=$!
-          trap 'adb -s emulator-5554 emu kill >/dev/null 2>&1 || true; wait "$emulator_pid" || true' EXIT
+          trust_evidence="$RUNNER_TEMP/android-native-tls-trust"
+          mkdir -p "$trust_evidence"
+          cleanup() {
+            status=$?
+            trap - EXIT
+            # Preserve actual app/test output metadata and hashes even on native failure.
+            if [[ -d apps/android/app/build/outputs/apk ]]; then
+              find apps/android/app/build/outputs/apk -type f -name '*.apk' -print0 | sort -z | xargs -0 -r sha256sum > "$trust_evidence/APK.sha256" || status=1
+              while IFS= read -r -d '' apk_output; do
+                cp --parents "$apk_output" "$trust_evidence" || status=1
+              done < <(find apps/android/app/build/outputs/apk -type f -name '*.apk' -print0)
+              while IFS= read -r -d '' metadata; do
+                cp --parents "$metadata" "$trust_evidence" || status=1
+              done < <(find apps/android/app/build/outputs/apk -type f -name output-metadata.json -print0)
+            fi
+            adb -s emulator-5554 logcat -d -v threadtime > "$trust_evidence/logcat.txt" || status=1
+            if ! bash scripts/android-native-tls-trust.sh cleanup "$trust_evidence"; then
+              echo 'FAILED: trust cleanup; emulator is contaminated and must not be reused.' | tee "$trust_evidence/CLEANUP-FAILED.txt"
+              status=1
+            fi
+            adb -s emulator-5554 emu kill >"$trust_evidence/emulator-disposal.txt" 2>&1 || status=1
+            wait "$emulator_pid" || true
+            if avdmanager delete avd --name openclaw-access >>"$trust_evidence/emulator-disposal.txt" 2>&1; then
+              echo 'Owned emulator process exited and AVD deleted; no snapshot or reuse.' >> "$trust_evidence/emulator-disposal.txt"
+            else
+              echo 'FAILED: owned AVD deletion; do not reuse runner.' >> "$trust_evidence/emulator-disposal.txt"
+              status=1
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          # Bound boot, root reconnection and trust admission together; cleanup stays in the parent.
           /usr/bin/timeout --signal=TERM --kill-after=2s 180s bash -c '
+            set -euo pipefail
+            trust_evidence=$1
+            EXPECTED_PAGE_SIZE=$2
             adb -s emulator-5554 wait-for-device
             until [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d "\r")" == 1 ]]; do sleep 2; done
-          '
-          test "$(adb -s emulator-5554 shell getconf PAGE_SIZE | tr -d '\r')" = "$EXPECTED_PAGE_SIZE"
-          if [[ "$EXPECTED_PAGE_SIZE" == 16384 ]]; then
-            # ps16k simulates 16 KiB pages on x86_64; compat mode must not hide loader failures.
-            adb -s emulator-5554 shell setprop bionic.linker.16kb.app_compat.enabled false
-            adb -s emulator-5554 shell setprop pm.16kb.app_compat.disabled true
-            test "$(adb -s emulator-5554 shell getprop bionic.linker.16kb.app_compat.enabled | tr -d '\r')" = false
-            test "$(adb -s emulator-5554 shell getprop pm.16kb.app_compat.disabled | tr -d '\r')" = true
-          fi
+            test "$(adb -s emulator-5554 shell getconf PAGE_SIZE | tr -d "\r")" = "$EXPECTED_PAGE_SIZE"
+            if [[ "$EXPECTED_PAGE_SIZE" == 16384 ]]; then
+              # ps16k simulates 16 KiB pages on x86_64; compat mode must not hide loader failures.
+              adb -s emulator-5554 shell setprop bionic.linker.16kb.app_compat.enabled false
+              adb -s emulator-5554 shell setprop pm.16kb.app_compat.disabled true
+              test "$(adb -s emulator-5554 shell getprop bionic.linker.16kb.app_compat.enabled | tr -d "\r")" = false
+              test "$(adb -s emulator-5554 shell getprop pm.16kb.app_compat.disabled | tr -d "\r")" = true
+            fi
+            bash scripts/android-native-tls-trust.sh prepare "$trust_evidence"
+          ' bash "$trust_evidence" "$EXPECTED_PAGE_SIZE"
           node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
-            :app:connectedPlayDebugAndroidTest \
+            :app:connectedPlayDebugAndroidTest --info \
             -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE" \
-            -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest \
+            -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.NativeTransportQualificationSuite \
             -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           apk="$(python3 - <<'PY'
           from pathlib import Path
@@ -6619,10 +6763,34 @@ jobs:
           import xml.etree.ElementTree as ET
           import zipfile
           reports = Path('apps/android/app/build/outputs/androidTest-results/connected').rglob('*.xml')
-          cases = [case for report in reports for case in ET.parse(report).getroot().iter('testcase')
+          all_cases = [case for report in reports for case in ET.parse(report).getroot().iter('testcase')]
+          cases = [case for case in all_cases
                    if case.get('classname') == 'ai.openclaw.app.gateway.CloudflareAccessNativeTest']
           assert len(cases) == 1, 'The packaged native test must execute exactly once'
           assert all(case.find(tag) is None for case in cases for tag in ('failure', 'error', 'skipped')), 'The packaged native test failed or skipped'
+          tls_cases = [case for case in all_cases if case.get('classname') in (
+              'ai.openclaw.app.gateway.GatewaySessionTlsNativeTest',
+              'ai.openclaw.app.ui.chat.ChatInlineWidgetTlsNativeTest')]
+          expected_tls = {
+              ('ai.openclaw.app.gateway.GatewaySessionTlsNativeTest', name) for name in (
+                  'platformRootReachesReadyWithMatchingHostname',
+                  'platformRootRejectsWrongHostnameBeforeWebSocketUpgrade',
+                  'platformRootCannotBypassBlocklistedRawIntermediate',
+                  'matchingLeafPinReachesReadyDespiteDiscoveredIpHostnameMismatch',
+                  'wrongLeafPinRejectsBeforeWebSocketUpgrade',
+                  'matchingLeafPinCannotBypassBlocklistedRawIntermediate')
+          } | {
+              ('ai.openclaw.app.ui.chat.ChatInlineWidgetTlsNativeTest', name) for name in (
+                  'platformRootFetchesDocumentWithMatchingHostname',
+                  'platformRootRejectsWrongHostnameWithoutOriginRequest',
+                  'platformRootCannotFetchThroughBlocklistedRawIntermediate',
+                  'matchingLeafPinFetchesDocumentDespiteDiscoveredIpHostnameMismatch',
+                  'wrongLeafPinReturnsUnavailableWithoutOriginRequest',
+                  'matchingLeafPinCannotFetchThroughBlocklistedRawIntermediate')
+          }
+          observed_tls = [(case.get('classname'), case.get('name')) for case in tls_cases]
+          assert set(observed_tls) == expected_tls and len(observed_tls) == len(expected_tls), 'Each required TLS class/method must execute exactly once'
+          assert all(case.find(tag) is None for case in tls_cases for tag in ('failure', 'error', 'skipped')), 'The native TLS proof failed or skipped'
           directory = Path('apps/android/app/build/outputs/apk/play/debug')
           metadata = json.loads((directory / 'output-metadata.json').read_text())
           assert metadata['variantName'] == 'playDebug' and metadata['artifactType']['type'] == 'APK'
@@ -6647,6 +6815,8 @@ jobs:
           path: |
             apps/android/app/build/outputs/androidTest-results/connected/**
             apps/android/app/build/reports/androidTests/connected/**
+            ${{ runner.temp }}/android-native-tls-trust/**
+            ${{ runner.temp }}/access-emulator.log
           if-no-files-found: error
           retention-days: 14
 

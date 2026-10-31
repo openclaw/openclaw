@@ -72,7 +72,7 @@ type ChatMetadataBinding = {
   sessionFactsRetryPending?: boolean;
   sessionFactsRequest?: { version: number; promise: Promise<void> };
   refreshPending?: { refresh: ChatMetadataRefresh; promise: Promise<void> };
-  catalogRequest?: { version: number; controller: AbortController; promise: Promise<boolean> };
+  catalogRequest?: { controller: AbortController; promise: Promise<boolean> };
   isCurrent: () => boolean;
   unsubscribe: () => void;
 };
@@ -414,12 +414,10 @@ async function loadChatModelCatalog(
   if (applyCachedChatModelCatalog(host, binding)) {
     return true;
   }
-  if (binding.catalogRequest?.version === binding.version) {
+  if (binding.catalogRequest) {
     return binding.catalogRequest.promise;
   }
-  binding.catalogRequest?.controller.abort();
   const controller = new AbortController();
-  const version = binding.version;
   const ownsRequest = () =>
     binding.isCurrent() && binding.catalogRequest?.controller === controller;
   host.chatModelsLoading =
@@ -456,7 +454,7 @@ async function loadChatModelCatalog(
         host.chatModelsLoading = false;
       }
     });
-  binding.catalogRequest = { version, controller, promise };
+  binding.catalogRequest = { controller, promise };
   return promise;
 }
 

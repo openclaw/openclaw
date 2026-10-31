@@ -95,11 +95,21 @@ export function shouldPrepareVitestCoreWorkers(
       ? ["test/e2e/gateway-transcripts-discord-capture.e2e.test.ts"]
       : []),
   ];
+  const gatewayStartupWorkers = [
+    "src/gateway/server-runtime-subscriptions.test.ts",
+    "src/gateway/server-runtime-config.test.ts",
+  ];
   const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
   return (
     workers.some((file) =>
       matchesVitestCliSelection(file, [file], args, "", env, includePatterns),
     ) ||
+    // These focused startup selections need native stores before their watchdog starts.
+    // Match their project directory so basename filters and exclusions keep working.
+    (includesProject("test/vitest/vitest.gateway-server.config.ts") &&
+      gatewayStartupWorkers.some((file) =>
+        matchesVitestCliSelection(file, [file], args, "src/gateway", env, includePatterns),
+      )) ||
     ((includesProject(agentVitestProjectOwners.core.config) ||
       includesProject(agentVitestProjectOwners.all.config)) &&
       matchesVitestCliSelection(

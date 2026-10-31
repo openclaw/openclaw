@@ -206,13 +206,15 @@ export function workspaceCatalogSearch(
   if (!search) {
     return [];
   }
+  // Canonically equivalent names may arrive in either Unicode form; compare on NFC.
+  const normalizedSearch = search.normalize("NFC");
   const catalog = projectWorkspaceCatalog(list);
   const results = new Map<string, WorkspaceCatalogFile>();
   for (const entry of [...catalog.session, ...catalog.project.values()]) {
     if (
       !("directory" in entry && entry.directory) &&
       [entry.name, entry.workspacePath, entry.path].some((value) =>
-        value?.toLowerCase().includes(search),
+        value?.toLowerCase().normalize("NFC").includes(normalizedSearch),
       )
     ) {
       results.set(entry.key, entry);

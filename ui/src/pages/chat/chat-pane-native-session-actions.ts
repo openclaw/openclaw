@@ -6,10 +6,8 @@ import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { pluginSessionMenuActions } from "../../plugins/control-ui-actions.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
-import type {
-  HeaderMenuAction,
-  HeaderMenuSessionAction,
-} from "./components/chat-header-session-menu.ts";
+import type { HeaderMenuAction } from "./chat-pane-session-menu-contract.ts";
+import type { HeaderMenuSessionAction } from "./components/chat-quick-action.tsx";
 
 registerSessionOrganizationSharedEnglish();
 

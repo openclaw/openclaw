@@ -123,10 +123,10 @@
   }
 
   .exec-approval-title {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 16px;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
     font-weight: 400;
     line-height: 24px;
     overflow-wrap: anywhere;
@@ -222,6 +222,7 @@
   }
 }
 
+.exec-approval-sentence.exec-approval-request,
 .exec-approval-sentence .exec-approval-request {
   display: inline;
 }
@@ -232,8 +233,10 @@
 }
 
 .exec-approval-fallback-icon {
-  display: grid;
+  display: inline-grid;
   place-items: center;
+  margin-inline-end: 6px;
+  vertical-align: top;
   flex: 0 0 24px;
   width: 24px;
   height: 24px;
@@ -342,7 +345,6 @@
 .exec-approval-details.oc-popover {
   /* A viewport budget lets native positioning flip instead of shrinking above the trigger. */
   max-height: min(420px, calc(100dvh - 16px));
-  width: 380px;
   max-width: calc(100dvw - 32px);
   --oc-popover-padding: 12px;
   font-size: var(--control-ui-text-sm);

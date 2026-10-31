@@ -289,6 +289,22 @@ function reconcileScheduledToolPolicy(params: {
     scheduledToolPolicy: job.scheduledToolPolicy,
     owner: job.owner,
   });
+  const callerPolicy = params.scheduledToolPolicy;
+  if (current?.mode === "trusted" && callerPolicy?.mode === "account") {
+    // An account-scoped owner edit narrows operator authority to that owner; it never inherits it.
+    // A dormant result keeps the account ceiling, so a later conversion cannot restore trusted authority.
+    if (cronJobUsesToolRuntime(job) && job.payload.toolsAllow !== undefined) {
+      stampScheduledToolPolicy(job, callerPolicy);
+    } else if (
+      job.owner?.sessionKey === callerPolicy.ownerSessionKey &&
+      job.owner?.accountId === callerPolicy.ownerAccountId
+    ) {
+      job.scheduledToolPolicy = structuredClone(callerPolicy);
+    } else {
+      throw new Error("scheduled account policy must match the persisted job owner");
+    }
+    return;
+  }
   if (!cronJobUsesToolRuntime(job) || job.payload.toolsAllow === undefined) {
     // A dormant account binding is still its ceiling. Dropping it would let
     // a later operator payload conversion silently adopt trusted authority.

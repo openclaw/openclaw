@@ -1,7 +1,13 @@
 // Complete cold handler transforms during collection, before timed visibility RPCs.
 import "./server-methods/sessions-mutations.js";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { requireGit } from "../agents/worktrees/git.js";
+import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import * as involvementStore from "../config/sessions/session-involvement-store.js";
@@ -14,6 +20,10 @@ import { readMentionStoreSnapshot } from "./mention-inbox-store.worker.js";
 import * as mentionInbox from "./mention-inbox.test-support.js";
 import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
 import { listSessionFixture } from "./session-list.test-support.js";
+import {
+  resolveLocalWorkspaceOwner,
+  withLocalWorkspaceProjection,
+} from "./worker-environments/local-workspace-projection.js";
 
 const { SESSION_KEY, SESSION_ID } = mentionInbox;
 type InboxFixture = Parameters<Parameters<typeof mentionInbox.withMentionInbox>[0]>[0];
@@ -229,4 +239,51 @@ it("keeps merged visibility separate from mention evidence when both profiles we
     expect((await listInvolvement(f)).sessions).toEqual([]);
     await f.post("new-mention");
     expect((await listInvolvement(f)).sessions).toHaveLength(1);
+  }));
+
+it("keeps a retained workspace usable through personal Hide and Show, but rejects a reset", () =>
+  mentionInbox.withMentionInbox(async (f) => {
+    const repo = path.join(process.env.OPENCLAW_STATE_DIR!, "involvement-project");
+    await fs.mkdir(repo);
+    const git = (...args: string[]) => requireGit(repo, args);
+    await git("init", "--quiet", "-b", "main");
+    await git("config", "user.name", "Test");
+    await git("config", "user.email", "test@example.invalid");
+    await fs.writeFile(path.join(repo, "project.txt"), "initial work\n");
+    await git("add", "project.txt");
+    await git("commit", "--quiet", "-m", "Initial project");
+    const worktree: ManagedWorktreeRecord = {
+      id: randomUUID(),
+      name: "involvement",
+      repoFingerprint: "fixture",
+      repoRoot: repo,
+      path: repo,
+      branch: "main",
+      baseRef: "main",
+      ownerKind: "session",
+      ownerId: SESSION_KEY,
+      createdAt: 1,
+      lastActiveAt: 1,
+    };
+    await insertRegistryWorktree(process.env, worktree);
+    await f.setSession({ worktree });
+    using owner = await resolveLocalWorkspaceOwner({ ...sessionScope, cfg: {} });
+    expect(owner).toBeDefined();
+    if (!owner) {
+      throw new Error("Managed workspace fixture was not admitted");
+    }
+    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+    for (const hidden of [true, false]) {
+      await setHidden(f, hidden);
+      expect(readEntry().profileInvolvement?.profiles[f.bob.id]?.hidden).toBe(hidden);
+      expect(projectPublicSessionEntry(readEntry())).not.toHaveProperty("profileInvolvement");
+      // Keep the same active workspace owner across another person's personal action.
+      owner.assertCurrent();
+      const contents = hidden ? "continued after Hide\n" : "completed after Show\n";
+      await fs.writeFile(path.join(projection, "project.txt"), contents);
+      await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+      expect(await fs.readFile(path.join(repo, "project.txt"), "utf8")).toBe(contents);
+    }
+    await f.setSession({ lifecycleRevision: "reset-after-personal-actions" });
+    expect(() => owner.assertCurrent()).toThrow("Local sandbox workspace authority changed");
   }));

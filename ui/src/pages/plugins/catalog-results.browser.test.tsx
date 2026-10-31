@@ -3,6 +3,7 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { baseProps, plugin } from "./catalog-results.test-support.ts";
 import {
   renderPluginCatalogResults as PluginCatalogResults,
@@ -13,6 +14,7 @@ import { renderPluginDetailShell } from "./detail-shell.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import { renderPluginContentCapabilities } from "./overview.tsx";
 import baseStyles from "../../styles/base.css?inline";
+import carapaceStyles from "../../styles/carapace-control-ui.css?inline";
 import componentStyles from "../../styles/components.css?inline";
 import pluginStyles from "../../styles/plugins.css?inline";
 import settingsStyles from "../../styles/settings.css?inline";
@@ -56,7 +58,13 @@ let styles: HTMLStyleElement;
 beforeEach(async () => {
   await page.viewport(1440, 900);
   styles = document.createElement("style");
-  styles.textContent = [baseStyles, componentStyles, settingsStyles, pluginStyles].join("\n");
+  styles.textContent = [
+    baseStyles,
+    componentStyles,
+    settingsStyles,
+    carapaceStyles,
+    pluginStyles,
+  ].join("\n");
   document.head.append(styles);
   container = document.createElement("div");
   document.body.append(container);
@@ -82,6 +90,255 @@ async function renderCatalog(props: Partial<PluginCatalogResultsProps>) {
   render(() => PluginCatalogResults({ ...catalogProps(), ...props }));
   await nextFrame();
 }
+
+it("windows large catalogs without losing keyboard traversal, reordered cards, or resized rows", async () => {
+  container.className = "content";
+  Object.assign(container.style, { height: "500px", width: "1100px", overflow: "auto" });
+  const entries = Array.from({ length: 1_000 }, (_, index) =>
+    plugin(`window-${String(index).padStart(4, "0")}`),
+  );
+  const [items, setItems] = createSignal(entries);
+  const [messages, setMessages] = createSignal<PluginCatalogResultsProps["messages"]>({});
+  const [progress, setProgress] = createSignal<PluginCatalogResultsProps["installProgress"]>();
+  render(() => (
+    <PluginCatalogResults
+      {...catalogProps()}
+      query=""
+      category="tools"
+      result={{ items: items() }}
+      messages={messages()}
+      installProgress={progress()}
+    />
+  ));
+  const card = (index: number) =>
+    find(`[data-plugin-id="window-${String(index).padStart(4, "0")}"]`);
+  const cards = () => [...container.querySelectorAll<HTMLElement>(".plugin-catalog-card")];
+  await waitForSolid(() => {
+    expect(cards().length).toBeLessThan(100);
+    expect(cards().length).toBeGreaterThan(4);
+    expect(container.scrollHeight).toBeGreaterThan(10_000);
+  });
+  await nextFrame();
+  const boundary = Math.max(
+    ...cards()
+      .map((node) => Number(node.dataset.pluginId!.slice(-4)))
+      .filter((index) => index < 100),
+  );
+  const focused = card(boundary).querySelector<HTMLAnchorElement>(".plugin-card-author")!;
+  focused.focus();
+  flush();
+  expect(card(boundary + 1)).not.toBeNull();
+  await userEvent.keyboard("{Tab}");
+  expect(document.activeElement).toBe(
+    card(boundary + 1).querySelector(".plugin-catalog-card__primary-link"),
+  );
+  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+  expect(document.activeElement).toBe(focused);
+  const retainedCard = card(boundary);
+  setItems([plugin("ranked-first"), ...entries]);
+  await waitForSolid(() => {
+    expect(card(boundary)).toBe(retainedCard);
+    expect(document.activeElement).toBe(focused);
+    expect(retainedCard.parentElement!.getAttribute("aria-posinset")).toBe(String(boundary + 2));
+    expect(retainedCard.parentElement!.getAttribute("aria-setsize")).toBe("1001");
+  });
+  setItems([entries[0]!, plugin("ranked-first"), ...entries.slice(1)]);
+  await waitForSolid(() => {
+    expect(card(0).parentElement!.getAttribute("aria-posinset")).toBe("1");
+    expect(card(boundary)).toBe(retainedCard);
+    expect(document.activeElement).toBe(focused);
+  });
+
+  const moved = entries.toSpliced(boundary, 1);
+  moved.splice(500, 0, entries[boundary]!);
+  setItems(moved);
+  flush();
+  expect(card(boundary)).toBe(retainedCard);
+  expect(focused.isConnected).toBe(true);
+  await nextFrame();
+  expect(retainedCard.parentElement!.getAttribute("aria-posinset")).toBe("501");
+  setItems(entries);
+  await nextFrame();
+  expect(card(boundary)).toBe(retainedCard);
+  // Native keyed moves also blur on the unwindowed catalog; preserve the node
+  // without adding a separate focus-restoration policy to the windowing owner.
+  focused.focus();
+  expect(document.activeElement).toBe(focused);
+
+  container.scrollTop = 0;
+  await nextFrame();
+  setProgress(
+    new Map<string, PluginInstallProgress>([
+      [
+        "install:window-0000",
+        {
+          startedAt: Date.now(),
+          activities: [{ activityId: "dependencies", stage: "dependencies", status: "started" }],
+        },
+      ],
+    ]),
+  );
+  await nextFrame();
+  const installAction = card(0).querySelector<HTMLButtonElement>("button")!;
+  installAction.click();
+  await waitForSolid(() => {
+    const popup = find(".plugin-install-action__popup", card(0));
+    expect(popup.matches(":popover-open")).toBe(true);
+    const bounds = popup.getBoundingClientRect();
+    const anchor = installAction.getBoundingClientRect();
+    expect(Math.abs(bounds.left - anchor.left)).toBeLessThan(2);
+    expect(bounds.top).toBeGreaterThanOrEqual(anchor.bottom);
+    expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+  });
+  setProgress(undefined);
+  await nextFrame();
+  setMessages({
+    "install:window-0000": { kind: "error", text: "Visible error details. ".repeat(30) },
+  });
+  await waitForSolid(() => {
+    const tall = card(0).getBoundingClientRect();
+    const nextRow = card(4).getBoundingClientRect();
+    expect(tall.height).toBeGreaterThan(150);
+    expect(Math.abs(tall.height - card(1).getBoundingClientRect().height)).toBeLessThan(1);
+    expect(nextRow.top).toBeGreaterThanOrEqual(tall.bottom);
+  });
+  const expandedHeight = card(0).getBoundingClientRect().height;
+  setMessages({});
+  await waitForSolid(() => {
+    expect(card(0).getBoundingClientRect().height).toBeLessThan(expandedHeight);
+    expect(card(4).getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      card(0).getBoundingClientRect().bottom,
+    );
+  });
+  const rootStyle = document.documentElement.style;
+  const previousSpacing = rootStyle.getPropertyValue("--space-3");
+  const compactHeight = card(0).getBoundingClientRect().height;
+  try {
+    rootStyle.setProperty("--space-3", "32px");
+    await waitForSolid(() => {
+      const first = card(0).getBoundingClientRect();
+      const next = card(4).getBoundingClientRect();
+      expect(first.height).toBeGreaterThan(compactHeight + 30);
+      expect(Math.abs(next.top - first.bottom - 32)).toBeLessThan(1);
+    });
+  } finally {
+    if (previousSpacing) {
+      rootStyle.setProperty("--space-3", previousSpacing);
+    } else {
+      rootStyle.removeProperty("--space-3");
+    }
+  }
+  container.style.width = "360px";
+  await page.viewport(390, 844);
+  await waitForSolid(() => {
+    expect(card(1).getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      card(0).getBoundingClientRect().bottom,
+    );
+    expect(cards().length).toBeLessThan(100);
+  });
+  card(999).querySelector<HTMLAnchorElement>(".plugin-catalog-card__primary-link")!.focus();
+  await nextFrame();
+  const bounds = card(999).getBoundingClientRect();
+  const viewport = container.getBoundingClientRect();
+  expect(bounds.top).toBeLessThan(viewport.bottom);
+  expect(bounds.bottom).toBeGreaterThan(viewport.top);
+});
+
+it("retains focused cards when crossing the catalog windowing threshold in both directions", async () => {
+  container.className = "content";
+  Object.assign(container.style, { height: "500px", width: "1100px", overflow: "auto" });
+  const entries = Array.from({ length: 61 }, (_, index) => plugin(`threshold-${index}`));
+  const [items, setItems] = createSignal(entries.slice(0, 60));
+  render(() => (
+    <PluginCatalogResults
+      {...catalogProps()}
+      query=""
+      category="tools"
+      result={{ items: items() }}
+    />
+  ));
+  const cards = () => container.querySelectorAll(".plugin-catalog-card");
+  await waitForSolid(() => expect(cards()).toHaveLength(60));
+  await nextFrame();
+  const middle = find('[data-plugin-id="threshold-30"]');
+  const focused = middle.querySelector<HTMLAnchorElement>(".plugin-card-author")!;
+  focused.focus();
+
+  for (const count of [61, 60, 61]) {
+    setItems(entries.slice(0, count));
+    flush();
+    expect(find('[data-plugin-id="threshold-30"]')).toBe(middle);
+    expect(document.activeElement).toBe(focused);
+    await nextFrame();
+    await waitForSolid(() => {
+      expect(find('[data-plugin-id="threshold-30"]')).toBe(middle);
+      expect(document.activeElement).toBe(focused);
+      if (count === 60) {
+        expect(cards()).toHaveLength(60);
+        expect(middle.parentElement!.style.position).toBe("");
+      } else {
+        expect(cards().length).toBeLessThan(61);
+        expect(middle.parentElement!.style.position).toBe("absolute");
+      }
+    });
+  }
+  find('[data-plugin-id="threshold-60"]')
+    .querySelector<HTMLAnchorElement>(".plugin-catalog-card__primary-link")!
+    .focus();
+  await nextFrame();
+  const last = find('[data-plugin-id="threshold-60"]').getBoundingClientRect();
+  const viewport = container.getBoundingClientRect();
+  expect(last.top).toBeLessThan(viewport.bottom);
+  expect(last.bottom).toBeGreaterThan(viewport.top);
+});
+
+it("windows both publisher groups while keeping their search endpoints reachable", async () => {
+  container.className = "content";
+  Object.assign(container.style, { height: "500px", width: "1100px", overflow: "auto" });
+  const items = Array.from({ length: 1_000 }, (_, index) =>
+    plugin(`search-${String(index).padStart(4, "0")}`, {
+      catalog: { official: index % 2 === 0 },
+    }),
+  );
+  const [messages, setMessages] = createSignal<PluginCatalogResultsProps["messages"]>({});
+  render(() => (
+    <PluginCatalogResults
+      {...catalogProps()}
+      result={{ items }}
+      query="search"
+      messages={messages()}
+    />
+  ));
+  await nextFrame();
+  const groups = [...container.querySelectorAll<HTMLElement>("[data-catalog-section]")];
+  expect(groups.map((group) => group.dataset.catalogSection)).toEqual(["official", "community"]);
+  await waitForSolid(() => {
+    expect(container.querySelectorAll(".plugin-catalog-card").length).toBeLessThan(100);
+    for (const group of groups) {
+      expect(group.querySelector("[aria-setsize]")?.getAttribute("aria-setsize")).toBe("500");
+    }
+  });
+  expect(container.querySelector(".plugin-catalog-grid--results")).toBeNull();
+  const firstOfficial = find('[data-plugin-id="search-0000"]');
+  const height = firstOfficial.getBoundingClientRect().height;
+  setMessages({
+    "install:search-0000": { kind: "error", text: "Visible error details. ".repeat(100) },
+  });
+  await waitForSolid(() =>
+    expect(firstOfficial.getBoundingClientRect().height).toBeGreaterThan(height),
+  );
+  for (const id of ["search-0998", "search-0999", "search-0000"]) {
+    const card = find(`[data-plugin-id="${id}"]`);
+    const link = card.querySelector<HTMLAnchorElement>(".plugin-catalog-card__primary-link")!;
+    link.focus();
+    await nextFrame();
+    const bounds = card.getBoundingClientRect();
+    const viewport = container.getBoundingClientRect();
+    expect(document.activeElement).toBe(link);
+    expect(bounds.top).toBeLessThan(viewport.bottom);
+    expect(bounds.bottom, id).toBeGreaterThan(viewport.top);
+  }
+});
 
 it.each([263, 362])(
   "keeps long identity text compact and clear of the action within a %ipx card",

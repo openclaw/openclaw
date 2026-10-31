@@ -7,6 +7,7 @@ import {
   extractAssistantPhaseText,
   extractFirstTextBlock,
   readTerminalSourceReplyDeliveryMirror,
+  resolveAssistantMessagePhase,
 } from "../../shared/chat-message-content.js";
 import {
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
@@ -36,6 +37,12 @@ export type SessionRecentConversationText = {
   sourceChannel?: string;
 };
 
+/** Internal channel-history evidence, not part of the Plugin SDK text projection. */
+export type SessionRecentConversationTurn = SessionRecentConversationText & {
+  messageId?: string;
+  isCompletedAnswer?: true;
+};
+
 export type ReadRecentSessionConversationTextOptions = {
   beforeTimestampMs?: number;
   includeCronDirectDeliveryContext?: boolean;
@@ -46,10 +53,14 @@ export type ReadRecentSessionConversationTextOptions = {
   preferUpstreamUserText?: boolean;
 };
 
+export type ReadRecentSessionConversationTurnOptions = ReadRecentSessionConversationTextOptions & {
+  includeTurnIdentity?: boolean;
+};
+
 function extractRecentConversationText(
   event: TranscriptEvent,
-  options: ReadRecentSessionConversationTextOptions = {},
-): SessionRecentConversationText | undefined {
+  options: ReadRecentSessionConversationTurnOptions = {},
+): SessionRecentConversationTurn | undefined {
   const parsed = asOptionalRecord(event);
   const message = asOptionalRecord(parsed?.message);
   if (
@@ -91,7 +102,7 @@ function extractRecentConversationText(
   }
   const provenance = asOptionalRecord(message.provenance);
   const timestamp = asFiniteNumber(message.timestamp);
-  return {
+  const entry: SessionRecentConversationTurn = {
     ...(typeof parsed?.id === "string" && parsed.id ? { id: parsed.id } : {}),
     role: message.role,
     text,
@@ -100,6 +111,28 @@ function extractRecentConversationText(
       ? { sourceChannel: provenance.sourceChannel.trim() }
       : {}),
   };
+  if (options.includeTurnIdentity) {
+    const metadata = asOptionalRecord(message["__openclaw"]);
+    const messageId =
+      message.role === "user" ? asOptionalRecord(metadata?.transport)?.messageId : undefined;
+    if (typeof messageId === "string" && messageId) {
+      entry.messageId = messageId;
+    }
+    // Native narration can stop too; only a terminal mirror or final reply proves completion.
+    if (
+      message.role === "assistant" &&
+      (readTerminalSourceReplyDeliveryMirror(message) ||
+        (message.stopReason === "stop" &&
+          !message.errorMessage &&
+          resolveAssistantMessagePhase(message) !== "commentary" &&
+          message.openclawStreamFallback === undefined &&
+          message.openclawAsyncDelivery === undefined &&
+          (metadata?.mirrorOrigin === undefined || metadata.runTerminal === true)))
+    ) {
+      entry.isCompletedAnswer = true;
+    }
+  }
+  return entry;
 }
 
 /** Select recent text inside the caller's single transcript snapshot. */
@@ -107,11 +140,11 @@ export function readRecentTranscriptConversationText(
   readPage: (
     options: SessionTranscriptBoundedMessageTailOptions,
   ) => SessionTranscriptBoundedMessageTailPage,
-  options: ReadRecentSessionConversationTextOptions = {},
-): SessionRecentConversationText[] {
+  options: ReadRecentSessionConversationTurnOptions = {},
+): SessionRecentConversationTurn[] {
   const limit = Math.max(1, Math.floor(options.limit ?? 10));
   const pageSize = 250;
-  const recent: SessionRecentConversationText[] = [];
+  const recent: SessionRecentConversationTurn[] = [];
   for (let offset = 0; recent.length < limit; offset += pageSize) {
     const page = readPage({ maxMessages: pageSize, maxBytes: Number.MAX_SAFE_INTEGER, offset });
     for (const event of page.events.toReversed()) {

@@ -83,6 +83,48 @@ function fixture(defaultOnly = false) {
 }
 
 describe("session model patches under operator policy", () => {
+  it("requires explicit Access grants independently of model aliases and keeps clearing safe", async () => {
+    const cfg: OpenClawConfig = { agents: { defaults: { model: "openai/fixture" } } };
+    const revoked = new AbortController();
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "limited-operator",
+      scopes: ["operator.write"],
+      assertCurrent: () => revoked.signal.throwIfAborted(),
+      modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { allow: ["openai/fixture"] } }),
+      rolePolicy: {
+        sessionAccessCap: "none",
+        sandboxRequired: false,
+        agents: "*",
+        accessPrograms: { cyber: ["daybreak_blue"] },
+      },
+    });
+    const project = (cyberAccessProgram: "daybreak_blue" | "daybreak_red" | null) =>
+      projectSessionsPatchEntry({
+        cfg,
+        operatorAuthority,
+        storeKey: key,
+        existingEntry: {
+          sessionId: "access-session",
+          updatedAt: 1,
+          cyberAccessProgram: "daybreak_red",
+        },
+        isLabelInUse: () => false,
+        patch: { key, cyberAccessProgram },
+      });
+    expect(await project("daybreak_red")).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN" },
+    });
+    const blue = await project("daybreak_blue");
+    assert(blue.ok);
+    expect(blue.validateModelSelection?.()).toBeUndefined();
+    const cleared = await project(null);
+    assert(cleared.ok);
+    expect(cleared.entry).not.toHaveProperty("cyberAccessProgram");
+    revoked.abort(new Error("Access role changed"));
+    expect(blue.validateModelSelection?.()).toMatchObject({ code: "FORBIDDEN" });
+  });
+
   it.each<[string | null, "source" | "model-policy" | undefined]>([
     ["fixture/blocked", undefined],
     ["blocked", undefined],

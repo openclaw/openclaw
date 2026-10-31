@@ -8,7 +8,7 @@ import {
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import {
@@ -102,7 +102,7 @@ export function resolveSessionRepositoryCreation(
 
 export function prepareSessionRepositoryWorkspace(
   repository: RepositorySource,
-  options: { runSetupScript: boolean; assertCurrent: () => void },
+  options: { runSetupScript: boolean; branchPrefix?: string; assertCurrent: () => void },
 ): PrepareGatewaySessionLifecycle {
   const { assertCurrent } = options;
   return async (target) => {
@@ -133,6 +133,7 @@ export function prepareSessionRepositoryWorkspace(
       url: repository.url,
       requestedRef: repository.ref,
       runSetupScript: options.runSetupScript,
+      branchPrefix: options.branchPrefix,
       assertCurrent: assertSourceCurrent,
     });
     const withCommit: NonNullable<PreparedGatewaySessionLifecycle["withCommit"]> = (run) =>

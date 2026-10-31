@@ -4,7 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { MessagePort } from "node:worker_threads";
 import { expect, it } from "vitest";
-import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
@@ -16,6 +15,7 @@ import {
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { captureTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import {
@@ -56,7 +56,9 @@ function catalogTask(value: PreparedModelCatalogWorkerInput): PreparedModelCatal
     request: {
       kind: "catalog",
       syntheticAuth: [],
-      clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: value.input.env }),
+      templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({
+        env: value.input.env,
+      }),
     },
   };
 }

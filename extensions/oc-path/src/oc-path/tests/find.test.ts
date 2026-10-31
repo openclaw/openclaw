@@ -9,7 +9,11 @@ import { resolveOcPath, setOcPath, type OcAst } from "../universal.js";
 import { parseYaml } from "../yaml/parse.js";
 
 function find(ast: OcAst, uri: string) {
-  return findOcPaths(ast, parseOcPath(uri));
+  const results = findOcPaths(ast, parseOcPath(uri));
+  for (const { path, match } of results) {
+    expect(resolveOcPath(ast, parseOcPath(formatOcPath(path)))).toEqual(match);
+  }
+  return results;
 }
 
 function leafValues(results: ReturnType<typeof findOcPaths>): string[] {
@@ -23,12 +27,6 @@ function leafValues(results: ReturnType<typeof findOcPaths>): string[] {
 
 function formattedPaths(results: ReturnType<typeof findOcPaths>): string[] {
   return results.map(({ path }) => formatOcPath(path));
-}
-
-function expectRoundTrips(ast: OcAst, results: ReturnType<typeof findOcPaths>) {
-  for (const { path, match } of results) {
-    expect(resolveOcPath(ast, parseOcPath(formatOcPath(path)))).toEqual(match);
-  }
 }
 
 function nestedValue(keys: string[], value: unknown = 1): unknown {
@@ -64,7 +62,6 @@ describe("empty string keys", () => {
     const prefix = "oc://" + file;
     const results = find(ast, prefix + "/*");
     expect(formattedPaths(results)).toEqual([prefix + '/""', prefix + "/keep"]);
-    expectRoundTrips(ast, results);
     const target = parseOcPath(prefix + "/" + suffix);
     expect(resolveOcPath(ast, target)).toMatchObject({ kind: "leaf", valueText: "old" });
     const edited = setOcPath(ast, target, "new");
@@ -140,9 +137,6 @@ describe("findOcPaths — JSONC", () => {
       "oc://f.json/mcp/nest/GITHUB_TOKEN",
     ]);
     expect(leafValues(out)).toEqual(["t", "u"]);
-    for (const { path, match } of out) {
-      expect(resolveOcPath(ast, path)).toEqual(match);
-    }
   });
 
   it("filters object members by boolean values and preserves leaf types", () => {
@@ -178,7 +172,6 @@ describe("quoted union targets", () => {
     const ast = parseJsonc(JSON.stringify({ [key]: "selected", plain: "sibling" }));
     const out = find(ast, "oc://f.json/" + pattern);
     expect(leafValues(out)).toEqual(["selected", "sibling"]);
-    expectRoundTrips(ast, out);
   });
 
   it.each([
@@ -191,7 +184,6 @@ describe("quoted union targets", () => {
       const out = find(ast, prefix + "/" + union);
       expect(formattedPaths(out)).toEqual([prefix + '/"a.b"']);
       expect(leafValues(out)).toEqual(["1"]);
-      expectRoundTrips(ast, out);
     }
   });
   it.each([
@@ -203,7 +195,6 @@ describe("quoted union targets", () => {
     const out = find(ast, prefix + '/{"*","**","a"}');
     expect(formattedPaths(out)).toEqual([prefix + '/"*"', prefix + '/"**"', prefix + '/"a"']);
     expect(leafValues(out)).toEqual(["1", "2", "3"]);
-    expectRoundTrips(ast, out);
   });
 });
 
@@ -222,7 +213,6 @@ describe("recursive wildcard targets", () => {
       prefix + '/"a.b"',
     ]);
     expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1", "2"]);
-    expectRoundTrips(ast, out);
   });
 
   it("bounds AST expansion for repeated recursive wildcards", () => {
@@ -266,7 +256,6 @@ describe("findOcPaths — JSONL", () => {
       "1",
       "2",
     ]);
-    expectRoundTrips(lineAst, out);
   });
 
   it("deduplicates quoted aliases within a line", () => {
@@ -293,7 +282,6 @@ describe("findOcPaths — JSONL", () => {
     const out = find(lineAst, "oc://session/**/**/event");
     expect(formattedPaths(out)).toEqual(["oc://session/L1/nest/event"]);
     expect(leafValues(out)).toEqual(["x"]);
-    expectRoundTrips(lineAst, out);
   });
 
   it("bounds JSONL expansion across recursive slot partitions", () => {
@@ -310,7 +298,6 @@ describe("findOcPaths — JSONL", () => {
     const out = find(lineAst, "oc://session/" + [slot, slot, slot].join("/"));
     expect(out).toHaveLength(depth + 2);
     expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1"]);
-    expectRoundTrips(lineAst, out);
   });
 
   it("expands a union of literal and positional line addresses", () => {
@@ -365,9 +352,8 @@ describe("findOcPaths — Markdown", () => {
       const out = find(ast, pattern);
       expect(formattedPaths(out)).toEqual([address]);
       expect(leafValues(out)).toEqual(["old"]);
-      for (const { path, match } of out) {
+      for (const { path } of out) {
         const concrete = parseOcPath(formatOcPath(path));
-        expect(resolveOcPath(ast, concrete)).toEqual(match);
         expect(setOcPath(ast, concrete, "changed").raw).toBe(
           raw.replace("!!!: old", "!!!: changed"),
         );
@@ -376,8 +362,9 @@ describe("findOcPaths — Markdown", () => {
     }
   });
 
-  it("keeps quoted Markdown field paths usable after expansion and formatting", () => {
-    for (const key of ["model name", "model.id", "a/b", 'say "hi"', "a\\b", "*", "$last", "+"]) {
+  it.each(["model name", "model.id", "a/b", 'say "hi"', "a\\b", "*", "**", "$last", "+"])(
+    "keeps quoted Markdown field %s usable after expansion and formatting",
+    (key) => {
       const raw = `## Settings\n- ${key}: old\n- plain: keep\n`;
       const ast = parseMd(raw);
       const address = `oc://notes.md/settings/#0/${JSON.stringify(key)}`;
@@ -388,12 +375,10 @@ describe("findOcPaths — Markdown", () => {
       }
       const concrete = parseOcPath(address);
       expect(resolveOcPath(ast, concrete)).toMatchObject({ kind: "leaf", valueText: "old" });
-      expect(setOcPath(ast, concrete, "changed").raw).toBe(
-        `## Settings\n- ${key}: changed\n- plain: keep\n`,
-      );
+      expect(setOcPath(ast, concrete, "changed").raw).toBe(raw.replace("old", "changed"));
       expect(ast.raw).toBe(raw);
-    }
-  });
+    },
+  );
 
   it("decodes quoted Markdown containers without treating quoted selectors as syntax", () => {
     const raw = "---\nname: sample\n---\n## Settings\n- first: old\n- plain: keep\n";
@@ -437,6 +422,24 @@ describe("findOcPaths — Markdown", () => {
     expect(leafValues(out)).toEqual(["a", "b"]);
   });
 
+  it.each([
+    ["name.absent", false],
+    ["name.*", false],
+    ["*.absent", false],
+    ["**.absent", false],
+    ["{name,absent}.absent", false],
+    ["[name=value].absent", false],
+    ["name.**", true],
+    ["**.name", true],
+    ["**.{name,absent}.**", true],
+    ["**.[name=value].**", true],
+    ["**.**", true],
+  ])("matches the complete terminal field pattern %s", (field, matches) => {
+    const ast = parseMd("## Settings\n- name: value\n");
+    const out = find(ast, `oc://notes.md/settings/*/${field}`);
+    expect(leafValues(out)).toEqual(matches ? ["value"] : []);
+  });
+
   it("keeps item nodes when a recursive wildcard consumes the item slot", () => {
     const out = find(md, "oc://AGENTS.md/tools/**");
     expect(formattedPaths(out)).toEqual([
@@ -445,7 +448,6 @@ describe("findOcPaths — Markdown", () => {
       "oc://AGENTS.md/tools/#1",
       "oc://AGENTS.md/tools/bar",
     ]);
-    expectRoundTrips(md, out);
   });
 
   it("bounds Markdown expansion across repeated recursive wildcards", () => {
@@ -479,7 +481,6 @@ describe("findOcPaths — Markdown", () => {
     expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(
       Array.from({ length: blockCount * itemsPerBlock }, (_, index) => String(index)),
     );
-    expectRoundTrips(document, out);
   });
 
   it("rejects out-of-range ordinals", () => {
@@ -535,7 +536,6 @@ describe.each([
         expect(path.section).toBe("L1");
       }
     }
-    expectRoundTrips(ast, out);
   });
   it("preserves an already valid slot partition", () => {
     const middle = Array(base ? 63 : 64).fill("k");
@@ -546,6 +546,5 @@ describe.each([
     const out = find(ast, prefix + "**" + end);
     expect(formattedPaths(out)).toEqual([prefix + middle.join(".") + end]);
     expect(leafValues(out)).toEqual(["1"]);
-    expectRoundTrips(ast, out);
   });
 });

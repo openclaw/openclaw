@@ -431,6 +431,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       ).toEqual([]);
     };
     return {
+      runParams,
       compact,
       maintain,
       target,

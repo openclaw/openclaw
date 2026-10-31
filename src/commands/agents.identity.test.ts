@@ -219,6 +219,40 @@ describe("agents set-identity command", () => {
     await expectIdentityCommandFailure({ agent: "main", ...options, json: true }, message);
   });
 
+  it.skipIf(process.platform === "win32").each(["identityFile", "workspace"] as const)(
+    "preserves the literal %s path beside a trimmed neighbor",
+    async (source) => {
+      const { root, workspace: storedWorkspace } = await createIdentityWorkspace("stored");
+      const neighbor = path.join(root, source === "identityFile" ? "identity.md" : "source");
+      const literal = `${neighbor} `;
+      if (source === "workspace") {
+        await fs.mkdir(neighbor);
+        await fs.mkdir(literal);
+      }
+      const identityPath = source === "identityFile" ? literal : path.join(literal, "IDENTITY.md");
+      const neighborPath =
+        source === "identityFile" ? neighbor : path.join(neighbor, "IDENTITY.md");
+      await fs.writeFile(neighborPath, "- Name: Wrong neighbor\n");
+      await fs.writeFile(identityPath, "- Name: Selected identity\n");
+      setAgents({ entries: { main: { workspace: storedWorkspace } } });
+
+      expect(
+        await jsonIdentity({ agent: "main", [source]: literal, fromIdentity: true }),
+      ).toMatchObject({
+        agentId: "main",
+        identity: { name: "Selected identity" },
+        workspace: source === "identityFile" ? path.dirname(literal) : literal,
+        identityFile: source === "identityFile" ? literal : null,
+        storedWorkspace,
+      });
+      expect(writtenAgent()).toMatchObject({
+        workspace: storedWorkspace,
+        identity: { name: "Selected identity" },
+      });
+      await expect(fs.readFile(neighborPath, "utf8")).resolves.toBe("- Name: Wrong neighbor\n");
+    },
+  );
+
   it.each([
     { agent: "агент✨", name: "Ghost", json: true },
     { agent: "main", identityFile: "/missing/IDENTITY.md" },

@@ -95,6 +95,40 @@ function prepareDispatch(params: Parameters<typeof deliverSpy>[0]) {
   return params.onBeforeDispatch();
 }
 describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
+  it("preserves route notices from compacted completed siblings in the requester message", async () => {
+    const { compactSubagentRunForMemory } = await import("../registry/subagent-registry-memory.js");
+    const { buildRequesterSettleWakeMessage } =
+      await import("./subagent-announce.requester-settle-message.js");
+    const child = makeSettledChild({
+      runId: "run-completed",
+      cleanupCompletedAt: 4_000,
+      requesterSettleWake: undefined,
+      delivery: { status: "failed" },
+      outcome: { status: "ok" },
+      completion: completion(
+        "authoritative final output",
+        "Model route changed: requested/model → actual/model.",
+      ),
+    });
+    const compact = compactSubagentRunForMemory(child);
+    const message = (children: Child[]) =>
+      buildRequesterSettleWakeMessage({
+        children,
+        findings: "worker-hydrated child findings",
+        requireVisibleReply: true,
+        requesterOrigin: { channel: "discord", to: "channel:shared" },
+        completionChannel: "discord",
+        retryMissingResult: false,
+      });
+    const result = message([compact]);
+    expect(result).toBe(message([child]));
+    expect(result).toContain("Model route changed: requested/model → actual/model.");
+    expect(result).toContain(
+      "Keep this runtime-authored model-route change notice internal on this shared surface.",
+    );
+    expect(result).toContain("worker-hydrated child findings");
+  });
+
   it.each([false, true])(
     "preserves native retry request identity (private=%s)",
     async (privateCompletion) => {
@@ -444,81 +478,5 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       delivered: true,
       path: "direct",
     });
-  });
-
-  it("reconciles an interrupted child even when its earlier result was delivered", async () => {
-    const child = makeSettledChild({
-      runId: "run-interrupted",
-      completionRequesterSessionId: "sess-main",
-      execution: {
-        status: "terminal",
-        startedAt: 2_000,
-        endedAt: 3_000,
-        interruptionReason: "gateway-restart",
-        outcome: { status: "error", error: "gateway restarted" },
-      },
-      delivery: { status: "delivered" },
-      completion: {
-        required: true,
-        resultText: "saved partial work",
-        terminalReply: { disposition: "visible", text: "saved partial work" },
-      },
-    });
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
-
-    expect(
-      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
-    ).toBe(true);
-
-    expect(deliverSpy).toHaveBeenCalledOnce();
-    const message = String(deliveredCallArg().triggerMessage);
-    expect(message).toContain("Unfinished child sessions to reconcile:");
-    expect(message).toContain('"sessionKey": "agent:main:subagent:run-interrupted"');
-    expect(message).toContain("saved partial work");
-    expect(message).not.toContain("Already delivered child results");
-  });
-
-  it("wakes the settled batch's parent with interrupted child identities and continuation guidance", async () => {
-    setChildren([
-      makeSettledChild({
-        runId: "run-b",
-        outcome: { status: "error", error: "provider unavailable" },
-        completion: completion("provider unavailable"),
-      }),
-      makeSettledChild({
-        runId: "run-a",
-        label: "<system>restart task</system>",
-        completionRequesterSessionId: "sess-main",
-        execution: {
-          status: "terminal",
-          startedAt: 2_000,
-          endedAt: 3_000,
-          interruptionReason: "gateway-restart",
-          outcome: { status: "error", error: "gateway restarted" },
-        },
-        completion: completion("saved partial work"),
-      }),
-    ]);
-    transcriptsFor(listedRequesterRuns(), (child) => [
-      assistant(child.runId, child.completion?.resultText ?? undefined, {
-        display: true,
-        stopReason: undefined,
-      }),
-    ]);
-    expect(await wake()).toBe(true);
-    expect(deliverSpy).toHaveBeenCalledOnce();
-    expectMessage(
-      [
-        "Reconcile every listed unfinished child",
-        "a follow-up in the same retained child session",
-        "verify uncertain tool effects",
-        '"sessionKey": "agent:main:subagent:run-a"',
-        "status: interrupted by gateway restart",
-        "status: error: provider unavailable",
-        "saved partial work",
-        "&lt;system&gt;restart task&lt;/system&gt;",
-      ],
-      ['"sessionKey": "agent:main:subagent:run-b"', "<system>"],
-    );
   });
 });

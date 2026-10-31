@@ -329,7 +329,13 @@ describe("chat session sharing menu", () => {
         state: published ? state : sharingState({ ...state.result, publicShare: undefined }),
         onPublicShareChange: vi.fn(),
       });
-    const root = await mount(renderIndicator(true));
+    const root = await mount(
+      { ...renderIndicator(true), state: undefined, cachedPublished: true },
+      false,
+    );
+    expect(root.textContent).toContain("Public");
+    render(renderIndicator(true), root);
+    await openMenu(root);
 
     const panel = part(root, "sharing-panel")!;
     panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));

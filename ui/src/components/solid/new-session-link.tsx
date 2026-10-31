@@ -56,6 +56,7 @@ export function renderNewSessionLink(params: {
   ) : (
     <openclaw-tooltip
       prop:content={params.disabledReason ?? (params.showShortcut ? undefined : params.label)}
+      prop:pointerThrough={true}
     >
       <Show when={params.disabledReason == null && params.showShortcut}>
         <span slot="content">

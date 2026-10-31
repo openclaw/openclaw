@@ -164,6 +164,7 @@ describe("widget-card", () => {
     const preview = documentPreview("saved-widget", { sandbox: "strict" });
     const widgetLayout = {
       read: vi.fn(() => 700),
+      readRows: () => undefined,
       write: vi.fn(),
       writeRows: vi.fn(),
       invalidateRow: vi.fn(),
@@ -297,6 +298,7 @@ describe("widget-card", () => {
       url: "https://youtu.be/AbCdEfGhI_1",
     };
     const host = mountWidget(preview, { sessionKey: "agent:main:video" });
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(host.querySelector('button[aria-label="Play Synthetic video"]')).not.toBeNull(),
     );

@@ -502,11 +502,11 @@ export function registerManagedLaunchdTeardownTests(
     15_000,
   );
 
-  itUnix(
-    "rejects a launchd target owned by a different parent without native mutation",
-    async () => {
+  itUnix.each(["wrong-parent", "nested-parent", "foreign-job", "duplicate-pid"] as const)(
+    "rejects launchd %s identity without native mutation",
+    async (launchdFault) => {
       const { commands, sentinel, state } = await runBoundary("launchd", {
-        launchdFault: "wrong-parent",
+        launchdFault,
       });
 
       expect(commands).toEqual(["print gui/501/ai.openclaw.gateway"]);
@@ -531,5 +531,46 @@ export function registerManagedLaunchdTeardownTests(
 
     expect(state).toMatchObject({ disabled: false, parked: true, restored: true });
     expect(sentinel).toMatchObject(restoreOutcome(expect, "error", restoreFailed, 1));
+  });
+
+  itUnix.each([true, false])(
+    "preserves large launchd inspection framing (cancel=%s)",
+    async (cancel) => {
+      const { sentinel, state } = await runBoundary("launchd", {
+        launchdOutputPadding: 9_000,
+        ...(cancel
+          ? { cancelAfterPark: true }
+          : { updaterNotification: "published", updaterResult: failedUpdate() }),
+      });
+      expect(state).toMatchObject({ parked: true, restored: true, healthProbed: true });
+      expect(sentinel).toMatchObject(
+        restoreOutcome(expect, cancel ? "skipped" : "error", cancel ? cancelled : failed, 0),
+      );
+    },
+  );
+
+  itUnix.each([
+    ["nested-restored-pid", true],
+    ["nested-restored-pid", false],
+    ["foreign-restored-job", true],
+    ["foreign-restored-job", false],
+    ["duplicate-restored-pid", true],
+    ["duplicate-restored-pid", false],
+  ] as const)("refuses launchd %s after restoration (cancel=%s)", async (launchdFault, cancel) => {
+    const { sentinel, state, commands } = await runBoundary("launchd", {
+      launchdFault,
+      ...(cancel
+        ? { cancelAfterPark: true }
+        : { updaterNotification: "published", updaterResult: failedUpdate() }),
+    });
+    expect(state).toMatchObject({ parked: true, restored: true });
+    expect(state.healthProbed).toBeUndefined();
+    expect(commands.filter((command) => command.startsWith("bootstrap "))).toHaveLength(1);
+    expect(
+      commands.filter((command) => command.startsWith("kickstart ")).length,
+    ).toBeLessThanOrEqual(1);
+    expect(sentinel).toMatchObject(
+      restoreOutcome(expect, "error", cancel ? restoreFailed : failed, 1, !cancel),
+    );
   });
 }

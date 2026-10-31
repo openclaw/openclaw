@@ -8,6 +8,7 @@ import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtim
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   readMatrixIdbSnapshotJson,
+  pruneMatrixIdbSnapshotChunks,
   type MatrixSnapshotStateRuntime,
   writeMatrixIdbSnapshotJson,
 } from "../crypto-state-store.js";
@@ -263,7 +264,7 @@ async function preflightIndexedDatabases(
 async function readCanonicalSnapshot(
   snapshotPath: string,
   stateRuntime: MatrixSnapshotStateRuntime,
-): Promise<IdbDatabaseSnapshot[] | null> {
+): Promise<{ snapshot: IdbDatabaseSnapshot[]; snapshotJson: string } | null> {
   throwIfLegacySnapshotNeedsDoctor(snapshotPath);
   const snapshotJson = await readMatrixIdbSnapshotJson(path.dirname(snapshotPath), stateRuntime);
   if (snapshotJson === null) {
@@ -273,7 +274,7 @@ async function readCanonicalSnapshot(
   if (!snapshot) {
     throw new Error("Malformed IndexedDB snapshot payload");
   }
-  return snapshot;
+  return { snapshot, snapshotJson };
 }
 
 // Production callers pass MatrixStoragePaths.idbSnapshotPath; explicit paths only isolate tests.
@@ -289,11 +290,12 @@ export async function restoreIdbFromDisk(
     // withFileLock is acquire-or-throw; it never skips the callback on contention.
     return await withFileLock(resolvedPath, MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS, async () => {
       callbackStarted = true;
-      const snapshot = await readCanonicalSnapshot(resolvedPath, snapshotStateRuntime);
-      if (snapshot === null) {
+      const canonical = await readCanonicalSnapshot(resolvedPath, snapshotStateRuntime);
+      if (canonical === null) {
         await clearAccountIndexedDatabases(databasePrefix);
         return false;
       }
+      const { snapshot } = canonical;
       await preflightIndexedDatabases(snapshot, databasePrefix);
       await clearAccountIndexedDatabases(databasePrefix);
       await restoreIndexedDatabases(snapshot, fakeIndexedDB);
@@ -332,15 +334,20 @@ export async function persistIdbToDisk(params?: {
     await withFileLock(snapshotPath, MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS, async () => {
       callbackStarted = true;
       const storageRootDir = path.dirname(snapshotPath);
-      await readCanonicalSnapshot(snapshotPath, stateRuntime);
+      const previousJson = (await readCanonicalSnapshot(snapshotPath, stateRuntime))?.snapshotJson;
       const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
       if (params?.abortSignal?.aborted || snapshot.length === 0) {
+        return;
+      }
+      const snapshotJson = JSON.stringify(snapshot);
+      if (previousJson === snapshotJson) {
+        await pruneMatrixIdbSnapshotChunks(storageRootDir, stateRuntime);
         return;
       }
       // Once publication begins, finish every row and cleanup before releasing the lock.
       await writeMatrixIdbSnapshotJson({
         storageRootDir,
-        snapshotJson: JSON.stringify(snapshot),
+        snapshotJson,
         databaseCount: snapshot.length,
         stateRuntime,
       });

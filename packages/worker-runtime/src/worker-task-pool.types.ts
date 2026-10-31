@@ -34,6 +34,8 @@ export type WorkerTaskPoolOptions<Output> = {
 
 export type WorkerTaskPoolOwnerOptions = {
   retainedTransport?: true;
+  /** Internal interactive owners retain their newest idle worker until explicit retirement. */
+  retainOneIdleWorker?: true;
   decodeResourceError?: (error: unknown) => Error;
 };
 

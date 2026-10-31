@@ -537,6 +537,66 @@ export async function listOpenClawRegisteredAgentDatabasesAsync(
   return snapshot.result.entries;
 }
 
+type AgentDatabaseRegistryWitness = {
+  memo: AgentDatabaseRegistryMemo;
+  assertCurrent: () => void;
+  followRegistration: (change: AgentDatabaseRegistryChange) => void;
+  acceptEntries: (entries: readonly OpenClawRegisteredAgentDatabase[]) => void;
+};
+
+// Only the lazy reader retains the discovery async context; publication guards outlive it.
+function createRegistrySnapshotReader(
+  options: AgentDatabaseRegistryListOptions & { path: string; fresh?: true },
+  scopedWitness: AgentDatabaseRegistryWitness | undefined,
+  prepareWitness: () => AgentDatabaseRegistryWitness,
+  assertAdmissionCurrent: () => void,
+): ReturnType<typeof prepareOpenClawAgentDatabaseRegistrySnapshotRead>["read"] {
+  const inCapturedScope = AsyncLocalStorage.snapshot();
+  return async (signal?: AbortSignal) => {
+    for (;;) {
+      signal?.throwIfAborted();
+      const witness = prepareWitness();
+      const { memo, assertCurrent, followRegistration } = witness;
+      const assertReadCurrent = scopedWitness ? assertCurrent : assertAdmissionCurrent;
+      assertReadCurrent();
+      let entries = options.fresh ? undefined : memo.entries;
+      if (!entries) {
+        const reply = await inCapturedScope(() =>
+          executeExistingOpenClawStateRead(
+            options,
+            { type: "agentDatabaseRegistry.read" },
+            { signal, current: options.fresh },
+          ),
+        );
+        const result = reply?.result;
+        // Only a newer owner publication warrants another read; scoped witnesses keep their fence.
+        if (!scopedWitness && memo.next) {
+          continue;
+        }
+        witness.acceptEntries(result?.status === "available" ? result.entries : []);
+        assertReadCurrent();
+        if (
+          result?.status === "unavailable" ||
+          (result === undefined && hasUnavailableMissingSqlitePath(options.path))
+        ) {
+          return { result: { status: "unavailable" }, assertCurrent, followRegistration };
+        }
+        entries = options.fresh
+          ? (result?.entries ?? [])
+          : (memo.entries ??= result?.entries ?? []);
+      }
+      return {
+        result: {
+          status: "available",
+          entries: cloneRegisteredAgentDatabases(entries, options),
+        },
+        assertCurrent,
+        followRegistration,
+      };
+    }
+  };
+}
+
 /** Scoped publication witnesses are immediate; native registry rows remain demand-driven. */
 export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
   inputOptions: AgentDatabaseRegistryListOptions & {
@@ -565,9 +625,8 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
       env,
       path: resolveDatabasePath({ ...inputOptions, env }),
     };
-    const context = captureOpenClawStateReadContext(options.path);
-    const assertAdmissionCurrent = () => context.admission.assertCurrent();
-    const inCapturedScope = AsyncLocalStorage.snapshot();
+    const assertAdmissionCurrent = captureOpenClawStateReadContext(options.path).admission
+      .assertCurrent;
     const captureWitness = () => {
       const memo = activateRegisteredAgentDatabasesMemo(options);
       let cursor = memo;
@@ -658,51 +717,15 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
         }
         preparedWitness.followRegistration(change);
       },
-      async read(signal) {
-        for (;;) {
-          signal?.throwIfAborted();
-          const witness = scopedWitness ?? captureWitness();
-          const { memo, assertCurrent, followRegistration } = witness;
-          const assertReadCurrent = scopedWitness ? assertCurrent : assertAdmissionCurrent;
-          // Install the witness before the first await, including a read that later rejects.
-          preparedWitness = witness;
-          assertReadCurrent();
-          let entries = options.fresh ? undefined : memo.entries;
-          if (!entries) {
-            const reply = await inCapturedScope(() =>
-              executeExistingOpenClawStateRead(
-                options,
-                { type: "agentDatabaseRegistry.read" },
-                { signal, current: options.fresh },
-              ),
-            );
-            const result = reply?.result;
-            // Only a newer owner publication warrants another read; scoped witnesses keep their fence.
-            if (!scopedWitness && memo.next) {
-              continue;
-            }
-            witness.acceptEntries(result?.status === "available" ? result.entries : []);
-            assertReadCurrent();
-            if (
-              result?.status === "unavailable" ||
-              (result === undefined && hasUnavailableMissingSqlitePath(options.path))
-            ) {
-              return { result: { status: "unavailable" }, assertCurrent, followRegistration };
-            }
-            entries = options.fresh
-              ? (result?.entries ?? [])
-              : (memo.entries ??= result?.entries ?? []);
-          }
-          return {
-            result: {
-              status: "available",
-              entries: cloneRegisteredAgentDatabases(entries, options),
-            },
-            assertCurrent,
-            followRegistration,
-          };
-        }
-      },
+      read: createRegistrySnapshotReader(
+        options,
+        scopedWitness,
+        () => {
+          // Install before the first await, including a read that later rejects.
+          return (preparedWitness = scopedWitness ?? captureWitness());
+        },
+        assertAdmissionCurrent,
+      ),
     };
   } catch (error) {
     const rethrow = () => {

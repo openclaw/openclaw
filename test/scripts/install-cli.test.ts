@@ -14,10 +14,8 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers.mjs";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
-import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeNpmLifecycleFixture } from "./install-npm-fixtures.js";
 import { findDarwinReexecBash } from "./install-reexec-fixtures.js";
@@ -38,6 +36,7 @@ function runShell(script: string, env: NodeJS.ProcessEnv = {}) {
     encoding: "utf8",
     env: {
       ...process.env,
+      ZDOTDIR: undefined,
       OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1",
       ...env,
       BASH_ENV: "",
@@ -120,6 +119,31 @@ function runNpmPolicy(spec: string) {
 
 describe("install-cli.sh", () => {
   const script = readStandaloneInstaller(process.cwd(), SCRIPT_PATH.slice("scripts/".length));
+
+  it.each([undefined, ".config/zsh"])("persists npm prefix PATH with ZDOTDIR=%s", (suffix) => {
+    const home = tempDirs.make("openclaw-cli-zdotdir-");
+    const zshDir = suffix ? join(home, suffix) : home;
+    mkdirSync(zshDir, { recursive: true });
+    const profiles = [join(home, ".bashrc"), join(zshDir, ".zshrc")];
+    for (const rc of profiles) {
+      writeFileSync(rc, "# existing\n");
+    }
+    const result = runInstallCliShell(
+      `
+      os_detect() { echo linux; }
+      npm_fixture() { [[ "$*" != "config get prefix" ]] || echo "$HOME/missing/prefix"; }
+      npm_bin() { echo npm_fixture; }
+      fix_npm_prefix_if_needed
+      fix_npm_prefix_if_needed
+    `,
+      { HOME: home, ZDOTDIR: suffix ? zshDir : undefined },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(profiles.map((rc) => readFileSync(rc, "utf8"))).toEqual(
+      Array(2).fill(`# existing\nexport PATH="${home}/.npm-global/bin:$PATH"\n`),
+    );
+    expect(existsSync(join(home, ".zshrc"))).toBe(!suffix);
+  });
   const installerContract = {
     scriptPath: SCRIPT_PATH,
     runShell,
@@ -500,26 +524,6 @@ fi
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("--timeout=300");
     expect(result.stdout).toContain("wget-status=4");
-  });
-
-  it("matches the canonical release-label contract for installed Node runtimes", () => {
-    const result = runShell(
-      [
-        "set -euo pipefail",
-        `source ${JSON.stringify(SCRIPT_PATH)}`,
-        "set +e",
-        ...NODE_RELEASE_VERSION_CASES.flatMap((version, index) => [
-          `node_release_version_is_supported ${JSON.stringify(version)}`,
-          `printf '${index}=%s\\n' "$?"`,
-        ]),
-      ].join("\n"),
-    );
-
-    expect(result.status).toBe(0);
-    for (const [index, version] of NODE_RELEASE_VERSION_CASES.entries()) {
-      const expectedStatus = isSupportedOpenClawNodeVersion(version) ? 0 : 1;
-      expect(result.stdout, version).toContain(`${index}=${expectedStatus}`);
-    }
   });
 
   it.each(["npm", "git"])("rejects incompatible %s before replacing the managed CLI", (method) => {
@@ -1016,7 +1020,7 @@ fi
     const failed = install();
     expect(failed.status).toBe(1);
     expect(failed.stdout).toContain(
-      "Installed Node 24.22.1 must provide Node >= 24.22.1 with WAL-reset-safe SQLite",
+      "Installed Node 24.22.1 must provide Node >= 24.16.0 with WAL-reset-safe SQLite",
     );
     expect(failed.stdout).toContain("found Node unknown, SQLite unavailable");
     expectActive(oldRuntime, "v22.23.2");
@@ -1057,7 +1061,7 @@ fi
     [
       "vulnerable Node",
       "NODE_VERSION=24.14.1; install_node linux x64",
-      "Node 24.14.1 is unsupported; use Node 24.22.1+ or Node 26.12.1+.",
+      "Node 24.14.1 is unsupported; use Node 24.16.0+ or Node 26.1.0+.",
       "Installing Node 24.14.1",
     ],
     [

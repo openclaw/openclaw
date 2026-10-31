@@ -3,6 +3,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as mcp from "../../gateway/mcp-http.loopback-runtime.js";
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
+import { runWithModelFallback } from "../model-fallback-runner.js";
 import { buildCliRunResult } from "./cli-run-settlement.js";
 import {
   closePluginTestAdmissions,
@@ -88,7 +90,22 @@ it.each([
     sessionBindingDisabled: false,
     preparedContextAgentMeta: {},
   });
+  const attempts: string[] = [];
+  const outcome = await runWithModelFallback({
+    cfg: undefined,
+    provider: "external",
+    model: "primary",
+    fallbacksOverride: ["external/fallback"],
+    skipAuthProfileRuntime: true,
+    run: async (_provider, model) => {
+      attempts.push(model);
+      return result;
+    },
+    classifyResult: classifyEmbeddedAgentRunResultForModelFallback,
+  });
   expect(order).toEqual(interruptible ? ["answered", "yield"] : ["answered"]);
+  expect(attempts).toEqual(["primary"]);
+  expect(outcome.attempts).toEqual([]);
   if (interruptible) {
     expect(assistantEvents).toEqual([]);
   }

@@ -92,6 +92,9 @@ export function deleteSessionEntryRows(
             .orderBy("session_key", "asc"),
         ).rows
       : [];
+  // All retained windows use the same unchanged survivor snapshot in this transaction.
+  const survivorReferences =
+    windows.length > 1 ? new Map<(typeof survivingNodes)[number], readonly string[]>() : undefined;
   const ownedSessionIds: string[] = [];
   let transcriptInventoryUnchanged = options.deleteOwnedWindows !== true;
   for (const window of windows) {
@@ -99,8 +102,13 @@ export function deleteSessionEntryRows(
       if (node.current_session_id === window.session_id) {
         return true;
       }
-      const entry = parseSessionEntryRow(node);
-      return entry ? collectSessionStateIdsForEntry(entry).includes(window.session_id) : false;
+      let references = survivorReferences?.get(node);
+      if (!references) {
+        const entry = parseSessionEntryRow(node);
+        references = entry ? collectSessionStateIdsForEntry(entry) : [];
+        survivorReferences?.set(node, references);
+      }
+      return references.includes(window.session_id);
     });
     if (survivingNode) {
       transcriptInventoryUnchanged &&=

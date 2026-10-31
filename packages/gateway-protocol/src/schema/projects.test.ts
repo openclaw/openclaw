@@ -25,7 +25,7 @@ it("validates closed project method inputs", () => {
     [{ includeObserved: "yes" }, { extra: true }],
   );
   check(S.validateProjectsRegisterParams, [{ path: "/repo", name: "OpenClaw" }], [{ path: "" }]);
-  check(S.validateProjectsAddParams, [{ gitUrl }], [{ gitUrl: "", unexpected: true }]);
+  check(S.validateProjectsAddParams, [{ gitUrl }], [{ gitUrl: "" }, { gitUrl, unexpected: true }]);
   check(S.validateProjectsSearchRemoteParams, [{ query: "openclaw" }], [{ query: "" }]);
   check(
     S.validateProjectsRemoveParams,

@@ -70,10 +70,6 @@ function history(key: string, messages: Message[]) {
     },
   };
 }
-function historyChange(detail: string) {
-  return [{ code: "historyRewrite", detail }];
-}
-
 describe("prompt cache history fingerprints", () => {
   beforeEach(() => {
     testScope += 1;
@@ -329,9 +325,12 @@ describe("prompt cache history fingerprints", () => {
       return entry.message;
     });
     const tracker = history("cached-history", messages);
+    const layouts = new Set(messages.map((message) => fingerprintMessage(message).layout));
     const writes = vi.spyOn(messageFingerprints, "set");
+    const lookups = vi.spyOn(Map.prototype, "get");
     expect(tracker.read()).toMatchObject(unchangedPrefix);
     expect(writes).not.toHaveBeenCalled();
+    expect(lookups.mock.calls.filter(([key]) => layouts.has(key))).toHaveLength(0);
   });
 
   it("reuses owned content under mutable append envelopes across observers", async () => {
@@ -533,9 +532,9 @@ describe("prompt cache history fingerprints", () => {
       }
       const detail = `message 1 (${message.role}) differs from the previous request; history must be append-only; changed fields: ${kind === "string" ? "content" : "content[0].text"}`;
       tracker.assertRewrite(detail, [first, rebuildWrapper ? { ...message } : message]);
-      expect(tracker.complete({ input: 8_000, cacheRead: 0 })?.changes).toEqual(
-        historyChange(detail),
-      );
+      expect(tracker.complete({ input: 8_000, cacheRead: 0 })?.changes).toEqual([
+        { code: "historyRewrite", detail },
+      ]);
     },
   );
 
@@ -550,27 +549,42 @@ describe("prompt cache history fingerprints", () => {
     tracker.assertRewrite("changed fields: content[0].arguments");
   });
 
-  it("names changed reasoning signatures without exposing values or extension keys", () => {
+  it("names added, changed, and removed extension keys without exposing values", () => {
     const sessionId = scopedKey("reasoning-fields");
     const block = {
       type: "thinking" as const,
       thinking: "private reasoning",
       thinkingSignature: "private original signature",
-      "private-extension-name": "original extension value",
+      changedBlock: "private original block value",
+      removedBlock: "private removed block value",
     };
-    const message = makeAgentAssistantMessage({ content: [block] });
+    const message = {
+      ...makeAgentAssistantMessage({ content: [block] }),
+      changedEnvelope: "private original envelope value",
+      removedEnvelope: "private removed envelope value",
+    };
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     observe(sessionId, [message]);
     block.thinkingSignature = "private rewritten signature";
-    block["private-extension-name"] = "rewritten extension value";
+    block.changedBlock = "private rewritten block value";
+    Reflect.deleteProperty(block, "removedBlock");
+    Object.assign(block, { addedBlock: "private added block value" });
+    message.changedEnvelope = "private rewritten envelope value";
+    Reflect.deleteProperty(message, "removedEnvelope");
+    Object.assign(message, { addedEnvelope: "private added envelope value" });
     const changes = observe(sessionId, [message]).changes;
     expect(changes).toEqual([
       {
         code: "historyRewrite",
         detail:
-          "message 0 (assistant) differs from the previous request; history must be append-only; changed fields: content[0].thinkingSignature, content[0].other",
+          'message 0 (assistant) differs from the previous request; history must be append-only; changed fields: content[0].thinkingSignature, content[0].other["changedBlock"], content[0].other["removedBlock"], content[0].other["addedBlock"], envelope.other["changedEnvelope"], envelope.other["removedEnvelope"], envelope.other["addedEnvelope"]',
       },
     ]);
     expect(JSON.stringify(changes)).not.toContain("private");
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining('content[0].other["removedBlock"]'),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("private");
   });
 
   it("detects primitive property additions, changes, and removals", () => {
@@ -662,7 +676,7 @@ describe("prompt cache history fingerprints", () => {
         expect(
           completePromptCacheObservation({ sessionId, usage: { input: 8_000, cacheRead: 0 } })
             ?.changes,
-        ).toEqual(historyChange(detail));
+        ).toEqual([{ code: "historyRewrite", detail }]);
         observe(sessionId, messages);
         expect(warn).toHaveBeenCalledTimes(1);
       });
@@ -676,44 +690,41 @@ describe("prompt cache history fingerprints", () => {
     { field: "timestamp", value: 2, label: "timestamp" },
     { field: "idempotencyKey", value: "private-value", label: "idempotencyKey" },
     { field: "usage", value: { input: 42 }, label: "usage" },
-    { field: "private-field-name", value: "private-value", label: "other" },
-  ])(
-    "identifies changed $label metadata without logging values or extension keys",
-    ({ field, value, label }) => {
-      const sessionId = scopedKey(`metadata-${label}`);
-      const message: Message & Record<string, unknown> = {
-        role: "user",
-        content: "private-prompt",
-        timestamp: 1,
-      };
-      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-      observe(sessionId, [message]);
-      completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
-      message[field] = value;
-      withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: undefined }, () => {
-        expect(observe(sessionId, [message]).changes).toEqual([
-          {
-            code: "historyRewrite",
-            detail: `message 0 (user) differs from the previous request; history must be append-only; changed fields: envelope.${label}`,
-          },
-        ]);
-      });
-      expect(warn).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining(`changed fields: envelope.${label} sessionKey=`),
-      );
-      expect(JSON.stringify(warn.mock.calls)).not.toContain("private-");
-      completePromptCacheObservation({ sessionId });
-      observe(sessionId, [message]);
-      expect(
-        completePromptCacheObservation({ sessionId, usage: { cacheRead: 2_000 } })?.changes,
-      ).toEqual([
+    { field: "extensionField", value: "private-value", label: 'other["extensionField"]' },
+  ])("identifies changed $label metadata without logging values", ({ field, value, label }) => {
+    const sessionId = scopedKey(`metadata-${label}`);
+    const message: Message & Record<string, unknown> = {
+      role: "user",
+      content: "private-prompt",
+      timestamp: 1,
+    };
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    observe(sessionId, [message]);
+    completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
+    message[field] = value;
+    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: undefined }, () => {
+      expect(observe(sessionId, [message]).changes).toEqual([
         {
           code: "historyRewrite",
           detail: `message 0 (user) differs from the previous request; history must be append-only; changed fields: envelope.${label}`,
         },
       ]);
-    },
-  );
+    });
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(`changed fields: envelope.${label} sessionKey=`),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("private-");
+    completePromptCacheObservation({ sessionId });
+    observe(sessionId, [message]);
+    expect(
+      completePromptCacheObservation({ sessionId, usage: { cacheRead: 2_000 } })?.changes,
+    ).toEqual([
+      {
+        code: "historyRewrite",
+        detail: `message 0 (user) differs from the previous request; history must be append-only; changed fields: envelope.${label}`,
+      },
+    ]);
+  });
 
   it("bounds diagnostics while detecting changes beyond the retained block prefix", () => {
     const blocks: TextContent[] = Array.from({ length: 20 }, () => ({

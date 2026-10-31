@@ -1,8 +1,10 @@
+import { getEventListeners } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   buildConfigSetOperations,
   readConfigPatchOperations,
@@ -24,31 +26,29 @@ async function readPatch(contents: string, options: Omit<ConfigPatchOptions, "fi
 }
 
 describe("readConfigPatchOperations", () => {
-  it.each([
-    {
-      label: "malformed bytes",
-      chunks: [Buffer.from('{name:"'), Buffer.from([0xff]), Buffer.from('"}')],
-      error: "--stdin must be valid UTF-8",
-    },
-    {
-      label: "valid split Unicode",
-      chunks: [
-        Buffer.from('{name:"中文 😀 \uFFFD"}').subarray(0, 9),
-        Buffer.from('{name:"中文 😀 \uFFFD"}').subarray(9),
-      ],
-      value: "中文 😀 \uFFFD",
-    },
-  ])("reads stdin as bytes for $label", async ({ chunks, error, value }) => {
+  it.each(["malformed", "Unicode", "abort", "pre-aborted"])("reads stdin: %s", async (mode) => {
     const original = Object.getOwnPropertyDescriptor(process, "stdin");
-    Object.defineProperty(process, "stdin", { configurable: true, value: Readable.from(chunks) });
+    const scope = new AsyncWorkScope();
+    const name = "中文 😀 \uFFFD";
+    const text = Buffer.from(`{name:"${name}"}`);
+    const chunks = [text.subarray(0, 9), text.subarray(9)];
+    const stdin = mode.includes("abort")
+      ? new Readable({ read: () => scope.beginClose() })
+      : Readable.from(mode === "malformed" ? [Buffer.from([0xff])] : chunks);
+    if (mode === "pre-aborted") {
+      scope.beginClose();
+    }
+    Object.defineProperty(process, "stdin", { configurable: true, value: stdin });
     try {
-      const result = readConfigPatchOperations({ stdin: true });
-      if (error) {
-        await expect(result).rejects.toThrow(error);
+      const result = scope.run(() => readConfigPatchOperations({ stdin: true }));
+      if (mode === "Unicode") {
+        await expect(result).resolves.toMatchObject([{ setPath: ["name"], value: name }]);
       } else {
-        await expect(result).resolves.toMatchObject([{ setPath: ["name"], value }]);
+        await expect(result).rejects.toThrow(mode === "malformed" ? "valid UTF-8" : /abort/i);
       }
+      expect(getEventListeners(scope.signal, "abort")).toHaveLength(0);
     } finally {
+      stdin.destroy();
       if (original) {
         Object.defineProperty(process, "stdin", original);
       }

@@ -3,7 +3,6 @@
 // Rejects changelog thanks entries that credit bots or internal handles.
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.ts";
 import { changelogFormat, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 
@@ -47,11 +46,14 @@ export function findForbiddenChangelogThanks(content: string, options: ThanksOpt
   return content
     .split(/\r?\n/u)
     .map((text, index) => {
-      if (!THANKS_PATTERN.test(text)) {
+      const thanksStart = text.search(THANKS_PATTERN);
+      if (thanksStart < 0) {
         return null;
       }
-      // A single changelog line may thank multiple handles; scan all of them.
-      for (const match of text.matchAll(THANKED_HANDLE_PATTERN)) {
+      // Author credit may precede a Thanks clause. Only classify handles that
+      // the line actually thanks.
+      const thanksText = text.slice(thanksStart);
+      for (const match of thanksText.matchAll(THANKED_HANDLE_PATTERN)) {
         const handle = match[1];
         if (handle && isForbiddenChangelogThanksHandle(handle, options)) {
           return { line: index + 1, handle: handle.toLowerCase(), text };
@@ -127,7 +129,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   main().catch((error: unknown) => {
     console.error(error);
     process.exit(1);

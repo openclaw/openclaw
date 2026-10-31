@@ -51,12 +51,29 @@ const source: BoardSnapshot = {
   ],
 };
 
+const boardSnapshot = (overrides: Partial<BoardSnapshot> = {}): BoardSnapshot => ({
+  ...structuredClone(source),
+  ...overrides,
+});
+const tabs = (count: number, title: (index: number) => string, id = (i: number) => `tab-${i}`) =>
+  Array.from({ length: count }, (_, position) => ({
+    tabId: id(position),
+    title: title(position),
+    position,
+    chatDock: "right" as const,
+  }));
+
+async function updateSnapshot(view: OpenClawBoardView, overrides: Partial<BoardSnapshot>) {
+  view.snapshot = boardSnapshot(overrides);
+  await settle(view);
+}
+
 async function mount(
   applyOps = vi.fn(async () => undefined),
   parent: HTMLElement = document.body,
 ): Promise<OpenClawBoardView> {
   const view = document.createElement("openclaw-board-view");
-  view.snapshot = structuredClone(source);
+  view.snapshot = boardSnapshot();
   view.activeTabId = "main";
   view.widgetFrameUrl = () => "about:blank";
   view.callbacks = { applyOps, grant: vi.fn(async () => undefined), selectTab: vi.fn() };
@@ -104,11 +121,9 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const view = await mount(undefined, parent);
     expect(parent.scrollTop).toBe(0);
 
-    view.snapshot = {
-      ...structuredClone(source),
+    await updateSnapshot(view, {
       tabs: [...source.tabs, { tabId: "later", title: "Later", position: 2, chatDock: "right" }],
-    };
-    await view.updateComplete;
+    });
     expect(parent.scrollTop).toBe(0);
   });
 
@@ -116,16 +131,10 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const { page } = await import("vitest/browser");
     const view = await mount();
     view.style.width = "340px";
-    view.snapshot = {
-      ...structuredClone(source),
-      tabs: Array.from({ length: 8 }, (_, index) => ({
-        tabId: `tab-${index}`,
-        title: `Research area ${index + 1}`,
-        position: index,
-        chatDock: "right" as const,
-      })),
+    view.snapshot = boardSnapshot({
+      tabs: tabs(8, (index) => `Research area ${index + 1}`),
       widgets: [],
-    };
+    });
     view.activeTabId = "tab-0";
     view.callbacks = { ...view.callbacks!, selectTab: (tabId) => (view.activeTabId = tabId) };
     await view.updateComplete;
@@ -312,33 +321,54 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(getComputedStyle(bar).visibility, revealState).toBe("hidden");
   }
 
-  it("reveals widget chrome while the widget has focus", async () => {
-    const view = await mount();
-    view.style.width = "1200px";
-    const sink = focusSink();
-    const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
-    const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
+  it.each([240, 320, 594])(
+    "reveals responsive chrome on a %ipx widget without covering its content",
+    async (width) => {
+      const view = await mount();
+      view.style.width = `${width * 4 + BOARD_GRID_GAP * 3}px`;
+      view.snapshot = {
+        ...structuredClone(source),
+        widgets: source.widgets.map((widget) => ({ ...widget, sizeW: 3 })),
+      };
+      await settle(view);
+      const sink = focusSink();
+      const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+      const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
 
-    expect(getComputedStyle(bar!).visibility).toBe("hidden");
-    expect(
-      getComputedStyle(widget!.querySelector(".board-widget__resize-handle")!).visibility,
-    ).toBe("hidden");
-    widget!.focus();
-    expect(getComputedStyle(bar!).visibility).toBe("visible");
-    // Chrome is a compact centered pill, not a full-width strip: it must not
-    // stretch across the card, so widget-owned corner actions stay clear.
-    const barBounds = bar!.getBoundingClientRect();
-    const widgetBounds = widget!.getBoundingClientRect();
-    expect(barBounds.width).toBeLessThan(widgetBounds.width * 0.75);
-    expect(barBounds.left + barBounds.width / 2).toBeCloseTo(
-      widgetBounds.left + widgetBounds.width / 2,
-      0,
-    );
+      expect(getComputedStyle(bar!).visibility).toBe("hidden");
+      expect(
+        getComputedStyle(widget!.querySelector(".board-widget__resize-handle")!).visibility,
+      ).toBe("hidden");
+      widget!.focus();
+      expect(getComputedStyle(bar!).visibility).toBe("visible");
+      // Chrome is a compact centered pill, not a full-width strip: it must not
+      // stretch across the card, so widget-owned corner actions stay clear.
+      const barBounds = bar!.getBoundingClientRect();
+      const widgetBounds = widget!.getBoundingClientRect();
+      expect(barBounds.width).toBeLessThan(widgetBounds.width * 0.75);
+      if (width < 266) {
+        expect(barBounds.left).toBeCloseTo(widgetBounds.left + 8, 0);
+      } else {
+        expect(barBounds.left + barBounds.width / 2).toBeCloseTo(
+          widgetBounds.left + widgetBounds.width / 2,
+          0,
+        );
+      }
+      expect(getComputedStyle(widget!.querySelector(".board-widget__title")!).display).toBe(
+        width < 378 ? "none" : "block",
+      );
+      expect(
+        document.elementFromPoint(
+          widgetBounds.left + widgetBounds.width / 2,
+          widgetBounds.bottom - 25,
+        ),
+      ).toBe(widget!.querySelector("iframe"));
 
-    sink.focus();
-    expect(widget!.matches(":focus-within")).toBe(false);
-    await vi.waitFor(() => expectChromeHidden(widget!, bar!));
-  });
+      sink.focus();
+      expect(widget!.matches(":focus-within")).toBe(false);
+      await vi.waitFor(() => expectChromeHidden(widget!, bar!));
+    },
+  );
 
   it("scrolls a dense widget menu to Remove with End and activates it", async () => {
     const { userEvent } = await import("vitest/browser");
@@ -348,19 +378,15 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
       return undefined;
     });
     const view = await mount(applyOps);
-    view.snapshot = {
-      ...structuredClone(source),
-      tabs: Array.from({ length: 30 }, (_, index) => ({
-        tabId: index ? `tab-${index}` : "main",
-        title: index ? `Dashboard ${index + 1}` : "Main",
-        position: index,
-        chatDock: "right" as const,
-      })),
+    await updateSnapshot(view, {
+      tabs: tabs(
+        30,
+        (i) => (i ? `Dashboard ${i + 1}` : "Main"),
+        (i) => (i ? `tab-${i}` : "main"),
+      ),
       widgets: [source.widgets[0]!],
-    };
-    await view.updateComplete;
+    });
     const cell = view.querySelector("openclaw-board-widget-cell")!;
-    await cell.updateComplete;
     cell.querySelector<HTMLElement>(".board-widget")!.focus();
     await userEvent.click(cell.querySelector<HTMLButtonElement>(".board-widget__menu-trigger")!);
     const panel = cell.querySelector<HTMLElement>(".board-widget__menu-panel")!;
@@ -404,14 +430,12 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
 
   it("grows an auto-height card from its frame message and reflows its neighbor", async () => {
     const view = await mount();
-    view.snapshot = {
-      ...structuredClone(source),
+    await updateSnapshot(view, {
       widgets: [
         { ...source.widgets[0]!, sizeW: 8 },
         { ...source.widgets[1]!, sizeW: 6, presentation: "frameless" },
       ],
-    };
-    await settle(view);
+    });
     const cells = [...view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')];
     const first = cells[0]!;
     const second = cells[1]!;
@@ -468,14 +492,11 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
         document.body.append(host);
       }
       const view = await mount(undefined, focused ? parent : document.body);
-      view.snapshot = {
-        ...structuredClone(source),
+      await updateSnapshot(view, {
         ...(focused ? { tabs: [source.tabs[0]!] } : {}),
         widgets: [{ ...source.widgets[0]!, presentation, ...(focused ? { sizeW: 12 } : {}) }],
-      };
-      await view.updateComplete;
+      });
       const cell = view.querySelector("openclaw-board-widget-cell")!;
-      await cell.updateComplete;
       const frame = cell.querySelector("iframe")!;
       const initialHeight = frame.getBoundingClientRect().height;
       const reports: number[] = [];
@@ -545,14 +566,13 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const view = await mount(applyOps);
 
     const other = await mount();
-    other.snapshot = {
-      ...structuredClone(source),
+    other.snapshot = boardSnapshot({
       tabs: [
         { tabId: "foreign-a", title: "Foreign A", position: 0, chatDock: "right" },
         { tabId: "foreign-b", title: "Foreign B", position: 1, chatDock: "right" },
       ],
       widgets: [],
-    };
+    });
     other.activeTabId = "foreign-a";
     await other.updateComplete;
 
@@ -579,11 +599,9 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount(applyOps);
     view.style.width = `${width}px`;
-    view.snapshot = {
-      ...structuredClone(source),
+    await updateSnapshot(view, {
       widgets: source.widgets.map((widget) => ({ ...widget, sizeW: 12 })),
-    };
-    await settle(view);
+    });
     const handle = view.querySelector<HTMLElement>(".board-widget__drag-handle");
     pointer(handle!, "pointerdown", 61, 100, 100);
     await view.updateComplete;
@@ -599,13 +617,9 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
 
   it("keeps approval controls scrollable in a one-row widget", async () => {
     const view = await mount();
-    view.snapshot = {
-      ...structuredClone(source),
+    await updateSnapshot(view, {
       widgets: [{ ...source.widgets[0]!, sizeH: 1, grantState: "pending" }],
-    };
-    await view.updateComplete;
-    const cell = view.querySelector("openclaw-board-widget-cell");
-    await cell?.updateComplete;
+    });
     const body = view.querySelector<HTMLElement>(".board-widget__body--scrollable");
     const allow = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]');
     expect(getComputedStyle(body!).overflowY).toBe("auto");

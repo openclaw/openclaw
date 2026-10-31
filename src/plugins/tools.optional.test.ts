@@ -26,6 +26,9 @@ import { createPluginRecord } from "./status.test-helpers.js";
 import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
 import {
   createNamedToolEntry,
+  createOptionalToolManifest as createToolManifest,
+  createOptionalToolContext as createContext,
+  createConfiguredFeishuToolContext,
   createFeishuToolManifest,
   createToolRegistry,
   createXaiToolManifest,
@@ -106,50 +109,6 @@ let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata.t
 let getPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").getPluginRuntimeGatewayRequestScope;
 let withPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").withPluginRuntimeGatewayRequestScope;
 
-function createToolManifest(
-  id: string,
-  toolNames: readonly string[],
-  overrides: Record<string, unknown> = {},
-) {
-  return {
-    id,
-    origin: "bundled" as const,
-    enabledByDefault: true,
-    channels: [],
-    providers: [],
-    contracts: { tools: [...toolNames] },
-    ...overrides,
-  };
-}
-
-function createContext(): { config: OpenClawConfig; workspaceDir: string } {
-  return {
-    config: {
-      plugins: {
-        enabled: true,
-        load: { paths: ["/tmp/plugin.js"] },
-        slots: { memory: "none" },
-      },
-    },
-    workspaceDir: "/tmp",
-  };
-}
-
-function createConfiguredFeishuToolContext<T extends string>(conversationReadOrigin: T) {
-  const context = createContext();
-  return {
-    ...context,
-    config: {
-      ...context.config,
-      plugins: {
-        ...context.config.plugins,
-        allow: ["feishu"],
-      },
-    },
-    conversationReadOrigin,
-  };
-}
-
 function createResolveToolsParams(params?: {
   context?: ReturnType<typeof createContext> & Record<string, unknown>;
   clientCaps?: string[];
@@ -219,14 +178,11 @@ function setFeishuConversationToolRegistry(params: {
 }) {
   return setRegistry(
     [
-      {
-        pluginId: "feishu",
-        optional: false,
+      createNamedToolEntry("feishu", "feishu_chat", {
         ...(params.origin ? { origin: params.origin as never } : {}),
         source: params.source ?? "/tmp/feishu.js",
-        names: ["feishu_chat"],
         factory: params.factory,
-      },
+      }),
     ],
     params.config,
   );
@@ -1318,14 +1274,11 @@ describe("resolvePluginTools optional tools", () => {
   it("uses declared names for an unnamed owner-scoped factory and preserves denies", () => {
     const factory = vi.fn(() => makeTool("optional_tool"));
     setRegistry([
-      {
-        pluginId: "optional-demo",
+      createNamedToolEntry("optional-demo", [], {
         optional: true,
-        source: "/tmp/optional-demo.js",
-        names: [],
         declaredNames: ["optional_tool"],
         factory,
-      },
+      }),
     ]);
     const runtimePluginToolGrant = {
       pluginId: "optional-demo",
@@ -1351,25 +1304,12 @@ describe("resolvePluginTools optional tools", () => {
     installToolManifestSnapshot({
       config,
       env: {},
-      plugin: {
-        id: "multi",
-        origin: "bundled",
-        enabledByDefault: true,
-        channels: [],
-        providers: [],
-        setup: {
-          providers: [{ id: "xai", envVars: ["XAI_API_KEY"] }],
-        },
-        contracts: {
-          tools: ["other_tool", "optional_tool"],
-        },
+      plugin: createToolManifest("multi", ["other_tool", "optional_tool"], {
+        setup: { providers: [{ id: "xai", envVars: ["XAI_API_KEY"] }] },
         toolMetadata: {
-          optional_tool: {
-            optional: true,
-            authSignals: [{ provider: "xai" }],
-          },
+          optional_tool: { optional: true, authSignals: [{ provider: "xai" }] },
         },
-      },
+      }),
     });
     const defaultFactory = vi.fn(() => makeTool("other_tool"));
     const optionalFactory = vi.fn(() => makeTool("optional_tool"));
@@ -1555,25 +1495,6 @@ describe("resolvePluginTools optional tools", () => {
     expect(registry.diagnostics).toHaveLength(0);
   });
 
-  it("isolates tools with malformed required client capabilities", () => {
-    const registry = setRegistry([
-      createNamedToolEntry("multi", ["broken_tool", "other_tool"], {
-        factory: () => [
-          { ...makeTool("broken_tool"), requiredClientCaps: "inline-widgets" },
-          makeTool("other_tool"),
-        ],
-      }),
-    ]);
-
-    const tools = resolvePluginTools(createResolveToolsParams({ clientCaps: ["inline-widgets"] }));
-
-    expectResolvedToolNames(tools, ["other_tool"]);
-    expectSingleDiagnosticMessage(
-      registry.diagnostics,
-      "broken_tool requiredClientCaps must be an array of strings",
-    );
-  });
-
   it.each([
     { toolName: "Message", suppressNameConflicts: false },
     { toolName: "message", suppressNameConflicts: true },
@@ -1610,36 +1531,42 @@ describe("resolvePluginTools optional tools", () => {
     },
   );
 
-  it.each(["schema", "name", "execute"] as const)(
+  it.each(["schema", "name", "execute", "client capabilities"] as const)(
     "skips malformed plugin tools (%s) while keeping valid sibling tools",
     async (field) => {
       const reason =
         field === "schema"
           ? "broken_tool missing parameters object"
-          : `ordinary ${field} getter failure`;
+          : field === "client capabilities"
+            ? "broken_tool requiredClientCaps must be an array of strings"
+            : `ordinary ${field} getter failure`;
       const expectedMessage = `plugin tool is malformed (schema-bug): ${reason}`;
       const siblingNames = ["valid_tool", "independent_tool"];
       let broken =
         field === "schema"
           ? createMalformedTool("broken_tool")
-          : Object.defineProperty(makeTool("broken_tool"), field, {
-              get() {
-                throw new Error(reason);
-              },
-            });
+          : field === "client capabilities"
+            ? { ...makeTool("broken_tool"), requiredClientCaps: "inline-widgets" }
+            : Object.defineProperty(makeTool("broken_tool"), field, {
+                get() {
+                  throw new Error(reason);
+                },
+              });
       const registry = setRegistry([
-        {
-          pluginId: "schema-bug",
+        createNamedToolEntry("schema-bug", ["broken_tool", "valid_tool"], {
           optional: field === "schema",
-          source: "/tmp/schema-bug.js",
-          names: ["broken_tool", "valid_tool"],
           factory: () => [broken, makeTool("valid_tool")],
-        },
+        }),
         createNamedToolEntry("independent-owner", "independent_tool"),
       ]);
 
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        const tools = resolvePluginTools(createResolveToolsParams({ toolAllowlist: ["*"] }));
+        const tools = resolvePluginTools(
+          createResolveToolsParams({
+            toolAllowlist: ["*"],
+            clientCaps: ["inline-widgets"],
+          }),
+        );
 
         expectResolvedToolNames(tools, siblingNames);
         expectSingleDiagnosticMessage(registry.diagnostics, expectedMessage);
@@ -1894,6 +1821,42 @@ describe("resolvePluginTools optional tools", () => {
     },
   );
 
+  it.each([true, false])(
+    "prepares registration membership only for completed generations (published=%s)",
+    (published) => {
+      const context = createContext();
+      const factory = vi.fn((ctx: { runId?: string }) => ({
+        ...makeTool("prepared_tool"),
+        description: ctx.runId,
+      }));
+      const entries = [createNamedToolEntry("prepared-owner", "prepared_tool", { factory })];
+      const publishedRegistry = setRegistry(entries, context.config);
+      const registry = published ? publishedRegistry : createToolRegistry(entries);
+      const iterations = vi.spyOn(registry.tools, Symbol.iterator);
+      const resolve = (runId: string) =>
+        resolvePluginTools({
+          ...createResolveToolsParams({ context: { ...context, runId } }),
+          runtimeRegistry: registry as PluginRegistry,
+        });
+
+      expect(resolve("first")[0]?.description).toBe("first");
+      expect(resolve("second")[0]?.description).toBe("second");
+      expect(factory).toHaveBeenCalledTimes(2);
+      expect(iterations).toHaveBeenCalledTimes(published ? 1 : 2);
+
+      if (published) {
+        setActivePluginRegistry(
+          registry as PluginRegistry,
+          "next-tool-generation",
+          "gateway-bindable",
+          "/tmp",
+        );
+        expect(resolve("third")[0]?.description).toBe("third");
+        expect(iterations).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
+
   it("executes assembled plugin tools from the published generation without rescanning manifests", async () => {
     const context = createContext();
     const runtimeConfig: OpenClawConfig = {
@@ -2046,14 +2009,10 @@ describe("resolvePluginTools optional tools", () => {
     });
     installToolManifestSnapshot({
       config: context.config,
-      plugin: {
-        id: "feishu",
+      plugin: createToolManifest("feishu", ["feishu_chat"], {
         origin: "config",
-        enabledByDefault: true,
         channels: ["feishu"],
-        providers: [],
-        contracts: { tools: ["feishu_chat"] },
-      },
+      }),
     });
 
     const tools = resolvePluginTools(
@@ -2109,15 +2068,11 @@ describe("resolvePluginTools optional tools", () => {
     const factory = vi.fn(() => [makeTool("feishu_doc"), makeTool("feishu_chat")]);
     setRegistry(
       [
-        {
-          pluginId: "feishu",
-          optional: false,
+        createNamedToolEntry("feishu", "feishu_doc", {
           origin: "workspace",
-          source: "/tmp/feishu.js",
-          names: ["feishu_doc"],
           declaredNames: ["feishu_doc", "feishu_chat"],
           factory,
-        },
+        }),
       ],
       context.config,
     );
@@ -2152,14 +2107,11 @@ describe("resolvePluginTools optional tools", () => {
 
       const externalFactory = vi.fn(() => makeTool("feishu_chat"));
       const externalRegistry = createToolRegistry([
-        {
-          pluginId: "feishu",
-          optional: false,
+        createNamedToolEntry("feishu", "feishu_chat", {
           origin: "config",
           source: "/tmp/external-feishu.js",
-          names: ["feishu_chat"],
           factory: externalFactory,
-        },
+        }),
       ]);
       setActivePluginRegistry?.(
         externalRegistry as never,
@@ -2169,14 +2121,10 @@ describe("resolvePluginTools optional tools", () => {
       );
       installToolManifestSnapshot({
         config: context.config,
-        plugin: {
-          id: "feishu",
+        plugin: createToolManifest("feishu", ["feishu_chat"], {
           origin: "config",
-          enabledByDefault: true,
           channels: ["feishu"],
-          providers: [],
-          contracts: { tools: ["feishu_chat"] },
-        },
+        }),
       });
 
       await expect(

@@ -42,6 +42,18 @@ Agent auth-store admission and configured model-owner changes explicitly select
 the Gateway agent-config readiness suite. Its lazy startup path is not fully
 visible to the bounded import graph; the owner watch preserves overlap coverage.
 
+PR Node plans also select the QA scenario catalog's reference check when a
+changed path is absent from the checkout, including the removed side of a rename.
+This catches stale YAML code references without selecting the full QA smoke lane.
+Removed UI test paths also select the UI runtime inventory check so its literal
+Node-driven browser list cannot silently retain deleted tests. Both checks use
+the existing bounded Node planner and leave native and real-Gateway tiers unchanged.
+
+Added tests outside the ordinary suite roots select the full-suite ownership
+inventory, including rename destinations. The policy watch uses the PR base
+to distinguish additions from existing-file edits, which add no inventory work.
+See [selection and routing](/ci/scope-and-routing/selection) for the scope.
+
 Gateway close and run-shutdown owner changes likewise select the Gateway
 detached-execution shutdown and late-admission suites. `server.close()` reaches
 those owners through the kernel's lazy shutdown runtime, beyond the bounded
@@ -107,8 +119,10 @@ not compared. See
 
 Add `ci:full` before a PR run to select every `checks-ui` unit shard, all
 `checks-ui-e2e` shards (Control UI and browser extension), and every
-`checks-ui-e2e-real-gateway` shard, including desktop resize proof. These use the
-same UI inventories and shard budgets as scheduled `main` CI. Unlabeled PRs keep
+`checks-ui-e2e-real-gateway` shard. These use the same UI inventories and shard
+budgets as scheduled `main` CI, including the release-only exclusions. Editing
+a release-only test selects that test; full manual/release runs retain the
+complete inventory, including desktop resize proof. Unlabeled PRs keep
 change-selected UI coverage; the label does not expand unrelated platform lanes.
 
 Current UI unit/browser CI retains three native shards with three workers each,
@@ -136,23 +150,43 @@ browser cases do not load backend stores or Gateway policy. The shared E2E
 cleanup hook reads the canonical admission state through its thin state module;
 policy and logging remain owned by the Gateway admission module.
 
-When artifact reuse is enabled, service-worker-update, phone stale-build, and
-real protocol-mismatch recovery fixtures run in `build-artifacts`. Each copies
+When artifact reuse is enabled, service-worker-update and phone stale-build
+fixtures run in `build-artifacts`. Each copies
 the verified production UI artifact and refreshes its own build identity before
-serving it. Protocol recovery also uses the producer’s built Gateway and retains
-its incompatible-protocol UI build. Local, compatibility, and frozen targets
+serving it. Local, compatibility, and frozen targets
 retain their ordinary preparation path.
 
-When the selected mocked Control UI shard includes production stale-build recovery,
-its workflow step prepares the Gateway runtime before starting Vitest. This moves
-the existing cold build outside the fixture's subprocess budget without adding a
-job or building on shards that do not select that fixture. Production-artifact
-reuse still omits the delegated fixture from the mocked shards.
+Real protocol-mismatch recovery runs in the prebuilt real-Gateway pool, sharing
+that job's Gateway and current UI artifacts while retaining its incompatible
+protocol UI build. It no longer makes a mocked browser shard prepare a Gateway.
+Isolated child-Gateway fixtures share the existing two-worker parallel pool;
+in-process global Gateway fixtures remain serial. Both parallel phases start
+their longest measured files first without crossing the serial phase barrier.
 
 The exact Doctor plugin-index and SQLite sessions/transcripts built-CLI proofs
 use the runtime-only compiled-worker registry. The local TUI file does the same
 when its existing built-CLI mode is enabled; source TUI and broad, mixed, or
 custom selections retain the full registry.
+
+When the artifact producer selects both channels and core support checks with
+matching compiler heap options, they share one full compiled-worker generation.
+Both test commands still run concurrently with their original configurations,
+worker limits, and separate transform caches. The generation remains owned until
+both commands finish; either failure fails the producer without canceling its
+sibling. Single selections, differing compiler heap options, and older targets
+without the shared runner retain their independent commands. Changes to the shared
+runner select both checks in the artifact producer on current targets, while the
+changed Node plan defers its boundary coverage to that producer. This opt-in does
+not enable unrelated proof-tier checks.
+
+Full and runtime-only compiled workers reserve separate live/cache slots, so
+runtime checks cannot replace a retained full generation. The protected warmer
+keeps its prebuild full seed for source-only Node shards and publishes the full
+generation already prepared by postbuild collection separately. Only selected
+source verifiers in the artifact producer restore that postbuild seed, keyed by
+the existing Node toolchain identity. A missing archive keeps their uncached path;
+an input, topology, runtime, or exact-output-path mismatch still compiles fresh.
+The producer creates no shared cache archive.
 
 Real-Gateway UI shards have a 30-minute whole-job budget on the normal Blacksmith
 path. Successful 16-class jobs reached 19:04, leaving too little margin under the
@@ -190,7 +224,15 @@ Current iOS Debug builds log CPU count, memory, machine model, booted simulators
 
 Shared OpenClawKit Periphery scans restore the same verified Watch RTC libraries published by trusted main CI, without saving caches. Both Apple consumers build their complete index in a separate timed step with streamed output retained as `build.log` in the consumer artifact. iOS uses a fresh run-owned index; Periphery analyzes that exact index without rebuilding. Scan scope and the shared dead-code intersection stay unchanged. Cache misses retain the locked Cargo build.
 
-iOS screenshot shards, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
+iOS screenshot capture, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time. Before creating each device, it requires ten continuous seconds with at least 30% idle host CPU, using qualification's existing five-minute headroom deadline. A host that stays busy fails before the next simulator starts; boots and captures are not retried. The screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
+
+Main CI screenshot capture restores the same verified Watch RTC simulator libraries published by trusted main CI, without saving that cache. Its Swift package sources and binary downloads use a separate cache for `SnapshotDerivedData/SourcePackages`, keyed by runner platform, architecture, Xcode, package manifests, and available lockfiles. Screenshot preparation preserves only that directory and deletes all other DerivedData contents; automatic package resolution and fresh compilation remain enabled. The screenshot build omits compiler index data while retaining the normal Debug configuration and all screenshot products. Only successful trusted current-main runs save screenshot downloads, including manual CI runs because hourly main CI omits screenshots. PRs restore only, historical and frozen targets skip both caches, and cache transfer failures retain the cold build path. Store Release and its screenshot-only operation retain their existing workflow cache settings.
+
+iOS and Android releases check out the exact selected commit at depth one and gather their release plans there. The release entry point creates a detached worktree and fetches complete ancestry only when preparing notes, without unrelated branches, tags, or historical file contents. TestFlight attempts that are unchanged or deferred for review or processing skip that extra checkout and history transfer. Release-note reads fetch their recorded baseline refs and hydrate historical contents as needed. Source identity and main-ancestry checks remain unchanged.
+
+Both release destinations share a separate Watch RTC device-library cache, populated only by successful trusted `main` release runs. It retains both `arm64` and `arm64_32` device slices without sharing the simulator cache. The existing build phase verifies each slice's input fingerprint and checksum before reuse; a miss runs the locked Cargo build. Cache transfer failures do not block a release.
+
+The same release job caches Xcode's `SourcePackages` downloads separately from ordinary CI, keyed by runner platform, architecture, Xcode, package manifests, and available lockfiles. Both destinations use the canonical `$RUNNER_TEMP/ios-release-recovery/source` project path, which determines Xcode's default DerivedData directory. Automatic package resolution and clean compilation remain enabled; build products and screenshot DerivedData are excluded. Only successful release jobs save downloads, and cache transfer failures retain the cold resolution path. Changing the canonical project path requires a new cache namespace.
 
 Release qualification disables Spotlight indexing on the disposable runner's Data volume before checkout. After Simulator boot, it requires ten seconds of at least 30% idle host CPU within five minutes before issuing the pairing credential. This keeps first-launch background work out of the Gateway and XCTest deadlines. Local qualification uses the same CPU readiness check and leaves host indexing settings to the operator.
 
@@ -198,6 +240,13 @@ Android screenshot-input PRs and ordinary full manual CI run the existing phone
 and Wear store capture script in one hosted Ubuntu job. The final CI gate requires
 capture to succeed; unit-test-only and documentation changes omit it. See
 [the job graph](/ci/pipeline#pipeline-overview) for capture evidence and scope details.
+
+Android Store Release and Internal distribution use the Blacksmith 32-class for
+their shared build/upload job. A controlled cold-build comparison measured eight
+usable CPUs on this class and reduced median signing preflight plus phone/Wear
+bundle time from 621 to 217 seconds. This trades paid compute for shorter release
+runs; qualification and ordinary screenshot CI retain hosted Ubuntu. See
+[runner evidence and cost](/ci/runners#android-release-runner).
 
 Android Release E2E adds one hosted Ubuntu KVM job to exact-source, full-scope
 manual validation when Android is selected, matching the iOS qualification
@@ -329,6 +378,8 @@ When the public artifact build is already selected, current-target browser exten
 
 Build, QA and test orchestration restore the same [protected Node compile cache](/ci/scope-and-routing/node-test-lanes). The trusted warmer populates build tools before collecting test imports. Scheduled and push warming use ordinary CI's Bun policy, retaining the runtime owner's Node-only exceptions; explicit workflow dispatches prime both runtimes for full validation. Optional full Node runs may start colder between manual dual-runtime warmings. Both Linux cache backends retain the same seven Control UI seed files on Node and the pinned Bun fork, and hosted tooling and contract seeds keep their existing runtime owners. Ordinary CI remains restore-only.
 
+Scheduled current-main artifact builds also [publish their completed build-all cache](/ci/pipeline#job-ordering-and-failure-reporting) without another declaration compile. The full warmer keeps its release profile; PRs and manual runs do not publish this archive.
+
 In-process Gateway test configs use [exclusive plan admission within existing packed jobs](/ci/capacity#measured-shard-weights).
 
 Changed-owner Node rows use existing file/group timing evidence with a
@@ -357,7 +408,7 @@ prepares its required declarations. Only a successful preparation step
 enables prebuilt consumption, so the children reuse its JavaScript, assets, and
 freshness stamps instead of starting another full build.
 
-Vitest transform-cache fingerprints include direct Vitest configs at every depth and the shared `test/vitest/` inputs, except the two database-worker membership inventories that only select tests. They exclude the generated `.ci-harness` checkout so CI consumers and the protected warmer hash the same source inputs. Node bytecode caching remains enabled for ordinary Vitest runs; Vitest owns the worker-level coverage safeguard described in [local testing](/reference/test/local#core-commands).
+Vitest transform-cache generations include direct Vitest configs at every depth and the shared `test/vitest/` inputs, except the two database-worker membership inventories, unit-fast discovery inventory, and the E2E config factory. Each project fingerprints its declaring config and imported config dependencies; the E2E factory also supplies its canonical file when loaded through a wrapper. E2E-only config edits therefore invalidate E2E transforms while preserving unrelated unit transforms. Shared compiler, helper, dependency, and schema inputs retain their invalidation. Generations exclude the generated `.ci-harness` checkout so CI consumers and the protected warmer hash the same source inputs. Node bytecode caching remains enabled for ordinary Vitest runs; Vitest owns the worker-level coverage safeguard described in [local testing](/reference/test/local#core-commands).
 
 Transform keys also include each project's dependency optimizer directory. This
 prevents cached UI imports from mixing separate projects' Lit instances when a
@@ -553,3 +604,25 @@ Every section heading from the previous single-page version keeps its anchor her
 - [Release channels](/install/development-channels)
 
 Ordinary PR iOS smoke keeps app and test-bundle compilation while selecting its two simulator groups by source owner. With neither group selected, simulator preparation is skipped. `OPENCLAW_CI_IOS_SIMULATOR_FULL=true` restores full PR execution; [selection and routing](/ci/scope-and-routing/selection) documents the owners and full hourly/release coverage.
+
+Android's existing `android-access-native` emulator rows retain their packaged
+Access-crypto proof and exercise Gateway WebSocket and widget HTTPS clients on
+Android Conscrypt. Each client must pass matching leaf-pin and platform-root
+controls, reject a wrong pin and wrong hostname before an origin request, and
+reject the verified incident OV G3C intermediate in both trust modes. The report
+reducer requires all twelve TLS class/method identities exactly once, separately
+from the existing Access case and packaged-library checks.
+
+Platform-root incident cases require either exact Conscrypt key rejection or
+OkHttp's specific blocklist rejection after verifying the raw peer chain and
+hostname. They do not depend on Android downloading a platform blocklist update.
+
+These secretless, disposable emulators temporarily import a synthetic localhost
+root and the verified incident root into copied APEX CA stores in the zygote
+mount namespaces before launching the test app. Stock roots and SELinux remain
+intact. Cleanup stops/uninstalls the task app, unmounts the copied stores, verifies
+the full original-store manifests and SELinux state, and always disposes the
+emulator and deletes its AVD without a snapshot. Failed restoration is preserved as contaminated
+runner evidence; that emulator must never be reused. Reports include fixture
+identities, before/after manifests and cleanup/disposal receipts. This adds no
+jobs, runner tiers or fanout and never changes host trust.

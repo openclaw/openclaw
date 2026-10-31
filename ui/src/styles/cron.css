@@ -235,7 +235,7 @@
 
 .cron-table__row:hover,
 .cron-table__row:focus-within {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .cron-table__row--paused .cron-table__name-text,

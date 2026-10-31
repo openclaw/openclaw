@@ -576,7 +576,8 @@ describe("attachment sidebar source ownership", () => {
     {
       code: "unsupported-format",
       label: "settings.toml",
-      reason: "Rejected by the local attachment allowlist. Send a supported file type.",
+      reason:
+        "This file type cannot be attached here. If it is saved in this session, download it from Files, or ask for a ZIP containing the original file.",
     },
     {
       code: "invalid-reference",

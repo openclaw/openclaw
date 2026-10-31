@@ -24,10 +24,8 @@ import type { BoardSessionTarget, BoardStore } from "../../boards/board-store.js
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "../../boards/github-actions-capability.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { buildWidgetDocument } from "../../canvas/wrap.js";
-import {
-  acquireSessionActorStorage,
-  runWithSessionActorStorage,
-} from "../../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
+import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
@@ -56,7 +54,6 @@ import {
 } from "../mcp-app-operations.js";
 import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
-import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import {
   defineBoardMethod,
@@ -76,13 +73,14 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
       const { params: boardParams, respond, context, client } = invocation;
       const ingress = client?.remoteControlUiIngress;
       const authority = captureBoardRequestAuthority(invocation);
-      const boardSession = resolveBoardSession(boardParams, context, respond);
+      const boardSession = resolveBoardSession(boardParams, context, respond, "read");
       if (!boardSession) {
         return;
       }
       const { snapshot, htmlViewMetadata } =
         await store.getSnapshotWithHtmlViewMetadata(boardSession);
       authority.assertActive();
+      const projectedSnapshot = projectBoardSnapshot(snapshot, boardSession.agentId);
       let sandboxPort = context.getMcpAppSandboxPort?.();
       let sandboxOrigin: string | undefined | null = null;
       for (const widget of snapshot.widgets) {
@@ -109,7 +107,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
           },
         });
         widget.frameUrl = buildBoardWidgetFrameUrl({
-          sessionKey: sessionObserverScopeKey(snapshot.sessionKey, boardSession.agentId),
+          sessionKey: projectedSnapshot.sessionKey,
           name: widget.name,
           ticket,
         });
@@ -120,9 +118,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
         widget.viewTicketTtlMs = BOARD_VIEW_TICKET_TTL_MS;
         widget.viewGeneration = viewMetadata.viewGeneration;
         if (sandboxPort !== undefined) {
-          widget.sandboxUrl = buildBoardWidgetSandboxPath({
-            ...viewMetadata,
-          });
+          widget.sandboxUrl = buildBoardWidgetSandboxPath(viewMetadata);
           if (ingress) {
             widget.sandboxUrl = new URL(widget.sandboxUrl, ingress.sandboxOrigin).href;
           }
@@ -138,7 +134,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
         }
       }
       authority.assertActive();
-      respond(true, projectBoardSnapshot(snapshot, boardSession.agentId));
+      respond(true, projectedSnapshot);
     }),
     "board.update": defineBoardMethod(
       "board.update",

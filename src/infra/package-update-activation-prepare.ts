@@ -17,7 +17,7 @@ import {
   type PackageActivationDescriptor,
   type PackageActivationRecord,
   createPackageActivationJournal,
-  openPackageActivationJournal,
+  openPackageActivationSettlementJournal,
   isPackageActivationComplete,
   assertPackageActivationLayout,
   resolvePackageActivationControl,
@@ -199,7 +199,7 @@ export async function preparePackageActivationJournal(
   const priorJournal = fs.lstatSync(resolvePackageActivationControl(anchor), {
     throwIfNoEntry: false,
   })
-    ? openPackageActivationJournal(anchor)
+    ? openPackageActivationSettlementJournal(anchor)
     : undefined;
   const prior = priorJournal?.read();
   if (prior && !isPackageActivationComplete(anchor, prior)) {

@@ -10,7 +10,7 @@ import {
   ProjectCheckoutError,
   resolveProjectCheckout,
   resolveProjectDirectory,
-  resolveWorkspaceProject,
+  resolveProjectRegistry,
   selectStoredProjectRegistry,
 } from "../projects/project-registry.js";
 import type { ProjectRegistryRecord } from "../projects/project-registry.types.js";
@@ -58,10 +58,8 @@ export async function resolveSessionProjectCheckoutOptions(params: {
   signal?: AbortSignal;
 }): Promise<{ current: boolean; worktree: boolean }> {
   params.assertCurrent();
-  const pendingSource = selectSessionWorktreeProjectSource(params.projectId, params.signal);
-  const source = pendingSource ? await pendingSource : undefined;
+  const project = await resolveProjectRegistry(params.cfg, params.projectId);
   params.assertCurrent();
-  const project = source?.project ?? resolveWorkspaceProject(params.cfg, params.projectId);
   if (!project) {
     return { current: false, worktree: false };
   }
@@ -80,5 +78,5 @@ export async function resolveSessionProjectCheckoutOptions(params: {
       enforceSandboxContainment: true,
       sandboxRequired: params.resolveSandboxRequired(),
     }).ok;
-  return { current, worktree: managed.ok && (current || source !== undefined) };
+  return { current, worktree: managed.ok && (current || project.source !== "workspace") };
 }

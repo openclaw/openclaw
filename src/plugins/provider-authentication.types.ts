@@ -1,6 +1,10 @@
 import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import type { PromptMode } from "../agents/system-prompt.types.js";
-import type { ModelProviderConfig, SecretInput } from "../config/types.js";
+import type {
+  ModelProviderConfig,
+  ModelProviderConfigInput,
+  SecretInput,
+} from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -40,8 +44,8 @@ export type ProviderAuthResult = {
     models?: Omit<NonNullable<OpenClawConfig["models"]>, "providers"> & {
       providers?: Record<
         string,
-        Omit<HeaderPatch<ModelProviderConfig>, "request"> & {
-          request?: HeaderPatch<NonNullable<ModelProviderConfig["request"]>>;
+        Omit<HeaderPatch<ModelProviderConfigInput>, "request"> & {
+          request?: HeaderPatch<NonNullable<ModelProviderConfigInput["request"]>>;
         }
       >;
     };

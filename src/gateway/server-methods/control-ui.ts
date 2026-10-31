@@ -27,6 +27,7 @@ import {
   type ControlUiGitHubSessionIdentity,
 } from "../github-public-api.js";
 import { prepareGitHubReaderIdentity } from "../github-reader-identity.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
@@ -221,8 +222,20 @@ async function withControlUiSessionPreview(
   const preview = previewOwner.ok
     ? projection.readPreview({ key: sessionKey, agentId: previewOwner.agentId })
     : null;
-  if (preview !== undefined) {
-    const entryFilter = createSessionListEntryFilter({ client, cfg: previewConfig });
+  if (
+    preview !== undefined &&
+    !(
+      operatorSessionCap(client, previewConfig) === "invited" &&
+      projection.needsMembershipPreparation()
+    )
+  ) {
+    const entryFilter = createSessionListEntryFilter({
+      client,
+      cfg: previewConfig,
+      membership: previewOwner.ok
+        ? projection.readMembership({ key: sessionKey, agentId: previewOwner.agentId })
+        : undefined,
+    });
     consume(
       preview && (!entryFilter || entryFilter(preview.sessionKey, preview.entry)) ? preview : null,
     );
@@ -241,7 +254,11 @@ async function withControlUiSessionPreview(
         ? read.describe({ key: sessionKey, agentId: owner.agentId })
         : undefined;
       // Hover previews follow list visibility, including after asynchronous preparation.
-      const entryFilter = createSessionListEntryFilter({ client, cfg });
+      const entryFilter = createSessionListEntryFilter({
+        client,
+        cfg,
+        membership: record?.membership,
+      });
       if (!record || (entryFilter && !entryFilter(record.key, record.entry))) {
         consume(null);
         return;

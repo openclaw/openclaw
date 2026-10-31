@@ -1,26 +1,20 @@
+import {
+  CONTROL_PLANE_WRITE,
+  OBSERVATION,
+  OWN_SESSION_WRITE,
+  PORTAL_SESSION_WRITE,
+  PROFILE_DEPENDENT,
+  PROFILE_STARTUP,
+  SESSION_METADATA_READ,
+  SESSION_WRITE,
+  SIDECAR_CONTROL_PLANE_WRITE,
+  UNADVERTISED,
+  UNADVERTISED_OBSERVATION,
+} from "./core-descriptor-options.js";
 import type { CoreGatewayMethodSpecRow } from "./core-descriptor-types.js";
 import { cronListShareKey, modelsListShareKey, operatorReadShareKey } from "./read-share-keys.js";
 
 // Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
-const CONTROL_PLANE_WRITE = { controlPlaneWrite: true } as const;
-const SIDECAR_CONTROL_PLANE_WRITE = { startup: true, controlPlaneWrite: true } as const;
-const UNADVERTISED = { advertise: false } as const;
-const PROFILE_DEPENDENT = { profileAccess: "required" } as const;
-const PROFILE_STARTUP = { startup: true, ...PROFILE_DEPENDENT } as const;
-const SESSION_METADATA_READ = {
-  startup: true,
-  shareKey: operatorReadShareKey,
-  shareMaxAgeMs: 1_000,
-  shareInvalidationEvents: ["sessions.changed", "chat.metadata.changed"],
-} as const;
-const OBSERVATION = { lifetime: "observation" } as const;
-const UNADVERTISED_OBSERVATION = { ...UNADVERTISED, ...OBSERVATION } as const;
-const SESSION_WRITE = { sessionAccess: { mode: "write" } } as const;
-const OWN_SESSION_WRITE = { sessionAccess: { mode: "write", allowOwnSessionScope: true } } as const;
-const PORTAL_SESSION_WRITE = {
-  sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "portal" },
-} as const;
-
 // This is the canonical core method policy table: every core handler must appear here so
 // listing, authorization, startup availability, and write throttling stay in sync.
 export const CORE_GATEWAY_METHOD_SPECS = [
@@ -235,20 +229,19 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["secrets.resolve", null, "operator.admin", "<=2026.7"],
   ["voicewake.routing.get", "voicewake-routing", "operator.read", "<=2026.7"],
   ["sessions.list", "sessions-read", "operator.read", "<=2026.7", SESSION_METADATA_READ],
-  ["sessions.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7", { startup: true }],
+  ["sessions.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
   ["sessions.messages.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
   ["sessions.messages.unsubscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
   ["sessions.viewers.set", "sessions-subscriptions", "operator.read", "2026.7"],
   ["sessions.preview", "sessions-read", "operator.read", "<=2026.7"],
   ["sessions.describe", "sessions-read", "operator.read", "<=2026.7", { lifetime: "observation" }],
-  ["sessions.branches.list", "sessions-rewind", "operator.read", "<=2026.7"],
+  ["sessions.branches.list", "sessions-rewind", "operator.read", "<=2026.7", OBSERVATION],
   ["sessions.branches.switch", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.rewind", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.fork", "sessions-rewind", "operator.write", "<=2026.7"],
   // Params-aware plus state-aware: the handler permits write-scoped cwd only
   // inside configured agent workspaces; execNode and other privileged modes stay admin.
   ["sessions.create", "sessions-create", "dynamic", "<=2026.7", { startup: true }],
-  ["sessions.recover", "sessions-recover", "operator.write", "2026.8", { startup: true }],
   ["sessions.send", "sessions-messaging", "operator.write", "<=2026.7", { startup: true }],
   ["sessions.abort", "sessions-abort", "operator.write", "<=2026.7", { startup: true }],
   // Dynamic mutation scope policy, including write-scoped model overrides, lives
@@ -355,10 +348,10 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["agent", "agent", "dynamic", "<=2026.7", { startup: true }],
   ["agent.identity.get", "agent-identity", "operator.read", "<=2026.7"],
   ["agent.wait", "agent", "operator.write", "<=2026.7", { ...PROFILE_STARTUP, ...OBSERVATION }],
-  ["chat.history", "chat", "operator.read", "<=2026.7", { startup: true }],
-  ["chat.startup", "chat", "operator.read", "<=2026.7", { startup: true }],
+  ["chat.history", "chat", "operator.read", "<=2026.7"],
+  ["chat.startup", "chat", "operator.read", "<=2026.7"],
   ["chat.metadata", "chat", "operator.read", "<=2026.7", SESSION_METADATA_READ],
-  ["chat.message.get", "chat", "operator.read", "<=2026.7", { startup: true }],
+  ["chat.message.get", "chat", "operator.read", "<=2026.7"],
   ["chat.abort", "chat-abort", "operator.write", "<=2026.7"],
   ["chat.send", "chat-send", "operator.write", "<=2026.7", { startup: true }],
   // Operator terminal: admin-only PTY surface. Appended to the advertised block
@@ -688,16 +681,22 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["memory.get", "memory-search", "operator.read", "2026.9"],
   ["memory.status", "memory-search", "operator.read", "2026.9"],
   ["sessions.files.assets", "sessions-files", "operator.read", "2026.9"],
-  ["claws.catalog.search", "claws", "operator.read", "2026.10"],
-  ["claws.catalog.detail", "claws", "operator.read", "2026.10"],
-  ["claws.catalog.preview", "claws", "operator.read", "2026.10"],
-  ["claws.drafts.create", "claws-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
-  ["claws.drafts.read", "claws-drafts", "operator.admin", "2026.10"],
-  ["claws.drafts.save", "claws-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
-  ["claws.drafts.review", "claws-drafts", "operator.admin", "2026.10"],
-  ["claws.drafts.publish", "claws-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
-  ["claws.add.plan", "claws-add", "operator.read", "2026.10"],
-  ["claws.add.apply", "claws-add", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
+  ["templates.catalog.search", "templates", "operator.read", "2026.10"],
+  ["templates.catalog.detail", "templates", "operator.read", "2026.10"],
+  ["templates.catalog.preview", "templates", "operator.read", "2026.10"],
+  ["templates.drafts.create", "templates-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
+  ["templates.drafts.read", "templates-drafts", "operator.admin", "2026.10"],
+  ["templates.drafts.save", "templates-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
+  ["templates.drafts.review", "templates-drafts", "operator.admin", "2026.10"],
+  [
+    "templates.drafts.publish",
+    "templates-drafts",
+    "operator.admin",
+    "2026.10",
+    CONTROL_PLANE_WRITE,
+  ],
+  ["templates.add.plan", "templates-add", "operator.read", "2026.10"],
+  ["templates.add.apply", "templates-add", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["worktrees.recoverFile", "worktrees", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["worktrees.recoverRemoval", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["worktrees.retireSnapshot", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
@@ -745,4 +744,13 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["diagnostics.capabilities", "diagnostics", "operator.read", "2026.10"],
   ["cron.bind", "cron", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["talk.client.say", "talk", "operator.talk", "2026.10"],
+  [
+    "sessions.github.readiness",
+    "sessions-github",
+    "operator.read",
+    "2026.10",
+    { startup: true, ...OBSERVATION },
+  ],
+  ["sessions.files.preview", "sessions-files", "operator.read", "2026.10"],
+  ["sessions.files.preview.release", "sessions-files", "operator.read", "2026.10"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

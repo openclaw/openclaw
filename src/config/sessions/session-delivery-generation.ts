@@ -20,6 +20,7 @@ import {
   sessionChanges,
   type SessionRowChange,
 } from "../../sessions/session-row-changes.js";
+import { agentDatabaseBorrowers } from "../../state/openclaw-agent-db-borrower.js";
 import { registerOpenClawAgentDatabaseReadCandidateResource } from "../../state/openclaw-agent-db-resources.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { readSessionEntryCreatedEntry } from "./session-accessor.sqlite-entry-cache-publication-state.js";
@@ -51,9 +52,13 @@ import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runti
 import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
 import {
   composeSessionSourceAssertion,
+  createDynamicSessionSourceAssertion,
+  type PreparedSessionSourceEffect,
   type SessionSourceAssertion,
 } from "./session-source-authority.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import { prepareSessionStoreCandidatesInWorker } from "./session-transcript-worker-resources.js";
+import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 export { isSessionDeliveryGenerationRevokedError } from "./session-delivery-generation-errors.js";
 
@@ -91,7 +96,7 @@ async function prepareSessionGenerationLease(
     publishBinding?: (
       binding: Pick<SessionGenerationEntry, "sessionId" | "lifecycleRevision">,
     ) => void,
-  ) => () => void;
+  ) => SessionSourceAssertion;
   isCreationAdopted: () => boolean;
 }> {
   if (!isSessionGenerationFacts(input)) {
@@ -107,7 +112,11 @@ async function prepareSessionGenerationLease(
     { assertCurrent() {}, authorize() {} },
   );
   if (memory) {
-    return prepareMemorySessionGeneration(memory, input, onRevoked);
+    const prepared = await prepareMemorySessionGeneration(memory, input, onRevoked);
+    Object.assign(prepared.assertCurrent, {
+      prepareSessionSourceEffect: async () => ({ assertCurrent: prepared.assertCurrent }),
+    });
+    return prepared;
   }
   const generation = { ...input };
   const releases: Array<() => void> = [];
@@ -143,6 +152,15 @@ async function prepareSessionGenerationLease(
     if (!active || invalidated) {
       throw new SessionDeliveryGenerationUnavailableError();
     }
+  };
+  const refuseCurrent = (error: unknown): never => {
+    const failure =
+      isSessionDeliveryGenerationRevokedError(error) ||
+      isSessionDeliveryGenerationUnavailableError(error)
+        ? error
+        : new SessionDeliveryGenerationUnavailableError({ cause: error });
+    onRevoked?.(failure);
+    throw failure;
   };
   const checkEntry = (entry: SessionGenerationEntry | null | undefined, committed = true) => {
     if (entry === undefined) {
@@ -246,6 +264,9 @@ async function prepareSessionGenerationLease(
     }
     let source: { path: string; identity: DatabasePathIdentity } | undefined;
     let assertNativeCurrent: (entry: SessionGenerationEntry | null) => void = () => {};
+    let prepareNativeEffect: (
+      entry: SessionGenerationEntry | null,
+    ) => Promise<PreparedSessionSourceEffect> = async () => ({ assertCurrent: assertActive });
     while (!retained) {
       assertActive();
       const before = publications;
@@ -313,8 +334,7 @@ async function prepareSessionGenerationLease(
           if (native && !isPostgresSqlConnection(native.db)) {
             releases.push(registerSqliteSchemaMutationListener(native.db, schemaChanged));
           }
-          assertNativeCurrent = (current) => {
-            const opened = getOpenClawAgentDatabaseIfOpen(nativeOptions);
+          const observeNativeHandle = (opened: typeof native) => {
             if (!native && opened) {
               native = opened;
               nativeRevision = undefined;
@@ -325,6 +345,10 @@ async function prepareSessionGenerationLease(
               invalidated = true;
               throw new SessionDeliveryGenerationUnavailableError();
             }
+            return native;
+          };
+          assertNativeCurrent = (current) => {
+            observeNativeHandle(getOpenClawAgentDatabaseIfOpen(nativeOptions));
             if (!native) {
               return;
             }
@@ -364,6 +388,83 @@ async function prepareSessionGenerationLease(
               throw error;
             }
           };
+          prepareNativeEffect = async (current) => {
+            // This is only a handle witness. The retained generation and reader own admission.
+            const readHandle = () => {
+              const opened = agentDatabaseBorrowers.databases.get(nativeOptions.path);
+              return opened?.db.isOpen ? opened : undefined;
+            };
+            const opened = observeNativeHandle(readHandle());
+            // A separate reader cannot observe an uncommitted same-connection transaction.
+            if (opened?.db.isTransaction) {
+              return { assertCurrent: () => assertNativeCurrent(current) };
+            }
+            const revision = opened && readSqliteNativeMutationRevision(opened.db);
+            const assertCurrent = () => {
+              assertActive();
+              if (
+                readHandle() !== opened ||
+                (opened &&
+                  (opened.db.isTransaction ||
+                    revision === undefined ||
+                    readSqliteNativeMutationRevision(opened.db) !== revision ||
+                    (!isPostgresSqlConnection(opened.db) &&
+                      hasPendingSqliteNativeExecution(opened.db))))
+              ) {
+                throw new SessionDeliveryGenerationUnavailableError();
+              }
+            };
+            assertCurrent();
+            if (!opened || revision === nativeRevision) {
+              return { assertCurrent };
+            }
+            const reader = retainSessionHistoryWorkerDatabase(nativeOptions);
+            try {
+              const result = await reader.owner.readExactEntries({
+                sessionKeys: [generation.sessionKey],
+                projection: "full",
+                includeAuthorization: true,
+                env: generation.env ?? process.env,
+              });
+              assertCurrent();
+              reader.owner.assertCurrent();
+              if (
+                `file:${result.databaseIdentity?.identity}` !== source?.identity.key ||
+                result.databaseIdentity?.birthtime !== source.identity.birthtime
+              ) {
+                throw new SessionDeliveryGenerationUnavailableError();
+              }
+              const observed = checkEntry(
+                result.entries.find((row) => row.sessionKey === generation.sessionKey)?.entry ??
+                  null,
+              );
+              if (
+                observed?.permissionMode !== current?.permissionMode ||
+                !isDeepStrictEqual(observed?.toolOverrides, current?.toolOverrides)
+              ) {
+                invalidated = true;
+                throw new SessionDeliveryGenerationUnavailableError();
+              }
+              nativeRevision = revision;
+              return {
+                assertCurrent: () => {
+                  assertCurrent();
+                  reader.owner.assertCurrent();
+                },
+                release: reader.release,
+              };
+            } catch (error) {
+              if (
+                readHandle() === opened &&
+                !opened.db.isTransaction &&
+                readSqliteNativeMutationRevision(opened.db) === revision
+              ) {
+                invalidated = true;
+              }
+              reader.release();
+              throw error;
+            }
+          };
           return prepared;
         },
       );
@@ -399,7 +500,7 @@ async function prepareSessionGenerationLease(
         },
       });
     }
-    const assertCurrent = (delivery = false) => {
+    const assertCurrent = (delivery = false): void => {
       try {
         assertActive();
         if (
@@ -415,15 +516,9 @@ async function prepareSessionGenerationLease(
         ) {
           throw new SessionDeliveryGenerationUnavailableError();
         }
-        return readCurrent();
+        readCurrent();
       } catch (error) {
-        const failure =
-          isSessionDeliveryGenerationRevokedError(error) ||
-          isSessionDeliveryGenerationUnavailableError(error)
-            ? error
-            : new SessionDeliveryGenerationUnavailableError({ cause: error });
-        onRevoked?.(failure);
-        throw failure;
+        refuseCurrent(error);
       }
     };
     for (let pending = prepareRead(); pending; pending = prepareRead()) {
@@ -447,22 +542,48 @@ async function prepareSessionGenerationLease(
         }),
       );
     }
-    const assertGenerationCurrent = workerSource
-      ? composeSessionSourceAssertion([workerSource], (assertSource) => {
-          try {
-            assertActive();
-            assertSource();
-          } catch (error) {
-            const failure =
-              isSessionDeliveryGenerationRevokedError(error) ||
-              isSessionDeliveryGenerationUnavailableError(error)
-                ? error
-                : new SessionDeliveryGenerationUnavailableError({ cause: error });
-            onRevoked?.(failure);
-            throw failure;
-          }
-        })
-      : assertCurrent;
+    const checkGenerationCurrent = (assertSource: () => void) => {
+      try {
+        assertActive();
+        assertSource();
+      } catch (error) {
+        refuseCurrent(error);
+      }
+    };
+    const assertGenerationCurrent = composeSessionSourceAssertion(
+      [workerSource ?? assertCurrent],
+      checkGenerationCurrent,
+    );
+    assertGenerationCurrent.prepareSessionSourceEffect = async () => {
+      let releaseEffect: PreparedSessionSourceEffect["release"];
+      try {
+        assertActive();
+        for (let pending = prepareRead(); pending; pending = prepareRead()) {
+          await pending;
+        }
+        const current = checkEntry(retained?.readCurrent());
+        const prepared = await prepareNativeEffect(current);
+        releaseEffect = prepared.release;
+        if (!source) {
+          throw new SessionDeliveryGenerationUnavailableError();
+        }
+        await prepareSessionStoreCandidatesInWorker({
+          validate: { candidates, sources: [source] },
+        });
+        const assertEffectCurrent = () =>
+          checkGenerationCurrent(() => {
+            prepared.assertCurrent();
+            if (checkEntry(retained?.readCurrent()) !== current) {
+              throw new SessionDeliveryGenerationUnavailableError();
+            }
+          });
+        assertEffectCurrent();
+        return { assertCurrent: assertEffectCurrent, release: prepared.release };
+      } catch (error) {
+        await releaseEffect?.();
+        return refuseCurrent(error);
+      }
+    };
     return {
       assertCurrent: assertGenerationCurrent,
       assertDeliveryCurrent: () => assertCurrent(true),
@@ -491,14 +612,16 @@ async function prepareSessionGenerationLease(
         assertSessionEntryCreationPublication(operation, target);
         creation = operation;
         publishCreatedBinding = publishBinding;
-        return () => {
-          if (creationAdopted) {
-            assertCurrent();
-            return;
-          }
+        const assertCreationCurrent = () => {
           assertActive();
           assertSessionEntryCreationPublication(operation, target);
         };
+        return createDynamicSessionSourceAssertion(
+          () => (creationAdopted ? assertGenerationCurrent : assertCreationCurrent),
+          () => {
+            throw new SessionDeliveryGenerationUnavailableError();
+          },
+        );
       },
       isCreationAdopted: () => creationAdopted,
     };

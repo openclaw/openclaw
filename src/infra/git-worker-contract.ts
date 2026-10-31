@@ -19,9 +19,9 @@ export type GitWorkerOperations = Omit<
 > & {
   "checkout.diff": {
     input: GitReadOperations["checkout.diff"]["input"] & {
-      cleanWorktree?: NonNullable<
+      worktreeStatus?: NonNullable<
         GitReadOperations["checkout.revision"]["output"]
-      >["cleanWorktree"];
+      >["worktreeStatus"];
     };
     output: GitReadOperations["checkout.diff"]["output"];
   };

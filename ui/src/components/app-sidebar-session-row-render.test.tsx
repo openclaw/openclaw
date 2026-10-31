@@ -123,11 +123,11 @@ it("keeps named glyphs visible and updates their kind without replacing the lead
   const { dom, session, setCurrent } = mountRow({ icon: "kanban" });
   const glyph = dom.query(".session-glyph");
   const art = dom.query<HTMLElement>(".session-glyph__icon .session-css-icon");
-  expect(art?.style.maskImage).toBe(sessionIconMask("kanban"));
+  expect(art?.style.maskImage).toBe(sessionIconMask("kanban", 1.75));
   setCurrent({ ...session, icon: "bot" });
   flush();
   expect(dom.query(".session-glyph__icon .session-css-icon")).toBe(art);
-  expect(art?.style.maskImage).toBe(sessionIconMask("bot"));
+  expect(art?.style.maskImage).toBe(sessionIconMask("bot", 1.75));
   expect(dom.query(".session-glyph")).toBe(glyph);
 });
 
@@ -287,6 +287,64 @@ it("keeps the unread badge on an idle child with an icon", () => {
   );
   expect(dom.text(".session-glyph__emoji")).toBe("🦞");
   expect(dom.query('.session-glyph__badge[aria-label="Unread"]')).not.toBeNull();
+});
+
+it("shows quiet background work on the own glyph and gives an active run precedence", () => {
+  const { dom, session, setCurrent } = mountRow({ backgroundProcessCount: 1, icon: "book" });
+  const indicator = () => dom.query('.session-glyph__ring[role="img"]');
+  expect(indicator()?.getAttribute("aria-label")).toBe("Background work running");
+  expect(indicator()?.classList.contains("session-glyph__ring--background")).toBe(true);
+  setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true });
+  flush();
+  expect(indicator()?.getAttribute("aria-label")).toBe("Active run");
+  expect(indicator()?.classList.contains("session-glyph__ring--background")).toBe(false);
+  setCurrent({ ...session, backgroundProcessCount: undefined });
+  flush();
+  expect(indicator()).toBeNull();
+});
+
+it.each([undefined, 1])(
+  "preserves the Subagents working leading ring with background count %s",
+  (backgroundProcessCount) => {
+    const { dom, session, setCurrent } = mountRow(
+      { icon: "book", unread: true, backgroundProcessCount },
+      { runningChildCount: 1 },
+    );
+    const ring = () => dom.query('.sidebar-session-indicator [role="img"]');
+    expect(ring()?.getAttribute("aria-label")).toBe("Subagents working");
+    expect(ring()?.classList.contains("session-glyph__ring--background")).toBe(false);
+    expect(dom.query('.session-row-aside [aria-label="Subagents working"]')).toBeNull();
+    expect(dom.all('[aria-label="Unread"]')).toHaveLength(0);
+    expect(dom.query(".sidebar-recent-session__link")?.getAttribute("aria-describedby")).toContain(
+      "state",
+    );
+
+    setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true, status: "running" });
+    flush();
+    expect(ring()?.getAttribute("aria-label")).toBe("Active run");
+    expect(ring()?.classList.contains("session-glyph__ring--background")).toBe(false);
+
+    // Preserve the existing queued-parent signal while its subagents are running.
+    setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true, status: "queued" });
+    flush();
+    expect(ring()?.getAttribute("aria-label")).toBe("Subagents working");
+    expect(ring()?.classList.contains("session-glyph__ring--queued")).toBe(false);
+  },
+);
+
+it("keeps hidden child background activity off the idle parent's own glyph", () => {
+  const { dom } = mountRow(
+    { icon: "book", unread: true },
+    {
+      runningChildCount: 1,
+      childSessionKeys: ["agent:main:child"],
+      subagentSummary: { runningChildCount: 0, attention: { kind: "none" } },
+    },
+  );
+  expect(dom.query(".sidebar-session-indicator .session-glyph__ring")).toBeNull();
+  expect(dom.query(".sidebar-child-session-toggle .session-run-spinner")).not.toBeNull();
+  expect(dom.all('[aria-label="Unread"]')).toHaveLength(1);
+  expect(dom.query(".sidebar-recent-session__link")?.getAttribute("aria-describedby")).toBeNull();
 });
 
 it("keeps an idle child owner's glyph hidden until the run starts", () => {

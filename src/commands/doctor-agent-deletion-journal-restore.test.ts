@@ -4,6 +4,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
+import { stateSchemaHealthCheck } from "../flows/doctor-lint-flow.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { recordLegacyMigrationReceipt } from "../infra/state-migrations.receipts.js";
 import {
@@ -24,6 +25,8 @@ import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { restoreDoctorMissingJournalStores } from "./doctor-agent-deletion-journal-restore.js";
 import { repairDoctorAgentDeletionJournal } from "./doctor-agent-deletion-journal.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
+import * as databasePreflight from "./doctor-database-preflight.js";
+import { runDoctorLintCliInProcess } from "./doctor-lint-runner.js";
 import * as migrationBackup from "./doctor-migration-backup.js";
 import { withMaintenance } from "./doctor-schema-migrations.test-support.js";
 
@@ -254,15 +257,31 @@ it.each(["first-upgrade", "already-held", "upgraded-producer"])(
         }
         const agentPaths = [agentPath];
         if (phase === "first-upgrade") {
-          const otherPath = path.join(root, "agents/ops/agent/openclaw-agent.sqlite");
-          copyAgent(agentPath, otherPath, "ops");
           const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
           config.agents.ownership = "explicit";
-          config.agents.entries.ops = {
-            workspace: path.join(root, "workspace-ops"),
-          };
+          for (const id of ["contador", "ayudante"]) {
+            const otherPath = path.join(root, `agents/${id}/agent/openclaw-agent.sqlite`);
+            copyAgent(agentPath, otherPath, id);
+            config.agents.entries[id] = { workspace: path.join(root, `workspace-${id}`) };
+            agentPaths.push(otherPath);
+          }
           writeFixtureJsonSync(configPath, config);
-          agentPaths.push(otherPath);
+          using state = new DatabaseSync(sharedPath);
+          for (const [i, id] of ["main", "contador", "ayudante"].entries()) {
+            const pathname = path.join(root, `agents/${id}/agent/openclaw-agent.sqlite`);
+            state
+              .prepare(
+                "INSERT INTO agent_databases(agent_id,path,schema_version,last_seen_at) VALUES (?,?,24,1000)",
+              )
+              .run(id, pathname);
+            for (let j = 0; j < (i < 2 ? 3 : 2); j++) {
+              state
+                .prepare(
+                  "INSERT INTO agent_database_leases (lease_id, agent_id, path, owner_pid, opened_at) VALUES (?, ?, ?, 2147483647, 1000)",
+                )
+                .run(`dead-${id}-${j}`, id, pathname);
+            }
+          }
           const preview = await repairDoctorAgentDeletionJournal({
             preflight: await prepareDoctorDatabasePreflight(),
             shouldRepair: false,
@@ -293,7 +312,8 @@ it.each(["first-upgrade", "already-held", "upgraded-producer"])(
         expect(result.warnings.join("\n")).toContain("Automatically restored agent main");
         expect(result.warnings.join("\n")).toContain("Verified backup:");
         if (phase === "first-upgrade") {
-          expect(result.warnings.join("\n")).toContain("Automatically restored agent ops");
+          expect(result.warnings.join("\n")).toContain("Automatically restored agent contador");
+          expect(result.warnings.join("\n")).toContain("Automatically restored agent ayudante");
         }
         expect(recoveryHolds(env)).toEqual([]);
         expect(agentPaths.map((pathname) => fs.readFileSync(pathname))).toEqual(bytes);
@@ -344,6 +364,44 @@ it.each(["present-incomplete", "different-owner", "unconfigured"])("keeps %s sto
     expect(result.warnings.join("\n")).not.toContain("Automatically restored");
     expect(result.warnings.join("\n")).toContain("held back");
     expect(result.warnings.join("\n")).toContain("agents add");
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const findings = await stateSchemaHealthCheck.detect({ mode: "lint", runtime, cfg: {}, env });
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/agent-deletion-journal",
+        severity: "warning",
+        errorCode: "agent-deletion-journal-held",
+        path: agentPath,
+        target: "main",
+        fixHint: expect.stringContaining("openclaw doctor --fix"),
+      }),
+    );
+    if (kind === "different-owner") {
+      const scoped = await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: path.join(root, "other-profile"),
+          OPENCLAW_CONFIG_PATH: path.join(root, "other-profile.json"),
+        },
+        () => stateSchemaHealthCheck.detect({ mode: "lint", runtime, cfg: {}, env }),
+      );
+      expect(scoped).toEqual(findings);
+      const preflight = vi.spyOn(databasePreflight, "prepareDoctorDatabasePreflight");
+      const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+      try {
+        expect(
+          await runDoctorLintCliInProcess(runtime, {
+            json: true,
+            onlyIds: ["core/doctor/state-schema"],
+          }),
+        ).toBe(1);
+        const json = JSON.parse(stdout.mock.calls.map(([value]) => String(value)).join(""));
+        expect(json).toMatchObject({ ok: false, checksRun: 1, findings });
+        expect(preflight).not.toHaveBeenCalled();
+      } finally {
+        stdout.mockRestore();
+        preflight.mockRestore();
+      }
+    }
     expect(recoveryHolds(env)).toContainEqual({
       agentId: "main",
       path: agentPath,

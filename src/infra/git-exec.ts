@@ -291,6 +291,7 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
       options.beforeRun?.();
       return runAttempt({
         ...options,
+        executionIntent: "gateway-internal",
         env,
         timeoutMs: undefined,
       });
@@ -304,6 +305,7 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
     (attemptTimeoutMs) =>
       runAttempt({
         ...options,
+        executionIntent: "gateway-internal",
         env,
         timeoutMs: attemptTimeoutMs,
       }),
@@ -334,7 +336,13 @@ export async function executeGitCommandBuffered(
     withGitNetworkRetry(
       retryableGitNetworkOperation(args),
       { ...options, timeoutMs: options.timeoutMs ?? GIT_TIMEOUT_MS },
-      (timeoutMs) => runCommandBuffered(argv, { ...options, env, timeoutMs }),
+      (timeoutMs) =>
+        runCommandBuffered(argv, {
+          ...options,
+          executionIntent: "gateway-internal",
+          env,
+          timeoutMs,
+        }),
     ),
   );
 }
@@ -398,4 +406,9 @@ export function requireGitCommandOutput(
 // Config values such as core.hooksPath still accept os.devNull.
 export function gitNullConfigPath(): string {
   return process.platform === "win32" ? "NUL" : "/dev/null";
+}
+
+/** Quote a Git config value without treating its contents as config syntax. */
+export function quoteGitConfig(value: string): string {
+  return `"${value.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"').replace(/\n/gu, "\\n").replace(/\t/gu, "\\t").replaceAll("\b", "\\b")}"`;
 }

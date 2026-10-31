@@ -40,7 +40,7 @@ it.each([
       api,
       authMethod,
     });
-    const model = result.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0];
+    const model = result.configPatch?.models?.providers?.["microsoft-foundry"]?.models?.[0];
     expect(model).toMatchObject({ name: modelNameHint, api, contextWindow, maxTokens });
   },
 );

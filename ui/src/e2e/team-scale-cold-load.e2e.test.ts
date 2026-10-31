@@ -1,16 +1,23 @@
 import { readFile } from "node:fs/promises";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { expect, inject, it } from "vitest";
+import { startControlUiBenchGatewayServer } from "../../../scripts/lib/control-ui-bench-gateway-server.ts";
 import {
   persistColdLoadWarmState,
   restoreColdLoadWarmState,
 } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
+import { warmReloadProbe } from "../../../scripts/lib/control-ui-warm-reload-probe.ts";
 import { buildSandboxHostPath } from "../../../src/agents/sandbox-host.js";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "../pages/chat/session-snapshot-record.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
+  createControlUiMockBootstrapConfig,
   installMockGateway,
+  navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../test-helpers/control-ui-sidebar-list-fixture.ts";
 import {
@@ -18,10 +25,22 @@ import {
   TEAM_SCALE_SELF_INSTANCE_ID,
 } from "../test-helpers/control-ui-team-scale-fixture.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
+import { layoutBox } from "./chat-presentation.test-support.ts";
 import { createLocalNetworkControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Team-scale cold-load fixture" });
+let http: Awaited<ReturnType<typeof startControlUiBenchGatewayServer>>;
+const suite = createControlUiE2eSuite({
+  name: "Team-scale cold-load fixture",
+  startServer: async () => {
+    const root = inject("controlUiE2eBuildRoot");
+    if (!root) {
+      throw new Error("Team reload proof requires the shared production UI build");
+    }
+    return (http = await startControlUiBenchGatewayServer(root));
+  },
+});
 
 function observeStoreWrite(
   page: Page,
@@ -140,6 +159,7 @@ suite.define(() => {
     });
     sandboxAssets = fixture.assets;
     await suite.withPage(createLocalNetworkControlUiContextOptions(), async ({ page }) => {
+      await page.setViewportSize({ width: 1719, height: 1179 });
       await page.route("**/__openclaw__/**", async (route) => {
         const asset = fixture.assets.get(new URL(route.request().url()).pathname);
         if (asset) {
@@ -150,7 +170,7 @@ suite.define(() => {
       });
       await page.addInitScript(
         ({ key, entries }) => {
-          if (window !== window.top) {
+          if (window !== window.top || localStorage.getItem(key)) {
             return;
           }
           localStorage.setItem(
@@ -168,18 +188,40 @@ suite.define(() => {
         },
       );
       const sessions = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
-      const gateway = await installMockGateway(page, fixture.scenario, {
-        requestHandlers: {
-          "sessions.list": queryHandler("sessions.list", (params) => sessions.list(params).result),
-          "cron.list": queryHandler("cron.list", (params) => fixture.listCronJobs(params)),
+      let liveJobName: string = fixture.cronJobs[0]!.name;
+      const gateway = await installMockGateway(
+        page,
+        {
+          ...fixture.scenario,
+          deferredMethods: ["connect"],
+          featureMethods: [...fixture.scenario.featureMethods!, "progressCard.refresh"],
         },
-      });
+        {
+          requestHandlers: {
+            "sessions.list": queryHandler(
+              "sessions.list",
+              (params) => sessions.list(params).result,
+            ),
+            "cron.list": queryHandler("cron.list", (params) => {
+              const result = fixture.listCronJobs(params);
+              return {
+                ...result,
+                jobs: result.jobs.map((job) =>
+                  job.id === fixture.cronJobs[0]!.id
+                    ? Object.assign({}, job, { name: liveJobName })
+                    : job,
+                ),
+              };
+            }),
+          },
+        },
+      );
       await page.goto(
         controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey, "dashboard"),
       );
-      await page.locator(".chat-pane__header").first().waitFor();
-
       const connectRequest = await gateway.waitForRequest("connect");
+      await gateway.resolveDeferred("connect");
+      await page.locator(".chat-pane__header").first().waitFor();
       const instanceId = asRecord(asRecord(connectRequest.params)?.client)?.instanceId;
       expect(typeof instanceId).toBe("string");
       const ownPresence = <T extends { instanceId?: string }>(entry: T) =>
@@ -259,6 +301,35 @@ suite.define(() => {
         JSON.stringify(sampled),
       ).toBe(true);
 
+      await navigateToControlUiSession(page, fixture.selectedSessionKey);
+      await sidebar.locator('[data-navigation-view="online"]').click();
+      await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
+      const details = await openChatDetails(page);
+      const sectionSelector = '[data-details-group], [data-progress-card-placement="details"]';
+      const sections = details.locator(sectionSelector);
+      const sectionOrder = () =>
+        sections.evaluateAll((rows) =>
+          rows.map((row) => row.getAttribute("data-details-group") ?? "progress"),
+        );
+      const expectedSections = ["people", "subagents", "outputs", "progress", "automations"];
+      const controls = [
+        [details.locator(".task-progress-details__refresh"), "progressCard.refresh"],
+        [details.locator(".chat-summary__automation-more"), "cron.list"],
+      ] as const;
+      await details.getByText(liveJobName, { exact: true }).waitFor();
+      await controls[0][0].waitFor();
+      await expect.poll(sectionOrder).toEqual(expectedSections);
+      await details.locator(".chat-details-people__preview-avatar").first().waitFor();
+      const geometry = async () => Promise.all([details, ...(await sections.all())].map(layoutBox));
+      const appearance = () =>
+        details
+          .locator(".task-progress-details__refresh, .chat-summary__automation-more")
+          .evaluateAll((buttons) =>
+            buttons.map((button) => {
+              const style = getComputedStyle(button);
+              return [button.className, style.opacity, style.color, style.cursor];
+            }),
+          );
       const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
         sessionKey: fixture.selectedSessionKey,
         sidebarView: "online",
@@ -266,7 +337,7 @@ suite.define(() => {
       const warm = await page.evaluate(persistColdLoadWarmState, warmInput);
       expect(warm).toMatchObject({
         databaseVersion: 8,
-        projectionVersion: 5,
+        projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
         sidebarView: "online",
         sidebarPeople: 120,
       });
@@ -336,12 +407,214 @@ suite.define(() => {
       expect(
         await page.evaluate(readStoredWarmState, { ...warmInput, includeDrafts: true }),
       ).toEqual({ ...baseline, drafts: 0 });
+      liveJobName = "A refreshed scheduled check 1";
       await page.reload();
+      await gateway.waitForRequest("connect");
+      await details.getByText("Synthetic scheduled check 1", { exact: true }).waitFor();
+      expect(await sectionOrder()).toEqual(expectedSections);
+      expect(await details.locator("openclaw-panel-loading-skeleton").count()).toBe(0);
+      expect(await details.locator(".chat-details-people__preview-avatar").count()).toBeGreaterThan(
+        0,
+      );
+      expect(
+        await details
+          .locator('[data-details-group="outputs"] .chat-details-desktop-section__count')
+          .textContent(),
+      ).toBe("·1");
+      const cachedAppearance = await appearance();
+      const chatUrl = page.url();
+      for (const [control, method] of controls) {
+        expect(await control.getAttribute("aria-disabled")).toBe("true");
+        expect(await control.getAttribute("disabled")).toBeNull();
+        // Forced inputs still need settled disclosure geometry to hit their intended controls.
+        await control.scrollIntoViewIfNeeded();
+        await waitForLayoutSettled(
+          page,
+          ".chat-details :is(.chat-details-desktop-section__body, button, a)",
+        );
+        await control.click({ force: true });
+        for (const key of ["Enter", "Space"]) {
+          await control.press(key);
+        }
+        expect(page.url()).toBe(chatUrl);
+        expect(await gateway.getRequests(method)).toHaveLength(0);
+      }
+      await page.mouse.move(0, 0);
+      const retained = await details
+        .locator(
+          `${sectionSelector}, .task-progress-details__refresh, .chat-summary__automation-more`,
+        )
+        .elementHandles();
+      await waitForLayoutSettled(page, ".chat-details-desktop-body__content");
+      const before = await geometry();
+      await gateway.resolveDeferred("connect");
+      await details.getByText(liveJobName, { exact: true }).waitFor();
+      for (const [control] of controls) {
+        await expect.poll(() => control.getAttribute("aria-disabled")).toBeNull();
+      }
+      await waitForLayoutSettled(page, ".chat-details-desktop-body__content");
+      expect(await geometry()).toEqual(before);
+      expect(await appearance()).toEqual(cachedAppearance);
+      expect(await gateway.getRequests("progressCard.refresh")).toHaveLength(0);
+      for (const element of retained) {
+        expect(await element.evaluate((node) => node.isConnected)).toBe(true);
+        await element.dispose();
+      }
       await sidebar.locator('[data-navigation-view="online"][aria-pressed="true"]').waitFor();
       await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
       expect(await sidebar.locator("[data-online-user-id]").count()).toBe(120);
       expect(await composer.inputValue()).toBe("");
       await page.locator(".chat-pane__header").first().waitFor();
     });
+  });
+  it.each(["chat", "dashboard"] as const)("%s cached rows stay complete", async (route) => {
+    const fixture = createControlUiTeamScaleFixture({
+      baseUrl: suite.server.baseUrl,
+      ...sandbox(""),
+      transcriptMessages: 4,
+      lateRowFacts: true,
+    });
+    sandboxAssets = fixture.assets;
+    const facts = fixture.lateRowFacts!;
+    const scenario = { ...fixture.scenario, deferredMethods: ["connect"] };
+    http.setFixtureReader((pathname, url) => {
+      if (pathname === "/control-ui-config.json") {
+        return {
+          body: JSON.stringify(createControlUiMockBootstrapConfig(scenario)),
+          contentType: "application/json",
+        };
+      }
+      if (pathname === "/__openclaw__/assistant-media") {
+        if (url.searchParams.get("source") !== facts.cacheableImageSource) {
+          return undefined;
+        }
+        if (url.searchParams.get("meta") === "1") {
+          return { body: JSON.stringify(facts.metadata), contentType: "application/json" };
+        }
+        if (url.searchParams.get("mediaTicket") !== facts.metadata.mediaTicket) {
+          return { body: "Ticket required", contentType: "text/plain", status: 403 };
+        }
+      }
+      return fixture.assets.get(pathname);
+    });
+    await suite.withPage(
+      { ...createLocalNetworkControlUiContextOptions(), viewport: { width: 1440, height: 1800 } },
+      async ({ page }) => {
+        const sessions = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
+        const gateway = await installMockGateway(page, scenario, {
+          afterInitScript: `;globalThis.__name = (fn) => fn; (${warmReloadProbe.toString()})({rowFacts:true,lateRowFacts:true});`,
+          requestHandlers: {
+            "sessions.list": queryHandler(
+              "sessions.list",
+              (params) => sessions.list(params).result,
+            ),
+            "cron.list": queryHandler("cron.list", (params) => fixture.listCronJobs(params)),
+          },
+        });
+        // Native HTTP, including ticketed media, must retain Chromium's real cache.
+        await page.unroute("**/control-ui-config.json");
+        const media = ["/api/artifacts/download/", "/__openclaw__/assistant-media"].map((path) =>
+          page.waitForResponse(
+            (response) =>
+              response.request().method() === "GET" &&
+              response.status() === 200 &&
+              response.url().includes(path) &&
+              response.headers()["content-type"]?.startsWith("image/") === true,
+          ),
+        );
+        await page.goto(
+          controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey, route),
+        );
+        await gateway.waitForRequest("connect");
+        await gateway.resolveDeferred("connect");
+        const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+        const complete = async () => {
+          await thread
+            .locator(".markdown-session-link--titled > .session-label")
+            .filter({ hasText: facts.sessionTitle })
+            .waitFor();
+          await thread.locator('.markdown-github-item[data-link-reader-tone="positive"]').waitFor();
+          await thread.locator('.chat-notice[data-chat-row-key^="archive:"]').waitFor();
+          await page.waitForFunction(() => {
+            const pane = document.querySelector(".chat-pane-cache__pane--active");
+            const threadElement = pane?.querySelector(".chat-thread");
+            const cache: ChatMessageCache | undefined = pane
+              ? Reflect.get(pane, "chatMessagesBySession")
+              : undefined;
+            const thumbnails = [...(cache?.values() ?? [])]
+              .flatMap(({ snapshot }) =>
+                Object.values(snapshot.rowDisplay ?? {}).flatMap((row) =>
+                  Object.values(row.images ?? {}),
+                ),
+              )
+              .flatMap((image) => (image.thumbnail instanceof Blob ? [image.thumbnail.size] : []));
+            const images = [
+              ...(threadElement?.querySelectorAll<HTMLImageElement>(".chat-image-frame img") ?? []),
+            ];
+            const avatars = [
+              ...(threadElement?.querySelectorAll<HTMLImageElement>(
+                "img.chat-avatar.assistant, .chat-avatar.assistant img, .identity-avatar--agent img",
+              ) ?? []),
+            ];
+            return (
+              thumbnails.length === 2 &&
+              thumbnails.every((bytes) => bytes >= 32 * 1024 && bytes <= 96 * 1024) &&
+              images.length === 2 &&
+              images.every(
+                (image) =>
+                  image.complete && image.naturalWidth === 480 && image.naturalHeight === 240,
+              ) &&
+              avatars.some(
+                (image) => image.checkVisibility() && image.complete && image.naturalWidth > 0,
+              )
+            );
+          });
+          expect(await thread.locator(".chat-image-skeleton").count()).toBe(0);
+        };
+        await complete();
+        for (const [index, response] of (await Promise.all(media)).entries()) {
+          expect(response.headers()["cache-control"]).toBe(
+            index === 0 ? "private, no-store" : "private, no-cache",
+          );
+        }
+        await page.evaluate(async () => {
+          await Reflect.get(
+            document.querySelector(".chat-pane-cache__pane--active")!,
+            "sessionSnapshotStore",
+          ).flush();
+        });
+        const requests = http.requests.length;
+        await page.reload();
+        await gateway.waitForRequest("connect");
+        await complete();
+        expect(
+          await thread
+            .locator(".chat-image-frame img")
+            .evaluateAll((images) =>
+              images.map((image) => image.getAttribute("src")?.startsWith("blob:")),
+            ),
+        ).toEqual([true, true]);
+        expect(
+          http.requests
+            .slice(requests)
+            .filter(({ url }) => /assistant-media|artifacts\/download/.test(url)),
+        ).toEqual([]);
+        await gateway.resolveDeferred("connect");
+        await page.waitForFunction(() =>
+          Reflect.get(document.querySelector(".chat-pane-cache__pane--active")!, "transcriptReady"),
+        );
+        await page.screenshot({ path: `${suite.artifactDir}/complete-cached-rows.png` });
+        const proof = await page.evaluate(
+          () => Reflect.get(window, "__warmReload").read().lateRowFacts,
+        );
+        expect(proof).toMatchObject({ measuredPaint: true, visualChanges: 0 });
+        // ResizeObserver can leave a 1/64 px rounding residual after cached row hydration.
+        expect(Math.abs(proof.heightDelta ?? Infinity)).toBeLessThanOrEqual(0.5);
+        expect(proof.maximumHeightChange).toBeLessThanOrEqual(0.5);
+        for (const kind of ["links", "images", "notices", "avatars"]) {
+          expect(proof.firstFrame[kind].length).toBeGreaterThan(0);
+        }
+      },
+    );
   });
 });

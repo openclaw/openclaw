@@ -5,6 +5,7 @@ import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   selectActiveTranscriptEventRows,
   parseActiveTranscriptMessageRow,
+  readProjectionTranscriptPayload,
   readSnapshotEventRows,
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEventPage,
@@ -19,7 +20,6 @@ import {
   resolveTranscriptBoundaryWindow,
 } from "./session-accessor.sqlite-reset-window.js";
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "./session-accessor.sqlite-visible-cursor.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 /** Reads a bounded active-path tail while preserving transcript line and byte caps. */
 export function readRecentSessionTranscriptMessageEventsFromProjection(
@@ -72,7 +72,7 @@ export function withRecentSessionTranscriptActiveEventsInSnapshot<T>(
 ): T {
   const limit = resolveIntegerOption(maxEvents, 0, { min: 0 });
   const query = selectActiveTranscriptEventRows(projection.database)
-    .select(transcriptEventJsonSql(projection.database.db, "event").as("event_json"))
+    .select(["event.seq", "event.event_json", "event.event_zstd", "event.event_utf8_bytes"])
     .where("active.session_id", "=", projection.resolved.sessionId)
     .where("active.context_eligible", "=", 1)
     .orderBy("active.active_position", "desc")
@@ -87,13 +87,14 @@ export function withRecentSessionTranscriptActiveEventsInSnapshot<T>(
         return;
       }
       let parseError: Error | undefined;
-      // Finish stepping before reporting JSON errors: SQL failures take precedence,
+      // Finish stepping before reporting JSON errors: SQL and payload failures take precedence,
       // followed by the oldest malformed row in the selected tail.
       for (const row of iterateSqliteQuerySync(projection.database.db, query)) {
+        const eventJson = readProjectionTranscriptPayload(projection, row, row.seq);
         let event: TranscriptEvent;
         try {
           // SAFETY: Transcript writers persist TranscriptEvent objects; parse failures are handled here.
-          event = JSON.parse(row.event_json) as TranscriptEvent;
+          event = JSON.parse(eventJson) as TranscriptEvent;
         } catch (error) {
           parseError = toErrorObject(error, "Transcript event JSON parsing failed");
           continue;
@@ -186,10 +187,13 @@ export function readSessionTranscriptBoundedMessageTailPageFromProjection(
         ).map((row) => [row.seq, row]),
   );
   const events = selected
-    .toSorted((left, right) => left.message_position - right.message_position)
+    // oxlint-disable-next-line unicorn/no-array-sort -- This selection is private to the page read.
+    .sort((left, right) => left.message_position - right.message_position)
     .flatMap((row) => {
       const payload = payloads.get(row.event_seq);
-      return payload === undefined ? [] : [parseActiveTranscriptMessageRow({ ...row, ...payload })];
+      return payload === undefined
+        ? []
+        : [parseActiveTranscriptMessageRow({ ...row, ...payload }, projection)];
     });
   return {
     ...checked,

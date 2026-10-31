@@ -35,7 +35,11 @@ import {
   type SessionListFilterParams,
   type SessionListFilteredEntries,
 } from "./session-list-filters.js";
-import { sortAndLimitSessionEntries, type SessionEntryPair } from "./session-list-order.js";
+import {
+  mergeSessionEntryPages,
+  sortAndLimitSessionEntries,
+  type SessionEntryPair,
+} from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
 import type { SessionRowGeneration } from "./session-row-identity.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -79,8 +83,8 @@ export function selectSessionEntries(
     !params.opts.includeOwnerSessionCounts;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
-    const entries: SessionEntryPair[] = [];
-    const ownerEntries: SessionEntryPair[] = [];
+    const pages: SessionEntryPair[][] = [];
+    const ownerPages: SessionEntryPair[][] = [];
     const owners = new Map<string, SessionListFilteredEntries["ownerFacet"][number]>();
     let totalCount = 0;
     let hits = 0;
@@ -112,8 +116,8 @@ export function selectSessionEntries(
       } else {
         hits++;
       }
-      entries.push(...part.entries);
-      ownerEntries.push(...part.ownerEntries);
+      pages.push(part.entries);
+      ownerPages.push(part.ownerEntries);
       totalCount += part.totalCount;
       activityExpiresAt = Math.min(activityExpiresAt, part.activityExpiresAt ?? Infinity);
       for (const owner of part.ownerFacet) {
@@ -122,8 +126,8 @@ export function selectSessionEntries(
     }
     recordSessionRowPartitionCache(hits, misses, getMainThreadTaskName());
     filteredResult = {
-      entries,
-      ownerEntries,
+      entries: mergeSessionEntryPages(pages, pageEnd, params.opts.sortBy),
+      ownerEntries: mergeSessionEntryPages(ownerPages, ownerLimit, params.opts.sortBy),
       totalCount,
       ownerFacet: sortSessionOwnerFacet(owners),
       ...(Number.isFinite(activityExpiresAt) ? { activityExpiresAt } : {}),
@@ -135,8 +139,9 @@ export function selectSessionEntries(
     );
   }
   const { ownerEntries, entries: filtered, ...facets } = filteredResult;
-  const sharedEntries =
-    params.entriesSorted && !incremental
+  const sharedEntries = incremental
+    ? filtered.slice(offset)
+    : params.entriesSorted
       ? filtered
       : sortAndLimitSessionEntries(
           filtered,
@@ -147,7 +152,7 @@ export function selectSessionEntries(
   let ownerCount = 0;
   if (ownerLimit > 0) {
     const owned =
-      params.entriesSorted && !incremental
+      params.entriesSorted || incremental
         ? ownerEntries
         : sortAndLimitSessionEntries(ownerEntries, ownerLimit, params.opts.sortBy);
     ownerCount = owned.length;
@@ -322,12 +327,13 @@ export function prepareSessionRowSelection(
   }
   const candidates =
     prepared?.candidateSessionIdsOrKeys &&
-    Array.from(prepared.candidateSessionIdsOrKeys).flatMap((sessionIdOrKey) =>
-      projection.selectEntries(
-        { agentId: selectedScope.agentId, sessionIdOrKey, sortBy: null },
-        prepared.metadataPrepared === true,
-        "running-candidate",
-      ),
+    projection.selectEntries(
+      {
+        agentId: selectedScope.agentId,
+        candidateSessionIdsOrKeys: prepared.candidateSessionIdsOrKeys,
+        sortBy: null,
+      },
+      prepared.metadataPrepared === true,
     );
   const selected = selection.read(
     prepared?.ordered ? (opts.sortBy ?? "updatedAt") : undefined,
@@ -344,19 +350,16 @@ export function prepareSessionRowSelection(
     partitions: retained ? selected.partitions : undefined,
     configuredAgentIds: selected.configuredAgentIds,
     involvementKeys: selected.involvementKeys,
-    candidateKeys(identities: Iterable<string>) {
+    candidateKeys(identities: ReadonlySet<string>) {
       return new Set(
-        Array.from(identities).flatMap((sessionIdOrKey) =>
-          projection
-            .selectEntries(
-              { agentId: selectedScope.agentId, sessionIdOrKey, sortBy: null },
-              prepared?.metadataPrepared === true,
-              "running-candidate",
-            )
-            .map((row) =>
-              sentinel(row.key) && activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key,
-            ),
-        ),
+        projection
+          .selectEntries(
+            { agentId: selectedScope.agentId, candidateSessionIdsOrKeys: identities, sortBy: null },
+            prepared?.metadataPrepared === true,
+          )
+          .map((row) =>
+            sentinel(row.key) && activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key,
+          ),
       );
     },
     storePath: selectedScope.path,
@@ -373,6 +376,7 @@ export function prepareSessionRowSelection(
         prepared?.metadataPrepared === true,
       );
     },
+    modelSearchMayMatch: (search: string) => projection.modelSearchMayMatch(search),
   };
 }
 
@@ -464,20 +468,42 @@ export function prepareProjectedSessionList(params: {
     ownerFirstActorId: opts.ownerFirst ? identity : undefined,
     restrictProfileReferences: client !== undefined,
     projectActiveRun: context ? (key) => active(getTarget(key)!)! : undefined,
-    entryFilter: (key, entry, row) => {
-      const storeKey = row.storeKey ?? key;
-      let visible = params.visibility?.get(entry);
-      if (visible === undefined) {
-        visible =
-          client === undefined || (presentation.sharing.entryFilter?.(storeKey, entry) ?? true);
-        params.visibility?.set(entry, visible);
-      }
-      return (
-        visible &&
-        (opts.hasBoard === undefined || row.hasBoard === opts.hasBoard) &&
-        (!opts.activeOnly || Boolean(active(getTarget(key)!)?.active))
-      );
-    },
+    entryFilter:
+      (client === undefined || !presentation.sharing.entryFilter) &&
+      opts.hasBoard === undefined &&
+      !opts.activeOnly
+        ? undefined
+        : (key, entry, row) => {
+            const storeKey = row.storeKey ?? key;
+            // Invitations can change without replacing the entry retained across yields.
+            const visibility =
+              presentation.sharing.sessionCap === "invited" ? undefined : params.visibility;
+            let visible = visibility?.get(entry);
+            if (visible === undefined) {
+              const selected = getTarget(key)!;
+              visible =
+                client === undefined ||
+                (presentation.sharing.entryFilter?.(
+                  storeKey,
+                  entry,
+                  Boolean(
+                    presentation.sharing.identity &&
+                    projection.hasMembership(
+                      selected.storeTarget.storePath,
+                      storeKey,
+                      presentation.sharing.identity.id,
+                    ),
+                  ),
+                ) ??
+                  true);
+              visibility?.set(entry, visible);
+            }
+            return (
+              visible &&
+              (opts.hasBoard === undefined || row.hasBoard === opts.hasBoard) &&
+              (!opts.activeOnly || Boolean(active(getTarget(key)!)?.active))
+            );
+          },
   };
   const ownerRunningCandidateKeys = () =>
     prepared.candidateKeys(
@@ -508,6 +534,8 @@ export async function listProjectedSessions(params: {
   const selectionPreparation = {
     metadataOnly: !opts.search?.trim() && opts.hasBoard === undefined,
     includeCatalog: true,
+    requireCurrentCatalog: true,
+    catalogSignal: client?.connectionSignal,
   };
   return projection.withSelectionPreparation(async () => {
     const dirtyRowCount = projection.dirtyRowCount;

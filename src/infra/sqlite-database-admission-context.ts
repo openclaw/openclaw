@@ -38,13 +38,45 @@ export { state as sqliteDatabaseAdmissionState };
 
 export function captureSqliteDatabaseAdmissions(
   cursor?: SqliteDatabaseAdmissionCursor,
-  scope?: { location?: string; admissions?: SqliteDatabaseAdmissions },
+  scope?: { location?: string; admissions?: readonly Pick<Admission, "identity">[] },
 ): SqliteDatabaseAdmissions {
   return state.registry.capture(cursor, scope);
 }
 
 export function installSqliteDatabaseAdmissions(admissions: SqliteDatabaseAdmissions): void {
   state.registry.install(admissions);
+}
+
+export function exchangeSqliteDatabaseAdmission(
+  target: string | Admission,
+  create?: boolean,
+  onlyChanged = false,
+): void {
+  const current = state.exchange.getStore();
+  if (!current || state.exchanging) {
+    return;
+  }
+  state.exchanging = true;
+  try {
+    const scope = typeof target === "string" ? { location: target } : { admissions: [target] };
+    const admissions = state.registry.captureExchange(scope, target);
+    if (onlyChanged && admissions.length === 0) {
+      return;
+    }
+    installSqliteDatabaseAdmissions(
+      current(
+        admissions,
+        // Publications already name their generation; only opens request pathname discovery.
+        typeof target === "string" ? target : undefined,
+        create,
+      ),
+    );
+  } catch (error) {
+    state.registry.resetExchangeCursor();
+    throw error;
+  } finally {
+    state.exchanging = false;
+  }
 }
 
 export function withSqliteDatabaseAdmissionExchange<T>(

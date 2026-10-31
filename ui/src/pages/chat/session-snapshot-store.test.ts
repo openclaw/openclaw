@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { IDBFactory } from "fake-indexeddb";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { Blob as NodeBlob } from "node:buffer";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { parseSidebarSnapshot } from "../../components/sidebar-snapshot-data.ts";
 import { sidebarSnapshot } from "../../components/sidebar-snapshot.test-support.ts";
@@ -9,19 +9,15 @@ import {
   requestResult,
   transactionComplete as transactionDone,
 } from "../../lib/chat/control-ui-database.runtime.ts";
-import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
+import { chatThumbnailWeight } from "../../lib/chat/row-display-facts.ts";
 import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
-import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   cacheChatSessionSnapshot,
-  observeChatCache,
   readChatSessionSnapshot,
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import {
-  CHAT_SNAPSHOT_DB_NAME as DB,
   CHAT_SNAPSHOT_METADATA_STORE_NAME as METADATA,
   CHAT_SNAPSHOT_STORE_NAME as SNAPSHOTS,
   SIDEBAR_SNAPSHOT_STORE_NAME as SIDEBAR,
@@ -34,28 +30,22 @@ import {
 } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-record.ts";
+import {
+  cacheSnapshot,
+  key,
+  persist,
+  rawKey,
+  readSnapshot,
+  sessionKey,
+  snapshot,
+  snapshotHost,
+  useSessionSnapshotStoreFixture,
+} from "./session-snapshot-store.test-support.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
-const snapshotHost = {
-  settings: { gatewayUrl: "wss://cache.example" },
-  client: { recoveryScope: "account-a", recoveryScopeReady: true },
-  assistantAgentId: "main",
-  agentsList: null,
-  hello: null,
-};
-const key = (sessionKey: string) => resolveChatSnapshotKey(snapshotHost, { sessionKey });
-const rawKey = (cacheKey: string) => cacheKey.slice(cacheKey.indexOf("\u0000") + 1);
-const sessionKey = key("agent:main:session");
-function snapshot(message: unknown = "conversation", sessionId = "session-1"): ChatSessionSnapshot {
-  return {
-    displayedLeafEntryId: "leaf-1",
-    messages: [message],
-    pagination: { hasMore: true, nextOffset: 1, totalMessages: 2 },
-    sessionId,
-  };
-}
-
-const readSnapshot = (cacheKey = sessionKey) => new SessionSnapshotStore().read(cacheKey);
+const DB = "openclaw-chat-snapshots";
 function boardSnapshot(cacheKey: string, message: string, receivedAtMs = 100) {
   return {
     ...snapshot(message),
@@ -92,15 +82,8 @@ function historyState(content: unknown, commands = true): ChatSessionSnapshot["h
   };
 }
 
-function cacheSnapshot(memory: ChatMessageCache, cacheKey: string, value = snapshot(cacheKey)) {
-  cacheChatSessionSnapshot(memory, snapshotHost, { sessionKey: rawKey(cacheKey) }, value);
-}
-async function persist(store: SessionSnapshotStore, cacheKey: string, value: ChatSessionSnapshot) {
-  store.write(cacheKey, value);
-  await store.flush();
-}
-const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion = 5) => ({
-  projectionVersion,
+const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion?: number) => ({
+  projectionVersion: projectionVersion ?? CHAT_SNAPSHOT_PROJECTION_VERSION,
   sessionKey: cacheKey,
   savedAt: 1,
   sessionId: "session-1",
@@ -157,58 +140,75 @@ async function readRawRecord(
 }
 
 describe("persistent chat session snapshots", () => {
-  it("restores model display data with the conversation, isolated from another account", async () => {
-    const writer = new SessionSnapshotStore();
-    const remembered: NonNullable<ChatSessionSnapshot["composer"]> = {
-      id: "model",
-      provider: "openai",
-      name: "Remembered model",
-      reasoning: true,
-      speed: { active: false, currentOverride: "off", label: "Standard", supported: true },
-      thinkingLevel: "high",
-      thinkingDefault: "medium",
-      thinkingLevels: [{ id: "high", label: "High" }],
-      permissionMode: "full",
-      defaultPermissionMode: "workspace",
+  it("restores conversation display facts and bytes within their account scope", async () => {
+    // fake-indexeddb uses Node structured clone; jsdom's Blob is not cloneable there.
+    vi.stubGlobal("Blob", NodeBlob);
+    const thumbnail = new Blob([new Uint8Array([1, 2, 3])], { type: "image/webp" });
+    const saved = {
+      ...snapshot({ role: "assistant", content: "Synthetic image", __openclaw: { id: "reply" } }),
+      rowDisplay: {
+        reply: {
+          links: { "session:agent:main:linked": { title: "Synthetic linked task" } },
+          images: { source: { width: 480, height: 240, rendition: 480 as const, thumbnail } },
+        },
+      },
     };
-    await persist(writer, sessionKey, { ...snapshot(), composer: remembered });
-    expect((await readSnapshot())?.composer).toEqual(remembered);
-    const otherKey = resolveChatSnapshotKey(
+    await seed(saved);
+    const restored = await readSnapshot();
+    expect(restored?.rowDisplay?.reply?.links).toEqual(saved.rowDisplay.reply.links);
+    const image = restored?.rowDisplay?.reply?.images?.source;
+    expect(image).toMatchObject({ width: 480, height: 240, rendition: 480 });
+    expect(await image?.thumbnail?.arrayBuffer()).toEqual(await thumbnail.arrayBuffer());
+    const otherAccountKey = resolveChatSnapshotKey(
       { ...snapshotHost, client: { recoveryScope: "account-b", recoveryScopeReady: true } },
       { sessionKey: rawKey(sessionKey) },
     );
-    expect(await readSnapshot(otherKey)).toBeNull();
+    expect(await readSnapshot(otherAccountKey)).toBeNull();
+    const other = key("agent:main:other");
+    await seed({ ...saved, sessionId: "other" }, other);
+    await clearStoredChatSnapshots(sessionKey.slice(0, sessionKey.indexOf("\u0000") + 1));
+    expect(await readSnapshot()).toBeNull();
+    expect(await readSnapshot(other)).toBeNull();
   });
+
+  it("evicts old thumbnail bytes at the global budget without evicting transcript rows", async () => {
+    vi.stubGlobal("Blob", NodeBlob);
+    const thumbnail = new Blob([new Uint8Array(256 * 1024)], { type: "image/webp" });
+    const make = (prefix: string, count: number): ChatSessionSnapshot => ({
+      ...snapshot(),
+      messages: Array.from({ length: count }, (_, index) => ({
+        role: "assistant",
+        content: "Synthetic image",
+        __openclaw: { id: `${prefix}-${index}` },
+      })),
+      rowDisplay: Object.fromEntries(
+        Array.from({ length: count }, (_, index) => [
+          `${prefix}-${index}`,
+          { images: { source: { width: 960, height: 480, rendition: 960 as const, thumbnail } } },
+        ]),
+      ),
+    });
+    const writer = new SessionSnapshotStore();
+    await persist(writer, sessionKey, make("old", 32));
+    const nextKey = key("agent:main:new");
+    await persist(writer, nextKey, make("new", 1));
+    const old = await readSnapshot();
+    const next = await readSnapshot(nextKey);
+    expect(old?.messages).toHaveLength(32);
+    expect(next?.messages).toHaveLength(1);
+    expect(chatThumbnailWeight(old ?? {}).count + chatThumbnailWeight(next ?? {}).count).toBe(32);
+    expect(chatThumbnailWeight(old ?? {}).bytes + chatThumbnailWeight(next ?? {}).bytes).toBe(
+      8 * 1024 * 1024,
+    );
+    expect(next?.rowDisplay?.["new-0"]?.images?.source?.thumbnail).toBeInstanceOf(Blob);
+  });
+
   let writer: SessionSnapshotStore;
   const seed = async (value = snapshot(), cacheKey = sessionKey) =>
     persist(writer, cacheKey, value);
-  const connected = new Set<SessionSnapshotStore>();
-  function makeStore(memory?: ChatMessageCache, connect = false) {
-    const store = new SessionSnapshotStore(memory);
-    if (memory) {
-      observeChatCache(memory, store);
-    }
-    if (connect) {
-      store.connect();
-      connected.add(store);
-    }
-    return store;
-  }
+  const { connected, makeStore } = useSessionSnapshotStoreFixture();
   beforeEach(() => {
-    vi.stubGlobal("indexedDB", new IDBFactory());
-    vi.stubGlobal("localStorage", createStorageMock());
     writer = makeStore();
-  });
-
-  afterEach(async () => {
-    for (const store of connected) {
-      store.disconnect();
-      await store.whenIdle();
-    }
-    connected.clear();
-    await clearStoredChatSnapshots();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
   });
 
   it("releases one read scope without retiring another reader or its replacement", () => {
@@ -240,7 +240,7 @@ describe("persistent chat session snapshots", () => {
       const retired = store.captureReadScope(target);
       const unrelated = store.captureReadScope(key("agent:main:unrelated"));
       if (operation === "write") {
-        store.write(target, snapshot());
+        writeSnapshotFixture(store, target, snapshot());
       } else if (operation === "forget") {
         store.forget(target);
       } else if (operation === "prefix") {
@@ -273,12 +273,12 @@ describe("persistent chat session snapshots", () => {
       const opening = vi
         .spyOn(snapshotDatabase, "openSessionSnapshotDatabase")
         .mockReturnValueOnce(held.promise);
-      writer.write(key("agent:main:blocker"), snapshot("blocker"));
+      writeSnapshotFixture(writer, key("agent:main:blocker"), snapshot("blocker"));
       const blocker = writer.flush();
       await vi.waitFor(() => expect(opening).toHaveBeenCalledOnce());
       const target = key("agent:main:queued");
       const value = snapshot("queued");
-      writer.write(target, value);
+      writeSnapshotFixture(writer, target, value);
       const queued = writer.flush();
       if (forgotten) {
         writer.forget(target);
@@ -296,9 +296,22 @@ describe("persistent chat session snapshots", () => {
     },
   );
 
-  it("restores a board snapshot and its original ticket receipt with the conversation", async () => {
-    const value: ChatSessionSnapshot = {
-      ...snapshot("dashboard conversation"),
+  it.each<Partial<ChatSessionSnapshot>>([
+    {
+      composer: {
+        id: "model",
+        provider: "openai",
+        name: "Remembered model",
+        reasoning: true,
+        speed: { active: false, currentOverride: "off", label: "Standard", supported: true },
+        thinkingLevel: "high",
+        thinkingDefault: "medium",
+        thinkingLevels: [{ id: "high", label: "High" }],
+        permissionMode: "full",
+        defaultPermissionMode: "workspace",
+      },
+    },
+    {
       board: {
         receivedAtMs: 100,
         snapshot: {
@@ -308,24 +321,29 @@ describe("persistent chat session snapshots", () => {
           ],
         },
       },
-    };
+    },
+  ])("restores scoped display facts with their original receipts (%j)", async (facts) => {
+    const value = { ...snapshot(), ...facts };
     await seed(value);
-    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(value);
+    expect(await readSnapshot()).toEqual(value);
+    const otherKey = resolveChatSnapshotKey(
+      { ...snapshotHost, client: { recoveryScope: "account-b", recoveryScopeReady: true } },
+      { sessionKey: rawKey(sessionKey) },
+    );
+    expect(await readSnapshot(otherKey)).toBeNull();
     await deleteStoredChatSnapshot(sessionKey);
-    expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+    expect(await readSnapshot()).toBeNull();
   });
 
-  it("does not present a cached board after its pending read is invalidated", async () => {
+  it("does not return a cached board after its pending read is invalidated", async () => {
     await seed({
       ...boardSnapshot(sessionKey, "retired conversation"),
       historyState: { stateRevision: {}, commands: [] },
     });
     const reader = new SessionSnapshotStore();
-    const presentBoard = vi.fn();
-    const reading = reader.read(sessionKey, presentBoard);
+    const reading = reader.read(sessionKey);
     reader.forget(sessionKey);
     expect(await reading).toBeNull();
-    expect(presentBoard).not.toHaveBeenCalled();
   });
 
   it("persists board removal before any transcript is in memory", async () => {
@@ -458,7 +476,7 @@ describe("persistent chat session snapshots", () => {
 
   it.each(["direct", "prewarmed"])("discards the previous projection (%s)", async (mode) => {
     await persist(writer, sessionKey, snapshot("current"));
-    await putRawRecord(envelope(sessionKey, snapshot("old"), 4));
+    await putRawRecord(envelope(sessionKey, snapshot("old"), 10));
     if (mode === "prewarmed") {
       void prewarmChatSnapshot(sessionKey);
     }
@@ -500,6 +518,8 @@ describe("persistent chat session snapshots", () => {
   });
 
   it("defers snapshot sanitization until flush", async () => {
+    writer.connect();
+    connected.add(writer);
     await seed();
     await seed(snapshot(1n));
     expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
@@ -523,33 +543,9 @@ describe("persistent chat session snapshots", () => {
     scope.dispose();
     await reader.flush();
     expect((await readRawRecord(sessionKey))?.savedAt).toBe(1);
-    reader.write(sessionKey, previousHydration);
+    writeSnapshotFixture(reader, sessionKey, previousHydration);
     await reader.flush();
     expect((await readRawRecord(sessionKey))?.savedAt).toBe(2);
-  });
-
-  it("releases hydrated snapshots after the message cache evicts them", async () => {
-    const memoryCache: ChatMessageCache = new Map();
-    const store = makeStore(memoryCache);
-    await persist(store, sessionKey, snapshot("persisted"));
-    const { evicted, collectionControl } = await (async () => {
-      const hydrated = await store.read(sessionKey);
-      assert.isNotNull(hydrated);
-      cacheSnapshot(memoryCache, sessionKey, hydrated);
-      return {
-        evicted: new WeakRef(hydrated),
-        collectionControl: new WeakRef({ unowned: true }),
-      };
-    })();
-    for (let index = 0; index < MAX_CACHED_CHAT_SESSIONS; index += 1) {
-      cacheSnapshot(memoryCache, key(`agent:main:newer-${index}`), snapshot(index));
-    }
-    await store.flush();
-    expect(memoryCache.has(sessionKey)).toBe(false);
-    await collectGarbageForTest();
-    expect(collectionControl.deref()).toBeUndefined();
-    expect(evicted.deref()).toBeUndefined();
-    expect(store.readSavedAt(key("agent:main:newer-0"))).not.toBeNull();
   });
 
   it.each([
@@ -595,11 +591,7 @@ describe("persistent chat session snapshots", () => {
     if (corruption !== "metadata") {
       expect(reader.readSavedAt(valid)).not.toBeNull();
       expect(reader.readSavedAt(corrupt)).not.toBeNull();
-      const presentBoard = vi.fn();
-      expect(await reader.read(corrupt, presentBoard)).toBeNull();
-      if (corruption === "board") {
-        expect(presentBoard).not.toHaveBeenCalled();
-      }
+      expect(await reader.read(corrupt)).toBeNull();
     } else {
       expect(reader.readSavedAt(corrupt)).toBeNull();
     }
@@ -610,10 +602,18 @@ describe("persistent chat session snapshots", () => {
   it.each(["unrelated", "session", "cache-eviction", "all"] as const)(
     "settles an in-flight transcript through %s invalidation",
     async (scope) => {
-      const value = snapshot("important transcript");
+      const value: ChatSessionSnapshot = {
+        ...snapshot("important transcript"),
+        headerSharing: "public",
+        headerViewers: {
+          users: [{ id: "peer", avatarUrl: "/peer.png" }],
+          totalCount: 5,
+          ownerViewing: true,
+        },
+      };
       writer.connect();
       connected.add(writer);
-      writer.write(sessionKey, value);
+      writeSnapshotFixture(writer, sessionKey, value);
       await Promise.all([
         writer.flush(),
         scope === "all"
@@ -719,7 +719,7 @@ describe("persistent chat session snapshots", () => {
   it("keeps every operation non-fatal when IndexedDB is unavailable or throws", async () => {
     vi.stubGlobal("indexedDB", undefined);
     const unavailable = new SessionSnapshotStore();
-    unavailable.write(key("agent:main:none"), snapshot("none"));
+    writeSnapshotFixture(unavailable, key("agent:main:none"), snapshot("none"));
     await expect(unavailable.flush()).resolves.toBeUndefined();
     await expect(unavailable.read(key("agent:main:none"))).resolves.toBeNull();
     await expect(unavailable.delete(key("agent:main:none"))).resolves.toBeUndefined();
@@ -732,7 +732,7 @@ describe("persistent chat session snapshots", () => {
       },
     });
     const denied = new SessionSnapshotStore();
-    denied.write(key("agent:main:denied"), snapshot("denied"));
+    writeSnapshotFixture(denied, key("agent:main:denied"), snapshot("denied"));
     await expect(denied.flush()).resolves.toBeUndefined();
     await expect(denied.read(key("agent:main:denied"))).resolves.toBeNull();
     await expect(clearStoredChatSnapshots()).resolves.toBeUndefined();

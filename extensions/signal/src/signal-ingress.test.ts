@@ -2,11 +2,15 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { SignalSseEvent } from "./client-adapter.js";
+import { useSignalHttpServer } from "./client.test-support.js";
 import type { SignalDataMessage, SignalReceivePayload } from "./monitor/event-handler.types.js";
 import { startSignalIngressMonitor } from "./signal-ingress.js";
+import { runSignalSseLoop, type SignalStatusSink } from "./sse-reconnect.js";
 
 type SignalIngressQueue = NonNullable<Parameters<typeof startSignalIngressMonitor>[0]["queue"]>;
 type SignalIngressPayload = Parameters<SignalIngressQueue["enqueue"]>[1];
@@ -35,6 +39,7 @@ function signalEvent(
 }
 
 type Monitor = Awaited<ReturnType<typeof startSignalIngressMonitor>>;
+const withSignalServer = useSignalHttpServer();
 let queue: SignalIngressQueue;
 const monitors = new Set<Monitor>();
 beforeEach(() => {
@@ -52,6 +57,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
       }
     } finally {
       monitors.clear();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       cleanup();
       vi.restoreAllMocks();
@@ -76,6 +82,61 @@ async function receive(monitor: Monitor, ...events: SignalSseEvent[]) {
 }
 
 describe("Signal durable ingress", () => {
+  it("resumes accepted ingress and publishes HTTP recovery", async () => {
+    const abort = new AbortController();
+    const received: Array<string | undefined> = [];
+    const headers: Array<string | string[] | undefined> = [];
+    const statusSink = vi.fn<SignalStatusSink>();
+    const frame = (id: string) =>
+      `id: ${id}\nevent: receive\ndata: ${signalEvent({ timestamp: Number(id) }).data}\n\n`;
+    const baseUrl = await withSignalServer((request, response) => {
+      headers.push(request.headers["last-event-id"]);
+      response.writeHead(headers.length === 1 ? 503 : 200, {
+        "Content-Type": "text/event-stream",
+      });
+      const cursor = request.headers["last-event-id"];
+      response.end(
+        headers.length === 1
+          ? ""
+          : headers.length === 2
+            ? frame("1")
+            : (cursor ? ["1", "2", "3"].slice(Number(cursor)) : ["3"]).map(frame).join(""),
+      );
+    });
+    const ingress = await start((event) => {
+      received.push(event.id);
+    });
+    try {
+      await runSignalSseLoop({
+        baseUrl,
+        abortSignal: abort.signal,
+        runtime: createRuntimeSpies(),
+        policy: { initialMs: 0, maxMs: 0, jitter: 0 },
+        statusSink,
+        onEvent: async (event) => {
+          await ingress.receive(event);
+          if (event.id === "3") {
+            abort.abort();
+          }
+        },
+      });
+    } finally {
+      abort.abort();
+      await ingress.waitForIdle();
+    }
+    expect(received).toEqual(["1", "2", "3"]);
+    expect(headers).toEqual([undefined, undefined, "1"]);
+    expect(statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({ lifecycle: "ready", connected: true }),
+    );
+    expect(statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({ lifecycle: "recovering", connected: false }),
+    );
+    expect(statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({ lastError: expect.stringContaining("503") }),
+    );
+  });
+
   it("propagates durable append failure before dispatch scheduling", async () => {
     const appendError = new Error("sqlite unavailable");
     const failingQueue = {

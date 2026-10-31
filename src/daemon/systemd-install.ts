@@ -4,6 +4,7 @@ import {
   isUnresolvedShellReference,
   readStateDirDotEnvFromStateDir,
 } from "../config/state-dir-dotenv.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import {
   GATEWAY_SERVICE_KIND,
@@ -29,7 +30,10 @@ import {
   type GatewayServiceInstallArgs,
   type GatewayServiceManageArgs,
 } from "./service-types.js";
-import { withGatewayServiceInstallationRecovery } from "./service-update-authority.js";
+import {
+  isUpdateOwnedGatewayServiceCommand,
+  withGatewayServiceInstallationRecovery,
+} from "./service-update-authority.js";
 import { withSystemdDefinitionMutation } from "./systemd-definition-mutation.js";
 import {
   readSystemdEnvironmentFile,
@@ -415,6 +419,11 @@ async function writeSystemdUnit(
           }),
           existingUnit?.contents.toString("utf8") ?? "",
           definitionTransaction?.preservePolicy,
+          {
+            preserveExecDelegation:
+              isUpdateOwnedGatewayServiceCommand() ||
+              isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS),
+          },
         );
         await assertNoSystemGatewayOwnership(env);
         await mutation.publish(unitPath, unit, restrictSystemdArtifactMode(existingUnit?.mode));

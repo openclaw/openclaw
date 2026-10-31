@@ -7,25 +7,29 @@ import { getEnvironmentData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { memoryTextSearchSchema } from "../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareDoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
+import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
+import { prepareDoctorDatabaseMigrations } from "../commands/doctor-schema-migrations.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import type { TranscriptTurnBoundary } from "../config/sessions/transcript-entry-anchor.js";
 import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { withEngineStoreAdmission as admit } from "../infra/database-engine/admission-scope.js";
+import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
 import * as engineSelection from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
-import type { SearchSchema } from "../infra/database-engine/contract.js";
-import { openEngineStore } from "../infra/database-engine/open.js";
+import { openPostgresEngineTestStore } from "../infra/database-engine/engine-store.test-support.js";
 import { getPostgresPhysicalFacts as postgresFacts } from "../infra/database-engine/physical-facts.js";
-import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
-import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { dropPostgresTestSchemas } from "../infra/postgres-sync/schema-cleanup.test-support.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { retireSqliteDatabaseAdmissionForPath as retireAdmission } from "../infra/sqlite-database-admission.js";
 import { migrateHistoricalTranscriptDirectives } from "../infra/state-migrations.transcript-directives.js";
+import { readUpdateDatabaseGenerationsIsolated } from "../infra/update-candidate-state.js";
+import { createNonExitingRuntime } from "../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION as schemaVersion } from "./openclaw-agent-db-contract.js";
 import { agentEngineSchema } from "./openclaw-agent-db-engine.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
@@ -34,7 +38,11 @@ import {
   expectAnchorOnly,
   loadOwners,
 } from "./openclaw-agent-db.postgres.test-support.js";
-import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+  repairOpenClawStateDatabaseIndexesForDoctor,
+} from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const closeReceipts = vi.hoisted(() => vi.fn());
@@ -131,10 +139,21 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
   beforeAll(async () => {
     root = tempDirs.make("agent-postgres-");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    engineSelection.installDatabaseEngineSelection({
-      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+    const database = {
+      engine: "postgres" as const,
       postgres: { connection: connection!, schemaPrefix: prefix },
-    });
+    };
+    fs.writeFileSync(
+      path.join(root, "openclaw.json"),
+      JSON.stringify({
+        database,
+        plugins: { enabled: false },
+        agents: { entries: { migration: {} } },
+      }),
+    );
+    engineSelection.installDatabaseEngineSelection(
+      await resolveDatabaseEngineSelection({ database }),
+    );
     client = new pg.Client({ connectionString: connection });
     await client.connect();
     await client.query("CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public");
@@ -218,17 +237,126 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     expect(backend()).toBe(backend());
   });
 
-  it("migrates version 27 indexes and revision triggers while retaining rows and search", async () => {
+  it("returns idle PostgreSQL backends without revoking logical readers or active borrowers", async () => {
+    await createSession("readonly-scope-release");
+    const { OpenClawAgentDatabaseReadOnlyScope } =
+      await import("./openclaw-agent-db-readonly-scope.js");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      admit(() => {
+        for (const cached of [false, true]) {
+          const scope = new OpenClawAgentDatabaseReadOnlyScope(cached);
+          const options = { agentId: "actor" };
+          try {
+            const first = scope.retain(options);
+            const second = scope.retain(options);
+            assert(first.found && second.found);
+            const db = first.database.db;
+            const pid = db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid;
+            second.claim.release();
+            vi.advanceTimersByTime(30 * 60_000);
+            expect(first.claim.isCurrent()).toBe(true);
+            first.claim.release();
+            expect(scope.hasRetainedConnection).toBe(true);
+            const reused = scope.read(({ db: reusedDb }) => reusedDb, options);
+            expect(reused).toEqual({ found: true, value: db });
+            const other = owners.openOpenClawAgentDatabaseReadOnly(options);
+            assert(other.found);
+            try {
+              vi.advanceTimersByTime(30 * 60_000);
+              expect(scope.hasRetainedConnection).toBe(false);
+              expect(other.database.db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid).toBe(
+                pid,
+              );
+            } finally {
+              other.database.close();
+            }
+          } finally {
+            scope.close();
+          }
+        }
+      });
+    } finally {
+      vi.advanceTimersByTime(3 * 60_000);
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds physical backends across retained logical stores without repeating admission", async () => {
+    const agents = Array.from({ length: 4 }, (_, index) => `retained-scope-${index}`);
+    for (const agentId of agents) {
+      await createSession("bounded-readers", agentId);
+    }
+    const { OpenClawAgentDatabaseReadOnlyScope } =
+      await import("./openclaw-agent-db-readonly-scope.js");
+    const scopes = agents.map((agentId) => ({
+      agentId,
+      scope: new OpenClawAgentDatabaseReadOnlyScope(),
+    }));
+    const databases: EngineConnection[] = [];
+    const pids: unknown[] = [];
+    const lockBase = Number.parseInt(randomUUID().replaceAll("-", "").slice(0, 10), 16);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      admit(() => {
+        scopes.forEach(({ scope, agentId }, index) => {
+          const result = scope.read(
+            ({ db }) => {
+              databases.push(db);
+              db.prepare("SELECT pg_advisory_lock(?)").get(lockBase + index);
+              return db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid;
+            },
+            { agentId },
+          );
+          assert(result.found);
+          pids.push(result.value);
+        });
+      });
+      await client.query("BEGIN; SET LOCAL lock_timeout = '1s'");
+      // Acquiring evicted backends' session locks waits for their asynchronous socket closes.
+      for (const backend of [...new Set(pids)].slice(0, -2)) {
+        await client.query("SELECT pg_advisory_xact_lock($1)", [lockBase + pids.indexOf(backend)]);
+      }
+      expect(
+        (await queryRows("SELECT pid FROM pg_stat_activity WHERE pid = ANY($1)", [pids])).length,
+      ).toBeLessThanOrEqual(2);
+      await client.query("ROLLBACK");
+      vi.advanceTimersByTime(3 * 60_000);
+      expect(scopes.every(({ scope }) => scope.hasRetainedConnection)).toBe(true);
+      const statements: unknown[] = [];
+      const observer = (event: unknown) => statements.push(event);
+      const observations = channel("openclaw.database.statement");
+      observations.subscribe(observer);
+      try {
+        admit(() => {
+          scopes.forEach(({ scope, agentId }, index) => {
+            const result = scope.read(
+              ({ db }) => {
+                expect(db).toBe(databases[index]);
+                return db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid;
+              },
+              { agentId },
+            );
+            assert(result.found);
+            expect(result.value).not.toBe(pids[index]);
+          });
+        });
+        // Only the requested reads run; retained logical readers do no schema/admission SQL.
+        expect(statements).toHaveLength(agents.length);
+      } finally {
+        observations.unsubscribe(observer);
+      }
+    } finally {
+      await client.query("ROLLBACK");
+      scopes.forEach(({ scope }) => scope.close());
+      vi.advanceTimersByTime(3 * 60_000);
+      vi.useRealTimers();
+    }
+  });
+
+  it("updates captured PostgreSQL families through Doctor before agent startup, retaining rows and search", async () => {
     const target = targetFor("migration-session", "migration", "main");
-    const memorySearch: SearchSchema = {
-      text: {
-        body: {
-          table: "memory_index_chunks",
-          fields: ["text"],
-          postgres: { identity: "chunk_rowid" },
-        },
-      },
-    };
+    const memorySearch = memoryTextSearchSchema("unicode61");
     const assertMemorySearch = (db: EngineConnection) => {
       expect(
         db
@@ -243,20 +371,17 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     const migration = agentEngineSchema.postgresMigrations!.find((step) => step.version === 28)!;
     const facts = admit(() => {
       using anchor = openNodeSqliteDatabase(databasePath);
-      const db = openEngineStore({
+      const db = openPostgresEngineTestStore({
         anchor,
         schema: {
           ...agentEngineSchema,
           version: 27,
           ...migration.fromSchema,
           postgresVectorDecoderVersion: migration.fromSchema.postgresVectorDecoderVersion,
+          postgresVectorSearchVersion: migration.fromSchema.postgresVectorSearchVersion,
+          postgresTextSearchVersion: migration.fromSchema.postgresTextSearchVersion,
         },
         input: { connection: connection!, schemaPrefix: prefix },
-        inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: false }),
-        prepareAnchor() {},
-        openSqlite() {
-          throw new Error("Expected PostgreSQL");
-        },
       });
       try {
         assert(isPostgresSqlConnection(db));
@@ -315,42 +440,35 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
         `SELECT session_id, event_id, parent_id FROM "${facts.namespace}".transcript_event_identities ORDER BY seq`,
       );
       retireAdmission(databasePath);
-      await client.query(`UPDATE "${facts.namespace}".openclaw_schema_meta
-        SET fingerprint = NULL, ddl_hash = NULL, server_major = NULL;`);
-      const owner = acquireGatewayStateOwner({ databasePath: resolveOpenClawStateSqlitePath() });
-      const maintenance = createOpenClawDatabaseMaintenanceScope({
-        schemaMaintenance: true,
-        assertOwnerCurrent: owner.assertCurrent,
-        assertDatabaseAccess: owner.assertDatabaseAccess,
+      admit(() => openOpenClawStateDatabase());
+      await closeOpenClawStateDatabaseAsync();
+      const paths = [resolveOpenClawStateSqlitePath(), databasePath];
+      const databaseGenerations = await readUpdateDatabaseGenerationsIsolated(paths);
+      const anchors = paths.map((file) => fs.readFileSync(file));
+      resetDatabaseEngineSelectionForTest();
+      const schemas = await prepareDoctorDatabasePreflight({ preserveSourceArtifacts: true });
+      const maintenance = await beginDoctorMaintenance({
+        options: { repair: true, nonInteractive: true },
+        root: null,
+        runtime: createNonExitingRuntime(),
+        databaseGenerations,
       });
+      assert(maintenance);
       try {
-        await maintenance.run(() =>
-          owners.withAgentDatabaseMaintenanceLease(
-            { env: process.env, processBound: true, schemaPolicy: "existing" },
-            async (lease) => {
-              using anchor = openNodeSqliteDatabase(databasePath);
-              lease.assertOwned();
-              admit(() => {
-                const engine = owners.openAgentEngineStore(
-                  anchor,
-                  target.agentId,
-                  databasePath,
-                  true,
-                );
-                if (engine !== anchor) {
-                  engine.close();
-                }
-              });
-            },
-          ),
-        );
+        await maintenance.run(async () => {
+          admit(() => repairOpenClawStateDatabaseIndexesForDoctor());
+          await prepareDoctorDatabaseMigrations({
+            env: process.env,
+            databasePaths: [databasePath],
+            agentDatabaseTargets: schemas.agentDatabaseMigrationDiscovery?.discovery.schemaTargets,
+            pendingDatabasePaths: schemas.pendingMigrations?.map((entry) => entry.path) ?? [],
+            pendingMigrations: schemas.pendingMigrations,
+          });
+        });
       } finally {
-        try {
-          await maintenance.close();
-        } finally {
-          owner.release();
-        }
+        await maintenance.release();
       }
+      expect(paths.map((file) => fs.readFileSync(file))).toEqual(anchors);
       const upgraded = openDatabase(options);
       assert(isPostgresSqlConnection(upgraded.db));
       expect(postgresFacts(upgraded.db)?.version).toBe(schemaVersion);
@@ -399,7 +517,6 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       await owners.closeOpenClawAgentDatabaseByPathAsync(databasePath);
       retireAdmission(databasePath);
       const reopened = openDatabase(options);
-      expect(postgresFacts(reopened.db)?.version).toBe(schemaVersion);
       admit(() => assertMemorySearch(reopened.db));
     } finally {
       closeDatabase(databasePath);

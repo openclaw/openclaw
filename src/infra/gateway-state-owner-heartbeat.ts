@@ -8,6 +8,7 @@ import { GATEWAY_OWNER_HEARTBEAT_MS } from "./gateway-lock-payload.js";
 import {
   type GatewayStateOwnerHeartbeatData,
   type GatewayStateOwnerVerification,
+  type GatewayStateOwnerHeartbeatLoss,
   renewGatewayStateOwnerLock,
   isGatewayStateOwnerLockSnapshotCurrent,
 } from "./gateway-state-owner-heartbeat.runtime.js";
@@ -20,6 +21,11 @@ import { recordWorkerMessage } from "./worker-message-metrics.js";
 const now = Date.now.bind(Date);
 
 type StateOwnerLock = { lockPath: string; verifyStillHeld(): boolean };
+type HeartbeatEvent =
+  | string
+  | null
+  | GatewayStateOwnerVerification
+  | GatewayStateOwnerHeartbeatLoss;
 
 function captureLock(lock: StateOwnerLock) {
   const raw = fs.readFileSync(lock.lockPath, "utf8");
@@ -77,10 +83,12 @@ export function startGatewayStateOwnerHeartbeat(
       port1.unref();
     };
     // Parent expiration checks verify physical custody directly.
-    port1.on("message", (message: string | null | GatewayStateOwnerVerification) => {
+    port1.on("message", (message: HeartbeatEvent) => {
       recordWorkerMessage("lifecycle", "from_worker");
       if (message === "parent-lost") {
         requestCliParentTermination();
+      } else if (message && typeof message === "object" && message.type === "lost") {
+        onLost(new Error(`${message.error}; restart the Gateway.`));
       } else if (message && typeof message === "object" && message.type === "verified") {
         const request = pending.get(message.id);
         pending.delete(message.id);

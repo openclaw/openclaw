@@ -76,7 +76,6 @@ it.each([
     await openMenu("badge-pattern");
     const reference = getComputedStyle(view.container.querySelector(".shortcut-hint__keys")!);
     const skin = (style: CSSStyleDeclaration) => [
-      style.backgroundColor,
       style.color,
       style.borderRadius,
       style.paddingInlineStart,

@@ -664,24 +664,20 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       createProvider.mockResolvedValueOnce(makeProvider({ id: "local", model: "local-embed" }));
     }
     // Concurrent provider admission needs distinct connections; each socket owns serial requests.
-    const firstPromise = post(
-      { input: "first" },
-      {
-        connection: "close",
-        ...(modelOverride ? { "x-openclaw-model": "openai/model-a" } : {}),
-      },
-    );
+    const request = (input: string, model: string) =>
+      post(
+        { input },
+        {
+          connection: "close",
+          ...(modelOverride ? { "x-openclaw-model": model } : {}),
+        },
+      );
+    const firstPromise = request("first", "openai/model-a");
     cleanup.requests.push(firstPromise);
     await waitForProviderEntry(cleanup.started, firstPromise);
     expect(closeProvider).toHaveBeenCalledTimes(1);
     const secondEntered = cleanup.watchAdmission();
-    const secondPromise = post(
-      { input: "second" },
-      {
-        connection: "close",
-        ...(modelOverride ? { "x-openclaw-model": "openai/model-b" } : {}),
-      },
-    );
+    const secondPromise = request("second", "openai/model-b");
     cleanup.requests.push(secondPromise);
     await waitForProviderEntry(secondEntered, secondPromise);
     expect(createProvider).toHaveBeenCalledTimes(1);

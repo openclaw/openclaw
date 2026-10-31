@@ -65,6 +65,7 @@ suite.define(() => {
                 sessionId: "uncached",
                 hasMore: true,
                 nextOffset: 40,
+                olderCursor: "older-cold-load",
                 totalMessages: 2040,
               },
             },
@@ -142,7 +143,9 @@ suite.define(() => {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         }
         await page.waitForFunction(() => (window.coldLoadSamples?.length ?? 0) >= 24);
-        expect(await gateway.getRequests("chat.history", { offset: 40 })).toHaveLength(0);
+        expect(
+          await gateway.getRequests("chat.history", { cursor: "older-cold-load" }),
+        ).toHaveLength(0);
         const frames = await page.evaluate(() => window.coldLoadSamples!);
         expect(frames[0]!.max).toBeGreaterThan(1000);
         expect(
@@ -393,11 +396,15 @@ suite.define(() => {
         expect(titleWrites?.[0]?.title).toBe("expected-title");
         expect(titleWrites?.some((event) => event.title === "New session")).toBe(false);
         expectFrames(samples, session.label);
+        expect(await gateway.getRequests("sessions.messages.unsubscribe")).toHaveLength(0);
         await gateway.waitForRequest("connect");
         await page.evaluate(() => {
           window.coldLoadReconcileStart = window.coldLoadSamples?.length ?? 0;
           window.coldLoadTitleTrace?.mark("reconcile");
         });
+        // Cached presentation must not send subscription traffic before hello admission.
+        expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.messages.unsubscribe")).toHaveLength(0);
         await gateway.resolveDeferred("connect");
         await gateway.waitForRequest("chat.startup");
         await gateway.waitForRequest("progressCard.get");

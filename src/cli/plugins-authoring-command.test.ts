@@ -665,8 +665,8 @@ describe("plugin authoring commands", () => {
       throw new Error("ENOENT: no such file or directory, uv_cwd");
     });
 
-    await runPluginsInitCommand("demo", { directory: projectDir });
-    expect(fs.existsSync(path.join(projectDir, "package.json"))).toBe(true);
+    await runPluginsInitCommand("@acme/demo", { directory: projectDir });
+    expect(readJson(projectDir, "package.json").name).toBe("@acme/openclaw-plugin-demo");
     expect(log).toHaveBeenCalledWith(`Created ${projectDir}`);
   });
 
@@ -674,7 +674,7 @@ describe("plugin authoring commands", () => {
     const tmpDir = tempDirs.make("openclaw-provider-init-");
     const projectDir = path.join(tmpDir, "plugin-init-test");
 
-    await runPluginsInitCommand("plugin-init-test", {
+    await runPluginsInitCommand("@acme/plugin-init-test", {
       directory: projectDir,
       name: "Plugin Init Test",
       type: "provider",
@@ -682,7 +682,7 @@ describe("plugin authoring commands", () => {
 
     const packageManifest = readJson(projectDir, "package.json");
     expect(packageManifest).toMatchObject({
-      name: "openclaw-plugin-plugin-init-test",
+      name: "@acme/openclaw-plugin-plugin-init-test",
       scripts: {
         build: "tsc -p tsconfig.json",
         test: "vitest run --config ./vitest.config.ts",
@@ -698,7 +698,7 @@ describe("plugin authoring commands", () => {
       openclaw: {
         extensions: ["./dist/index.js"],
         install: {
-          clawhubSpec: "clawhub:openclaw-plugin-plugin-init-test",
+          clawhubSpec: "clawhub:@acme/openclaw-plugin-plugin-init-test",
           defaultChoice: "clawhub",
           minHostVersion: `>=${VERSION}`,
         },
@@ -712,12 +712,12 @@ describe("plugin authoring commands", () => {
 
     const manifest = readJson(projectDir, "openclaw.plugin.json");
     expect(manifest).toMatchObject({
-      id: "plugin-init-test",
+      id: "@acme/plugin-init-test",
       name: "Plugin Init Test",
       version: "0.1.0",
-      providers: ["plugin-init-test"],
+      providers: ["@acme/plugin-init-test"],
       setup: {
-        providers: [{ id: "plugin-init-test", envVars: ["PLUGIN_INIT_TEST_API_KEY"] }],
+        providers: [{ id: "@acme/plugin-init-test", envVars: ["ACME_PLUGIN_INIT_TEST_API_KEY"] }],
       },
       configSchema: {
         type: "object",

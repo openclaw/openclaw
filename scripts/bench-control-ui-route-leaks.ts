@@ -107,7 +107,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,cron-transcript,worktree-create,claws-search,roster-create-claw,model-search-and-compose probes follow cold readiness; new-session-typing-immediate types before artifact work with no hover or think time; preload-idle observes native New Session/roster prefetch without prior intent; --routes roster exercises the persisted sidebar roster on New Session. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
+    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,cron-transcript,worktree-create,templates-search,roster-create-template,model-search-and-compose probes follow cold readiness; new-session-typing-immediate types before artifact work with no hover or think time; preload-idle observes native New Session/roster prefetch without prior intent; --routes roster exercises the persisted sidebar roster on New Session. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
     "Native Settings root: --routes settings-native-root uses the iOS phone embed at 390x844; do not combine with --interactions.",
     `Browser/Reader cells: ${DOCK_SCENARIO_IDS.join(",")}. Each owns its cold/native first-open phases; do not combine with --interactions.`,
     "Activity media: --routes activity --activity-media empty|gallery; --interactions activity-lightbox opens the viewer after the fixed warmup, activity-lightbox-immediate opens it before artifact analysis, and activity-idle records the warmup without a click.",
@@ -182,9 +182,9 @@ if (routes.some(isDockScenario) && interactionIds.length) {
 }
 const securityInteractions = ["settings-security-immediate", "settings-security-idle"];
 const creationInteractions: Record<string, ProbeRoute[]> = {
-  "claws-search": ["claws"],
+  "templates-search": ["templates"],
   "worktree-create": ["worktrees"],
-  "roster-create-claw": ["roster"],
+  "roster-create-template": ["roster"],
   "model-search-and-compose": ["chat", "new-session"],
 };
 const knownInteractions = [
@@ -286,8 +286,8 @@ function routeTarget(
           : id;
   const selectors: Partial<Record<ProbeRoute, string>> = {
     roster: 'openclaw-sidebar-agent-roster a[data-agent-id="main"]',
-    claws:
-      "[data-claws-featured] [data-claws-entry] button.agents-home__claw-card-link:not(:disabled)",
+    templates:
+      "[data-templates-featured] [data-templates-entry] button.agents-home__template-card-link:not(:disabled)",
     worktrees:
       'openclaw-worktrees-page button[aria-label="Delete: synthetic-route-worktree"]:not(:disabled)',
     systems: ".systems-desktop .desktop-surface canvas",
@@ -356,7 +356,7 @@ function routeTarget(
         : id === "activity" && activityMedia
           ? "?time=all"
           : "",
-    ...(id === "claws" ? { requiredMethods: ["claws.catalog.search"] } : {}),
+    ...(id === "templates" ? { requiredMethods: ["templates.catalog.search"] } : {}),
     ...(id === "worktrees" ? { requiredMethods: ["worktrees.list"] } : {}),
     ...(id === "desktop-document"
       ? { requiredMethods: ["sessions.describe", "environments.status", "desktop.observe"] }
@@ -400,14 +400,14 @@ function fixtureFor(
       ? activityMediaFixture(baseFixture, activityMedia)
       : baseFixture;
   const workboard = id === "workboard" ? parityWorkboardScenario : {};
-  const creationFixture = id === "claws" || id === "roster";
-  const clawsConfig = {
+  const creationFixture = id === "templates" || id === "roster";
+  const templatesConfig = {
     ...fixture.methodResponses["config.get"].config,
-    gateway: { controlUi: { experimental: { claws: true } } },
+    gateway: { controlUi: { experimental: { templates: true } } },
   };
   const clawEntry = {
     packageName: "@synthetic/route-claw",
-    displayName: "Synthetic route Claw",
+    displayName: "Synthetic route Template",
     summary: "Synthetic catalog entry for route proof.",
     latestVersion: "1.0.0",
     channel: "community" as const,
@@ -480,7 +480,9 @@ function fixtureFor(
         ...(id === "search" ? ["webSearch.status"] : []),
         ...(id === "model-setup" ? ["openclaw.setup.detect"] : []),
         ...(id === "cron" && interactionIds.length ? ["cron.history"] : []),
-        ...(creationFixture ? ["claws.catalog.search", "claws.drafts.create", "chat.send"] : []),
+        ...(creationFixture
+          ? ["templates.catalog.search", "templates.drafts.create", "chat.send"]
+          : []),
         ...(id === "worktrees" ? ["worktrees.list", "worktrees.branches", "worktrees.create"] : []),
         ...(id === "activity" && activityMedia ? activityMediaMethods : []),
       ]),
@@ -512,11 +514,11 @@ function fixtureFor(
         ? {
             "config.get": {
               ...fixture.methodResponses["config.get"],
-              config: clawsConfig,
-              sourceConfig: clawsConfig,
-              raw: JSON.stringify(clawsConfig),
+              config: templatesConfig,
+              sourceConfig: templatesConfig,
+              raw: JSON.stringify(templatesConfig),
             },
-            "claws.catalog.search": {
+            "templates.catalog.search": {
               cases: [
                 { match: { featured: true }, response: { entries: [clawEntry] } },
                 { match: { category: "productivity" }, response: { entries: [clawEntry] } },
@@ -735,7 +737,7 @@ async function readBuild(directory: string) {
         "agents-next",
         "cron-next",
         "activity-next",
-        "claws-next",
+        "templates-next",
         "model-picker",
         "roster-next",
       ].map((key) => [key, navigationPreloads[key] ?? []]),
@@ -968,22 +970,24 @@ async function runCreationAction(
     await page.getByRole("button", { name: "Delete: native-created", exact: true }).waitFor();
     return { request };
   }
-  if (id === "claws-search") {
-    await page.locator("input[data-claws-search]").fill("synthetic");
-    const request = await receipt("claws.catalog.search", before.search, { query: "synthetic" });
+  if (id === "templates-search") {
+    await page.locator("input[data-templates-search]").fill("synthetic");
+    const request = await receipt("templates.catalog.search", before.search, {
+      query: "synthetic",
+    });
     await page
-      .locator("[data-claws-results] [data-claws-entry] h3")
-      .filter({ hasText: /^Synthetic route Claw$/u })
+      .locator("[data-templates-results] [data-templates-entry] h3")
+      .filter({ hasText: /^Synthetic route Template$/u })
       .first()
       .waitFor();
     return { request };
   }
-  if (id === "roster-create-claw") {
+  if (id === "roster-create-template") {
     await page
       .locator('openclaw-sidebar-agent-roster a[data-agent-id="main"]')
       .click({ button: "right" });
-    await page.locator('[role="menuitem"][data-value="create-claw"]').click();
-    const request = await receipt("claws.drafts.create", before.created);
+    await page.locator('[role="menuitem"][data-value="create-template"]').click();
+    const request = await receipt("templates.drafts.create", before.created);
     const sent = await receipt("chat.send", before.sent);
     await page.waitForFunction(
       () => window.openclawControlUi?.snapshot().route?.matches[0]?.routeId === "chat",
@@ -1463,16 +1467,18 @@ try {
                         !node.matches(":disabled,[aria-disabled=true],[aria-busy=true]"),
                     );
                   const clawsSettled =
-                    routeId !== "claws" ||
-                    (enabled("input[data-claws-search]") &&
-                      document.querySelector("[data-claws-featured] [data-claws-entry] h3")
-                        ?.textContent === "Synthetic route Claw" &&
+                    routeId !== "templates" ||
+                    (enabled("input[data-templates-search]") &&
+                      document.querySelector("[data-templates-featured] [data-templates-entry] h3")
+                        ?.textContent === "Synthetic route Template" &&
                       document.querySelector(
-                        '[data-claws-category="productivity"] [data-claws-entry] h3',
-                      )?.textContent === "Synthetic route Claw" &&
-                      (gateway?.findRequests("claws.catalog.search", { limit: 8, featured: true })
-                        .length ?? 0) > 0 &&
-                      (gateway?.findRequests("claws.catalog.search", {
+                        '[data-templates-category="productivity"] [data-templates-entry] h3',
+                      )?.textContent === "Synthetic route Template" &&
+                      (gateway?.findRequests("templates.catalog.search", {
+                        limit: 8,
+                        featured: true,
+                      }).length ?? 0) > 0 &&
+                      (gateway?.findRequests("templates.catalog.search", {
                         limit: 8,
                         category: "productivity",
                       }).length ?? 0) > 0);
@@ -1698,7 +1704,7 @@ try {
                 assert.equal(await textarea.inputValue(), "Synthetic unsent draft");
                 const writes = await page.evaluate(() => {
                   const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
-                  return ["claws.drafts.create", "sessions.create", "chat.send"].map(
+                  return ["templates.drafts.create", "sessions.create", "chat.send"].map(
                     (method) => gateway.findRequests(method).length,
                   );
                 });
@@ -2091,11 +2097,11 @@ try {
                 : undefined;
               result.rpc = data.rpc;
               result.alerts = data.alerts;
-              if (route === "claws" || route === "worktrees" || route === "roster") {
+              if (route === "templates" || route === "worktrees" || route === "roster") {
                 for (const method of [
-                  "claws.drafts.create",
-                  "claws.drafts.publish",
-                  "claws.add.apply",
+                  "templates.drafts.create",
+                  "templates.drafts.publish",
+                  "templates.add.apply",
                   "worktrees.create",
                   "sessions.create",
                   "chat.send",
@@ -2384,8 +2390,8 @@ try {
                               };
                               gateway.setMethodResponse("worktrees.create", created);
                               gateway.setMethodResponse("worktrees.list", { worktrees: [created] });
-                            } else if (actionId === "roster-create-claw") {
-                              gateway.setMethodResponse("claws.drafts.create", {
+                            } else if (actionId === "roster-create-template") {
+                              gateway.setMethodResponse("templates.drafts.create", {
                                 draftId: "native-draft",
                                 prompt: "Synthetic draft instructions",
                               });
@@ -2398,10 +2404,10 @@ try {
                               created: gateway.findRequests(
                                 actionId === "worktree-create"
                                   ? "worktrees.create"
-                                  : "claws.drafts.create",
+                                  : "templates.drafts.create",
                               ).length,
                               sent: gateway.findRequests("chat.send").length,
-                              search: gateway.findRequests("claws.catalog.search", {
+                              search: gateway.findRequests("templates.catalog.search", {
                                 query: "synthetic",
                               }).length,
                             };
@@ -2420,7 +2426,7 @@ try {
                     });
                   }
                   const activation =
-                    id === "roster-create-claw"
+                    id === "roster-create-template"
                       ? await page.evaluateHandle(() => {
                           const recorded = { at: null as number | null };
                           const capture = (event: MouseEvent) => {
@@ -2431,7 +2437,9 @@ try {
                                 .some(
                                   (member) =>
                                     member instanceof Element &&
-                                    member.matches('[role="menuitem"][data-value="create-claw"]'),
+                                    member.matches(
+                                      '[role="menuitem"][data-value="create-template"]',
+                                    ),
                                 )
                             ) {
                               recorded.at = performance.now();
@@ -2515,7 +2523,7 @@ try {
                       baseRef: "main",
                     });
                     cell.created = creationOutcome.request.params;
-                  } else if (id === "roster-create-claw") {
+                  } else if (id === "roster-create-template") {
                     assert(creationOutcome?.request && creationOutcome.sent);
                     assert.deepEqual(creationOutcome.request.params, { agentId: "main" });
                     const params = creationOutcome.sent.params;
@@ -2529,17 +2537,17 @@ try {
                     assert.equal(params.deliver, false);
                     cell.created = creationOutcome.request.params;
                     cell.sent = params;
-                  } else if (id === "claws-search" || id === "model-search-and-compose") {
+                  } else if (id === "templates-search" || id === "model-search-and-compose") {
                     const writes = await page.evaluate(() => {
                       const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
                       return {
-                        drafts: gateway.findRequests("claws.drafts.create").length,
+                        drafts: gateway.findRequests("templates.drafts.create").length,
                         sends: gateway.findRequests("chat.send").length,
                       };
                     });
                     assert.equal(writes.drafts, 0);
                     assert.equal(writes.sends, 0);
-                    if (id === "claws-search") {
+                    if (id === "templates-search") {
                       assert(creationOutcome?.request);
                       cell.search = creationOutcome.request.params;
                     } else {
@@ -2584,7 +2592,7 @@ try {
               if (
                 immediateTyping ||
                 preloadIdle ||
-                route === "claws" ||
+                route === "templates" ||
                 route === "worktrees" ||
                 route === "roster" ||
                 ((route === "chat" || route === "new-session") &&

@@ -24,6 +24,7 @@ function freshSpawnState() {
     readOnlyRoot: true,
     inspectError: "",
     createError: "",
+    imageError: "",
     labelHash: "",
     mounts: "[]",
     tmpfs: null as Record<string, string> | null,
@@ -36,6 +37,7 @@ const spawnState = freshSpawnState();
 
 const registryMocks = vi.hoisted(() => ({
   readRegistryEntry: vi.fn(),
+  readRegisteredSandboxRuntimeIds: vi.fn(),
   removeRegistryEntry: vi.fn(),
   updateRegistry: vi.fn(),
   completeSandboxRegistryReservation: vi.fn(),
@@ -145,6 +147,12 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
       return result(0, output);
     }
   }
+  if (args[0] === "image" && args[1] === "inspect" && spawnState.imageError) {
+    return result(1, "", spawnState.imageError);
+  }
+  if (args[0] === "exec" && args.at(-1) === "/proc/self/mountinfo") {
+    return result(0, "1 0 8:1 / / rw - ext4 /dev/synthetic rw\n");
+  }
   if (args[0] === "rm" && args[1] === "-f") {
     spawnState.containerExists = spawnState.inspectRunning = false;
   } else if (args[0] === "create") {
@@ -253,6 +261,7 @@ export function createSandboxContainerTestHarness() {
     Object.assign(spawnState, freshSpawnState());
     resolveDockerSourceNamespace.mockResolvedValue(undefined);
     registryMocks.readRegistryEntry.mockClear();
+    registryMocks.readRegisteredSandboxRuntimeIds.mockClear().mockResolvedValue([]);
     registryMocks.removeRegistryEntry.mockClear().mockResolvedValue(undefined);
     registryMocks.updateRegistry.mockClear().mockResolvedValue(undefined);
     registryMocks.completeSandboxRegistryReservation.mockClear().mockResolvedValue(undefined);

@@ -284,6 +284,52 @@ it("preserves literal stdio paths from add flags", async () => {
   expect(await readServer("literal")).toEqual({ command, args: ["server.mjs"], cwd });
 });
 
+it.each(["cert.pem", " cert.pem "])(
+  "preserves literal TLS client paths from add flags: %j",
+  async (name) => {
+    const clientCert = path.join(workspaceDir, name);
+    const clientKey = path.join(workspaceDir, name.replace("cert", "key"));
+    await mcp(
+      "add",
+      "literal-tls",
+      "--url",
+      "https://mcp.example.com/mcp",
+      "--client-cert",
+      clientCert,
+      "--client-key",
+      clientKey,
+      "--no-probe",
+    );
+    const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+    expect(saved.mcp.servers["literal-tls"]).toEqual({
+      url: "https://mcp.example.com/mcp",
+      clientCert,
+      clientKey,
+    });
+    expect(await readServer("literal-tls")).toEqual({
+      url: "https://mcp.example.com/mcp",
+      clientCert,
+      clientKey,
+    });
+  },
+);
+
+it("treats whitespace-only TLS client paths from add flags as absent", async () => {
+  await mcp(
+    "add",
+    "blank-tls",
+    "--url",
+    "https://mcp.example.com/mcp",
+    "--client-cert",
+    "   ",
+    "--client-key",
+    "\t",
+    "--no-probe",
+  );
+  const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+  expect(saved.mcp.servers["blank-tls"]).toEqual({ url: "https://mcp.example.com/mcp" });
+});
+
 it.each([
   { mode: "existing", script: "existing.mjs" },
   { mode: "race", script: "winner.mjs" },

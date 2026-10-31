@@ -445,11 +445,14 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       })
     : () => false;
   // Current human context reaches all harnesses without changing the stable system/tool prefix.
-  const attributionPrompt = () =>
-    `${markInboundContextLabel("PR attribution:")}
-${buildPrAttributionPrompt(
-  Boolean(requester?.isCurrent()) && attributionEnabled() && !inboundContextSessionEntry?.incognito,
-)}`;
+  const attributionPrompt = () => {
+    const prompt = buildPrAttributionPrompt(
+      Boolean(requester?.isCurrent()) &&
+        attributionEnabled() &&
+        !inboundContextSessionEntry?.incognito,
+    );
+    return prompt ? `${markInboundContextLabel("PR attribution:")}\n${prompt}` : "";
+  };
   // Synthetic turns retain routing facts without inventing user-role inbound context.
   const buildInboundContextState = () => ({
     activeGoalContext: formatActiveGoalContext(inboundContextSessionEntry),

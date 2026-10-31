@@ -9,7 +9,6 @@ import {
   normalizeRoleForGrouping,
 } from "../../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached, isToolCardError } from "../../../lib/chat/tool-cards.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
 import { isProviderVoiceTranscript } from "../chat-assistant-reply.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
@@ -288,14 +287,6 @@ export function prepareGroupedMessage(
   const expandsSingleToolCard =
     Boolean(singleToolCard) && (!markdown || standaloneToolPayload) && !hasImages;
   const failedToolCard = expandsSingleToolCard ? undefined : toolCards.find(isToolCardError);
-  const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
-  const duplicateSuffix =
-    duplicateCount > 1
-      ? {
-          count: duplicateCount,
-          label: t("chat.messages.duplicatesCollapsed", { count: String(duplicateCount) }),
-        }
-      : undefined;
 
   // Pure tool messages (no text/images/attachments) skip the "Tool output"
   // shell and render as flat kind-aware rows, one disclosure level deep.
@@ -344,8 +335,6 @@ export function prepareGroupedMessage(
     renderInOrder,
     expandsSingleToolCard,
     failedToolCard,
-    duplicateCount,
-    duplicateSuffix,
     onlyToolCards,
     toolRenderOptions,
   };

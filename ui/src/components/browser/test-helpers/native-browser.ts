@@ -2,6 +2,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 import type * as Bridge from "../../../app/native-browser-bridge.ts";
 import { createFrameClock } from "../../../test-helpers/animation-frame-clock.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { preserveDocumentStyle } from "../../../test-helpers/preserve-document-style.ts";
 import { stubResizeObserver } from "../../../test-helpers/resize-observer.ts";
 import { createStorageMock } from "../../../test-helpers/storage.ts";
 import {
@@ -116,6 +117,7 @@ export function setupNativeBrowserPanelTests() {
   }
 
   beforeEach(() => {
+    preserveDocumentStyle();
     clock = createFrameClock();
     hit = null;
     vi.stubGlobal("localStorage", createStorageMock());

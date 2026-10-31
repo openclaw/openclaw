@@ -1,7 +1,11 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronRunLogEntry } from "../../api/types.ts";
-import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "../../e2e/control-ui-built-module.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({
@@ -43,6 +47,70 @@ async function openRunHistory(page: Page) {
 }
 
 suite.define(() => {
+  it("opens and focuses the transcript region while its feed loads", async () => {
+    await suite.withPage({ viewport: { width: 1100, height: 900 } }, async ({ page }) => {
+      const held = await holdModuleResponse(
+        page,
+        controlUiE2eBuiltModuleRequest(
+          "ui/src/pages/chat/components/chat-transcript-feed-view.tsx",
+        ),
+      );
+      try {
+        await installCron(page, { "cron.history": history("Delayed transcript output") });
+        await page.getByRole("tab", { name: "Run history", exact: true }).waitFor();
+        expect(held.requests()).toBe(0);
+        const { button, region } = await openRunHistory(page);
+        await held.request;
+        await region.getByRole("status").waitFor();
+        await expect
+          .poll(() => region.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        const original = await region.elementHandle();
+        held.release();
+        await exactText(region, "Delayed transcript output").waitFor();
+        expect(
+          await original?.evaluate(
+            (element) => element === document.querySelector("[data-cron-run-transcript]"),
+          ),
+        ).toBe(true);
+        await buttonNamed(region, "Close").click();
+        expect(await region.count()).toBe(0);
+        expect(await button.evaluate((element) => element === document.activeElement)).toBe(true);
+      } finally {
+        held.release();
+      }
+    });
+  });
+
+  it("recovers a failed feed import through the guarded document reload", async () => {
+    await suite.withPage({ viewport: { width: 1100, height: 900 } }, async ({ page }) => {
+      const feedModule = controlUiE2eBuiltModuleRequest(
+        "ui/src/pages/chat/components/chat-transcript-feed-view.tsx",
+      );
+      let requests = 0;
+      await page.route(feedModule, (route) =>
+        ++requests === 1 ? route.abort("internetdisconnected") : route.fallback(),
+      );
+      const gateway = await installCron(page, {
+        "cron.history": history("Recovered transcript output"),
+      });
+      const reload = page.waitForEvent("framenavigated", {
+        predicate: (frame) =>
+          frame === page.mainFrame() && frame.url().includes("openclaw_mount_recovery="),
+      });
+      await openRunHistory(page);
+      await reload;
+      const { button, region } = await openRunHistory(page);
+      await exactText(region, "Recovered transcript output").waitFor();
+      expect(requests).toBe(2);
+      expect((await gateway.getRequests("cron.history")).map(({ params }) => params)).toEqual([
+        { id: entry.jobId, runAtMs: entry.runAtMs, limit: 100 },
+      ]);
+      await buttonNamed(region, "Close").click();
+      expect(await button.evaluate((element) => element === document.activeElement)).toBe(true);
+    });
+  });
+
   it("opens and pages the exact recorded run using runId", async () => {
     await suite.withPage({ viewport: { width: 1100, height: 900 } }, async ({ page }) => {
       const identity = { id: entry.jobId, runId: "recorded-run", limit: 100 };

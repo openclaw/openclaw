@@ -41,6 +41,21 @@ describe("FilterableSelectList", () => {
     expect(select(list)?.value).toBe("kilo");
   });
 
+  it.each(["label", "description", "searchText"] as const)(
+    "matches canonical Unicode in %s without changing the value",
+    (field) => {
+      for (const [stored, query] of [
+        ["Café".normalize("NFD"), "Café"],
+        ["Café", "Café".normalize("NFD")],
+      ] as const) {
+        const value = "original-value";
+        const list = createList([{ value, label: "session", [field]: stored }]);
+        typeText(list, query);
+        expect(select(list)?.value).toBe(value);
+      }
+    },
+  );
+
   it("preserves arrow and Ctrl-key navigation", () => {
     const list = createList();
 

@@ -259,6 +259,7 @@ export function resetRunnerTestState() {
     },
   ];
   vi.clearAllMocks();
+  mocks.startGatewayClientWhenEventLoopReady.mockReset().mockResolvedValue(mocks.readiness(false));
   mocks.loadNodeHostConfig.mockReset().mockResolvedValue(null);
   mocks.loadDeviceAuthTokenReadOnly.mockReset().mockResolvedValue(null);
   mocks.loadDeviceIdentityIfPresent.mockReset().mockResolvedValue(null);
@@ -266,10 +267,6 @@ export function resetRunnerTestState() {
 }
 
 export { loadResumableNodeHostGateway, mocks, runNodeHost, startNodeHostMcpManager };
-
-export function readyNodeHost() {
-  mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce(mocks.readiness(true));
-}
 
 export async function withReadyNodeHost(
   runTest: (host: {
@@ -280,11 +277,12 @@ export async function withReadyNodeHost(
   }) => Promise<void>,
   options: Partial<Parameters<typeof runNodeHost>[0]> = {},
   beforeStop?: () => void,
+  start = runNodeHost,
 ) {
-  readyNodeHost();
+  mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce(mocks.readiness(true));
   const on = vi.spyOn(process, "on");
   const previousExitCode = process.exitCode;
-  const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789, ...options });
+  const running = start({ gatewayHost: "127.0.0.1", gatewayPort: 18789, ...options });
   const stop = () => {
     const listener = on.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
     listener?.("SIGTERM");

@@ -109,7 +109,16 @@ export function createCrabboxWorkerProvider(
     resolveBinary: async (...args) => (await resolveBinary(...args)).binary,
     warn,
   });
+  const activeProvisions = new Set<{ leaseId: string }>();
   const warmImages = createCrabboxWarmImageManager({
+    isLeaseActive: (leaseId) => {
+      for (const owner of activeProvisions) {
+        if (owner.leaseId === leaseId) {
+          return true;
+        }
+      }
+      return false;
+    },
     state: dependencies.state,
     warn,
     info: dependencies.info,
@@ -207,9 +216,13 @@ export function createCrabboxWorkerProvider(
       ? CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS
       : CRABBOX_WARMUP_TIMEOUT_MS;
     const protectedSetup = Object.keys(parsed.setupSecrets ?? {}).length > 0;
-    const project = parsed.warmImage || protectedSetup ? options?.project : undefined;
+    const project = supportsCrabboxProjectPreparation(profile, options?.machineClass, options?.os)
+      ? options?.project
+      : undefined;
     if (options?.project?.preparation && !project) {
-      throw new WorkerProviderError("Crabbox prepared workers require warm images");
+      throw new WorkerProviderError(
+        "Crabbox prepared workers require warm images, protected setup, or a configured Linux Sandbox disk",
+      );
     }
     const preparationSignal = AbortSignal.any([
       providerAbort.signal,
@@ -250,7 +263,7 @@ export function createCrabboxWorkerProvider(
       await assertAwsWorkerHasNoInstanceProfile({ binary, signal });
     }
 
-    return async () => {
+    const provision = async () => {
       assertCurrent();
       // Completed setup can survive a crash before its capture requirement returns.
       // Sample before allocate creates the first-call record; enrolled replay stays closed.
@@ -555,6 +568,16 @@ export function createCrabboxWorkerProvider(
         if (!provisioned) {
           await heartbeats.stop(leaseId);
         }
+      }
+    };
+    return async () => {
+      // An admitted dispatch may not have created its lease yet; absence cannot release its hold.
+      const owner = { leaseId };
+      activeProvisions.add(owner);
+      try {
+        return await provision();
+      } finally {
+        activeProvisions.delete(owner);
       }
     };
   };

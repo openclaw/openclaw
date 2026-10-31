@@ -115,19 +115,15 @@ it("commits unchanged authorization without main-thread SQLite and keeps its cap
   expect(calls.count()).toBe(0);
   vi.restoreAllMocks();
   const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-  try {
-    expect(assertCurrent).not.toThrow();
-    expect(sql.queries).toEqual([]);
-    writeExecApprovalsConfigRow({
-      db: source.db,
-      file: { version: 1, defaults: { security: "deny" } },
-    });
-    sql.queries.length = 0;
-    expect(assertCurrent).toThrow("Exec approval changed before execution");
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
+  expect(assertCurrent).not.toThrow();
+  expect(sql.queries).toEqual([]);
+  writeExecApprovalsConfigRow({
+    db: source.db,
+    file: { version: 1, defaults: { security: "deny" } },
+  });
+  sql.queries.length = 0;
+  expect(assertCurrent).toThrow("Exec approval changed before execution");
+  expect(sql.queries).toEqual([]);
   expect(fs.existsSync(foreign.databasePath)).toBe(false);
 });
 
@@ -158,20 +154,15 @@ it("settles batched usage commits in order while isolating refused authorization
       lastUsedAt: expect.any(Number),
     }),
   ]);
-  for (const result of outcomes) {
-    if (result.status === "fulfilled") {
-      expect(result.value).not.toThrow();
-    }
-  }
+  const guards = outcomes.flatMap((result) =>
+    result.status === "fulfilled" ? [result.value] : [],
+  );
+  guards.forEach((guard) => expect(guard).not.toThrow());
   let checkedPendingPolicy = false;
   const release = execApprovalsPublication.subscribeFacts((change) => {
     if (change.kind === "pending") {
       checkedPendingPolicy = true;
-      for (const result of outcomes) {
-        if (result.status === "fulfilled") {
-          expect(result.value).toThrow("changing before execution");
-        }
-      }
+      guards.forEach((guard) => expect(guard).toThrow("changing before execution"));
     }
   });
   try {
@@ -183,16 +174,8 @@ it("settles batched usage commits in order while isolating refused authorization
   }
   expect(checkedPendingPolicy).toBe(true);
   const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-  try {
-    for (const result of outcomes) {
-      if (result.status === "fulfilled") {
-        expect(result.value).toThrow("Exec approval changed before execution");
-      }
-    }
-    expect(reads.queries).toEqual([]);
-  } finally {
-    reads.restore();
-  }
+  guards.forEach((guard) => expect(guard).toThrow("Exec approval changed before execution"));
+  expect(reads.queries).toEqual([]);
 });
 
 it("keeps independent authorization scopes isolated after settlement", async () => {

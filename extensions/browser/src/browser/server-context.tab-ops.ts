@@ -461,8 +461,8 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             url: createdViaCdp.finalUrl,
             ...ssrfPolicyOpts,
           });
-          const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
-          while (Date.now() < deadline) {
+          const deadline = performance.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
+          while (performance.now() < deadline) {
             opts?.signal?.throwIfAborted();
             const tabs = await readTabs(opts).catch(() => [] as BrowserTab[]);
             const found = tabs.find((t) => t.targetId === createdViaCdp.targetId);

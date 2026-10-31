@@ -15,10 +15,7 @@ import {
 import { listManagedPluginNpmRootsForInstallRecords } from "../../../plugins/installed-plugin-npm-roots.js";
 import type { PluginPayloadSmokeFailure } from "../../../plugins/payload-verification.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
-import {
-  reconcileRegisteredOpenClawHostLinks,
-  relinkOpenClawPeerDependenciesInManagedNpmRoot,
-} from "../../../plugins/plugin-peer-link.js";
+import { repairInstalledOpenClawHostLinks } from "../../../plugins/plugin-peer-link.js";
 import { detectPluginVersionDrift } from "../../../plugins/plugin-version-drift.js";
 import { pruneStaleLocalBundledPluginInstallRecords } from "../../../plugins/stale-local-bundled-plugin-install-records.js";
 import type { PluginUpdateOutcome } from "../../../plugins/update.js";
@@ -193,44 +190,27 @@ async function runPostCorePluginConvergenceWithLease(
       installRecords: hostLinkInstallRecords,
       env,
     });
-    const results = await Promise.allSettled(
-      npmRoots.map((npmRoot) =>
-        relinkOpenClawPeerDependenciesInManagedNpmRoot({
-          npmRoot,
-          beforePersistentApply: beforePersistentEffect,
-          logger: {},
-          onPackageReadError,
-        }),
-      ),
-    );
-    // Join every admitted repair before rejecting; siblings must not keep
-    // mutating after convergence has reported authority loss.
-    if (effectFailure) {
-      throw effectFailure.error;
-    }
-    let repaired = 0;
-    for (const result of results) {
-      if (result.status === "rejected") {
-        throw result.reason;
-      }
-      repaired += result.value.repaired;
-    }
-    // Registered npm, ClawHub, and archive installs also live under extensions/, outside managed npm roots.
-    const registeredRepair = await reconcileRegisteredOpenClawHostLinks({
+    const { managedRepaired, registeredRepaired } = await repairInstalledOpenClawHostLinks({
+      managedNpmRoots: npmRoots,
       installRecords: hostLinkInstallRecords,
       extensionsDir: resolveDefaultPluginExtensionsDir(env),
       env,
-      mode: "repair",
       beforePersistentApply: beforePersistentEffect,
+      logger: {},
       onPackageReadError,
     });
+    if (effectFailure) {
+      throw effectFailure.error;
+    }
     peerLinkChanges = [
-      ...(repaired > 0
-        ? [`Repaired OpenClaw host peer link(s) for ${repaired} managed npm plugin package(s).`]
-        : []),
-      ...(registeredRepair.repaired > 0
+      ...(managedRepaired > 0
         ? [
-            `Repaired OpenClaw host peer link(s) for ${registeredRepair.repaired} registered plugin package(s).`,
+            `Repaired OpenClaw host peer link(s) for ${managedRepaired} managed npm plugin package(s).`,
+          ]
+        : []),
+      ...(registeredRepaired > 0
+        ? [
+            `Repaired OpenClaw host peer link(s) for ${registeredRepaired} registered plugin package(s).`,
           ]
         : []),
     ];

@@ -78,6 +78,8 @@ export type PluginToolRegistration = PluginRegistrationOwner & {
   declaredNames?: ReadonlySet<string>;
   optional: boolean;
   workspaceAccess?: boolean | "execute";
+  /** Shown only while one of `names` is callable; see listToolPromptGuidance. */
+  promptGuidance?: string;
   /** Loader-owned provenance. Missing values are conservative legacy registrations. */
   origin?: PluginOrigin;
 };
@@ -189,6 +191,8 @@ export type PluginSessionActionRegistryRegistration = PluginRegistrationOwner & 
 
 export type PluginRecord = {
   id: string;
+  /** Manifest opt-in; the replacement owner also checks registered resource surfaces. */
+  generationOverlap?: boolean;
   nativeSessionCatalog?: PluginManifestNativeSessionCatalogSetup;
   name: string;
   packageVersion?: string;
@@ -239,6 +243,8 @@ export type PluginRecord = {
   migrationProviderIds: string[];
   contextEngineIds?: string[];
   declaredContextEngineIds?: readonly string[];
+  /** Manifest `reload.turnHandover`: a reload hands this generation's running turns to the next one. */
+  turnHandover?: boolean;
   agentHarnessIds: string[];
   cliCommands: string[];
   services: string[];

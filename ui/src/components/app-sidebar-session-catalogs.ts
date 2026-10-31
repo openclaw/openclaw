@@ -32,14 +32,16 @@ export function catalogSessionActivity(
   liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
   isRunVisuallyActive: (row: GatewaySessionRow) => boolean,
 ) {
-  const rows = sessions.flatMap((session) => {
+  let running = false;
+  let unread = false;
+  for (const session of sessions) {
     const row = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
-    return row ? [row] : [];
-  });
-  return {
-    running: rows.some(isRunVisuallyActive),
-    unread: rows.some((row) => row.unread === true),
-  };
+    running ||= row
+      ? isRunVisuallyActive(row) || (row.backgroundProcessCount ?? 0) > 0
+      : session.status === "active" || session.status === "running";
+    unread ||= row?.unread === true;
+  }
+  return { running, unread };
 }
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {

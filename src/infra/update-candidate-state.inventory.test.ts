@@ -86,6 +86,7 @@ describe("snapshot inventory", () => {
 
   it.each([
     "missing plugin dependency",
+    "missing plugin dependency in WAL",
     "install record",
     "locator symlink",
     "database registration",
@@ -185,26 +186,32 @@ describe("snapshot inventory", () => {
       expect(message).toContain("Check access to the reported source");
       expect(message).not.toContain("Check database access");
     };
-    if (change === "missing plugin dependency") {
+    if (change.startsWith("missing plugin dependency")) {
       // An external missing target must fail inventory rather than survive as an internal link.
       await fs.symlink(
         path.join(root, "missing-dependency"),
         path.join(path.dirname(initial.directory), "missing"),
         "junction",
       );
+      using db = openNodeSqliteDatabase(shared);
+      db.exec(
+        change.endsWith("WAL")
+          ? "PRAGMA journal_mode=WAL; CREATE TABLE committed_wal(value);"
+          : "PRAGMA journal_mode=DELETE;",
+      );
       const sourceDatabase = await fs.readFile(shared);
+      const wal = change.endsWith("WAL") ? await fs.readFile(`${shared}-wal`) : undefined;
       const inventoried = await run("inventory");
       expect(inventoried.code).not.toBe(0);
       expect(inventoried.stderr.toString("utf8")).toContain(
         "Cannot privately copy plugin dependency",
       );
-      expect(inventoried.progress).toContainEqual(
-        expect.objectContaining({
-          phase: "shared database snapshot",
-          snapshot: expect.objectContaining({ status: "completed" }),
-        }),
-      );
+      // Metadata inventory must not copy the whole store before discovering this failure.
+      expect(inventoried.progress.some((progress) => progress.snapshot !== undefined)).toBe(false);
       expect((await fs.readFile(shared)).equals(sourceDatabase)).toBe(true);
+      if (wal) {
+        expect(await fs.readFile(`${shared}-wal`)).toEqual(wal);
+      }
       expectFailurePhase(inventoried, "plugin inventory");
       return;
     }
@@ -279,9 +286,11 @@ describe("snapshot legacy cron identity", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["original", "moved", "released envelope", "explicit config"])(
-    "preserves source cron partition selection (%s)",
+  it.each(["original", "moved", "released envelope", "bound released envelope", "explicit config"])(
+    "preserves only proven source cron partition selection (%s)",
     async (selector) => {
+      const released = selector.includes("released envelope");
+      const bound = selector === "bound released envelope";
       const root = await fs.realpath(dirs.make("candidate-cron-identity-"));
       const stateDir = path.join(root, "source");
       const targetStateDir = path.join(root, "rehearsal");
@@ -292,7 +301,7 @@ describe("snapshot legacy cron identity", () => {
       const storeKey = path.join(
         selector === "moved"
           ? path.join(root, "prior")
-          : selector === "explicit config"
+          : selector === "explicit config" || bound
             ? configDir
             : stateDir,
         "cron",
@@ -308,23 +317,29 @@ describe("snapshot legacy cron identity", () => {
         (store_key, job_id, content, revision, updated_at_ms) VALUES (?, 'retained', NULL, 1, 1)`).run(
           storeKey,
         );
-        if (selector === "explicit config") {
+        if (selector === "explicit config" || bound) {
           db.prepare(`INSERT INTO cron_job_scratch
           (store_key, job_id, content, revision, updated_at_ms) VALUES (?, 'custom', NULL, 1, 1)`).run(
             path.join(stateDir, "cron", "jobs.json"),
           );
         }
+        if (bound) {
+          db.prepare(`INSERT INTO config_machine_state
+          (state_key, value_json, updated_at_ms) VALUES ('cron.defaultStoreKey', ?, 1)`).run(
+            JSON.stringify(storeKey),
+          );
+        }
       }
       const original = await fs.readFile(source);
       const input = createStateSnapshotInput(root, stateDir, targetStateDir);
-      if (selector === "released envelope" || selector === "explicit config") {
+      if (released || selector === "explicit config") {
         vi.stubEnv("OPENCLAW_STATE_DIR", targetStateDir);
         vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(targetStateDir, "openclaw.json"));
       }
       await runUpdateCandidateSnapshotWorker({
         ...input,
         // Released parents omit source selectors and launch with the rehearsal environment.
-        ...(selector === "released envelope" || selector === "explicit config"
+        ...(released || selector === "explicit config"
           ? {
               env: {
                 HOME: root,
@@ -345,7 +360,9 @@ describe("snapshot legacy cron identity", () => {
         ),
       );
       expect(selection).toMatchObject(
-        selector === "moved" ? { status: "unresolved" } : { status: "ready", storeKey },
+        selector === "moved" || selector === "released envelope"
+          ? { status: "unresolved" }
+          : { status: "ready", storeKey },
       );
       expect(await fs.readFile(source)).toEqual(original);
     },

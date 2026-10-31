@@ -14,6 +14,9 @@ export async function resolveSessionDiffBase(params: {
   gitOut: GitOutput;
   root: string;
 }): Promise<{ base: string; baseRef: string }> {
+  if (!params.branch) {
+    return { base: params.head, baseRef: "HEAD" };
+  }
   const defaultRef = await params.gitOut(params.root, [
     "symbolic-ref",
     "--short",
@@ -21,14 +24,14 @@ export async function resolveSessionDiffBase(params: {
   ]);
   const remoteDefault = defaultRef?.trim() || null;
   const defaultShort = remoteDefault?.replace(/^origin\//, "");
-  if (remoteDefault && defaultShort && params.branch && params.branch !== defaultShort) {
+  if (remoteDefault && defaultShort && params.branch !== defaultShort) {
     const mergeBase = await params.gitOut(params.root, ["merge-base", remoteDefault, params.head]);
     if (mergeBase?.trim()) {
       return { base: mergeBase.trim(), baseRef: defaultShort };
     }
   }
   // Plain clones without origin/HEAD still get a branch-relative diff.
-  if (params.branch && params.branch !== "main" && params.branch !== "master") {
+  if (params.branch !== "main" && params.branch !== "master") {
     for (const candidate of ["main", "master", "origin/main", "origin/master"]) {
       const mergeBase = await params.gitOut(params.root, ["merge-base", candidate, params.head]);
       if (mergeBase?.trim()) {

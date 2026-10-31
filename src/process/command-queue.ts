@@ -208,13 +208,16 @@ function drainLane(
           },
           (err: unknown) => {
             entry.reject(err);
-            const isProbeLane = isQuietProbeLane(lane);
-            if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
+            const quietFailure =
+              isQuietProbeLane(lane) ||
+              (entry.taskIdentity?.modelFallbackCandidate &&
+                readErrorName(err) === "FailoverError");
+            if (!quietFailure && !isExpectedNonErrorLaneFailure(err)) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error=${JSON.stringify(formatErrorMessage(err))}`,
                 { errorName: readErrorName(err) || undefined, ...entry.taskIdentity },
               );
-            } else if (!isProbeLane) {
+            } else if (!quietFailure) {
               diag.debug(
                 `lane task interrupted: lane=${lane} durationMs=${Date.now() - startTime} reason="${String(err)}"`,
               );

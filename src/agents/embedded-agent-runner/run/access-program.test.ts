@@ -3,6 +3,10 @@ import { fetchWithSsrFGuard } from "../../../infra/net/fetch-guard.js";
 import { withGuardedFetchBeforeRequest } from "../../../infra/net/fetch-request-authority.js";
 import type { ProviderPlugin } from "../../../plugins/types.js";
 import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  prepareSystemAgentRunAdmission,
+} from "../../admitted-run-context.js";
 import type { OAuthCredential } from "../../auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "../../model-catalog.types.js";
 import { setPreparedModelFullCatalogAuth } from "../../prepared-model-runtime-auth.js";
@@ -158,3 +162,62 @@ it.each(["current", "revoked", "reassigned"])(
     }
   },
 );
+
+it("enforces role grants for configured defaults without overriding explicit Standard", async () => {
+  const authority = createAdmittedRunOperatorAuthority({
+    profileId: "access-default-fixture",
+    scopes: ["operator.admin"],
+    rolePolicy: { sessionAccessCap: "none", sandboxRequired: false, agents: "*" },
+    assertCurrent() {},
+  });
+  const admission = prepareSystemAgentRunAdmission(
+    {},
+    "access-default",
+    "main",
+    "test",
+    undefined,
+    authority,
+  );
+  try {
+    const attempt = {
+      ...attemptWith(discovered),
+      cyberAccessProgram: undefined,
+      admittedRunContext: await admission.admit("embedded"),
+    };
+    const configured = { accessPrograms: { cyber: "daybreak_blue" } };
+    await expect(prepareEmbeddedAccessProgramGuard(attempt, configured)).rejects.toThrow(
+      "operator role cannot use this Access level",
+    );
+    await expect(
+      prepareEmbeddedAccessProgramGuard({ ...attempt, cyberAccessProgram: "standard" }, configured),
+    ).resolves.toBeTypeOf("function");
+    await expect(
+      prepareEmbeddedAccessProgramGuard(attempt, { accessPrograms: {} }),
+    ).resolves.toBeTypeOf("function");
+  } finally {
+    admission.close();
+  }
+});
+
+it("checks account authority for a configured default before final provider I/O", async () => {
+  const attempt = { ...attemptWith(discovered), cyberAccessProgram: undefined };
+  let current = true;
+  attempt.preparedModelRuntime = { ...attempt.preparedModelRuntime!, isCurrent: () => current };
+  const check = await prepareEmbeddedAccessProgramGuard(attempt, {
+    accessPrograms: { cyber: "daybreak_blue" },
+  });
+  const fetchImpl = vi.fn(async () => new Response("ok"));
+  await expect(
+    withGuardedFetchBeforeRequest(check, () =>
+      fetchWithSsrFGuard({
+        url: "https://public.example/response",
+        lookupFn: async () => {
+          current = false;
+          return [{ address: "93.184.216.34", family: 4 }];
+        },
+        fetchImpl,
+      }),
+    ),
+  ).rejects.toMatchObject({ code: "OPENAI_ACCESS_PROGRAM_UNAVAILABLE" });
+  expect(fetchImpl).not.toHaveBeenCalled();
+});

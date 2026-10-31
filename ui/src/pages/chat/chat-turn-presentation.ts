@@ -302,7 +302,7 @@ export function collapseCompletedTurnWork(
       if (
         index !== finalReplyIndex &&
         isCollapsibleWorkGroup(item) &&
-        (index < finalReplyIndex || !groupHasFailedResult(item))
+        (index < finalReplyIndex || (!groupHasFailedResult(item) && !groupEndsRunInFailure(item)))
       ) {
         groups.push(item);
         if (precedingAnswerKey) {

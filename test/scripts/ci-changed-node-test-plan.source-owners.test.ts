@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -17,27 +16,21 @@ import {
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import {
   gatewayCallsitesGuard,
+  createFixtureGit,
   createChangedNodeTestShards,
   materializeGatewayCallsitesFixture,
   selectedFiles,
   fallbackGroups,
   expectProtectedOwnerExpansion,
+  writeFiles,
 } from "./ci-changed-node-test-plan.test-support.js";
 
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const sourcePolicyTest = "src/infra/fs-safe-import-boundary.test.ts";
 const lintSuppressionInventory = "test/scripts/lint-suppressions.test.ts";
-
-function writeFiles(cwd: string, files: Record<string, string>) {
-  for (const [file, source] of Object.entries(files)) {
-    mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-    writeFileSync(path.join(cwd, file), source);
-  }
-}
 
 function createSourceFixture(prefix: string, files: Record<string, string>) {
   const cwd = argvTempDirs.make(prefix);
@@ -86,22 +79,7 @@ function createErasedCoreSourceFixture() {
     "src/example/runtime-before.ts": "export const value = 1;\n",
   });
   materializeGatewayCallsitesFixture(cwd);
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.test",
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "core.hooksPath=/dev/null",
-        ...args,
-      ],
-      { cwd, env: createNestedGitEnv(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
+  const git = createFixtureGit(cwd);
   git("init", "--quiet");
   git("add", ".");
   git("commit", "--quiet", "-m", "fixture baseline");
@@ -431,7 +409,7 @@ describe("CI changed Node test plan", () => {
   });
 
   it("runs a boundary target once through its local owner", () => {
-    const target = "test/extension-import-boundaries.test.ts";
+    const target = "test/plugin-extension-import-boundary.test.ts";
     const runnerBackend = "blacksmith";
     expect(createChangedNodeTestShards([target], { runnerBackend })).toEqual([
       {
@@ -455,7 +433,7 @@ describe("CI changed Node test plan", () => {
 
   it("leaves explicit boundary coverage with the selected artifact owner", () => {
     const companion = "src/agents/live-provider-owner.ts";
-    const target = "test/extension-import-boundaries.test.ts";
+    const target = "test/plugin-extension-import-boundary.test.ts";
     const options = { dedicatedBuildArtifacts: true };
     const shards = createChangedNodeTestShards([target, companion], options);
     expect(shards).not.toBeNull();
@@ -528,6 +506,12 @@ describe("CI changed Node test plan", () => {
     );
   });
 
+  it("keeps the extracted session database collection proof protected", () => {
+    expect(PR_PROTECTED_RUNTIME_TEST_FILES).toContain(
+      "src/gateway/session-database-retention.test.ts",
+    );
+  });
+
   it("keeps policy scanners beside ordinary importers without claiming complete source ownership", () => {
     const source = "src/test-utils/runtime.ts";
     const consumer = "src/example/runtime.test.ts";
@@ -535,6 +519,7 @@ describe("CI changed Node test plan", () => {
     const createFixture = () =>
       createSourceFixture("changed-policy-scanner-", {
         [source]: "export const value = 1;\n",
+        "src/example/runtime.ts": "export const value = 1;\n",
         [consumer]: 'import "../test-utils/runtime.js";\n',
         [unowned]: "export {};\n",
       });
@@ -566,13 +551,13 @@ describe("CI changed Node test plan", () => {
       "test/scripts/plugin-sdk-surface-report.test.ts",
       lintSuppressionInventory,
     ];
-    expect(resolvePolicyTestTargets([source])).toEqual([
+    expect(resolvePolicyTestTargets([source], { cwd })).toEqual([
       ...sourceInventories,
       gatewayCallsitesGuard,
       sourcePolicyTest,
     ]);
-    expect(resolvePolicyTestTargets([source], { completeOwnersOnly: true })).toEqual([]);
-    expect(resolvePolicyTestTargets(["src/example/runtime.ts"])).toEqual([
+    expect(resolvePolicyTestTargets([source], { cwd, completeOwnersOnly: true })).toEqual([]);
+    expect(resolvePolicyTestTargets(["src/example/runtime.ts"], { cwd })).toEqual([
       ...sourceInventories,
       gatewayCallsitesGuard,
     ]);
@@ -722,11 +707,22 @@ describe("CI changed Node test plan", () => {
     // Child-process E2Es: the import graph reaches only the test-instance helper.
     {
       changedPath: "src/gateway/server-startup-observers.ts",
-      expected: ["test/gateway-background-process-restart.e2e.test.ts"],
+      expected: ["test/gateway-restart-resume.e2e.test.ts"],
     },
     {
       changedPath: "src/process/command-queue.capacity-groups.ts",
       expected: ["test/gateway-hook-concurrency.e2e.test.ts"],
+    },
+    {
+      changedPath: "src/sessions/session-controller.steer.ts",
+      expected: [
+        "test/gateway-restart-resume.e2e.test.ts",
+        "test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts",
+      ],
+    },
+    {
+      changedPath: "src/auto-reply/reply/queue/drain.ts",
+      expected: ["test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts"],
     },
     {
       changedPath: "node-runtime-recovery.mjs",

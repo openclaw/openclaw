@@ -135,7 +135,7 @@ it.each(["doctor", "convergence", "error", "retained recovery"] as const)(
       mocks[phase].mockRejectedValueOnce(new Error("failed"));
     }
     await expect(repair()).rejects.toThrow(
-      phase === "retained recovery" ? "full-state recovery is deferred" : undefined,
+      phase === "retained recovery" ? "Interrupted shared-database publication left" : undefined,
     );
     if (phase === "retained recovery") {
       expect(mocks.doctor).not.toHaveBeenCalled();

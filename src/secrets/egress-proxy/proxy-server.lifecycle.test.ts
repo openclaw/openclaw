@@ -22,7 +22,7 @@ import {
 } from "./proxy-server.js";
 
 vi.mock("node:https", { spy: true });
-vi.mock("node:http", { spy: true });
+vi.mock("node:http", async (importOriginal) => ({ ...(await importOriginal<typeof http>()) }));
 
 const value = "synthetic-lifecycle-credential";
 const seedDirs = createTempDirTracker();

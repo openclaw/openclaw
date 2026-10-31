@@ -42,6 +42,14 @@ async function drainStream(stream: FakeWrappedStream) {
   }
 }
 
+async function readStream(wrapped: StreamFn, drain = true) {
+  const stream = await wrapped({} as never, {} as never, {} as never);
+  if (drain) {
+    await drainStream(stream);
+  }
+  return (await stream.result()) as ToolStreamMessage;
+}
+
 function textUser(text: string) {
   return { role: "user", content: [{ type: "text", text }] };
 }
@@ -118,17 +126,11 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
   });
 
   it("summarizes unknown structured data before JSON serialization", () => {
-    const result = mergeOrphan({
-      content: [
-        {
-          type: "unknown_content",
-          nested: {
-            inline: `data:image/png;base64,${"a".repeat(10_000)}`,
-            longText: "b".repeat(2_000),
-          },
-        },
-      ],
-    });
+    const nested = {
+      inline: `data:image/png;base64,${"a".repeat(10_000)}`,
+      longText: "b".repeat(2_000),
+    };
+    const result = mergeOrphan({ content: [{ type: "unknown_content", nested }] });
     expect(result).toMatchObject({ merged: true, removeLeaf: false });
     expect(result.prompt).toContain("[value] inline data URI (image/png, 10022 chars)");
     expect(result.prompt).toContain("bbbb");
@@ -176,10 +178,9 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   ) {
     const finalMessage = sparseAssistant(Array.isArray(call) ? call : [call]);
     const baseFn = fakeBaseStream(finalMessage, events);
-    const wrapped = wrapStreamFnTrimToolCallNames(baseFn as never, allowed, guardOptions);
-    const stream = await wrapped({} as never, {} as never, {} as never);
-    await drainStream(stream);
-    const result = (await stream.result()) as ToolStreamMessage;
+    const result = await readStream(
+      wrapStreamFnTrimToolCallNames(baseFn as never, allowed, guardOptions),
+    );
     return { result, finalMessage };
   }
 
@@ -198,17 +199,12 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     ]);
     const message = calls(["exec' parameter='command' string='true", "allowedTool>suffix"]);
     const final = calls(["qualified/write<parameter=path"]);
-    const finalMessage = sparseAssistant(final);
-    const baseFn = fakeBaseStream(finalMessage, [
-      { ...toolDelta("partial", partial), message: sparseAssistant(message) },
-    ]);
-    const wrapped = wrapStreamFnTrimToolCallNames(
-      baseFn as never,
+    const { result, finalMessage } = await runCall(
+      final,
       new Set(["read", "write", "exec", "qualified.write", "allowedTool"]),
+      [{ ...toolDelta("partial", partial), message: sparseAssistant(message) }],
     );
-    const stream = await wrapped({} as never, {} as never, {} as never);
-    await drainStream(stream);
-    expect(await stream.result()).toBe(finalMessage);
+    expect(result).toBe(finalMessage);
     expect([...partial, ...message, ...final].map((call) => call.name)).toEqual([
       "read",
       'unknown" parameter="value" string="true',
@@ -246,15 +242,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(allowedTools), {
       unknownToolThreshold: 1,
     });
-    return () => Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-  }
-
-  async function nextResult(nextStream: () => Promise<FakeWrappedStream>, drain = false) {
-    const stream = await nextStream();
-    if (drain) {
-      await drainStream(stream);
-    }
-    return (await stream.result()) as ToolStreamMessage;
+    return (drain = false) => readStream(wrappedFn, drain);
   }
 
   function frame(resultMessage: unknown, ...messages: string[][]) {
@@ -302,9 +290,9 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   `("$name", async ({ tools, frames, drain, text, expected }: RetryCase) => {
     const next = sequenceStreams(tools, frames);
     for (const readEvents of drain.slice(0, -1)) {
-      await nextResult(next, readEvents);
+      await next(readEvents);
     }
-    const result = await nextResult(next, drain.at(-1));
+    const result = await next(drain.at(-1));
     expect(result.role).toBe("assistant");
     if (text) {
       expectSingleTextContent(result.content, expected);
@@ -416,7 +404,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
   };
   const signedPolicy = { ...anthropicPolicy, preserveSignatures: true };
 
-  async function replayContext(
+  async function replay(
     messages: unknown[],
     allowedToolNames?: Set<string>,
     policy?: Parameters<typeof wrapStreamFnSanitizeMalformedToolCalls>[2],
@@ -431,15 +419,15 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       policy,
     );
     await wrapped((api ? { api } : {}) as never, { messages } as never, {} as never);
-    return baseFn.mock.calls[0]![1];
+    return baseFn.mock.calls[0]![1].messages;
   }
   function replaySigned(messages: unknown[], api = "anthropic-messages") {
-    return replayContext(messages, new Set(["read"]), signedPolicy, api);
+    return replay(messages, new Set(["read"]), signedPolicy, api);
   }
 
   it("strips trailing assistant prefill turns for Gemini outbound replay", async () => {
     const messages = [textUser("earlier question"), textAssistant("stale model answer")];
-    const seenContext = await replayContext(
+    const seen = await replay(
       messages,
       new Set(["read"]),
       {
@@ -450,30 +438,20 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       },
       "google-generative-ai",
     );
-    expect(seenContext.messages).toEqual([textUser("earlier question")]);
-    expect(seenContext.messages).not.toBe(messages);
+    expect(seen).toEqual([textUser("earlier question")]);
+    expect(seen).not.toBe(messages);
   });
 
-  it.each([
-    {
-      name: "unsafe Bedrock sibling tool",
-      turn: thinkingTurn(replayCall("gateway", "toolu_legacy")),
-      api: "bedrock-converse-stream",
+  it.each`
+    name                             | turn                                                                                                               | api
+    ${"unsafe Bedrock sibling tool"} | ${thinkingTurn(replayCall("gateway", "toolu_legacy"))}                                                             | ${"bedrock-converse-stream"}
+    ${"duplicate sibling tool id"}   | ${thinkingTurn(replayCall("read", "call_1"), { type: "functionCall", id: "call_1", name: "read", arguments: {} })} | ${"anthropic-messages"}
+  `(
+    "drops signed thinking replay with $name",
+    async ({ turn, api }: { turn: ReturnType<typeof thinkingTurn>; api: string }) => {
+      expect(await replaySigned([turn, textUser("retry")], api)).toEqual([textUser("retry")]);
     },
-    {
-      name: "duplicate sibling tool id",
-      turn: thinkingTurn(replayCall("read", "call_1"), {
-        type: "functionCall",
-        id: "call_1",
-        name: "read",
-        arguments: {},
-      }),
-      api: "anthropic-messages",
-    },
-  ])("drops signed thinking replay with $name", async ({ turn, api }) => {
-    const seenContext = await replaySigned([turn, textUser("retry")], api);
-    expect(seenContext.messages).toEqual([textUser("retry")]);
-  });
+  );
 
   it.each([false, true])(
     "retains reused signed ids only with adjacent results (displaced: %s)",
@@ -489,7 +467,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         thinkingTurn({ type: "toolUse", id: "call_1", name: "read", input: {} }),
         ...(displaced ? [user, result] : [result, user]),
       ];
-      const seen = (await replaySigned(messages)).messages;
+      const seen = await replaySigned(messages);
       if (displaced) {
         expect(seen).toEqual([...prefix, user]);
       } else {
@@ -500,13 +478,8 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
   it("keeps mutable thinking turns outside anthropic replay-only preservation", async () => {
     const messages = [thinkingTurn(replayCall(" read ", "call_1")), textUser("retry")];
-    const seenContext = await replayContext(
-      messages,
-      new Set(["read"]),
-      anthropicPolicy,
-      "openai-completions",
-    );
-    expect(seenContext.messages).toEqual([
+    const seen = await replay(messages, new Set(["read"]), anthropicPolicy, "openai-completions");
+    expect(seen).toEqual([
       thinkingTurn(replayCall("read", "call_1")),
       expect.objectContaining({
         ...textToolResult(
@@ -523,28 +496,20 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
   it("canonicalizes mixed-case allowlisted tool names on replay", async () => {
     const messages = [sparseAssistant([replayCall("readfile", "call_1")])];
-    const seenContext = await replayContext(messages, new Set(["ReadFile"]));
-    expect(seenContext.messages[0]).toMatchObject({ content: [{ name: "ReadFile" }] });
+    const seen = await replay(messages, new Set(["ReadFile"]));
+    expect(seen[0]).toMatchObject({ content: [{ name: "ReadFile" }] });
   });
 
-  it.each([
-    {
-      name: "blank names and their stale results",
-      messages: [
-        sparseAssistant([replayCall("   ", "call_1")]),
-        textToolResult("call_1", "", "stale result", { isError: true }),
-      ],
-      allowed: undefined,
+  it.each`
+    name                                     | messages                                                                                                             | allowed
+    ${"blank names and their stale results"} | ${[sparseAssistant([replayCall("   ", "call_1")]), textToolResult("call_1", "", "stale result", { isError: true })]} | ${undefined}
+    ${"ambiguous mangled names"}             | ${[sparseAssistant([replayCall("functions.exec2", "call_1")])]}                                                      | ${new Set(["exec", "exec2"])}
+  `(
+    "drops replayed $name",
+    async ({ messages, allowed }: { messages: unknown[]; allowed?: Set<string> }) => {
+      expect(await replay(messages, allowed)).toStrictEqual([]);
     },
-    {
-      name: "ambiguous mangled names",
-      messages: [sparseAssistant([replayCall("functions.exec2", "call_1")])],
-      allowed: new Set(["exec", "exec2"]),
-    },
-  ])("drops replayed $name", async ({ messages, allowed }) => {
-    const seenContext = await replayContext(messages, allowed);
-    expect(seenContext.messages).toStrictEqual([]);
-  });
+  );
 
   it("preserves matching tool results for retained errored assistant turns", async () => {
     const retained = { ...sparseAssistant([replayCall("read", "call_1")]), stopReason: "error" };
@@ -552,7 +517,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       textToolResult("call_1", "read", "kept result", { isError: false }),
       textUser("retry"),
     ];
-    const seenContext = await replayContext(
+    const seen = await replay(
       [
         {
           ...retained,
@@ -562,7 +527,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       ],
       new Set(["read"]),
     );
-    expect(seenContext.messages).toEqual([retained, ...tail]);
+    expect(seen).toEqual([retained, ...tail]);
   });
 
   it.each([false, true])(
@@ -573,12 +538,12 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       const assistant = dropped
         ? { ...sparseAssistant([call]), stopReason: "error" }
         : sparseAssistant([...text.content, call]);
-      const seenContext = await replayContext(
+      const seen = await replay(
         [...(dropped ? [textUser("first")] : []), assistant, embeddedResultUser("stale")],
         new Set(["read"]),
         anthropicPolicy,
       );
-      expect(seenContext.messages).toEqual(
+      expect(seen).toEqual(
         dropped
           ? [
               {
@@ -596,24 +561,18 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       sparseAssistant([{ type: "toolUse", id: "call_1", name: "read", input: { path: "." } }]),
       embeddedResultUser("kept result"),
     ];
-    const seenContext = await replaySigned(messages);
-    expect(seenContext.messages).toEqual(messages);
+    expect(await replaySigned(messages)).toEqual(messages);
   });
 });
 
 describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
-  async function replayArgumentDeltas(
-    deltas: string[],
-    options: {
-      initialArgs?: Record<string, unknown>;
-    } = {},
-  ) {
+  async function replayArgumentDeltas(deltas: string[], initialArgs: Record<string, unknown>) {
     const call = (args: Record<string, unknown> = {}) => ({
       type: "toolCall",
       name: "read",
       arguments: args,
     });
-    const calls = [call(options.initialArgs), call()] as const;
+    const calls = [call(initialArgs), call()] as const;
     const partial = sparseAssistant([calls[0]]);
     const baseFn = fakeBaseStream(partial, [
       ...deltas.map((delta) => ({ type: "toolcall_delta", contentIndex: 0, delta, partial })),
@@ -634,16 +593,16 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
   type ArgumentCase = {
     name: string;
     deltas: string[];
-    options: Parameters<typeof replayArgumentDeltas>[1];
+    initialArgs: Record<string, unknown>;
     expected: Record<string, unknown>[];
   };
   it.each`
-    name                                   | deltas                    | options                                    | expected
-    ${"rejects leading prose"}             | ${[`please use ${json}`]} | ${{}}                                      | ${[{}, {}]}
-    ${"clears oversized trailing repairs"} | ${[json, "oops"]}         | ${{}}                                      | ${[{}, {}]}
-    ${"preserves preexisting arguments"}   | ${["}"]}                  | ${{ initialArgs: { path: "/etc/hosts" } }} | ${[{ path: "/etc/hosts" }, {}]}
-  `("$name", async ({ deltas, options, expected }: ArgumentCase) => {
-    const calls = await replayArgumentDeltas(deltas, options);
+    name                                   | deltas                    | initialArgs               | expected
+    ${"rejects leading prose"}             | ${[`please use ${json}`]} | ${{}}                     | ${[{}, {}]}
+    ${"clears oversized trailing repairs"} | ${[json, "oops"]}         | ${{}}                     | ${[{}, {}]}
+    ${"preserves preexisting arguments"}   | ${["}"]}                  | ${{ path: "/etc/hosts" }} | ${[{ path: "/etc/hosts" }, {}]}
+  `("$name", async ({ deltas, initialArgs, expected }: ArgumentCase) => {
+    const calls = await replayArgumentDeltas(deltas, initialArgs);
     expect(calls.map((call) => call.arguments)).toStrictEqual(expected);
   });
 });

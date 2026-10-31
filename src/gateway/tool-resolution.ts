@@ -9,10 +9,7 @@ import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferre
 import { createOpenClawCodingToolsInternalAsync } from "../agents/agent-tools.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
-import {
-  isSchedulerSystemTurn,
-  resolveTurnToolSurface,
-} from "../agents/agent-tools.turn-authority.js";
+import { isHostSystemTurn, resolveTurnToolSurface } from "../agents/agent-tools.turn-authority.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
 import { resolveConversationQuestionInputMode } from "../agents/conversation-capability-profile.js";
@@ -21,7 +18,6 @@ import { prepareExecDefaults, resolvePreparedExecDefaultsAsync } from "../agents
 import { applyGatewayToolPolicy } from "../agents/gateway-tool-policy.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawToolsAsync } from "../agents/openclaw-tools.js";
-import { filterRequesterYieldTools } from "../agents/openclaw-tools.requester-yield.js";
 import {
   applySwarmCollectorToolContract,
   createSwarmCollectorWriteAuthority,
@@ -695,7 +691,7 @@ export async function resolveGatewayScopedTools(
           ? completeTools(filterGatewayToolPolicies(params.cfg, undefined, "session"))
           : undefined,
         ownerOnlyDenied: new Set(ownerOnlyGatewayDeny),
-        schedulerSystemTurn: isSchedulerSystemTurn(params),
+        hostSystemTurn: isHostSystemTurn(params),
       })
     : { tools: turnTools, exportedTools: turnTools };
   // The loopback exec tool is node-only. Do not let a raw `exec` capability get
@@ -720,7 +716,7 @@ export async function resolveGatewayScopedTools(
 
   return {
     agentId: sessionAgentId,
-    tools: applyToolAvailabilityDescriptions(filterRequesterYieldTools(tools, params.sessionKey)),
+    tools: applyToolAvailabilityDescriptions(tools),
     workspaceDir,
     // Only the MCP owner knows which tools survived its grant and schema gates.
     captureFinalCronCreatorTools: cronCreatorToolAllowlistCaptureRef

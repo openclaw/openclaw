@@ -285,6 +285,11 @@ shared credential belongs to the same account. If that identity cannot be
 verified, the peer remains terminally fenced instead of inheriting another
 account.
 
+Concurrent requests serialize first-use authorization capture when their local
+or shared credential stores overlap. Each request retains its own live authority;
+closing one does not close another. Credential replacement, revocation, pending
+writes, and uncertain settlement still refuse stale authorization.
+
 Catalog discovery fences and settles historical peers through the same
 request-owned native writer as the refreshing credential. Each peer update
 retains its captured database file identity and compares the credential inside

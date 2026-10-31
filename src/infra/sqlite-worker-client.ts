@@ -11,11 +11,11 @@ import {
   type SqliteWorkerStore,
 } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-admission.js";
+import { classifyWorkerRequest } from "./sqlite-worker-request-class.js";
 import {
   captureSqliteWorkerStateContext,
   type SqliteWorkerStateContext,
 } from "./sqlite-worker-state-context.js";
-import { classifyWorkerRequest } from "./worker-request-diagnostics.js";
 
 export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOperations, T>(
   client: StoreClient | undefined,

@@ -185,11 +185,17 @@ export type DoctorConfigCapture = {
   configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
   deferredInspectionCheckIds?: string[];
 };
+/** Runs a policy check under Doctor's held maintenance owner and its open scope. */
+type DoctorPolicyCustodyOwner = { assertCurrent(policy: () => void): void };
 export type UpdateDoctorWriteAuthority = {
+  /** An optional work profile; config preparation still proves eligibility. */
+  retirementOnly?: true;
   /** Parent Doctor phase deadline for nested managed-service inspection. */
   serviceInspectionDeadlineAtMs?: number;
   inputHash: string;
   assertCurrent: () => void;
+  /** Doctor lends its held maintenance owner to `assertCurrent`; see doctor-policy-custody. */
+  lendPolicyCustody?: (owner: DoctorPolicyCustodyOwner | undefined) => void;
   commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
@@ -222,6 +228,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
   let admitted = false;
   let unchanged = true;
   let receipt: UpdateDatabaseWriteReceipt | undefined;
+  const openedSqlitePaths = new Set<string>();
   const historicalScans = createUpdateDoctorHistoricalScanCapture(options);
   const read = async () => {
     if (!expectedGenerations) {
@@ -268,12 +275,17 @@ export function createUpdateDoctorDatabaseWriteCapture(
     run<T>(operation: () => T): T {
       return runWithUpdateDoctorMigrationCapture(
         {
+          openedSqlitePaths,
           expected: (pathname) => expectedGenerations?.[pathname],
           assertCurrent: () => options.assertCurrent?.(),
           accept(pathname, before, after) {
             options.assertCurrent?.();
             const expected = expectedGenerations;
-            if (!expected || !Object.hasOwn(expected, pathname) || expected[pathname] !== before) {
+            if (
+              !expected ||
+              !Object.hasOwn(expected, pathname) ||
+              (!openedSqlitePaths.has(pathname) && expected[pathname] !== before)
+            ) {
               unchanged = false;
               return;
             }
@@ -326,8 +338,13 @@ export function createUpdateDoctorDatabaseWriteCapture(
         cleanScans = historicalScans.settle(generations);
       }
       if (generations && expectedGenerations) {
-        // Only native migration publications advance the expected generation.
-        // Unattributed writes, including independent SQLite writers, remain unknown.
+        // Like the native close receipt (#177831), this can absorb raw outside writes
+        // during the update window only for databases this Doctor itself opened.
+        for (const [pathname, generation] of Object.entries(generations)) {
+          if (openedSqlitePaths.has(pathname)) {
+            expectedGenerations[pathname] = generation;
+          }
+        }
         acceptEmptyReaderTransitions(observation!);
         unchanged &&= isDeepStrictEqual(generations, expectedGenerations);
         receipt = {

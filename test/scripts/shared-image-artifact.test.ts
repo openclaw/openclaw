@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -49,6 +49,7 @@ function verifyUploadedArtifact(
   params: {
     artifactDigest?: string;
     env?: NodeJS.ProcessEnv;
+    json?: boolean;
   } = {},
 ) {
   return spawnSync(
@@ -62,6 +63,7 @@ function verifyUploadedArtifact(
       params.artifactDigest ?? ARTIFACT_DIGEST,
       ARTIFACT_RUN_ID,
       ARTIFACT_RUN_ATTEMPT,
+      ...(params.json ? ["--json"] : []),
     ],
     {
       encoding: "utf8",
@@ -111,6 +113,7 @@ function expectRejectedUpload(
   writeFileSync(fixture.ghLog, "");
   const result = verifyUploadedArtifact(fixture, options);
   expect(result.status).not.toBe(0);
+  expect(result.stdout).toBe("");
   expect(result.stderr).toContain(message);
   expect(readFileSync(fixture.ghLog, "utf8").trim().split("\n")).toHaveLength(calls);
   expect(result.stderr).not.toContain("retrying");
@@ -166,7 +169,8 @@ if (tool === "docker") {
   }
 } else if (tool === "gh") {
   if (args.shift() !== "api") fail("unexpected gh invocation");
-  let method, endpoint;
+  let method = "GET";
+  let endpoint;
   while (args.length) {
     const arg = args.shift();
     if (arg === "--method") method = args.shift();
@@ -184,12 +188,12 @@ if (tool === "docker") {
   if (count <= Number(env["FAKE_GH_" + kind.toUpperCase() + "_FAILURES"] || 0)) {
     emit("partial " + kind + " response\\n");
     console.error(env["FAKE_GH_" + kind.toUpperCase() + "_ERROR"] || "gh: request failed");
-    process.exit(1);
+    process.exit(Number(env.FAKE_GH_EXIT_STATUS || 1));
   }
   const value = kind === "artifact" ? {
     id: Number(env.FAKE_ARTIFACT_ID), name: env.FAKE_ARTIFACT_NAME,
     expired: env.FAKE_ARTIFACT_EXPIRED === "true", digest: "sha256:" + env.FAKE_ARTIFACT_DIGEST,
-    workflow_run: { id: Number(env.FAKE_ARTIFACT_RUN_ID) },
+    workflow_run: { id: Number(env.FAKE_ARTIFACT_RUN_ID) }, expires_at: "2030-01-01T00:00:00Z",
   } : { id: Number(env.FAKE_ATTEMPT_RUN_ID), run_attempt: Number(env.FAKE_ARTIFACT_RUN_ATTEMPT) };
   emit((kind === "artifact" && env.FAKE_ARTIFACT_JSON || JSON.stringify(value)) + "\\n");
 }
@@ -260,16 +264,58 @@ function expectRejectedLoad(
 }
 
 describe("shared Docker image artifacts", () => {
-  it("binds uploaded artifacts to the exact service tuple and producer attempt", () => {
+  it.each(["2", "3"])("propagates expiry verification for producer attempt %s", (attempt) => {
     const fixture = createFixture();
-    const verified = verifyUploadedArtifact(fixture);
+    const harnessScripts = join(fixture.root, ".release-harness/scripts/docker");
+    mkdirSync(harnessScripts, { recursive: true });
+    copyFileSync(HELPER, join(harnessScripts, "shared-image-artifact.sh"));
+    const workflow = readFileSync(
+      resolve(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml"),
+      "utf8",
+    );
+    const expiry = expectDefined(
+      workflow.match(/ {10}artifact_expiry\(\) \{[\s\S]*?\n {10}\}/)?.[0],
+      "release artifact expiry function",
+    );
+    // The workflow captures this function's stdout; that disables Bash's implicit errexit.
+    const result = spawnSync(
+      "bash",
+      [
+        "-ec",
+        `${expiry}\nvalue="$(artifact_expiry "$@")"\nprintf '%s' "$value"`,
+        "expiry",
+        "Docker E2E image",
+        ARTIFACT_ID,
+        ARTIFACT_NAME,
+        ARTIFACT_DIGEST,
+        ARTIFACT_RUN_ID,
+        ARTIFACT_RUN_ATTEMPT,
+      ],
+      {
+        cwd: fixture.root,
+        encoding: "utf8",
+        env: { ...fixture.env, FAKE_ARTIFACT_RUN_ATTEMPT: attempt },
+      },
+    );
+    expect(result.status === 0, result.stderr).toBe(attempt === ARTIFACT_RUN_ATTEMPT);
+    expect(result.stdout).toBe(attempt === ARTIFACT_RUN_ATTEMPT ? "2030-01-01T00:00:00Z" : "");
+    expect(readFileSync(fixture.ghLog, "utf8").trim().split("\n")).toHaveLength(2);
+  });
+
+  it.each([false, true])("binds uploaded artifacts before returning metadata (json=%s)", (json) => {
+    const fixture = createFixture();
+    const verified = verifyUploadedArtifact(fixture, { json });
     expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
+    expect(json ? JSON.parse(verified.stdout).expires_at : verified.stdout).toBe(
+      json ? "2030-01-01T00:00:00Z" : "",
+    );
+    expect(readFileSync(fixture.ghLog, "utf8").trim().split("\n")).toHaveLength(2);
     const mismatch = "artifact identity does not match the immutable producer tuple";
-    expectRejectedUpload(fixture, { artifactDigest: "e".repeat(64) }, mismatch, 1);
-    expectRejectedUpload(fixture, { env: { FAKE_ARTIFACT_JSON: "not-json" } }, mismatch, 1);
+    expectRejectedUpload(fixture, { json, artifactDigest: "e".repeat(64) }, mismatch, 1);
+    expectRejectedUpload(fixture, { json, env: { FAKE_ARTIFACT_JSON: "not-json" } }, mismatch, 1);
     expectRejectedUpload(
       fixture,
-      { env: { FAKE_ARTIFACT_RUN_ATTEMPT: "3" } },
+      { json, env: { FAKE_ARTIFACT_RUN_ATTEMPT: "3" } },
       "producer run attempt does not match the immutable tuple",
       2,
     );
@@ -299,6 +345,35 @@ describe("shared Docker image artifacts", () => {
       if (!attempts) {
         expect(result.stdout).not.toContain("partial artifact response");
         expect(result.stderr).toContain("i/o timeout");
+      }
+    },
+  );
+
+  it.each([
+    [124, "ARTIFACT", "1", true, 2, 1],
+    [137, "ATTEMPT", "1", true, 1, 2],
+    [124, "ARTIFACT", "3", false, 3, 0],
+    [137, "ATTEMPT", "3", false, 1, 3],
+  ] as const)(
+    "handles deadline exit %s for %s after %s failures",
+    (status, target, failures, success, artifacts, attempts) => {
+      const fixture = createFixture();
+      const result = verifyUploadedArtifact(fixture, {
+        env: {
+          FAKE_GH_EXIT_STATUS: String(status),
+          [`FAKE_GH_${target}_FAILURES`]: failures,
+        },
+      });
+      expectApiResult(result, fixture, {
+        success,
+        sleeps: success ? "2\n" : "2\n4\n",
+        artifacts,
+        attempts,
+        messages: ["GitHub API GET exceeded the 30s request deadline."],
+      });
+      expect(result.stdout).not.toContain("partial");
+      if (!success) {
+        expect(result.stderr).toContain("GitHub API GET failed after 3 attempt(s)");
       }
     },
   );

@@ -1,8 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  getRuntimeConfig: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ getRuntimeConfig: vi.fn() }));
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
@@ -10,79 +8,43 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
 
 import { resolveConfiguredLiveQuicksilverModel } from "./realtime-quicksilver-live-test-support.js";
 
+const directModel = "gpt-live-direct-fixture";
+const providerModel = "gpt-live-provider-fixture";
+
 describe("private realtime live model selection", () => {
-  beforeEach(() => {
-    mocks.getRuntimeConfig.mockReset();
-  });
-
-  it("prefers a valid Talk-level model over provider configuration", () => {
-    mocks.getRuntimeConfig.mockReturnValue({
-      talk: {
-        realtime: {
-          provider: "openai",
-          model: "gpt-live-direct-fixture",
-          providers: {
-            openai: { model: "gpt-live-provider-fixture" },
-          },
-        },
-      },
-    });
-
-    expect(resolveConfiguredLiveQuicksilverModel()).toBe("gpt-live-direct-fixture");
-  });
-
-  it("rejects an ineligible explicit Talk-level model instead of falling through", () => {
-    mocks.getRuntimeConfig.mockReturnValue({
-      talk: {
-        realtime: {
-          provider: " OPENAI ",
-          model: "public-realtime-fixture",
-          providers: {
-            OpenAI: { model: "gpt-live-provider-fixture" },
-          },
-        },
-      },
-    });
-
-    expect(resolveConfiguredLiveQuicksilverModel()).toBeUndefined();
-  });
-
-  it("uses a sole OpenAI provider model when no provider is selected", () => {
-    mocks.getRuntimeConfig.mockReturnValue({
-      talk: {
-        realtime: {
-          providers: {
-            OpenAI: { model: "gpt-live-provider-fixture" },
-          },
-        },
-      },
-    });
-
-    expect(resolveConfiguredLiveQuicksilverModel()).toBe("gpt-live-provider-fixture");
-  });
-
   it.each([
-    {},
-    {
-      talk: {
-        realtime: {
-          provider: "custom",
-          model: "gpt-live-direct-fixture",
-          providers: { custom: { model: "gpt-live-provider-fixture" } },
-        },
+    [
+      "prefers a valid Talk-level model over provider configuration",
+      { provider: "openai", model: directModel, providers: { openai: { model: providerModel } } },
+      directModel,
+    ],
+    [
+      "rejects an ineligible explicit Talk-level model instead of falling through",
+      {
+        provider: " OPENAI ",
+        model: "public-realtime-fixture",
+        providers: { OpenAI: { model: providerModel } },
       },
-    },
-    {
-      talk: {
-        realtime: {
-          model: "gpt-live-direct-fixture",
-          providers: { custom: { model: "gpt-live-provider-fixture" } },
-        },
-      },
-    },
-  ])("rejects missing or ineligible live configuration", (config) => {
-    mocks.getRuntimeConfig.mockReturnValue(config);
-
-    expect(resolveConfiguredLiveQuicksilverModel()).toBeUndefined();
+      undefined,
+    ],
+    [
+      "uses a sole OpenAI provider model when no provider is selected",
+      { providers: { OpenAI: { model: providerModel } } },
+      providerModel,
+    ],
+    ["rejects missing live configuration", undefined, undefined],
+    [
+      "rejects an explicitly selected ineligible provider",
+      { provider: "custom", model: directModel, providers: { custom: { model: providerModel } } },
+      undefined,
+    ],
+    [
+      "rejects an implicitly selected ineligible provider",
+      { model: directModel, providers: { custom: { model: providerModel } } },
+      undefined,
+    ],
+  ])("%s", (_label, realtime, expected) => {
+    mocks.getRuntimeConfig.mockReturnValue(realtime ? { talk: { realtime } } : {});
+    expect(resolveConfiguredLiveQuicksilverModel()).toBe(expected);
   });
 });

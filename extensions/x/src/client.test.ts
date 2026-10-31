@@ -25,6 +25,7 @@ const fixture = vi.hoisted(() => {
 let current: OpenClawConfig;
 let stateDir: string;
 let failTokenCommit: "before" | "after" | undefined;
+let failSpendWrite = false;
 const refreshes: { token: string | null; auth: string | null }[] = [];
 const requests: string[] = [];
 let exchange: (token: string | null, attempt: number) => Response | Promise<Response>;
@@ -61,10 +62,20 @@ function restartRuntime() {
         if (options.maxEntries === undefined) {
           throw new Error("Spend fixture requires bounded state");
         }
-        return createPluginStateKeyedStoreForTests<T>("x", {
+        const store = createPluginStateKeyedStoreForTests<T>("x", {
           ...options,
           maxEntries: options.maxEntries,
         });
+        return {
+          ...store,
+          register: async (...args: Parameters<typeof store.register>) => {
+            if (failSpendWrite) {
+              failSpendWrite = false;
+              throw new Error("database is locked");
+            }
+            await store.register(...args);
+          },
+        };
       },
       openKeyedStoreV2: <T>(
         options: OpenAsyncKeyedStoreOptions,
@@ -113,6 +124,7 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   current = config();
   failTokenCommit = undefined;
+  failSpendWrite = false;
   refreshes.length = requests.length = 0;
   exchange = (_token, attempt) => tokenResponse(attempt);
   resource = () => Response.json({ data: [] });
@@ -139,6 +151,18 @@ afterEach(async () => {
 });
 
 describe("X OAuth client ownership", () => {
+  it("resumes paid calls on the cached client after a transient spend write failure", async () => {
+    const api = await getXApi("default", config());
+    failSpendWrite = true;
+    await expect(api.getMentions({ userId: "9" })).rejects.toThrow("database is locked");
+    await expect(api.getMentions({ userId: "9" })).rejects.toThrow("accounting unavailable");
+
+    // Channel restart reopens the account; the cached client must adopt the recovered owner.
+    expect(await getXApi("default", config())).toBe(api);
+    await api.getMentions({ userId: "9" });
+    expect(requests.filter((url) => url.includes("/mentions"))).toHaveLength(1);
+  });
+
   it("shares an active refresh across transport rotation and preserves its grant across restart", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const refreshStarted = Promise.withResolvers<void>();

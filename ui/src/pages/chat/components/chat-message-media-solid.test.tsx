@@ -87,7 +87,7 @@ it.each([
     const second = createDeferred<Response>();
     const fetchMock = fetchResponses([first.promise, second.promise]);
     const initialComments = ["first", "second"].map((name) =>
-      commentAttachment(`/__openclaw__/fixtures/${name}.txt`),
+      commentAttachment(`/__openclaw__/fixtures/${retirement}-${name}.txt`),
     );
     const view = mountComments(initialComments, inline, {});
     if (!inline) {
@@ -133,8 +133,13 @@ it.each([
 ] as const)("clears the previous annotation when %s changes", async (_name, changed) => {
   const pending = createDeferred<Response>();
   const fetchMock = fetchResponses([commentResponse("Original passage")], pending.promise);
-  const view = mountComments([commentAttachment("blob:scope")]);
+  const items = [commentAttachment(`blob:scope-${_name}`)];
+  let view = mountComments(items);
   await waitForSolid(() => expect(view.container.textContent).toContain("Original passage"));
+  view.unmount();
+  view = mountComments(items);
+  await waitForSolid(() => expect(view.container.textContent).toContain("Original passage"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
   view.setOptions({ ...commentOptions, ...changed });
   await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(2));
   expect(view.container.textContent).not.toContain("Original passage");
@@ -150,7 +155,7 @@ it.each(["denied", "oversized"])(
       [commentResponse("Original passage")],
       Response.json({ available: false, reason: "Unavailable annotation", retryable: false }),
     );
-    const item = commentAttachment("blob:annotation");
+    const item = commentAttachment(`blob:annotation-${reason}`);
     const view = mountComments([item]);
     await waitForSolid(() => expect(view.container.textContent).toContain("Original passage"));
     view.setComments([

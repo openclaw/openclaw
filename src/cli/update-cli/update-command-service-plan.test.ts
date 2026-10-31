@@ -211,7 +211,9 @@ describe("package runtime compatibility guidance", () => {
 
   it("does not offer the current Bun as a fallback for a managed Node service", async () => {
     stubRuntime({ bun: "1.4.4" }, { execPath: path.resolve("/fixture/app-runtime") });
-    vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue(unsupportedServiceRuntimeFixture);
+    vi.mocked(resolveNodeRuntimeInfo).mockImplementation(async (node) =>
+      node === "/recovered/node" ? runtimeInfo() : unsupportedServiceRuntimeFixture,
+    );
     vi.mocked(resolveTargetNodeRuntime).mockResolvedValue("/recovered/node");
     const result = await preflight({
       nodeRunner: "/old/node",
@@ -506,7 +508,7 @@ describe("package runtime compatibility guidance", () => {
       ]),
       error: expect.stringContaining(
         [
-          `Node ${node}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.22.1+/26.12.1+ or a build with the fix`,
+          `Node ${node}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix`,
           expectedPlainRecovery("2026.9.3", "24.22.1", "refresh", "", path.resolve("/fixture/cli")),
         ].join("\n"),
       ),
@@ -514,10 +516,10 @@ describe("package runtime compatibility guidance", () => {
   });
 
   it.each([
-    [">=22.19.0", "24.22.1"],
-    [">=24.18.0 <25", "24.22.1"],
-    ["^22 || >=25 <27", "26.12.1"],
-    [">=26.2.0-rc.1 <27", "26.12.1"],
+    [">=22.19.0", "24.16.0"],
+    [">=24.18.0 <25", "24.18.0"],
+    ["^22 || >=25 <27", "26.1.0"],
+    [">=26.2.0-rc.1 <27", "26.2.0"],
     [">=90.2.0 <91 || >=92.5.0", "90.2.0"],
     [">=22.22.3 <23", null],
     [">=25.0.0 <26", null],
@@ -540,11 +542,11 @@ describe("package runtime compatibility guidance", () => {
     expect(result.error).toContain(
       minimum
         ? expectedPlainRecovery("2027.1.0", minimum)
-        : "No Node version satisfies both this range and this updater's supported range (>=24.22.1 <25 || >=26.12.1).",
+        : "No Node version satisfies both this range and this updater's supported range (>=24.16.0 <25 || >=26.1.0).",
     );
     if (minimum !== "90.2.0" && minimum) {
       expect(result.error).toContain(
-        `Node ${node}: openclaw requires Node >=24.22.1 <25, or >=26.12.1.`,
+        `Node ${node}: openclaw requires Node >=24.16.0 <25, or >=26.1.0.`,
       );
     }
   });

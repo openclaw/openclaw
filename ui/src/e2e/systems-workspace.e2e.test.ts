@@ -5,6 +5,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expandSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Systems workspace mocked Gateway E2E",
@@ -305,11 +306,7 @@ suite.define(() => {
             .first();
           await row.waitFor();
           if (route === "dashboards") {
-            const showMore = page
-              .locator("openclaw-app-sidebar")
-              .getByRole("button", { name: "Show more" });
-            await showMore.click();
-            await showMore.click();
+            await expandSidebarSessions(scroller, 30);
             await revealSidebarTarget(
               scroller,
               page.locator('.sidebar-recent-session[data-session-key="agent:main:task-29"]'),

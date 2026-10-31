@@ -1,3 +1,5 @@
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
 import type {
   OpenAsyncKeyedStoreOptions,
   PluginStateOperation,
@@ -5,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { generateIdentity } from "../protocol/index.js";
@@ -184,6 +187,38 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("keeps peer read request bytes independent of retained outbound deliveries", async () => {
+  const { store, trustedPeer, recipient } = await trustedStore();
+  const deliveries = runtime().state.openSyncKeyedStore(REEF_DELIVERY_STORE_OPTIONS);
+  for (let index = 0; index < 128; index++) {
+    deliveries.register(`${peerKey()}:${String(index).padStart(26, "0")}`, {
+      bodyHash: "a".repeat(64),
+      recipient,
+      sentAt: Date.now(),
+    });
+  }
+  const nativePost = Object.getOwnPropertyDescriptor(Worker.prototype, "postMessage")!;
+  const bytes: number[] = [];
+  vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (this: Worker, ...args) {
+    const message: unknown = args[0];
+    if (isRecord(message) && message.type === "execute" && message.input instanceof Uint8Array) {
+      const command: unknown = deserialize(message.input);
+      if (isRecord(command) && command.type === "pluginState.executeOperation") {
+        bytes.push(message.input.byteLength);
+      }
+    }
+    Reflect.apply(nativePost.value, this, args);
+  });
+  expect((await store.snapshot("clawd")).trust).toEqual(trustedPeer);
+  expect(await store.list()).toEqual([{ peer: "clawd", trust: trustedPeer }]);
+  const observation = await store.observePeer("clawd");
+  expect(bytes).toHaveLength(3);
+  expect(Math.max(...bytes)).toBeLessThan(16_384);
+  await store.setAutonomy("clawd", "notify-only");
+  expect(observation!.assertCurrent).toThrow();
+  expect(await store.overdueOutboundDeliveries(0, Date.now() + 1)).toHaveLength(128);
+});
+
 it("renews a rejection reservation while preserving duplicate receipt expiry", async () => {
   const { store } = await deliveryFixture();
   await rejectDelivery(store, "clawd", id);
@@ -209,15 +244,6 @@ it("renews a rejection reservation while preserving duplicate receipt expiry", a
   const dayMs = 24 * 60 * 60 * 1_000;
   expect(renewed.expiresAt).toBeGreaterThan(shortened.expiresAt! + 60 * dayMs);
   expect(renewed.expiresAt).toBeLessThan(shortened.expiresAt! + 61 * dayMs);
-});
-
-it("isolates trust by relay identity instead of machine-specific key paths", async () => {
-  const molty = newStore();
-  await molty.set("clawd", peerTrust());
-
-  expect(await newStore().get("clawd")).toBeDefined();
-  expect(await newStore("other").get("clawd")).toBeUndefined();
-  expect(await newStore("molty", "https://relay.example").get("clawd")).toBeUndefined();
 });
 
 it("persists and consumes concurrent outbound request intents separately from active trust", async () => {
@@ -330,13 +356,16 @@ it("refuses an unaccepted removal and consumes accepted cleanup once", async () 
   expect(await persisted.hasOutboundRequest("clawd")).toBe(true);
 });
 
-it("keeps rejection notices durable until the sender agent consumes them", async () => {
+it("keeps trust identity-scoped and rejection notices durable until consumption", async () => {
   const textHash = "c".repeat(64);
   const { store, recipient } = await deliveryFixture(id, { textHash });
 
   expect(await rejectDelivery(store, "clawd", id)).toMatchObject({ category: "guard_deny" });
 
   const reopened = newStore();
+  expect(await reopened.get("clawd")).toBeDefined();
+  expect(await newStore("other").get("clawd")).toBeUndefined();
+  expect(await newStore("molty", "https://relay.example").get("clawd")).toBeUndefined();
   const expected = { id, peer: "clawd", recipient, textHash, category: "guard_deny" };
   expect(await reopened.pendingOutboundRejections()).toMatchObject([expected]);
   expect(await (await readDelivery(reopened)).consume()).toBe("rejected");
@@ -377,6 +406,8 @@ it("rejects recovery if peer keys change before rejection reservation", async ()
   const { store } = await deliveryFixture();
   await rejectDelivery(store, "clawd", id);
 
+  const observed = (await store.observePeer("clawd"))!;
+  observed.assertCurrent();
   const selected = (await store.pendingOutboundRejections())[0]!;
   const previous = await store.snapshot("clawd");
   const writer = runtime().state.openSyncKeyedStore(REEF_TRUST_STORE_OPTIONS);
@@ -389,6 +420,7 @@ it("rejects recovery if peer keys change before rejection reservation", async ()
   await expect(selected.recovery.reserve({ lastRejectionAt: 10_000 })).rejects.toThrow(
     "changed keys before rejection recovery",
   );
+  expect(() => observed.assertCurrent()).toThrow();
   expect(await store.pendingOutboundRejections()).toMatchObject([]);
   expect((await readDelivery(store))?.delivery.rejection?.notice).toBeUndefined();
 });

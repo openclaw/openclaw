@@ -335,8 +335,11 @@ async function sendGatewayBenchCommand(
   command: GatewayBenchCommand,
 ): Promise<GatewayProfileReply> {
   const { kind, action } = command;
-  // Constructor census scans the full heap three times, unlike a resource sample.
-  const timeoutMs = command.kind === "resource-usage" && command.sessionCensus ? 120_000 : 30_000;
+  // Heap scans and snapshot serialization are heavier than a resource sample.
+  const timeoutMs =
+    command.kind === "resource-usage" && (command.sessionCensus || command.snapshotPath)
+      ? 120_000
+      : 30_000;
   return await new Promise<GatewayProfileReply>((resolve, reject) => {
     const finish = (result: Error | GatewayProfileReply) => {
       clearTimeout(timer);

@@ -1,4 +1,5 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveDefaultMSTeamsAccountId } from "./accounts.js";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
@@ -336,7 +337,8 @@ export async function searchMessagesMSTeams(params: {
   const top = Number.isFinite(rawLimit)
     ? Math.min(Math.max(Math.floor(rawLimit), 1), SEARCH_MAX_LIMIT)
     : SEARCH_DEFAULT_LIMIT;
-  const query = params.query.trim().toLowerCase();
+  // Canonical forms compare equal here; message text keeps its original spelling.
+  const query = normalizeLowercaseStringOrEmpty(params.query).normalize("NFC");
   const messages: Awaited<ReturnType<typeof getMessageMSTeams>>[] = [];
   let nextUrl: string | undefined;
   let truncated = false;
@@ -351,7 +353,10 @@ export async function searchMessagesMSTeams(params: {
 
     for (const message of response.value ?? []) {
       const searchText = normalizeSearchText(message);
-      if (searchText.toLowerCase().includes(query) && matchesSearchSender(message, params.from)) {
+      if (
+        normalizeLowercaseStringOrEmpty(searchText).normalize("NFC").includes(query) &&
+        matchesSearchSender(message, params.from)
+      ) {
         if (messages.length >= top) {
           return { messages, truncated: true };
         }

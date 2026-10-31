@@ -226,11 +226,16 @@ function labelField(
 
 /**
  * The runtime the existing run picks for a bound job from its copied cron session entry,
- * read from the rows and config the run reads.
+ * read from the rows and config the run reads. `models` is set for a job that copies a
+ * creating conversation: the model that copy selects, and the job's own scheduled model.
  */
-export type ScheduledInferenceRuntimeFacts = Readonly<{ legacy: string }>;
+export type ScheduledInferenceRuntimeFacts = Readonly<{
+  legacy: string;
+  models?: Readonly<{ legacy: string; context: string }>;
+}>;
 
-// A recorded runtime replaces the legacy pick; a binding without one keeps the legacy pick.
+// A recorded runtime replaces the legacy pick, and the job's scheduled model replaces the
+// model a copied creating conversation selects; a binding without one keeps both picks.
 function labelInference(
   result: Extract<ScheduledExecutionContextResult, { status: "ready" }>,
   runtimes: ScheduledInferenceRuntimeFacts,
@@ -241,10 +246,12 @@ function labelInference(
   }
   const recorded = inference.binding.runtime;
   if (recorded) {
+    const { models } = runtimes;
+    const same = recorded === runtimes.legacy && (!models || models.legacy === models.context);
     return {
-      label: recorded === runtimes.legacy ? "equal" : "retarget",
-      legacy: runtimes.legacy,
-      context: recorded,
+      label: same ? "equal" : "retarget",
+      legacy: models ? `${runtimes.legacy} ${models.legacy}` : runtimes.legacy,
+      context: models ? `${recorded} ${models.context}` : recorded,
     };
   }
   return { label: "equal", legacy: runtimes.legacy, context: runtimes.legacy };

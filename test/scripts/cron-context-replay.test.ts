@@ -223,6 +223,48 @@ describe("replayInferenceRuntimes", () => {
     });
   });
 
+  it.each([
+    { provider: "anthropic", model: "claude-sonnet-4-5", legacy: "anthropic/claude-sonnet-4-5" },
+    {
+      provider: "openai",
+      model: "gpt-5",
+      legacy: "openai/gpt-5 (refused: not the bound provider)",
+    },
+  ])(
+    "compares a current job's scheduled model with its conversation's $provider model",
+    async ({ provider, model, legacy }) => {
+      const cfg: OpenClawConfig = { agents: { defaults: { model: "anthropic/claude-haiku-4-5" } } };
+      const job = storedJob({
+        agentId: "main",
+        sessionTarget: "current",
+        sessionKey: parentKey,
+        inferenceBinding: {
+          provider: "anthropic",
+          profileId: "anthropic:profile",
+          authorizationId: "authorization",
+          runtime: "openclaw",
+        },
+      } as Partial<CronStoredJob>);
+      const parent = {
+        sessionId: "parent",
+        updatedAt: 1,
+        modelOverride: model,
+        providerOverride: provider,
+        modelOverrideSource: "user" as const,
+      };
+      await expect(
+        replayInferenceRuntimes(job, "main", cfg, (key) =>
+          key === parentKey ? parent : undefined,
+        ),
+      ).resolves.toEqual({
+        runtimes: {
+          legacy: "openclaw",
+          models: { legacy, context: "anthropic/claude-haiku-4-5" },
+        },
+      });
+    },
+  );
+
   it("reports an unresolved comparison when selection leaves the bound provider", async () => {
     const cfg: OpenClawConfig = { agents: { defaults: { model: "openai/gpt-5" } } };
     const job = storedJob({

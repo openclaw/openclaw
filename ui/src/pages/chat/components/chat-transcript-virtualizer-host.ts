@@ -93,16 +93,18 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       behavior: this.offsetState.scrollCommand?.behavior ?? "auto",
     });
   private readonly reconcileEnd = () => {
-    if (!this.connected || this.offsetState.pendingInteractionAnchor) {
-      return;
+    if (this.connected && !this.offsetState.pendingInteractionAnchor) {
+      this.commitComposerResize(true);
+      // Initial layout owns positioning until the visible range is measured.
+      if (!this.initialRange.pending) {
+        this.endAnchor.reconcile(
+          this.scrollElement,
+          this.canAutoFollow(),
+          this.offsetState.pendingScrollOffset !== null || this.offsetState.touchActive,
+          this.followEnd,
+        );
+      }
     }
-    this.commitComposerResize(true);
-    this.endAnchor.reconcile(
-      this.scrollElement,
-      this.canAutoFollow(),
-      this.offsetState.pendingScrollOffset !== null || this.offsetState.touchActive,
-      this.followEnd,
-    );
   };
   private readonly scrollRestoreHost: TranscriptScrollRestoreHost;
   private readonly messageReveal = new ChatMessageReveal(this.messageElements.elements);
@@ -182,6 +184,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       () => this.virtualizer,
       (range) => this.prependAnchor.extractRange(range, this.rowIndexesByKey, this.focusedRowKey),
       invalidate,
+      this.layout.rowMinimum,
     );
     this.mcpAppUnmountGate = createMcpAppUnmountGate(invalidate);
     this.positionRail = createPositionRailGutter(
@@ -211,7 +214,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       initialRect: initialTranscriptRect(),
       initialOffset: initialOffset ?? Number.MAX_SAFE_INTEGER,
       anchorTo: "end",
-      followOnAppend: false,
       scrollToFn: (...args) =>
         scrollTranscriptOffset(this.offsetState, this, this.headerHeight, ...args),
       observeElementRect: this.viewportRect.observe,
@@ -239,6 +241,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           callback,
         ),
       measureElement: this.layout.measureRow,
+      // Row measurements can resize the range and mount new observed rows.
+      // Commit those writes outside native resize delivery to avoid WebKit's loop.
+      useAnimationFrameWithResizeObserver: true,
       rangeExtractor: (range) => this.initialRange.extract(range),
       // Virtual distance omits real padding, pinning readers ~80px up past scroll.ts's follow-lock.
       // scheduleCommittedChatScroll owns end-follow on content changes and source: "resize".
@@ -370,9 +375,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       }
     }
     this.queueLayout();
-    if (!this.initialRange.pending && this.layout.ready) {
-      this.layout.persistRows(this.virtualizer);
-    }
+    this.layout.persistRows(this.virtualizer, this.initialRange.pending);
     // Disclosure measurement owns this commit; its sizer lands on the next update.
     if (interactionResizePending) {
       this.endAnchor.cancelReconcile();
@@ -415,6 +418,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
 
   dispose(): void {
     this.disconnect();
+    // Temporary disconnect preserves restoration facts; terminal disposal releases their owner.
+    Object.assign(this.layout, { rows: [], rowLayout: undefined });
     this.renderer.dispose();
     this.messageElements.dispose();
     this.rowRefs.clear();
@@ -535,7 +540,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           getContent: (index) => renderRow(rows[index]!),
           virtualizer,
           overlay,
-          header: header?.props ?? null,
+          header: header?.content ?? null,
           scrollElementRef: this.scrollElementRef,
           captureInteractionResize: this.captureInteractionResize,
           measureRowRefFor: (key) => this.rowRefs.forKey(key),
@@ -748,7 +753,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     if (!this.initialRange.measuring || !this.rowKeys.length || !this.scrollElement?.clientHeight) {
       return;
     }
-    this.syncViewportGeometry();
     const measured = this.presentation.measureRows();
     if ((this.initialRange.pending && this.initialRange.extend(this.scrollElement)) || measured) {
       this.invalidate();

@@ -20,13 +20,13 @@ const idleCallbacks: Array<() => void> = [];
 const connection = { saveData: false };
 const manifest = {
   "new-session": ["assets/new-1234abcd.js", "assets/new-1234abcd.css"],
-  claws: ["assets/claws-1234abcd.js"],
+  templates: ["assets/templates-1234abcd.js"],
   palette: ["assets/palette-1234abcd.js"],
   "model-picker": ["assets/model-picker-1234abcd.js"],
   appearance: ["assets/appearance-1234abcd.js"],
   debug: ["assets/debug-1234abcd.js"],
   "advanced-next": ["assets/security-1234abcd.js", "assets/security-1234abcd.css"],
-  "claws-next": ["assets/claws-next-1234abcd.js"],
+  "templates-next": ["assets/templates-next-1234abcd.js"],
   "roster-next": ["assets/chat-1234abcd.js", "assets/chat-1234abcd.css"],
 };
 
@@ -212,15 +212,15 @@ it("warms New Session after presentation and leaves other routes for intent", as
   fixture.notify();
   await idle();
   expect(hints()).toHaveLength(2);
-  const claws = fixture.shell.appendChild(document.createElement("a"));
-  claws.className = "nav-item";
-  claws.href = "/control/claws";
-  claws.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+  const templates = fixture.shell.appendChild(document.createElement("a"));
+  templates.className = "nav-item";
+  templates.href = "/control/templates";
+  templates.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
   await vi.advanceTimersByTimeAsync(50);
   expect(hints().map((link) => link.href)).toContain(
-    new URL("/control/assets/claws-1234abcd.js", location.origin).href,
+    new URL("/control/assets/templates-1234abcd.js", location.origin).href,
   );
-  expect(fixture.preloadRoute).toHaveBeenCalledExactlyOnceWith("claws");
+  expect(fixture.preloadRoute).toHaveBeenCalledExactlyOnceWith("templates");
   fixture.stop();
   await idle();
   expect(hints()).toHaveLength(0);
@@ -246,11 +246,11 @@ it("keeps declared next interactions as the route's only automatic idle work", a
   hints().forEach((link) => link.dispatchEvent(new Event("load")));
   await idle();
   expect(hints()).toHaveLength(2);
-  const nextLocation = { pathname: "/control/claws", search: "", hash: "" };
+  const nextLocation = { pathname: "/control/templates", search: "", hash: "" };
   fixture.state.location = nextLocation;
   fixture.state.resolvedLocation = nextLocation;
   fixture.state.matches = [
-    { ...fixture.state.matches[0]!, id: "claws", routeId: "claws", location: nextLocation },
+    { ...fixture.state.matches[0]!, id: "templates", routeId: "templates", location: nextLocation },
   ];
   fixture.state.status = "success";
   fixture.notify();
@@ -258,7 +258,7 @@ it("keeps declared next interactions as the route's only automatic idle work", a
   expect(hints().map((link) => link.href)).toEqual([
     new URL("/control/assets/security-1234abcd.js", location.origin).href,
     new URL("/control/assets/security-1234abcd.css", location.origin).href,
-    new URL("/control/assets/claws-next-1234abcd.js", location.origin).href,
+    new URL("/control/assets/templates-next-1234abcd.js", location.origin).href,
   ]);
   hints().forEach((link) => link.dispatchEvent(new Event("load")));
   await idle();
@@ -274,7 +274,7 @@ it("keeps declared next interactions as the route's only automatic idle work", a
   expect(hints().map((link) => link.href)).toEqual([
     new URL("/control/assets/security-1234abcd.js", location.origin).href,
     new URL("/control/assets/security-1234abcd.css", location.origin).href,
-    new URL("/control/assets/claws-next-1234abcd.js", location.origin).href,
+    new URL("/control/assets/templates-next-1234abcd.js", location.origin).href,
     new URL("/control/assets/new-1234abcd.js", location.origin).href,
     new URL("/control/assets/new-1234abcd.css", location.origin).href,
   ]);

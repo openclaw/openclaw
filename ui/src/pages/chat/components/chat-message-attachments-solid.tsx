@@ -143,7 +143,7 @@ export function AssistantAttachments(
         <SentCommentAttachments
           comments={comments()}
           inline={props.inlineComments && files().length === 0}
-          options={props.options}
+          options={{ ...props.options, onMediaChange: refreshComments }}
           resolve={(item) => commentSources().get(item)!}
         />
         <For each={files()} keyed={false}>

@@ -4,6 +4,7 @@ import {
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
@@ -244,6 +245,28 @@ export function isCronRunMessage(message: Record<string, unknown>): boolean {
 
 export function isForwardedUserMessage(message: Record<string, unknown>): boolean {
   return message.role === "user" && hasForwardedMessageProvenance(message);
+}
+
+const TOOL_MESSAGE_ENVELOPE_FIELDS = [
+  "toolCallId",
+  "tool_call_id",
+  "toolUseId",
+  "tool_use_id",
+  "toolName",
+  "tool_name",
+] as const;
+
+/** Tool-shaped user rows display as tool results, so they do not start a chat turn. */
+export function userMessageStartsDisplayTurn(message: Record<string, unknown>): boolean {
+  if (TOOL_MESSAGE_ENVELOPE_FIELDS.some((field) => typeof message[field] === "string")) {
+    return false;
+  }
+  return !Array.isArray(message.content)
+    ? true
+    : !message.content.some((block) => {
+        const type = readRecord(block)?.type;
+        return isToolCallContentType(type) || isToolResultContentType(type);
+      });
 }
 
 export function isProjectedForwardedMessage(message: Record<string, unknown>): boolean {

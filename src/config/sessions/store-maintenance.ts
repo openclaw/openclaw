@@ -12,7 +12,6 @@ import {
 } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
-import { hasMainSessionRecoveryClaim } from "./restart-recovery-state.js";
 import { isPinnableSessionEntry } from "./session-pin-policy.js";
 import {
   getSessionMaintenanceActivityAt,
@@ -435,7 +434,8 @@ function shouldPreserveNonArchivedMaintenanceEntry(params: SessionMaintenanceEnt
   // the same conversation under an incompatible model, so pressure may exceed
   // configured retention limits while the lock remains.
   return (
-    (hasMainSessionRecoveryClaim(params.entry) && !params.entry?.mainRestartRecovery?.tombstone) ||
+    params.entry?.resumeAfterRestart !== undefined ||
+    params.entry?.pendingFinalDelivery?.kind === "transport-only" ||
     params.entry?.modelSelectionLocked === true ||
     params.preserveKeys?.has(params.key) === true ||
     isRecentSessionMaintenanceEntry(params) ||

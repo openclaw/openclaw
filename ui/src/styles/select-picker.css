@@ -304,7 +304,7 @@ openclaw-select-picker {
   padding: 0 var(--chat-mobile-edge-inset) calc(var(--space-2) + var(--shell-safe-area-bottom));
   border: 0;
   box-shadow: none;
-  animation: picker-sheet-page-in 200ms var(--ease-out);
+  animation: picker-sheet-page-in var(--motion-sheet);
 }
 
 .picker-select--sheet .picker-select__options {

@@ -95,9 +95,8 @@ suite.define(() => {
       await historyPage.goto(`${suite.server.baseUrl}chat`);
       await historyPage.locator(".chat-text").getByText(completed, { exact: true }).waitFor();
       const group = historyPage.locator(".chat-activity-group__summary").first();
-      expect(await group.textContent()).toContain("1 failed");
-      expect((await group.textContent())?.match(/1 skipped/gu)).toHaveLength(1);
-      expect(await group.textContent()).not.toContain("blocked");
+      // Completed work leaves failed and skipped steps to their rows.
+      expect(await group.textContent()).not.toMatch(/failed|skipped|blocked/u);
       expect(await group.locator(".chat-activity-group__label").textContent()).not.toContain(
         "Write (failed)",
       );
@@ -108,8 +107,7 @@ suite.define(() => {
       expect(await historyRow.textContent()).toContain("Skipped");
       await historyRow.click({ position: { x: 4, y: 4 } });
       expect(await historyPage.locator(".chat-tool-card__outcome").textContent()).toBe("Skipped");
-      expect((await group.textContent())?.match(/1 skipped/gu)).toHaveLength(1);
-      expect(await group.textContent()).not.toContain("blocked");
+      expect(await group.textContent()).not.toMatch(/failed|skipped|blocked/u);
     } finally {
       await context.close();
     }

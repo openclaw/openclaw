@@ -96,12 +96,13 @@ listed here.
 | `isCacheTtlEligible`              | Prompt-cache policy for proxy/backhaul providers                                                               | Provider needs proxy-specific cache TTL gating                                                                                                |
 | `buildMissingAuthMessage`         | Replacement for the generic missing-auth recovery message                                                      | Provider needs a provider-specific missing-auth recovery hint                                                                                 |
 | `augmentModelCatalog`             | Synthetic/final catalog rows appended after discovery (deprecated, see below)                                  | Provider needs synthetic forward-compat rows in `models list` and pickers                                                                     |
-| `resolveThinkingProfile`          | Model-specific `/think` level set, display labels, and default                                                 | Provider exposes a custom thinking ladder or binary label for selected models                                                                 |
+| `resolveThinkingProfile`          | Model-specific `/think` level set, display labels, and default                                                 | Ladder must restrict or relabel base levels; derive it from `compat` with `resolveEffortThinkingProfile`                                      |
 | `isBinaryThinking`                | On/off reasoning toggle compatibility hook                                                                     | Provider exposes only binary thinking on/off                                                                                                  |
 | `supportsXHighThinking`           | `xhigh` reasoning support compatibility hook                                                                   | Provider wants `xhigh` on only a subset of models                                                                                             |
 | `resolveDefaultThinkingLevel`     | Default `/think` level compatibility hook                                                                      | Provider owns default `/think` policy for a model family                                                                                      |
 | `isModernModelRef`                | Modern-model matcher for live profile filters and smoke selection                                              | Provider owns live/smoke preferred-model matching                                                                                             |
-| `prepareRuntimeAuth`              | Exchange a configured credential into the actual runtime token/key just before inference                       | Provider needs a token exchange or short-lived request credential                                                                             |
+| `prepareRuntimeAuthV2`            | Capability-aware credential exchange before chat or decision inference                                         | Provider needs a token exchange or short-lived request credential without requiring chat model fields                                         |
+| `prepareRuntimeAuth`              | Legacy chat exchange with its full runtime model contract                                                      | Existing third-party plugins; migrate to V2 for decision support                                                                              |
 | `resolveUsageAuth`                | Resolve usage/billing credentials for `/usage` and related status surfaces                                     | Provider needs custom usage/quota token parsing or a different usage credential                                                               |
 | `fetchUsageSnapshot`              | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved                             | Provider needs a provider-specific usage endpoint or payload parser                                                                           |
 | `createEmbeddingProvider`         | Build a provider-owned embedding adapter for memory/search                                                     | Memory embedding behavior belongs with the provider plugin                                                                                    |
@@ -196,7 +197,7 @@ api.registerProvider({
     contextWindow: 128000,
     maxTokens: 8192,
   }),
-  prepareRuntimeAuth: async (ctx) => {
+  prepareRuntimeAuthV2: async (ctx) => {
     const exchanged = await exchangeToken(ctx.apiKey);
     return {
       apiKey: exchanged.token,

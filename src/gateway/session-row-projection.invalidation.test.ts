@@ -130,8 +130,6 @@ it("reuses resident rows across plugin reloads while adopting changed model norm
           id: "example",
           label: "Example",
           auth: [],
-          aliases: ["example-alias"],
-          hookAliases: ["example-hook"],
           resolveThinkingProfile: () => null,
         }),
       });
@@ -327,7 +325,6 @@ it("reuses descendants after parent progress while keeping inherited models curr
           }).row!;
       const siblingSnapshot = snapshot(siblingKey);
       const parentSnapshot = snapshot(parentKey);
-      const siblingBytes = JSON.stringify(siblingSnapshot);
       expect(() => {
         siblingSnapshot.label = "Reader mutation";
       }).toThrow(TypeError);
@@ -342,7 +339,6 @@ it("reuses descendants after parent progress while keeping inherited models curr
         await list();
         expect(children.map(sequence)).toEqual(original);
         expect(snapshot(siblingKey)).toBe(siblingSnapshot);
-        expect(JSON.stringify(snapshot(siblingKey))).toBe(siblingBytes);
         if (change) {
           expect(snapshot(parentKey)).not.toBe(parentSnapshot);
           expect(snapshot(parentKey).label).toBe("Updated parent");

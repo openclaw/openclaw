@@ -5,10 +5,7 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import {
-  parseSqliteSessionFileMarker,
-  type SqliteSessionFileMarker,
-} from "../config/sessions/legacy-sqlite-marker.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
@@ -17,7 +14,6 @@ import {
   captureSessionActorStorageOwner,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
-import { restoreSessionColdTranscript } from "../config/sessions/session-cold-storage.js";
 import { listDurableSqliteTargetPathsForSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { resolveStateDir } from "../config/state-dir.js";
@@ -31,7 +27,6 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
-import type { SessionCostUsageRollupSnapshot } from "./session-cost-usage-cache.kernel.js";
 import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
 import { runSessionActorUsage } from "./session-cost-usage-memory.js";
 import {
@@ -270,16 +265,6 @@ async function runPreparedUsageCostWorker(
       scope.assertCurrent();
       signal?.throwIfAborted();
     };
-    const resolveBinding = (target: Pick<SqliteSessionFileMarker, "agentId" | "storePath">) => {
-      const binding = stores.find(
-        (entry) => entry.agentId === target.agentId && entry.storePath === target.storePath,
-      )?.database;
-      if (!binding) {
-        throw new Error("Usage worker requested an unowned transcript database");
-      }
-      return binding;
-    };
-    const pruneRows: SessionCostUsageRollupSnapshot[] = [];
     const lock =
       capturedOperation.kind === "refresh"
         ? prepareSessionCostUsageRefreshLock(location.agentId, location.databasePath, {
@@ -361,29 +346,15 @@ async function runPreparedUsageCostWorker(
                 case "pricing":
                   output = request.input.map(resolveCost);
                   break;
-                case "restore": {
-                  const binding = resolveBinding(request.input);
-                  await restoreSessionColdTranscript(
-                    { ...request.input, storePath: binding.path, env: location.env },
-                    assertRequestCurrent,
-                    undefined,
-                    undefined,
-                    context.signal,
-                  );
-                  break;
-                }
                 case "prune-rows":
-                  for (const row of request.input) {
-                    pruneRows.push({
+                  await requireLock("prune cache rows").pruneRows(
+                    request.input.map((row) => ({
                       key: row.key,
                       valueJson: row.value,
                       updatedAt: row.updatedAt,
-                    });
-                  }
-                  break;
-                case "prune":
-                  await requireLock("prune cache rows").pruneRows(pruneRows, context.signal);
-                  pruneRows.length = 0;
+                    })),
+                    context.signal,
+                  );
                   break;
                 case "write":
                   output = await requireLock("write cache rows").writeRollup(

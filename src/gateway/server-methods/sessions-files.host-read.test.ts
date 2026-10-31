@@ -138,7 +138,9 @@ it("downloads original binary bytes beyond preview limits with safe HTTP metadat
   const bytes = Buffer.alloc(8 * 1024 * 1024 + 17, 0xff);
   bytes.write("PK\x03\x04", "binary");
   fs.writeFileSync(path.join(workspaceRoot, filename), bytes);
+  hoisted.loadSessionEntry.mockClear();
   const download = await fixture.files.ok("download", filename, undefined, connection);
+  expect(hoisted.loadSessionEntry).toHaveBeenCalledOnce();
   expect(download).toMatchObject({ filename, mimeType: "application/zip" });
   const fetched = await connection.fetch(download.url);
   expect(fetched.response.statusCode).toBe(200);
@@ -309,6 +311,7 @@ it("keeps host previews bounded and classifies image and unsupported bytes", asy
         type: "session_file_too_large",
         maxPreviewBytes: 256 * 1024,
         size: bytes.length,
+        root: workspaceRoot,
       });
     } else {
       const { file } = expectOkPayload(result);
@@ -359,4 +362,91 @@ it("rejects escaped and symlinked write targets without touching outside files",
   }
   expect(fs.readFileSync(outsidePath, "utf8")).toBe(outsideContent);
   expect(fs.existsSync(escapedPath)).toBe(false);
+});
+
+const previewPolicy =
+  "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
+function previewDocument(script: string) {
+  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${previewPolicy}"><script defer src="${script}"></script></head><body><p>Ready</p></body></html>`;
+}
+
+it("serves only the preview's exact admitted bytes and retires them with their owner", async () => {
+  using connection = createSessionFileDownloadClient();
+  using other = createSessionFileDownloadClient();
+  const fixture = prepareHostFileRead({ permissionMode: "read-only" });
+  const html = previewDocument("app.js");
+  const code = 'document.querySelector("p").textContent = "Loaded";';
+  fs.writeFileSync(path.join(workspaceRoot, "index.html"), html);
+  fs.writeFileSync(path.join(workspaceRoot, "app.js"), code);
+  const options = { ...fixture.options, ...connection };
+  const preview = await fixture.files.ok(
+    "preview",
+    { path: "index.html", html },
+    undefined,
+    options,
+  );
+  expect(preview.status).toBe("ready");
+  expect(preview.html).toContain(`content="${previewPolicy}"`);
+  const url = new URL("app.js", "http://preview.invalid" + preview.sandboxPath).pathname;
+  const response = await connection.fetch(url);
+  expect(response.response.statusCode).toBe(200);
+  expect(Buffer.from(response.body as Uint8Array).toString()).toBe(code);
+  expect(response.response.getHeader("content-type")).toBe("text/javascript; charset=utf-8");
+  expect(response.response.getHeader("cache-control")).toBe("private, no-store");
+  expect(response.response.getHeader("access-control-allow-origin")).toBeNull();
+  expect((await connection.fetch(url + "?ungranted=1")).response.statusCode).toBe(404);
+  expect((await connection.fetch(url.replace("app.js", "index.html"))).response.statusCode).toBe(
+    404,
+  );
+  expect((await other.fetch(url)).response.statusCode).toBe(404);
+  expect(
+    (
+      await fixture.files.ok(
+        "preview.release",
+        { path: "index.html", previewId: preview.previewId },
+        undefined,
+        { ...fixture.options, ...other },
+      )
+    ).released,
+  ).toBe(false);
+  fs.writeFileSync(path.join(workspaceRoot, "app.js"), "replacement");
+  expect((await connection.fetch(url)).response.statusCode).toBe(404);
+  fs.writeFileSync(path.join(workspaceRoot, "app.js"), code);
+  expect(
+    (
+      await fixture.files.ok(
+        "preview.release",
+        { path: "index.html", previewId: preview.previewId },
+        undefined,
+        options,
+      )
+    ).released,
+  ).toBe(true);
+  expect((await connection.fetch(url)).response.statusCode).toBe(404);
+  expect(fs.readFileSync(path.join(workspaceRoot, "index.html"), "utf8")).toBe(html);
+});
+
+it("rechecks preview host-read authority after the asset read before HTTP delivery", async () => {
+  using connection = createSessionFileDownloadClient();
+  const fixture = prepareHostFileRead({ permissionMode: "full" });
+  const external = path.join(outsideDirs.make("preview-private-"), "asset.js");
+  fs.writeFileSync(external, "window.privateValue = 1;");
+  const html = previewDocument(path.relative(workspaceRoot, external));
+  fs.writeFileSync(path.join(workspaceRoot, "index.html"), html);
+  const preview = await fixture.files.ok("preview", { path: "index.html", html }, undefined, {
+    ...fixture.options,
+    ...connection,
+  });
+  expect(preview.status).toBe("ready");
+  const url = new URL(
+    path.relative(workspaceRoot, external),
+    "http://preview.invalid" + preview.sandboxPath,
+  ).pathname;
+  const read = workspaceFs.readWorkspaceFile;
+  vi.spyOn(workspaceFs, "readWorkspaceFile").mockImplementationOnce(async (...args) => {
+    const result = await read(...args);
+    fixture.entry.permissionMode = "read-only";
+    return result;
+  });
+  expect((await connection.fetch(url)).response.statusCode).toBe(404);
 });

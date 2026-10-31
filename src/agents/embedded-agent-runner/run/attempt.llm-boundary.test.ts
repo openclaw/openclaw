@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ImageContent, UserMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
@@ -87,6 +87,32 @@ describe("normalizeMessagesForLlmBoundary", () => {
         operatorMessage: { turnScoped: true },
       },
     ]);
+  });
+
+  it("removes the synthetic tail without copying or mutating resident history", () => {
+    const earlier = user("Resident question");
+    const messages: AgentMessage[] = [earlier];
+    const before = JSON.stringify(messages);
+    const slice = vi.spyOn(Array.prototype, "slice");
+    let projected: AgentMessage[];
+    let historyCopies: number;
+    try {
+      projected = normalizeMessagesForCurrentPromptBoundary({
+        messages,
+        prompt: "Synthetic current question",
+        includeTimestamp: false,
+      });
+      historyCopies = slice.mock.contexts.filter(
+        (receiver) => Array.isArray(receiver) && receiver[0] === earlier,
+      ).length;
+    } finally {
+      slice.mockRestore();
+    }
+    expect(historyCopies).toBe(0);
+    expect(projected).toEqual([earlier]);
+    expect(projected[0]).toBe(earlier);
+    expect(projected).not.toBe(messages);
+    expect(JSON.stringify(messages)).toBe(before);
   });
 
   it.each(["aborted"] as const)(

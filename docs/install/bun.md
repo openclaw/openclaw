@@ -128,7 +128,7 @@ rollback, and custom-bin behavior.
 
 Bun blocks dependency lifecycle scripts unless explicitly trusted. For this repo, the commonly blocked scripts are not required:
 
-- `baileys` `preinstall`: checks Node major >= 20 (OpenClaw requires Node 24.16+ or 26.1+, with Node 26 recommended)
+- `baileys` `preinstall`: checks Node major >= 20 (OpenClaw accepts Node 24.16.0+ on 24.x or 26.1.0+, with 24.22.1+/26.12.1+ strongly recommended for security)
 - `protobufjs` `postinstall`: emits warnings about incompatible version schemes (no build artifacts)
 
 If you hit a runtime issue that needs these scripts, trust them explicitly:

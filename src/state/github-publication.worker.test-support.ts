@@ -73,7 +73,7 @@ export function holdNextReply(
   commandType = "githubPublications.repository",
   beforeDispatch?: () => void,
 ) {
-  const ready = createDeferredCore();
+  const ready = createDeferredCore<Extract<SqliteWorkerReply, { ok: true }>>();
   let deliver: ((error?: Error) => void) | undefined;
   let target: { worker: Worker; id: number } | undefined;
   // Restored spies retain native call-through; Reflect.apply supplies each live Worker.
@@ -119,7 +119,7 @@ export function holdNextReply(
           : reply;
         Reflect.apply(emit, this, [event, outcome, ...args]);
       };
-      ready.resolve();
+      ready.resolve(reply);
       return true;
     }
     return Reflect.apply(emit, this, [event, reply, ...args]);

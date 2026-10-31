@@ -8,6 +8,7 @@ import {
   clearModelCatalogCache,
   beginModelCatalogRead,
   publishModelCatalogResult,
+  invalidateModelCatalogCache,
 } from "./model-catalog-cache.ts";
 import { ModelCatalogReader } from "./model-catalog-reader.ts";
 import { peekModelCatalog, subscribeModelCatalogCache } from "./model-catalog-store.ts";
@@ -173,3 +174,47 @@ it("observes each admitted read while preserving the non-throwing request contra
   await expect(retired).resolves.toBeUndefined();
   expect(onRead).toHaveBeenCalledTimes(3);
 });
+
+it.each(["document", "presentation"] as const)(
+  "defers hidden %s catalog changes and catches up once on reveal",
+  async (hiddenBy) => {
+    let visible = true;
+    const visibility = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockImplementation(() => (hiddenBy === "document" && !visible ? "hidden" : "visible"));
+    onTestFinished(() => visibility.mockRestore());
+    const onRead = vi.fn<(read: Promise<ModelCatalogResult | undefined>) => void>();
+    const { reader, client, current } = fixture({
+      isPresented: () => hiddenBy !== "presentation" || visible,
+      onRead,
+    });
+    current().request.mockResolvedValue(first);
+    await reader.read();
+    current().request.mockClear();
+    onRead.mockClear();
+    visible = false;
+    current().request.mockResolvedValue(second);
+    for (let index = 0; index < 60; index++) {
+      invalidateModelCatalogCache(client, main);
+      current().testOptions.onEvent?.({
+        type: "event",
+        event: "chat.metadata.changed",
+        payload: { modelCatalogChanged: true, commandsChanged: false, authChanged: false },
+      });
+    }
+    expect(current().request).not.toHaveBeenCalled();
+    expect(onRead).not.toHaveBeenCalled();
+    visible = true;
+    if (hiddenBy === "document") {
+      document.dispatchEvent(new Event("visibilitychange"));
+      document.dispatchEvent(new Event("visibilitychange"));
+    } else {
+      reader.resume();
+      reader.resume();
+    }
+    await onRead.mock.calls[0]![0];
+    expect(current().request).toHaveBeenCalledTimes(1);
+    expect(reader.snapshot.models).toEqual(second.models);
+    expect(onRead).toHaveBeenCalledOnce();
+  },
+);

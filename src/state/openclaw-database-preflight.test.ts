@@ -48,6 +48,7 @@ import {
   ensureDevicePairSetupBootstrapSchema,
 } from "./openclaw-state-db-schema-additive.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
+import { TEMPLATE_STATE_TABLE_RENAMES } from "./openclaw-state-db-schema-v36-template-names.js";
 import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
@@ -57,6 +58,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   withStateMigrationBackupForTest,
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
 } from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -492,7 +494,19 @@ it("upgrades captured subagent authority state without rewriting rows and refuse
   let catalog;
   {
     using writer = openRawDatabase(pathname);
+    // Raw catalog equality needs a post-cutover reference, not fresh CREATE
+    // spelling: SQLite quotes table names after the legitimate rename cycle.
+    for (const table of [
+      ...TEMPLATE_STATE_TABLE_RENAMES.map(([, current]) => current),
+      "agent_provenance",
+    ]) {
+      if (writer.prepare("SELECT 1 FROM sqlite_schema WHERE name = ?").get(table)) {
+        writer.exec(`ALTER TABLE ${table} RENAME TO ${table}_fixture_cutover;
+          ALTER TABLE ${table}_fixture_cutover RENAME TO ${table};`);
+      }
+    }
     catalog = writer.prepare(catalogSql).all();
+    restorePreTemplateStateIdentifiersForTest(writer);
     addPreCutoverClientCredentialTablesForTest(writer);
     writer.exec(`PRAGMA user_version = 24;
       UPDATE schema_meta SET schema_version = 24 WHERE meta_key = 'primary';

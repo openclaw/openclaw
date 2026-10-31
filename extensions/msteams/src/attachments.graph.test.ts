@@ -238,29 +238,16 @@ describe("msteams attachment helpers", () => {
       expectAdvertised([createHtmlAttachment("<div><at>Bot</at> hello</div>")], []);
     });
 
-    it("does not count HTML references separately from files or cards", () => {
+    it.each([
+      [CONTENT_TYPE_APPLICATION_PDF, { contentUrl: "https://x/x.pdf" }, true],
+      ["application/vnd.microsoft.card.adaptive", { content: { type: "AdaptiveCard" } }, false],
+    ])("does not count HTML references separately from %s", (contentType, fields, isFile) => {
       expectAdvertised(
         [
-          createHtmlAttachment('<attachment id="file-1"></attachment>'),
-          {
-            id: "file-1",
-            contentType: CONTENT_TYPE_APPLICATION_PDF,
-            contentUrl: "https://x/x.pdf",
-          },
+          createHtmlAttachment('<attachment id="ref-1"></attachment>'),
+          { id: "ref-1", contentType, ...fields },
         ],
-        [{ kind: "document", sourceId: "file-1" }],
-      );
-
-      expectAdvertised(
-        [
-          createHtmlAttachment('<attachment id="card-1"></attachment>'),
-          {
-            id: "card-1",
-            contentType: "application/vnd.microsoft.card.adaptive",
-            content: { type: "AdaptiveCard" },
-          },
-        ],
-        [],
+        isFile ? [{ kind: "document", sourceId: "ref-1" }] : [],
       );
     });
 
@@ -278,18 +265,26 @@ describe("msteams attachment helpers", () => {
       );
     });
 
-    it("counts repeated inline URLs once while keeping data images per occurrence", () => {
-      const repeatedUrl = "https://example.com/repeated.png";
+    it.each([
+      ["emoji/smile/default/30_f.png", "🙂", false],
+      ["emoji/1f44b/default/30_f.png", "", false],
+      ["brand/brand.png", "brand.png", true],
+    ])("classifies Teams CDN %s without hiding real images", (path, alt, isMedia) => {
+      const url = `https://statics.teams.cdn.office.net/evergreen-assets/${path}`;
       expectAdvertised(
-        [createHtmlAttachment(`<img src="${repeatedUrl}"><img src="${repeatedUrl}">`)],
-        [{ kind: "image", sourceId: repeatedUrl }],
+        [createHtmlAttachment(`<img src="${url}" alt="${alt}"><img src="https://x/photo.png">`)],
+        [
+          ...(isMedia ? [{ kind: "image" as const, sourceId: url }] : []),
+          { kind: "image", sourceId: "https://x/photo.png" },
+        ],
       );
+    });
 
-      const dataUrl = "data:image/png;base64,AQ==";
-      expectAdvertised(
-        [createHtmlAttachment(`<img src="${dataUrl}"><img src="${dataUrl}">`)],
-        [{ kind: "image" }, { kind: "image" }],
-      );
+    it.each<[string, Parameters<typeof expectAdvertised>[1]]>([
+      ["https://x/repeated.png", [{ kind: "image", sourceId: "https://x/repeated.png" }]],
+      ["data:image/png;base64,AQ==", [{ kind: "image" }, { kind: "image" }]],
+    ])("counts repeated URL/data occurrences correctly: %s", (src, expected) => {
+      expectAdvertised([createHtmlAttachment(`<img src="${src}"><img src="${src}">`)], expected);
     });
   });
 

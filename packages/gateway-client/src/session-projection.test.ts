@@ -730,3 +730,34 @@ it("protects every concurrent active stream when terminal retention reaches its 
   expect(state.runs["active-0"]).toBeUndefined();
   expect(state.runs["active-204"]?.status).toBe("streaming");
 });
+it("bounds retained content receipts while remembering distinct late finals", () => {
+  const first = reply("First accepted final");
+  const prefix = "large synthetic reply 🦊 ".repeat(4_000);
+  const lateReply = (index: number) => reply(`${prefix}${index}`);
+  let state = announce(first);
+  for (let index = 0; index < 40; index += 1) {
+    state = terminal(state, { message: lateReply(index) });
+  }
+  state = reduce(state, {
+    type: "snapshotLoaded",
+    scope: primaryScope,
+    messages: [],
+    options: { shouldIncludeMessage: () => false },
+  });
+  expectRows(state);
+  expect(state.runs[runId]?.message).toBe(first);
+  const receipts = state.runs[runId]?.acceptedFinalMessageIdentities ?? [];
+  expect(receipts).toHaveLength(32);
+  const encoder = new TextEncoder();
+  expect(
+    Math.max(...receipts.map((value) => encoder.encode(value).byteLength)),
+  ).toBeLessThanOrEqual(80);
+  expect(acceptedFinal(state.runs[runId], lateReply(0))).toBe(false);
+  expect(acceptedFinal(state.runs[runId], lateReply(39))).toBe(true);
+  expect(terminal(state, { message: lateReply(39) })).toBe(state);
+  const different = reply(`${prefix}39 changed suffix`);
+  expect(acceptedFinal(state.runs[runId], different)).toBe(false);
+  const accepted = terminal(state, { message: different });
+  expect(accepted.runs[runId]?.message).toBe(first);
+  expect(acceptedFinal(accepted.runs[runId], different)).toBe(true);
+});

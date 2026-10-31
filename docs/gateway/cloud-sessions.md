@@ -128,6 +128,8 @@ Repository-only checkpoint history remains until session deletion. While a worke
 
 Reset keeps the repository and accepted changes but ends unfinished publication requests from the previous session lifecycle. Review the retained changes and request publication again after reset. Existing GitHub commits and pull requests remain unchanged.
 
+Completed publication receipts remain readable by request ID after reset. A pending transcript report from the previous lifecycle is retired instead of being appended to the reset session.
+
 ## Related
 
 - [Cloud Workers](/gateway/cloud-workers) — profiles, dispatch, moves, security model

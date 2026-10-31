@@ -14,7 +14,11 @@ const proc = vi.hoisted(() => ({
 }));
 
 // Count synchronous filesystem work too, so restoring the old scan cannot evade the budget.
-vi.mock("node:fs", () => ({ readdirSync: proc.entries, readFileSync: proc.stat }));
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  readdirSync: proc.entries,
+  readFileSync: proc.stat,
+}));
 vi.mock("node:fs/promises", () => ({ readdir: proc.entries, readFile: proc.stat }));
 vi.mock("@openclaw/proc-safe/reaper", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/proc-safe/reaper")>()),

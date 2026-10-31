@@ -8,7 +8,9 @@ import {
   createShutdownCleanupController,
   currentRootWork,
   GATEWAY_WORK_ADMISSION_STATE,
+  getActiveGatewayRootWorkCount,
   reloadWaitingRoots,
+  subscriptionRootWork,
   type GatewayDrainReason,
   type GatewayRootWorkAdmission,
   type GatewaySuspendAdmissionPhase,
@@ -86,6 +88,7 @@ function createGatewayRootWorkAdmission(
     origin: normalizedOrigin || "gateway",
     references: 1,
     released: false,
+    ...(subscriptionRootWork.getStore() ? { subscription: true as const } : {}),
   };
   GATEWAY_WORK_ADMISSION_STATE.activeRootWork.add(admission);
   const release = createGatewayRootWorkRelease(admission);
@@ -396,7 +399,7 @@ export function tryBeginGatewayPreparedRestartRootWorkAdmission(): GatewayRootWo
   if (
     isGatewayRestartDraining() ||
     GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "prepared" ||
-    GATEWAY_WORK_ADMISSION_STATE.activeRootWork.size > 0
+    getActiveGatewayRootWorkCount() > 0
   ) {
     return null;
   }
@@ -602,6 +605,14 @@ export async function runWithRetainedGatewayRootWork<T>(run: () => T | Promise<T
   } finally {
     release?.();
   }
+}
+
+/**
+ * Opens a long-lived subscription whose roots do not defer restart or suspension.
+ * The caller must retire it on the restart drain signal; drain then waits for its close.
+ */
+export function runAsGatewaySubscription<T>(run: () => T): T {
+  return subscriptionRootWork.run(true, run);
 }
 
 /** Starts process-lifetime work without inheriting the request root that created it. */

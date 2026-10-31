@@ -660,6 +660,28 @@ export async function restoreWorkshopSkill(
   });
 }
 
+/**
+ * Publishes the live skill with `files` written over it as one versioned swap. Files not listed
+ * are kept byte for byte, binary assets included; without a live skill the files are the skill.
+ */
+export async function publishSkillOverlay(
+  paths: MutationPaths,
+  files: ReadonlyArray<readonly [string, string | Buffer]>,
+): Promise<string | undefined> {
+  const live = await pathExists(paths.skillDir);
+  return await publishSkillBundle(paths, "write_file", async (staging) => {
+    if (live) {
+      await fs.cp(paths.skillDir, staging, {
+        recursive: true,
+        filter: async (source) => !(await fs.lstat(source)).isSymbolicLink(),
+      });
+    }
+    for (const [file, content] of files) {
+      await writeStagedFile(staging, file, content);
+    }
+  });
+}
+
 export async function writeStagedFile(staging: string, filePath: string, content: string | Buffer) {
   const destination = path.join(staging, ...filePath.split("/"));
   await fs.mkdir(path.dirname(destination), { recursive: true });

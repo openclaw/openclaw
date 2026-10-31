@@ -9,11 +9,11 @@ OpenClaw installs its runtime automatically from the running Gateway. Profiles n
 
 ## Automatic Linux Node toolchains
 
-Linux x64 and arm64 workers need no Node installation in `settings.setup`. OpenClaw preserves a supported Node on `PATH` when npm, npx, and Corepack are available; otherwise it installs its pinned official release after SHA-256 verification. The image needs compatible glibc, `curl`, `tar`, and `sha256sum`, plus HTTPS access to nodejs.org.
+Linux x64 and arm64 workers need no Node installation in `settings.setup`. OpenClaw preserves a supported Node on `PATH`; otherwise it installs its pinned official release after SHA-256 verification. Explicit npm profiles and repository seed/setup preparation require npm, npx, and Corepack before reusing the existing toolchain. Only bundle runtime enrollment uses the Node-only prerequisite. Installing a toolchain needs compatible glibc, `curl`, `tar`, and `sha256sum`, plus HTTPS access to nodejs.org; a supported bundle-mode Node installation needs no download.
 
 Prepared repositories select their Node requirement from `.nvmrc`, `.node-version`, `.tool-versions` (`nodejs` or `node`), `mise.toml` (`[tools] node`), then `package.json` `engines.node`. Versions, majors, SemVer ranges, `node`/`latest`, and LTS aliases resolve to a matching official Linux release; `system` retains the bootstrap Node. Invalid declarations or missing releases fail with a repair hint.
 
-Verified toolchains survive snapshot forks. Repository commands use the prepared HOME's `.local/bin` shims first. A declared `packageManager` gets user-writable Corepack shims without sudo. The OpenClaw runtime uses its own supported Node, independently of the repository's version. Custom profile Node installs remain supported. macOS and Windows need image- or setup-provided Node and npm; OpenClaw does not install them there.
+Verified toolchains survive snapshot forks. Repository commands use the prepared HOME's `.local/bin` shims first. A declared `packageManager` gets user-writable Corepack shims without sudo. The OpenClaw runtime uses its own supported Node, independently of the repository's version. Custom profile Node installs remain supported. macOS and Windows need image- or setup-provided Node (and npm for explicit npm profiles); OpenClaw does not install them there.
 
 ## The setup command
 
@@ -29,17 +29,15 @@ Private package access uses [setup secrets](/gateway/config-cloud-workers#setup-
 
 For `windows/normal`, Crabbox executes `settings.setup` with Windows PowerShell. Write setup commands for PowerShell; Linux, macOS, and Windows (WSL2) continue to use POSIX scripts. A profile with setup cannot override its OS across that interpreter boundary: OpenClaw rejects the request before allocation and omits incompatible OS and machine choices. Use a separate profile with `settings.target: "windows/normal"` and PowerShell setup for native Windows. Profiles without setup retain all backend-supported OS choices. OpenClaw does not inspect or translate scripts; you remain responsible for compatibility between POSIX targets.
 
-For example, this prerequisite check uses the machine's existing Node and npm installation:
+For example, this prerequisite check uses the machine's existing Node installation:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
 & (Get-Command node.exe -CommandType Application -ErrorAction Stop).Source --version
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& (Get-Command npm.cmd -CommandType Application -ErrorAction Stop).Source --version
 exit $LASTEXITCODE
 ```
 
-Use a Crabbox bootstrap or image that supplies a supported Node.js release and npm on the machine `PATH`, with npm's CLI installed beside `node.exe` under `node_modules/npm`. OpenClaw fails enrollment with a prerequisite message if Node or that npm installation is missing; it does not install Node. npm installs the node runtime archive, and OpenClaw extracts worker bundles with its Node archive library.
+Use a Crabbox bootstrap or image that supplies a supported Node.js release and tar.exe on the machine PATH. Bundle profiles extract the verified, preassembled runtime without npm. Explicit npm profiles additionally require npm's CLI beside node.exe under node_modules/npm. OpenClaw reports missing prerequisites rather than installing Node there. Worker bundles use the Node archive library.
 
 Headless Windows guests must include Crabbox's managed launcher at `C:\Program Files\Crabbox\bin\Start-CrabboxDetachedProcess.ps1`. It keeps the node alive after Crabbox closes its SSH command. Enrollment fails with guidance if the launcher is absent. A hidden PowerShell parent redirects node output to `node.log` under its isolated state directory because the launcher does not inherit SSH output handles.
 
@@ -55,9 +53,17 @@ Before enrollment, the Gateway prepares a reusable archive from its current buil
 
 The worker bundle and its standalone GitHub launcher include the pinned Windows permission-inspection helper and the package metadata needed for fallback inspection. These assets are covered by the same archive manifest and content verification.
 
-Archives and successful installs are verified by content digest, rather than version alone, and reused when they match. A snapshot fork tops up an older runtime before enrollment. Native dependencies install for the destination OS and CPU, so registry access is still required; this is not an offline dependency bundle. Enrollment and archive-download credentials are not passed to npm or the node process.
+Archives and fresh installations are verified by content digest, rather than version alone. A snapshot fork tops up an older runtime before enrollment. For `install: "bundle"`, the node bootstrap archive includes the preassembled production dependency closure for each prepared OS and CPU. Workers verify the archive size and SHA-256, reject unsafe archive paths and links, extract into private staging, check the manifest pin and target/build identity, then atomically publish the runtime. Cold bundle-mode node-bootstrap caches and cache misses never invoke npm, resolve dependencies, or run package lifecycle scripts. Missing target dependencies fail with a Gateway preparation hint. Enrollment and archive-download credentials are not passed to extraction tools or the node process.
 
-Each prepared runtime archive also gets a best-effort npm project lock, generated once by the Gateway and transferred separately from the lockless runtime tarball. Fresh workers use `npm ci --omit=dev` with that lock, while npm still selects and installs native optional packages for the worker's OS and CPU. A missing lock, failed download, or rejected locked install falls back to the ordinary unlocked install with a warning. Lock-generation failures are cached with the prepared archive, so each worker does not retry generation.
+Node-backed profiles using `install: "npm"` retain target-native node bootstrap,
+including exact registry pins, bundled JavaScript, package lifecycle hooks, and
+installation verification. Their worker loop still uses the pinned Gateway
+bundle. SSH-backed npm worker installation retains its exact released-package
+proof. Npm bootstrap can provision a different OS or CPU without preassembled
+dependencies for that target. Its archive and producer cache remain distinct from bundle mode.
+Startup of an already installed bundle runtime checks the SHA-256 of `node-runtime.manifest.json` against the Gateway's expected manifest pin, along with package/build/platform compatibility and the CLI version probe. It does not enumerate, stat, or hash the installed payload inventory. Missing or mismatched manifest pins refuse startup. This check proves manifest identity, not the integrity of every installed file: payload changes that leave the manifest unchanged are not detected by it. Fresh installations still verify archive size and SHA-256 and reject unsafe tar paths and entry types before extracting into private staging and publishing the runtime. Worker archive integrity and current worker, credential, and session ownership checks remain unchanged.
+
+Each explicit npm runtime archive also gets a best-effort npm project lock, generated once by the Gateway and transferred separately from the lockless runtime tarball. Fresh workers use `npm ci --omit=dev` with that lock, while npm still selects and installs native optional packages for the worker's OS and CPU. A missing lock, failed download, or rejected locked install falls back to the ordinary unlocked install with a warning. Lock-generation failures are cached with the prepared archive, so each worker does not retry generation.
 
 Successful worker starts log the `openclaw-bootstrap-*` phase durations at info level in the Gateway log, including download, installation, and verification. The installation phase can overlap the independent worker-bundle download. Unlocked-install fallback warnings also appear in the Gateway log.
 
@@ -66,6 +72,8 @@ Concurrent workspace installs on the same node share an in-progress integrity sc
 For source builds, run `pnpm build` and restart the Gateway before dispatching. Bootstrap does not compile an unbuilt checkout or copy arbitrary source files. Missing or mismatched build metadata gives a rebuild-and-restart error. Runtime modules and installation scripts come from the package's published file list; custom distributions must declare their launcher helpers there. Private QA-only build chunks are excluded only when build metadata verifies their ownership; incomplete metadata or imports fail preparation.
 
 OpenClaw worker turns install the matching worker bundle, reusing a verified archive retained in a prepared image when available. Codex remote execution starts its managed exec-server directly. Node-command allowlists and invocation approval still apply. See [runtime support](/gateway/cloud-workers/dispatching-a-session#runtime-support) and [the security model](/gateway/cloud-workers/security-model).
+
+Cross-platform Gateway installations prepare additional dependency inputs under `node-runtime-dependencies/<platform>-<arch>/` inside the immutable package (for example, `linux-x64`). Each input contains the exact root `package.json`, its complete installed production `node_modules`, linked workspace packages, and selected plugins' installed dependency directories under `extensions/`, and a `runtime-input.json` receipt with `platform`, `arch`, `packageJsonSha256`, and `lockfileSha256`. The hashes must match the Gateway's `package.json` and `pnpm-lock.yaml`. Build/install dependencies and native addons on the target platform using the frozen lockfile; copy compiled workspace distributions from the same source build. Keep all links within that input. The canonical producer materializes regular archive files from these installed dependencies; it never resolves or downloads packages. Qualify the resulting runtime with a real cold launch on each target. A macOS dependency tree alone does not qualify Linux.
 
 ### Reuse a node runtime archive after Gateway restart
 

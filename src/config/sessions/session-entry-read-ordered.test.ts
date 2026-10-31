@@ -1,19 +1,30 @@
+import fs from "node:fs";
 import { serialize } from "node:v8";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
 } from "../../state/openclaw-agent-write-admission.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { fenceUserProfileMutationAuthority } from "../../state/user-profile-events.js";
+import { prepareCurrentUserProfileIdentity } from "../../state/user-profile-reads.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { resolveInternalSessionEffectsIdentity } from "./internal-session-key.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
-import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import {
+  patchSessionEntryCore,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { entryFixture, test } from "./session-entry-fixture.test-support.js";
 import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import {
@@ -22,12 +33,157 @@ import {
   withSessionEntriesFromStoresInWorker,
   withSessionStoreReaderInWorker,
 } from "./session-entry-read-runtime.js";
+import type { PreparedSessionEntryWorkerRead } from "./session-entry-read-runtime.types.js";
 import {
   addSessionMemberInWorker,
   recordSessionParticipantInWorker,
   removeSessionMemberInWorker,
 } from "./session-sharing-store.async.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
+
+test.for(["empty", "empty-ordered", "memory", "mixed", "ordered"] as const)(
+  "retains the captured preparation through %s cohort consumption",
+  async (kind, { store }) => {
+    store.replace();
+    const memoryScope = {
+      agentId: "private",
+      env: store.env,
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "private", env: store.env }),
+      sessionKey: "agent:private:secret",
+    };
+    const memoryInput = { ...memoryScope, sessionKeys: [memoryScope.sessionKey] };
+    if (kind === "memory" || kind === "mixed") {
+      await replaceSessionEntry(memoryScope, {
+        sessionId: "secret",
+        updatedAt: 1,
+        incognito: true,
+      });
+    }
+    const inputs = kind.startsWith("empty")
+      ? []
+      : kind === "memory"
+        ? [memoryInput]
+        : kind === "mixed"
+          ? [store.input, memoryInput]
+          : [store.input];
+    const entered = createDeferred();
+    const release = createDeferred();
+    const prepareConsume = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const consume = vi.fn((reads: readonly PreparedSessionEntryWorkerRead[]) => {
+      reads.forEach((read) => read.assertCurrent());
+      return reads.flatMap((read) => read.result.entries).length;
+    });
+    const options = { ordered: kind !== "empty", prepareConsume };
+    const reading = withSessionEntriesFromStoresInWorker(inputs, consume, options);
+    options.prepareConsume = vi.fn(async () => {
+      throw new Error("Changed preparation ran");
+    });
+    try {
+      await awaitGateBeforeSettlement(entered.promise, reading, "Preparation did not begin");
+      expect(consume).not.toHaveBeenCalled();
+      release.resolve();
+      expect(await reading).toBe(inputs.length);
+      expect(prepareConsume).toHaveBeenCalledTimes(1);
+      expect(options.prepareConsume).not.toHaveBeenCalled();
+      expect(fs.existsSync(memoryScope.storePath)).toBe(false);
+    } finally {
+      release.resolve();
+      await reading.catch(() => {});
+      memorySessionActorOwners.closeDatabase({ ...memoryScope, path: memoryScope.storePath });
+    }
+  },
+);
+
+test("does not yield an empty cohort when preparation is absent", async () => {
+  let consumed = false;
+  const reading = withSessionEntriesFromStoresInWorker([], () => {
+    consumed = true;
+  });
+  expect(consumed).toBe(true);
+  await reading;
+});
+
+test.for(["reject", "abort", "native-write"] as const)(
+  "releases ordered custody without consumption after preparation %s",
+  async (failure, { store }) => {
+    store.replace();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const controller = new AbortController();
+    const consume = vi.fn();
+    const reading = withSessionEntriesFromStoresInWorker([store.input], consume, {
+      ordered: true,
+      signal: controller.signal,
+      prepareConsume: async () => {
+        entered.resolve();
+        await release.promise;
+        if (failure === "reject") {
+          throw new Error("Preparation failed");
+        }
+      },
+    });
+    const refused = expect(reading).rejects.toThrow();
+    let writer: Promise<unknown> | undefined;
+    try {
+      await awaitGateBeforeSettlement(entered.promise, reading, "Preparation did not begin");
+      const next = vi.fn();
+      writer = runOpenClawAgentWriteAdmission(store.options, next);
+      expect(next).not.toHaveBeenCalled();
+      if (failure === "abort") {
+        controller.abort(new Error("Caller cancelled"));
+      } else if (failure === "native-write") {
+        store.replace({ category: "Private" });
+      }
+      release.resolve();
+      await refused;
+      await writer;
+      expect(consume).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([reading, ...(writer ? [writer] : [])]);
+    }
+  },
+);
+
+test("settles pending profile identity preparation while agent custody stays held", async ({
+  store,
+}) => {
+  store.replace();
+  const options = { env: store.env };
+  const profile = ensureProfileForEmail("person@example.test", options);
+  const context = captureOpenClawStateWorkerContext(options);
+  const mutation = fenceUserProfileMutationAuthority(context.admission, {
+    profiles: [profile.id],
+    identities: [profile.id],
+    channels: [],
+  });
+  const entered = createDeferred();
+  let identity: Awaited<ReturnType<typeof prepareCurrentUserProfileIdentity>> | undefined;
+  const consume = vi.fn(() => identity?.assertCurrent());
+  const reading = withSessionEntriesFromStoresInWorker([store.input], consume, {
+    ordered: true,
+    prepareConsume: async () => {
+      entered.resolve();
+      identity = await prepareCurrentUserProfileIdentity(profile.id, options);
+    },
+  });
+  try {
+    await awaitGateBeforeSettlement(entered.promise, reading, "Preparation did not begin");
+    expect(consume).not.toHaveBeenCalled();
+    mutation.settle(true);
+    await reading;
+    expect(identity?.profile?.profileId).toBe(profile.id);
+    expect(consume).toHaveBeenCalledTimes(1);
+  } finally {
+    mutation.settle(true);
+    await reading.catch(() => {});
+  }
+});
+
 test("returns immutable exact reads and hides internal entries from lists", async ({ store }) => {
   store.replace();
   const other = entryFixture(store.env, "other", "other");

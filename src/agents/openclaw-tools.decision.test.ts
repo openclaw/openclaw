@@ -6,12 +6,9 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DecisionProviderV1 } from "../decisions/provider-types.js";
 import { registered } from "../decisions/runtime.test-support.js";
-import type {
-  DecisionBatch,
-  DecisionProviderV1,
-  ProviderDecisionOutcome,
-} from "../decisions/types.js";
+import type { DecisionBatch, ProviderDecisionOutcome } from "../decisions/types.js";
 import {
   clearCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshotState,

@@ -31,6 +31,25 @@ function displayRow(key: string, label: string, pinned = false) {
 }
 const parse = (patch: Record<string, unknown>) => parseSidebarSnapshot({ ...model, ...patch });
 
+it.each(["none", "error"] as const)(
+  "restores only own failure attention (%s) from older snapshots",
+  (ownAttention) => {
+    const restored = restoreSnapshotSession(
+      {
+        key: "agent:main:parent",
+        label: "Parent",
+        pinned: false,
+        isChild: false,
+        children: [],
+        state: { attention: "error", ownAttention, subagentSummary: { attention: "error" } },
+      },
+      "",
+    );
+    expect(restored.attention.kind).toBe(ownAttention);
+    expect(restored.subagentSummary?.attention.kind).toBe("none");
+  },
+);
+
 it("omits private session contributions from the saved Inbox count", () => {
   const incognito = "agent:main:dashboard:incognito-private";
   const outbox: SidebarInboxEntry = {

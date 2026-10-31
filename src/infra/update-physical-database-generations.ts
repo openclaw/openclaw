@@ -1,29 +1,60 @@
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { readBackupEngineImage, type BackupEngine } from "./database-engine/physical-store.js";
 import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
+import type { PreparedSqliteSnapshotSource } from "./sqlite-readonly-location.types.js";
 import {
+  readUpdateDatabaseGeneration,
   readUpdateDatabaseGenerationPair,
-  readUpdateDatabaseGenerations,
+  type SqliteDatabaseGenerationReceipt,
 } from "./update-database-generations.js";
 
-export function readUpdatePhysicalDatabaseObservation(pathname: string): {
+export function readUpdatePhysicalDatabaseObservation(
+  pathname: string,
+  stagingRoot?: string,
+): {
   engine?: BackupEngine;
   generation: Result<string | null, unknown>;
+  preparedSource?: PreparedSqliteSnapshotSource;
+  sqliteReceipt?: SqliteDatabaseGenerationReceipt;
 } {
   let engine: BackupEngine | undefined;
   let classificationFailed = false;
   try {
-    const generations = readUpdateDatabaseGenerations([pathname], (imagePath, sourcePath) => {
-      try {
-        engine = readBackupEngineImage(imagePath, sourcePath);
-      } catch (error) {
-        classificationFailed = true;
-        throw error;
-      }
-    });
-    return { engine, generation: ok(generations[pathname]!) };
+    const observation = readUpdateDatabaseGeneration(
+      pathname,
+      (imagePath, sourcePath) => {
+        try {
+          engine = readBackupEngineImage(imagePath, sourcePath);
+        } catch (error) {
+          classificationFailed = true;
+          throw error;
+        }
+      },
+      stagingRoot ? { stagingRoot, accept: () => engine?.engine === "sqlite" } : undefined,
+    );
+    return {
+      engine,
+      generation: ok(observation.generation),
+      preparedSource: observation.preparedSource,
+      ...(engine?.engine === "sqlite" && observation.generation && observation.physical
+        ? {
+            sqliteReceipt: Object.freeze({
+              sourcePath: pathname,
+              generation: observation.generation,
+              physical: observation.physical,
+            }),
+          }
+        : {}),
+    };
   } catch (error) {
-    if (classificationFailed) {
+    if (
+      classificationFailed ||
+      collectNestedErrorCandidates(error).some(
+        (failure) => failure instanceof SqliteSnapshotCleanupError,
+      )
+    ) {
       throw error;
     }
     // The coherent private image already established the engine. A later generation

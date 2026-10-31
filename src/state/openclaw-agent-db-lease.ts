@@ -7,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { LruCache } from "../infra/lru-cache.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
@@ -18,6 +19,7 @@ import { SqliteWorkerOpenRefusedError } from "../infra/sqlite-worker-contract.js
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   AgentDatabaseDeletionRefusedError,
@@ -60,6 +62,12 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateLeaseContext } from "./openclaw-state-lease-context.js";
 
 const log = createSubsystemLogger("state/agent-db");
+// Diagnostic state survives handle churn, but never owns leases or suppresses seal checks.
+const closeReceipts = resolveGlobalSingleton(
+  Symbol.for("openclaw.agentDatabaseCloseReceipts"),
+  () => new LruCache<{ agentId: string; receipt: string }>(128),
+  (receipts) => receipts.clear(),
+);
 
 type AgentDatabaseLeaseDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -259,7 +267,7 @@ function claimAgentDatabaseLeaseInDatabase(
       path: owner.path,
       owner_pid: owner.ownerPid,
       owner_start_time: owner.ownerStartTime,
-      opened_at: 0, // A killed, unfinished admission cannot lend process-death provenance.
+      opened_at: 0, // A live, unfinished admission cannot lend verification.
     }),
   );
 }
@@ -312,7 +320,14 @@ export function releaseOpenClawAgentDatabaseLease(
       // Shared-state writer admission excludes a competing claim until this release commits.
       receipt = closeOutcome.publishSeal() ? "written" : "verification-missing";
     }
-    const publish = () =>
+    const publish = () => {
+      if (held) {
+        const previous = closeReceipts.get(held.path);
+        if (previous?.agentId === held.agent_id && previous.receipt === receipt) {
+          return;
+        }
+        closeReceipts.set(held.path, { agentId: held.agent_id, receipt });
+      }
       log.info(
         `agent database clean-close receipt: ${receipt}; agent=${held?.agent_id ?? "unknown"}`,
         {
@@ -322,6 +337,7 @@ export function releaseOpenClawAgentDatabaseLease(
           receipt,
         },
       );
+    };
     if (!deferSqlitePostCommitPublication(database, publish)) {
       publish();
     }
@@ -364,10 +380,11 @@ function hasAgentDatabasePathLease(database: EngineConnection, pathname: string)
   );
 }
 
-/** Record that the claimed native owner completed its admission. */
+/** Preserve a known FULL requirement across death, then replace it on completed admission. */
 export function recordOpenClawAgentDatabaseAdmission(
   leaseId: string,
   params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
+  status: "full-required" | "complete" = "complete",
 ): void {
   runOpenClawStateWriteTransaction(
     (database) => {
@@ -376,7 +393,7 @@ export function recordOpenClawAgentDatabaseAdmission(
         database.db,
         getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db)
           .updateTable("agent_database_leases")
-          .set({ opened_at: Date.now() })
+          .set({ opened_at: status === "full-required" ? -1 : Date.now() })
           .where("lease_id", "=", leaseId)
           .where("agent_id", "=", params.agentId)
           .where("path", "=", params.path)
@@ -447,6 +464,7 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
   provenance: string | null;
   validation?: OpenClawAgentDatabaseValidation;
   integrityRevoked?: boolean;
+  startupIntegrity?: import("./agent-database-startup-integrity.js").AgentDatabaseStartupIntegrity;
   startupRepair?: (
     check: SqliteIntegrityCheck,
     error: unknown,

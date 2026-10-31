@@ -17,7 +17,7 @@ import {
 import { trackSqliteDatabaseAdmissionWorker } from "../../infra/sqlite-database-admission.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
-import { createCpuTrackedWorker } from "../../infra/worker-cpu.js";
+import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "../../infra/worker-cpu.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -99,6 +99,7 @@ export function createSqliteTranscriptArchiveWorker(
   }
   trackSqliteArchiveWorkerCleanup(worker);
   trackSqliteDatabaseAdmissionWorker(worker);
+  worker.on("message", (message: unknown) => receiveWorkerMemoryPort(worker, message));
   worker.once("exit", finish);
   return worker;
 }

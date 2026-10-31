@@ -218,6 +218,10 @@ openclaw-board-widget-cell {
   z-index: 8;
 }
 
+.board-widget__chrome {
+  display: contents;
+}
+
 .board-widget__bar {
   align-items: center;
   background: color-mix(in srgb, var(--text) 3%, transparent);
@@ -338,6 +342,16 @@ openclaw-board-widget-cell {
 
 .board-widget__body--scrollable {
   overflow: auto;
+}
+
+/* Fixed grid tracks reserve the card, including chrome, before it enters view. */
+.board-widget--fixed-report {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 0px;
+}
+
+.board-widget__body--fixed-report {
+  contain: strict;
 }
 
 .board-widget__body--scrollable .board-widget__grant {
@@ -474,13 +488,20 @@ openclaw-board-widget-cell {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  /* Focus keeps keyboard actions reachable; menu-open and dragging keep chrome
-     pinned when interaction leaves the card bounds. Inline-size containment
-     lets the pill drop to its minimal form on narrow cards; grid tracks set
-     the card's width, so containment changes no layout. */
+  /* Keep responsive chrome's query container separate from report content.
+     WebKit otherwise recalculates every report descendant on board resize. */
   .board-widget {
-    container-type: inline-size;
     grid-template-rows: minmax(0, 1fr);
+    isolation: isolate;
+  }
+
+  .board-widget__chrome {
+    container-type: inline-size;
+    display: block;
+    inset: 0;
+    pointer-events: none;
+    position: absolute;
+    z-index: 5;
   }
 
   /* Fine pointers center a compact overlay; coarse pointers keep the base 38px
@@ -498,6 +519,7 @@ openclaw-board-widget-cell {
     max-width: calc(100% - 176px);
     opacity: 0;
     padding: 0 5px;
+    pointer-events: auto;
     position: absolute;
     top: 7px;
     transform: translateX(-50%);
@@ -569,8 +591,19 @@ openclaw-board-widget-cell {
   .board-widget:focus-within .board-widget__resize-handle,
   .board-widget--dragging .board-widget__bar,
   .board-widget--dragging .board-widget__resize-handle,
-  .board-widget:has(.board-widget__menu-trigger[aria-expanded="true"]) .board-widget__bar,
-  .board-widget:has(.board-widget__menu-trigger[aria-expanded="true"])
+  .board-widget:has(
+      > :where(.board-widget__chrome)
+        > :where(.board-widget__bar)
+        > :where(.board-widget__menu)
+        > .board-widget__menu-trigger[aria-expanded="true"]
+    )
+    .board-widget__bar,
+  .board-widget:has(
+      > :where(.board-widget__chrome)
+        > :where(.board-widget__bar)
+        > :where(.board-widget__menu)
+        > .board-widget__menu-trigger[aria-expanded="true"]
+    )
     .board-widget__resize-handle {
     opacity: 1;
     transition-delay: 0s;
@@ -597,7 +630,13 @@ openclaw-board-widget-cell {
   .board-widget:hover .board-widget__grant-dot,
   .board-widget:focus-within .board-widget__grant-dot,
   .board-widget--dragging .board-widget__grant-dot,
-  .board-widget:has(.board-widget__menu-trigger[aria-expanded="true"]) .board-widget__grant-dot {
+  .board-widget:has(
+      > :where(.board-widget__chrome)
+        > :where(.board-widget__bar)
+        > :where(.board-widget__menu)
+        > .board-widget__menu-trigger[aria-expanded="true"]
+    )
+    .board-widget__grant-dot {
     opacity: 0;
   }
 
@@ -613,7 +652,12 @@ openclaw-board-widget-cell {
 
   .board-widget--frameless:hover,
   .board-widget--frameless:focus-within,
-  .board-widget--frameless:has(.board-widget__menu-trigger[aria-expanded="true"]) {
+  .board-widget--frameless:has(
+    > :where(.board-widget__chrome)
+      > :where(.board-widget__bar)
+      > :where(.board-widget__menu)
+      > .board-widget__menu-trigger[aria-expanded="true"]
+  ) {
     border-color: var(--board-line);
   }
 

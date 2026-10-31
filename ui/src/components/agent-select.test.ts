@@ -104,6 +104,53 @@ it("renders named scope icons and restores the selected agent avatar", async () 
   expect(trigger.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦞");
 });
 
+it("retains agent row content while selection and roster details change", async () => {
+  const element = await createAgentSelect({
+    options: [
+      { value: "alpha", label: "Alpha", agent: { id: "alpha", identity: { emoji: "🦉" } } },
+      { value: "beta", label: "Beta", agent: { id: "beta", identity: { emoji: "🦊" } } },
+    ],
+  });
+  const alpha = element.querySelector<HTMLElement>('[data-agent-option][value="alpha"]')!;
+  const beta = element.querySelector<HTMLElement>('[data-agent-option][value="beta"]')!;
+  const alphaAvatar = alpha.querySelector(".agent-select__avatar");
+  const betaAvatar = beta.querySelector(".agent-select__avatar");
+  expect(alphaAvatar).not.toBeNull();
+  expect(betaAvatar).not.toBeNull();
+
+  element.value = "beta";
+  await waitForSolid(() => {
+    expect(beta.getAttribute("aria-checked")).toBe("true");
+    expect(alpha.getAttribute("aria-checked")).toBe("false");
+    expect(alpha.querySelector(".agent-select__avatar")).toBe(alphaAvatar);
+    expect(beta.querySelector(".agent-select__avatar")).toBe(betaAvatar);
+  });
+
+  element.options = [
+    {
+      value: "beta",
+      label: "Research",
+      description: "Updated description",
+      badge: "Default",
+      agent: { id: "beta", identity: { emoji: "🐙" } },
+    },
+    { value: "alpha", label: "Alpha", agent: { id: "alpha", identity: { emoji: "🦉" } } },
+  ];
+  await waitForSolid(() => {
+    expect([...element.querySelectorAll("[data-agent-option]")]).toEqual([beta, alpha]);
+    expect(beta.querySelector(".agent-select__option-label")?.textContent).toBe("Research");
+    expect(beta.querySelector(".agent-select__option-description")?.textContent).toBe(
+      "Updated description",
+    );
+    expect(beta.querySelector(".agent-select__badge")?.textContent).toBe("Default");
+    expect(beta.getAttribute("aria-label")).toBe("Research, Updated description, Default");
+    expect(beta.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🐙");
+    expect(alpha.querySelector(".agent-select__avatar")).toBe(alphaAvatar);
+    expect(beta.querySelector(".agent-select__avatar")).toBe(betaAvatar);
+    expect(element.querySelector(".agent-select__label")?.textContent).toBe("Research");
+  });
+});
+
 it("keeps a failed avatar on its fallback until the image changes", async () => {
   const invalidAvatar = "data:image/gif;base64,bm90LWFuLWltYWdl";
   const replacementAvatar = "data:image/png;base64,cmVwbGFjZW1lbnQ=";
@@ -132,12 +179,15 @@ it("keeps a failed avatar on its fallback until the image changes", async () => 
   expect(avatarSrc(element)).toBe(replacementAvatar);
 });
 
-it("does not let a removed option's image error poison its replacement lease", async () => {
+it("retires a missing-option fallback without poisoning its replacement image", async () => {
   const avatar = "data:image/png;base64,cmV0YWluZWQ=";
   const element = await createAvatarSelect(avatar);
   const retired = avatarImage(element, "trigger")!;
   expect(retired.getAttribute("src")).toBe(avatar);
   element.options = options.filter((option) => option.value === "beta");
+  await element.updateComplete;
+  await waitForSolid(() => expect(avatarSrc(element, "trigger")).toBe(avatar));
+
   element.value = "beta";
   await element.updateComplete;
   await waitForSolid(() => expect(avatarImage(element, "trigger")).toBeNull());

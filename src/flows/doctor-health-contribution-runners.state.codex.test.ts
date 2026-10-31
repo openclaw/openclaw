@@ -62,3 +62,15 @@ it("keeps preview mode read-only without inventing an auth migration map", async
     shouldRepair: false,
   });
 });
+
+it.each([
+  { requiresFullDoctor: true, warnings: [] },
+  { warnings: ["A model route still needs repair."] },
+])("returns constrained or incomplete session discovery to full Doctor", async (outcome) => {
+  mocks.maybeRepairCodexSessionRoutes.mockResolvedValue({ changes: [], ...outcome });
+  const ctx = createDoctorHealthFlowContext({ retirementOnly: true });
+
+  await runCodexSessionRouteHealth(ctx);
+
+  expect(ctx.retirementOnly).toBe(false);
+});

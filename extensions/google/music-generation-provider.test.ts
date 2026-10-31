@@ -129,7 +129,7 @@ it.each([
 });
 
 it("shares the configured timeout budget across a no-audio retry", async () => {
-  vi.spyOn(Date, "now")
+  vi.spyOn(performance, "now")
     .mockReturnValueOnce(1_000)
     .mockReturnValueOnce(1_000)
     .mockReturnValue(2_500);

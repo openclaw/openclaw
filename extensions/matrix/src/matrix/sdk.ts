@@ -1,5 +1,5 @@
 import type { Room } from "matrix-js-sdk/lib/models/room.js";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
 import { isMatrixNotFoundError } from "./errors.js";
@@ -541,6 +541,7 @@ export class MatrixClient extends MatrixClientVerification {
       getSelfUserId: () => this.client.getUserId() ?? this.selfUserId ?? "",
       setCurrentSyncState: (state, error, fromCache) => {
         this.currentSyncState = state;
+        materializeErrorStack(error);
         this.currentSyncError = error;
         this.currentSyncFromCache = fromCache;
       },

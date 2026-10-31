@@ -819,7 +819,7 @@ describe("agent request events", () => {
   it("records a visible durable omission when inline image persistence fails", async () => {
     parseAttachments.mockResolvedValueOnce({
       message: "describe",
-      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg", sourceIndex: 0 }],
+      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg" }],
       imageOrder: ["inline"],
       offloadedRefs: [],
     });

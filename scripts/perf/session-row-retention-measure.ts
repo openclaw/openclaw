@@ -7,6 +7,8 @@
  * Compare baseline with --owner-file <base/session-row-presentation.ts> and
  * --serialization-file <base/session-row-serialization.ts> and
  * --cache-file <base/session-list-view-cache.ts>. Alternate arms; never reuse state.
+ * Index retention changes can use --identities-file <base/session-row-projection-identities.ts>.
+ * projectionHeapDelta includes projection initialization and its dependencies after fixture setup.
  * Measure a bounded 1,000-row unarchived resident page over 10,800 stored sessions; do not bypass the
  * projection owner's archive/preparation bounds to materialize the entire inventory.
  * Compact page preparation precedes measurement. Cold sidebar cost includes fact sharing/encoding;
@@ -37,6 +39,7 @@ const { values } = parseArgs({
     "owner-file": { type: "string" },
     "serialization-file": { type: "string" },
     "cache-file": { type: "string" },
+    "identities-file": { type: "string" },
   },
 });
 assert(values["state-dir"], "--state-dir must name a fresh synthetic directory");
@@ -68,6 +71,7 @@ for (const [flag, name] of [
   ["owner-file", "session-row-presentation"],
   ["serialization-file", "session-row-serialization"],
   ["cache-file", "session-list-view-cache"],
+  ["identities-file", "session-row-projection-identities"],
 ] as const) {
   if (values[flag]) {
     overrides.set(`/src/gateway/${name}.ts`, {
@@ -172,8 +176,14 @@ async function measure(name: string, work: () => Promise<void>) {
   };
 }
 try {
+  await nextTurn();
+  global.gc();
+  const projectionHeapBefore = process.memoryUsage().heapUsed;
   projection = await projections.createSessionRowProjection({ cfg, modelCatalog: [] });
   await projection.ensureMaterialized();
+  await nextTurn();
+  global.gc();
+  const projectionHeapDelta = process.memoryUsage().heapUsed - projectionHeapBefore;
   const read = (rowMode: "compact" | "sidebar", limit: number) =>
     lists.listProjectedSessions({
       projection: projection!,
@@ -255,6 +265,7 @@ try {
     warm,
     heapBefore,
     heapAfter,
+    projectionHeapDelta,
     retainedHeapDelta: heapAfter.heapUsed - heapBefore.heapUsed,
     retainedHeapPer1000Rows: ((heapAfter.heapUsed - heapBefore.heapUsed) * 1000) / residentRows,
     rawEncodingBytes,
@@ -262,17 +273,20 @@ try {
     rawEncodingBytesPer1000Rows: (rawEncodingBytes * 1000) / residentRows,
     wireDigest: digest,
     sourceHashes: Object.fromEntries(
-      ["session-row-presentation", "session-row-serialization", "session-list-view-cache"].map(
-        (name) => [
-          name,
-          createHash("sha256")
-            .update(
-              overrides.get(`/src/gateway/${name}.ts`)?.source ??
-                readFileSync(`src/gateway/${name}.ts`, "utf8"),
-            )
-            .digest("hex"),
-        ],
-      ),
+      [
+        "session-row-presentation",
+        "session-row-serialization",
+        "session-list-view-cache",
+        "session-row-projection-identities",
+      ].map((name) => [
+        name,
+        createHash("sha256")
+          .update(
+            overrides.get(`/src/gateway/${name}.ts`)?.source ??
+              readFileSync(`src/gateway/${name}.ts`, "utf8"),
+          )
+          .digest("hex"),
+      ]),
     ),
   };
   writeFileSync(path.join(root, "result.json"), `${JSON.stringify(result, null, 2)}\n`);

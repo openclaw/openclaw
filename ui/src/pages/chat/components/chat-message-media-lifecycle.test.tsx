@@ -7,11 +7,17 @@ import { notifyBrowserAuthRestored } from "../../../app/browser-http.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
-import { mediaTicketPayload } from "../../../test-helpers/control-ui-attachment-fixtures.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
+import { stubManualIntersectionObserver } from "./chat-media-observer.test-support.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
+import {
+  imageResponse,
+  managedSource as managedImageSource,
+  stubObjectUrls,
+  ticketResponse,
+} from "./chat-message-media.test-helpers.ts";
 import {
   isChatMediaResourceCurrent,
   observeChatMediaResource,
@@ -89,10 +95,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function managedImageSource(): string {
-  return `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
-}
-
 function managedImageResource(source: string) {
   return observeChatMediaResource<string | null>("managed-image", managedImageResourceKey(source));
 }
@@ -117,25 +119,11 @@ function managedImageResourceKey(source: string): string {
 }
 
 function installManagedImageUrls(prefix = `managed-image-${crypto.randomUUID()}`) {
-  const NativeUrl = URL;
   let blobIndex = 0;
   const createObjectURL = vi.fn(() => `blob:${prefix}-${blobIndex++}`);
   const revokeObjectURL = vi.fn<(url: string) => void>();
-  vi.stubGlobal(
-    "URL",
-    class extends NativeUrl {
-      static override createObjectURL = createObjectURL;
-      static override revokeObjectURL = revokeObjectURL;
-    },
-  );
+  stubObjectUrls(createObjectURL, revokeObjectURL);
   return { blobUrl: `blob:${prefix}-0`, createObjectURL, revokeObjectURL };
-}
-
-function imageResponse() {
-  return {
-    ok: true,
-    blob: async () => new Blob(["png"], { type: "image/png" }),
-  };
 }
 
 function installImageFetch() {
@@ -225,10 +213,6 @@ function abortableFetch() {
   };
 }
 
-function ticketResponse(mediaTicket: string, expiresInMs = 90_000) {
-  return Response.json(mediaTicketPayload(mediaTicket, expiresInMs));
-}
-
 function createAvailabilityPane(
   source: string,
   authToken: string | (() => string),
@@ -254,7 +238,7 @@ function createAvailabilityPane(
 function installTicketFetch(...tickets: Array<[string, number?]>) {
   const fetchMock = vi.fn<() => Promise<Response>>();
   for (const [ticket, expiresIn] of tickets) {
-    fetchMock.mockImplementationOnce(async () => ticketResponse(ticket, expiresIn));
+    fetchMock.mockImplementationOnce(async () => ticketResponse(ticket, expiresIn ?? 90_000));
   }
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
@@ -675,14 +659,14 @@ describe("chat media resource lifecycle", () => {
         .fn()
         .mockReturnValueOnce(firstResponse.promise)
         .mockReturnValueOnce(secondResponse.promise)
-        .mockImplementationOnce(async () => ticketResponse("current-policy-ticket")),
+        .mockImplementationOnce(async () => ticketResponse("current-policy-ticket", 90_000)),
     );
     const first = createAvailabilityPane(source, "shared-token", "full");
     const second = createAvailabilityPane(source, "shared-token", "workspace");
     first.rerender();
     second.rerender();
-    firstResponse.resolve(ticketResponse("first-pane-ticket"));
-    secondResponse.resolve(ticketResponse("second-pane-ticket"));
+    firstResponse.resolve(ticketResponse("first-pane-ticket", 90_000));
+    secondResponse.resolve(ticketResponse("second-pane-ticket", 90_000));
     await vi.advanceTimersByTimeAsync(0);
     expectTicket(first, "first-pane-ticket");
     expectTicket(second, "second-pane-ticket");
@@ -709,7 +693,7 @@ describe("chat media resource lifecycle", () => {
   it("keeps automatic renewal when switching to the oldest retained attachment at capacity", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ticketResponse(`ticket-${Date.now()}`)),
+      vi.fn(async () => ticketResponse(`ticket-${Date.now()}`, 90_000)),
     );
     const source = `/tmp/openclaw/${crypto.randomUUID()}.png`;
     for (let index = 0; index < 64; index++) {
@@ -876,6 +860,57 @@ describe("chat media resource lifecycle", () => {
     expect(imageSrc(container)).toBe(blobUrl);
   });
 });
+
+it.each([true, false])(
+  "reserves canonical image dimensions before loading (slot layout: %s)",
+  (withLayout) => {
+    stubManualIntersectionObserver(() => {});
+    const message = {
+      role: "user",
+      content: [
+        { type: "image", url: "media://inbound/landscape.png" },
+        { type: "image", url: "media://inbound/portrait.png" },
+      ],
+      __openclaw: {
+        media: [
+          {
+            path: "media://inbound/landscape.png",
+            contentType: "image/png",
+            width: 1600,
+            height: 900,
+          },
+          {
+            path: "media://inbound/portrait.png",
+            contentType: "image/png",
+            width: 900,
+            height: 1600,
+          },
+        ],
+        ...(withLayout
+          ? {
+              mediaImageLayout: {
+                slots: [
+                  { kind: "inline", factIndex: 0 },
+                  { kind: "inline", factIndex: 1 },
+                ],
+              },
+            }
+          : {}),
+      },
+    };
+    const media = projectMessageMedia(message, normalizeMessage(message).content);
+    const container = document.createElement("div");
+    renderImages(container, media.images);
+    const frames = [...container.querySelectorAll<HTMLElement>(".chat-image-frame")];
+    expect(frames).toHaveLength(2);
+    expect(frames.map((frame) => frame.style.getPropertyValue("--chat-image-ratio"))).toEqual([
+      "400 / 225",
+      "202.5 / 360",
+    ]);
+    expect(container.querySelectorAll(".chat-image-skeleton")).toHaveLength(2);
+    expect(container.querySelector("img")).toBeNull();
+  },
+);
 
 describe("pairing QR expiry resource lifecycle", () => {
   it.each(["ordinary", "expired QR"])("does not schedule expiry for %s messages", (kind) => {

@@ -7,8 +7,17 @@ import type {
   UserMessage,
 } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { transformTransportMessages } from "../../../src/agents/transport-message-transform.js";
+import {
+  freezeJsonSnapshot,
+  isDeeplyFrozenPlainData,
+  isPlainData,
+} from "../../../src/shared/immutable-data.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { createFailureMessage } from "../../agent-core/src/turn-interruption.js";
+import { createAiTransportHost, runWithAiTransportHost } from "./host.js";
+import type { AnthropicOptions } from "./provider-options.js";
+import { preparedRequestSuffix } from "./provider-options.js";
 import {
   anthropicModel,
   assistantMessage,
@@ -19,6 +28,7 @@ import {
   userMessage,
 } from "./provider-transport-parity.test-support.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./replay-turn-classification.js";
+import { buildAnthropicRequest } from "./transports/anthropic-messages.js";
 
 function user(content: string, timestamp: number, turnScoped?: boolean): UserMessage {
   return userMessage(content, {
@@ -365,4 +375,144 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       }
     },
   );
+});
+
+it.each(["provider", "transport"] as const)(
+  "reuses frozen %s history with isolated cache checkpoints, result groups and mutable tails",
+  async (profile) => {
+    const host = createAiTransportHost({
+      transformTransportMessages,
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData },
+    });
+    await runWithAiTransportHost(host, async () => {
+      const calls = ["a", "b"].map((id) => ({
+        type: "toolCall" as const,
+        id,
+        name: "read",
+        arguments: { path: id },
+      }));
+      const messages = [
+        user("question", 0),
+        assistant(anthropicModel, calls, 1, "toolUse"),
+        makeTextToolResult("a", "read", "A", false, 2),
+        makeTextToolResult("b", "read", "B", false, 3),
+        user("follow up", 4),
+        assistant(anthropicModel, [textBlock("done")], 5),
+      ];
+      messages.forEach(freezeJsonSnapshot);
+      const tail = user("current", 6);
+      const request = async (
+        history = [...messages, tail],
+        oauth = false,
+        cacheRetention: AnthropicOptions["cacheRetention"] = "none",
+      ) =>
+        (
+          await buildAnthropicRequest(
+            anthropicModel,
+            { messages: history },
+            { cacheRetention },
+            profile,
+            oauth,
+            false,
+          )
+        ).params.messages;
+      const golden =
+        '[{"role":"user","content":"question"},{"role":"assistant","content":[{"type":"tool_use","id":"a","name":"read","input":{"path":"a"}},{"type":"tool_use","id":"b","name":"read","input":{"path":"b"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"a","content":"A","is_error":false},{"type":"tool_result","tool_use_id":"b","content":"B","is_error":false}]},{"role":"user","content":"follow up"},{"role":"assistant","content":[{"type":"text","text":"done"}]},{"role":"user","content":"current"}]';
+      const first = await request();
+      expect(JSON.stringify(first)).toBe(golden);
+      expect(first.slice(0, -1).every(isDeeplyFrozenPlainData)).toBe(true);
+      expect(JSON.stringify(await request(undefined, true))).toContain('"name":"Read"');
+      const marked = await request(undefined, false, "long");
+      const expectedMarked = JSON.parse(golden);
+      for (const index of [3, 5]) {
+        expectedMarked[index].content = [
+          textBlock(index === 3 ? "follow up" : "current", { type: "ephemeral", ttl: "1h" }),
+        ];
+      }
+      expect(JSON.stringify(marked)).toBe(JSON.stringify(expectedMarked));
+      expect(marked[2]).toBe(first[2]);
+      const changed = messages.map((message, index) =>
+        index === 3
+          ? freezeJsonSnapshot(makeTextToolResult("b", "read", "changed", false, 3))
+          : message,
+      );
+      expect(JSON.stringify(await request([...changed, tail]))).toBe(
+        golden.replace('"content":"B"', '"content":"changed"'),
+      );
+      const again = await request();
+      expect(JSON.stringify(again)).toBe(golden);
+      for (let index = 0; index < first.length - 1; index++) {
+        expect(again[index]).toBe(first[index]);
+      }
+      tail.content = "edited tail";
+      expect(JSON.stringify(await request())).toBe(
+        golden.replace('"content":"current"', '"content":"edited tail"'),
+      );
+      expect(first.at(-1)?.content).toBe("current");
+    });
+  },
+);
+
+it("separates active tool-turn thinking and prepared suffix projections", async () => {
+  const host = createAiTransportHost({
+    transformTransportMessages,
+    immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData },
+  });
+  await runWithAiTransportHost(host, async () => {
+    const messages = freezeJsonSnapshot([
+      user("question", 0),
+      assistant(
+        anthropicModel,
+        [
+          { type: "thinking", thinking: "signed", thinkingSignature: "signature" },
+          { type: "toolCall", id: "read", name: "read", arguments: {} },
+        ],
+        1,
+        "toolUse",
+      ),
+      makeTextToolResult("read", "read", "result", false, 2),
+    ]);
+    const request = async (requestContext: Context) =>
+      (
+        await buildAnthropicRequest(
+          anthropicModel,
+          requestContext,
+          { cacheRetention: "none", thinkingEnabled: false },
+          "transport",
+          false,
+          false,
+        )
+      ).params.messages;
+    const active = await request({ messages });
+    expect(active[1]?.content).toEqual([
+      { type: "thinking", thinking: "signed", signature: "signature" },
+      { type: "tool_use", id: "read", name: "read", input: {} },
+    ]);
+    const inactive = await request({ messages: [...messages, user("next", 3)] });
+    expect(inactive[1]?.content).toEqual([
+      { type: "tool_use", id: "read", name: "read", input: {} },
+    ]);
+    expect((await request({ messages }))[1]).toBe(active[1]);
+    const suffix = {
+      messages: [freezeJsonSnapshot(makeTextToolResult("read:0", "read", "suffix", false, 4))],
+    };
+    preparedRequestSuffix.mark(suffix, new Set(["read_0"]));
+    expect(await request(suffix)).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "read_0", content: "suffix", is_error: false },
+        ],
+      },
+    ]);
+    preparedRequestSuffix.mark(suffix, new Set(["read:0"]));
+    expect(await request(suffix)).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "read:0", content: "suffix", is_error: false },
+        ],
+      },
+    ]);
+  });
 });

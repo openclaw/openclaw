@@ -2,12 +2,18 @@
  * Persisted skill-snapshot hydration through the real discovery/projection owner.
  * node --import ./scripts/tsx.mjs scripts/perf/skill-snapshot-hydration-measure.ts --output .local/skills-base.json
  * Alternate baseline/candidate >=5 times; repeat separately with --allocations.
- * Each run hydrates 32 retained sessions sharing 256 synthetic skills, 3,200 times.
+ * Each run hydrates 32 retained sessions sharing 256 synthetic skills, 3,200 times,
+ * including project skills that shadow bundled skills. Reports worker completions
+ * and main-thread CPU; allocation sampling runs separately from timing.
+ * --baseline-dir uses the existing sparse source overlay preload; save the baseline
+ * src/skills/runtime/session-snapshot.ts beneath that directory before editing.
  * Setup and first worker projection are outside the measured warm window. This
  * owner microbenchmark does not measure Gateway startup, admission, or remote I/O.
  */
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,10 +22,21 @@ import { parseArgs } from "node:util";
 import type { SkillSnapshot } from "../../src/skills/types.js";
 
 const { values } = parseArgs({
-  options: { output: { type: "string" }, allocations: { type: "boolean" } },
+  options: {
+    output: { type: "string" },
+    allocations: { type: "boolean" },
+    "baseline-dir": { type: "string" },
+  },
 });
 assert(values.output, "--output is required");
 const output = path.resolve(values.output);
+const ownerSource = path.resolve(
+  values["baseline-dir"] ?? ".",
+  "src/skills/runtime/session-snapshot.ts",
+);
+const ownerSha256 = createHash("sha256")
+  .update(await readFile(ownerSource))
+  .digest("hex");
 await mkdir(path.dirname(output), { recursive: true });
 const fixture = await mkdtemp(path.join(path.dirname(output), "skill-hydration-fixture-"));
 Object.assign(process.env, {
@@ -30,6 +47,10 @@ Object.assign(process.env, {
   OPENCLAW_BUNDLED_SKILLS_DIR: path.join(fixture, "bundled-skills"),
   OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(fixture, "bundled-plugins"),
 });
+if (values["baseline-dir"]) {
+  process.env.OPENCLAW_BENCH_BASELINE_DIR = path.resolve(values["baseline-dir"]);
+  await import("./worker-retained-heap-preload.ts");
+}
 const { resolveReusableWorkspaceSkillSnapshot } =
   await import("../../src/skills/runtime/session-snapshot.js");
 const { closeSkillsWatchers } = await import("../../src/skills/runtime/refresh.js");
@@ -41,12 +62,18 @@ try {
   const skillCount = 256;
   for (let index = 0; index < skillCount; index++) {
     const name = `synthetic-${String(index).padStart(3, "0")}`;
-    const dir = path.join(workspaceDir, "skills", name);
-    await mkdir(dir, { recursive: true });
-    await writeFile(
-      path.join(dir, "SKILL.md"),
-      `---\nname: ${name}\ndescription: Synthetic skill ${index}\n---\nSynthetic instructions.\n`,
-    );
+    const roots =
+      index < 32
+        ? [path.join(workspaceDir, ".agents", "skills"), path.join(fixture, "bundled-skills")]
+        : [path.join(workspaceDir, "skills")];
+    for (const root of roots) {
+      const dir = path.join(root, name);
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        path.join(dir, "SKILL.md"),
+        `---\nname: ${name}\ndescription: Synthetic skill ${index}\n---\nSynthetic instructions.\n`,
+      );
+    }
   }
   const params = {
     workspaceDir,
@@ -61,7 +88,8 @@ try {
         },
       },
     },
-    watch: false,
+    // Exercise reply preparation's root registration; passive timers are disabled above.
+    watch: true,
   };
   const initial = (await resolveReusableWorkspaceSkillSnapshot(params)).snapshot;
   assert.equal(initial.skills.length, skillCount);
@@ -89,6 +117,13 @@ try {
     });
   }
   const iterations = 3_200;
+  let workerRoundTrips = 0;
+  const tasks = channel("openclaw.worker.task");
+  const countTask = () => {
+    workerRoundTrips++;
+  };
+  tasks.subscribe(countTask);
+  const threadCpuBefore = process.threadCpuUsage();
   const cpuBefore = process.cpuUsage();
   const started = performance.now();
   let last: SkillSnapshot | undefined;
@@ -97,6 +132,8 @@ try {
   }
   const elapsedMs = performance.now() - started;
   const cpu = process.cpuUsage(cpuBefore);
+  const threadCpu = process.threadCpuUsage(threadCpuBefore);
+  tasks.unsubscribe(countTask);
   let sampledBytes: number | undefined;
   if (inspector) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -106,12 +143,15 @@ try {
   assert.equal(last?.prompt, initial.prompt);
   assert.equal(last?.discoverySkills?.length, skillCount);
   const result = {
+    ownerSha256,
     iterations,
     sessionCount: sessions.length,
     skillCount,
     mode: inspector ? "allocation" : "timing",
     elapsedMs,
     processCpuMs: (cpu.user + cpu.system) / 1_000,
+    mainThreadCpuMs: (threadCpu.user + threadCpu.system) / 1_000,
+    workerRoundTrips,
     sampledBytes,
     sampledBytesPerHydration: sampledBytes === undefined ? undefined : sampledBytes / iterations,
     hostLoad: os.loadavg(),

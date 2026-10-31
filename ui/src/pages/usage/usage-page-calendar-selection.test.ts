@@ -37,7 +37,6 @@ async function loadCalendar(
     tokens: day.totalTokens,
     cost: day.totalCost,
     count: 1,
-    ...(day.usageReport ? { usageReport: day.usageReport } : {}),
   }));
   const result = {
     ...base,
@@ -46,7 +45,6 @@ async function loadCalendar(
       ...base.totals,
       totalTokens,
       input: pending ? base.totals.input : totalTokens,
-      usageReport: daily.find((day) => day.usageReport?.state === "unavailable")?.usageReport,
     },
     sessions: daily.map((day, index) => ({
       key: `agent:main:${day.date}`,
@@ -79,28 +77,22 @@ const labelOf = (bar: HTMLElement) => textOf(bar, ".daily-bar-label");
 const shiftClick = (bar: HTMLElement) =>
   bar.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
 
-it.each([false, true])(
-  "keeps calendar attribution and completeness independent of the selected summary (partial calendar: %s)",
-  async (partial) => {
-    const { page } = await loadCalendar("fresh", [
-      dailyEntry("2026-05-02", 100),
-      {
-        ...dailyEntry("2026-05-04", 900),
-        ...(partial ? { usageReport: { state: "unavailable" as const } } : {}),
-      },
-    ]);
-    const legend = () =>
-      texts(page.element, ".daily-chart-legend li", false).map((text) => text.replace(/\s+/g, ""));
-    expect(legend()).toEqual(partial ? ["Anthropic", "OpenAI"] : ["Anthropic90%", "OpenAI10%"]);
-    barsIn(page)
-      .find((bar) => labelOf(bar) === "May 2")!
-      .click();
-    await settleUsageTimers(page);
-    expect(textOf(page, ".usage-metric-badge strong")).toBe("100");
-    expect(legend()).toEqual(partial ? ["Anthropic", "OpenAI"] : ["Anthropic90%", "OpenAI10%"]);
-    expect(texts(page.element, ".session-bar-title", false)).toEqual(["Usage on 2026-05-02"]);
-  },
-);
+it("keeps calendar attribution independent of the selected summary", async () => {
+  const { page } = await loadCalendar("fresh", [
+    dailyEntry("2026-05-02", 100),
+    dailyEntry("2026-05-04", 900),
+  ]);
+  const legend = () =>
+    texts(page.element, ".daily-chart-legend li", false).map((text) => text.replace(/\s+/g, ""));
+  expect(legend()).toEqual(["Anthropic90%", "OpenAI10%"]);
+  barsIn(page)
+    .find((bar) => bar.getAttribute("aria-label")?.startsWith("May 2, 2026:"))!
+    .click();
+  await settleUsageTimers(page);
+  expect(textOf(page, ".usage-metric-badge strong")).toBe("100");
+  expect(legend()).toEqual(["Anthropic90%", "OpenAI10%"]);
+  expect(texts(page.element, ".session-bar-title", false)).toEqual(["Usage on 2026-05-02"]);
+});
 
 it.each<["fresh" | "partial", boolean, string[]]>([
   ["fresh", false, ["May 1", "May 2", "May 3", "May 4"]],
@@ -171,6 +163,15 @@ it("keeps the same calendar interactive while day totals are pending", async () 
     [dailyEntry("2026-05-02", 100), dailyEntry("2026-05-04", 900)],
     true,
   );
+  changeUsageControl(
+    page.querySelector<HTMLInputElement>('input[aria-label="Start date"]')!,
+    "2026-01-01",
+  );
+  await settleUsageTimers(page, 400);
+  const trend = page.querySelector<HTMLElement>(".usage-trend-section")!;
+  const heatmap = page.querySelector<HTMLElement>(".usage-heatmap")!;
+  const heatmapHost = heatmap.closest(".settings-section")!.parentElement!;
+  const lastCell = [...heatmap.querySelectorAll(".usage-heatmap__cell")].at(-1);
   const bars = () => barsIn(page);
   const first = bars()[0]!;
   const last = bars().at(-1)!;
@@ -178,11 +179,16 @@ it("keeps the same calendar interactive while day totals are pending", async () 
   await page.updateComplete;
   expect(texts(page.element, ".usage-metric-badge strong", false)).toEqual(["—", "—", "—"]);
   expect(bars()).toContain(last);
+  expect(trend.hidden).toBe(false);
+  expect(trend.hasAttribute("inert")).toBe(false);
+  expect(heatmapHost.hidden).toBe(false);
+  expect(heatmapHost.hasAttribute("inert")).toBe(false);
+  expect([...heatmap.querySelectorAll(".usage-heatmap__cell")].at(-1)).toBe(lastCell);
   shiftClick(last);
   await page.updateComplete;
   const days = request.mock.calls.findLast(([method]) => method === "sessions.usage")?.[1]
     ?.selectedDays;
-  expect(days).toEqual(expect.arrayContaining(["2026-04-05", "2026-05-04"]));
+  expect(days).toEqual(expect.arrayContaining(["2026-01-01", "2026-05-04"]));
   expect(Array.isArray(days) && days.length > 1).toBe(true);
 });
 

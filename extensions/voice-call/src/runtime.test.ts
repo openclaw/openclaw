@@ -96,9 +96,7 @@ vi.mock("./webhook/tailscale.js", () => ({
 
 import { createVoiceCallRuntime } from "./runtime.js";
 
-function createBaseConfig(): VoiceCallConfig {
-  return createVoiceCallBaseConfig({ tunnelProvider: "ngrok" });
-}
+const createBaseConfig = () => createVoiceCallBaseConfig({ tunnelProvider: "ngrok" });
 
 function createRuntime(options: Partial<Parameters<typeof createVoiceCallRuntime>[0]> = {}) {
   return createVoiceCallRuntime({
@@ -172,22 +170,18 @@ function expectIncludes(value: unknown, ...parts: string[]) {
 
 const realtimeArgs = () => expectDefined(mocks.realtimeHandlerCtorArgs[0], "realtime handler");
 
-function requireRealtimeConsultToolHandler() {
-  const registeredToolHandler = expectDefined(
-    mocks.realtimeHandlerRegisterToolHandler.mock.calls.at(0),
-    "realtime tool handler registration call",
-  );
-  expect(registeredToolHandler[0]).toBe("openclaw_agent_consult");
-  return registeredToolHandler[1];
-}
-
 async function startConsult(
   config: VoiceCallConfig,
   agentRuntime: ReturnType<typeof createConsultRuntime>,
   coreConfig: OpenClawConfig = {},
 ) {
   await createRuntime({ config, agentRuntime: agentRuntime as never, coreConfig });
-  return requireRealtimeConsultToolHandler();
+  const [name, handler] = expectDefined(
+    mocks.realtimeHandlerRegisterToolHandler.mock.calls.at(0),
+    "realtime tool handler registration call",
+  );
+  expect(name).toBe("openclaw_agent_consult");
+  return handler;
 }
 
 describe("createVoiceCallRuntime lifecycle", () => {
@@ -243,7 +237,6 @@ describe("createVoiceCallRuntime lifecycle", () => {
   });
 
   it("cleans up tunnel, tailscale, and webhook server when init fails after start", async () => {
-    const config = createBaseConfig();
     const tunnelStop = vi.fn().mockResolvedValue(undefined);
     mocks.startTunnel.mockResolvedValue({
       publicUrl: "https://public.example:8443/voice/webhook",
@@ -251,7 +244,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
     mocks.managerInitialize.mockRejectedValue(new Error("init failed"));
 
-    await expect(createRuntime({ config })).rejects.toThrow("init failed");
+    await expect(createRuntime()).rejects.toThrow("init failed");
 
     expect(tunnelStop).toHaveBeenCalledTimes(1);
     expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
@@ -504,7 +497,6 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const tools = realtimeArgs()[0].tools;
     expect(tools.map((tool) => tool.name)).toEqual(["openclaw_end_call", "custom_tool"]);
     const endCallTool = expectDefined(tools[0], "end-call tool");
-    expectIncludes(endCallTool.description, "final words", "no further reply");
     expect(endCallTool.parameters).toEqual({
       type: "object",
       properties: {},

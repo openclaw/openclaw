@@ -25,6 +25,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { sharedPluginsProjection } from "../../lib/reactive/shared-application-projections.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -95,10 +96,6 @@ function BoardWidgetCellContent(
   let actionInFlight = false;
   let menu: MenuHandle | undefined;
   let connected = true;
-  // Retain the MCP renderer until its teardown acknowledgement releases it.
-  const [renderedMcp, setRenderedMcp] = createSignal(
-    (previous = false) => props.widget?.contentKind === "mcp-app" || previous,
-  );
   const active = () => props.active !== false;
   const canMutate = () => props.canMutate !== false;
   const canGrant = () => props.canGrant !== false;
@@ -151,6 +148,10 @@ function BoardWidgetCellContent(
       if (!needsResources()) {
         return undefined;
       }
+      // Retain the MCP renderer until its teardown acknowledgement releases it.
+      const [renderedMcp, setRenderedMcp] = createSignal(
+        (previous = false) => props.widget?.contentKind === "mcp-app" || previous,
+      );
       const appView = createBoardMcpAppLifecycle({
         active,
         connected: () => connected,
@@ -171,7 +172,13 @@ function BoardWidgetCellContent(
         widget: () => props.widget,
       });
       disconnectFrame = () => frame.disconnect();
-      return { appView, frame, frameState: projectOwner(frame, (owner) => owner) };
+      return {
+        appView,
+        frame,
+        frameState: projectOwner(frame, (owner) => owner),
+        renderedMcp,
+        setRenderedMcp,
+      };
     },
     { lazy: false },
   );
@@ -180,6 +187,21 @@ function BoardWidgetCellContent(
     props.widget?.contentKind === "plugin" && !props.widget.frameUrl
       ? getPluginWidgetKindContribution(props.widget.pluginKind, activeKinds())
       : null,
+  );
+  const fixedReport = () =>
+    props.widget?.heightMode === "fixed" && contribution()?.kind === "session:report";
+  const [reportEntered, setReportEntered] = createSignal(false);
+  // Fixed reports already reserve their full height. Build nearby bodies once,
+  // then let the existing core-widget latch retain them across tab switches.
+  // Observe the card because the display:contents host has no intersection box.
+  createIntersectionObserver(
+    () => (fixedReport() && !reportEntered() && widgetRoot() ? [widgetRoot()!] : []),
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setReportEntered(true);
+      }
+    },
+    { rootMargin: "300px" },
   );
 
   function runAction(run: () => Promise<void>, failureMessage?: string) {
@@ -246,19 +268,16 @@ function BoardWidgetCellContent(
     },
     focusWidget: () => widgetRoot()?.focus(),
     selectMenuItem,
-    async teardown() {
-      await mcpElement?.teardown();
-    },
-    restartAfterTeardown() {
-      mcpElement?.restartAfterTeardown();
-    },
+    teardown: async () => mcpElement?.teardown(),
+    restartAfterTeardown: () => mcpElement?.restartAfterTeardown(),
   });
   createEffect(
-    () => [props.widget, props.boardRevision, active(), gatewayBinding(), resources()] as const,
-    // Owner callbacks intentionally read the current binding captured above.
-    (next, previous) => {
-      const widget = next[0];
-      const current = next[4];
+    // Native widgets retain identity history without subscribing to frame activity.
+    () =>
+      resources()
+        ? ([props.widget, resources(), props.boardRevision, active(), gatewayBinding()] as const)
+        : ([props.widget, undefined] as const),
+    ([widget, current], previous) => {
       const previousWidget = previous?.[0];
       if (previousWidget && previousWidget !== widget) {
         current?.frame.widgetChanged(previousWidget, widget);
@@ -268,22 +287,28 @@ function BoardWidgetCellContent(
   );
   createEffect(
     () =>
-      [
-        widgetRoot(),
-        resources(),
-        resources()?.frameState.revision(),
-        props.widget,
-        props.boardRevision,
-        props.callbacks,
-        props.sessionKey,
-        gatewayBinding(),
-        active(),
-        props.loadingCovered,
-        props.bridgeEnabled,
-        props.widgetFrameUrl,
-        bodyErrored(),
-      ] as const,
-    ([root, current]) => {
+      resources() || props.loadingCovered
+        ? ([
+            widgetRoot(),
+            resources(),
+            resources()?.frameState.revision(),
+            props.widget,
+            props.boardRevision,
+            props.callbacks,
+            props.sessionKey,
+            gatewayBinding(),
+            active(),
+            props.loadingCovered,
+            props.bridgeEnabled,
+            props.widgetFrameUrl,
+            bodyErrored(),
+          ] as const)
+        : undefined,
+    (next) => {
+      if (!next) {
+        return;
+      }
+      const [root, current] = next;
       current?.appView.synchronize(props.callbacks, root ?? null);
       current?.frame.update();
       if (props.loadingCovered && presentationReady()) {
@@ -376,9 +401,6 @@ function BoardWidgetCellContent(
             ?.read()
             ?.errors.find((entry) => entry.pluginId === pluginId() || entry.pluginId === "host")
         : undefined;
-    const Loading = () => (
-      <p class="board-widget__plugin-loading">{t("board.widget.pluginLoading")}</p>
-    );
     return (
       <Switch
         fallback={
@@ -401,7 +423,7 @@ function BoardWidgetCellContent(
               contribution={core}
               widget={props.widget}
               session={props.session}
-              active={active()}
+              active={active() && (!fixedReport() || reportEntered())}
             />
           )}
         </Match>
@@ -424,7 +446,7 @@ function BoardWidgetCellContent(
             plugins?.read().isLoading(pluginId())
           }
         >
-          <Loading />
+          <p class="board-widget__plugin-loading">{t("board.widget.pluginLoading")}</p>
         </Match>
         <Match when={runtimeError()}>
           <BoardWidgetError
@@ -448,7 +470,7 @@ function BoardWidgetCellContent(
       <Match when={resources()?.frameState.read().error}>
         <BoardWidgetError error={resources()?.frameState.read().error} />
       </Match>
-      <Match when={renderedMcp() && resources()}>
+      <Match when={resources()?.renderedMcp() && resources()}>
         {(current) => (
           <BoardMcpAppContent
             accessNotice={<AccessNotice />}
@@ -467,7 +489,7 @@ function BoardWidgetCellContent(
             }}
             retired={() => {
               if (props.widget?.contentKind !== "mcp-app") {
-                setRenderedMcp(false);
+                current().setRenderedMcp(false);
               }
             }}
           />
@@ -514,7 +536,7 @@ function BoardWidgetCellContent(
   const style = (): SolidJSX.CSSProperties => {
     const rect = props.rect!;
     const height =
-      props.dragging || props.pageChrome
+      props.dragging || props.pageChrome || props.widget!.contentKind !== "html"
         ? undefined
         : exactBoardWidgetHeightPx(
             props.widget!,
@@ -567,6 +589,7 @@ function BoardWidgetCellContent(
           {
             "board-widget--page-chrome": props.pageChrome,
             "board-widget--dragging": props.dragging,
+            "board-widget--fixed-report": fixedReport(),
           },
           presentation() && `board-widget--${presentation()}`,
         ]}
@@ -586,40 +609,42 @@ function BoardWidgetCellContent(
         onKeyDown={keyDown}
       >
         <Show when={!props.pageChrome}>
-          <header class="board-widget__bar">
-            <Show when={canMutate()}>
-              <span
-                class="board-widget__drag-handle"
-                aria-hidden="true"
-                title={t("board.widget.moveHandle", { title: label() })}
-                onPointerDown={(event) => props.callbacks!.movePointerDown(props.widget!, event)}
-              >
-                <span aria-hidden="true">⠿</span>
+          <div class="board-widget__chrome">
+            <header class="board-widget__bar">
+              <Show when={canMutate()}>
+                <span
+                  class="board-widget__drag-handle"
+                  aria-hidden="true"
+                  title={t("board.widget.moveHandle", { title: label() })}
+                  onPointerDown={(event) => props.callbacks!.movePointerDown(props.widget!, event)}
+                >
+                  <span aria-hidden="true">⠿</span>
+                </span>
+              </Show>
+              <span class="board-widget__title" title={label()}>
+                {label()}
               </span>
-            </Show>
-            <span class="board-widget__title" title={label()}>
-              {label()}
-            </span>
-            <span class="board-widget__kind">
-              {props.widget!.contentKind === "mcp-app"
-                ? t("board.widget.kindMcp")
-                : props.widget!.contentKind === "plugin"
-                  ? contribution()?.label || t("board.widget.kindPlugin")
-                  : t("board.widget.kindHtml")}
-            </span>
-            <BoardGrantedCapabilities widget={props.widget!} />
-            <Show when={canMutate()}>
-              <BoardWidgetMenu
-                widget={props.widget!}
-                tabs={props.tabs ?? []}
-                disabled={props.busy || actionPending()}
-                onSelect={selectMenuItem}
-                ref={(handle) => {
-                  menu = handle;
-                }}
-              />
-            </Show>
-          </header>
+              <span class="board-widget__kind">
+                {props.widget!.contentKind === "mcp-app"
+                  ? t("board.widget.kindMcp")
+                  : props.widget!.contentKind === "plugin"
+                    ? contribution()?.label || t("board.widget.kindPlugin")
+                    : t("board.widget.kindHtml")}
+              </span>
+              <BoardGrantedCapabilities widget={props.widget!} />
+              <Show when={canMutate() && (!fixedReport() || reportEntered())}>
+                <BoardWidgetMenu
+                  widget={props.widget!}
+                  tabs={props.tabs ?? []}
+                  disabled={props.busy || actionPending()}
+                  onSelect={selectMenuItem}
+                  ref={(handle) => {
+                    menu = handle;
+                  }}
+                />
+              </Show>
+            </header>
+          </div>
         </Show>
         <div
           class={[
@@ -627,6 +652,7 @@ function BoardWidgetCellContent(
             {
               "board-widget__body--scrollable": scrollable(),
               "board-widget__body--card": presentation() === "card",
+              "board-widget__body--fixed-report": fixedReport(),
             },
           ]}
         >

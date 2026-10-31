@@ -7,22 +7,290 @@ import {
   controlUiStableChunkName,
 } from "../../config/control-ui-chunking.ts";
 
+const modulePath = (relative: string) => new URL(relative, import.meta.url).pathname;
+
+function buildFixture(
+  entry: string,
+  sources: Map<string, string>,
+  codeSplitting = controlUiCodeSplitting,
+) {
+  return build({
+    configFile: false,
+    publicDir: false,
+    logLevel: "silent",
+    plugins: [
+      {
+        name: entry.slice(1),
+        enforce: "pre",
+        resolveId: (id) => (sources.has(id) ? id : null),
+        load: (id) => sources.get(id) ?? null,
+      },
+    ],
+    build: {
+      write: false,
+      minify: false,
+      rolldownOptions: {
+        input: entry,
+        preserveEntrySignatures: "allow-extension",
+        output: { codeSplitting, strictExecutionOrder: true },
+      },
+    },
+  });
+}
+
 describe("Control UI build chunking", () => {
+  it("consolidates lazy Settings helpers while keeping validation behind the editor", async () => {
+    const page = modulePath("../pages/config/config-page.tsx");
+    const editor = modulePath("../components/config-form.render.tsx");
+    const lightConsumer = modulePath("../pages/plugins/credential-presentation.tsx");
+    const analyze = modulePath("../components/config-form.analyze.ts");
+    const constraints = modulePath("../components/config-form.constraints.ts");
+    const validator = modulePath("../../../packages/normalization-core/src/json-schema.ts");
+    const shared = modulePath("../components/config-form.shared.ts");
+    const sensitive = modulePath("../../../src/config/sensitive-paths.ts");
+    const utils = modulePath("../lib/config-form-utils.ts");
+    const hints = modulePath("../i18n/lib/config-hint-translation.ts");
+    const items = modulePath("../components/config-form.array-items.ts");
+    const controls = modulePath("../components/solid/settings-ui.tsx");
+    const header = modulePath("../pages/config/settings-section-header.tsx");
+    const copy = modulePath("../i18n/locales/en-settings.ts");
+    const entry = "\0settings-helper-fixture";
+    const result = await buildFixture(
+      entry,
+      new Map([
+        [
+          entry,
+          `export const settings = () => import(${JSON.stringify(page)}); export const credentials = () => import(${JSON.stringify(lightConsumer)});`,
+        ],
+        [
+          page,
+          `import { analyze } from ${JSON.stringify(analyze)}; import { items } from ${JSON.stringify(items)}; import { header } from ${JSON.stringify(header)}; export const render = () => analyze + items + header; export const edit = () => import(${JSON.stringify(editor)});`,
+        ],
+        [
+          analyze,
+          `import { items } from ${JSON.stringify(items)}; import { shared } from ${JSON.stringify(shared)}; export const analyze = items + shared + 'analysis';`,
+        ],
+        [
+          constraints,
+          `import { items } from ${JSON.stringify(items)}; import { shared } from ${JSON.stringify(shared)}; import { validator } from ${JSON.stringify(validator)}; export const constraints = items + shared + validator + 'constraints';`,
+        ],
+        [validator, "export const validator = 'value validation';"],
+        [
+          shared,
+          `import { sensitive } from ${JSON.stringify(sensitive)}; export const shared = sensitive + 'shared';`,
+        ],
+        [sensitive, "export const sensitive = 'sensitive';"],
+        [
+          items,
+          `import { value } from ${JSON.stringify(utils)}; export const items = value + 'items';`,
+        ],
+        [
+          utils,
+          `import { hint } from ${JSON.stringify(hints)}; export const value = hint + 'value';`,
+        ],
+        [hints, "export const hint = 'hint';"],
+        [
+          header,
+          `import { control } from ${JSON.stringify(controls)}; export const header = control + 'header';`,
+        ],
+        [controls, "export const control = 'control';"],
+        [
+          lightConsumer,
+          `import { value } from ${JSON.stringify(utils)}; export const credential = value;`,
+        ],
+        [
+          editor,
+          `import { constraints } from ${JSON.stringify(constraints)}; import { copy } from ${JSON.stringify(copy)}; export const edit = () => constraints + copy;`,
+        ],
+        [copy, "export const copy = 'optional editor copy';"],
+      ]),
+    );
+    if (Array.isArray(result) || !("output" in result)) {
+      throw new Error("Expected one in-memory build");
+    }
+    const chunks = result.output.filter((asset) => asset.type === "chunk");
+    const chunkFor = (id: string) => chunks.find((chunk) => id in chunk.modules)!;
+    const reachable = (fileName: string, visited = new Set<string>()): Set<string> => {
+      if (!visited.has(fileName)) {
+        visited.add(fileName);
+        for (const imported of chunks.find((chunk) => chunk.fileName === fileName)!.imports) {
+          reachable(imported, visited);
+        }
+      }
+      return visited;
+    };
+    const analysisChunk = chunkFor(analyze);
+    const utilsChunk = chunkFor(utils);
+    const controlsChunk = chunkFor(controls);
+    for (const [name, chunk, modules] of [
+      ["config-form-analysis-runtime", analysisChunk, [analyze, shared, sensitive]],
+      ["config-form-utils-runtime", utilsChunk, [utils, hints, items]],
+      ["settings-controls-runtime", controlsChunk, [controls, header]],
+    ] as const) {
+      expect(chunk.fileName).toContain(name);
+      expect(modules.every((id) => id in chunk.modules)).toBe(true);
+    }
+    const pageChunk = chunkFor(page);
+    const pageImports = reachable(pageChunk.fileName);
+    const startupImports = reachable(chunks.find((chunk) => chunk.isEntry)!.fileName);
+    for (const chunk of [pageChunk, analysisChunk, utilsChunk, controlsChunk]) {
+      expect(pageImports.has(chunk.fileName)).toBe(true);
+      expect(startupImports.has(chunk.fileName)).toBe(false);
+    }
+    const editorChunk = chunkFor(editor);
+    const editorImports = reachable(editorChunk.fileName);
+    for (const id of [editor, constraints, validator, copy]) {
+      expect(pageImports.has(chunkFor(id).fileName)).toBe(false);
+      expect(editorImports.has(chunkFor(id).fileName)).toBe(true);
+    }
+    expect(pageChunk.dynamicImports).toContain(editorChunk.fileName);
+    const lightImports = reachable(chunkFor(lightConsumer).fileName);
+    expect(lightImports.has(utilsChunk.fileName)).toBe(true);
+    for (const chunk of [
+      pageChunk,
+      analysisChunk,
+      controlsChunk,
+      editorChunk,
+      chunkFor(constraints),
+      chunkFor(validator),
+      chunkFor(copy),
+    ]) {
+      expect(lightImports.has(chunk.fileName)).toBe(false);
+    }
+  });
+
+  it("keeps the real schema analyzer independent of the optional value validator", async () => {
+    const analyze = modulePath("../components/config-form.analyze.ts");
+    const constraints = modulePath("../components/config-form.constraints.ts");
+    const validator = modulePath("../../../packages/normalization-core/src/json-schema.ts");
+    const entry = "\0config-analysis-boundary";
+    const result = await build({
+      configFile: false,
+      publicDir: false,
+      logLevel: "silent",
+      resolve: {
+        alias: [
+          {
+            find: /^@openclaw\/normalization-core\/(.+)$/u,
+            replacement: modulePath("../../../packages/normalization-core/src/$1.ts"),
+          },
+        ],
+      },
+      plugins: [
+        {
+          name: "config-analysis-boundary",
+          resolveId: (id) => (id === entry ? id : null),
+          load: (id) =>
+            id === entry
+              ? `export { analyzeConfigSchema } from ${JSON.stringify(analyze)}; export const editor = () => import(${JSON.stringify(constraints)});`
+              : null,
+        },
+      ],
+      build: {
+        write: false,
+        minify: false,
+        rolldownOptions: {
+          input: entry,
+          // Translation content does not affect the schema/validator import boundary.
+          external: /^virtual:openclaw-control-ui-locale/u,
+          preserveEntrySignatures: "allow-extension",
+          output: { codeSplitting: controlUiCodeSplitting, strictExecutionOrder: true },
+        },
+      },
+    });
+    if (Array.isArray(result) || !("output" in result)) {
+      throw new Error("Expected one in-memory build");
+    }
+    const chunks = result.output.filter((asset) => asset.type === "chunk");
+    const modulesFrom = (fileName: string, visited = new Set<string>()): Set<string> => {
+      if (!visited.has(fileName)) {
+        visited.add(fileName);
+        for (const imported of chunks.find((chunk) => chunk.fileName === fileName)?.imports ?? []) {
+          modulesFrom(imported, visited);
+        }
+      }
+      return new Set(
+        chunks
+          .filter((chunk) => visited.has(chunk.fileName))
+          .flatMap((chunk) =>
+            Object.entries(chunk.modules)
+              .filter(([, module]) => module.renderedLength > 0)
+              .map(([id]) => id),
+          ),
+      );
+    };
+    const startup = modulesFrom(chunks.find((chunk) => chunk.isEntry)!.fileName);
+    const editor = modulesFrom(chunks.find((chunk) => constraints in chunk.modules)!.fileName);
+    expect(startup.has(analyze)).toBe(true);
+    for (const id of [constraints, validator]) {
+      expect(startup.has(id)).toBe(false);
+      expect(editor.has(id)).toBe(true);
+    }
+    expect([...startup].some((id) => id.includes("/node_modules/typebox/"))).toBe(false);
+    expect([...editor].some((id) => id.includes("/node_modules/typebox/"))).toBe(true);
+  });
+
+  it("keeps the creator runtime and its copy outside shared admission and virtualizer chunks", async () => {
+    const owner = modulePath("../pages/templates/creator-owner.ts");
+    const flow = modulePath("../pages/templates/creator-flow.ts");
+    const copy = modulePath("../i18n/locales/en-template-creator.ts");
+    const title = modulePath("../i18n/locales/en-agents-home.ts");
+    const virtualizer = modulePath("../../node_modules/@tanstack/virtual-core/dist/esm/index.js");
+    const entry = "\0creator-owner-fixture";
+    const result = await buildFixture(
+      entry,
+      new Map([
+        [
+          entry,
+          `export { open } from ${JSON.stringify(owner)}; export { measure } from ${JSON.stringify(virtualizer)};`,
+        ],
+        [
+          owner,
+          `import { title } from ${JSON.stringify(title)}; export const open = () => import(${JSON.stringify(flow)}).then(m => m.start(title));`,
+        ],
+        [
+          flow,
+          `import { copy } from ${JSON.stringify(copy)}; export const start = title => title + copy;`,
+        ],
+        [copy, "export const copy = 'Optional creator copy';"],
+        [title, "export const title = 'Create Template';"],
+        [virtualizer, "export const measure = () => 1;"],
+      ]),
+    );
+    if (Array.isArray(result) || !("output" in result)) {
+      throw new Error("Expected one in-memory build");
+    }
+    const chunks = result.output.filter((asset) => asset.type === "chunk");
+    const cold = chunks.find((chunk) => flow in chunk.modules)!;
+    expect(cold.fileName).toContain("template-creator-runtime");
+    expect(copy in cold.modules).toBe(true);
+    const reachable = new Set<string>();
+    const visit = (file: string) => {
+      if (reachable.has(file)) {
+        return;
+      }
+      reachable.add(file);
+      chunks.find((chunk) => chunk.fileName === file)?.imports.forEach(visit);
+    };
+    visit(chunks.find((chunk) => chunk.isEntry)!.fileName);
+    expect(reachable.has(cold.fileName)).toBe(false);
+    expect(
+      chunks
+        .filter((chunk) => reachable.has(chunk.fileName))
+        .some((chunk) => owner in chunk.modules),
+    ).toBe(true);
+  });
   it("keeps optional parsing and device signing outside the eager graph", async () => {
-    const zod = new URL("../../node_modules/zod/index.js", import.meta.url).pathname;
-    const json5 = new URL("../../node_modules/json5/dist/index.mjs", import.meta.url).pathname;
-    const gatewayMethods = new URL("../lib/gateway-methods.ts", import.meta.url).pathname;
-    const solid = new URL("../../node_modules/solid-js/dist/solid.js", import.meta.url).pathname;
-    const verdict = new URL(
-      "../../node_modules/@solidjs/signals/dist/prod/core/verdict.js",
-      import.meta.url,
-    ).pathname;
-    const signer = new URL("../../node_modules/@noble/ed25519/index.js", import.meta.url).pathname;
-    const markdown = new URL("../../node_modules/markdown-it/dist/markdown-it.mjs", import.meta.url)
-      .pathname;
-    const entities = new URL("../../node_modules/entities/dist/index.js", import.meta.url).pathname;
-    const motion = new URL("../components/mascot-animator.ts", import.meta.url).pathname;
-    const channels = new URL("../lib/channels/index.ts", import.meta.url).pathname;
+    const zod = modulePath("../../node_modules/zod/index.js");
+    const json5 = modulePath("../../node_modules/json5/dist/index.mjs");
+    const gatewayMethods = modulePath("../lib/gateway-methods.ts");
+    const solid = modulePath("../../node_modules/solid-js/dist/solid.js");
+    const verdict = modulePath("../../node_modules/@solidjs/signals/dist/prod/core/verdict.js");
+    const signer = modulePath("../../node_modules/@noble/ed25519/index.js");
+    const markdown = modulePath("../../node_modules/markdown-it/dist/markdown-it.mjs");
+    const entities = modulePath("../../node_modules/entities/dist/index.js");
+    const motion = modulePath("../components/mascot-animator.ts");
+    const channels = modulePath("../lib/channels/index.ts");
     const entry = "\0config-parser-fixture";
     const sources = new Map([
       [
@@ -40,28 +308,7 @@ describe("Control UI build chunking", () => {
       [markdown, `export { decode as render } from ${JSON.stringify(entities)};`],
       [entities, "export const decode = () => 'decoded';"],
     ]);
-    const result = await build({
-      configFile: false,
-      publicDir: false,
-      logLevel: "silent",
-      plugins: [
-        {
-          name: "config-parser-fixture",
-          enforce: "pre",
-          resolveId: (id) => (sources.has(id) ? id : null),
-          load: (id) => sources.get(id) ?? null,
-        },
-      ],
-      build: {
-        write: false,
-        minify: false,
-        rolldownOptions: {
-          input: entry,
-          preserveEntrySignatures: "allow-extension",
-          output: { codeSplitting: controlUiCodeSplitting, strictExecutionOrder: true },
-        },
-      },
-    });
+    const result = await buildFixture(entry, sources);
     if (Array.isArray(result) || !("output" in result)) {
       throw new Error("Expected one in-memory build");
     }
@@ -102,9 +349,15 @@ describe("Control UI build chunking", () => {
   });
 
   it("keeps routes and optional code lazy with one shared stylesheet", async () => {
-    const modulePath = (relative: string) => new URL(relative, import.meta.url).pathname;
     const chat = modulePath("../pages/chat/chat-pane.tsx");
     const newSession = modulePath("../pages/new-session/new-session-page.tsx");
+    const runFrame = modulePath("../pages/chat/components/chat-agent-run-frame.tsx");
+    const runStream = modulePath("../pages/chat/components/chat-message-stream-view.tsx");
+    const sourcePreviews = modulePath("../lib/chat/source-previews.ts");
+    const sourcePreviewView = modulePath("../pages/chat/components/chat-source-previews.tsx");
+    const permissionCard = modulePath("../pages/chat/components/chat-permission-card.tsx");
+    const permissionLabels = modulePath("../i18n/locales/en-chat-permissions.ts");
+    const processRow = modulePath("../pages/chat/components/chat-details-process-row.tsx");
     const optional = modulePath("../components/assistant-panel-content-solid.tsx");
     const devices = modulePath("../pages/devices/devices-page.tsx");
     const cron = modulePath("../pages/cron/cron-page.tsx");
@@ -146,12 +399,25 @@ describe("Control UI build chunking", () => {
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export { skeleton } from ${JSON.stringify(skeleton)}; export class Chat { label = patch(action(label)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export { skeleton } from ${JSON.stringify(skeleton)}; export { card } from ${JSON.stringify(permissionCard)}; export { row as process } from ${JSON.stringify(processRow)}; export { renderRun, renderPreview } from ${JSON.stringify(runFrame)}; export class Chat { label = patch(action(label)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
       [
         newSession,
         `import ${JSON.stringify(sidebarStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; export class NewSession { label = label; }`,
       ],
+      [
+        runFrame,
+        `import { stream } from ${JSON.stringify(runStream)}; import { preview } from ${JSON.stringify(sourcePreviews)}; export const renderRun = () => stream + preview; export const renderPreview = () => import(${JSON.stringify(sourcePreviewView)});`,
+      ],
+      [runStream, 'export const stream = "stream";'],
+      [sourcePreviews, 'export const preview = "preview";'],
+      [sourcePreviewView, 'export const view = "source-preview";'],
+      [
+        permissionCard,
+        `import { permission } from ${JSON.stringify(permissionLabels)}; export const card = () => permission;`,
+      ],
+      [permissionLabels, 'export const permission = "permission";'],
+      [processRow, 'export const row = "process";'],
       [
         optional,
         `import ${JSON.stringify(optionalStyle)}; import { hubTabs } from ${JSON.stringify(hubTabs)}; import { link } from ${JSON.stringify(settingsUi)}; import { subtitle } from ${JSON.stringify(routeSubtitles)}; export const panel = hubTabs() + link + subtitle;`,
@@ -213,60 +479,35 @@ describe("Control UI build chunking", () => {
       [optionalStyle, ".optional-fixture { color: orange; }"],
       [inlineStyle, ".optional-fixture { color: orange; }"],
     ]);
-    const result = await build({
-      configFile: false,
-      publicDir: false,
-      logLevel: "silent",
-      plugins: [
-        {
-          name: "cold-load-fixture",
-          enforce: "pre",
-          resolveId: (id) => (sources.has(id) ? id : null),
-          load: (id) => sources.get(id) ?? null,
-        },
-      ],
-      build: {
-        write: false,
-        minify: false,
-        rolldownOptions: {
-          input: entry,
-          preserveEntrySignatures: "allow-extension",
-          output: {
-            codeSplitting: {
-              ...controlUiCodeSplitting,
-              // A stale capture must not pull a lazy page into the shared boot chunk.
-              groups: controlUiCodeSplitting.groups.map((group) => ({
-                ...group,
-                // Exercise grouping below the production chunk-size floor.
-                minSize: 0,
-                ...(group.name === "control-ui-boot-shared"
-                  ? {
-                      // Fixture sharing is independent of changing production captures.
-                      test: (id: string) =>
-                        [
-                          devices,
-                          sharedUi,
-                          sharedStyle,
-                          sidebarStyle,
-                          mutations,
-                          receipts,
-                          creation,
-                          unread,
-                        ].includes(id) || group.test(id),
-                    }
-                  : {}),
-                ...(group.name === "control-ui-boot-shared-styles"
-                  ? {
-                      test: (id: string) =>
-                        id === sharedStyle || id === sidebarStyle || group.test(id),
-                    }
-                  : {}),
-              })),
-            },
-            strictExecutionOrder: true,
-          },
-        },
-      },
+    const result = await buildFixture(entry, sources, {
+      ...controlUiCodeSplitting,
+      // A stale capture must not pull a lazy page into the shared boot chunk.
+      groups: controlUiCodeSplitting.groups.map((group) => ({
+        ...group,
+        // Exercise grouping below the production chunk-size floor.
+        minSize: 0,
+        ...(group.name === "control-ui-boot-shared"
+          ? {
+              // Fixture sharing is independent of changing production captures.
+              test: (id: string) =>
+                [
+                  devices,
+                  sharedUi,
+                  sharedStyle,
+                  sidebarStyle,
+                  mutations,
+                  receipts,
+                  creation,
+                  unread,
+                ].includes(id) || group.test(id),
+            }
+          : {}),
+        ...(group.name === "control-ui-boot-shared-styles"
+          ? {
+              test: (id: string) => id === sharedStyle || id === sidebarStyle || group.test(id),
+            }
+          : {}),
+      })),
     });
     if (Array.isArray(result) || !("output" in result)) {
       throw new Error("Expected one in-memory build");
@@ -293,6 +534,17 @@ describe("Control UI build chunking", () => {
     };
     expect(staticImports(chatChunk.fileName)).not.toContain(newSessionChunk.fileName);
     expect(staticImports(newSessionChunk.fileName)).not.toContain(chatChunk.fileName);
+    const runChunk = chunks.find((chunk) => runFrame in chunk.modules)!;
+    expect([runStream, sourcePreviews].every((id) => id in runChunk.modules)).toBe(true);
+    expect(staticImports(chatChunk.fileName)).toContain(runChunk.fileName);
+    expect(staticImports(newSessionChunk.fileName)).not.toContain(runChunk.fileName);
+    const previewChunk = chunks.find((chunk) => sourcePreviewView in chunk.modules)!;
+    expect(staticImports(chatChunk.fileName)).not.toContain(previewChunk.fileName);
+    expect(runChunk.dynamicImports).toContain(previewChunk.fileName);
+    const visibleChunk = chunks.find((chunk) => permissionCard in chunk.modules)!;
+    expect([permissionLabels, processRow].every((id) => id in visibleChunk.modules)).toBe(true);
+    expect(staticImports(chatChunk.fileName)).toContain(visibleChunk.fileName);
+    expect(staticImports(visibleChunk.fileName)).not.toContain(runChunk.fileName);
     const pluginChunk = chunks.find((chunk) => pluginLoader in chunk.modules)!;
     const actionChunk = chunks.find((chunk) => pluginActions in chunk.modules)!;
     const sharedChunk = chunks.find((chunk) => sharedUi in chunk.modules)!;
@@ -362,19 +614,13 @@ describe("Control UI build chunking", () => {
       ],
       ["/tmp/openclaw-pnpm-node-modules/@noble/ed25519/index.js", "device-signing-runtime"],
       ["/repo/ui/src/lib/gateway-methods.ts", undefined],
-      [
-        new URL("../components/sidebar-update-card.tsx", import.meta.url).pathname,
-        "sidebar-update-runtime",
-      ],
-      [
-        new URL("../styles/sidebar-update-card.css", import.meta.url).pathname,
-        "sidebar-update-runtime",
-      ],
-      [new URL("../pages/chat/route-entry.ts", import.meta.url).pathname, "chat-route-entry"],
-      [new URL("../pages/cron/cron-page.tsx", import.meta.url).pathname, "cron-page"],
-      [new URL("../pages/plugins/plugins-page.tsx", import.meta.url).pathname, "plugins-page"],
-      [new URL("../components/markdown-parser.ts", import.meta.url).pathname, "markdown-runtime"],
-      ["/repo/ui/src/components/config-form.shared.ts", undefined],
+      [modulePath("../components/sidebar-update-card.tsx"), "sidebar-update-runtime"],
+      [modulePath("../styles/sidebar-update-card.css"), "sidebar-update-runtime"],
+      [modulePath("../pages/chat/route-entry.ts"), "chat-route-entry"],
+      [modulePath("../pages/cron/cron-page.tsx"), "cron-page"],
+      [modulePath("../pages/plugins/plugins-page.tsx"), "plugins-page"],
+      [modulePath("../components/markdown-parser.ts"), "markdown-runtime"],
+      [modulePath("../components/config-form.shared.ts"), "config-form-analysis-runtime"],
       ["/repo/ui/src/lib/clipboard.ts", undefined],
       ["/repo/ui/src/build-info.ts", undefined],
       ["/repo/ui/src/build-info-normalizers.ts", undefined],
@@ -387,9 +633,11 @@ describe("Control UI build chunking", () => {
   });
 
   it("lets snapshot prewarming load independently of the measured boot groups", () => {
-    const database = new URL("../pages/chat/session-snapshot-database.ts", import.meta.url)
-      .pathname;
-    const stableGroup = controlUiCodeSplitting.groups[0];
+    const database = modulePath("../pages/chat/session-snapshot-database.ts");
+    const stableGroup = controlUiCodeSplitting.groups.find(
+      (group) =>
+        typeof group.name === "function" && group.name(database) === "session-snapshot-database",
+    );
     const bootGroup = controlUiCodeSplitting.groups.find(
       (group) =>
         typeof group.name === "string" &&
@@ -414,7 +662,7 @@ describe("Control UI build chunking", () => {
     const bootGroup = sharedGroup as {
       test: (id: string) => boolean;
     };
-    const repoRoot = new URL("../../..", import.meta.url).pathname.replace(/\/$/, "");
+    const repoRoot = modulePath("../../..").replace(/\/$/, "");
     // Representative always-loaded boot surface and a lazy island that must
     // keep its own chunk (terminal runtime is not part of the default boot).
     expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar.tsx`)).toBe(true);

@@ -72,7 +72,7 @@ suite.define(() => {
   it.each([
     "current",
     "new messages",
-    "stale",
+    // Cursor rejection is covered by chat-history-cursor.test.ts.
     "compaction",
     "branch change",
     "scope change",
@@ -155,9 +155,8 @@ suite.define(() => {
       expect(persisted.rosterContainsSession).toBe(false);
       expect(persisted.messages).toBe(2);
 
-      const reset = change === "stale" || change === "compaction" || change === "branch change";
-      const replacement = change === "compaction" || change === "branch change";
-      const finalMessages = replacement
+      const reset = change === "compaction" || change === "branch change";
+      const finalMessages = reset
         ? [
             message(1, "Replacement question", "replacement-1"),
             message(2, "Replacement answer", "replacement-2"),
@@ -171,7 +170,7 @@ suite.define(() => {
         activeLeafEntryId:
           change === "branch change"
             ? "replacement-leaf"
-            : change === "new messages" || change === "stale"
+            : change === "new messages"
               ? "entry-4"
               : session.activeLeafEntryId,
       };

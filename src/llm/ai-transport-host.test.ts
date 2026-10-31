@@ -15,18 +15,70 @@ import {
   withGuardedFetchBeforeRequest,
   withGuardedFetchRequestAuthority,
 } from "../infra/net/fetch-request-authority.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import { loggingState } from "../logging/state.js";
 import {
   createSolidPngBuffer,
   createTinyJpegBuffer,
 } from "../plugin-sdk/test-helpers/image-fixtures.js";
 import "./ai-transport-host.js";
+import { withModelTransportContext } from "./model-transport-context.js";
 
 afterEach(() => {
   resetSecretRedactionRegistryForTest();
+  resetLogger();
+  loggingState.rawConsole = null;
   vi.restoreAllMocks();
 });
+
+it.each(["logInfo", "logWarn"] as const)(
+  "formats transport context for %s only while its sink is enabled",
+  (method) => {
+    const requestId = vi.fn(() => "fixture-request:1");
+    const sink = vi.fn();
+    loggingState.rawConsole = { log: sink, info: sink, warn: sink, error: sink };
+    const host = getAiTransportHost();
+    withModelTransportContext(
+      {
+        sessionKey: "fixture-session",
+        runId: "fixture-run",
+        get requestId() {
+          return requestId();
+        },
+      },
+      () => {
+        for (const consoleLevel of ["silent", "info", "silent"] as const) {
+          setLoggerOverride({ level: "silent", consoleLevel, consoleStyle: "compact" });
+          requestId.mockClear();
+          sink.mockClear();
+          host[method](
+            "fixture-transport",
+            "attempt failed",
+            method === "logWarn" ? { requestId: "provider-request" } : undefined,
+          );
+          if (consoleLevel === "silent") {
+            expect(requestId).not.toHaveBeenCalled();
+            expect(sink).not.toHaveBeenCalled();
+          } else {
+            expect(requestId).toHaveBeenCalled();
+            expect(sink).toHaveBeenCalledExactlyOnceWith(
+              expect.stringContaining(
+                `attempt failed sessionKey="fixture-session" runId="fixture-run" ${method === "logWarn" ? "clientRequestId" : "requestId"}="fixture-request:1" requestNumber=1`,
+              ),
+            );
+            if (method === "logWarn") {
+              expect(sink).toHaveBeenCalledWith(
+                expect.stringContaining(" requestId=provider-request"),
+              );
+            }
+          }
+        }
+      },
+    );
+  },
+);
 
 const anthropicModel = makeProviderModelFixture<"anthropic-messages">({
   id: "claude-test",

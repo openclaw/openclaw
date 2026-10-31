@@ -351,7 +351,8 @@ describe("conversation registry", () => {
       parentPeerId: "parent-a",
       memberRoleIds: ["support", "admin"],
     };
-    await commitInitialization(scope, { routeContext });
+    // Keep observation times explicit; bookkeeping clamps future activity to its wall clock.
+    await commitInitialization(scope, { routeContext, entry: { updatedAt: 100 } });
     const canonicalConversation = (await list()).find(
       (conversation) => conversation.peerId === "canonical-ops",
     );
@@ -368,26 +369,25 @@ describe("conversation registry", () => {
       routeContext: { ...routeContext, memberRoleIds: ["admin", "support"] },
     });
 
-    await commitInitialization(scope, {
-      entry: { updatedAt: canonicalConversation!.lastSeenAt + 100 },
-    });
+    await commitInitialization(scope, { entry: { updatedAt: 200 } });
     const resumed = await read(conversationRef);
-    expect(resumed!.lastSeenAt).toBeGreaterThan(canonicalConversation!.lastSeenAt);
+    expect(resumed!.lastSeenAt).toBe(200);
     expect(resumed).toEqual({ ...canonicalConversation, lastSeenAt: resumed!.lastSeenAt });
 
     await upsertSessionEntry(scope, {
       totalTokens: 42,
-      updatedAt: resumed!.lastSeenAt + 100,
+      updatedAt: 300,
     });
     expect(await read(conversationRef)).toEqual(resumed);
     expect(await primary(scope, "ops-session")).toEqual(resumed);
 
     await commitInitialization(scope, {
       routeContext: { peerId: "canonical-ops", guildId: "guild-b" },
+      entry: { updatedAt: 400 },
     });
     const observed = await read(conversationRef);
     expect(observed).toMatchObject({ routeContext: { guildId: "guild-b" } });
-    expect(observed!.lastSeenAt).toBeGreaterThan(resumed!.lastSeenAt);
+    expect(observed!.lastSeenAt).toBe(400);
 
     await upsertSessionEntry(scope, { label: "generic current write", updatedAt: 200 });
     expect((await list()).filter((conversation) => conversation.role === "primary")).toEqual([

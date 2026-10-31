@@ -276,13 +276,17 @@ export function iteratePluginStateEntries(
 
 export function selectPluginStateEntriesInKeyRange(
   db: EngineConnection,
-  params: PluginStateKeyRangeParams & { order: "asc" | "desc"; now: number },
+  params: PluginStateKeyRangeParams & {
+    order: "asc" | "desc";
+    now: number;
+    exclusiveStart?: boolean;
+  },
 ): PluginStateReadRow[] {
   assertPluginStateKey(db, params.keyStartInclusive, "entries");
   assertPluginStateKey(db, params.keyEndExclusive, "entries");
   let query = selectLivePluginStateRows(db, params)
     .select(["entry_key", "value_json", "created_at", "expires_at"])
-    .where("entry_key", ">=", params.keyStartInclusive)
+    .where("entry_key", params.exclusiveStart ? ">" : ">=", params.keyStartInclusive)
     .where("entry_key", "<", params.keyEndExclusive);
   const filter = params.valueFilter;
   if (filter) {

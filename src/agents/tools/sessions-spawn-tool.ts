@@ -640,13 +640,14 @@ export function createSessionsSpawnTool(
           return spawnResult(result);
         }
 
+        const checkoutParams = params.worktree === true ? params : {};
         const result = await spawnSubagentDirect(
           {
             ...spawnParams,
-            projectId: readToolStringParam(params, "projectId"),
+            projectId: readToolStringParam(checkoutParams, "projectId"),
             worktree: params.worktree === true,
-            worktreeName: readToolStringParam(params, "worktreeName"),
-            worktreeBaseRef: readToolStringParam(params, "worktreeBaseRef"),
+            worktreeName: readToolStringParam(checkoutParams, "worktreeName"),
+            worktreeBaseRef: readToolStringParam(checkoutParams, "worktreeBaseRef"),
             collect: hasCollectParam ? collect : undefined,
             outputSchema:
               params.outputSchema && typeof params.outputSchema === "object"

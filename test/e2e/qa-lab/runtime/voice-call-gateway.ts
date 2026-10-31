@@ -24,36 +24,17 @@ import {
 import { withinTest } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
+import { parseQaProducerOptions, type QaProducerOptions } from "./script-options.js";
 
 const FIXTURE_PLUGIN_ID = "qa-voice-call-runtime";
 const FIXTURE_REALTIME_PROVIDER_ID = "qa-voice-call-realtime";
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/voice-call-gateway.ts";
-
-type ProducerOptions = {
-  artifactBase: string;
-  repoRoot: string;
-};
 
 type ProofResult = {
   details?: string;
   durationMs: number;
   status: QaScriptEvidenceStatus;
 };
-
-function parseOptions(argv: readonly string[]): ProducerOptions {
-  const readValue = (name: string) => {
-    const index = argv.indexOf(name);
-    return index >= 0 ? argv[index + 1] : undefined;
-  };
-  const artifactBase = readValue("--artifact-base");
-  if (!artifactBase) {
-    throw new Error("--artifact-base is required");
-  }
-  return {
-    artifactBase: path.resolve(artifactBase),
-    repoRoot: path.resolve(readValue("--repo-root") ?? process.cwd()),
-  };
-}
 
 async function createFixturePlugin(repoRoot: string, outputRoot: string, receiptEndpoint: string) {
   const sourceDir = path.join(
@@ -281,7 +262,7 @@ function countOccurrences(text: string, marker: string): number {
   return text.split(marker).length - 1;
 }
 
-async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
+async function runVoiceCallProof(options: QaProducerOptions): Promise<string> {
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-call-gateway-"));
   const mock = await startQaMockOpenAiServer();
   const servePort = await getFreePort();
@@ -294,6 +275,7 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
     const fixture = await createFixturePlugin(options.repoRoot, fixtureRoot, receipts.endpoint);
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
+      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
@@ -514,7 +496,7 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
   }
 }
 
-async function produceProof(options: ProducerOptions): Promise<ProofResult> {
+async function produceProof(options: QaProducerOptions): Promise<ProofResult> {
   const startedAt = Date.now();
   try {
     return {
@@ -532,7 +514,7 @@ async function produceProof(options: ProducerOptions): Promise<ProofResult> {
 }
 
 async function runVoiceCallGatewayProducer(
-  options: ProducerOptions,
+  options: QaProducerOptions,
 ): Promise<QaEvidenceSummaryJson> {
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
@@ -559,7 +541,7 @@ async function runVoiceCallGatewayProducer(
 }
 
 async function main(argv: readonly string[]) {
-  const options = parseOptions(argv);
+  const options = parseQaProducerOptions(argv);
   const evidence = await runVoiceCallGatewayProducer(options);
   const status = evidence.entries[0]?.result.status;
   console.log(`Voice Call Gateway evidence: ${QA_EVIDENCE_FILENAME}`);

@@ -236,6 +236,30 @@ describe("Picker", () => {
     },
   );
 
+  it("starts revealing a windowed selection before animation frames resume", async () => {
+    const frames = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
+    try {
+      const p = await mount({
+        options: Array.from({ length: 1000 }, (_, index) => ({
+          value: `model-${index}`,
+          label: `Model ${index}`,
+        })),
+        value: "model-750",
+        windowed: () => "",
+      });
+      p.container.style.width = "420px";
+      await p.open();
+      await waitForSolid(() =>
+        expect(
+          p.picker.querySelector<HTMLElement>(".picker-select__options")!.scrollTop,
+        ).toBeGreaterThan(0),
+      );
+    } finally {
+      cleanupSolid();
+      frames.mockRestore();
+    }
+  });
+
   it("windows a caller-sized large catalog without truncating keyboard selection", async () => {
     const choices = Array.from({ length: 1000 }, (_, index) => ({
       value: `model-${index}`,
@@ -424,6 +448,37 @@ describe("Picker", () => {
     expect(p.picker.querySelector<HTMLInputElement>("input")!.value).toBe("");
     expect(p.rows()).toHaveLength(9);
   });
+
+  it.each([
+    ["NFC", "MÜNCHEN", "Mu\u0308nchen"],
+    ["NFD", "MU\u0308NCHEN", "München"],
+  ])(
+    "matches canonical %s searches across option fields without rewriting values",
+    async (_, query, text) => {
+      const reference = `fixture/${text}`;
+      const p = await mount({
+        value: "label",
+        searchable: "always",
+        options: [
+          { value: "label", label: text },
+          { value: reference, label: "Reference" },
+          { value: "description", label: "Description", description: text },
+          { value: "group", label: "Grouped" },
+        ],
+        groupBy: (option) => (option.value === "group" ? { id: "group", label: text } : undefined),
+      });
+      await p.open();
+      expect((await p.search(query)).value).toBe(query);
+      expect(p.rows().map((row) => row.dataset.value)).toEqual([
+        "label",
+        reference,
+        "description",
+        "group",
+      ]);
+      p.rows()[1]!.click();
+      expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith(reference);
+    },
+  );
 
   it("commits an enabled visible choice once and skips disabled keyboard rows", async () => {
     const p = await mount();

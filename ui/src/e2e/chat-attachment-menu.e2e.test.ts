@@ -159,7 +159,7 @@ suite.define(() => {
         }
         for (const [width, height] of widths) {
           await page.setViewportSize({ width, height });
-          const mediaChooser = await choose(page, "media");
+          const mediaChooser = await choose(page, cameraFallback ? "media" : "file");
           await expectPickerAtPlusButton(mediaChooser);
           await mediaChooser.setFiles([]);
           await trigger.click();
@@ -249,8 +249,26 @@ suite.define(() => {
           await trigger.press("Enter");
           await attachmentOption(page, "file").waitFor({ state: "visible" });
           expect((await items.allTextContents()).map((text) => text.trim())).toEqual(
-            fixture.single ? ["Media", "Attach…"] : ["Camera", "Media", "File"],
+            fixture.single ? ["Add attachment…"] : ["Camera", "Media", "File"],
           );
+          if (fixture.single) {
+            await expect
+              .poll(() =>
+                page
+                  .locator(".agent-chat__capability-menu-panel:visible")
+                  .getAttribute("data-phase"),
+              )
+              .toBe("open");
+            const standardRow = page.getByRole("menuitem", { name: "Skills", exact: true });
+            for (const column of [".oc-menu-item__icon", ".oc-menu-item__label"]) {
+              const expected = (await standardRow.locator(column).boundingBox())!;
+              const actual = (await items.first().locator(column).boundingBox())!;
+              expect(actual.x).toBeCloseTo(expected.x, 1);
+            }
+            expect((await items.first().boundingBox())!.height).toBe(
+              (await standardRow.boundingBox())!.height,
+            );
+          }
           await page.keyboard.press("Escape");
           await attachmentOption(page, "file").waitFor({ state: "hidden" });
         }

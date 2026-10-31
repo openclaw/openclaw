@@ -171,23 +171,23 @@ it("backs off shared-repository snapshots after a missing-object failure", async
 });
 
 it.each([
-  "promised",
-  "promised-retry",
-  "unpromised",
-  "checksum",
-  "byte-limited",
-  "index-limited",
+  ["promised", 1],
+  ["promised-retry", 2],
+  ["unpromised", 0],
+  ["checksum", 1],
+  ["byte-limited", 1],
+  ["index-limited", 1],
 ] as const)(
   "consolidates healthy pack batches independently of missing snapshot objects (%s)",
-  async (damage) => {
+  async (damage, expectedFetches) => {
     const { root, source, repo, env, materialize } = await fixture("partial");
-    // Fixture materialization is an explicit checkout, not a Gateway inspection.
     await git(repo, "config", "gc.auto", "0");
     await git(repo, "config", "maintenance.auto", "false");
     const records = await materialize(["partial-a", "partial-b"], { stateDir: root });
     await editRecords(records);
     if (damage === "promised-retry") {
-      // Persist the snapshot failure before explicitly retrying with an offline remote.
+      // Persist a failed hydration before explicitly retrying with an offline remote.
+      await git(repo, "remote", "set-url", "origin", path.join(root, "unavailable.git"));
       await makeService(env).gc();
     }
     const directory = path.join(repo, ".git", "objects", "pack");
@@ -283,9 +283,9 @@ it.each([
     }
     const traceOutput = await fs.readFile(trace, "utf8");
     expect(traceOutput).not.toContain('"fsck"');
-    if (damage !== "promised-retry") {
-      expect(traceOutput).not.toContain("upload-pack");
-    }
+    const fetches = traceOutput.match(/"name":"fetch"/g)?.length ?? 0;
+    // Git may detect checksum damage before hydration or after its single batch.
+    expect(damage === "checksum" ? [0, 1] : [expectedFetches]).toContain(fetches);
     if (damage === "unpromised") {
       await git(repo, "remote", "set-url", "origin", source);
       const repaired = await service.gc({ retryDeferred: true });

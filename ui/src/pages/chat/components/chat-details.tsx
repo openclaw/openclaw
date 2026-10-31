@@ -133,12 +133,14 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   const outputsDemand = createMemo(() =>
     desktop() && opened() && props.chat?.outputs ? props.chat.retainOutputs : undefined,
   );
-  // Load on first presentation, then retain disclosure state while closed.
-  // Automatic content follows transcript paint; explicit opens bypass that wait.
-  // After first mount, retain disclosure state while closed or reconnecting.
+  // Mount cached chrome with the transcript; retain disclosure state while closed.
+  const cachedReady = () =>
+    props.chat?.cachedDetails?.subagents !== undefined &&
+    props.chat.cachedDetails.automations !== undefined;
   const [sessionOpened] = createSignal<boolean>(
     (previous) =>
-      previous || (opened() && (!props.contentPending || intent() === "open" || !desktop())),
+      previous ||
+      (opened() && (!props.contentPending || cachedReady() || intent() === "open" || !desktop())),
   );
   const docked = () => opened() && canDock();
   const surface = document.createElement("div");
@@ -547,7 +549,9 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       <Show when={sessionOpened()}>
         <ChatLazyBoundary
           fallback={
-            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+            !cachedReady() && (
+              <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+            )
           }
         >
           {content.children}

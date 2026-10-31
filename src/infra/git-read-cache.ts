@@ -3,6 +3,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
   addDiffReadDurations,
@@ -28,7 +29,7 @@ export type GitReadOptions = {
 };
 
 type ReadEntry<T> = {
-  revision: string;
+  revision: string | null | undefined;
   expiresAt: number;
   promise: Promise<T>;
   controller: AbortController;
@@ -49,17 +50,19 @@ type ReadSlot<T> = {
 };
 
 function gitEnvironment() {
-  return Object.entries(process.env)
-    .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
-    .toSorted(([left], [right]) => left.localeCompare(right));
+  return Object.keys(process.env)
+    .filter((key) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
+    .toSorted((left, right) => left.localeCompare(right))
+    .map((key) => [key, process.env[key]]);
 }
 
-function diffRevisionMissReason(previous: string, current: string): DiffReadCacheMissReason {
+function diffRevisionMissReason(
+  previous: ReadEntry<unknown>["revision"],
+  current: ReadEntry<unknown>["revision"],
+): DiffReadCacheMissReason {
   try {
-    const previousKey: [unknown, string | null] = JSON.parse(previous);
-    const currentKey: [unknown, string | null] = JSON.parse(current);
-    const before: Record<string, unknown> | null = JSON.parse(previousKey[1] ?? "null");
-    const after: Record<string, unknown> | null = JSON.parse(currentKey[1] ?? "null");
+    const before: Record<string, unknown> | null = JSON.parse(previous ?? "null");
+    const after: Record<string, unknown> | null = JSON.parse(current ?? "null");
     if (before && after) {
       for (const [component, reason] of [
         ["head", "revision-changed-head"],
@@ -131,16 +134,21 @@ function createReadCache<Input, Output>(
       }
     }
   };
-  const read = async (input: Input, options: GitReadOptions = {}): Promise<Output> => {
+  const read = async (
+    input: Input,
+    options: GitReadOptions = {},
+    preparedEnvironment?: ReturnType<typeof gitEnvironment>,
+    preparedKey?: string,
+  ): Promise<Output> => {
     options.signal?.throwIfAborted();
     using completedTiming = polling ? startDiffReadTiming("checkout.diff") : undefined;
     const timing = completedTiming ?? options.diffTiming;
     const validationStarted = timing ? performance.now() : 0;
-    const environment = gitEnvironment();
-    const key = JSON.stringify([input, environment]);
+    const environment = preparedEnvironment ?? gitEnvironment();
+    const key = preparedKey ?? JSON.stringify([input, environment]);
     let entry = entries.get(key)?.entry;
-    const waitingToRetry = !options.refresh && (entry?.retryAt ?? 0) > Date.now();
-    let currentRevision: string | null | undefined;
+    const waitingToRetry = !options.refresh && (entry?.retryAt ?? 0) > monotonicNow();
+    let currentRevision = waitingToRetry ? entry!.revision : undefined;
     let preparedRevision: GitReadOperations["checkout.revision"]["output"] | undefined;
     if (revision && !waitingToRetry) {
       // Share only overlapping checks of identical inputs, never a settled revision.
@@ -175,7 +183,6 @@ function createReadCache<Input, Output>(
       typeof freshness !== "number" && typeof currentRevision === "string"
         ? Number.POSITIVE_INFINITY
         : freshnessMs;
-    const revisionKey = waitingToRetry ? entry!.revision : JSON.stringify([input, currentRevision]);
     options.signal?.throwIfAborted();
     if (closed) {
       throw new Error("Git reads are unavailable while the Gateway is restarting");
@@ -187,8 +194,8 @@ function createReadCache<Input, Output>(
     if (
       (options.refresh && (currentRevision === null || entry?.retryAt !== undefined)) ||
       !entry ||
-      entry.revision !== revisionKey ||
-      (entry.expiresAt <= Date.now() && (!(snapshot || joinPending) || !entry.pending))
+      entry.revision !== currentRevision ||
+      (entry.expiresAt <= monotonicNow() && (!(snapshot || joinPending) || !entry.pending))
     ) {
       if (snapshot && pending.size >= MAX_CACHED_CHECKOUTS) {
         return entry?.value ?? snapshot.empty();
@@ -198,11 +205,11 @@ function createReadCache<Input, Output>(
       const previousRefresh = refreshTail;
       const controller = new AbortController();
       const next: ReadEntry<Output> = {
-        revision: revisionKey,
+        revision: currentRevision,
         expiresAt:
           retainedFreshnessMs === 0
             ? Number.POSITIVE_INFINITY
-            : Date.now() +
+            : monotonicNow() +
               (currentRevision === null
                 ? Math.min(retainedFreshnessMs, 75_000)
                 : retainedFreshnessMs),
@@ -229,11 +236,11 @@ function createReadCache<Input, Output>(
           controller.signal.throwIfAborted();
           next.value = value;
           if (snapshot) {
-            next.expiresAt = Date.now() + freshnessMs;
+            next.expiresAt = monotonicNow() + freshnessMs;
           }
           const retention = retain(value);
           if (typeof retention === "number") {
-            next.retryAt = next.expiresAt = Date.now() + retention;
+            next.retryAt = next.expiresAt = monotonicNow() + retention;
           } else if (retainedFreshnessMs === 0 || !retention) {
             remove(key, next);
           } else if (joinPending && currentRevision === null) {
@@ -246,7 +253,7 @@ function createReadCache<Input, Output>(
           next.pending = false;
           pending.delete(next);
           if (snapshot) {
-            next.expiresAt = Date.now() + freshnessMs;
+            next.expiresAt = monotonicNow() + freshnessMs;
           } else {
             next.expiresAt = 0;
             remove(key, next);
@@ -275,7 +282,7 @@ function createReadCache<Input, Output>(
         break;
       }
       if (candidate.poll) {
-        if (candidate.poll.pending || candidate.poll.expiresAt > Date.now()) {
+        if (candidate.poll.pending || candidate.poll.expiresAt > monotonicNow()) {
           continue;
         }
         releasePoll(oldest, candidate);
@@ -300,8 +307,8 @@ function createReadCache<Input, Output>(
             ? wasEvicted
               ? "evicted"
               : "cold"
-            : previous.revision !== revisionKey
-              ? diffRevisionMissReason(previous.revision, revisionKey)
+            : previous.revision !== currentRevision
+              ? diffRevisionMissReason(previous.revision, currentRevision)
               : "pending";
       if (!cacheHit && entry.timing) {
         addDiffReadDurations(timing, entry.timing);
@@ -330,14 +337,15 @@ function createReadCache<Input, Output>(
         }
         return polling.empty();
       };
-      const key = JSON.stringify([input, gitEnvironment()]);
+      const environment = gitEnvironment();
+      const key = JSON.stringify([input, environment]);
       const slot = entries.get(key) ?? {};
-      if (slot.poll && !slot.poll.pending && slot.poll.expiresAt <= Date.now()) {
+      if (slot.poll && !slot.poll.pending && slot.poll.expiresAt <= monotonicNow()) {
         releasePoll(key, slot);
       }
       let poll = slot.poll;
       if (!poll && slot.entry?.value) {
-        return read(input, options);
+        return read(input, options, environment, key);
       }
       if (!poll) {
         if (pollCount >= maxEntries) {
@@ -345,7 +353,7 @@ function createReadCache<Input, Output>(
             if (
               candidate.poll &&
               !candidate.poll.pending &&
-              candidate.poll.expiresAt <= Date.now()
+              candidate.poll.expiresAt <= monotonicNow()
             ) {
               releasePoll(otherKey, candidate);
             }
@@ -364,7 +372,7 @@ function createReadCache<Input, Output>(
         // Fan out both outcomes to reconnecting tabs before the next fresh read.
         const settled = () => {
           admitted.pending = false;
-          admitted.expiresAt = Date.now() + 1_000;
+          admitted.expiresAt = monotonicNow() + 1_000;
         };
         void promise.then(settled, settled);
         slot.poll = poll;
@@ -436,6 +444,7 @@ function createDiffReadCache(
     root: input.cwd,
     scope: "diff",
     summaryOnly: input.summaryOnly === true,
+    refreshIndex: input.refreshIndex === true,
     paths: previous?.files
       .flatMap((file) => (file.oldPath ? [file.path, file.oldPath] : [file.path]))
       .toSorted(),
@@ -450,9 +459,7 @@ function createDiffReadCache(
           type: "checkout.diff",
           input: {
             ...input,
-            ...(preparedRevision?.cleanWorktree
-              ? { cleanWorktree: preparedRevision.cleanWorktree }
-              : {}),
+            worktreeStatus: preparedRevision?.worktreeStatus,
           },
         },
         { signal, diffTiming },

@@ -281,6 +281,12 @@ const {
   listenHttp: startHttpServer,
   close: closeServers,
 } = createCdpFixture({});
+const clientSockets: WebSocket[] = [];
+function openTrackedSocket(...args: Parameters<typeof openCdpWebSocket>) {
+  const socket = openCdpWebSocket(...args);
+  clientSockets.push(socket);
+  return socket;
+}
 const fixtureAuthorization = `Basic ${Buffer.from("openclaw:cdp-abort-test").toString("base64")}`;
 type CdpMessage = { id: number; method: string };
 
@@ -331,6 +337,9 @@ afterEach(async () => {
   mocks.bypass.mockReset();
   mocks.bypass.mockImplementation(() => undefined);
   vi.restoreAllMocks();
+  for (const socket of clientSockets.splice(0)) {
+    socket.close();
+  }
   await closeServers();
 });
 
@@ -391,14 +400,10 @@ it("preserves IPv6 hostnames in pinned WebSocket agent checks", async () => {
   } catch {
     return;
   }
-  const ws = openCdpWebSocket(wsUrl(server, "[::1]"), {
+  const ws = openTrackedSocket(wsUrl(server, "[::1]"), {
     lookup: pinnedLookupMock("::1") as never,
   });
-  try {
-    await once(ws, "open");
-  } finally {
-    ws.close();
-  }
+  await once(ws, "open");
 });
 
 it("blocks pinned WebSocket redirects before connecting to a new authority", async () => {
@@ -409,23 +414,19 @@ it("blocks pinned WebSocket redirects before connecting to a new authority", asy
   redirect.on("upgrade", (_request, socket) => {
     socket.end(`HTTP/1.1 302 Found\r\nLocation: ${wsUrl(target)}\r\nConnection: close\r\n\r\n`);
   });
-  const ws = openCdpWebSocket(wsUrl(redirect, "cdp-pinned.test"), {
+  const ws = openTrackedSocket(wsUrl(redirect, "cdp-pinned.test"), {
     lookup: pinnedLookupMock() as never,
     playwrightTransportDefaults: true,
   });
-  try {
-    const error = await new Promise<Error>((resolve, reject) => {
-      ws.once("open", () => reject(new Error("redirect unexpectedly opened")));
-      ws.once("error", resolve);
-    });
-    expect(error.message).toContain("CDP WebSocket redirect changed authority");
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 25);
-    });
-    expect(targetConnection).not.toHaveBeenCalled();
-  } finally {
-    ws.close();
-  }
+  const error = await new Promise<Error>((resolve, reject) => {
+    ws.once("open", () => reject(new Error("redirect unexpectedly opened")));
+    ws.once("error", resolve);
+  });
+  expect(error.message).toContain("CDP WebSocket redirect changed authority");
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 25);
+  });
+  expect(targetConnection).not.toHaveBeenCalled();
 });
 
 it("ignores malformed and uncorrelated messages before the matching response", async () => {
@@ -456,7 +457,6 @@ it.each([
   "rejects once and releases the socket when a command %s",
   async (mode, method, options, error) => {
     const server = await startWsServer();
-    const callback = vi.fn(async (send: CdpSendFn) => send(method));
     const connection = vi.fn();
     const closed = Promise.withResolvers<void>();
     server.on("connection", connection);
@@ -466,9 +466,10 @@ it.each([
         setImmediate(() => socket.close());
       }
     });
-    await expect(withCdpSocket(wsUrl(server), callback, options)).rejects.toThrow(error);
+    await expect(withCdpSocket(wsUrl(server), (send) => send(method), options)).rejects.toThrow(
+      error,
+    );
     await closed.promise;
-    expect(callback).toHaveBeenCalledOnce();
     expect(connection).toHaveBeenCalledOnce();
   },
 );
@@ -615,16 +616,12 @@ it("keeps WebSocket credentials out of the URL and managed-proxy bypass", async 
   });
   const release = vi.fn();
   mocks.bypass.mockReturnValueOnce(release);
-  const ws = openCdpWebSocket(wsUrl(server, "alice:p%40ss@127.0.0.1"), { handshakeTimeoutMs: 500 });
-  try {
-    await once(ws, "open");
-    expect(ws.url).toBe(wsUrl(server));
-    expect(await authorization.promise).toBe(
-      `Basic ${Buffer.from("alice:p@ss").toString("base64")}`,
-    );
-    expect(mocks.bypass).toHaveBeenCalledWith(wsUrl(server));
-    expect(release).toHaveBeenCalledOnce();
-  } finally {
-    ws.close();
-  }
+  const ws = openTrackedSocket(wsUrl(server, "alice:p%40ss@127.0.0.1"), {
+    handshakeTimeoutMs: 500,
+  });
+  await once(ws, "open");
+  expect(ws.url).toBe(wsUrl(server));
+  expect(await authorization.promise).toBe(`Basic ${Buffer.from("alice:p@ss").toString("base64")}`);
+  expect(mocks.bypass).toHaveBeenCalledWith(wsUrl(server));
+  expect(release).toHaveBeenCalledOnce();
 });

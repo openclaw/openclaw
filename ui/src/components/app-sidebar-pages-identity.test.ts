@@ -182,14 +182,14 @@ describe("Pages navigation identity", () => {
     pin.click();
     await settleLitElement(sidebar);
     expect(sidebar.sidebarEntries).toEqual([]);
-    sidebar.enabledRouteIds = ["claws"];
+    sidebar.enabledRouteIds = ["templates"];
     await settleLitElement(sidebar);
     expect(usage.row.isConnected).toBe(false);
     expect(pageRow(sidebar, "route:usage")).toBeNull();
-    const claws = pageEntry(sidebar, "route:claws");
-    sidebar.enabledRouteIds = ["claws", "usage"];
+    const templates = pageEntry(sidebar, "route:templates");
+    sidebar.enabledRouteIds = ["templates", "usage"];
     await settleLitElement(sidebar);
-    expect(pageEntry(sidebar, "route:claws").row).toBe(claws.row);
+    expect(pageEntry(sidebar, "route:templates").row).toBe(templates.row);
     expect(pageEntry(sidebar, "route:usage").link.getAttribute("aria-current")).toBe("page");
   });
 

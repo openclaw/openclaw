@@ -10,6 +10,7 @@ const TRAITS = [
   ["logsPage", "content--logs-page"],
   ["activityPage", "content--activity-page"],
   ["terminalPage", "content--terminal-page"],
+  ["portalsPage", "content--portals-page"],
 ] as const;
 
 export type ShellLayoutTraits = Partial<Record<(typeof TRAITS)[number][0], boolean>>;

@@ -3,7 +3,7 @@ import { GatewayOperatorRoleDefinitionSchema } from "../config/zod-schema.gatewa
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { userChannelAuthorizationReferenceSchema } from "../state/user-channel-authorization-reference.js";
 
-export const MAX_RECOVERY_SOURCE_BYTES = 65_536;
+const MAX_RECOVERY_SOURCE_BYTES = 65_536;
 const boundedString = z.string().min(1).max(4096);
 const refs = z.strictObject({
   exact: z.array(boundedString).max(4096),

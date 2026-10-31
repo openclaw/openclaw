@@ -1,6 +1,7 @@
 import path from "node:path";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import {
+  formatNodeSecurityWarning,
   formatUnsupportedNodeVersionMessage,
   SUPPORTED_NODE_VERSION_RANGE,
 } from "../../../node-version.mjs";
@@ -91,7 +92,7 @@ import { resolveForegroundUpdateAdmission } from "./update-command-handoff.js";
 import type { UpdateInitializationAdmission } from "./update-command-initialization-types.js";
 import {
   admitMutableUpdateSignalRun,
-  retireMutableUpdateSignalRun,
+  retireMutableUpdateSignalLedgerRecording,
 } from "./update-command-mutable-signals.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import { admitUpdatePreviewSignalRun } from "./update-command-preview-signals.js";
@@ -182,10 +183,9 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
 export async function admitUpdateCommandRun(params: {
   opts: UpdateCommandOptions;
   root: string;
+  env: NodeJS.ProcessEnv;
   installKind?: "git" | "package" | "unknown";
   serviceRoot?: string;
-  invocationCwd?: string;
-  pkgOwnership?: SystemPackageOwnershipInspection;
   expectedForeground?: true;
   initialization?: UpdateInitializationAdmission;
   assertCurrent?: () => void;
@@ -194,7 +194,8 @@ export async function admitUpdateCommandRun(params: {
     serviceRoot: params.serviceRoot,
     dryRun: params.opts.dryRun,
   });
-  const env = await resolveUpdateCommandAdmissionEnv(params);
+  // Engine selection and original-state capture already use this selected service profile.
+  const { env } = params;
   // A previous invocation may have died with a sealed restoration plan. Detect
   // it before any writable owner open or history row creation changes that state.
   // An inherited diagnostic run ID is not a durable continuation claim.
@@ -347,7 +348,7 @@ export function createUpdateRunProgress(
       // Candidate Doctor can advance SQLite beyond this process's reader. Hold
       // activation receipts until the supported runtime owns ledger writes.
       deferred = true;
-      retireMutableUpdateSignalRun(run);
+      retireMutableUpdateSignalLedgerRecording(run);
     },
     async flushLedgerWrites() {
       if (flushFailure) {
@@ -514,6 +515,12 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     }
     exitCliAfterOutput(defaultRuntime, 1);
   }
+  const nodeSecurityWarning = process.versions.bun
+    ? null
+    : formatNodeSecurityWarning(process.versions.node);
+  if (nodeSecurityWarning) {
+    defaultRuntime.error(`SECURITY WARNING: ${nodeSecurityWarning}`);
+  }
   const startedAt = Date.now();
   suppressDeprecations();
   const postCoreUpdateResume = process.env[POST_CORE_UPDATE_ENV] === "1";
@@ -641,6 +648,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   return {
     startedAt,
     postCoreUpdateResume,
+    ...(nodeSecurityWarning ? { nodeSecurityWarning } : {}),
     postCoreUpdateChannel,
     timeoutMs,
     shouldRestart,

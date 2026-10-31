@@ -10,6 +10,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
+import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
 import {
   captureChatHistoryRun,
   chatHistoryRequestParams,
@@ -81,15 +82,19 @@ export async function hydrateChatHistory(
   inputRunIds: string[],
   requestKeyPrefix: string,
 ): Promise<ObservedChatHistoryResult | undefined> {
+  const requests = chatHistoryRequests(state);
+  requests.historyRead?.abort();
+  const read = new AbortController();
+  requests.historyRead = read;
   const ownership = beginHistoryRequest(state, client, connectionEpoch, sessionKey, requestAgentId);
-  const isCurrent = () => state.sessions === sessions && acceptsHistoryResult(state, ownership);
+  const isCurrent = () =>
+    !read.signal.aborted && state.sessions === sessions && acceptsHistoryResult(state, ownership);
   const captureRun = () => captureChatHistoryRun(state, isCurrent);
   const previousRunProjections = readRunProjections(state, sessionKey, requestAgentId);
   const previousRunId = state.chatRunId;
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
   state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
-  const requests = chatHistoryRequests(state);
   const request = (cursor?: string) => {
     const initialHistory = requests.initialHistory;
     delete requests.initialHistory;
@@ -121,6 +126,7 @@ export async function hydrateChatHistory(
       state,
       {
         isCurrent,
+        signal: read.signal,
         captureRun,
         onRetry: () => {
           if (isCurrent()) {
@@ -137,7 +143,13 @@ export async function hydrateChatHistory(
   try {
     let admission = requests.subscriptionReady;
     while (admission) {
-      const ready = await admission;
+      // Subscription admission owns live/approval custody. Release this read's
+      // wait without aborting that independent subscription's acknowledgement.
+      const ready = await subscribeToSharedRequest(
+        { promise: admission, subscribers: new Set<AbortController>() },
+        read,
+        read.signal,
+      );
       if (!isCurrent()) {
         return undefined;
       }
@@ -170,9 +182,27 @@ export async function hydrateChatHistory(
     if (!isCurrent()) {
       return undefined;
     }
-    if (isHistoryCursor(response) && response.kind === "reset") {
+    const cursorReset = isHistoryCursor(response) && response.kind === "reset";
+    if (cursorReset) {
       clearHistoryCursor(state, sessionKey, requestAgentId);
       response = await request();
+      if (!isCurrent()) {
+        return undefined;
+      }
+    }
+    // Only a Stop-style cursor reset can cut a transcript this pane shows from
+    // its start; a window reset asks for a fresh window instead.
+    if (cursorReset && !isHistoryCursor(response) && !requests.windowReset?.isCurrent()) {
+      const { fillHeldHistoryGap } = await import("./chat-history-held-gap.ts");
+      response = await fillHeldHistoryGap(
+        state,
+        client,
+        sessionKey,
+        requestAgentId,
+        response,
+        isCurrent,
+        read.signal,
+      );
       if (!isCurrent()) {
         return undefined;
       }
@@ -290,18 +320,21 @@ export async function hydrateChatHistory(
       ? res.sessionInfo?.activeLeafEntryId?.trim() || null
       : (previousDisplayedLeafEntryId ?? null);
     const retainsTranscriptIdentity =
+      !requests.windowReset?.isCurrent() &&
       res.windowReset !== true &&
       (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId) &&
       (previousDisplayedLeafEntryId === undefined ||
         previousDisplayedLeafEntryId === nextDisplayedLeafEntryId);
-    const reconciledHistory = reconcileHistoryTail({
-      nextMessages: visibleMessages,
-      nextPagination,
-      nextSessionId,
-      previousMessages: retainsTranscriptIdentity ? previousTerminalMessages : [],
-      previousPagination,
-      previousSessionId,
-    });
+    const reconciledHistory = retainsTranscriptIdentity
+      ? reconcileHistoryTail({
+          nextMessages: visibleMessages,
+          nextPagination,
+          nextSessionId,
+          previousMessages: previousTerminalMessages,
+          previousPagination,
+          previousSessionId,
+        })
+      : null;
     const authoritativeMessages = reconciledHistory?.messages ?? visibleMessages;
     const scope = readChatSessionProjectionScope(state, {
       sessionKey,
@@ -334,6 +367,7 @@ export async function hydrateChatHistory(
       state.chatDisplayedLeafEntryId = nextDisplayedLeafEntryId;
     }
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
+    delete requests.windowReset;
     state.currentSessionId = nextSessionId;
     applyChatPendingInputs(state, res.pendingInputs, {
       queriedRunIds: inputRunIds,
@@ -467,6 +501,9 @@ export async function hydrateChatHistory(
         (err instanceof GatewayRequestError && err.retryable),
     });
   } finally {
+    if (requests.historyRead === read) {
+      delete requests.historyRead;
+    }
     if (ownsHistoryRequest(state, ownership)) {
       setChatHistoryRetrying(state, "history", false);
       state.chatLoading = false;

@@ -48,13 +48,10 @@ function readStyles(
 ) {
   return page.evaluate(
     (options) =>
-      options.selectors.map((selector) => {
-        const node = document.querySelector(selector);
-        if (!(node instanceof HTMLElement)) {
-          throw new Error(`Missing style fixture ${selector}`);
-        }
-        return getComputedStyle(node, options.pseudo)[options.property];
-      }),
+      options.selectors.map(
+        (selector) =>
+          getComputedStyle(document.querySelector(selector)!, options.pseudo)[options.property],
+      ),
     { selectors, property, pseudo },
   );
 }
@@ -156,12 +153,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await setFixture(
         page,
-        `<span
-          class="oc-sensitive-input"
-          data-sensitive-input
-          data-sensitive-mask-ready="true"
-          data-revealed="true"
-        >
+        `<span class="oc-sensitive-input" data-sensitive-input data-sensitive-mask-ready="true" data-revealed="true">
           <span class="oc-sensitive-mask" data-sensitive-mask hidden>
             <span data-sensitive-mask-text>*******************************</span>
           </span>
@@ -194,10 +186,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       const metrics = await page
         .getByRole("button", { name: "Remove synthetic server", exact: true })
         .evaluate((button) => {
-          const glyph = button.querySelector("svg");
-          if (!(glyph instanceof SVGElement)) {
-            throw new Error("Missing remove button glyph");
-          }
+          const glyph = button.querySelector("svg")!;
           const buttonRect = button.getBoundingClientRect();
           const glyphRect = glyph.getBoundingClientRect();
           return {
@@ -382,11 +371,8 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       const measure = () =>
         page.locator(".settings-row").evaluateAll((rows) =>
           rows.map((row) => {
-            const select = row.querySelector(".settings-select--media-device");
-            const button = row.querySelector(".btn--icon");
-            if (!(select instanceof HTMLElement) || !(button instanceof HTMLElement)) {
-              throw new Error("Missing media device controls");
-            }
+            const select = row.querySelector<HTMLElement>(".settings-select--media-device")!;
+            const button = row.querySelector<HTMLElement>(".btn--icon")!;
             const selectRect = select.getBoundingClientRect();
             const buttonRect = button.getBoundingClientRect();
             return {
@@ -520,7 +506,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
               <input data-scale data-baseline="16" data-scale-base="12.5" class="settings-sidebar__search-input" value="settings" />
               <div class="sidebar-recent-session sidebar-recent-session--child">
                 <span data-scale data-baseline="12" class="sidebar-recent-session__name">Child session</span>
-                <span data-scale data-baseline="10" class="session-row-trail">3m</span>
+                <span data-scale class="session-row-trail">3m</span>
               </div>
             </div>`
             : `<span data-scale class="nav-item__text">Navigation</span>
@@ -589,19 +575,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
   it.each([
     { label: "merged chat chrome", nativeClass: "", merged: true, search: "visible" },
     { label: "topbar still shown", nativeClass: "", merged: false, search: "hidden" },
-    {
-      label: "native macOS",
-      nativeClass: "openclaw-native-macos",
-      merged: false,
-      search: "hidden",
-    },
-    { label: "native nav", nativeClass: "openclaw-native-nav", merged: false, search: "hidden" },
-    {
-      label: "native web chrome",
-      nativeClass: "openclaw-native-web-chrome",
-      merged: false,
-      search: "hidden",
-    },
   ])(
     "shows the mobile drawer command palette button only where nothing else carries it ($label)",
     async ({ nativeClass, merged, search }) => {

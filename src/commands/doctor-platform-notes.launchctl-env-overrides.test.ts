@@ -150,6 +150,37 @@ describe("macOS Gateway environment warnings", () => {
 });
 
 describe("macOS stale updater warnings", () => {
+  it("scans the installed service without caller state selectors", async () => {
+    vi.stubEnv("OPENCLAW_HOME", "/tmp/caller-home");
+    vi.stubEnv("OPENCLAW_PROFILE", "caller");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", "/tmp/caller.json");
+    mocks.readCommand.mockResolvedValue({
+      programArguments: ["node", "openclaw.mjs", "gateway"],
+      environment: { HOME: "/tmp/service-home" },
+    });
+    await collectGatewayPlatformWarnings({});
+    const [env] = expectDefined<NodeJS.ProcessEnv[]>(
+      mocks.findJobs.mock.calls[0],
+      "scan environment",
+    );
+    expect(
+      Object.fromEntries(
+        [
+          "HOME",
+          "OPENCLAW_HOME",
+          "OPENCLAW_STATE_DIR",
+          "OPENCLAW_PROFILE",
+          "OPENCLAW_CONFIG_PATH",
+        ].map((key) => [key, env?.[key]]),
+      ),
+    ).toEqual({
+      HOME: "/tmp/service-home",
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_STATE_DIR: undefined,
+      OPENCLAW_PROFILE: undefined,
+      OPENCLAW_CONFIG_PATH: undefined,
+    });
+  });
   it("uses service env for gateway platform stale updater warnings", async () => {
     const serviceEnv = {
       OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",

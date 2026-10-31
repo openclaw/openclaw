@@ -57,12 +57,14 @@ import {
 import { isPlainCommandExitFailure, type CommandOptions } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { truncateUtf8Prefix, truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
+import { createUpdateDoctorProgress } from "./progress.js";
 import { parseUpdateTimeoutMs, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateCommandAuthority } from "./update-command-authority.js";
 import { readUpdateTargetCliOptions } from "./update-command-cli-options.js";
 import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
   consumeUpdateDoctorHistoricalScans,
+  observeUpdateParentDatabaseWrites,
   recordUpdateDatabaseWrites,
 } from "./update-command-database-receipts.js";
 import {
@@ -106,7 +108,8 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   runId?: string;
   opts?: UpdateCommandOptions;
   /** Only local candidate code may supply its known native Doctor contract. */
-  doctorConfigWrites?: true;
+  doctorCapabilities?: { doctorConfigWrites: true; doctorRetirementOnly: true };
+  retirementOnly?: true;
   databaseBackup?: UpdateDatabaseBackup;
   onDoctorStep?: (step: UpdateStepResult) => void;
   yes: boolean;
@@ -159,7 +162,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   let result: { stdout?: unknown; stderr?: unknown } | undefined;
   let warning: PluginUpdateWarning | undefined;
   let failure: { error: unknown } | undefined;
-  const sectionTiming = createUpdateDoctorSectionTiming();
+  const sectionTiming = createUpdateDoctorSectionTiming(process.env, createUpdateDoctorProgress());
   let doctorStep: UpdateStepResult | undefined;
   let doctorStartedAt: number | undefined;
   assertCurrent();
@@ -205,9 +208,8 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       root: params.root,
     });
     const workerCommand = [workerRuntime, ...resolveRuntimeWorkerArgv(workerUrl, workerRuntime)];
-    const doctorConfigWrites =
-      run &&
-      (params.doctorConfigWrites ??
+    const doctorCapabilities = run
+      ? (params.doctorCapabilities ??
         (await inspectUpdateDoctorChildSupport(
           { workerUrl, argv: workerCommand },
           {
@@ -217,7 +219,9 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
             env: commandOptions.env,
           },
           assertCurrent,
-        )));
+        )))
+      : undefined;
+    const doctorConfigWrites = doctorCapabilities?.doctorConfigWrites;
     // The capability check above stays untraced; only the Doctor reports its sections.
     const doctorOptions: CommandOptions = {
       ...commandOptions,
@@ -263,6 +267,13 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     if (doctorConfigWrites && executorFence && runId) {
       const snapshot = await readUpdateConfigSnapshot(resolveConfigPath());
       assertCurrent();
+      if (params.databaseBackup) {
+        await observeUpdateParentDatabaseWrites(params.databaseBackup, {
+          env: run?.env ?? baseEnv,
+          root: params.root,
+          assertCurrent,
+        });
+      }
       child = await withUpdateDoctorChild(
         {
           root: params.root,
@@ -279,6 +290,9 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
             configInputHash: snapshot.hash,
             originalRecoveryCapture: run?.originalRecoveryCapture,
             repair: true,
+            ...(params.retirementOnly && doctorCapabilities?.doctorRetirementOnly
+              ? { retirementOnly: true as const }
+              : {}),
             fullIntegrityCheck: params.opts?.fullIntegrityCheck,
             databaseGenerations:
               params.databaseBackup?.migration?.to ?? params.databaseBackup?.sourceGenerations,
@@ -479,6 +493,12 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
           : refusal,
       };
     }
+    // Install the child's postimage before completion callbacks persist parent ledger writes.
+    const databaseReceipt = params.databaseBackup
+      ? recordUpdateDatabaseWrites(params.databaseBackup, doctorResult?.databaseWrites, {
+          name: `${params.phase} doctor`,
+        })
+      : undefined;
     if (processSettlement) {
       params.onDoctorStep?.(processSettlement);
     }
@@ -488,13 +508,8 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       doctorStep.deferredInspectionCheckIds = doctorResult?.deferredInspectionCheckIds ?? null;
       params.onDoctorStep?.(doctorStep);
     }
-    if (params.databaseBackup) {
-      const receipt = recordUpdateDatabaseWrites(
-        params.databaseBackup,
-        doctorResult?.databaseWrites,
-        { name: `${params.phase} doctor` },
-      );
-      params.onDoctorStep?.(receipt);
+    if (databaseReceipt) {
+      params.onDoctorStep?.(databaseReceipt);
     }
     if (doctorResult?.warnings?.length) {
       params.onWarnings?.(doctorResult.warnings);
@@ -525,7 +540,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
 export async function completePostCorePluginUpdate(
   params: Omit<
     Parameters<typeof runUpdateFinalizationDoctorInFreshProcess>[0],
-    "phase" | "workspaceSuggestions" | "entryPath" | "onAuthorityRefused"
+    "phase" | "workspaceSuggestions" | "entryPath" | "onAuthorityRefused" | "retirementOnly"
   > & {
     pluginUpdate: PostCorePluginUpdateResult;
     beforeDoctor?: () => Promise<void>;
@@ -569,6 +584,7 @@ export async function completePostCorePluginUpdate(
         let inspectionCheckIds: string[] | null | undefined;
         const warning = await runUpdateFinalizationDoctorInFreshProcess({
           ...params,
+          ...(!pluginUpdate.changed ? { retirementOnly: true as const } : {}),
           onDoctorStep: (step) => {
             if (step.deferredInspectionCheckIds !== undefined) {
               inspectionCheckIds = step.deferredInspectionCheckIds;

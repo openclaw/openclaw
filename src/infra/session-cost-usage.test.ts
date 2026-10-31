@@ -166,6 +166,28 @@ const writeMessages = async (...entries: unknown[]) => {
   return file;
 };
 
+it("counts only measured turns; a turn with unknown usage still counts as a message", async () => {
+  const unknown = (timestamp: string, content: unknown[], counters: Record<string, number>) =>
+    assistant(
+      timestamp,
+      { ...counters, cost: { total: 0.01 }, usageReport: { state: "unavailable" } },
+      { provider: "openai", model: "gpt-5.5", content, stopReason: "error" },
+    );
+  const sessionFile = await writeMessages(
+    modelMessage("2026-02-05T12:00:00.000Z", 10),
+    // A request that failed before any output, and one interrupted after partial counters.
+    unknown("2026-02-05T12:01:00.000Z", [], { input: 0, output: 0, totalTokens: 0 }),
+    unknown("2026-02-05T12:02:00.000Z", [textBlock("partial")], { input: 500, totalTokens: 600 }),
+  );
+  const summary = await readSummary({ sessionFile });
+  expect(summary).toMatchObject({
+    totalTokens: 10,
+    missingCostEntries: 0,
+    messageCounts: { assistant: 3, errors: 2 },
+  });
+  expect(summary).not.toHaveProperty("usageReport");
+});
+
 it("prices and aggregates usage with each row's agent-local registry", async () => {
   const provider = "demo-agent-scope";
   const model = "demo-model";
@@ -391,19 +413,11 @@ it("preserves rollups and aborts when the transcript directory cannot be read", 
 });
 
 it("includes sessions outside the refreshed range in the first aggregate read", async () => {
-  const oldSessionFile = await writeTranscript(
-    "sess-cache-cold-sync-old",
-    assistant("2026-02-05T12:00:00.000Z", billed(100, 100, 200, 0.2)),
-  );
-  await writeTranscript(
-    "sess-cache-cold-sync-current",
-    assistant("2026-02-05T12:00:00.000Z", billed(10, 20, 30, 0.03)),
-  );
-  await fs.utimes(
-    oldSessionFile,
-    new Date("2025-12-05T12:00:00.000Z"),
-    new Date("2025-12-05T12:00:00.000Z"),
-  );
+  const timestamp = "2026-02-05T12:00:00.000Z";
+  const oldSessionFile = await writeTranscript("cache-old", modelMessage(timestamp, 200));
+  await writeTranscript("cache-current", modelMessage(timestamp, 30));
+  const old = new Date("2025-12-05T12:00:00.000Z");
+  await fs.utimes(oldSessionFile, old, old);
 
   await refreshCostUsageCacheForAgent({
     config: defaultConfig,
@@ -419,19 +433,12 @@ it("includes sessions outside the refreshed range in the first aggregate read", 
 });
 
 it("waits for a busy refresh before loading a direct session summary", async () => {
-  const sessionFile = await writeTranscript(
-    "cost-session-busy-refresh",
-    assistant("2026-02-01T10:00:00.000Z", billed(7, 5, 12, 0.012)),
-    root,
-  );
-
+  const sessionFile = await writeMessages(modelMessage("2026-02-01T10:00:00.000Z", 12));
   const lock = prepareSessionCostUsageRefreshLock("main");
-  let released: Promise<void> | undefined;
+  expect(await lock.acquire()).toBe(true);
+  const released = delay(40).then(lock.release);
   try {
-    expect(await lock.acquire()).toBe(true);
-    released = delay(40).then(lock.release);
-    const [summary] = await Promise.all([readSummary({ sessionFile }), released]);
-    expect(summary?.totalTokens).toBe(12);
+    expect((await readSummary({ sessionFile }))?.totalTokens).toBe(12);
   } finally {
     await released;
     await lock.release();
@@ -788,25 +795,17 @@ it.each<PricingCase>([
     ]);
 
     const summary = await loadSessionCostSummary(params);
-    const expectedReport = usageUnavailable ? { state: "unavailable" } : undefined;
+    // A turn with unknown usage adds no tokens, cost or missing-cost entry.
     expect(summary).toMatchObject({
       totalTokens: usageUnavailable ? 0 : 1_700,
-      missingCostEntries: expectedCost === undefined ? 1 : 0,
+      missingCostEntries: expectedCost === undefined && !usageUnavailable ? 1 : 0,
     });
-    expect([
-      summary?.usageReport,
-      summary?.dailyBreakdown?.[0]?.usageReport,
-      summary?.modelUsage?.[0]?.totals.usageReport,
-      summary?.dailyModelUsage?.[0]?.usageReport,
-      summary?.utcQuarterHourTokenUsage?.find((bucket) => bucket.quarterIndex === 48)?.usageReport,
-    ]).toEqual(Array(5).fill(expectedReport));
     expect(summary?.totalCost).toBeCloseTo(expectedCost ?? 0, 8);
     for (const field of ["input", "output", "cacheRead", "cacheWrite"] as const) {
       expect(summary?.[`${field}Cost`]).toBeCloseTo(expectedBreakdown?.[field] ?? 0, 8);
     }
 
     const series = await loadSessionUsageTimeSeries(params);
-    expect(series?.usageReport).toEqual(expectedReport);
     expect(series?.points).toMatchObject(
       usageUnavailable ? [] : [{ totalTokens: 1_700, cost: expect.closeTo(expectedCost ?? 0, 8) }],
     );

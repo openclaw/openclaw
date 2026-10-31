@@ -14,13 +14,12 @@ async function sourceFixture(filename = "meeting-notes.txt", content = "hello fr
   await fs.writeFile(inputPath, content, "utf8");
   const ingest = () =>
     ingestMemoryWikiSource({ config, inputPath, nowMs: Date.UTC(2026, 3, 5, 12) });
-  const read = (relativePath: string) =>
-    fs.readFile(path.join(config.vault.path, relativePath), "utf8");
+  const read = (file: string) => fs.readFile(path.join(config.vault.path, file), "utf8");
   return { config, inputPath, ingest, read };
 }
 
 describe("ingestMemoryWikiSource", () => {
-  it("rejects malformed source encodings without replacing the imported page", async () => {
+  it("preserves the imported page across invalid source files and retry", async () => {
     const content = "\uFEFFNotes: café, 東京, 🦞\n";
     const { config, inputPath, ingest, read } = await sourceFixture("meeting-notes.txt", content);
     const result = await ingest();
@@ -44,12 +43,19 @@ describe("ingestMemoryWikiSource", () => {
       Buffer.from([0xe2, 0x82]),
       Buffer.from([0xed, 0xa0, 0x80]),
       Buffer.concat([Buffer.from("valid UTF-8 café then Latin-1: "), Buffer.from([0xe9])]),
+      undefined,
     ]) {
-      await fs.writeFile(inputPath, bytes);
-      await expect(ingest()).rejects.toThrow(/UTF-8/);
+      await fs.rm(inputPath, { recursive: true });
+      await (bytes ? fs.writeFile(inputPath, bytes) : fs.mkdir(inputPath));
+      await expect(ingest()).rejects.toThrow(bytes ? /UTF-8/ : /regular.*file/);
       expect(await fs.readFile(pagePath)).toEqual(original);
-      expect(await fs.readFile(inputPath)).toEqual(bytes);
+      const actual = bytes ? fs.readFile(inputPath) : fs.readdir(inputPath);
+      await expect(actual).resolves.toEqual(bytes ?? []);
     }
+    await fs.rm(inputPath, { recursive: true });
+    await fs.writeFile(inputPath, content, "utf8");
+    expect((await ingest()).created).toBe(false);
+    expect(await fs.readFile(pagePath, "utf8")).toContain(content);
   });
 
   it("ingests a source with many backtick runs without losing its content", async () => {

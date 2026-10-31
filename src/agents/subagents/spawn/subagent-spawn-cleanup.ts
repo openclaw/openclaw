@@ -1,7 +1,7 @@
 import { asNullableRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { bindGatewayLifecycleRequest } from "../../../gateway/server-lifecycle-runtime-context.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import {
   getRpcSourceForGateway,
@@ -118,7 +118,7 @@ export function bindSubagentSpawnCleanup(params: {
     ) {
       return { aborted: false, runIds: [] };
     }
-    if (!context?.recoveryRuntime) {
+    if (!context?.lifecycleRuntime) {
       throw new Error("Subagent cleanup Gateway is unavailable");
     }
     return await dispatchCleanup({

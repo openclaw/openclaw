@@ -93,7 +93,7 @@ describe("cron service run admission", () => {
       }
       expect(await waitForManualRun(state, ack.runId, 60_000)).toBe(true);
       expect(targetCalls()).toHaveLength(0);
-      expect(onEvent).toHaveBeenCalledWith(
+      expect(onEvent.mock.calls.map(([event]) => event)).toContainEqual(
         expect.objectContaining({ jobId: job.id, action: "finished", status: "skipped" }),
       );
       expect((await readJob())?.state.queuedAtMs).toBeUndefined();

@@ -1,5 +1,4 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
-import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import type { UsageOverviewBatch } from "./session-cost-usage-overview-batch.js";
@@ -46,7 +45,6 @@ type UsageCostWorkerRange = {
 export type UsageCostWorkerSession = {
   sessionId?: string;
   sessionFile: string;
-  transcriptFile?: UsageCostTranscriptFile;
 };
 
 /** A SQLite transcript as `[stores index, session id]`, so worker inputs name each store once. */
@@ -57,8 +55,6 @@ export type UsageCostWorkerOperation =
       kind: "inventory";
       minMtimeMs?: number;
       sessionFiles?: string[];
-      /** False lists SQLite sessions without transcript statistics (overview selection). */
-      statistics?: false;
     }
   | ({ kind: "summary"; pricingFingerprint: string } & UsageCostWorkerRange)
   | {
@@ -67,7 +63,6 @@ export type UsageCostWorkerOperation =
       sessions: Array<{
         sessionId?: string;
         sessionFile: string;
-        transcriptFile?: UsageCostTranscriptFile;
       }>;
       startMs?: number;
       endMs?: number;
@@ -109,11 +104,7 @@ export type UsageCostPendingFile = { sessionFile: string; rollupId: string };
 export type UsageCostWorkerResult =
   | {
       kind: "inventory";
-      files: Array<
-        Pick<UsageCostTranscriptFile, "kind" | "sourcePath" | "sessionId" | "mtimeMs"> & {
-          transcriptFile?: UsageCostTranscriptFile;
-        }
-      >;
+      files: Array<Pick<UsageCostTranscriptFile, "kind" | "sourcePath" | "sessionId" | "mtimeMs">>;
     }
   | {
       kind: "summary";
@@ -183,9 +174,7 @@ export type UsageCostWorkerHostEffects = {
     input: Array<{ provider?: string; model?: string }>;
     output: Array<ModelCostConfig | undefined>;
   };
-  restore: { input: SqliteSessionFileMarker; output: void };
   "prune-rows": { input: UsageCostPruneRow[]; output: void };
-  prune: { input: Record<string, never>; output: void };
   write: { input: UsageCostPreparedRollup[]; output: boolean };
   "write-quarters": { input: UsageCostQuarterBackfillRow[]; output: boolean };
 };

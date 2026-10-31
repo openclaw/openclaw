@@ -493,9 +493,6 @@ describe("delivery-queue recovery", () => {
     async (transportBoundary) => {
       const deliveryId = `pending-final-stale-recovery-${transportBoundary}`;
       const { completion } = await pendingFinal(deliveryId, true);
-      if (transportBoundary !== "afterHandoff") {
-        await replaceWriter(completion);
-      }
       const platformSend = vi.fn();
       deliver = vi.fn(async (params: SendParams) => {
         if (transportBoundary === "afterHandoff") {
@@ -503,6 +500,7 @@ describe("delivery-queue recovery", () => {
           await replaceWriter(completion);
           params.assertDirectAdapterHandoff?.();
         } else {
+          await replaceWriter(completion);
           await params[transportBoundary]?.();
         }
         await platformSend();

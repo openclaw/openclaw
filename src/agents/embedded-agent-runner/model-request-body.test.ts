@@ -275,20 +275,13 @@ it("hashes prompt prefixes without assembling copies of their serialized fields"
   const system = JSON.stringify({ instructions: payload.instructions, system: payload.system });
   const tools = JSON.stringify({ tools: payload.tools });
   const expected = { system: hash("sha256", system), tools: hash("sha256", tools) };
-  const copiedPrefixes: string[] = [];
-  const originalHash = crypto.hash;
-  const spy = vi.spyOn(crypto, "hash").mockImplementation((algorithm, data, encoding) => {
-    if (data === system || data === tools) {
-      copiedPrefixes.push(data);
-    }
-    return originalHash(algorithm, data, encoding);
-  });
+  const spy = vi.spyOn(crypto, "hash").mockClear();
   syncBuiltinESMExports();
   try {
     const result = prepareProviderPrompt({ payload, encode: true });
     expect(result.cachePrefix).toMatchObject(expected);
     expect(new TextDecoder().decode(result.encoded!.body)).toBe(JSON.stringify(payload));
-    expect(copiedPrefixes).toHaveLength(0);
+    expect(spy.mock.calls.some(([, data]) => data === system || data === tools)).toBe(false);
   } finally {
     spy.mockRestore();
     syncBuiltinESMExports();

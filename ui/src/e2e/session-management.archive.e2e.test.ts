@@ -75,7 +75,7 @@ async function confirmDelete(page: Page, proofName?: string) {
 }
 
 async function setSidebarStatus(page: Page, status: "Archived" | "Active") {
-  await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+  await page.getByRole("button", { name: /^Filter & sort · /, exact: true }).click();
   await chooseSidebarMenuOption(page, "Status", status);
   await closeSidebarMenu(page);
 }

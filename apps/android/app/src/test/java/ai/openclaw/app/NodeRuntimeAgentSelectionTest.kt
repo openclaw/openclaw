@@ -964,9 +964,20 @@ class NodeRuntimeAgentSelectionTest {
       val releaseRoster = CompletableDeferred<Unit>()
       val history = CompletableDeferred<String?>()
       val requests = Collections.synchronizedList(mutableListOf<Pair<String, String?>>())
+      val observations = Collections.synchronizedList(mutableListOf<String>())
+      val phase = AtomicReference("installing-fixture")
+      val operatorSession = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
+
+      fun diagnosticState(): String =
+        "phase=${phase.get()} thread=${Thread.currentThread().name} " +
+          "operatorConnected=${ReflectionHelpers.getField<Boolean>(runtime, "operatorConnected")} " +
+          "transportReady=${operatorSession.isReady()} " +
+          "main=${runtime.mainSessionKey.value} chat=${runtime.chat.sessionKey.value}"
+
       try {
         val refreshes = answerAgentList(runtime, "agent-b", beforeAnswer = { releaseRoster.await() })
         installChatGateway(runtime, requestGateway = { method, params ->
+          observations += "${diagnosticState()} method=$method params=$params"
           requests += method to params
           when (method) {
             "sessions.describe" -> {
@@ -983,18 +994,26 @@ class NodeRuntimeAgentSelectionTest {
             }
           }
         })
+        phase.set("reconnect-callbacks")
         reconnectOperator(runtime, mainSessionKey = "agent:agent-a:main")
+        phase.set("awaiting-roster-request")
         val refresh = withTimeout(2_000) { refreshes.receive() }
+        phase.set("roster-held")
         assertTrue("Chat must wait for the allowed roster", requests.isEmpty())
 
+        phase.set("roster-released")
         releaseRoster.complete(Unit)
         withTimeout(2_000) { refresh.join() }
+        phase.set("roster-settled")
         assertTrue(withTimeout(2_000) { history.await() }.orEmpty().contains("agent:agent-b:"))
         assertEquals("agent-b", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
         assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
         synchronized(requests) {
           assertFalse(requests.any { (_, params) -> params.orEmpty().contains("agent:agent-a:") })
         }
+      } catch (error: Throwable) {
+        println("COLD_START_DIAGNOSTIC ${diagnosticState()} requests=$requests observations=$observations")
+        throw error
       } finally {
         releaseRoster.complete(Unit)
         closeNodeRuntimeTestFixture(runtime)

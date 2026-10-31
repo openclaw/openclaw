@@ -1073,7 +1073,7 @@ describe("dispatchReplyFromConfig", () => {
     ]);
     mockPersistentAcpRuntime(runtime);
 
-    const cfg = createLiveAcpConfig(256);
+    const cfg = { ...createLiveAcpConfig(256), tts: { auto: "always" } } satisfies OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = createPersistentAcpContext("stream this");
 

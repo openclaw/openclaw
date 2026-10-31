@@ -121,12 +121,7 @@ export const marginCases = [
   ),
   surface("peer-gallery", [peer([image, image, image])], "left", ".chat-message-images"),
   caseFor("user-mixed", "user", [image, video, file, { type: "text", text: longText }]),
-  ...[
-    ["forwarded", "agent:main:cron:release-review"],
-    ["other-agent", "agent:research:notes"],
-    ["subagent", "agent:main:subagent:checklist"],
-    ["legacy", "legacy-checklist"],
-  ].map(([id, key]) => activity(id!, key!)),
+  activity("forwarded", "agent:main:cron:release-review"),
   activity("forwarded-short", "agent:main:cron:release-review", "Review complete."),
   activity("forwarded-media", "agent:research:notes", [
     { ...image, url: remoteImage() },

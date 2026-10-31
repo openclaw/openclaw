@@ -30,6 +30,7 @@ import {
   removeWorkspaceFixture,
   writeWorkspaceFile,
 } from "./sessions-files.test-support.js";
+import * as workspaceFs from "./workspace-fs.js";
 
 const { sessionFilesMocks } = await import("./sessions-files.mocks.test-support.js");
 
@@ -312,6 +313,22 @@ describe("sessions.files RPC handlers", () => {
     await expectFile(folder.browser.entries[0].path, { content: "# Notes\n" });
   });
 
+  it("lists the admitted local root without a separate metadata probe", async () => {
+    mockVisibleMessages([]);
+    const stat = vi.spyOn(workspaceFs, "statWorkspacePath");
+    try {
+      const payload = await files.ok("list");
+      expect(browserKinds(payload.browser.entries)).toEqual([
+        ["src", "directory", undefined],
+        ["ui", "directory", undefined],
+        ["package.json", "file", undefined],
+      ]);
+      expect(stat).not.toHaveBeenCalled();
+    } finally {
+      stat.mockRestore();
+    }
+  });
+
   it.each([
     { cwd: "", prefix: "" },
     { cwd: "ui", prefix: "../" },
@@ -382,6 +399,22 @@ describe("sessions.files RPC handlers", () => {
       } else {
         expect(browser).not.toHaveProperty("truncated");
       }
+    },
+  );
+
+  it.each([
+    ["München", "Mu\u0308nchen.md"],
+    ["Mu\u0308nchen", "München.md"],
+  ])(
+    "finds a canonically equivalent workspace filename without rewriting it (%s)",
+    async (query, filename) => {
+      writeWorkspace(filename, "# Canonically equivalent filename\n");
+
+      const { browser } = await files.ok("list", { search: query });
+
+      expect(browser.entries).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: filename })]),
+      );
     },
   );
 
@@ -574,6 +607,8 @@ describe("sessions.files RPC handlers", () => {
         size: 256 * 1024 + 2,
         type: "session_file_too_large",
       });
+      expect(error.details).not.toHaveProperty("root");
+      expect(error.details).not.toHaveProperty("source");
       expect(bufferFrom).not.toHaveBeenCalled();
     } finally {
       bufferFrom.mockRestore();
@@ -707,7 +742,11 @@ describe("sessions.files preview formats", () => {
     denyLegacyChild = false;
     const reveal = await files.ok("reveal");
     expect(reveal).toMatchObject({ ok: false, error: expect.stringContaining("remote host") });
-    expect((await files.error("get", "large.txt")).details.type).toBe("session_file_too_large");
+    expect((await files.error("get", "large.txt")).details).toMatchObject({
+      type: "session_file_too_large",
+      root: payload.root,
+      size: 256 * 1024 + 1,
+    });
     await expect(saveFile("result.json", "changed", '{"total":46}')).rejects.toThrow(
       "conflict-safe editing",
     );
@@ -728,7 +767,10 @@ describe("sessions.files preview formats", () => {
         },
       },
     });
-    expect(await errorType("get", "growing.txt")).toBe("session_file_too_large");
+    expect((await files.error("get", "growing.txt")).details).toMatchObject({
+      type: "session_file_too_large",
+      root: workspaceRoot,
+    });
   });
 
   it.each(TEXT_PREVIEW_FIXTURES)("keeps detected $format text editable", async (fixture) => {

@@ -57,16 +57,16 @@ describe("worktree Git size estimates", () => {
     const root = tempDirs.make("openclaw-complete-worktree-");
     const repo = await initializeGitFixture(root, "repo", "base.txt", "base\n");
     const commands = vi.spyOn(commandExec, "runCommandBuffered");
+    const calls = (arg: string) => commands.mock.calls.filter(([argv]) => argv.includes(arg));
     await expect(estimateWorktreeGitBytes(repo, "HEAD")).resolves.toBe(4096);
+    expect(calls("--missing=print")).toHaveLength(0);
     await fs.writeFile(path.join(repo, "large.txt"), "x".repeat(5000));
     await git(repo, "add", ".");
     await git(repo, "commit", "-m", "advance complete base");
     await expect(estimateWorktreeGitBytes(repo, "HEAD")).resolves.toBe(12_288);
 
-    expect(commands.mock.calls.filter(([argv]) => argv.includes("ls-tree"))).toHaveLength(1);
-    expect(commands.mock.calls.filter(([argv]) => argv.includes("--missing=print"))).toHaveLength(
-      2,
-    );
+    expect(calls("ls-tree")).toHaveLength(1);
+    expect(calls("--missing=print")).toHaveLength(1);
   });
 
   it.each(["blob", "commit"])("sizes the target when a cached %s is gone", async (missing) => {
@@ -142,14 +142,23 @@ describe("worktree Git size estimates", () => {
         await git(clone, "config", "--unset", "remote.origin.promisor");
       }
       const commandSpy = vi.spyOn(gitExec, "executeGitCommandBytes");
-      const bufferedSpy = vi.spyOn(commandExec, "runCommandBuffered");
+      const runBuffered = commandExec.runCommandBuffered;
+      const bufferedSpy = vi
+        .spyOn(commandExec, "runCommandBuffered")
+        .mockImplementation((argv, options) => {
+          // Older Git ignores GIT_NO_LAZY_FETCH; transport denial must still prevent per-blob fetches.
+          const executionOptions = argv.includes("ls-tree")
+            ? { ...options, env: { ...options?.env, GIT_NO_LAZY_FETCH: "0" } }
+            : options;
+          return runBuffered(argv, executionOptions);
+        });
       const packetTrace = path.join(clone, "hydrate-packets.log");
       vi.stubEnv("GIT_TRACE_PACKET", packetTrace);
-      const objectsBefore = new Set(
+      const objects = async () =>
         (await git(clone, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)")).split(
           "\n",
-        ),
-      );
+        );
+      const objectsBefore = new Set(await objects());
       const configBefore = await fs.readFile(path.join(clone, ".git", "config"), "utf8");
       const refsBefore = await git(clone, "show-ref");
       const fetchHeadBefore = await fs.readFile(path.join(clone, ".git", "FETCH_HEAD"), "utf8");
@@ -159,10 +168,7 @@ describe("worktree Git size estimates", () => {
       expect(
         new Set([...packets.matchAll(/>\s+want ([0-9a-f]{40})/gu)].map((match) => match[1])),
       ).toEqual(new Set(missing));
-      const objectsAfter = (
-        await git(clone, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)")
-      ).split("\n");
-      expect(new Set(objectsAfter.filter((oid) => !objectsBefore.has(oid)))).toEqual(
+      expect(new Set((await objects()).filter((oid) => !objectsBefore.has(oid)))).toEqual(
         new Set(missing),
       );
       expect(await fs.readFile(path.join(clone, ".git", "config"), "utf8")).toBe(configBefore);
@@ -176,17 +182,17 @@ describe("worktree Git size estimates", () => {
       const fetchOptions = fetches[0]?.[2];
       expect(fetchOptions?.timeoutMs).toBe(300_000);
       const input = fetchOptions?.input;
+      expect(typeof input === "string" ? input : Buffer.from(input ?? []).toString("utf8")).toBe(
+        `${missing.join("\n")}\n`,
+      );
+      const sizes = bufferedSpy.mock.calls.filter(
+        ([argv]) => argv[0] === "git" && argv.includes("ls-tree"),
+      );
+      expect(sizes).toHaveLength(2);
+      expect(sizes[0]?.[1]?.env?.GIT_NO_LAZY_FETCH).toBe("1");
       expect(
-        typeof input === "string"
-          ? input
-          : input === undefined
-            ? undefined
-            : Buffer.from(input.buffer, input.byteOffset, input.byteLength).toString("utf8"),
-      ).toBe(`${missing.join("\n")}\n`);
-      expect(
-        bufferedSpy.mock.calls.find(([argv]) => argv[0] === "git" && argv.includes("ls-tree"))?.[1]
-          ?.env?.GIT_NO_LAZY_FETCH,
-      ).toBe("1");
+        bufferedSpy.mock.calls.filter(([argv]) => argv.includes("--missing=print")),
+      ).toHaveLength(1);
       commandSpy.mockClear();
       await expect(estimateWorktreeGitBytes(clone, commit)).resolves.toBe(16_384);
       expect(commandSpy.mock.calls.filter(([, args]) => args[0] === "fetch").length).toBe(0);

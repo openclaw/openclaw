@@ -50,6 +50,8 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
         await gateway.waitForRequest("sessions.messages.subscribe", { match: { key } });
+        // Early transport may send before the pane's read-retry owner attaches.
+        await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
         await pauseVirtualClock(page);
         await gateway.setMethodResponse("sessions.messages.subscribe", {
           key,

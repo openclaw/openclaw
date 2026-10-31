@@ -482,7 +482,9 @@ export async function prepareModelsListResult({
           preserveUnknownAvailability || evaluation.runtimeAuth?.source === "native"
             ? evaluation.availability
             : (evaluation.availability ?? false);
-        const speedPolicy = fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
+        // An omitted row runtime means the implicit OpenClaw runtime, not an unknown one.
+        const runtimeId = preparedEntry.agentRuntime?.id ?? "openclaw";
+        const speedPolicy = fastMode(entry, evaluation, runtimeId);
         const supportsFastMode = speedPolicy.supportsFastMode;
         const serviceTiers = projectModelServiceTiers({
           config: cfg,
@@ -491,7 +493,7 @@ export async function prepareModelsListResult({
           snapshot: projectionSnapshot,
           entry,
           evaluation,
-          runtimeId: preparedEntry.agentRuntime?.id ?? "openclaw",
+          runtimeId,
           modelServiceTiers: speedPolicy.serviceTiers,
           isCurrent: projectionIsCurrent,
         });
@@ -507,7 +509,7 @@ export async function prepareModelsListResult({
             ? accountCatalog?.readServiceTierObservations({
                 identityKey: credential.identityKey,
                 modelId: entry.id,
-                runtimeId: preparedEntry.agentRuntime?.id ?? "openclaw",
+                runtimeId,
                 api: route.api,
                 baseUrl: route.baseUrl,
               })
@@ -527,7 +529,7 @@ export async function prepareModelsListResult({
                 snapshot: projectionSnapshot,
                 entry,
                 evaluation,
-                runtimeId: preparedEntry.agentRuntime?.id ?? "openclaw",
+                runtimeId,
                 isCurrent: projectionIsCurrent,
               })),
           ...(serviceTierObservations?.length

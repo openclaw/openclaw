@@ -167,7 +167,15 @@ async function runCronIsolatedAgentTurnInTrace(
     // Accounting, delivery, and teardown use the same metadata as inference. Keep
     // the lease open until cleanup finishes, then fence detached borrowed work.
     try {
-      return await withPreparedModelRuntimePluginGenerationScope(
+      const runTurn: typeof withPreparedModelRuntimePluginGenerationScope = (
+        generation,
+        run,
+        borrow,
+      ) =>
+        preparedRuntimeLease.run(() =>
+          withPreparedModelRuntimePluginGenerationScope(generation, run, borrow),
+        );
+      return await runTurn(
         preparedRuntimeLease.pluginGeneration,
         () =>
           withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, async () => {

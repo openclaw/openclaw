@@ -8,7 +8,6 @@ import {
   appendOutput,
   clearFinishedSessionsForScopes,
   deleteSession,
-  getActiveBackgroundExecSessionCount,
   getFinishedSession,
   isProcessSessionIdTaken,
   listFinishedSessions,
@@ -265,22 +264,6 @@ it("retains the complete newest log when it alone exceeds the aggregate budget",
 
   expect(listFinishedSessions()).toHaveLength(1);
   expect(getFinishedSession("oversized-finished")?.aggregated).toHaveLength(2_000_001);
-});
-
-it("tracks only live backgrounded sessions", () => {
-  const session = makeSession({ backgrounded: false });
-
-  expect(getActiveBackgroundExecSessionCount()).toBe(0);
-
-  markBackgrounded(session);
-  markBackgrounded(session);
-  expect(getActiveBackgroundExecSessionCount()).toBe(1);
-
-  markExited(session, 0, null, "completed");
-  expect(getActiveBackgroundExecSessionCount()).toBe(0);
-
-  markBackgrounded(session);
-  expect(getActiveBackgroundExecSessionCount()).toBe(0);
 });
 
 it.each([false, true])(

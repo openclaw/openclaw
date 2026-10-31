@@ -111,9 +111,12 @@ export function adoptCronRunRequests(
   const batch = { notified: false };
   return accepted.map((entry) => {
     const launch: CronLaunchContext = {
+      job: entry.job,
       receipt: entry.runReceipt,
       context,
       options: Object.assign({}, options, {
+        // Event ingress retains its claim until transfer; manual request custody ends here.
+        commitGuard: options.event ? options.commitGuard : undefined,
         scheduleOwnershipAtMs: options.scheduleOwnershipAtMs ?? entry.runReceipt.startedAtMs,
       }),
       generation,
@@ -214,17 +217,21 @@ function publishSkipped(state: CronServiceState, skipped: CronSkippedRequest) {
   pending.activation.resolve();
   launchState(state).contexts.delete(skipped.runReceipt.receiptId);
   // The worker writes skipped history with the same receipt; events are best effort.
-  emit(state, {
-    jobId: skipped.runReceipt.jobId,
-    job: skipped.job,
-    action: "finished",
-    status: "skipped",
-    error: skipped.error,
-    runId: pending.options.runId,
-    runAtMs: skipped.runReceipt.startedAtMs,
-    durationMs: 0,
-    nextRunAtMs: skipped.job?.state.nextRunAtMs,
-  });
+  emit(
+    state,
+    {
+      jobId: skipped.runReceipt.jobId,
+      job: skipped.job ?? pending.job,
+      action: "finished",
+      status: "skipped",
+      error: skipped.error,
+      runId: pending.options.runId,
+      runAtMs: skipped.runReceipt.startedAtMs,
+      durationMs: 0,
+      nextRunAtMs: skipped.job?.state.nextRunAtMs,
+    },
+    { runNotStarted: true },
+  );
   if (pending.options.terminalTracker) {
     pending.options.terminalTracker.emitted = true;
   }
@@ -420,6 +427,7 @@ export async function launchCronRunQueueResult(
     let pending = launchState(state).contexts.get(entry.runReceipt.receiptId);
     if (!pending) {
       pending = {
+        job: entry.job,
         receipt: entry.runReceipt,
         context,
         options: {},

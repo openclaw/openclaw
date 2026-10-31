@@ -33,10 +33,10 @@ export async function resumeAgentDeletions(
   context: GatewayRequestContext,
   signal?: AbortSignal,
 ): Promise<void> {
-  const { entries, manualClawAgentIds } = await restorePendingDeletionFences();
-  for (const agentId of manualClawAgentIds) {
+  const { entries, manualTemplateAgentIds } = await restorePendingDeletionFences();
+  for (const agentId of manualTemplateAgentIds) {
     context.logGateway.warn(
-      `Claw ${agentId} removal remains pending; retry its Claw removal plan.`,
+      `Template ${agentId} removal remains pending; retry its Template removal plan.`,
     );
   }
   for (const journal of entries) {

@@ -41,8 +41,8 @@ import {
   setMcpCodeModeGuestResultFromAgentResult,
 } from "./mcp-content.js";
 import { prepareMcpAppFormUpload } from "./mcp-form-resource-upload.js";
-import { captureMcpFormRequester, createMcpFormToolPreparer } from "./mcp-form-tool-approval.js";
-import { isMcpToolAllowed } from "./mcp-tool-filter.js";
+import { captureMcpFormRequester } from "./mcp-form-tool-approval.js";
+import { createMcpToolFilter, mcpCatalogToolFilterScope } from "./mcp-tool-filter.js";
 import {
   buildMcpAppCanvasPayload,
   fetchMcpAppView,
@@ -236,7 +236,8 @@ export function buildBundleMcpToolsFromCatalog(params: {
   for (const server of Object.values(params.catalog.servers).toSorted((a, b) =>
     a.serverName.localeCompare(b.serverName),
   )) {
-    const safeServerName = server.safeServerName ?? server.serverName;
+    const filterScope = mcpCatalogToolFilterScope(params.catalog, server.serverName);
+    const isToolAllowed = createMcpToolFilter(server.toolFilter, filterScope);
     const instructions = serverInstructions.get(server.serverName);
     const executionMode: AnyAgentTool["executionMode"] = server.supportsParallelToolCalls
       ? "parallel"
@@ -259,7 +260,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
       if (
         !server[capability] ||
         (server.deniedToolNames?.includes(operation) === true) !== sessionDeniedOnly ||
-        !isMcpToolAllowed(server.toolFilter, operation)
+        !isToolAllowed(operation)
       ) {
         return;
       }
@@ -267,7 +268,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
         ? params[definition.createExecute]?.(server.serverName)
         : undefined;
       const name = buildSafeToolName({
-        serverName: safeServerName,
+        serverName: filterScope.safeServerName,
         toolName: operation,
         reservedNames,
       });
@@ -290,7 +291,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
         optional: false,
         mcp: {
           serverName: server.serverName,
-          safeServerName,
+          safeServerName: filterScope.safeServerName,
           toolName: operation,
           operation,
           ...(instructions ? { instructions } : {}),
@@ -460,16 +461,36 @@ export async function materializeBundleMcpToolsForRun(params: {
                             sessionKey: runtime.sessionKey,
                             requesterId: appRequester?.profileId,
                             assertCurrent,
-                            prepareToolCall: createMcpFormToolPreparer(
-                              {
-                                runtime,
-                                serverName,
-                                agentId: params.agentId,
-                                requesterId: appRequester?.profileId,
-                                assertCurrent,
-                              },
-                              () => allowedAppToolsByServer?.get(serverName),
-                            ),
+                            /** Model-run forms retain their allowlist, then borrow current App approval for each preview. */
+                            prepareToolCall: async (action) => {
+                              const assertToolCallCurrent = () => {
+                                origin.assertCurrent();
+                                action.assertCurrent();
+                                if (
+                                  !allowedAppToolsByServer?.get(serverName)?.has(action.toolName)
+                                ) {
+                                  throw new Error(
+                                    "MCP form preview tool is not granted by the active run",
+                                  );
+                                }
+                              };
+                              assertToolCallCurrent();
+                              const { prepareModelCreatedAppToolCall } =
+                                await import("../gateway/mcp-app-operations.js");
+                              return await prepareModelCreatedAppToolCall(
+                                {
+                                  runtime: origin.runtime,
+                                  view: {
+                                    serverName: origin.serverName,
+                                    sessionId: origin.runtime.sessionId,
+                                    agentId: origin.agentId,
+                                    requesterId: origin.requesterId,
+                                    allowedAppToolNames: allowedAppToolsByServer?.get(serverName),
+                                  },
+                                },
+                                { ...action, assertCurrent: assertToolCallCurrent },
+                              );
+                            },
                           };
                           return await createMcpAppFormResourceContext({
                             snapshot: request.snapshot,

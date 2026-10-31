@@ -1,6 +1,7 @@
 import { IMAGE_BLOCK_TOKENS } from "openclaw/plugin-sdk/agent-core";
 import {
   isOpenClawRuntimeContextCustomMessage,
+  isTranscriptOnlyOpenClawAssistantMessage,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
@@ -145,7 +146,7 @@ export async function projectContextEngineAssemblyForCodex(params: {
     const remaining = options.maxRenderedContextChars - retainedChars;
     // Read only retained attachments, then charge their rendered text to this same window.
     const files =
-      remaining > 0 && message.role === "user"
+      remaining > 0 && (message.role === "user" || message.role === "assistant")
         ? await options.prepareFileContext?.(message, Math.min(remaining, options.maxTextPartChars))
         : undefined;
     // Use the shared image estimate; native image payloads consume context too.
@@ -452,6 +453,9 @@ type MessageRenderOptions = {
 };
 
 export function renderMessageBody(message: AgentMessage, options: MessageRenderOptions): string {
+  if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
+    return "";
+  }
   // Canonical summaries carry `summary`, not `content`; keep them in the quoted history.
   if (message.role === "compactionSummary" || message.role === "branchSummary") {
     return message.summary.trim();

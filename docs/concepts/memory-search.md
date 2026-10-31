@@ -11,8 +11,8 @@ read_when:
 wording differs from the original text. It chunks memory into small pieces and
 searches them with embeddings, keywords, or both.
 
-The built-in index supports SQLite and PostgreSQL agent databases. The PostgreSQL
-engine remains experimental. Search uses engine-local text ranking, so scores and ordering
+The built-in index supports SQLite and [qualified PostgreSQL runtimes](/gateway/postgresql#support-matrix).
+Search uses engine-local text ranking, so scores and ordering
 can differ from SQLite. It requires `unaccent` for text search, `pg_trgm` for the
 trigram tokenizer, and `vector` for semantic search. Explicit
 `memory.search.provider: "none"` enables keyword-only search without `vector`;
@@ -24,8 +24,9 @@ for extension setup.
 On PostgreSQL, both body keywords and filename/path lookup use the admitted
 index. Source and selected-agent scope restrict candidates before the result
 limit; semantic retrieval also filters the embedding model. Text uses native
-full-text ranking; semantic retrieval uses exact
-cosine distance over a derived float32 vector projection. Hybrid search keeps
+full-text ranking; semantic retrieval preselects candidates with binary sketches,
+then reranks them by exact cosine distance over a derived float32 vector projection.
+Small candidate-ID scopes use exact search. Hybrid search keeps
 the same vector/text weights, but PostgreSQL text scores are not SQLite BM25
 scores. A phrase with nearby terms can rank above scattered terms without
 promising identical ordering across engines.

@@ -85,6 +85,9 @@ Or paste a short-lived node setup link from the Control UI Devices page:
 openclaw node run --pair "oc-pair://<setup-code>"
 ```
 
+Stopping a foreground node also cancels startup. If termination arrives before
+the Gateway connection is ready, the node drains its prepared resources and exits.
+
 Options:
 
 - `--host <host>`: Gateway WebSocket host (default: `127.0.0.1`)

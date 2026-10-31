@@ -89,4 +89,5 @@ if (isMainThread) {
     }
     void profiling.catch(console.error);
   });
+  process.channel?.unref();
 }

@@ -32,6 +32,8 @@ export const runtimeProcessDeclarationEntries = {
     "extensions/codex/session-history-worker-entrypoint.ts",
 };
 export const vitestWorkerDeclarationEntries = {
+  "talk/client-voice-session-runtime.test-support":
+    "src/talk/client-voice-session-runtime.test-support.ts",
   "infra/postgres-sync/locks-runtime.test-support":
     "src/infra/postgres-sync/locks-runtime.test-support.ts",
   "worker/native-worker-entrypoints.test-support":
@@ -64,7 +66,7 @@ export const vitestWorkerDeclarationEntries = {
     "src/daemon/service-process-env-runtime.test-support.ts",
   "shared/worker-bundle-archive-runtime.test-support":
     "src/shared/worker-bundle-archive-runtime.test-support.ts",
-  "claws/project-runtime.test-support": "src/claws/project-runtime.test-support.ts",
+  "templates/project-runtime.test-support": "src/templates/project-runtime.test-support.ts",
   "test-helpers/temp-dir-runtime.test-support": "src/test-helpers/temp-dir-runtime.test-support.ts",
   "infra/outbound/delivery-queue-process-runtime.test-support":
     "src/infra/outbound/delivery-queue-process-runtime.test-support.ts",

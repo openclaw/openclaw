@@ -13,6 +13,7 @@ import type {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
@@ -22,7 +23,10 @@ import type {
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { retainSessionEntryWorkerPublication } from "./session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
-import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
+import {
+  sqliteSessionEntriesEqual,
+  type SqliteLifecycleTargetSnapshot,
+} from "./session-accessor.sqlite-entry-equality.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import {
   withSessionEntryWorker,
@@ -30,6 +34,7 @@ import {
 } from "./session-accessor.sqlite-replacement-worker.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 import { readSessionActorEntryFacts } from "./session-actor-replica.js";
+import { projectSessionEntryPatch } from "./session-entry-patch-operation.js";
 import type {
   SessionEntryPatchCommit,
   SessionEntryPatchCommitted,
@@ -49,27 +54,8 @@ import {
 } from "./session-source-authority.js";
 import { retainSessionTranscriptWorkerPublication } from "./session-transcript-authority.js";
 import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
-import { collectSessionEntryLookupKeys } from "./store-entry.js";
+import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
-
-// Persisted entries are JSON; isolate mutable containers without copying immutable strings.
-function copySessionEntryForResult(entry: SessionEntry): SessionEntry {
-  const copied = { ...entry };
-  const pending: object[] = [copied];
-  while (pending.length) {
-    const parent = pending.pop()!;
-    for (const key of Object.keys(parent)) {
-      const value: unknown = Reflect.get(parent, key);
-      if (value === null || typeof value !== "object") {
-        continue;
-      }
-      const child = Array.isArray(value) ? [...value] : { ...value };
-      Reflect.set(parent, key, child);
-      pending.push(child);
-    }
-  }
-  return copied;
-}
 
 export async function patchSessionEntryInWorker(params: {
   database: OpenClawAgentDatabaseOptions & { path: string };
@@ -87,7 +73,7 @@ export async function patchSessionEntryInWorker(params: {
   prepare(snapshot: SqliteLifecycleTargetSnapshot): Promise<SessionEntryPatchCommit | undefined>;
   onCommitted?: SessionEntryPatchCommitObserver;
   onCommittedSource?: (source: CapturedSessionEntryReadSource, entry: SessionEntry) => void;
-}): Promise<{ entry: SessionEntry | null; wrote: boolean }> {
+}): Promise<{ entry: Readonly<SessionEntry> | null; wrote: boolean }> {
   let source = params.preparedSource;
   const sourceChecks = source?.checks ?? [];
   const releaseSource = () => {
@@ -103,7 +89,7 @@ export async function patchSessionEntryInWorker(params: {
   let retainedEntry: SessionEntry | undefined;
   return await runSessionEntryWorkerOperation<
     SessionEntryPatchCommitted,
-    { entry: SessionEntry | null; wrote: boolean }
+    { entry: Readonly<SessionEntry> | null; wrote: boolean }
   >({
     ...params,
     releaseSource,
@@ -134,9 +120,10 @@ export async function patchSessionEntryInWorker(params: {
       if (actor) {
         actor.entry = entry;
       }
-      // Public results remain mutable and detached from the resident publication.
+      // Internal callers replace fields locally; nested facts belong to the frozen publication.
+      // SDK egress owns the fully mutable public copy.
       if (delta.returnEntry) {
-        candidate.entry = copySessionEntryForResult(entry);
+        candidate.entry = { ...freezeTrustedJsonSnapshot(entry) };
       }
       delete candidate.entryDelta;
     },
@@ -198,18 +185,25 @@ export async function patchSessionEntryInWorker(params: {
             source?.assertCurrent();
             const snapshot = await runOpenClawAgentWorkerWrite(params.database, async () => {
               const generation = execution.capturePreparedGenerationClaim();
+              const selection = params.selection;
+              const sessionKey =
+                selection.kind === "entry"
+                  ? selection.exact
+                    ? selection.sessionKey
+                    : selection.sessionKey.trim()
+                  : selection.target.canonicalKey;
+              const singleEntry =
+                selection.kind === "entry" ||
+                (sessionKey === normalizeStoreSessionKey(sessionKey) &&
+                  selection.target.storeKeys.every((key) => key === sessionKey));
               // Complete current facts already contain the callback's CAS preimage.
               // Alias targets and cold/incomplete facts keep their worker-owned selection.
               const retained =
-                params.selection.kind === "entry" && generation
+                singleEntry && generation
                   ? readRetainedSessionEntryFacts(
                       params.database,
                       {
-                        sessionKeys: [
-                          params.selection.exact
-                            ? params.selection.sessionKey
-                            : params.selection.sessionKey.trim(),
-                        ],
+                        sessionKeys: [sessionKey],
                         projection: "full",
                       },
                       generation,
@@ -248,6 +242,46 @@ export async function patchSessionEntryInWorker(params: {
         sessionKey: prepared.sessionKey,
       });
       retainedEntry = resident?.snapshots === "full" ? resident.entry : undefined;
+      // The FIFO and replica write token own this synchronous postimage check.
+      // Transaction predicates, side effects and commit observers still need the writer.
+      if (
+        retainedEntry &&
+        "operation" in prepared &&
+        prepared.preserveActivity &&
+        prepared.operation.kind !== "public-fields" &&
+        prepared.selection.kind === "entry" &&
+        collectSessionEntryLookupKeys(prepared.sessionKey).length === 1 &&
+        !prepared.consumePendingReset &&
+        !prepared.providerReviewMutation &&
+        !prepared.shouldCommitIf &&
+        !prepared.cliHistory &&
+        !prepared.conversation &&
+        !prepared.ensureIdentitySource &&
+        !sourceChecks.length &&
+        !source?.nativeSource &&
+        !params.onCommitted &&
+        !params.onCommittedSource
+      ) {
+        const next = projectSessionEntryPatch({
+          ...prepared,
+          existing: retainedEntry,
+          writeBase: retainedEntry,
+        });
+        if (!next || sqliteSessionEntriesEqual(next, retainedEntry)) {
+          params.assertCurrent();
+          params.assertCommitAllowed?.();
+          params.guard?.assertCurrent?.();
+          source?.assertCurrent();
+          params.guard?.assertMutationAllowed?.();
+          if (params.shouldCommit?.() === false) {
+            return { entry: null, wrote: false };
+          }
+          return {
+            entry: prepared.returnEntry === false ? null : structuredClone(retainedEntry),
+            wrote: false,
+          };
+        }
+      }
       if (retainedEntry && resident) {
         prepared.retainedEntry = {
           writeToken: resident.writeToken,
@@ -325,7 +359,7 @@ export async function runSessionEntryWorkerOperation<
   agentId: string;
   assertCurrent: () => void;
   assertPrepared?: () => void;
-  assertCandidate?: (candidate: Candidate) => void;
+  assertCandidate?: (candidate: Candidate, operation: RetainedWorkerTransactionAdmission) => void;
   decodeCandidate?: (candidate: Candidate) => void;
   releaseSource?: () => void | Promise<void>;
   candidateKind: Candidate["kind"];
@@ -522,7 +556,7 @@ export async function runSessionEntryWorkerOperation<
       if (!isRecord(facts) || !matchesReceipt(facts.publication) || !settlement.candidate) {
         throw new Error("Session patch commit omitted its exact candidate");
       }
-      params.assertCandidate?.(settlement.candidate);
+      params.assertCandidate?.(settlement.candidate, retained);
       settlement.admitted = { admission, retained };
       transcriptPublication?.begin(
         settlement.candidate.publication?.transcriptPublication

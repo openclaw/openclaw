@@ -4,13 +4,7 @@ import { en } from "./en.ts";
 // Analysis copy loads with Usage; shared labels and Settings search stay eager.
 const enUsage = {
   usage: {
-    // The session time series still names a response that ended before its final usage.
-    unavailable:
-      "Token usage and cost are unknown because a response ended before final usage arrived. Select an unaffected session to view its usage.",
-    lowerBoundShort: "≥ Lower bound",
     partialShort: "Partial results",
-    lowerBound:
-      "≥ marks a lower bound: some responses ended before their final usage arrived, so their tokens and cost are partly counted.",
     presets: {
       today: "Today",
       last7d: "7d",

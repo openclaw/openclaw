@@ -17,6 +17,9 @@
  * --rows 20000 doubles the default session population; use a multiple of 500.
  * --retained-heap collects before/after the measured window in a separate retention
  * diagnostic pass. Its forced pre-window GC makes its timings unsuitable as gates.
+ * Native total-allocated-byte deltas, when available, also measure untraced churn.
+ * --snapshot adds post-GC worker snapshots at both retention boundaries; use with
+ * --retained-heap and keep this diagnostic pass separate from latency gates.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -37,11 +40,13 @@ const { values } = parseArgs({
     warmup: { type: "string", default: "200" },
     rows: { type: "string", default: "10000" },
     "retained-heap": { type: "boolean", default: false },
+    snapshot: { type: "boolean", default: false },
     "owner-dir": { type: "string" },
     allocations: { type: "boolean", default: false },
   },
 });
 const kinds = ["acp", "shared-facts", "lifecycle", "plugins", "machine-state", "session-list"];
+assert(!values.snapshot || values["retained-heap"], "--snapshot requires --retained-heap");
 assert(kinds.includes(values.kind), `--kind must be one of ${kinds.join(", ")}`);
 assert(values.output, "--output must name a new synthetic fixture directory");
 const root = path.resolve(values.output);
@@ -107,6 +112,18 @@ const ownerSource =
     ? replacementOwner
     : new URL(`../../${ownerPath}`, import.meta.url);
 const ownerSourceSha256 = createHash("sha256").update(fs.readFileSync(ownerSource)).digest("hex");
+const readConnectionPath = "src/state/openclaw-state-db-read-connection.ts";
+const replacementConnection =
+  values["owner-dir"] && path.resolve(values["owner-dir"], readConnectionPath);
+const readConnectionSourceSha256 = createHash("sha256")
+  .update(
+    fs.readFileSync(
+      replacementConnection && fs.existsSync(replacementConnection)
+        ? replacementConnection
+        : new URL(`../../${readConnectionPath}`, import.meta.url),
+    ),
+  )
+  .digest("hex");
 const rows = parseStrictIntegerOption({
   raw: values.rows,
   label: "--rows",
@@ -218,8 +235,10 @@ type Measurement = {
   cpu: NodeJS.CpuUsage;
   elapsedMs: number;
   allocation?: { sampledBytes: number; samples: number };
+  initialMemory?: { allocatedBytes?: number };
+  finalMemory?: { allocatedBytes?: number };
 };
-async function sample(name: string, operation: "start" | "stop" | "collect") {
+async function sample(name: string, operation: "start" | "stop" | "collect" | "snapshot") {
   const ready = fs.readdirSync(output).flatMap((file) => {
     if (!file.endsWith(".ready.json")) {
       return [];
@@ -325,7 +344,7 @@ try {
     await read(commands[index % commands.length]!);
   }
   const retainedBefore = values["retained-heap"]
-    ? await sample("retained-before", "collect")
+    ? await sample("retained-before", values.snapshot ? "snapshot" : "collect")
     : undefined;
   await delay(1_100);
   const before = census();
@@ -351,7 +370,7 @@ try {
   const after = census();
   assert.equal(after.tasks - before.tasks, iterations, "Worker task census must cover every reply");
   const retainedAfter = values["retained-heap"]
-    ? await sample("retained-after", "collect")
+    ? await sample("retained-after", values.snapshot ? "snapshot" : "collect")
     : undefined;
   latencies.sort((left, right) => left - right);
   const result = {
@@ -364,6 +383,7 @@ try {
     loadAfter: loadavg(),
     ownerDir: values["owner-dir"] ? path.resolve(values["owner-dir"]) : null,
     ownerSourceSha256,
+    readConnectionSourceSha256,
     rows,
     batchSize: values.kind === "acp" || values.kind === "shared-facts" ? batchSize : undefined,
     keysPerEntry: values.kind === "acp" || values.kind === "shared-facts" ? 1 : undefined,
@@ -375,6 +395,12 @@ try {
     replySha256: digest.digest("hex"),
     elapsedMs,
     workerCpuUsPerTask: (measurement.cpu.user + measurement.cpu.system) / iterations,
+    nativeAllocationBytesPerTask:
+      measurement.initialMemory?.allocatedBytes !== undefined &&
+      measurement.finalMemory?.allocatedBytes !== undefined
+        ? (measurement.finalMemory.allocatedBytes - measurement.initialMemory.allocatedBytes) /
+          iterations
+        : undefined,
     mainCpuUsPerTask: (mainCpu.user + mainCpu.system) / iterations,
     sampledAllocationBytesPerTask:
       measurement.allocation === undefined

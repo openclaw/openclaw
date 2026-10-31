@@ -150,6 +150,15 @@ nested code in the same group counts once, but **different rows can overlap**.
 The `total` row unions all reachable code subtrees independently. Do not sum
 retained rows or equate them with `v8.getHeapCodeStatistics()` or expected savings.
 
+`sourceStrings` separately ranks the strings reached by each Script's `source`
+edge, including concatenated and sliced backing strings. Its total counts each
+physical string once; per-script rows can overlap when scripts share storage.
+These are shallow string bytes, not exclusive retained size or RSS. The same
+script allowlist applies, and source contents are never emitted. Check that
+instrumentation preserves built JavaScript before attributing these bytes to the
+product: transforming loaders can append large inline source maps to the loaded
+source even when the built files contain none.
+
 `duplicateStringRetainers` ranks excess shallow bytes by a representative direct
 retainer constructor/property and its nearest context or named-constructor
 dominator. It keeps the first largest copy of each complete string and charges

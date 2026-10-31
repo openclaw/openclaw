@@ -87,6 +87,9 @@ it.each(["ancestry-unverified", "missing-capture"] as const)(
       }).catch((error: unknown) => error);
 
       expect(refusal).toBeInstanceOf(DoctorMaintenanceRefusalError);
+      if (failure === "ancestry-unverified") {
+        expect(refusal).toHaveProperty("failureFacts.0.code", failure);
+      }
       expect(refusal).toMatchObject({
         refusal:
           failure === "ancestry-unverified"

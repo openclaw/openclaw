@@ -126,18 +126,24 @@ describe("grouped chat rendering", () => {
       retry: false,
       discard: true,
     },
-    { state: "submitting", label: "Queued", actionLabel: undefined, retry: false, discard: true },
-    { state: "sending", label: "Queued", actionLabel: undefined, retry: false, discard: true },
+    { state: "submitting", label: undefined, actionLabel: undefined, retry: false, discard: false },
+    { state: "sending", label: undefined, actionLabel: undefined, retry: false, discard: false },
     {
       state: "waiting-model",
-      label: "Queued",
+      label: undefined,
       actionLabel: undefined,
       retry: false,
-      discard: true,
+      discard: false,
     },
-    { state: "waiting-idle", label: "Queued", actionLabel: undefined, retry: false, discard: true },
+    {
+      state: "waiting-idle",
+      label: undefined,
+      actionLabel: undefined,
+      retry: false,
+      discard: false,
+    },
   ] as const)(
-    "shows a $state footer with its diagnostic and recovery actions ($actionLabel)",
+    "shows only actionable $state delivery status ($actionLabel)",
     ({ state, label, actionLabel, retry: canRetry, discard: canDiscard }) => {
       const onRetryQueuedMessage = vi.fn();
       const onDiscardQueuedMessage = vi.fn();
@@ -162,6 +168,13 @@ describe("grouped chat rendering", () => {
       );
 
       const status = element(".chat-send-status");
+      if (!label) {
+        expect(status).toBeNull();
+        expect(requireElement(".chat-group-timestamp", HTMLTimeElement).dateTime).toBe(
+          new Date(1_000).toISOString(),
+        );
+        return;
+      }
       expect(status).not.toBeNull();
       expect(status?.title).toBe("Delivery diagnostic");
       expect(status?.textContent).toContain(label);

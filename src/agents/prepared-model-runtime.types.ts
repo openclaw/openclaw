@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import type { ActiveRemoteModelCatalog } from "../model-catalog/remote-overlay.js";
 import type { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
+import type { PluginGenerationMetrics } from "../plugins/plugin-generation-metrics.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
@@ -168,6 +169,7 @@ export type PreparedModelRuntimeInput = {
 export type PreparedModelRuntimeLease = Readonly<{
   snapshot: PreparedModelRuntimeSnapshot;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
+  run<T>(run: () => T): T;
   [Symbol.asyncDispose](): Promise<void>;
 }>;
 
@@ -177,6 +179,12 @@ export type PreparedModelRuntimeLeaseOptions = {
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   abortSignal?: AbortSignal;
+  /**
+   * A plugin-runtime refresh continuation already ran tools on
+   * the previous generation, so it waits for every pending reload to settle
+   * instead of failing after the usual three publication gates.
+   */
+  waitForReplacementPublication?: boolean;
   /** Pure planning against admitted facts; requested selections remain explicit and additive. */
   deriveRuntimePluginSelections?: (context: {
     config: OpenClawConfig;
@@ -221,6 +229,7 @@ export type PreparedModelRuntimeBuildStats = Readonly<{
   generatedCatalogReadCount: number;
   workspaceFactsMs: number;
   runtimePluginMs: number;
+  pluginPreparation?: Readonly<PluginGenerationMetrics>;
   pluginMetadataMs: number;
   staticProviderCatalogMs: number;
   ambientCredentialsMs: number;

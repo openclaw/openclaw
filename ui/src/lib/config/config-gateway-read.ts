@@ -5,6 +5,7 @@ import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { configMutationFailure } from "./config-mutation-error.ts";
 import {
   beginConfigRead,
+  currentConfigConnectionEpoch,
   currentConfigRead,
   isCurrentConfigConnection,
   isCurrentRequest,
@@ -22,17 +23,50 @@ export type ConfigSnapshotLoadOptions = LoadConfigOptions & {
   };
 };
 
+// Observers re-ensure config on every publication, and every read publishes.
+// A failed foreground read therefore waits before an ensure may repeat it on
+// the same connection; explicit refreshes and reconnects still read at once.
+const CONFIG_READ_RETRY_DELAY_MS = 5_000;
+const failedReads = new WeakMap<RuntimeConfigState, { connectionEpoch: number; at: number }>();
+
+function canStartConfigRead(state: RuntimeConfigState): boolean {
+  const client = state.client;
+  return Boolean(client && state.connected && hasOperatorReadAccess(client.auth));
+}
+
+/** Whether an ensure-style caller may start a read now, rather than spin on one that cannot help. */
+export function canEnsureConfigRead(state: RuntimeConfigState): boolean {
+  if (!canStartConfigRead(state)) {
+    return false;
+  }
+  const failed = failedReads.get(state);
+  return (
+    !failed ||
+    failed.connectionEpoch !== currentConfigConnectionEpoch(state) ||
+    Date.now() - failed.at >= CONFIG_READ_RETRY_DELAY_MS
+  );
+}
+
 function startConfigLoad(
   state: RuntimeConfigState,
   options: ConfigSnapshotLoadOptions,
   isCurrentLoad: () => boolean = () => true,
 ): ConfigRead | null {
   const client = state.client;
-  if (!client || !state.connected || !hasOperatorReadAccess(client.auth)) {
+  if (!client || !canStartConfigRead(state)) {
     return null;
   }
   const read = beginConfigRead(state, client);
-  void readConfig(state, read, options, isCurrentLoad).then(read.completion.resolve);
+  void readConfig(state, read, options, isCurrentLoad).then((result) => {
+    if (!options.background && currentConfigRead(state) === read) {
+      if (result.ok) {
+        failedReads.delete(state);
+      } else {
+        failedReads.set(state, { connectionEpoch: read.connectionEpoch, at: Date.now() });
+      }
+    }
+    read.completion.resolve(result);
+  });
   return read;
 }
 

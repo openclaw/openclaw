@@ -2,7 +2,9 @@ import type { SessionPublicShareSetResult } from "../../../../packages/gateway-p
 import type { GatewaySessionRow, SessionVisibility } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionOptionalEnglish } from "../../i18n/locales/en-chat-session-optional.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { ChatPaneConnectionScope } from "./chat-pane-shared.ts";
@@ -10,6 +12,8 @@ import type {
   ChatSessionSharingOutcome,
   ChatSessionSharingState,
 } from "./components/chat-session-sharing-shared.tsx";
+
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 export async function setSessionPublicShare(
   scope: ChatPaneConnectionScope,

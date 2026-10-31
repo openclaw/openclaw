@@ -13,7 +13,6 @@ import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installMockGateway } from "./new-session-page.test-support.ts";
 import {
-  expectAppArtwork,
   expectComposerSurface,
   expectMobileComposer,
   readArtwork,
@@ -101,9 +100,9 @@ suite.define(() => {
           route === "settings/appearance" ? null : page.locator(".agent-chat__input");
         const textarea = composer?.locator("textarea");
         const draft = `An unsent ${route} draft stays here while the theme changes.`;
-        const expectDraft = async (accessible = false) => {
+        const expectDraft = async () => {
           if (composer && textarea) {
-            await expectComposerSurface(composer, accessible);
+            await expectComposerSurface(composer);
             expect(await textarea.inputValue()).toBe(draft);
           }
         };
@@ -131,7 +130,7 @@ suite.define(() => {
             const label = `${resolved}-${route.replace("/", "-")}-${viewport}`;
             const fingerprint = route === "new" && viewport === "desktop";
             const artwork = await readArtwork(shell, fingerprint ? "fingerprint" : undefined);
-            expectAppArtwork(artwork, label);
+            expect(artwork.failures, label).toEqual([]);
             expect(artwork.canvasOwner, label).toBe(
               route === "chat" && viewport === "mobile" ? "native-mobile" : "shell-artwork",
             );
@@ -170,7 +169,7 @@ suite.define(() => {
         ] as const) {
           await page.emulateMedia(media);
           await expect.poll(background).toBe("none");
-          await expectDraft(true);
+          await expectDraft();
         }
         await page.emulateMedia({ contrast: "no-preference", forcedColors: "none" });
         await expect.poll(background).toBe(images.get("dash-light"));
@@ -189,7 +188,7 @@ suite.define(() => {
                 () => matchMedia("(prefers-reduced-transparency: reduce)").matches,
               ),
             ).toBe(true);
-            await expectDraft(true);
+            await expectDraft();
             expect(await background()).toBe(images.get("dash-light"));
           } finally {
             await session.send("Emulation.setEmulatedMedia", { features: [] });
@@ -235,7 +234,7 @@ suite.define(() => {
         const resolved = mode === "dark" ? "custom" : "custom-light";
         await changeTheme(page, gateway, { family: "custom", mode }, resolved);
         const artwork = await readArtwork(page.locator(".shell"), "color-spread");
-        expectAppArtwork(artwork, `custom ${mode}`);
+        expect(artwork.failures, `custom ${mode}`).toEqual([]);
         await expectComposerSurface(composer);
         expect(artwork.maxColorSpread).toBeLessThanOrEqual(32);
         images.add(artwork.backgroundImage);

@@ -1,16 +1,12 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { getEnvironmentData, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { isPostgresSqlConnection, type PostgresSqlConnection } from "../sql-connection.js";
+import type { PostgresSqlConnection } from "../sql-connection.js";
 import { admitStoreSearch } from "./adapters.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { DatabaseSearchCapabilityUnavailableError } from "./capability-unavailable.js";
-import type { StoreSchema } from "./contract.js";
-import { createNotesSearch, openPostgresEngineTestStore } from "./engine-store.test-support.js";
-import { readEngineAnchor } from "./open.js";
+import { createNotesSearch, createPostgresEngineTestFixture } from "./engine-store.test-support.js";
 import {
   admitPostgresSearch,
   assertPostgresSearchAdmitted,
@@ -30,36 +26,19 @@ function fixture(
 ) {
   expect(threadId, "The fixture host must retain the native admission descriptor").toBe(0);
   withEngineStoreAdmission(() => {
-    const anchor = openNodeSqliteDatabase(
-      path.join(dirs.make("pg-search-admission-"), "anchor.sqlite"),
-    );
-    const schema: StoreSchema = {
-      id: "search",
-      version: 1,
-      sqlite: "",
-      postgres: "CREATE TABLE notes(id TEXT PRIMARY KEY, text TEXT NOT NULL, embedding BYTEA)",
-      search: selected,
-    };
-    let db: PostgresSqlConnection | undefined;
-    try {
-      const opened = openPostgresEngineTestStore({
-        anchor,
-        schema,
-        input: { connection: dsn, schemaPrefix: "r6" },
-      });
-      if (!isPostgresSqlConnection(opened)) {
-        throw new Error("Expected PostgreSQL");
-      }
-      db = opened;
-      run(db);
-    } finally {
-      if (db) {
-        const namespace = readEngineAnchor(anchor)?.[0]?.schema;
-        db.exec(`DROP SCHEMA ${pgSearchName(String(namespace))} CASCADE`);
-        db.close();
-      }
-      anchor.close();
-    }
+    using store = createPostgresEngineTestFixture({
+      directory: dirs.make("pg-search-admission-"),
+      connection: dsn,
+      schemaPrefix: "r6",
+      schema: {
+        id: "search",
+        version: 1,
+        sqlite: "",
+        postgres: "CREATE TABLE notes(id TEXT PRIMARY KEY, text TEXT NOT NULL, embedding BYTEA)",
+        search: selected,
+      },
+    });
+    run(store.open());
   });
 }
 

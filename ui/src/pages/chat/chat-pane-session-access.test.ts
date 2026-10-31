@@ -15,7 +15,11 @@ import {
 } from "../../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
-import { createPaneHeaderWorkspaceFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+import {
+  createPaneHeaderWorkspaceFixture,
+  createTestChatPane,
+  runPaneHeaderAction,
+} from "./chat-pane.test-support.ts";
 import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import {
   openNativeMenu,
@@ -198,7 +202,7 @@ describe("chat pane session access", () => {
         selfUser: { id: "alice", name: "Alice" },
       };
       pane.applyGatewaySnapshot(connected);
-      const open = () => modal.track(pane.handleHeaderSessionAction({ kind: "new-group" }, row));
+      const open = () => modal.track(runPaneHeaderAction(pane, { kind: "new-group" }, row));
       try {
         const completion = open();
         const input = await waitForInputDialog();
@@ -280,7 +284,7 @@ describe("chat pane session access", () => {
         throw new Error("Assignment rejected");
       });
       try {
-        void modal.track(pane.handleHeaderSessionAction({ kind: "new-group" }, row));
+        void modal.track(runPaneHeaderAction(pane, { kind: "new-group" }, row));
         await submitInputDialog("Keep this group");
         await vi.waitFor(() =>
           expect(document.body.querySelector("openclaw-modal-dialog [role=alert]")).not.toBeNull(),

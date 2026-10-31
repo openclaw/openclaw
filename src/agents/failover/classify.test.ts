@@ -33,16 +33,25 @@ const validationError = {
 
 describe("failover classification", () => {
   it.each([
-    ["403", true],
-    ["response_code=403", true],
-    ['{"status":403}', true],
-    ['{"code":"403"}', true],
-    ['{"argumentChars":403}', false],
-    ['{"requestId":"403"}', false],
-  ] as const)("recognizes auth status but not diagnostic counts: %s", (message, auth) => {
-    expect(isAuthErrorMessage(message)).toBe(auth);
-    expect(classifyFailoverReason(message, noPlugin)).toBe(auth ? "auth" : null);
-  });
+    ["403", true, "auth"],
+    ["response_code=403", true, "auth"],
+    ['{"status":403}', true, "auth"],
+    ['{"code":"403"}', true, "auth"],
+    ['{"argumentChars":403}', false, null],
+    ['{"requestId":"403"}', false, null],
+    ["deadline expired", false, "timeout"],
+    ["Deadline expired before operation could complete.", false, "timeout"],
+    ["request timed out", false, "timeout"],
+    ["token has expired", true, "auth"],
+    ["API key expired. Please renew the API key.", true, "auth"],
+    ["Your session has expired", true, "auth"],
+  ] as const)(
+    "keeps auth evidence distinct from deadline failures: %s",
+    (message, auth, reason) => {
+      expect(isAuthErrorMessage(message)).toBe(auth);
+      expect(classifyFailoverReason(message, noPlugin)).toBe(reason);
+    },
+  );
 
   it.each([
     ["auth", { status: 403, message: "provider refusal" }, noPlugin],
@@ -54,7 +63,7 @@ describe("failover classification", () => {
       },
       noPlugin,
     ],
-    ["server_error", { status: 500, message: "upstream failure" }],
+    ["server_error", { status: 500, message: "[Malformed diagnostic JSON redacted]" }],
     ["billing", validationSignal(402)],
     ["overloaded", validationSignal(529)],
     ["format", validationSignal(404)],
@@ -97,6 +106,31 @@ describe("failover classification", () => {
         classifyFailoverSignal(typeof signal === "string" ? { message: signal } : signal, opts),
       ).toEqual(reason ? { kind: "reason", reason } : null),
   );
+
+  it.each([400, 422])("leaves placeholder-only HTTP %i failures unclassified", (status) => {
+    for (const body of [
+      "[Malformed diagnostic JSON redacted]",
+      "[Oversized diagnostic JSON redacted]",
+      "[Unserializable]",
+    ]) {
+      expect(
+        classifyFailoverSignal({ status, message: `${status}: ${body}` }, noPlugin),
+      ).toBeNull();
+    }
+    expect(
+      classifyFailoverSignal({ status, message: `${status} status code (no body)` }, noPlugin),
+    ).toBeNull();
+    expect(classifyFailoverSignal(validationSignal(status), noPlugin)).toEqual({
+      kind: "reason",
+      reason: "format",
+    });
+    expect(
+      classifyFailoverSignal(
+        { status, message: "[Malformed diagnostic JSON redacted] Unsupported parameter: logprobs" },
+        noPlugin,
+      ),
+    ).toEqual({ kind: "reason", reason: "format" });
+  });
 
   it.each([
     {

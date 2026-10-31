@@ -33,7 +33,11 @@ import {
 } from "../plugin-model-catalog.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
-import { resolveModelRegistryRequestAuth } from "./model-registry-request-auth.js";
+import {
+  resolveModelRegistryRequestAuth,
+  hasModelRegistryConfiguredAuth,
+  resolveModelRegistryProviderApiKey,
+} from "./model-registry-request-auth.js";
 import { createRegistryRuntimeModel } from "./model-registry-runtime-model.js";
 import {
   getModelRegistryRuntime,
@@ -58,7 +62,6 @@ import {
 } from "./model-registry-sources.js";
 import type { ProviderConfigInput } from "./provider-config.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
-import { resolveConfigValueUncached } from "./resolve-config-value.js";
 
 export type { ProviderConfigInput } from "./provider-config.js";
 export type { ResolvedRequestAuth } from "./model-registry-sources.js";
@@ -658,15 +661,11 @@ export class ModelRegistry {
   }
 
   hasConfiguredAuth(model: Model): boolean {
-    const providerConfig = this.getModelProviderRequestConfig(model);
-    if (providerConfig?.auth === "none") {
-      return model.api === "openai-completions";
-    }
-    return (
-      this.authStorage.hasAuth(model.provider) ||
-      providerConfig?.auth === "aws-sdk" ||
-      providerConfig?.apiKey !== undefined
-    );
+    return hasModelRegistryConfiguredAuth({
+      model,
+      providerConfig: this.getModelProviderRequestConfig(model),
+      authStorage: this.authStorage,
+    });
   }
 
   private getModelProviderRequestConfig(model: Model): ProviderRequestConfig | undefined {
@@ -777,13 +776,11 @@ export class ModelRegistry {
   }
 
   async getApiKeyForProvider(provider: string): Promise<string | undefined> {
-    const apiKey = await this.authStorage.getApiKey(provider, { includeFallback: false });
-    if (apiKey !== undefined) {
-      return apiKey;
-    }
-
-    const providerApiKey = this.providerRequestConfigs.get(provider)?.apiKey;
-    return providerApiKey ? resolveConfigValueUncached(providerApiKey) : undefined;
+    return resolveModelRegistryProviderApiKey({
+      provider,
+      readProviderConfig: () => this.providerRequestConfigs.get(provider),
+      authStorage: this.authStorage,
+    });
   }
 
   isUsingOAuth(model: Model): boolean {

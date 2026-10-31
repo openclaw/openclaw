@@ -45,6 +45,11 @@ import { buildEmbeddedAttemptToolRunContext } from "../embedded-agent-runner/run
 import { runEmbeddedAgent } from "../embedded-agent.js";
 import { createAgentHarnessHostCapabilities } from "../harness/host-capability.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../harness/tool-authority.runtime.js";
+import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../subagents/registry/subagent-registry-persistence.js";
+import { markSubagentRunPausedAfterYield } from "../subagents/registry/subagent-registry-run-pause.js";
+import { resetSubagentRegistryForTests } from "../subagents/registry/subagent-registry.test-helpers.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -63,6 +68,15 @@ await Promise.all([
 
 const request = { action: "reloadAndResume", pluginId: "reload-fixture" };
 const callerRequired = "active Gateway conversation";
+function runningOperation(sessionKey: string, sessionId: string, storeScope: string) {
+  const operation = createTestReplyOperation({
+    sessionKey,
+    sessionId,
+    target: captureSessionTarget({ storeScope, sessionKey, incarnation: sessionId }),
+  });
+  operation.setPhase("running");
+  return operation;
+}
 afterEach(() => {
   vi.restoreAllMocks();
   resetGatewayWorkAdmission();
@@ -92,18 +106,9 @@ it.each([
     await upsertSessionEntryCore({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
     const runAbort = new AbortController();
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-    const runningOperation = (storeScope: string) => {
-      const operation = createTestReplyOperation({
-        sessionKey,
-        sessionId,
-        target: captureSessionTarget({ storeScope, sessionKey, incarnation: sessionId }),
-      });
-      operation.setPhase("running");
-      return operation;
-    };
-    const operation = runningOperation(storePath);
+    const operation = runningOperation(sessionKey, sessionId, storePath);
     const other = outcome.startsWith("same-ID")
-      ? runningOperation(state.path("other", "sessions.json"))
+      ? runningOperation(sessionKey, sessionId, state.path("other", "sessions.json"))
       : undefined;
     if (outcome !== "same-ID prepublication" && outcome !== "same-ID unmatched run") {
       operation.attachBackend({ kind: "embedded", runId, cancel: () => {} });
@@ -300,6 +305,7 @@ it.for([
   "replaced",
   "system",
   "non-owner",
+  "operator-owner",
 ] as const)(
   "preserves authenticated plugin execution across reload handoff: %s",
   async (scenario, { signal, onTestFinished }) => {
@@ -378,20 +384,9 @@ it.for([
             expect(input.ctx.SenderId).toBeUndefined();
             return dispatch(input);
           });
-        const operation = createTestReplyOperation({
-          sessionKey,
-          sessionId,
-          target: captureSessionTarget({
-            storeScope: storePath,
-            sessionKey,
-            incarnation: sessionId,
-          }),
-        });
-        operation.setPhase("running");
+        const operation = runningOperation(sessionKey, sessionId, storePath);
         operation.attachBackend({ kind: "embedded", runId: "reload-source", cancel: () => {} });
-        const endpoint = vi.fn<
-          import("../../gateway/server-methods/types.js").GatewayRequestHandler
-        >(async ({ respond }) => {
+        const endpoint = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
           if (scenario === "reload failure") {
             respond(false, undefined, { code: "UNAVAILABLE", message: "fixture reload failed" });
           } else {
@@ -414,15 +409,15 @@ it.for([
           scenario === "system"
             ? undefined
             : createOperatorClient(
-                scenario === "non-owner"
-                  ? { profileName: "reload-guest", scopes: ["operator.admin"] }
+                scenario === "non-owner" || scenario === "operator-owner"
+                  ? { profileName: `reload-${scenario}`, scopes: ["operator.admin"] }
                   : { profileId: GATEWAY_OWNER_PROFILE_ID, scopes: ["operator.admin"] },
               );
         if (client) {
           client.internal = {
             authenticatedOperator: true,
             operatorRoleActor:
-              scenario === "non-owner"
+              scenario === "non-owner" || scenario === "operator-owner"
                 ? { kind: "operator", profileId: client.authenticatedUserProfile!.profileId }
                 : { kind: "system" },
             operatorAccessAuthority: {
@@ -434,27 +429,24 @@ it.for([
         const isOwner = scenario !== "system" && scenario !== "non-owner";
         const invalidated =
           scenario === "revoked" || scenario === "cancelled" || scenario === "replaced";
-        const resolveAudience = async (
-          senderIsOwner: boolean | undefined,
-          assertCallerCurrent: () => void,
-        ) => {
-          const resolution = await resolveMemoryAudienceFromEntry(
-            { ...scope, sessionId, storePath, senderIsOwner, assertCallerCurrent },
-            expectDefined(loadSessionEntry(scope), "admitted session"),
-          );
-          if (resolution.status !== "granted") {
-            throw new Error(resolution.reason);
-          }
-          return resolution;
-        };
         runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
           const admittedRunContext = await startEmbeddedTurn(params, "resumed owner admission");
           expect(readAdmittedRunOperatorAuthority(admittedRunContext)?.profileId).toBe(
             client?.authenticatedUserProfile?.profileId,
           );
-          const audience = await resolveAudience(params.senderIsOwner, () =>
-            params.preparedRunAdmission!.assertSourceCurrent(),
+          const audience = await resolveMemoryAudienceFromEntry(
+            {
+              ...scope,
+              sessionId,
+              storePath,
+              senderIsOwner: params.senderIsOwner,
+              assertCallerCurrent: () => params.preparedRunAdmission!.assertSourceCurrent(),
+            },
+            expectDefined(loadSessionEntry(scope), "admitted session"),
           );
+          if (audience.status !== "granted") {
+            throw new Error(audience.reason);
+          }
           const host = createAgentHarnessHostCapabilities({
             attempt: {
               admittedRunContext,
@@ -543,6 +535,26 @@ it.for([
             audience.release();
           }
         });
+        const reload = () =>
+          withSessionControllerOwner(operation, async () => {
+            expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority?.profileId).toBe(
+              client?.authenticatedUserProfile?.profileId,
+            );
+            // Only the yielding turn's owner decision plus a live operator source grants owner tools.
+            const tool = createPluginsTool({
+              sessionId,
+              runId: "reload-source",
+              senderIsOwner: isOwner || scenario === "system",
+              onYield: () => {
+                operation.completeWithAfterClearBarrier(cleanup.promise);
+              },
+            });
+            const result = await tool.execute("reload", {
+              action: "reloadAndResume",
+              pluginId: "owner-probe",
+            });
+            expect(result.details).toMatchObject({ status: "started" });
+          });
         let receipt: EventReceipt | undefined;
         try {
           await withPluginRuntimeGatewayRequestScope(
@@ -556,31 +568,7 @@ it.for([
                 () =>
                   exec.withExecRequestTurn(
                     { identity: { ...scope, sessionId, runId: "reload-source" } },
-                    () =>
-                      withGatewayToolCallerIdentity(scope, () =>
-                        withSessionControllerOwner(operation, async () => {
-                          const sourceAuthority =
-                            readOperatorToolGatewayAuthority()?.operatorRunAuthority;
-                          expect(sourceAuthority?.profileId).toBe(
-                            client?.authenticatedUserProfile?.profileId,
-                          );
-                          const tool = createPluginsTool({
-                            sessionId,
-                            runId: "reload-source",
-                            onYield: () => {
-                              operation.completeWithAfterClearBarrier(cleanup.promise);
-                            },
-                          });
-                          expect(
-                            (
-                              await tool.execute("reload", {
-                                action: "reloadAndResume",
-                                pluginId: "owner-probe",
-                              })
-                            ).details,
-                          ).toMatchObject({ status: "started" });
-                        }),
-                      ),
+                    () => withGatewayToolCallerIdentity(scope, reload),
                   ),
               ),
           );
@@ -637,6 +625,157 @@ it.for([
           resetSystemEventsForTest();
         }
       });
+    });
+  },
+);
+
+it.for([
+  // The yielding turn is the task's execution: its resumed result continues that task.
+  { scenario: "task", adopts: true },
+  // A kill between yield and resume leaves the stopped task alone.
+  { scenario: "killed", adopts: false },
+  // An independent turn in the same child session never takes over an earlier paused task.
+  { scenario: "follow-up", adopts: false },
+] as const)(
+  "resumes a yielded subagent task through its reload handoff: $scenario",
+  async ({ scenario, adopts }, { signal, onTestFinished }) => {
+    onTestFinished(() => resetSubagentRegistryForTests({ persist: false }));
+    await runEventFixture("reload-subagent-task", onTestFinished, async (state) => {
+      const sessionKey = "agent:main:subagent:reload-child";
+      const sessionId = "33333333-3333-4333-8333-333333333333";
+      const scope = { agentId: "main", sessionKey };
+      const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+      const taskRunId = "reload-task-run";
+      const yieldingRunId = scenario === "follow-up" ? "reload-follow-up-run" : taskRunId;
+      const config = await configureEventState(state);
+      await replaceSessionEntry(scope, {
+        sessionId,
+        chatType: "direct",
+        updatedAt: 1,
+        spawnedBy: "agent:main:main",
+        spawnDepth: 1,
+      });
+      const task = createSubagentRunRecord({
+        runId: taskRunId,
+        childSessionKey: sessionKey,
+        childAgentId: "main",
+        childSessionIdentity: { sessionId },
+        requesterSessionKey: "agent:main:main",
+        requesterAgentId: "main",
+        expectsCompletionMessage: true,
+        task: "Reload the fixture plugin and report.",
+        startedAt: 1,
+      });
+      await mutateSubagentRuns([taskRunId], () => ({
+        value: undefined,
+        postimages: new Map([[taskRunId, task]]),
+      }));
+      // Stands in for the registry's yielded-terminal observation of the task run.
+      const pauseTask = () =>
+        mutateSubagentRuns([taskRunId], (rows) => {
+          const draft = structuredClone(expectDefined(rows.get(taskRunId), "task row"));
+          markSubagentRunPausedAfterYield({ entry: draft, endedAt: 2 });
+          if (scenario === "killed") {
+            draft.killIntent = { requestedAt: 3, reason: "test kill" };
+          }
+          return { value: undefined, postimages: new Map([[taskRunId, draft]]) };
+        });
+      if (scenario === "follow-up") {
+        await pauseTask();
+      }
+      const operation = runningOperation(sessionKey, sessionId, storePath);
+      operation.attachBackend({ kind: "embedded", runId: yieldingRunId, cancel: () => {} });
+      const endpoint = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
+        respond(true, { ok: true, runtime: { generation: 2, pluginIds: ["reload-fixture"] } });
+      });
+      const context = createContext(
+        [["plugins.reload", "operator.admin", "plugins", endpoint]],
+        () => config,
+      );
+      context.resolveGatewayContext = () => context;
+      const cleanup = createDeferredCore();
+      const enqueued = createDeferredCore<EventReceipt>();
+      const enqueue = events.enqueueSessionEventForHost;
+      vi.spyOn(events, "enqueueSessionEventForHost").mockImplementation((text, options) => {
+        const receipt = enqueue(text, options);
+        enqueued.resolve(receipt);
+        return receipt;
+      });
+      let observed: unknown;
+      runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+        await startEmbeddedTurn(params, "resumed reload turn");
+        observed = [...subagentRuns.values()]
+          .filter((row) => row.childSessionKey === sessionKey)
+          .map((row) => ({
+            runId: row.runId === params.runId ? "resumed" : row.runId,
+            taskRunId: row.taskRunId,
+            task: row.task,
+            pauseReason: row.pauseReason,
+            requesterSessionKey: row.requesterSessionKey,
+            status: row.execution.status,
+          }));
+        return { payloads: [{ text: "Reload reported." }], meta: { durationMs: 1 } };
+      });
+      let receipt: EventReceipt | undefined;
+      try {
+        await withPluginRuntimeGatewayRequestScope(
+          { context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
+          () =>
+            withOperatorToolGatewayAuthority(
+              { scopes: ["operator.admin"], operatorRoleActor: { kind: "system" } },
+              () =>
+                exec.withExecRequestTurn(
+                  { identity: { ...scope, sessionId, runId: yieldingRunId } },
+                  () =>
+                    withGatewayToolCallerIdentity(scope, () =>
+                      withSessionControllerOwner(operation, async () => {
+                        const tool = createPluginsTool({
+                          sessionId,
+                          runId: yieldingRunId,
+                          onYield: async () => {
+                            if (scenario !== "follow-up") {
+                              await pauseTask();
+                            }
+                            operation.completeWithAfterClearBarrier(cleanup.promise);
+                          },
+                        });
+                        const result = await tool.execute("reload", request);
+                        expect(result.details).toMatchObject({ status: "started" });
+                      }),
+                    ),
+                ),
+            ),
+        );
+        cleanup.resolve();
+        receipt = await withinTest(enqueued.promise, signal);
+        const outcome = await withinTest(receipt.settled, signal);
+        expect(outcome, outcome.error).toMatchObject({
+          status: "completed",
+          executionStarted: true,
+        });
+        expect(endpoint).toHaveBeenCalledOnce();
+        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+        const row = {
+          requesterSessionKey: "agent:main:main",
+          task: "Reload the fixture plugin and report.",
+        };
+        expect(observed).toEqual([
+          adopts
+            ? { ...row, runId: "resumed", taskRunId, pauseReason: undefined, status: "running" }
+            : {
+                ...row,
+                runId: taskRunId,
+                taskRunId: undefined,
+                pauseReason: "sessions_yield",
+                status: "terminal",
+              },
+        ]);
+      } finally {
+        cleanup.resolve();
+        operation.complete();
+        await Promise.allSettled([receipt?.settled]);
+        resetSystemEventsForTest();
+      }
     });
   },
 );

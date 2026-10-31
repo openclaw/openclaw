@@ -178,7 +178,7 @@ if (isMainThread) {
       selectedAvailabilityUrl,
       {
         prepareCurrentGitHubPublicationOptionsIdentity: "identity",
-        hasSupportedGitHubPublicationTarget: "target",
+        qualifyGitHubPublicationSource: "target",
         prepareGitHubPublicationSession: "publication-session",
       },
     ],

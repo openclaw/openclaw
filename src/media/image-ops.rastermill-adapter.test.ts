@@ -22,14 +22,15 @@ describe("image ops Rastermill adapter", () => {
       vi.doUnmock("rastermill");
       vi.doUnmock("@silvia-odwyer/photon-node");
       vi.doUnmock("../infra/resolve-system-bin.js");
-      vi.doUnmock("../agents/image-compression-policy.js");
       vi.doUnmock("../infra/worker-task-pool.js");
       vi.resetModules();
     });
 
-    it("does not load Photon for Rastermill-backed operations", async () => {
+    it("configures Rastermill without eagerly loading Photon", async () => {
       const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
       const encode = vi.fn(async () => ({ data: Buffer.from("jpeg") }));
+      const createRastermill = vi.fn((_options: unknown) => ({ encode }));
+      const resolveSystemBin = vi.fn(() => "/usr/bin/tool");
       const photonModuleFactory = vi.fn(() => {
         throw new Error("Photon loaded eagerly");
       });
@@ -37,30 +38,7 @@ describe("image ops Rastermill adapter", () => {
       vi.doMock("@silvia-odwyer/photon-node", photonModuleFactory);
       vi.doMock("rastermill", () => ({
         ...actualRastermill,
-        createRastermill: vi.fn(() => ({ encode })),
-        readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-        readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "jpeg" })),
-      }));
-
-      const { createLocalImageProcessor } = await import("./image-processor-config.js");
-
-      await expect(
-        createLocalImageProcessor("auto").encode(Buffer.from("input"), { format: "jpeg" }),
-      ).resolves.toEqual({ data: Buffer.from("jpeg") });
-      expect(photonModuleFactory).not.toHaveBeenCalled();
-    });
-
-    it("configures Rastermill with OpenClaw limits, temp root, and command resolution", async () => {
-      const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
-      const encode = vi.fn(async () => ({ data: Buffer.from("jpeg") }));
-      const createRastermill = vi.fn((_options: unknown) => ({ encode }));
-      const resolveSystemBin = vi.fn(() => "/usr/bin/tool");
-
-      vi.doMock("rastermill", () => ({
-        ...actualRastermill,
         createRastermill,
-        readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-        readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "png" })),
       }));
       vi.doMock("../infra/resolve-system-bin.js", () => ({
         resolveSystemBin,
@@ -91,6 +69,7 @@ describe("image ops Rastermill adapter", () => {
       expect(options.env).toBeUndefined();
       expect(options.commandResolver("powershell")).toBe("/usr/bin/tool");
       expect(resolveSystemBin).toHaveBeenLastCalledWith("powershell", { trust: "strict" });
+      expect(photonModuleFactory).not.toHaveBeenCalled();
     });
 
     it("scopes the larger source admission to media understanding", async () => {
@@ -154,17 +133,13 @@ describe("image ops Rastermill adapter", () => {
       );
 
       createRastermill.mockClear();
-      vi.doMock("../agents/image-compression-policy.js", () => ({
-        resolveImageCompressionModelPolicy: vi.fn(async () => ({ maxSidePx: 1 })),
-      }));
       const { optimizeImageDescriptionInput } =
         await import("../media-understanding/image-input-normalize.js");
       await optimizeImageDescriptionInput({
         buffer: Buffer.alloc(32),
         mime: "image/png",
         maxBytes: 16,
-        provider: "vision-plugin",
-        model: "vision-v1",
+        modelPolicy: { maxSidePx: 1 },
       });
 
       expect(createRastermill).toHaveBeenLastCalledWith(

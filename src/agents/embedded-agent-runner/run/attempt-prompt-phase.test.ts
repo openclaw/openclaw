@@ -97,6 +97,18 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(manager.buildSessionContext().messages).toEqual([]);
   });
 
+  it("reuses the attempt during context assembly", async () => {
+    const fixture = createFixture();
+    const attemptFragments = [{ kind: "runtime-instruction" as const, text: "Turn instruction" }];
+    fixture.input.attempt.runtimeContextFragments = attemptFragments;
+    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+
+    const [contextInput] = mocks.preparePromptContext.mock.calls[0]!;
+    expect(contextInput.attempt).toBe(fixture.input.attempt);
+    expect(fixture.input.attempt.runtimeContextFragments).toBe(attemptFragments);
+    expect(mocks.submitPrompt).toHaveBeenCalledTimes(1);
+  });
+
   it("passes cloned prompt context to a policy without mutating a passing turn", async () => {
     const fixture = createFixture();
     const { activeSession } = fixture.input.prepared.sessionRuntime.agentSession;

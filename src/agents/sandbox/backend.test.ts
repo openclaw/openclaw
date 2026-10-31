@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import * as backend from "./backend.js";
 import type { ReservedSandboxBackendFactoryV1 } from "./backend.types.js";
 import { resolveSandboxConfigForAgent as resolveTestSandboxConfig } from "./config.js";
+import * as registry from "./registry.js";
 const { getSandboxBackendCapabilities, getSandboxBackendFactory } = backend;
 const restorers: Array<() => void> = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const restore of restorers.splice(0).toReversed()) {
     restore();
   }
@@ -44,6 +47,83 @@ function createGenerationRegistration(label: string) {
 }
 
 describe("sandbox backend registry", () => {
+  it.each([false, true])(
+    "does not dispatch a retired factory after discovery (replacement=%s)",
+    async (replace) => {
+      const discovered = createDeferred<string[]>();
+      vi.spyOn(registry, "readRegisteredSandboxRuntimeIds").mockReturnValue(discovered.promise);
+      const retired = vi.fn(async () => {
+        throw new Error("retired factory reached");
+      });
+      const restore = registerSandboxBackend("changing-selection", retired);
+      const preparation = backend.createSandboxBackend(
+        paramsFor({ ...resolveTestSandboxConfig(), backend: "changing-selection" }),
+      );
+      restore();
+      const replacement = vi.fn(async () => {
+        throw new Error("replacement factory reached");
+      });
+      if (replace) {
+        registerSandboxBackend("changing-selection", replacement);
+      }
+      discovered.resolve(["registered"]);
+      await expect(preparation).rejects.toThrow(
+        replace
+          ? "replacement factory reached"
+          : 'Sandbox backend "changing-selection" is not registered',
+      );
+      expect(retired).not.toHaveBeenCalled();
+      expect(replacement).toHaveBeenCalledTimes(replace ? 1 : 0);
+    },
+  );
+
+  it("prepares registered runtimes for custom factories and preserves supplied selection", async () => {
+    const read = vi
+      .spyOn(registry, "readRegisteredSandboxRuntimeIds")
+      .mockResolvedValue(["new", "old"]);
+    const factory = vi.fn(async () => {
+      throw new Error("provider factory reached");
+    });
+    registerSandboxBackend("runtime-selection", factory);
+    const params = paramsFor({ ...resolveTestSandboxConfig(), backend: "runtime-selection" });
+    await expect(backend.createSandboxBackend(params)).rejects.toThrow("provider factory reached");
+    expect(read).toHaveBeenCalledExactlyOnceWith({
+      backendId: "runtime-selection",
+      scopeKey: "test",
+    });
+    expect(factory).toHaveBeenLastCalledWith({ ...params, registeredRuntimeIds: ["new", "old"] });
+    for (const registeredRuntimeIds of [[], ["prepared"]]) {
+      await expect(
+        backend.createSandboxBackend({ ...params, registeredRuntimeIds }),
+      ).rejects.toThrow("provider factory reached");
+      expect(factory).toHaveBeenLastCalledWith({ ...params, registeredRuntimeIds });
+    }
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks runtime authority after custom backend selection", async () => {
+    let current = true;
+    vi.spyOn(registry, "readRegisteredSandboxRuntimeIds").mockImplementation(async () => {
+      current = false;
+      return ["retired"];
+    });
+    const factory = vi.fn(async () => {
+      throw new Error("provider factory reached");
+    });
+    registerSandboxBackend("revoked-selection", factory);
+    await expect(
+      backend.createSandboxBackend({
+        ...paramsFor({ ...resolveTestSandboxConfig(), backend: "revoked-selection" }),
+        assertRuntimeCurrent: () => {
+          if (!current) {
+            throw new Error("runtime removed");
+          }
+        },
+      }),
+    ).rejects.toThrow("runtime removed");
+    expect(factory).not.toHaveBeenCalled();
+  });
+
   it("checks reserved-runtime authority before invoking an opted-in factory", async () => {
     const factory = vi.fn<ReservedSandboxBackendFactoryV1>(async () => {
       throw new Error("provider factory reached");

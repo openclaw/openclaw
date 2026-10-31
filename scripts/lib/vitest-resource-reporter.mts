@@ -46,6 +46,7 @@ export default class VitestResourceReporter implements Reporter {
   private cpu = process.cpuUsage();
   private queued = new Map<string, number>();
   private diagnosticPath: string | undefined;
+  private diagnosticTimer: ReturnType<typeof setTimeout> | undefined;
   private active = new Map<
     string,
     {
@@ -57,7 +58,19 @@ export default class VitestResourceReporter implements Reporter {
     }
   >();
 
+  private queueDiagnostic() {
+    if (!this.diagnosticPath || this.diagnosticTimer) {
+      return;
+    }
+    // The reporter can checkpoint a stuck fork independently. Keep at most one
+    // pending checkpoint; a hard kill within this second may retain the prior case.
+    this.diagnosticTimer = setTimeout(() => this.writeDiagnostic(), 1_000);
+    this.diagnosticTimer.unref();
+  }
+
   private writeDiagnostic(reason = "running") {
+    clearTimeout(this.diagnosticTimer);
+    this.diagnosticTimer = undefined;
     if (!this.diagnosticPath) {
       return;
     }
@@ -83,6 +96,9 @@ export default class VitestResourceReporter implements Reporter {
   }
 
   onInit(ctx: Vitest) {
+    clearTimeout(this.diagnosticTimer);
+    this.diagnosticTimer = undefined;
+    this.diagnosticPath = undefined;
     this.resourceStarted = performance.now();
     writeReceipt("resources", {
       pid: process.pid,
@@ -177,7 +193,11 @@ export default class VitestResourceReporter implements Reporter {
     const active = this.active.get(moduleKey(test.module.toTestSpecification()));
     if (active) {
       active.cases.push({ id: test.id, location: test.location });
-      this.writeDiagnostic();
+      if (active.pool === "browser") {
+        this.writeDiagnostic();
+      } else {
+        this.queueDiagnostic();
+      }
     }
   }
 
@@ -185,7 +205,11 @@ export default class VitestResourceReporter implements Reporter {
     const active = this.active.get(moduleKey(test.module.toTestSpecification()));
     if (active) {
       active.cases = active.cases.filter((entry) => entry.id !== test.id);
-      this.writeDiagnostic();
+      if (active.pool === "browser" || test.result().state === "failed") {
+        this.writeDiagnostic();
+      } else {
+        this.queueDiagnostic();
+      }
     }
   }
 

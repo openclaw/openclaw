@@ -209,7 +209,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
             }),
         })
       : null;
-    let batchEmbeddings: number[][];
     // Completion accounting is synchronous: concurrent batches cannot interleave updates.
     if (batchResult?.kind === "success") {
       if (this.batchFailure.count > 0) {
@@ -217,39 +216,30 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       }
       // An in-flight success clears failures without re-enabling disabled batching.
       this.batchFailure = { count: 0 };
-      if (!batchResult.value) {
-        return this.embedChunksInBatches(candidates, generation, EMBEDDING_BATCH_MAX_TOKENS, {
-          embeddings,
-          missing,
-          missingCandidates,
-        });
+    } else if (batchResult) {
+      const message = formatErrorMessage(batchResult.error);
+      const forceDisable = isEmbeddingBatchUnavailableError(batchResult.error);
+      if (this.batch.enabled) {
+        const count =
+          this.batchFailure.count + (forceDisable ? this.batchFailureLimit : batchResult.attempts);
+        this.batchFailure = { count, lastError: message, lastProvider: provider.id };
+        this.batch.enabled = !(forceDisable || count >= this.batchFailureLimit);
       }
-      batchEmbeddings = batchResult.value;
-      await this.persistGeneratedEmbeddings(missingCandidates, batchEmbeddings, generation);
-    } else {
-      if (batchResult) {
-        const message = formatErrorMessage(batchResult.error);
-        const forceDisable = isEmbeddingBatchUnavailableError(batchResult.error);
-        if (this.batch.enabled) {
-          const count =
-            this.batchFailure.count +
-            (forceDisable ? this.batchFailureLimit : batchResult.attempts);
-          this.batchFailure = { count, lastError: message, lastProvider: provider.id };
-          this.batch.enabled = !(forceDisable || count >= this.batchFailureLimit);
-        }
-        const suffix = this.batch.enabled ? "keeping batch enabled" : "disabling batch";
-        log.warn(
-          `memory embeddings: ${provider.id} batch failed (${this.batchFailure.count}/${this.batchFailureLimit}); ${suffix}; falling back to non-batch embeddings: ${message}`,
-        );
-      }
+      const suffix = this.batch.enabled ? "keeping batch enabled" : "disabling batch";
+      log.warn(
+        `memory embeddings: ${provider.id} batch failed (${this.batchFailure.count}/${this.batchFailureLimit}); ${suffix}; falling back to non-batch embeddings: ${message}`,
+      );
+    }
+    if (batchResult?.kind !== "success" || batchResult.value === null) {
       return this.embedChunksInBatches(candidates, generation, EMBEDDING_BATCH_MAX_TOKENS, {
         embeddings,
         missing,
         missingCandidates,
       });
     }
+    await this.persistGeneratedEmbeddings(missingCandidates, batchResult.value, generation);
     for (const [index, item] of missing.entries()) {
-      embeddings[item] = batchEmbeddings[index] ?? [];
+      embeddings[item] = batchResult.value[index] ?? [];
     }
     return embeddings;
   }

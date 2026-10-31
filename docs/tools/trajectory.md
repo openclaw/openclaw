@@ -76,7 +76,8 @@ authorization checks plus the owner check for the channel.
 Trajectory capture is on by default for OpenClaw agent runs.
 This includes conversations that stay entirely on a CLI backend, such as Claude
 Code: their runtime timeline records the session lifecycle, submitted prompt,
-model completion, and usage without requiring a fallback to another runtime.
+observed tool calls and results, model completion, and usage without requiring a
+fallback to another runtime. Earlier CLI turns are not backfilled.
 
 Runtime events include:
 

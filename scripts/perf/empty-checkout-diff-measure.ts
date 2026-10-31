@@ -5,7 +5,9 @@
  * Measure each revision in alternating order:
  *   node --expose-gc --import ./scripts/tsx.mjs scripts/perf/empty-checkout-diff-measure.ts --state-dir .local/empty-diff --boundary owner --iterations 10 --output <result.json>
  * --boundary read exercises the production cache/worker owner; owner calls the
- * uncached collector. --rewrite rewrites identical contents before each sample;
+ * uncached collector. --scope all tests branch-relative reads; detach the seeded
+ * repository first to make its resolved base equal HEAD. --rewrite rewrites
+ * identical contents before each sample;
  * --rewrite-once rewrites before warmup to measure subsequent idle polls;
  * --refresh then refreshes the index outside measurement. --allocations selects
  * a separate sampled-allocation pass (parent isolate only; timings diagnostic).
@@ -41,6 +43,7 @@ const { values } = parseArgs({
     files: { type: "string", default: "300000" },
     iterations: { type: "string", default: "10" },
     boundary: { type: "string", default: "owner" },
+    scope: { type: "string", default: "uncommitted" },
     rewrite: { type: "boolean" },
     "rewrite-once": { type: "boolean" },
     refresh: { type: "boolean" },
@@ -53,6 +56,7 @@ const { values } = parseArgs({
 });
 assert(values["state-dir"], "--state-dir is required");
 assert(values.boundary === "owner" || values.boundary === "read");
+assert(values.scope === "all" || values.scope === "uncommitted");
 assert(!values.refresh || values.rewrite, "--refresh requires --rewrite");
 const integer = (key: "files" | "iterations") =>
   parseStrictIntegerOption({
@@ -196,7 +200,11 @@ registerHooks({ load(url, context, nextLoad) {
   const { loadCheckoutDiff } = await import("../../src/sessions/session-diff.js");
   const { drainGlobalSingletonLifecycleState } =
     await import("../../src/shared/global-singleton.js");
-  const input = { cwd: repo, scope: "uncommitted" as const, summaryOnly: false };
+  const input: Parameters<typeof collectCheckoutDiff>[0] = {
+    cwd: repo,
+    scope: values.scope,
+    summaryOnly: false,
+  };
   const read = async () => {
     const result =
       values.boundary === "owner"
@@ -312,6 +320,7 @@ registerHooks({ load(url, context, nextLoad) {
       gc,
       memoryBefore,
       boundary: values.boundary,
+      scope: values.scope,
       iterations,
       rewrite: Boolean(values.rewrite),
       rewriteOnce: Boolean(values["rewrite-once"]),

@@ -18,7 +18,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
-import { isRecord, resolveUserPath, shortenHomePath } from "../utils.js";
+import { displayPath, isRecord, resolveUserPath, shortenHomePath } from "../utils.js";
 
 type SetupOptions = { workspace?: string; skipBootstrap?: boolean; json?: boolean };
 
@@ -299,7 +299,7 @@ async function setupUnderOwner(opts: SetupOptions | undefined, runtime: RuntimeE
     skipOptionalBootstrapFiles: plan.skipOptionalBootstrapFiles,
   });
   if (!opts?.json) {
-    runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
+    runtime.log(`Workspace OK: ${displayPath(ws.dir)}`);
   }
 
   const sessionsDir = await ensureSessionsDir(selectedAgentId);
@@ -383,7 +383,7 @@ async function setupWithGatewayOwner(
       runtime.log(restartHint);
     }
     runtime.log(
-      `Workspace: ${shortenHomePath(resolveUserPath(plan.workspace))} (owned by the running Gateway, which seeds missing files on the agent's first run)`,
+      `Workspace: ${displayPath(resolveUserPath(plan.workspace))} (owned by the running Gateway, which seeds missing files on the agent's first run)`,
     );
   }
   finishSetup(opts, runtime, {
@@ -415,7 +415,7 @@ function finishSetup(
     writeRuntimeJson(runtime, { ok: true, ...result });
     return;
   }
-  runtime.log(`Sessions OK: ${shortenHomePath(result.sessionsDir)}`);
+  runtime.log(`Sessions OK: ${displayPath(result.sessionsDir)}`);
   runtime.log("");
   runtime.log("Setup complete: config, workspace, and session directories are ready.");
   runtime.log(`Next guided path: ${formatCliCommand("openclaw onboard")}.`);

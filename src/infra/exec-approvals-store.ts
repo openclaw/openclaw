@@ -35,8 +35,10 @@ import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-
 import type { ExecAuthorizationWorkerOperations } from "./exec-approvals-authorization.worker-contract.js";
 import {
   createFailClosedExecApprovalsFallback,
+  normalizeExecApprovalsInternal,
   parsePersistedExecApprovals,
   resolveExecApprovalsDisplayPath,
+  stripExecApprovalsSocketCredentials,
 } from "./exec-approvals-config.js";
 import type { ExecAuthorizationCommitInput } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
@@ -452,7 +454,7 @@ export async function updateExecApprovals(
 }
 
 type CommittedExecAuthorization = {
-  snapshot: ExecApprovalsSnapshot;
+  file: ExecApprovalsFile;
   readCurrent: () => ExecApprovalsFile;
 };
 type PendingAuthorization = {
@@ -506,6 +508,7 @@ function enqueueExecAuthorization(
       owner.admission.identity.key !== context.admission.identity.key ||
       owner.maintenanceScope !== context.maintenanceScope ||
       owner.existingSchemaPath !== context.existingSchemaPath ||
+      owner.gatewayServiceInstallation !== context.gatewayServiceInstallation ||
       owner.environment.OPENCLAW_SUPERVISOR_MODE !== context.environment.OPENCLAW_SUPERVISOR_MODE
     ) {
       batch = undefined;
@@ -540,10 +543,10 @@ function enqueueExecAuthorization(
             return () =>
               item.reject(new Error(result?.message ?? "Missing exec authorization result"));
           }
-          item.policy.seed(result.snapshot.file);
+          item.policy.seed(result.file);
           return () =>
             item.resolve({
-              snapshot: result.snapshot,
+              file: result.file,
               readCurrent: () => {
                 item.signal?.throwIfAborted();
                 item.assertCurrent?.();
@@ -716,14 +719,19 @@ export async function ensureExecApprovalsSnapshot(
   assertPreparationCurrent = assertCurrent,
 ): Promise<ExecApprovalsSnapshot> {
   const context = captureOpenClawStateWorkerContext();
-  const snapshot = await mutateExecPolicy(
-    context,
-    {
-      type: "execApprovals.ensureSnapshot",
-      input: undefined,
-    },
-    assertCurrent,
-    assertPreparationCurrent,
+  assertPreparationCurrent?.();
+  let snapshot = await readExecApprovalsSnapshotAsync(context);
+  assertPreparationCurrent?.();
+  const normalized = stripExecApprovalsSocketCredentials(
+    normalizeExecApprovalsInternal(snapshot.file),
   );
+  if (!snapshot.exists || snapshot.raw !== serializeExecApprovals(normalized)) {
+    snapshot = await mutateExecPolicy(
+      context,
+      { type: "execApprovals.ensureSnapshot", input: undefined },
+      assertCurrent,
+      assertPreparationCurrent,
+    );
+  }
   return attachExecApprovalsSocket(snapshot, context, assertCurrent);
 }

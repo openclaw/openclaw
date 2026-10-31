@@ -201,6 +201,9 @@ if (
   );
 }
 const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-stable";
+// Stable tags also ship the macOS app, and its post-tag validation is too late
+// to block the tag, so only beta defers macOS Swift proof.
+const deferMacosSwift = releaseScope === "npm-beta";
 const fullNativeValidation =
   eventName === "workflow_dispatch" && !mainValidation && !releaseGate && releaseScope === "full";
 if (releaseScope !== "full" && !npmQualification) {
@@ -279,6 +282,10 @@ const runNodeFastOnly =
   !toolingOwnerChange &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
 const runNodeFull = runNode && !runNodeFastOnly;
+const runBuiltSourceVerifiers =
+  runNodeFull &&
+  !frozenTarget &&
+  changedPaths?.includes("scripts/test-built-source-verifiers.mts") === true;
 // release-fast-lane: label-admitted narrow gate for release tooling PRs.
 // Canonical PR CI only; declined runs keep every ordinary decision.
 const releaseFastLaneLabel = parseCiEnvFlag(process.env.OPENCLAW_CI_RELEASE_FAST_LANE_LABEL);
@@ -377,7 +384,7 @@ const supportsCurrentMacosSwiftCi =
   existsSync("scripts/format-swift.sh");
 const runMacosSwift =
   runMacos &&
-  !npmQualification &&
+  !deferMacosSwift &&
   (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi);
 const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
@@ -834,7 +841,7 @@ if (runtimePullRequest && runNodeFull) {
     selectedTestTargets,
     // Changed compiler plans validate every consuming graph, with full fallback on ambiguity.
     dedicatedCoreTypeChecks: runNodeFull,
-    dedicatedBuildArtifacts: false,
+    dedicatedBuildArtifacts: runBuiltSourceVerifiers,
     dedicatedNativeChecks: { macos: runMacos, ios: runIosBuild, android: runAndroid },
     includeReleaseOnlyToolingShards: false,
     includeReleaseOnlyRuntimeTests,
@@ -1085,6 +1092,7 @@ const runPostgresConformance =
             postgresConformancePaths.some((pattern) => matchesGlob(file, pattern)),
         ))));
 const runBuildArtifacts =
+  runBuiltSourceVerifiers ||
   publishedDriverUpdate ||
   (runMacosSwift && existsSync("apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift")) ||
   (runNodeFull &&
@@ -1359,6 +1367,11 @@ const nodeTestShards = targetNodeTestShards
             plan.shard_name ?? plan.shardName,
           ),
       ),
+      requires_native_secret_service: shardRequiresTests(
+        shard,
+        ["test/e2e/qa-lab/runtime/codex-native-command-auth.e2e.test.ts"],
+        (plan) => plan.configs?.includes("test/vitest/vitest.e2e.config.ts") ?? false,
+      ),
       requires_sandbox_image: shardRequiresTests(
         shard,
         [
@@ -1376,6 +1389,7 @@ const nodeTestShards = targetNodeTestShards
         "requires_dist",
         "requires_go",
         "requires_ripgrep",
+        "requires_native_secret_service",
         "requires_sandbox_image",
       ]) {
         if (row[key] === false) {
@@ -1625,6 +1639,7 @@ const manifest = {
   run_skills_python: runSkillsPython,
   run_windows: runWindows,
   run_build_artifacts: runBuildArtifacts,
+  run_built_source_verifiers: runBuiltSourceVerifiers,
   run_proof_tier: runProofTier,
   run_browser_native_host: runBrowserNativeHost,
   run_doctor_plugin_index: runDoctorPluginIndex,
@@ -1774,7 +1789,7 @@ const manifest = {
       : [],
   ),
   run_macos_swift: runMacosSwift,
-  run_openclawkit_tests: runMacos && !npmQualification && supportsOpenClawKitTests,
+  run_openclawkit_tests: runMacos && !deferMacosSwift && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
   run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,
   run_ios_lifecycle_tests: iosSimulatorSelection.lifecycle.selected,
@@ -2121,9 +2136,11 @@ if (process.env.GITHUB_STEP_SUMMARY) {
   appendFileSync(
     process.env.GITHUB_STEP_SUMMARY,
     `### CI release qualification\n\n- Scope: \`${releaseScope}\`\n- Target: \`${checkoutRevision}\`\n` +
-      (npmQualification
+      (deferMacosSwift
         ? "- Native app qualification: deferred; Linux, macOS, and Windows Node coverage retained.\n"
-        : ""),
+        : npmQualification
+          ? "- Native app qualification: deferred except macOS Swift; Linux, macOS, and Windows Node coverage retained.\n"
+          : ""),
   );
 }
 

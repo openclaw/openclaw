@@ -50,6 +50,8 @@ export type LeaseHeartbeatWorkerData = {
   postgresPool?: import("../infra/postgres-sync/pool-state.js").PostgresPoolEndpoints;
   databaseEngineSelection?: DatabaseEngineSelection;
   databaseAdmissionPort: MessagePort;
+  /** First loss is queued before shared liveness changes, including while the parent is blocked. */
+  lossPort: MessagePort;
   path: string;
   expectedIdentity: string;
   /** The actor's startup operations settle before this worker begins renewal. */
@@ -73,7 +75,6 @@ export type LeaseHeartbeatParentMessage = LeaseHeartbeatRequest | { startup: "ac
 
 export type LeaseHeartbeatReply =
   | LeaseHeartbeatRenewalFailure
-  | { loss: LeaseHeartbeatLoss }
   | { startup: "prepared" }
   | { id: number; ok: true; expiresAt: number }
   | { id: number; ok: false; message: string; payload?: OpenClawStateWorkerErrorPayload };

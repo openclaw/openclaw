@@ -115,16 +115,14 @@ export async function handleEmbeddedAssistantFailure(input: {
   // may drive retries, profile health, or failure copy.
   const failedAssistant = attemptAssistant?.stopReason === "error" ? attemptAssistant : undefined;
   const transcriptError = failedAssistant?.errorMessage;
-  if (failedAssistant) {
-    log.warn("Assistant attempt failed", {
+  if (failedAssistant && log.isEnabled("debug")) {
+    log.debug("Assistant attempt failed", {
       provider: failedAssistant.provider,
       model: failedAssistant.model,
       runId: runInput.runParams.runId,
       responseId: failedAssistant.responseId,
       code: failedAssistant.errorCode,
       type: failedAssistant.errorType,
-      message: transcriptError,
-      body: failedAssistant.errorBody,
     });
   }
   if (isSessionTranscriptTurnMismatchErrorMessage(transcriptError)) {

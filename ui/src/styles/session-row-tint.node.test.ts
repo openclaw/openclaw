@@ -88,18 +88,25 @@ fixture.describe("sidebar session row tint", () => {
               const colored = row.classList.contains("sidebar-recent-session--colored");
               const hover = rowState.includes("hover");
               const background = paint(fill.backgroundColor);
-              const token = selected ? "--accent" : active ? "--text" : "--session-color";
+              const token = selected
+                ? "--accent"
+                : active && !colored
+                  ? "--text"
+                  : "--session-color";
               // Neutral active paint differs by mode and strengthens on hover;
               // multiselection keeps its independent accent wash over either state.
               const tints =
                 mode === "light"
                   ? { idle: 0.09, hover: 0.14, active: 0.06, activeHover: 0.09 }
                   : { idle: 0.12, hover: 0.18, active: 0.08, activeHover: 0.11 };
+              // An open colored row keeps its tag color one step stronger.
               const alpha = selected
                 ? 0.14
-                : active
-                  ? tints[hover ? "activeHover" : "active"]
-                  : tints[hover ? "hover" : "idle"];
+                : active && colored
+                  ? tints.idle * (hover ? 2.4 : 2)
+                  : active
+                    ? tints[hover ? "activeHover" : "active"]
+                    : tints[hover ? "hover" : "idle"];
               const expected = paint(style.getPropertyValue(token), alpha);
               const metadata = [".sidebar-recent-session__subtitle", ".session-row-trail"].map(
                 (selector) => {
@@ -129,8 +136,9 @@ fixture.describe("sidebar session row tint", () => {
                 expected,
                 metadata,
                 title: paint(title.color),
-                expectedTitle: paint(style.getPropertyValue(active ? "--text-strong" : "--text")),
-                stripe: getComputedStyle(row, "::before").width,
+                expectedTitle: paint(
+                  style.getPropertyValue(active || selected ? "--text-strong" : "--text"),
+                ),
               };
             });
           },
@@ -140,7 +148,7 @@ fixture.describe("sidebar session row tint", () => {
           const label = theme + "/" + state + "/" + sample.id;
           expect(sample, label).toMatchObject({
             outerBackground: "rgba(0, 0, 0, 0)",
-            insets: [2, 2],
+            insets: [1, 1],
             title: sample.expectedTitle,
           });
           if (sample.colored || state.includes("active") || state.includes("selected")) {
@@ -154,7 +162,6 @@ fixture.describe("sidebar session row tint", () => {
             expect(sample.fillBackground).toBe("rgba(0, 0, 0, 0)");
           }
           if (sample.colored) {
-            expect(sample.stripe, label + " retained stripe").toBe("3px");
             for (const ratio of sample.metadata) {
               expect(ratio, label + " metadata AA").toBeGreaterThanOrEqual(4.5);
             }

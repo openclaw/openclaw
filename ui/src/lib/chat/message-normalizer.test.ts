@@ -65,6 +65,27 @@ const failures = [
 describe("message-normalizer", () => {
   afterEach(() => vi.useRealTimers());
 
+  it.each(["assistant", "user"])(
+    "omits only confirmed assistant companion blocks for %s",
+    (role) => {
+      const notice = {
+        type: "text",
+        text: "Operational status",
+        openclawFallback: true,
+      };
+      const answer = { type: "text", text: "The work continued." };
+      const ordinary = { type: "text", text: "Other status", openclawStatusNotice: true };
+      const source = { role, content: [notice, answer, ordinary] };
+      const normalized = normalizeMessage(source);
+      expect(
+        normalized.content
+          .flatMap((block) => (block.type === "text" ? [block.text] : []))
+          .join("\n"),
+      ).toBe([...(role === "user" ? [notice.text] : []), answer.text, ordinary.text].join("\n"));
+      expect(source.content).toEqual([notice, answer, ordinary]);
+    },
+  );
+
   it("degrades missing transcript entries to an empty unknown message", () => {
     expect(normalizeMessage(undefined)).toMatchObject({ role: "unknown", content: [] });
     expect(isToolResultMessage(undefined)).toBe(false);
@@ -187,11 +208,17 @@ describe("message-normalizer", () => {
     expect([result.replyTarget, result.audioAsVoice]).toEqual([undefined, undefined]);
   });
 
-  it("accepts assistant Responses input blocks but rejects user output blocks", () => {
-    expect(assistant([{ type: "input_text", text: "Answer" }]).content).toEqual([text("Answer")]);
-    expect(user({ content: [{ type: "output_text", text: "Answer" }] }).content).not.toContainEqual(
-      text("Answer"),
-    );
+  it.each([
+    ["assistant", "input_text", "text"],
+    ["assistant", "output_text", "text"],
+    ["user", "input_text", "text"],
+    ["user", "output_text", "output_text"],
+    ["custom", "input_text", "input_text"],
+    ["custom", "output_text", "output_text"],
+  ])("classifies %s %s as %s", (role, type, expectedType) => {
+    expect(normalizeMessage({ role, content: [{ type, text: "Answer" }] }).content).toMatchObject([
+      { type: expectedType, text: "Answer" },
+    ]);
   });
 
   it("does not turn non-assistant structured audio into attachments", () => {

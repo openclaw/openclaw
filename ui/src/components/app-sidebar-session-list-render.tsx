@@ -132,7 +132,7 @@ export function renderSessionList(params: {
   const host = createMemo(() => params.host);
   // A create for a rendered custom group is placed by that section instead.
   const unplacedCreate = createMemo(() => {
-    const pending = host().pendingSessionCreate();
+    const pending = host().sessionCreateDisplay();
     const category = pending?.category;
     return category && params.sections.some((section) => section.category === category)
       ? undefined
@@ -198,7 +198,12 @@ function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
   );
 }
 
-export function renderSessionListFrame(host: () => SidebarSessionListHost, body: JSX.Element) {
+/** The roster leads with its agents; the session list keeps its own sections first. */
+export function renderSessionListFrame(
+  host: () => SidebarSessionListHost,
+  body: JSX.Element,
+  bodyFirst = false,
+) {
   const home = createMemo(() =>
     host().sidebarAgentsMode === "roster" ? null : host().mainSessionRow(),
   );
@@ -239,9 +244,10 @@ export function renderSessionListFrame(host: () => SidebarSessionListHost, body:
         </div>
       ) : undefined}
       {renderSessionMutationError(host())}
-      <PersonalSessionGroups host={host()} />
+      {bodyFirst ? body : undefined}
       <PinnedSessionSection host={host()} />
-      {body}
+      <PersonalSessionGroups host={host()} />
+      {bodyFirst ? undefined : body}
     </section>
   );
 }

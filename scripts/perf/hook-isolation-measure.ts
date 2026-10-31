@@ -6,7 +6,6 @@
 // Use --messages 200 --calls 1000 for the 0/1/3-hook prompt-envelope workload.
 // Counts, unprofiled CPU, and sampled allocations are separate passes; use built Gateway stress too.
 import assert from "node:assert/strict";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { performance } from "node:perf_hooks";
 import { parseArgs } from "node:util";
@@ -16,6 +15,7 @@ import type { PluginHookBeforePromptBuildEvent } from "../../src/plugins/hook-be
 import { createHookRunner } from "../../src/plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import { projectModelContextMessages } from "../../src/shared/model-context-message.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -293,9 +293,6 @@ for (let sample = 0; sample < samples; sample++) {
   }
 }
 
-function allocatedBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocatedBytes(child), 0);
-}
 const inspector = new Session();
 inspector.connect();
 try {
@@ -308,7 +305,7 @@ try {
       });
       await cell.run(calls);
       const { profile } = await inspector.post("HeapProfiler.stopSampling");
-      const sampledBytes = allocatedBytes(profile.head);
+      const sampledBytes = sumSampledHeapBytes(profile.head);
       rows.push({
         mode: "allocation",
         sample,
