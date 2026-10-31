@@ -370,6 +370,20 @@ it.each([
     let replacement: ReturnType<typeof registerAbort> | undefined;
     let callerAuthorized = true;
     const onResult = callback ? undefined : vi.fn(() => undefined);
+    if (mode === "replacement") {
+      const lifecycle = await import("../../../sessions/session-controller.lifecycle.js");
+      const waitForSettlement = lifecycle.waitForSessionControllerSettlement;
+      vi.spyOn(lifecycle, "waitForSessionControllerSettlement").mockImplementation(
+        (settled, timeoutMs) => {
+          const draining = waitForSettlement(settled, timeoutMs);
+          // Retire the idle fixture only after Stop selects and begins draining it.
+          if (replacement?.entry?.input.settlement.promise === settled) {
+            replacement.cleanup();
+          }
+          return draining;
+        },
+      );
+    }
     try {
       if (mode === "already terminal") {
         termination = markSubagentRunTerminated({ runId, reason: "killed" });
@@ -416,14 +430,9 @@ it.each([
       if (mode === "replacement") {
         rpcSourceTesting.deleteExpected(runId, owner);
         replacement = registerAbort(target);
+        expect(getRpcSource(runId)?.input.abortSignal.aborted).toBe(false);
       }
       releaseTail.resolve();
-      if (replacement) {
-        // This unstarted replacement has no execution to retire it after the original cleanup.
-        await execution;
-        replacement.cleanup();
-        await replacement.entry!.input.settlement.promise;
-      }
       await expect(pending).rejects.toThrow("Caller control revoked");
       expect(settlement.status).toBe("fulfilled");
       expect(subagentRuns.get(runId)?.execution.status).toBe("terminal");
