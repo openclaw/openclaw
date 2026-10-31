@@ -2360,6 +2360,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-online__running .session-run-spinner {
   width: calc(9px * var(--control-ui-text-scale));
   height: calc(9px * var(--control-ui-text-scale));
+  border-width: var(--spinner-stroke-small);
   margin-inline-end: 4px;
   vertical-align: baseline;
 }

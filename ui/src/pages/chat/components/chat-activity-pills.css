@@ -165,6 +165,7 @@
 .chat-activity-pills .activity-pill__badge .activity-pill__spinner {
   width: 9px;
   height: 9px;
+  border-width: var(--spinner-stroke-small);
 }
 .chat-activity-pills [data-family="progress"] {
   gap: 7px;

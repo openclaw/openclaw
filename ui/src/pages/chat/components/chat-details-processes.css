@@ -91,7 +91,7 @@
   width: 8px;
   height: 8px;
   color: var(--accent);
-  border: var(--spinner-stroke) solid currentColor;
+  border: var(--spinner-stroke-small) solid currentColor;
   border-right-color: var(--spinner-gap);
   border-radius: 50%;
   corner-shape: round;

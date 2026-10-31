@@ -359,6 +359,8 @@
   --spinner-duration: 0.9s;
   --spinner-duration-background: 1.8s;
   --spinner-stroke: 2px;
+  /* 8-9px badges: 2px leaves too small a hole to read as an arc. */
+  --spinner-stroke-small: 1.5px;
   --spinner-stroke-large: 2.5px;
   --spinner-gap: transparent;
   --spinner-trace-dash: 72 28;
