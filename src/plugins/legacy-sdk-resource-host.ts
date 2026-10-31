@@ -1,8 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { GATEWAY_WORK_ADMISSION_STATE } from "../process/gateway-work-admission-state.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import type { PluginInstanceHandle } from "./plugin-instance-scope.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { hasRetainedPluginRuntimeCloseError } from "./runtime-close-error.js";
@@ -27,6 +29,7 @@ export class LegacyPluginSdkResourceHost {
   private readonly failures: unknown[] = [];
   private closing?: Promise<void>;
   private gatewayScheduler?: GatewayScheduler;
+  private gatewayShutdownSignal?: AbortSignal;
 
   get scheduler(): GatewayScheduler {
     this.assertOpen();
@@ -44,6 +47,7 @@ export class LegacyPluginSdkResourceHost {
       throw new Error("Plugin SDK resource host already belongs to another Gateway scheduler");
     }
     this.gatewayScheduler = scheduler;
+    this.gatewayShutdownSignal = GATEWAY_WORK_ADMISSION_STATE.restartDrainController.signal;
   }
 
   assertOpen(): void {
@@ -59,6 +63,40 @@ export class LegacyPluginSdkResourceHost {
   track<T>(run: () => T | Promise<T>): Promise<T> {
     this.assertOpen();
     return this.work.track(() => this.run(run));
+  }
+
+  assertSharedStateAdmission(): void {
+    const parent = sharedStateWorkContext.getStore();
+    if (parent?.host === this && parent.active) {
+      return;
+    }
+    if (
+      this.gatewayShutdownSignal?.aborted ||
+      this.gatewayScheduler?.signal.aborted ||
+      this.closing ||
+      this.work.isClosing
+    ) {
+      throw Object.assign(
+        new Error("Gateway is closing; plugin shared-state admission is closed"),
+        {
+          code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+        },
+      );
+    }
+  }
+
+  /** Join accepted state work before SDK resources and the shared worker retire. */
+  trackSharedStateWork<T>(run: () => Promise<T>): Promise<T> {
+    this.assertSharedStateAdmission();
+    const frame = { host: this, active: true };
+    return this.work.track(async () => {
+      try {
+        return await sharedStateWorkContext.run(frame, run);
+      } finally {
+        // Completed operations cannot lend admission to inherited timers.
+        frame.active = false;
+      }
+    });
   }
 
   /** Preserve synchronous SDK hooks while joining their asynchronous results and descendants. */
@@ -161,10 +199,14 @@ export class LegacyPluginSdkResourceHost {
   }
 }
 
-const { hostContext, gatewayHosts } = resolveGlobalSingleton(
+const { hostContext, gatewayHosts, sharedStateWorkContext } = resolveGlobalSingleton(
   Symbol.for("openclaw.legacyPluginSdkResourceHosts"),
   () => ({
     hostContext: new AsyncLocalStorage<LegacyPluginSdkResourceHost>(),
+    sharedStateWorkContext: new AsyncLocalStorage<{
+      host: LegacyPluginSdkResourceHost;
+      active: boolean;
+    }>(),
     gatewayHosts: new WeakMap<object, LegacyPluginSdkResourceHost>(),
   }),
 );
@@ -202,4 +244,14 @@ export function getLegacyPluginSdkResourceHost(): LegacyPluginSdkResourceHost {
     getBoundLegacyPluginSdkResourceHost() ??
     resolveGlobalSingleton(STANDALONE_HOST_KEY, () => new LegacyPluginSdkResourceHost())
   );
+}
+
+/** Core shutdown persistence shares the host but is not a new plugin invocation. */
+export function getPluginSharedStateResourceHost(): LegacyPluginSdkResourceHost | undefined {
+  return pluginInstanceInvocation.getStore() ? getBoundLegacyPluginSdkResourceHost() : undefined;
+}
+
+export function runPluginSharedStateWork<T>(run: () => Promise<T>): Promise<T> {
+  const host = getPluginSharedStateResourceHost();
+  return host ? host.trackSharedStateWork(run) : run();
 }
