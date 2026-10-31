@@ -1,6 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
+import {
+  resolveOwnedSessionSandboxRuntimeStatus,
+  resolveSandboxRuntimeStatus,
+} from "../agents/sandbox/runtime-status.js";
 import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
@@ -47,8 +50,12 @@ export function isUnscopedSessionHostWorkspace(
     (entry.worktree?.id ||
       !(
         prepared?.sandboxed ??
-        resolveSandboxRuntimeStatus({ cfg, agentId, sessionKey, preparedSessionEntry: entry })
-          .sandboxed
+        resolveOwnedSessionSandboxRuntimeStatus({
+          cfg,
+          agentId,
+          sessionKey,
+          preparedSessionEntry: entry,
+        }).sandboxed
       )),
   );
 }

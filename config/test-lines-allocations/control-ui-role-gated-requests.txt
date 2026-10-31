@@ -1,2 +1,2 @@
-# Role-gated UI RPCs and retryable workspace-change regression coverage.
-161
+# Role-gated UI RPCs, preserved row ownership, and retryable workspace-change regressions.
+210
