@@ -425,7 +425,7 @@ it.each([false, true])(
   },
 );
 
-it("keeps fractional observer sizes as the sole skipped-row sizing input", async () => {
+it("keeps current fractional native sizes for skipped rows", async () => {
   saveChatSessionScrollPosition("fractional-rows", "agent:main:fractional-rows", {
     scrollTop: 0,
     anchorToEnd: false,
@@ -433,6 +433,9 @@ it("keeps fractional observer sizes as the sole skipped-row sizing input", async
   const rows = contentRows(4, "fractional:", "row");
   const { container, transcript, renderRows } = await mountTestTranscript("fractional-rows", rows);
   try {
+    for (const row of transcriptRows(container)) {
+      row.style.height = "100.375px";
+    }
     measureRows(container, 100.375);
     await flushDeferredRowPrune();
     renderRows(rows);
@@ -479,6 +482,7 @@ it.each([false, true])(
 
       const row = requireElement(container, ".chat-virtual-row");
       for (let index = 0; index < 4; index++) {
+        row.style.height = `${1240 + index}px`;
         emitTranscriptResize(row, 800, 1240 + index);
         renderRows(rows);
       }

@@ -3,7 +3,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { measureTranscriptRow } from "./chat-transcript-geometry.ts";
+import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { measureTranscriptRow, readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
 import {
   installTranscriptDomMocks,
@@ -57,6 +58,7 @@ it("reobserves a retained row after its detached observer receipt retires the ca
   refs.observeConnected();
   expect(virtualizer.elementsCache.get("retained")).toBe(row);
   expect(observedElements.has(row)).toBe(true);
+  row.style.height = "160px";
   for (const observer of resizeObservers) {
     observer.emitTarget(row, 800, 160);
   }
@@ -101,6 +103,7 @@ it.each([
   updateVirtualizer();
   virtualizer.getVirtualItems();
   const readViewport = vi.fn(() => 300);
+  const readStyle = vi.spyOn(globalThis, "getComputedStyle");
   Object.defineProperty(viewport, "clientHeight", { configurable: true, get: readViewport });
   const refs = new TranscriptRowRefs(virtualizer, {
     isCurrentRow: (row) => viewport.contains(row),
@@ -134,12 +137,84 @@ it.each([
   await Promise.resolve();
   await Promise.resolve();
   expect([readHeight.mock.calls, readViewport.mock.calls]).toEqual([[], []]);
+  expect(readStyle).not.toHaveBeenCalled();
   expect(mounted.every((row) => observedElements.has(row))).toBe(true);
   for (const observer of resizeObservers) {
     for (const row of mounted) {
+      row.style.height = `${height}px`;
       observer.emitTarget(row, 800, height);
     }
   }
   expect([...virtualizer.itemSizeCache.values()]).toEqual(indexes.map(() => 80));
   expect(readHeight).not.toHaveBeenCalled();
 });
+
+it.each([
+  { before: 206.688, after: 215.219 },
+  { before: 215.219, after: 206.688 },
+])(
+  "keeps the current $after px row after a deferred $before px receipt",
+  async ({ before, after }) => {
+    const flushFrames = stubAnimationFrames();
+    const viewport = document.body.appendChild(document.createElement("div"));
+    const rows = [before, 100].map((height, index) => {
+      const row = viewport.appendChild(document.createElement("div"));
+      row.dataset.index = String(index);
+      row.dataset.virtualRowKey = String(index);
+      row.style.height = `${height}px`;
+      return row;
+    });
+    const row = expectDefined(rows[0], "measured row");
+    const readScaledBounds = vi.fn(() => new DOMRect(0, 0, 400, 50.1875));
+    Object.defineProperty(row, "getBoundingClientRect", {
+      configurable: true,
+      value: readScaledBounds,
+    });
+    const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+      count: rows.length,
+      getScrollElement: () => viewport,
+      getItemKey: (index) => String(index),
+      estimateSize: () => 100,
+      observeElementRect: (_, callback) => callback({ width: 800, height: 600 }),
+      observeElementOffset: (_, callback) => callback(0, false),
+      scrollToFn: vi.fn(),
+      measureElement: measureTranscriptRow,
+      useAnimationFrameWithResizeObserver: true,
+    });
+    const { _didMount: mountVirtualizer, _willUpdate: updateVirtualizer } = virtualizer;
+    const dispose = mountVirtualizer();
+    updateVirtualizer();
+    virtualizer.getVirtualItems();
+    const refs = new TranscriptRowRefs(virtualizer, {
+      isCurrentRow: (element) => viewport.contains(element),
+      beforeMeasure: () => {},
+      onMount: () => {},
+    });
+    onTestFinished(() => {
+      refs.clear();
+      dispose();
+    });
+    rows.forEach((element, index) => refs.forKey(String(index))(element));
+    await Promise.resolve();
+    expect(observedElements.has(row)).toBe(true);
+    expect(readConnectedTranscriptRows(viewport, virtualizer, refs.elements)?.()).toBe(true);
+    const geometry = () => [
+      virtualizer.itemSizeCache.get("0"),
+      virtualizer.getVirtualItems()[1]?.start,
+      virtualizer.getTotalSize(),
+    ];
+    expect(geometry()).toEqual([before, before, before + 100]);
+
+    for (const observer of resizeObservers) {
+      observer.emitTarget(row, 800, before);
+    }
+    row.style.height = `${after}px`;
+    expect(readConnectedTranscriptRows(viewport, virtualizer, refs.elements)?.()).toBe(true);
+    expect(geometry()).toEqual([after, after, after + 100]);
+
+    // TanStack defers this captured receipt until after the newer foreground read.
+    flushFrames();
+    expect(geometry()).toEqual([after, after, after + 100]);
+    expect(readScaledBounds).not.toHaveBeenCalled();
+  },
+);

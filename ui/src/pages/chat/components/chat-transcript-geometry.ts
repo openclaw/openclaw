@@ -1,4 +1,4 @@
-import { measureElement, type Virtualizer } from "@tanstack/virtual-core";
+import type { Virtualizer } from "@tanstack/virtual-core";
 import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
 import type { TranscriptViewportMeasurement } from "./chat-transcript-scroll-events.ts";
 
@@ -134,6 +134,13 @@ export function isTranscriptRangeCommitted(
   });
 }
 
+function readTranscriptRowHeight(element: HTMLElement): number {
+  // Rows are border-boxes; CSS layout height stays fractional and unscaled
+  // inside board/sidebar transitions.
+  const height = Number.parseFloat(getComputedStyle(element).height);
+  return Number.isFinite(height) ? height : element.offsetHeight;
+}
+
 export function readConnectedTranscriptRows(
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
@@ -159,10 +166,7 @@ export function readConnectedTranscriptRows(
     );
   for (const row of rows) {
     const index = virtualizer.indexFromElement(row);
-    // Rows are border-boxes; read their fractional layout height, not a scaled
-    // client rect when a containing board or sidebar is transitioning.
-    const height = Number.parseFloat(getComputedStyle(row).height);
-    measurements.push({ index, height: Number.isFinite(height) ? height : row.offsetHeight });
+    measurements.push({ index, height: readTranscriptRowHeight(row) });
   }
   return () => {
     let changed = false;
@@ -182,9 +186,9 @@ export function measureTranscriptRow(
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
 ): number {
   if (entry || !virtualizer.targetWindow?.ResizeObserver) {
-    // Rounded row heights accumulate when skipped overscan uses those measurements.
-    const size =
-      entry?.borderBoxSize?.[0]?.blockSize ?? measureElement(element, entry, virtualizer);
+    // TanStack defers observer entries; they can predate a foreground read.
+    // Treat delivery as invalidation so old sizes cannot roll that read back.
+    const size = readTranscriptRowHeight(element);
     if (size !== 0 || virtualizer.scrollElement?.clientHeight !== 0) {
       return size;
     }

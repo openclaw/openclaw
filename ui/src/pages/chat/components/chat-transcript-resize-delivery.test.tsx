@@ -32,6 +32,7 @@ it("defers resized rows while committing viewport geometry in native delivery", 
   const row = requireElement(container, ".chat-virtual-row");
   const before = transcriptSize(container);
 
+  row.style.height = "180px";
   emitTranscriptResize(row, 800, 180);
   // A microtask commit still runs inside the browser's resize delivery cycle.
   await flushDeferredRowPrune();
