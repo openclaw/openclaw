@@ -224,6 +224,7 @@
 }
 
 .cron-table__head {
+  padding-block: var(--space-2);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-weight: 600;

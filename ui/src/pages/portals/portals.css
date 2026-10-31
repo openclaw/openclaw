@@ -63,7 +63,7 @@ main.content:where(.content--portals-page) .portals-empty {
 }
 
 .portals-rail__item.active {
-  background: var(--surface-selected);
+  background: var(--surface-selected-hover);
 }
 
 .portals-rail__title,

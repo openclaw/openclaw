@@ -79,7 +79,7 @@
 }
 
 .sw-row--selected {
-  background: var(--surface-selected);
+  background: var(--surface-selected-hover);
 }
 
 .sw-row__main {
@@ -143,7 +143,7 @@
   border-radius: var(--radius-sm);
   padding: 6px var(--space-2) 6px var(--space-3);
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  background: color-mix(in srgb, var(--bg) 35%, transparent);
+  background: var(--surface-hover);
   font-size: var(--control-ui-text-xs);
 }
 
