@@ -193,7 +193,9 @@ export function installPaneChromeProbe() {
       const geometryChanged =
         JSON.stringify([boxes, paneFacts]) !==
         JSON.stringify([frames.at(-1)?.boxes, frames.at(-1)?.paneFacts]);
-      if (!dirty && !geometryChanged) return;
+      if (!dirty && !geometryChanged) {
+        return;
+      }
       dirty = false;
       const next = Object.fromEntries(
         regions.map((region) => [region, signature(region)]),

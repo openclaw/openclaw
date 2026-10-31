@@ -41,7 +41,7 @@ import { sessionWorkspaceForHost } from "./components/chat-session-workspace-sta
 import { activeQueuedMessageEdit, subscribeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
-import { waitForPrewarmedChatSnapshot } from "./session-snapshot-prewarm.ts";
+import { waitForPrewarmedChatSnapshot } from "./session-snapshot-store.ts";
 
 const ChatComposerCapabilityDialogs = lazy(() => import("./chat-composer-capability-host.tsx"), {
   export: "ChatComposerCapabilityDialogs",
@@ -134,7 +134,9 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     );
     if (pendingSnapshot) {
       void pendingSnapshot.then(() => {
-        if (!disposed) setReady(true);
+        if (!disposed) {
+          setReady(true);
+        }
       });
     } else {
       setReady(true);

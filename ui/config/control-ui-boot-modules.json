@@ -934,6 +934,7 @@
   "ui/src/pages/chat/chat-run-startup.ts",
   "ui/src/pages/chat/chat-send-ack.ts",
   "ui/src/pages/chat/chat-session-state-snapshot.ts",
+  "ui/src/pages/chat/chat-snapshot-prewarm.ts",
   "ui/src/pages/chat/components/chat-attachment-admission.ts",
   "ui/src/pages/chat/components/chat-attachment-draft.ts",
   "ui/src/pages/chat/components/chat-attachment-image.ts",

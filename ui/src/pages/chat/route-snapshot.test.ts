@@ -3,6 +3,7 @@ import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createApplicationRouter, startApplicationRouter } from "../../app-routes.ts";
+import { prewarmChatSnapshot } from "./chat-snapshot-prewarm.ts";
 import { loadChatRoute } from "./route-loader.ts";
 import {
   createSessionRouteContext,
@@ -13,7 +14,6 @@ import {
 } from "./route-resolution.test-support.ts";
 import * as database from "./session-snapshot-database.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
-import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { readPrewarmedChatSnapshot, SessionSnapshotStore } from "./session-snapshot-store.ts";
 import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 

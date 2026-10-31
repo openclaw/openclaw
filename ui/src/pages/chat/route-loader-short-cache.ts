@@ -17,9 +17,9 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
+import { peekPrewarmedChatSnapshot } from "./chat-snapshot-prewarm.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
-import { peekPrewarmedChatSnapshot } from "./session-snapshot-prewarm.ts";
 
 export function sessionKeyUuid(sessionKey: string): string | null {
   const uuid = parseAgentSessionKey(sessionKey)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];

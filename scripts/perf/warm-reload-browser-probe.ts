@@ -63,7 +63,7 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
       const original = IDBObjectStore.prototype[operation];
       Object.defineProperty(IDBObjectStore.prototype, operation, {
         configurable: true,
-        value: function (this: IDBObjectStore, ...args: unknown[]) {
+        value(this: IDBObjectStore, ...args: unknown[]) {
           const request = Reflect.apply(original, this, args) as IDBRequest;
           if (!data.stopped && this.transaction.db.name === "openclaw-chat-snapshots") {
             const entry: (typeof data.indexedDb)[number] = {
