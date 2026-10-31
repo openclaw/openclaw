@@ -100,6 +100,28 @@ describe("recordOutboundMessageForPromptContext", () => {
     },
   );
 
+  it("keeps an unthreaded group reply chain out of the thread scope", async () => {
+    const cached = await recordAndRead(
+      {
+        message_id: 700,
+        message_thread_id: 99,
+        chat: { id: -1001, type: "supergroup", title: "General" },
+        text: "Bot replied in a chain",
+      },
+      { chatId: -1001 },
+    );
+    expect(cached?.threadId).toBeUndefined();
+    expect(cached?.threadBinding?.threadSpec).toEqual({ scope: "none" });
+
+    const history = await createPromptContextCache().readHistoryWindow({
+      accountId,
+      chatId: -1001,
+      before: "701",
+      limit: 10,
+    });
+    expect(history.map((node) => node.messageId)).toContain("700");
+  });
+
   it.each([
     [
       "  Configured Agent  ",

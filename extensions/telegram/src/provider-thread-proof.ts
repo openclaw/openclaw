@@ -55,11 +55,14 @@ export function resolveTelegramProviderObservedThreadSpec(params: {
 }): TelegramThreadSpec | undefined {
   const providerThreadId = resolveTelegramProviderObservedThreadId(params);
   const successfulSendThread = params.successfulSendThread;
-  if (
-    providerThreadId === undefined ||
-    successfulSendThread?.id !== providerThreadId ||
-    successfulSendThread.scope === "none"
-  ) {
+  if (providerThreadId === undefined) {
+    // A non-forum group reply chain is positively unthreaded. Mirror the inbound
+    // scope so outbound context does not adopt the chain root as a topic.
+    return successfulSendThread?.id === undefined && isTelegramNonForumReplyChain(params.message)
+      ? { scope: "none" }
+      : undefined;
+  }
+  if (successfulSendThread?.id !== providerThreadId || successfulSendThread.scope === "none") {
     return undefined;
   }
   return { scope: successfulSendThread.scope, id: providerThreadId };
