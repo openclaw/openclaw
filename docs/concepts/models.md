@@ -165,6 +165,11 @@ In chat apps, `/models` and model picker buttons reuse the newest completed prov
 list. Gateway model pickers return prepared rows immediately while an idle native
 agent starts its harness and discovers models in the background. Pending providers
 show `checking models…`.
+In the Telegram model picker, selecting a model whose provider has no working sign-in
+keeps the current model and shows how to connect that provider (sign-in buttons or
+secure setup steps) instead of switching the chat to a model that can only fail
+authentication. Other chat pickers still apply the selection directly; extending the
+same picker policy to them is a follow-up.
 Open the menu again to see newly discovered models; completing discovery does not
 edit a list that was already sent. If optional native discovery fails, ordinary
 catalog requests keep the published rows and report `refreshFailed`; selecting a

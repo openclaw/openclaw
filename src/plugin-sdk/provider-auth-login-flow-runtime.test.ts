@@ -3,10 +3,11 @@ import type { ModelsAuthLoginFlowOptions } from "../commands/models/auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildProviderLoginChoicesReply,
+  buildProviderLoginControlUiHandoffReply,
+  prepareProviderChannelLogin,
   cancelProviderLoginFlow,
   createProviderLoginFlowRegistry,
   decideProviderLoginSessionAdoption,
-  prepareProviderChannelLogin,
   reserveProviderLoginFlow,
   runProviderChannelLoginFlow,
   type ProviderChannelLoginChoice,
@@ -255,5 +256,66 @@ describe("provider channel login runtime", () => {
       }
     }
     expect(reply.text).toContain("/login oauth/plugin-11/provider-11");
+  });
+
+  it("adds a tappable Control UI button to setup handoffs only with a public URL", () => {
+    const setupChoice: ProviderChannelLoginChoice = {
+      ...choice,
+      methodId: "api-key",
+      label: "Acme catalog",
+      mode: "setup",
+    };
+    const withUrl = buildProviderLoginControlUiHandoffReply(
+      setupChoice,
+      "https://gateway.example.com/settings/model-providers?provider=acme-cloud",
+    );
+    expect(withUrl.text).toContain("needs provider setup. Open Control UI");
+    const buttons = withUrl.presentation?.blocks.flatMap((block) =>
+      block.type === "buttons" ? block.buttons : [],
+    );
+    expect(buttons).toEqual([
+      {
+        label: "Open Control UI",
+        action: {
+          type: "url",
+          url: "https://gateway.example.com/settings/model-providers?provider=acme-cloud",
+        },
+      },
+    ]);
+    expect(buildProviderLoginControlUiHandoffReply(setupChoice).presentation).toBeUndefined();
+  });
+
+  it("builds the handoff link with provider and originating agent through prepare", async () => {
+    resolveChoice.mockReturnValue({
+      status: "resolved",
+      choice: { ...choice, methodId: "api-key", label: "Acme catalog", mode: "setup" },
+    });
+    const prepared = await prepareProviderChannelLogin({
+      commandText: "/login acme-cloud",
+      commandAuthorized: true,
+      senderIsOwner: true,
+      isPrivateChat: true,
+      config: {
+        commands: { ownerAllowFrom: ["owner"] },
+        gateway: { publicOrigin: "https://gateway.example.com" },
+      } as OpenClawConfig,
+      agentId: "research",
+      refreshAuth: async () => {},
+    });
+    expect(prepared?.status).toBe("reply");
+    if (prepared?.status === "reply") {
+      const buttons = prepared.reply.presentation?.blocks.flatMap((block) =>
+        block.type === "buttons" ? block.buttons : [],
+      );
+      expect(buttons).toEqual([
+        {
+          label: "Open Control UI",
+          action: {
+            type: "url",
+            url: "https://gateway.example.com/settings/model-providers?provider=acme-cloud&agent=research",
+          },
+        },
+      ]);
+    }
   });
 });

@@ -39,6 +39,30 @@ export const AUTH_INVALID_TOKEN_USER_TEXT =
   "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
 export const TLS_CERTIFICATE_ERROR_USER_TEXT =
   "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+
+const SAFE_PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
+
+/** Only normalized provider ids are safe to embed in chat or shell guidance. */
+export function resolveSafeProviderId(provider?: string): string | undefined {
+  const normalized = provider?.trim().toLowerCase();
+  return normalized && SAFE_PROVIDER_ID_RE.test(normalized) ? normalized : undefined;
+}
+
+/** Format sign-in failure copy with the provider's own recovery steps when known. */
+export function formatProviderAuthenticationErrorUserText(provider?: string): string {
+  const providerName = resolveSafeProviderId(provider);
+  return providerName
+    ? `Couldn't sign in to ${providerName}. Sign in again with /login ${providerName} or under Models in the Control UI. For now, switch to a working model with /model.`
+    : AUTH_INVALID_TOKEN_USER_TEXT;
+}
+
+/** Permanent auth failures (revoked key, deactivated account) are not a missing sign-in. */
+export function formatProviderAuthPermanentErrorUserText(provider?: string): string {
+  const providerName = resolveSafeProviderId(provider);
+  return providerName
+    ? `${providerName} isn't accepting your login. Reconnect it with /login ${providerName} or under Models in the Control UI. For now, switch to a working model with /model.`
+    : "The AI service isn't accepting your login. Sign in again under Models in the Control UI or run `openclaw configure`.";
+}
 export const OAUTH_REFRESH_CONTENTION_USER_TEXT =
   "Another sign-in is still in progress. Wait a moment, then try again.";
 const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
@@ -379,6 +403,7 @@ export function resolveProviderRequestFailureCopy(params: {
   classification: FailoverClassification | null;
   facet: ProviderRequestFacet | null;
   status?: number;
+  provider?: string;
 }) {
   const code = resolveProviderRequestFailureCode(params);
   if (!code) {
@@ -386,7 +411,10 @@ export function resolveProviderRequestFailureCopy(params: {
   }
   return {
     code,
-    userMessage: PROVIDER_REQUEST_COPY[code],
+    userMessage:
+      code === "provider_authentication_error"
+        ? `⚠️ ${formatProviderAuthenticationErrorUserText(params.provider)}`
+        : PROVIDER_REQUEST_COPY[code],
   };
 }
 
@@ -531,8 +559,12 @@ export function renderMissingApiKeyReplyCopy(params?: {
   if (provider === "openai" && params?.providerGuidance) {
     return "⚠️ OpenAI needs a different sign-in for this model. Open Models in the Control UI or run `openclaw configure` to choose how to connect.";
   }
-  return provider === "openai"
-    ? "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the Control UI or run `openclaw configure`."
+  if (provider === "openai") {
+    return "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the Control UI or run `openclaw configure`.";
+  }
+  const safeProvider = resolveSafeProviderId(provider);
+  return safeProvider
+    ? `⚠️ ${safeProvider} isn't signed in yet. Sign in with /login ${safeProvider} or under Models in the Control UI. For now, switch to a working model with /model.`
     : "⚠️ This AI service isn't set up yet. Sign in under Models in the Control UI or run `openclaw configure`.";
 }
 

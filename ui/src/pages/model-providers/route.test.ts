@@ -170,6 +170,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("applies a cold-link agent to the settings selection before loading", async () => {
+  const h = createModelsRouter("main");
+  await h.router.navigateLocation(
+    {
+      pathname: "/settings/model-providers",
+      search: "?provider=openai&agent=research",
+      hash: "",
+    },
+    h.context,
+  );
+  expect(h.selection.state.selectedId).toBe("research");
+  expect(h.data()).toMatchObject({ provider: "openai", agentId: "research" });
+});
+
 it.each([true, false])("preserves provider deep links when connected=%s", async (connected) => {
   const h = createModelsRouter();
   if (!connected) {

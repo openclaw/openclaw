@@ -30,6 +30,8 @@ import {
 import { resolveExecutionApprovalFailureMessage } from "../../agents/failover/message-patterns.js";
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
+  formatProviderAuthPermanentErrorUserText,
+  formatProviderAuthenticationErrorUserText,
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   renderAuthProfileFailoverCopy,
   renderBillingReplyCopy,
@@ -42,7 +44,10 @@ import {
   type ReplyFallbackAttempt,
 } from "../../agents/failover/user-copy.js";
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
-import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
+import {
+  isProviderAuthError,
+  type ProviderAuthError,
+} from "../../agents/model-auth-runtime-shared.js";
 import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
 import {
   createMissingReplyNotice,
@@ -51,6 +56,7 @@ import {
   shouldDeliverMissingReplyNotice,
   type ReplyExpectation,
 } from "../../agents/reply-completion.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   collectErrorGraphCandidates,
   formatErrorMessage,
@@ -58,7 +64,10 @@ import {
 } from "../../infra/errors.js";
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
-import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
+import {
+  buildProviderAuthLoginPresentation,
+  buildProviderLoginRecovery,
+} from "../provider-login-recovery.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -219,6 +228,8 @@ export function buildExternalRunFailureReply(
     includeDetails?: boolean;
     replayPrevented?: boolean;
     failoverFacts?: ReplyFailoverFacts;
+    /** Runtime config so sign-in buttons honor disabled-plugin settings. */
+    config?: OpenClawConfig;
   },
 ): ExternalRunFailureReply {
   const message = typeof input === "string" ? input : input.message;
@@ -361,16 +372,66 @@ export function buildExternalRunFailureReply(
     // Curated facet copy carries recovery guidance (quota/billing ambiguity,
     // /new for conversation-state, config fix for model_not_found); the
     // classified summary below is the fallback for facts without a facet.
-    return { text: providerRequestError.userMessage, isGenericRunnerFailure: false };
+    // A typed missing-credential error in the cause graph is more specific
+    // than the generic authentication copy and keeps its wording.
+    const typedAuthError =
+      providerRequestError.code === "provider_authentication_error"
+        ? collectErrorGraphCandidates(error, readErrorCauses).find(
+            (candidate): candidate is ProviderAuthError => isProviderAuthError(candidate),
+          )
+        : undefined;
+    const missingCredentialCopy = typedAuthError
+      ? renderMissingApiKeyReplyCopy({
+          provider: typedAuthError.provider,
+          providerGuidance: typedAuthError.providerGuidance,
+        })
+      : undefined;
+    const presentation =
+      providerRequestError.code === "provider_authentication_error"
+        ? buildProviderAuthLoginPresentation(failoverFacts.provider, options?.config)
+        : undefined;
+    return {
+      text: missingCredentialCopy ?? providerRequestError.userMessage,
+      isGenericRunnerFailure: false,
+      ...(presentation ? { presentation } : {}),
+    };
   }
-  const authError = isProviderAuthError(error) ? error : undefined;
-  const missingApiKeyFailure = renderMissingApiKeyReplyCopy(
-    authError
-      ? { provider: authError.provider, providerGuidance: authError.providerGuidance }
-      : undefined,
+  // Lane/failover wrapping can bury the typed auth error in the cause graph, and
+  // flattened attempts keep only provider+reason facts. Either form must still
+  // reach sign-in guidance instead of generic (silenceable) boilerplate. Only
+  // typed errors use missing-credential copy; facts-only auth failures get the
+  // generic sign-in (auth) or not-accepting-login (auth_permanent) wording so
+  // revoked keys never read as "isn't signed in yet".
+  const authError = collectErrorGraphCandidates(error, readErrorCauses).find(
+    (candidate): candidate is ProviderAuthError => isProviderAuthError(candidate),
   );
+  const factsAuthFailure =
+    !authError &&
+    failoverFacts.provider &&
+    (failoverFacts.reason === "auth" || failoverFacts.reason === "auth_permanent")
+      ? `⚠️ ${
+          failoverFacts.reason === "auth_permanent"
+            ? formatProviderAuthPermanentErrorUserText(failoverFacts.provider)
+            : formatProviderAuthenticationErrorUserText(failoverFacts.provider)
+        }`
+      : undefined;
+  const missingApiKeyFailure =
+    factsAuthFailure ??
+    renderMissingApiKeyReplyCopy(
+      authError
+        ? { provider: authError.provider, providerGuidance: authError.providerGuidance }
+        : undefined,
+    );
   if (missingApiKeyFailure) {
-    return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
+    const presentation = buildProviderAuthLoginPresentation(
+      authError?.provider ?? failoverFacts.provider,
+      options?.config,
+    );
+    return {
+      text: missingApiKeyFailure,
+      isGenericRunnerFailure: false,
+      ...(presentation ? { presentation } : {}),
+    };
   }
   const codexAppServerFailure = renderCodexAppServerFailureCopy(normalizedMessage);
   if (codexAppServerFailure) {

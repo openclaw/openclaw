@@ -22,6 +22,7 @@ import { GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import { hasReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
+import { buildProviderAuthLoginPresentation } from "../provider-login-recovery.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -225,6 +226,7 @@ export async function handleAgentExecutionError(params: {
       { message, error: err },
       {
         includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
+        config: params.runtimeConfig,
       },
     );
     const text =
@@ -274,6 +276,10 @@ export async function handleAgentExecutionError(params: {
   }
   const replayPrevented = findCliTimeoutError(err)?.cliTimeout.observedActivity === true;
   if (providerRequestError) {
+    const presentation =
+      providerRequestError.code === "provider_authentication_error"
+        ? buildProviderAuthLoginPresentation(failoverFacts.provider, params.runtimeConfig)
+        : undefined;
     return await settleFailure({
       // Recorded retry exhaustion is more specific than generic quota guidance.
       // Other facets keep their recovery advice, as in buildExternalRunFailureReply.
@@ -283,6 +289,7 @@ export async function handleAgentExecutionError(params: {
         err.rateLimitRetriesExhausted !== undefined
           ? failureSummary.text
           : providerRequestError.userMessage,
+      ...(presentation ? { presentation } : {}),
     });
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
@@ -295,6 +302,7 @@ export async function handleAgentExecutionError(params: {
             includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
             replayPrevented,
             failoverFacts,
+            config: params.runtimeConfig,
           },
         )
       : undefined;
