@@ -159,14 +159,13 @@ describe("hook request delivery normalization", () => {
     const optedOut = createDeliveryHandler({
       mappings: [deliveryMapping("channel-only", { deliver: false, channel: "delivery-test" })],
     });
-    await dispatchPayload(optedOut.handler, {}, "/hooks/channel-only");
-    expect(optedOut.dispatchAgentHook).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliver: false,
-        channel: "delivery-test",
-        delivery: { mode: "none" },
-      }),
-    );
+    const optedOutResponse = await dispatchPayload(optedOut.handler, {}, "/hooks/channel-only");
+    expect(optedOutResponse.res.statusCode).toBe(200);
+    expect(optedOut.dispatchAgentHook.mock.calls[0]?.[0]).toMatchObject({
+      deliver: false,
+      channel: "delivery-test",
+      delivery: { mode: "none" },
+    });
   });
 
   test.each([
@@ -191,10 +190,12 @@ describe("hook request delivery normalization", () => {
         },
       ],
     });
-    await dispatchPayload(handler, {}, "/hooks/mapped-unknown-agent");
-    expect(dispatchAgentHook).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "main", effectiveAgentId: "main" }),
-    );
+    const mapping = await dispatchPayload(handler, {}, "/hooks/mapped-unknown-agent");
+    expect(mapping.res.statusCode).toBe(200);
+    expect(dispatchAgentHook.mock.calls[0]?.[0]).toMatchObject({
+      agentId: "main",
+      effectiveAgentId: "main",
+    });
   });
 
   test.each([

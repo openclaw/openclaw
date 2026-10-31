@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { sendHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
@@ -36,11 +35,10 @@ import {
   resolveHookPathBodyLimit,
   resolveHookSessionKey,
 } from "../hooks.js";
-import type { HookAgentDispatchResult, HookAgentDispatchSuccess } from "../hooks.types.js";
+import type { HookAgentDispatchResult } from "../hooks.types.js";
 import { sendJson } from "../http-common.js";
 import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js";
 import { resolveRequestClientIpFromHeaders } from "../net.js";
-import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import {
   HookWakeUnavailableError,
   sendAgentResult,
@@ -48,6 +46,7 @@ import {
   settleFanOutDispatches,
   type WakeResult,
 } from "./hooks-request-handler-response.js";
+import { createHookRequestReplay } from "./hooks-request-replay.js";
 
 const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
@@ -72,19 +71,8 @@ type HookDispatchers = {
   ) => WakeResult | null | Promise<WakeResult | null>;
   dispatchAgentHook: (
     value: HookAgentDispatchPayload,
+    context?: { abortSignal?: AbortSignal },
   ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
-};
-
-type HookReplayEntry =
-  | { state: "pending"; dispatch: Promise<HookAgentDispatchResult> }
-  | { state: "active"; dispatch: HookAgentDispatchSuccess }
-  | { state: "terminal"; ts: number; dispatch: HookAgentDispatchSuccess };
-
-type HookReplayScope = {
-  pathKey: string;
-  token: string | undefined;
-  idempotencyKey?: string;
-  dispatchScope: Record<string, unknown>;
 };
 
 export function createHooksRequestHandler(
@@ -99,7 +87,7 @@ export function createHooksRequestHandler(
   } & HookDispatchers,
 ): HooksRequestHandler {
   const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook, getClientIpConfig } = opts;
-  const hookReplayCache = new Map<string, HookReplayEntry>();
+  const hookReplay = createHookRequestReplay();
   const hookAuthLimiter = createGatewayAuthRateLimiter(
     {
       maxAttempts: HOOK_AUTH_FAILURE_LIMIT,
@@ -125,83 +113,6 @@ export function createHooksRequestHandler(
         clientIpConfig?.allowRealIpFallback === true,
       ) ?? req.socket?.remoteAddress;
     return normalizeRateLimitClientIp(clientIp);
-  };
-
-  const pruneHookReplayCache = (now: number) => {
-    for (const [key, entry] of hookReplayCache) {
-      if (entry.state === "terminal" && entry.ts < now - DEDUPE_TTL_MS) {
-        hookReplayCache.delete(key);
-      }
-    }
-    const terminal = [...hookReplayCache].filter(([, entry]) => entry.state === "terminal");
-    for (const [key] of terminal.slice(0, Math.max(0, terminal.length - DEDUPE_MAX))) {
-      hookReplayCache.delete(key);
-    }
-  };
-
-  const buildHookReplayCacheKey = (params: HookReplayScope): string | undefined => {
-    const idem = params.idempotencyKey?.trim();
-    if (!idem) {
-      return undefined;
-    }
-    const scope = JSON.stringify({
-      pathKey: params.pathKey,
-      dispatchScope: params.dispatchScope,
-    });
-    return `${sha256Hex(params.token ?? "")}:${sha256Hex(scope)}:${sha256Hex(idem)}`;
-  };
-
-  const resolveHookReplay = (key: string | undefined) => {
-    if (!key) {
-      return undefined;
-    }
-    pruneHookReplayCache(Date.now());
-    const cached = hookReplayCache.get(key);
-    if (!cached) {
-      return undefined;
-    }
-    if (cached.state === "terminal") {
-      hookReplayCache.delete(key);
-      hookReplayCache.set(key, cached);
-    }
-    return cached.dispatch;
-  };
-
-  const dispatchAgentHookWithReplay = (
-    key: string | undefined,
-    dispatch: () => HookAgentDispatchResult | Promise<HookAgentDispatchResult>,
-  ): HookAgentDispatchResult | Promise<HookAgentDispatchResult> => {
-    if (!key) {
-      return dispatch();
-    }
-    const existing = resolveHookReplay(key);
-    if (existing) {
-      return existing;
-    }
-    const pending = Promise.resolve()
-      .then(dispatch)
-      .then((result) => {
-        // Pending/active entries cannot be pruned or replaced by another request.
-        if (result.ok) {
-          hookReplayCache.set(key, { state: "active", dispatch: result });
-          const settle = () => {
-            const terminal = { state: "terminal", ts: Date.now(), dispatch: result } as const;
-            hookReplayCache.delete(key);
-            hookReplayCache.set(key, terminal);
-            pruneHookReplayCache(terminal.ts);
-          };
-          void result.completion.then(settle, settle);
-        } else {
-          hookReplayCache.delete(key);
-        }
-        return result;
-      })
-      .catch((err: unknown) => {
-        hookReplayCache.delete(key);
-        throw err;
-      });
-    hookReplayCache.set(key, { state: "pending", dispatch: pending });
-    return pending;
   };
 
   return async (req, res) => {
@@ -450,7 +361,7 @@ export function createHooksRequestHandler(
         });
         return true;
       }
-      const replayKey = buildHookReplayCacheKey({
+      const replayKey = hookReplay.buildHookReplayCacheKey({
         pathKey: "agent",
         token,
         idempotencyKey,
@@ -471,9 +382,14 @@ export function createHooksRequestHandler(
           timeoutSeconds: normalized.value.timeoutSeconds ?? null,
         },
       });
-      const replay = resolveHookReplay(replayKey);
+      const replay = hookReplay.resolveHookReplay(replayKey);
       if (replay) {
-        await sendAgentResult(res, await replay, undefined, waitForCompletion === true);
+        await sendAgentResult(
+          res,
+          await hookReplay.awaitHookReplay(replay, replayKey, req, res),
+          undefined,
+          waitForCompletion === true,
+        );
         return true;
       }
       const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
@@ -483,21 +399,29 @@ export function createHooksRequestHandler(
       if (dispatchSessionKey === null) {
         return true;
       }
-      const dispatched = await dispatchAgentHookWithReplay(replayKey, () => {
-        if (!isHooksConfigCurrent()) {
-          return changedHooksConfigDispatchResult();
-        }
-        return dispatchAgentHook({
-          ...normalized.value,
-          effectiveAgentId: target.effectiveAgentId,
-          idempotencyKey,
-          sessionKey: dispatchSessionKey,
-          sourcePath: `${basePath}/agent`,
-          agentId: target.selectedAgentId,
-          externalContentSource: "webhook",
-          replayKey,
-        });
-      });
+      const dispatched = await hookReplay.dispatchAgentHookWithReplay(
+        replayKey,
+        req,
+        res,
+        (abortSignal) => {
+          if (!isHooksConfigCurrent()) {
+            return changedHooksConfigDispatchResult();
+          }
+          return dispatchAgentHook(
+            {
+              ...normalized.value,
+              effectiveAgentId: target.effectiveAgentId,
+              idempotencyKey,
+              sessionKey: dispatchSessionKey,
+              sourcePath: `${basePath}/agent`,
+              agentId: target.selectedAgentId,
+              externalContentSource: "webhook",
+              replayKey,
+            },
+            abortSignal ? { abortSignal } : undefined,
+          );
+        },
+      );
       await sendAgentResult(res, dispatched, undefined, waitForCompletion === true);
       return true;
     }
@@ -600,7 +524,7 @@ export function createHooksRequestHandler(
               fanOutScopeOccurrences.set(fingerprint, occurrence + 1);
               dispatchScope.occurrence = occurrence;
             }
-            const replayKey = buildHookReplayCacheKey({
+            const replayKey = hookReplay.buildHookReplayCacheKey({
               pathKey: subPath,
               token,
               // Fan-out producers (gog gmail) send no idempotency key, yet a
@@ -613,38 +537,47 @@ export function createHooksRequestHandler(
               dispatchScope,
             });
             return () =>
-              dispatchAgentHookWithReplay(replayKey, () => {
-                if (!isHooksConfigCurrent()) {
-                  return changedHooksConfigDispatchResult();
-                }
-                return dispatchAgentHook({
-                  message: action.message,
-                  name: action.name ?? "Hook",
-                  idempotencyKey,
-                  agentId: target.selectedAgentId,
-                  effectiveAgentId: target.effectiveAgentId,
-                  wakeMode: action.wakeMode,
-                  sessionKey: dispatchSessionKey,
-                  sessionMode: action.sessionMode,
-                  sourcePath: `${basePath}/${subPath}`,
-                  deliver,
-                  channel,
-                  to: action.to,
-                  delivery,
-                  model: action.model,
-                  thinking: action.thinking,
-                  timeoutSeconds: action.timeoutSeconds,
-                  mappingId: action.mappingId,
-                  allowUnsafeExternalContent: action.allowUnsafeExternalContent,
-                  ...(mapped.fanout ? { admissionMode: "background" as const } : {}),
-                  replayKey,
-                  externalContentSource:
-                    subPath === "gmail"
-                      ? "gmail"
-                      : (resolveHookExternalContentSourceFromSession(sessionKey.value) ??
-                        "webhook"),
-                });
-              });
+              hookReplay.dispatchAgentHookWithReplay(
+                replayKey,
+                req,
+                res,
+                (abortSignal) => {
+                  if (!isHooksConfigCurrent()) {
+                    return changedHooksConfigDispatchResult();
+                  }
+                  return dispatchAgentHook(
+                    {
+                      message: action.message,
+                      name: action.name ?? "Hook",
+                      idempotencyKey,
+                      agentId: target.selectedAgentId,
+                      effectiveAgentId: target.effectiveAgentId,
+                      wakeMode: action.wakeMode,
+                      sessionKey: dispatchSessionKey,
+                      sessionMode: action.sessionMode,
+                      sourcePath: `${basePath}/${subPath}`,
+                      deliver,
+                      channel,
+                      to: action.to,
+                      delivery,
+                      model: action.model,
+                      thinking: action.thinking,
+                      timeoutSeconds: action.timeoutSeconds,
+                      mappingId: action.mappingId,
+                      allowUnsafeExternalContent: action.allowUnsafeExternalContent,
+                      ...(mapped.fanout ? { admissionMode: "background" as const } : {}),
+                      replayKey,
+                      externalContentSource:
+                        subPath === "gmail"
+                          ? "gmail"
+                          : (resolveHookExternalContentSourceFromSession(sessionKey.value) ??
+                            "webhook"),
+                    },
+                    abortSignal ? { abortSignal } : undefined,
+                  );
+                },
+                mapped.fanout,
+              );
           };
 
           // One pass over every action so a per-item transform emitting mixed
