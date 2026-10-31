@@ -9,6 +9,7 @@ vi.mock("./doctor-bootstrap-size.js", () => ({
   noteBootstrapFileSize: vi.fn().mockResolvedValue(undefined),
 }));
 
+// mock-isolation: Scenario fixtures own credential state and migration outcomes; isolate filesystem writes and provider login effects proved by their owner suites.
 vi.mock("./doctor-auth-flat-profiles.js", () => ({
   maybeRepairLegacyAuthProfileStores: ({
     profileIdMap,
@@ -17,6 +18,7 @@ vi.mock("./doctor-auth-flat-profiles.js", () => ({
   }) => ({
     changes: [],
     warnings: [],
+    findings: [],
     profileIdMap,
   }),
   collectOpenAICodexAuthProfileStoreIdMap: vi.fn(() => new Map()),
@@ -25,6 +27,8 @@ vi.mock("./doctor-auth-flat-profiles.js", () => ({
     changes: [],
     migratedProfileIds: new Set<string>(),
     blockedProfileIds: new Set<string>(),
+    findings: [],
+    aliasFindings: [],
     warnings: [],
   }),
   maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => ({
@@ -34,19 +38,18 @@ vi.mock("./doctor-auth-flat-profiles.js", () => ({
   })),
 }));
 
+// mock-isolation: Scenario fixtures own credential state and migration outcomes; isolate filesystem writes and provider login effects proved by their owner suites.
 vi.mock("./doctor-auth-legacy-oauth.js", () => ({
   maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => ({
     config: cfg,
+    findings: [],
     retiredProfileCleanupPlans: [],
   })),
 }));
 
+// mock-isolation: Fast-path fixtures isolate host browser probes and keep unrelated browser runtime outside this test graph.
 vi.mock("./doctor-browser.js", () => ({
-  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
-    changes: [],
-    warnings: [],
-  }),
-  noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
+  collectBrowserReadinessFindings: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./doctor-claude-cli.js", () => ({
@@ -78,8 +81,9 @@ vi.mock("./doctor/cron/legacy-repair.js", () => ({
   repairLegacyCronStoreWithoutPrompt: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
 }));
 
+// mock-isolation: Fast-path Doctor fixtures exclude device identity and pairing-store reads.
 vi.mock("./doctor-device-pairing.js", () => ({
-  noteDevicePairingHealth: vi.fn().mockResolvedValue(undefined),
+  collectDevicePairingHealthFindings: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./doctor-gateway-daemon-flow.js", () => ({
@@ -161,20 +165,27 @@ vi.mock("./doctor-ui.js", () => ({
   maybeRepairUiProtocolFreshness: vi.fn().mockResolvedValue(undefined),
 }));
 
+// mock-isolation: Fast-path Doctor fixtures exclude host process enumeration.
 vi.mock("./doctor-whatsapp-responsiveness.js", () => ({
-  noteWhatsappResponsivenessHealth: vi.fn().mockResolvedValue(undefined),
+  collectWhatsappResponsivenessHealthFindings: vi.fn().mockReturnValue([]),
 }));
 
-vi.mock("./doctor-workspace-status.js", () => ({
-  noteWorkspaceStatus: vi.fn(),
+vi.mock("./doctor-workspace-status.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-workspace-status.js")>()),
+  collectWorkspaceStatusHealthFindings: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock("../flows/doctor-startup-channel-maintenance.js", () => ({
   maybeRunDoctorStartupChannelMaintenance: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("./doctor-heartbeat-cadence-migration.js", () => ({
+vi.mock("./doctor-heartbeat-cadence-migration.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-heartbeat-cadence-migration.js")>()),
   collectHeartbeatCadenceMigrationFindings: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("./doctor-heartbeat-retirement.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-heartbeat-retirement.js")>()),
   maybeMigrateHeartbeatCadenceToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
 }));
 

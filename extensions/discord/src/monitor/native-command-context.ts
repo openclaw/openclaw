@@ -16,30 +16,15 @@ import type { DiscordBuildInboundContext } from "./native-command.types.js";
 import type { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
 import { buildDiscordRoutePeer } from "./route-resolution.js";
 
-type BuildDiscordNativeCommandContextParams = {
+export async function buildDiscordNativeInteractionContext(params: {
   cfg: OpenClawConfig;
   prompt: string;
   commandArgs: CommandArgs;
-  sessionKey: string;
-  commandTargetSessionKey: string;
-  accountId: string;
-  agentId: string;
   buildContext?: DiscordBuildInboundContext;
-  interactionId: string;
-  channelId: string;
-  threadParentId?: string;
-  memberRoleIds?: string[];
-  guildId?: string;
-  guildName?: string;
-  channelTopic?: string;
   channelConfig?: DiscordChannelConfigResolved | null;
   guildInfo?: DiscordGuildEntryResolved | null;
   allowNameMatching?: boolean;
   commandAuthorized: boolean;
-  isDirectMessage: boolean;
-  isGroupDm: boolean;
-  isGuild: boolean;
-  isThreadChannel: boolean;
   user: {
     id: string;
     username: string;
@@ -50,54 +35,78 @@ type BuildDiscordNativeCommandContextParams = {
     name?: string;
     tag?: string;
   };
-  timestampMs?: number;
-};
-
-export async function buildDiscordNativeCommandContext(
-  params: BuildDiscordNativeCommandContextParams,
-) {
-  const conversationLabel = params.isDirectMessage
-    ? (params.user.globalName ?? params.user.username)
-    : params.channelId;
+  interaction: CommandInteraction | BaseComponentInteraction;
+  route: ResolvedAgentRoute;
+  boundSessionKey?: string;
+  sessionPrefix: string;
+  channelContext: Awaited<ReturnType<typeof resolveDiscordNativeInteractionChannelContext>>;
+}) {
+  const { interaction, route, boundSessionKey, sessionPrefix, channelContext, ...context } = params;
+  const targets = resolveNativeCommandSessionTargets({
+    agentId: route.agentId,
+    sessionPrefix,
+    userId: context.user.id,
+    targetSessionKey: route.sessionKey,
+    boundSessionKey,
+  });
+  const agentId = route.agentId;
+  const accountId = route.accountId;
+  const interactionId = interaction.rawData.id;
+  const channelId = channelContext.rawChannelId || "unknown";
+  const threadParentId = channelContext.threadParentId;
+  const memberRoleIds = channelContext.memberRoleIds;
+  const guildId = interaction.guild?.id;
+  const guildName = interaction.guild?.name;
+  const channelTopic = resolveDiscordChannelTopicSafe(interaction.channel);
+  const isGuild = Boolean(interaction.guild);
+  const isDirectMessage = channelContext.isDirectMessage;
+  const isGroupDm = channelContext.isGroupDm;
+  const isThreadChannel = channelContext.isThreadChannel;
+  const conversationLabel = isDirectMessage
+    ? (context.user.globalName ?? context.user.username)
+    : channelId;
   const { groupSystemPrompt, ownerAllowFrom, channelStructuredContext, toolPolicy } =
     buildDiscordInboundAccessContext({
-      ...params,
-      parentId: params.threadParentId,
-      senderName: params.user.globalName ?? params.user.username,
-      senderUsername: params.user.username,
+      ...context,
+      accountId,
+      parentId: threadParentId,
+      channelTopic,
+      isGuild,
+      senderName: context.user.globalName ?? context.user.username,
+      senderUsername: context.user.username,
     });
 
   const conversation = {
-    kind: params.isDirectMessage
+    kind: isDirectMessage
       ? ("direct" as const)
-      : params.isGroupDm
+      : isGroupDm
         ? ("group" as const)
         : ("channel" as const),
-    id: params.channelId,
-    parentId: params.isThreadChannel ? params.threadParentId : undefined,
-    threadId: params.isThreadChannel ? params.channelId : undefined,
+    id: channelId,
+    parentId: isThreadChannel ? threadParentId : undefined,
+    threadId: isThreadChannel ? channelId : undefined,
   };
   // Native admission has already checked the live channel, member, DM, and command policy.
   // Carry that decision through the same identity-bound host ingress as ordinary messages.
-  const allowFrom = params.commandAuthorized ? [`user:${params.user.id}`] : [];
+  const allowFrom = context.commandAuthorized ? [`user:${context.user.id}`] : [];
   const channelIngress = await getDiscordRuntime()
     .channel.inbound.ingress.createResolver({
       channelId: "discord",
-      accountId: params.accountId,
+      accountId,
       identity: discordIngressIdentity,
       useDefaultPairingStore: false,
     })
     .command({
       subject: {
-        stableId: params.user.id,
+        stableId: context.user.id,
         aliases: { participantKind: "user" },
       },
       conversation,
       contextBinding: {
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        nativeChannelId: params.channelId,
-        messageId: params.interactionId,
+        agentId,
+        sessionKey: targets.sessionKey,
+        nativeChannelId: channelId,
+        messageId: interactionId,
         inboundEventKind: "user_request",
       },
       event: { kind: "native-command", mayPair: false },
@@ -107,123 +116,73 @@ export async function buildDiscordNativeCommandContext(
       groupAllowFrom: allowFrom,
       command: { modeWhenAccessGroupsOff: "configured" },
     });
-  return await (params.buildContext ?? buildChannelInboundEventContext)({
+  const ctxPayload = await (context.buildContext ?? buildChannelInboundEventContext)({
     channel: "discord",
     channelIngress,
-    accountId: params.accountId,
-    messageId: params.interactionId,
-    timestamp: params.timestampMs ?? Date.now(),
-    from: params.isDirectMessage
-      ? `discord:${params.user.id}`
-      : params.isGroupDm
-        ? `discord:group:${params.channelId}`
-        : `discord:channel:${params.channelId}`,
+    accountId,
+    messageId: interactionId,
+    timestamp: Date.now(),
+    from: isDirectMessage
+      ? `discord:${context.user.id}`
+      : isGroupDm
+        ? `discord:group:${channelId}`
+        : `discord:channel:${channelId}`,
     sender: {
-      id: params.user.id,
-      name: params.user.globalName ?? params.user.username,
-      username: params.user.username,
-      tag: params.sender.tag,
-      roles: params.memberRoleIds,
+      id: context.user.id,
+      name: context.user.globalName ?? context.user.username,
+      username: context.user.username,
+      tag: context.sender.tag,
+      roles: memberRoleIds,
     },
     conversation: {
       ...conversation,
-      nativeChannelId: params.channelId,
+      nativeChannelId: channelId,
       routePeer: buildDiscordRoutePeer({
-        isDirectMessage: params.isDirectMessage,
-        isGroupDm: params.isGroupDm,
-        directUserId: params.user.id,
-        conversationId: params.channelId,
+        isDirectMessage,
+        isGroupDm,
+        directUserId: context.user.id,
+        conversationId: channelId,
       }),
       label: conversationLabel,
-      spaceId: params.isGuild
-        ? (params.guildInfo?.id ?? params.guildInfo?.slug ?? params.guildId)
-        : undefined,
+      spaceId: isGuild ? (context.guildInfo?.id ?? context.guildInfo?.slug ?? guildId) : undefined,
     },
     route: {
-      agentId: params.agentId,
-      accountId: params.accountId,
-      routeSessionKey: params.commandTargetSessionKey,
-      dispatchSessionKey: params.sessionKey,
+      agentId,
+      accountId,
+      routeSessionKey: targets.commandTargetSessionKey,
+      dispatchSessionKey: targets.sessionKey,
     },
     reply: {
-      to: `slash:${params.user.id}`,
+      to: `slash:${context.user.id}`,
       // Interactions reply through slash:<user>; follow-ups use the real Discord target.
       originatingTo:
         resolveDiscordConversationIdentity({
-          isDirectMessage: params.isDirectMessage,
-          userId: params.user.id,
-          channelId: params.channelId,
-        }) ?? (params.isDirectMessage ? `user:${params.user.id}` : `channel:${params.channelId}`),
+          isDirectMessage,
+          userId: context.user.id,
+          channelId,
+        }) ?? (isDirectMessage ? `user:${context.user.id}` : `channel:${channelId}`),
     },
-    message: { rawBody: params.prompt },
+    message: { rawBody: context.prompt },
     access: {
       toolPolicy,
       mentions: { canDetectMention: true, wasMentioned: true },
-      commands: { authorized: params.commandAuthorized },
+      commands: { authorized: context.commandAuthorized },
     },
     commandTurn: {
       kind: "native",
       source: "native",
-      authorized: params.commandAuthorized,
-      body: params.prompt,
+      authorized: context.commandAuthorized,
+      body: context.prompt,
     },
     supplemental: { groupSystemPrompt },
     extra: {
-      CommandArgs: params.commandArgs,
-      CommandTargetSessionKey: params.commandTargetSessionKey,
+      CommandArgs: context.commandArgs,
+      CommandTargetSessionKey: targets.commandTargetSessionKey,
       CommandSource: "native",
-      GroupSubject: params.isGuild ? params.guildName : undefined,
+      GroupSubject: isGuild ? guildName : undefined,
       ChannelStructuredContext: channelStructuredContext,
       OwnerAllowFrom: ownerAllowFrom,
     },
-  });
-}
-
-export async function buildDiscordNativeInteractionContext(
-  params: Pick<
-    BuildDiscordNativeCommandContextParams,
-    | "cfg"
-    | "prompt"
-    | "commandArgs"
-    | "user"
-    | "sender"
-    | "channelConfig"
-    | "guildInfo"
-    | "allowNameMatching"
-    | "commandAuthorized"
-    | "buildContext"
-  > & {
-    interaction: CommandInteraction | BaseComponentInteraction;
-    route: ResolvedAgentRoute;
-    boundSessionKey?: string;
-    sessionPrefix: string;
-    channelContext: Awaited<ReturnType<typeof resolveDiscordNativeInteractionChannelContext>>;
-  },
-) {
-  const { interaction, route, boundSessionKey, sessionPrefix, channelContext, ...context } = params;
-  const targets = resolveNativeCommandSessionTargets({
-    agentId: route.agentId,
-    sessionPrefix,
-    userId: context.user.id,
-    targetSessionKey: route.sessionKey,
-    boundSessionKey,
-  });
-  const ctxPayload = await buildDiscordNativeCommandContext({
-    ...context,
-    ...targets,
-    agentId: route.agentId,
-    accountId: route.accountId,
-    interactionId: interaction.rawData.id,
-    channelId: channelContext.rawChannelId || "unknown",
-    threadParentId: channelContext.threadParentId,
-    memberRoleIds: channelContext.memberRoleIds,
-    guildId: interaction.guild?.id,
-    guildName: interaction.guild?.name,
-    channelTopic: resolveDiscordChannelTopicSafe(interaction.channel),
-    isGuild: Boolean(interaction.guild),
-    isDirectMessage: channelContext.isDirectMessage,
-    isGroupDm: channelContext.isGroupDm,
-    isThreadChannel: channelContext.isThreadChannel,
   });
   return { ctxPayload, ...targets };
 }

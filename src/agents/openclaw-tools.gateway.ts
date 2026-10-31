@@ -1,10 +1,5 @@
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
-import {
-  createConversationsListTool,
-  createConversationsSendTool,
-  createConversationsTurnTool,
-} from "./tools/conversation-tools.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createOpenClawDelegateToolsForRun } from "./tools/openclaw-delegate-tool.js";
 import { createPersonalInstructionsTool } from "./tools/personal-instructions-tool.js";
@@ -33,25 +28,9 @@ export function createHostedGatewayTools(
       sessionId: options?.sessionId,
       runId: options?.runId,
       onYield: options?.onYield,
+      senderIsOwner: options?.senderIsOwner,
     }),
     ...(preparedDelegateTools ?? createOpenClawDelegateToolsForRun({ ...options, sessionAgentId })),
     ...(personalInstructionsEnabled ? [createPersonalInstructionsTool(sessionAgentId)] : []),
   ];
-}
-
-export function createHostedConversationTools(
-  options: OpenClawToolsOptions | undefined,
-  sessionAgentId: string,
-): AnyAgentTool[] {
-  return [
-    createConversationsListTool,
-    createConversationsSendTool,
-    createConversationsTurnTool,
-  ].map((createTool) =>
-    createTool({
-      ...options,
-      agentId: sessionAgentId,
-      agentSessionId: options?.sessionId,
-    }),
-  );
 }

@@ -1,11 +1,14 @@
 import { readSessionActorBoundedHistory } from "./session-actor-bounded-history.js";
 import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
-import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
+import type {
+  PreparedSessionTranscriptHydration,
+  SessionTranscriptContextSelection,
+} from "./session-history-read.types.js";
 
 /** The actor already owns these bytes; limits select a detached view, never a second store. */
 export function readSessionActorMemoryHistory(
   state: SessionActorMemoryWindow,
-  limits?: { maxBytes: number; maxEvents: number },
+  limits?: SessionTranscriptContextSelection,
 ): PreparedSessionTranscriptHydration {
   if (!limits) {
     return {

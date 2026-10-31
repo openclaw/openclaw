@@ -87,7 +87,7 @@ describe("committed agent database reads", () => {
       expectedError: {
         name: "SqliteSchemaMismatchError",
         message: expect.stringContaining(
-          "stop active agents and run openclaw doctor --fix to migrate session identities",
+          `uses schema version ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}; stop active agents and run openclaw doctor --fix to upgrade it to schema version ${OPENCLAW_AGENT_SCHEMA_VERSION} before using it.`,
         ),
       },
     },

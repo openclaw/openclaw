@@ -1,27 +1,30 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { registerReplyOperationSuccessorBarrier } from "../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { assertRequiredWorkerLocalExecution } from "../config/required-worker-profile.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
-import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import { retainQueuedAgentRunContext } from "../infra/agent-run-registry.js";
-import { enqueueCommandInLane, isCommandLaneTaskMarkerCurrent } from "../process/command-queue.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
+import { registerReplyOperationSuccessorBarrier } from "../sessions/session-controller.js";
+import {
+  assertSessionControllerOperation,
+  isCurrentSessionControllerOperation,
+} from "../sessions/session-controller.state.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
-import { resolveSessionLane } from "./embedded-agent-runner/lanes.js";
 import type { RunEmbeddedAgentInternalParams } from "./embedded-agent-runner/run/internal-params.js";
 import { resolveEmbeddedRunSessionLanePolicy } from "./embedded-agent-runner/run/lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
@@ -39,6 +42,7 @@ import {
   resolveSessionPlacementTurnSettlementAssertion,
   withoutSessionPlacementForcedTerminalSettlement,
 } from "./session-placement-forced-terminal-settlement.js";
+import { withSessionPlacementTurnInput } from "./session-placement-turn-input.js";
 import {
   getGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
@@ -70,7 +74,7 @@ export type SessionPlacementAdmissionProvider = {
     successorSessionId: string;
   }) => void;
   recoverTerminalTurn?: (
-    session: { sessionId: string; sessionKey?: string },
+    session: { sessionId: string; sessionKey?: string; operation?: ReplyOperation },
     assertCurrent?: () => void,
   ) => Promise<string | undefined>;
   executeLocalTurn: <T>(
@@ -113,7 +117,6 @@ export function installSessionPlacementAdmissionProvider(
     }
   };
 }
-
 /** Carries placement-owned runtime selection into candidate preparation and execution. */
 export async function resolveSessionPlacementRuntimeOverride(
   identity: Omit<LocalTurnPlacementClaim, "runId">,
@@ -130,6 +133,11 @@ const requiredPlacementScope = resolveGlobalSingleton(
       assertPlacementCurrent: SessionSourceAssertion;
     }>(),
 );
+
+/** Independent turns acquire placement custody instead of inheriting their predecessor's. */
+export function withoutRequiredSessionPlacement<T>(task: () => T): T {
+  return requiredPlacementScope.exit(task);
+}
 
 /** Nested entry points consume this run's owner-held admission, never a cached permission. */
 export async function withRequiredSessionPlacement<T>(
@@ -229,35 +237,34 @@ export async function withSessionPlacementTurnAdmission(
   task: (signal: AbortSignal) => Promise<EmbeddedAgentRunResult>,
   onAdmitted?: () => void,
 ): Promise<EmbeddedAgentRunResult> {
+  const config = params.config ?? getRuntimeConfig();
   const { sessionAgentId } = resolveSessionAgentIds({
-    config: params.config ?? getRuntimeConfig(),
+    config,
     sessionKey: claim.sessionKey,
     agentId: claim.agentId,
   });
-  const interrupted = new AbortController();
-  const signal = params.abortSignal
-    ? AbortSignal.any([params.abortSignal, interrupted.signal])
-    : interrupted.signal;
-  const admission = await beginSessionWorkAdmission({
-    agentId: sessionAgentId,
-    scope: `agent:${sessionAgentId}`,
-    identities: [claim.sessionKey, claim.sessionId, claim.runId],
-    signal,
-    assertAllowed: () => signal.throwIfAborted(),
-    onInterrupt: (reason) => interrupted.abort(reason),
-  });
-  try {
-    return await admission.run(() =>
-      executeAdmittedSessionPlacementTurn(
+  return await withSessionTurn(
+    {
+      ...claim,
+      agentId: sessionAgentId,
+      sessionTarget: params.sessionTarget,
+      storePath:
+        params.sessionTarget?.storePath ??
+        resolveSessionStorePathCore(config.session?.store, { agentId: sessionAgentId }),
+      replyOperation: params.replyOperation,
+      abortSignal: params.abortSignal,
+      detached: params.sessionPersistence === "detached",
+    },
+    async (operation, signal) => {
+      const admitted = { ...params, replyOperation: operation, abortSignal: signal };
+      return await executeAdmittedSessionPlacementTurn(
         claim,
-        { ...params, abortSignal: signal },
-        () => task(signal),
+        admitted,
+        () => withSessionPlacementTurnInput(params, admitted, () => task(signal)),
         onAdmitted,
-      ),
-    );
-  } finally {
-    admission.release();
-  }
+      );
+    },
+  );
 }
 
 async function executeAdmittedSessionPlacementTurn(
@@ -280,7 +287,7 @@ async function executeAdmittedSessionPlacementTurn(
     assertRequiredWorkerLocalExecution(getRuntimeConfig(), "Gateway");
     assertRequiredWorkerLocalExecution(params.config ?? {}, "Gateway");
     const settle = resolveSessionPlacementForcedTerminalSettlement();
-    const assertCurrent = resolveSessionPlacementTurnSettlementAssertion();
+    const assertPlacementCurrent = resolveSessionPlacementTurnSettlementAssertion();
     if (params.replyOperation && settle) {
       // Preflight can stall before an embedded handle exists. The exact reply
       // owner must release and fence its admitted claim before waking a successor.
@@ -291,11 +298,15 @@ async function executeAdmittedSessionPlacementTurn(
         start: settle,
       });
     }
-    assertCurrent?.();
+    assertPlacementCurrent?.();
     admitTurn();
-    assertCurrent?.();
+    params.abortSignal?.throwIfAborted();
+    if (params.replyOperation) {
+      assertSessionControllerOperation(params.replyOperation);
+    }
+    assertPlacementCurrent?.();
     const result = await task();
-    assertCurrent?.();
+    assertPlacementCurrent?.();
     return result;
   };
   const provider = state.provider;
@@ -347,6 +358,8 @@ export async function withLocalSessionPlacementTurnSettlement(
     | "admittedRunContext"
     | "preparedRunAdmission"
     | "isFinalFallbackAttempt"
+    | "replyOperation"
+    | "sessionTarget"
   > = {},
 ): Promise<EmbeddedAgentRunResult> {
   const assertLocalAllowed = () => {
@@ -374,48 +387,66 @@ export async function withLocalSessionPlacementTurnSettlement(
     assertOwnerCurrent();
   };
   assertCurrent();
-  const releaseForeground =
-    resolveEmbeddedRunSessionLanePolicy(options.trigger, options.inputProvenance).priority ===
-    "foreground"
-      ? await beginForegroundSessionMaintenance(claim.sessionKey ?? claim.sessionId)
-      : undefined;
+  let releaseForeground: (() => void) | undefined;
   const releaseQueuedContext = retainQueuedAgentRunContext(claim.runId, lifecycleGeneration);
-  let releaseCapacityWait: (() => void) | undefined;
   try {
-    return await enqueueCommandInLane(
-      resolveSessionLane(claim.sessionKey?.trim() || claim.sessionId),
-      async (taskMarker) => {
-        assertCurrent();
+    return await withSessionTurn(
+      {
+        ...claim,
+        abortSignal: options.abortSignal,
+        replyOperation: options.replyOperation,
+        sessionTarget: options.sessionTarget,
+      },
+      async (operation, signal) => {
+        const assertAdmissionCurrent = () => {
+          signal.throwIfAborted();
+          assertCurrent();
+        };
+        assertAdmissionCurrent();
+        operation?.markWaitingForDeferredMaintenance();
+        try {
+          releaseForeground =
+            resolveEmbeddedRunSessionLanePolicy(options.trigger, options.inputProvenance)
+              .priority === "foreground"
+              ? await beginForegroundSessionMaintenance(claim.sessionKey ?? claim.sessionId)
+              : undefined;
+        } finally {
+          operation?.markDeferredMaintenanceWaitEnded();
+        }
         const runLocal = async () => {
           assertLocalAllowed();
           // Placement admission can itself await work. A cancelled or replaced
           // queue owner must never execute through the captured provider.
-          assertCurrent();
+          assertAdmissionCurrent();
           const assertClaimCurrent = resolveSessionPlacementTurnSettlementAssertion();
           let open = true;
           const assertSettlementCurrent = composeSessionSourceAssertion(
             [assertClaimCurrent],
             (assertSource) => {
-              // Queue reset closes this task even if its callback has not returned.
-              if (!open || !isCommandLaneTaskMarkerCurrent(taskMarker)) {
+              // Cancellation keeps terminal custody until cleanup releases this turn.
+              if (!open || (operation && !isCurrentSessionControllerOperation(operation))) {
                 throw createSessionPlacementSettlementClosedAbortError();
               }
               assertOwnerCurrent();
               assertSource();
             },
           );
+          const cleanup = resolveSessionPlacementForcedTerminalSettlement();
+          const releaseCleanup = cleanup && operation?.registerExecutionCleanup(cleanup);
           try {
             assertSettlementCurrent();
-            releaseCapacityWait?.();
             releaseQueuedContext?.("admitted");
             return await task(assertSettlementCurrent);
           } finally {
+            releaseCleanup?.();
             open = false;
           }
         };
         const result = await withPlacementTurnCallerScope(options, () =>
           withoutSessionPlacementForcedTerminalSettlement(() =>
-            provider ? provider.executeLocalTurn(claim, runLocal, assertCurrent) : runLocal(),
+            provider
+              ? provider.executeLocalTurn(claim, runLocal, assertAdmissionCurrent)
+              : runLocal(),
           ),
         );
         if (options.isFinalFallbackAttempt === undefined) {
@@ -427,26 +458,16 @@ export async function withLocalSessionPlacementTurnSettlement(
               throw createAbortError("admitted run authority is no longer active");
             }
             assertAdmittedRunCurrent?.();
-            if (!isCommandLaneTaskMarkerCurrent(taskMarker)) {
-              throw createSessionPlacementSettlementClosedAbortError();
+            if (operation) {
+              assertSessionControllerOperation(operation);
             }
           });
         }
         return result;
       },
-      {
-        abortSignal: options.abortSignal,
-        sessionTarget: claim,
-        priority: resolveEmbeddedRunSessionLanePolicy(options.trigger, options.inputProvenance)
-          .priority,
-        onQueued: () => {
-          releaseCapacityWait = registerAgentRunCapacityWait(claim.runId, lifecycleGeneration);
-        },
-      },
     );
   } finally {
     releaseForeground?.();
-    releaseCapacityWait?.();
     releaseQueuedContext?.("abandoned");
   }
 }
@@ -482,7 +503,7 @@ export async function prepareSessionPlacementSandbox(
 
 /** The current placement owner alone can settle a proven terminal worker turn. */
 export async function recoverTerminalSessionPlacementTurn(
-  session: { sessionId: string; sessionKey?: string },
+  session: { sessionId: string; sessionKey?: string; operation?: ReplyOperation },
   assertCurrent?: () => void,
 ): Promise<string | undefined> {
   const provider = state.provider;

@@ -7,13 +7,14 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
-import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
 import {
   getAdmittedSqliteSchemaFacts,
   type SqliteSchemaFacts,
 } from "../../infra/sqlite-schema-facts.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { ensureStatePostgresFragment } from "../../state/openclaw-state-db-engine.js";
 import { ensureColumn, tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as StateDatabase,
@@ -65,6 +66,10 @@ const installWorkerPlacementMoveSchema = createSqliteSchemaEnsurer(
 );
 
 function ensureWorkerPlacementMoveSchema(db: EngineConnection): void {
+  if (isPostgresSqlConnection(db)) {
+    ensureStatePostgresFragment(db, "worker_session_placement_moves");
+    return;
+  }
   const facts = getAdmittedSqliteSchemaFacts(db);
   if (facts && ensuredMoveSchemaHandles.get(db) === facts) {
     return;

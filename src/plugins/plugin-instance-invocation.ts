@@ -1,18 +1,23 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { runWithAsyncStore } from "../shared/async-store.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import type {
   PluginExecutionFrame,
   PluginExecutionScopes,
   PluginInstanceInvocation,
 } from "./plugin-instance-invocation.types.js";
+import type { PluginInstanceCallLease, PluginInvocationInstance } from "./plugin-instance.types.js";
 
 export class InvocationFrame implements PluginExecutionFrame {
+  readonly retentionOwner: PluginExecutionScopes["retentionOwner"];
   readonly invocation: PluginExecutionScopes["invocation"];
   readonly metadataScope: PluginExecutionScopes["metadataScope"];
   readonly cacheScope: PluginExecutionScopes["cacheScope"];
   readonly sourceCaptureStorage: PluginExecutionScopes["sourceCaptureStorage"];
 
   constructor(scopes: PluginExecutionScopes, invocation = scopes.invocation) {
+    this.retentionOwner = scopes.retentionOwner;
     this.invocation = invocation;
     this.metadataScope = scopes.metadataScope;
     this.cacheScope = scopes.cacheScope;
@@ -51,13 +56,21 @@ const pluginExecutionContext = resolveGlobalSingleton(
           const current = frames.getStore();
           return current?.invocation === invocation
             ? run()
-            : frames.run(createPluginExecutionFrame({ ...current, invocation }, current), run);
+            : runWithAsyncStore(
+                frames,
+                createPluginExecutionFrame({ ...current, invocation }, current),
+                run,
+              );
         },
         // Cache-owned retirement drops self-call admission, never the Gateway caller.
         exit<T>(run: () => T): T {
           const current = frames.getStore();
           return current?.invocation
-            ? frames.run(current.withScopes({ ...current, invocation: undefined }), run)
+            ? runWithAsyncStore(
+                frames,
+                current.withScopes({ ...current, invocation: undefined }),
+                run,
+              )
             : run();
         },
       },
@@ -65,8 +78,7 @@ const pluginExecutionContext = resolveGlobalSingleton(
         return frames.getStore();
       },
       runFrame<T>(this: void, frame: PluginExecutionFrame, run: () => T): T {
-        // Every run copies the whole async context; re-entering the current frame is a no-op.
-        return frames.getStore() === frame ? run() : frames.run(frame, run);
+        return runWithAsyncStore(frames, frame, run);
       },
     };
   },
@@ -75,3 +87,28 @@ const pluginExecutionContext = resolveGlobalSingleton(
 export const pluginInstanceInvocation = pluginExecutionContext.invocation;
 export const getPluginExecutionFrame = pluginExecutionContext.getFrame;
 export const runWithPluginExecutionFrame = pluginExecutionContext.runFrame;
+
+/** Retain admission independently; each operation still owns its physical call settlement. */
+export function retainPluginOwnerWork(owner: {
+  instance: PluginInvocationInstance;
+  lease(options: { joinDisposal: false; ownerLifetime?: true }): PluginInstanceCallLease;
+  invoke<T>(run: () => T, lease: PluginInstanceCallLease): T;
+  hasToken(token: object): boolean;
+}) {
+  const held = pluginInstanceInvocation.exit(() =>
+    owner.lease({ joinDisposal: false, ownerLifetime: true }),
+  );
+  return {
+    run: <T>(run: () => T): T => {
+      if (!owner.hasToken(held.token)) {
+        throw new PluginInstanceUnavailableError(owner.instance.pluginId);
+      }
+      return pluginInstanceInvocation.run({ instance: owner.instance, token: held.token }, () =>
+        owner.invoke(run, owner.lease({ joinDisposal: false })),
+      );
+    },
+    release: () => {
+      void held.release();
+    },
+  };
+}

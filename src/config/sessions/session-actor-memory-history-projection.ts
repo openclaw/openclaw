@@ -14,6 +14,7 @@ import {
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import {
+  boundHistoryAnchorPageRange,
   resolveHistoryAnchorPageRange,
   resolveTranscriptPageEnd,
 } from "../../sessions/transcript-anchor-page.js";
@@ -26,17 +27,9 @@ import type {
   TranscriptReadWindowOptions,
 } from "../../sessions/transcript-read-window.js";
 import { isVisibleTranscriptRecord } from "../../sessions/transcript-visible-record.js";
-import {
-  createVisibleMessageCursor,
-  encodeVisibleMessageCursor,
-  normalizeVisibleDeltaLimits,
-  parseVisibleMessageCursor,
-} from "./session-accessor.sqlite-visible-cursor.js";
 import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,
-  SessionTranscriptVisibleMessageDeltaLimits,
-  SessionTranscriptVisibleMessageDeltaResult,
 } from "./session-accessor.types.js";
 import { readSessionActorMemoryBoundedTail } from "./session-actor-memory-history-facts.js";
 import {
@@ -123,92 +116,6 @@ export function readSessionActorMemoryRawDelta(
   return {
     kind: "page",
     cursor: encodeRawTranscriptCursor({ ...cursor, lastSeq }),
-    events,
-    hasMore,
-    serializedBytes,
-    ...(requiredBytes === undefined ? {} : { requiredBytes }),
-  };
-}
-
-export function readSessionActorMemoryVisibleDelta(
-  window: SessionActorMemoryWindow,
-  scope: SessionActorMemoryHistoryScope,
-  limits: SessionTranscriptVisibleMessageDeltaLimits,
-): SessionTranscriptVisibleMessageDeltaResult {
-  const { maxBytes, maxMessages } = normalizeVisibleDeltaLimits(limits);
-  const generation = window.hot.transcript.version.generation;
-  const sessionId = window.hot.entry?.sessionId;
-  if (!generation || !sessionId) {
-    return { kind: "missing" };
-  }
-  const initial = createVisibleMessageCursor({ agentId: scope.agentId, sessionId, generation });
-  const reset = (
-    reason: Extract<SessionTranscriptVisibleMessageDeltaResult, { kind: "reset" }>["reason"],
-  ): SessionTranscriptVisibleMessageDeltaResult => ({
-    kind: "reset",
-    cursor: encodeVisibleMessageCursor(initial),
-    reason,
-  });
-  const cursor = limits.cursor === undefined ? initial : parseVisibleMessageCursor(limits.cursor);
-  if (!cursor) {
-    return reset("invalid_cursor");
-  }
-  if (cursor.agentId !== scope.agentId || cursor.sessionId !== sessionId) {
-    return reset("scope_mismatch");
-  }
-  if (cursor.generation !== generation) {
-    return reset("generation_mismatch");
-  }
-  if (
-    scope.readFence &&
-    cursor.lastMessagePosition >= scope.readFence.beforeActiveMessagePosition
-  ) {
-    throw new SessionTranscriptReadFenceError(
-      "Transcript read cursor has crossed the current-turn admission fence",
-    );
-  }
-  const navigation = createSessionActorMemoryHistoryNavigation(window);
-  const messages = navigation.active.filter((row) => row.messagePosition !== null);
-  if (cursor.lastEventSeq >= 0) {
-    const anchor = messages.find((row) => row.rawSeq === cursor.lastEventSeq);
-    if (!anchor) {
-      return reset("anchor_missing");
-    }
-    if (anchor.messagePosition !== cursor.lastMessagePosition) {
-      return reset("anchor_moved");
-    }
-  }
-  let serializedBytes = 0;
-  let hasMore = false;
-  let requiredBytes: number | undefined;
-  let lastEventSeq = cursor.lastEventSeq;
-  let lastMessagePosition = cursor.lastMessagePosition;
-  const events: Extract<SessionTranscriptVisibleMessageDeltaResult, { kind: "page" }>["events"] =
-    [];
-  for (const row of messages) {
-    if (row.messagePosition! <= cursor.lastMessagePosition) {
-      continue;
-    }
-    if (events.length >= maxMessages || serializedBytes + row.serializedBytes > maxBytes) {
-      hasMore = true;
-      if (!events.length) {
-        requiredBytes = row.serializedBytes;
-      }
-      break;
-    }
-    serializedBytes += row.serializedBytes;
-    lastEventSeq = row.rawSeq;
-    lastMessagePosition = row.messagePosition!;
-    events.push({
-      event: row.event,
-      eventSeq: row.rawSeq,
-      seq: row.messagePosition! + 1,
-      parentId: navigation.active[row.activePosition - 1]?.node?.id ?? null,
-    });
-  }
-  return {
-    kind: "page",
-    cursor: encodeVisibleMessageCursor({ ...cursor, lastEventSeq, lastMessagePosition }),
     events,
     hasMore,
     serializedBytes,
@@ -537,53 +444,39 @@ export function readSessionActorMemoryProjection(
       }
       const range = resolveHistoryAnchorPageRange(rows.length, anchor, options);
       const limit = Math.min(options.maxBytes ?? SOURCE_PAGE_MAX_BYTES, SOURCE_PAGE_MAX_BYTES);
-      const start = resolveSessionActorMemoryHistoryStart(
-        rows,
-        range.readStart,
-        range.endExclusive,
+      const { start, endExclusive } = boundHistoryAnchorPageRange(
+        range,
+        anchor,
         Math.max(1024, Math.floor(limit)),
-        Infinity,
-        options.maxBytes === undefined,
-        2,
+        (index, remainingBytes) =>
+          options.maxBytes === undefined || rows[index]!.serializedBytes > remainingBytes
+            ? rows[index]!.serializedBytes
+            : jsonUtf8Bytes({
+                event: rows[index]!.event,
+                eventSeq: rows[index]!.rawSeq,
+                seq: index + 1,
+                displayPosition: position(rows[index]!),
+              }) + 1,
         options.maxBytes === undefined,
       );
-      let selected = rows.slice(start, range.endExclusive);
-      let selectedStart = start;
-      if (options.maxBytes !== undefined) {
-        const responseLimit = Math.max(1024, Math.floor(limit));
-        let bytes = 2;
-        let index = selected.length;
-        while (index > 0) {
-          const candidate = selected[index - 1]!;
-          const size = jsonUtf8Bytes({
-            event: candidate.event,
-            eventSeq: candidate.rawSeq,
-            seq: start + index,
-            displayPosition: position(candidate),
-          });
-          const separator = index === selected.length ? 0 : 1;
-          if (bytes + size + separator > responseLimit) {
-            break;
-          }
-          bytes += size + separator;
-          index--;
-        }
-        selectedStart += index;
-        selected = selected.slice(index);
-      }
+      const selected = rows.slice(start, endExclusive);
       return {
         found: true,
-        messages: messages(selected, selectedStart),
+        messages: messages(selected, start),
         totalMessages: rows.length,
-        hasOverreadContext: range.hasOverreadContext && selectedStart === range.readStart,
-        offset: range.offset,
+        hasOverreadContext: range.hasOverreadContext && start === range.readStart,
+        offset: rows.length - endExclusive,
         displaySource,
         transcriptPath: window.hot.target.sessionKey,
-        ...(changed ? { windowReset: true, readWindow: capture(selected, selectedStart) } : {}),
+        ...(changed ? { windowReset: true } : {}),
+        ...(changed || options.captureReadWindow
+          ? { readWindow: rows === history ? capture(selected, start) : capture([], 0) }
+          : {}),
       };
     }
     case "source": {
       const options = selection.options;
+      const messageIds = options.messageIds && new Set(options.messageIds);
       if (options.cursor?.kind === "archive") {
         throw new Error("Memory sessions have no archive source");
       }
@@ -626,18 +519,25 @@ export function readSessionActorMemoryProjection(
       let bytes = 0;
       let consumed = 0;
       const activeSeqs = new Set(active.slice(0, count).map((row) => row.rawSeq));
+      let rawPosition = 0;
       while (cursor && consumed < SOURCE_PAGE_MAX_MESSAGES) {
+        if (cursor.kind === "off-path") {
+          while (
+            rawPosition < window.events.length &&
+            (window.events[rawPosition]!.rawSeq <= cursor.position ||
+              activeSeqs.has(window.events[rawPosition]!.rawSeq))
+          ) {
+            rawPosition++;
+          }
+        }
         const row =
           cursor.kind === "kept"
             ? navigation.keptMessages[cursor.position]
             : cursor.kind === "active"
               ? active[cursor.position < count ? cursor.position : -1]
-              : window.events.find(
-                  (candidate) =>
-                    candidate.rawSeq > cursor!.position &&
-                    candidate.rawSeq <= snapshot.indexedSeq &&
-                    !activeSeqs.has(candidate.rawSeq),
-                );
+              : (window.events[rawPosition]?.rawSeq ?? Infinity) <= snapshot.indexedSeq
+                ? window.events[rawPosition]
+                : undefined;
         if (!row) {
           cursor =
             cursor.kind === "kept"
@@ -646,6 +546,24 @@ export function readSessionActorMemoryProjection(
                 ? { ...cursor, kind: "off-path", position: -1 }
                 : undefined;
           continue;
+        }
+        if (messageIds) {
+          const event = isRecord(row.event) ? row.event : undefined;
+          const storedMessage = isRecord(event?.message) ? event.message : undefined;
+          const storedMeta = isRecord(storedMessage?.["__openclaw"])
+            ? storedMessage["__openclaw"]
+            : undefined;
+          const messageId = typeof event?.id === "string" ? event.id : storedMeta?.id;
+          if (typeof messageId !== "string" || !messageIds.has(messageId)) {
+            cursor = {
+              ...cursor,
+              position: cursor.kind === "off-path" ? row.rawSeq : cursor.position + 1,
+              messageSeq:
+                cursor.messageSeq +
+                (cursor.kind !== "off-path" && isVisibleTranscriptRecord(row.event) ? 1 : 0),
+            };
+            continue;
+          }
         }
         const size = Buffer.byteLength(row.eventJson) + 1;
         if (size > SOURCE_PAGE_MAX_BYTES) {

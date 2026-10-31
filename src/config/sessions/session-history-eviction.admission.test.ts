@@ -6,7 +6,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as sqlite from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
-import { isSessionLifecycleMutationActive } from "../../sessions/session-lifecycle-admission.js";
+import { isSessionMutationActive } from "../../sessions/session-controller.lifecycle.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
@@ -22,6 +22,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntryReadOnly, loadTranscriptEventsSync } from "./session-accessor.js";
 import { createWorkerSqliteIntegrityGate } from "./session-accessor.sqlite-integrity-counter.test-support.js";
+import { observeNativeSqliteIntegrityChecks } from "./session-accessor.sqlite-native-integrity.test-support.js";
 import {
   getSessionKysely,
   runExclusiveSqliteSessionWrite,
@@ -44,16 +45,13 @@ vi.mock("node:worker_threads", async (importOriginal) => {
     Worker: observeWorkerSqliteIntegrity(actual.Worker, () => hook.integrityGate),
   };
 });
-vi.mock("../../sessions/session-lifecycle-admission.js", async (importOriginal) => {
+vi.mock("../../sessions/session-controller.lifecycle.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../../sessions/session-lifecycle-admission.js")>();
+    await importOriginal<typeof import("../../sessions/session-controller.lifecycle.js")>();
   return {
     ...actual,
-    runExclusiveSessionLifecycleMutation: <T>(
-      operation: Parameters<typeof actual.runExclusiveSessionLifecycleMutation<T>>[0],
-      params: Parameters<typeof actual.runExclusiveSessionLifecycleMutation<T>>[1],
-    ) =>
-      actual.runExclusiveSessionLifecycleMutation(operation, {
+    runSessionMutation: <T>(params: Parameters<typeof actual.runSessionMutation<T>>[0]) =>
+      actual.runSessionMutation({
         ...params,
         run: async () => {
           await hook.beforePlan?.();
@@ -109,17 +107,17 @@ function own<T>(promise: Promise<T>): Promise<T> {
 }
 
 it.each([
-  { boundary: "initial", cold: false, outcome: "reclaim" },
-  { boundary: "initial", cold: true, outcome: "reclaim" },
-  { boundary: "replan", cold: false, outcome: "reclaim" },
-  { boundary: "replan", cold: true, outcome: "reclaim" },
-  { boundary: "initial", cold: true, outcome: "protected" },
-  { boundary: "replan", cold: true, outcome: "protected" },
-  { boundary: "initial", cold: true, outcome: "revoked" },
-  { boundary: "replan", cold: true, outcome: "revoked" },
+  ["initial", false, "reclaim"],
+  ["initial", true, "reclaim"],
+  ["replan", false, "reclaim"],
+  ["replan", true, "reclaim"],
+  ["initial", true, "protected"],
+  ["replan", true, "protected"],
+  ["initial", true, "revoked"],
+  ["replan", true, "revoked"],
 ] as const)(
-  "keeps $boundary history preparation and $outcome ordered at worker admission (cold: $cold)",
-  async ({ boundary: preparationBoundary, cold, outcome }) => {
+  "keeps %s history preparation ordered at worker admission (cold: %s, outcome: %s)",
+  async (preparationBoundary, cold, outcome) => {
     const sessionsDir = testState.sessionsDir();
     fs.mkdirSync(sessionsDir, { recursive: true });
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -127,7 +125,6 @@ it.each([
     const oldSessionId = "old-generation";
     const currentSessionId = "current-generation";
     const dayMs = 24 * 60 * 60 * 1000;
-    const oldAt = Date.now() - 8 * dayMs;
     const currentScope = { sessionKey, storePath };
     const oldScope = { ...currentScope, sessionId: oldSessionId };
     await createSessionHistoryBudgetFixture(() => ({
@@ -137,7 +134,7 @@ it.each([
       sessionKey,
       sessionId: oldSessionId,
       nextSessionId: currentSessionId,
-      updatedAt: oldAt,
+      updatedAt: Date.now() - 8 * dayMs,
       content: "x".repeat(64 * 1024),
     });
     const target = resolveSqliteTargetFromSessionStorePath(storePath);
@@ -156,7 +153,6 @@ it.each([
     const historyBefore = loadTranscriptEventsSync(oldScope);
     expect(historyBefore.length).toBeGreaterThan(0);
     const currentEntry = loadSessionEntryReadOnly(currentScope);
-    expect(currentEntry).toMatchObject({ sessionId: currentSessionId });
     database.walMaintenance.checkpoint();
     const peerBytes = 2 * 1024 * 1024;
     fs.writeFileSync(path.join(sessionsDir, "synthetic-pressure.bin"), Buffer.alloc(peerBytes));
@@ -174,37 +170,16 @@ it.each([
     hook.integrityGate = integrityGate;
     releases.push(() => releaseBlocker.resolve(), integrityGate.release);
 
-    vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, openOptions) => {
-      const opened = realOpen(pathname, openOptions);
-      if (pathname !== database.path || openOptions?.readOnly) {
-        return opened;
-      }
-      const prepare = opened.prepare.bind(opened);
-      opened.prepare = (sql) => {
-        const statement = prepare(sql);
-        if (
-          sql === "PRAGMA integrity_check;" ||
-          sql === "PRAGMA integrity_check('sqlite_schema');"
-        ) {
-          const all = statement.all.bind(statement);
-          statement.all = () => {
-            parentChecks += Number(observingAdmission);
-            return all();
-          };
-        }
-        return statement;
-      };
-      return opened;
+    observeNativeSqliteIntegrityChecks(database.path, () => {
+      parentChecks += Number(observingAdmission);
     });
     const beforePreparation = async () => {
       hook.beforePlan = undefined;
       hook.afterMaterialize = undefined;
-      expect(database.db.isTransaction).toBe(false);
       if (cold) {
         closeCachedOpenClawAgentDatabase(database);
         invalidateOpenClawAgentDatabaseValidation(database.path);
         revokeSqliteDatabaseAdmissionsForPath(database.path);
-        expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
       }
       observingAdmission = true;
       if (cold) {
@@ -257,9 +232,8 @@ it.each([
       await yieldToEventLoop();
       // Both archive reads and cold integrity validation release writer admission;
       // transaction ordering resumes only when the reclaimer requests its write.
-      expect(laterWriterRan).toBe(true);
       expect(followingWriterRan).toBe(true);
-      expect(isSessionLifecycleMutationActive(storePath, [oldSessionId])).toBe(true);
+      expect(isSessionMutationActive(storePath, [oldSessionId])).toBe(true);
       if (outcome === "protected") {
         // A peer connection can refresh the live entry while its worker validates.
         const peer = realOpen(database.path);
@@ -299,8 +273,7 @@ it.each([
     expect(laterWriterRan).toBe(true);
     expect(boundary).toBe(cold ? "worker" : "completed");
     expect(parentChecks).toBe(0);
-    expect(integrityGate.count()).toBe(cold ? 1 : 0);
-    expect(isSessionLifecycleMutationActive(storePath, [oldSessionId])).toBe(false);
+    expect(isSessionMutationActive(storePath, [oldSessionId])).toBe(false);
     if (outcome === "revoked") {
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
     }

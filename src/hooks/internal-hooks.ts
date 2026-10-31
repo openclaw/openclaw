@@ -6,9 +6,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  clearLegacyPluginInternalHooks,
-  listLegacyPluginInternalHooks,
-} from "../plugins/legacy-internal-hook-state.js";
+  getActivePluginRegistry,
+  getPluginRegistrationContext,
+  requireActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
   InternalHookEvent,
@@ -140,6 +141,21 @@ const internalHooksEnabledState = resolveGlobalSingleton<{ enabled: boolean }>(
   () => ({ enabled: true }),
 );
 const log = createSubsystemLogger("internal-hooks");
+
+function listActiveRegistrations() {
+  return getActivePluginRegistry()?.legacyInternalHooks ?? [];
+}
+
+function listLegacyPluginInternalHooks(event: string): InternalHookHandler[] {
+  return listActiveRegistrations()
+    .filter((registration) => registration.event === event)
+    .map((registration) => registration.handler);
+}
+
+function clearLegacyPluginInternalHooks(): void {
+  const context = getPluginRegistrationContext();
+  (context?.registry ?? requireActivePluginRegistry()).legacyInternalHooks.length = 0;
+}
 
 /** Register for a family (e.g. "command") or an exact action (e.g. "command:new"). */
 export function registerInternalHook(eventKey: string, handler: InternalHookHandler): void {

@@ -116,12 +116,9 @@ export function readToolSearchLimit(value: unknown, config: ToolSearchConfig): n
 
 function readToolSearchArgs(
   params: Record<string, unknown>,
+  query: string,
   config: ToolSearchConfig,
 ): { query: string; limit: number } {
-  const query = params.query;
-  if (typeof query !== "string") {
-    throw new ToolInputError("query must be a string.");
-  }
   const options = isRecord(params.options) ? params.options : undefined;
   return {
     query,
@@ -203,10 +200,10 @@ export function readToolSearchRequest(args: unknown, config: ToolSearchConfig): 
   }
   const singleQuery = query?.trim() ? query : undefined;
   if (batchEntries.length === 0) {
-    if (singleQuery === undefined && hasQueries) {
+    if (query == null || (singleQuery === undefined && hasQueries)) {
       throw new ToolInputError("queries must be a non-empty array.");
     }
-    return { kind: "single", search: readToolSearchArgs(params, config) };
+    return { kind: "single", search: readToolSearchArgs(params, query, config) };
   }
   if (singleQuery === undefined && (params.limit != null || params.options !== undefined)) {
     throw new ToolInputError("set limit on each batch query, not on the batch request.");
@@ -216,7 +213,7 @@ export function readToolSearchRequest(args: unknown, config: ToolSearchConfig): 
   );
   if (singleQuery !== undefined) {
     // Even identical text is an independent search with its own limit and budget.
-    const single = readToolSearchArgs(params, config);
+    const single = readToolSearchArgs(params, singleQuery, config);
     searches.unshift({ query: single.query.trim(), limit: single.limit });
   }
   return readBatchToolSearchRequest(searches, config);

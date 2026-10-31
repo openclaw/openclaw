@@ -1,3 +1,4 @@
+import { omitUndefinedFields } from "../../packages/normalization-core/src/record-coerce.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   normalizeOptionalTrimmedStringList,
@@ -14,9 +15,10 @@ import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { isRecord } from "../utils.js";
 import {
+  isPluginManifestOnboardingScope,
   normalizeManifestObjectList,
   normalizeNamedMetadataRecord,
-  omitUndefinedManifestFields,
+  normalizeProviderAssistantVisibility,
   optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
@@ -28,7 +30,6 @@ import type {
   PluginManifestCliCommand,
   PluginManifestDashboard,
   PluginManifestDashboardActionVerb,
-  PluginManifestOnboardingScope,
   PluginManifestProviderAuthChoice,
   PluginManifestQaRunner,
   PluginManifestSetup,
@@ -123,57 +124,12 @@ export function normalizeManifestCliCommands(
   );
 }
 
-function normalizeManifestSetupProviders(
-  value: unknown,
-): PluginManifestSetupProvider[] | undefined {
-  return normalizeManifestObjectList(value, (entry) => {
-    const id = normalizeOptionalString(entry.id) ?? "";
-    if (!id) {
-      return undefined;
-    }
-    return omitUndefinedManifestFields({
-      id,
-      authMethods: normalizeOptionalTrimmedStringList(entry.authMethods),
-      envVars: normalizeOptionalTrimmedStringList(entry.envVars),
-      authEvidence: normalizeManifestSetupProviderAuthEvidence(entry.authEvidence),
-    });
-  });
-}
-
-function normalizeManifestSetupProviderAuthEvidence(
-  value: unknown,
-): PluginManifestSetupProviderAuthEvidence[] | undefined {
-  return normalizeManifestObjectList(value, (entry) => {
-    if (entry.type !== "local-file-with-env") {
-      return undefined;
-    }
-    const credentialMarker = normalizeOptionalString(entry.credentialMarker);
-    if (!credentialMarker) {
-      return undefined;
-    }
-    const fileEnvVar = normalizeOptionalString(entry.fileEnvVar);
-    const fallbackPaths = normalizeOptionalTrimmedStringList(entry.fallbackPaths);
-    if (!fileEnvVar && !fallbackPaths) {
-      return undefined;
-    }
-    return omitUndefinedManifestFields<PluginManifestSetupProviderAuthEvidence>({
-      type: "local-file-with-env",
-      fileEnvVar,
-      fallbackPaths,
-      requiresAnyEnv: normalizeOptionalTrimmedStringList(entry.requiresAnyEnv),
-      requiresAllEnv: normalizeOptionalTrimmedStringList(entry.requiresAllEnv),
-      credentialMarker,
-      source: normalizeOptionalString(entry.source),
-    });
-  });
-}
-
 export function normalizeManifestSetup(value: unknown): PluginManifestSetup | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
   const nativeSessionCatalog = isRecord(value.nativeSessionCatalog)
-    ? omitUndefinedManifestFields({
+    ? omitUndefinedFields({
         label: normalizeOptionalString(value.nativeSessionCatalog.label) ?? "",
         legacyDefaultEnabled:
           value.nativeSessionCatalog.legacyDefaultEnabled === true ? true : undefined,
@@ -182,7 +138,46 @@ export function normalizeManifestSetup(value: unknown): PluginManifestSetup | un
       })
     : undefined;
   return optionalManifestFields({
-    providers: normalizeManifestSetupProviders(value.providers),
+    providers: normalizeManifestObjectList<PluginManifestSetupProvider>(
+      value.providers,
+      (entry) => {
+        const id = normalizeOptionalString(entry.id) ?? "";
+        if (!id) {
+          return undefined;
+        }
+        return omitUndefinedFields({
+          id,
+          authMethods: normalizeOptionalTrimmedStringList(entry.authMethods),
+          envVars: normalizeOptionalTrimmedStringList(entry.envVars),
+          authEvidence: normalizeManifestObjectList<PluginManifestSetupProviderAuthEvidence>(
+            entry.authEvidence,
+            (rawEvidence) => {
+              if (rawEvidence.type !== "local-file-with-env") {
+                return undefined;
+              }
+              const credentialMarker = normalizeOptionalString(rawEvidence.credentialMarker);
+              if (!credentialMarker) {
+                return undefined;
+              }
+              const fileEnvVar = normalizeOptionalString(rawEvidence.fileEnvVar);
+              const fallbackPaths = normalizeOptionalTrimmedStringList(rawEvidence.fallbackPaths);
+              if (!fileEnvVar && !fallbackPaths) {
+                return undefined;
+              }
+              return omitUndefinedFields<PluginManifestSetupProviderAuthEvidence>({
+                type: "local-file-with-env",
+                fileEnvVar,
+                fallbackPaths,
+                requiresAnyEnv: normalizeOptionalTrimmedStringList(rawEvidence.requiresAnyEnv),
+                requiresAllEnv: normalizeOptionalTrimmedStringList(rawEvidence.requiresAllEnv),
+                credentialMarker,
+                source: normalizeOptionalString(rawEvidence.source),
+              });
+            },
+          ),
+        });
+      },
+    ),
     cliBackends: normalizeOptionalTrimmedStringList(value.cliBackends),
     configMigrations: normalizeOptionalTrimmedStringList(value.configMigrations),
     nativeSessionCatalog: nativeSessionCatalog?.label ? nativeSessionCatalog : undefined,
@@ -196,7 +191,7 @@ export function normalizeManifestQaRunners(value: unknown): PluginManifestQaRunn
     if (!commandName) {
       return undefined;
     }
-    return omitUndefinedManifestFields({
+    return omitUndefinedFields({
       commandName,
       description: normalizeOptionalString(entry.description),
     });
@@ -303,10 +298,9 @@ export function normalizeProviderAuthChoices(
       return undefined;
     }
     const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
-      (scope): scope is PluginManifestOnboardingScope =>
-        scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
+      isPluginManifestOnboardingScope,
     );
-    return omitUndefinedManifestFields<PluginManifestProviderAuthChoice>({
+    return omitUndefinedFields<PluginManifestProviderAuthChoice>({
       provider,
       method,
       choiceId,
@@ -322,12 +316,7 @@ export function normalizeProviderAuthChoices(
         typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
           ? entry.assistantPriority
           : undefined,
-      assistantVisibility:
-        entry.assistantVisibility === "manual-only" ||
-        entry.assistantVisibility === "visible" ||
-        entry.assistantVisibility === "detected-only"
-          ? entry.assistantVisibility
-          : undefined,
+      assistantVisibility: normalizeProviderAssistantVisibility(entry.assistantVisibility),
       deprecatedChoiceIds: normalizeOptionalTrimmedStringList(entry.deprecatedChoiceIds),
       groupId: normalizeOptionalString(entry.groupId),
       groupLabel: normalizeOptionalString(entry.groupLabel),
@@ -383,7 +372,7 @@ export function normalizeChannelConfigs(
     if (!schema) {
       return undefined;
     }
-    return omitUndefinedManifestFields({
+    return omitUndefinedFields({
       schema,
       uiHints: normalizeConfigUiHints(rawEntry.uiHints),
       runtime:

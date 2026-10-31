@@ -91,6 +91,10 @@ openclaw tui --local
 
 Esc or Ctrl+C closes a picker. In the session picker, the first press clears a nonempty filter. Press again to close it.
 
+Picker searches and [`openclaw resume`](/cli/resume) match canonically equivalent
+Unicode text, so composed and decomposed names can find the same entries.
+Session keys and selected model or agent values retain their original spelling.
+
 The model picker opens immediately, showing a checking state if no models are known yet.
 In Gateway mode, it reuses the selected agent's last known list while refreshing in the
 background. Catalog changes update an open picker without clearing its search or
@@ -179,11 +183,17 @@ Session controls:
 Session lifecycle:
 
 - `/new` (spawn a fresh, isolated session under a new key). It does not affect other TUI clients on the old session.
-- `/reset` (reset the current session key in place)
+- `/reset` (reset the current session key in place). `/reset soft [message]` is forwarded to the Gateway, which keeps the transcript and reruns startup; it is not available in local mode.
 - `/abort` (abort the active run)
 - `/stop` (stop the active or queued run)
 - `/settings`
 - `/exit` (or `/quit`)
+
+During Gateway startup, messages and `/new` wait up to five minutes. Stop cancels
+requests that are still waiting for startup admission. Once a request is sent, the
+TUI keeps its response and original deadline; repeated input cannot submit a
+second copy while that response is pending. Stop still asks the Gateway to abort
+active runs.
 
 When the current session is reset, the TUI reports it after refreshing the transcript. This includes resets started by another client.
 

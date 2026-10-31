@@ -36,6 +36,7 @@ CREATE TABLE "github_personal_publication_requests" (
   "created_at_ms" bigint NOT NULL,
   "updated_at_ms" bigint NOT NULL,
   "reported_at_ms" bigint,
+  "draft" bigint,
   PRIMARY KEY ("request_id"),
   CHECK ((char_length("request_id") = 36)),
   CHECK ((char_length("owner_profile_id") BETWEEN 1 AND 128)),
@@ -77,6 +78,6 @@ CREATE TABLE "github_personal_publication_requests" (
   UNIQUE ("owner_profile_id", "session_id", "idempotency_key")
 );
 
-CREATE INDEX "idx_github_personal_publication_owner_session" ON "github_personal_publication_requests" (("owner_profile_id") ASC NULLS FIRST, ("session_id") ASC NULLS FIRST, ("created_at_ms") ASC NULLS FIRST);
+CREATE INDEX "idx_github_personal_publication_owner_session" ON "github_personal_publication_requests" (("owner_profile_id") ASC, ("session_id") ASC, ("created_at_ms") ASC);
 
-CREATE INDEX "idx_github_personal_publication_pending" ON "github_personal_publication_requests" (("status") ASC NULLS FIRST, ("updated_at_ms") ASC NULLS FIRST, ("request_id") ASC NULLS FIRST);
+CREATE INDEX "idx_github_personal_publication_pending" ON "github_personal_publication_requests" (("status") ASC, ("updated_at_ms") ASC, ("request_id") ASC);

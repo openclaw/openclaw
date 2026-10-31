@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAckReaction,
@@ -7,40 +7,23 @@ import {
   resolveHumanDelayConfig,
 } from "./identity.js";
 
-describe("resolveAckReaction", () => {
-  it("falls back to channel-level overrides", () => {
-    const cfg: OpenClawConfig = {
-      messages: { ackReaction: "👀" },
-      agents: { entries: { main: { identity: { emoji: "✅" } } } },
-      channels: {
-        slack: {
-          ackReaction: "eyes",
-          accounts: {
-            acct1: { ackReaction: "party_parrot" },
-          },
-        },
-      },
-    };
-
-    expect(resolveAckReaction(cfg, "main", { channel: "slack", accountId: "missing" })).toBe(
-      "eyes",
-    );
-  });
-
-  it("falls back to the agent identity emoji when global config is unset", () => {
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: { identity: { emoji: "🔥" } } } },
-    };
-
-    expect(resolveAckReaction(cfg, "main", { channel: "discord" })).toBe("🔥");
-  });
-
-  it("returns the default emoji when no config is present", () => {
-    const cfg: OpenClawConfig = {};
-
-    expect(resolveAckReaction(cfg, "main")).toBe("👀");
-  });
-});
+const ackConfig: OpenClawConfig = {
+  messages: { ackReaction: "👀" },
+  agents: { entries: { main: { identity: { emoji: "✅" } } } },
+  channels: {
+    slack: { ackReaction: "eyes", accounts: { acct1: { ackReaction: "party_parrot" } } },
+  },
+};
+it.each([
+  [ackConfig, { channel: "slack", accountId: "missing" }, "eyes"],
+  [{ agents: { entries: { main: { identity: { emoji: "🔥" } } } } }, { channel: "discord" }, "🔥"],
+  [{}, undefined, "👀"],
+] satisfies [OpenClawConfig, { channel: string; accountId?: string } | undefined, string][])(
+  "resolves ack reaction %#",
+  (config, options, expected) => {
+    expect(resolveAckReaction(config, "main", options)).toBe(expected);
+  },
+);
 
 function prefixConfig(
   responsePrefix?: string,
@@ -52,53 +35,41 @@ function prefixConfig(
   };
 }
 
-describe("response prefixes", () => {
-  it("keeps the global fallback for a configured custom channel", () => {
-    const cfg = {
-      messages: { responsePrefix: "[Bot] " },
-      channels: { custom: { enabled: true } },
-    } as OpenClawConfig;
-    expect(resolveResponsePrefix(cfg, "main", { channel: "custom" })).toBe("[Bot] ");
-  });
-
-  it("resolves 'auto' at account level to identity name", () => {
-    const cfg = prefixConfig(undefined, { business: { responsePrefix: "auto" } });
-    expect(resolveResponsePrefix(cfg, "main", { channel: "whatsapp", accountId: "business" })).toBe(
-      "[MyBot]",
-    );
-  });
-
-  it("passes channel context through to responsePrefix resolution", () => {
-    const cfg = prefixConfig("[WA] ");
-    const result = resolveEffectiveMessagesConfig(cfg, "main", {
-      channel: "whatsapp",
-    });
-    expect(result.responsePrefix).toBe("[WA] ");
-  });
+it("keeps the global prefix for a configured custom channel", () => {
+  const cfg = {
+    messages: { responsePrefix: "[Bot] " },
+    channels: { custom: { enabled: true } },
+  } as OpenClawConfig;
+  expect(resolveResponsePrefix(cfg, "main", { channel: "custom" })).toBe("[Bot] ");
 });
 
-describe("resolveHumanDelayConfig", () => {
-  it("returns undefined when no humanDelay config is set", () => {
-    const cfg: OpenClawConfig = {};
-    expect(resolveHumanDelayConfig(cfg, "main")).toBeUndefined();
-  });
+it("resolves account auto-prefix to the identity name", () => {
+  const cfg = prefixConfig(undefined, { business: { responsePrefix: "auto" } });
+  expect(resolveResponsePrefix(cfg, "main", { channel: "whatsapp", accountId: "business" })).toBe(
+    "[MyBot]",
+  );
+});
 
-  it("merges defaults with per-agent overrides", () => {
-    // Partial agent overrides should preserve unspecified timing bounds from
-    // defaults while replacing the fields the agent owns.
-    const cfg: OpenClawConfig = {
+it("passes channel context through effective message config", () => {
+  expect(
+    resolveEffectiveMessagesConfig(prefixConfig("[WA] "), "main", { channel: "whatsapp" }),
+  ).toMatchObject({ responsePrefix: "[WA] " });
+});
+
+it.each([
+  [{}, undefined],
+  [
+    {
       agents: {
-        defaults: {
-          humanDelay: { mode: "natural", minMs: 800, maxMs: 1800 },
-        },
+        defaults: { humanDelay: { mode: "natural", minMs: 800, maxMs: 1800 } },
         entries: { main: { humanDelay: { mode: "custom", minMs: 400 } } },
       },
-    };
-
-    expect(resolveHumanDelayConfig(cfg, "main")).toEqual({
-      mode: "custom",
-      minMs: 400,
-      maxMs: 1800,
-    });
-  });
-});
+    },
+    { mode: "custom", minMs: 400, maxMs: 1800 },
+  ],
+] satisfies [OpenClawConfig, ReturnType<typeof resolveHumanDelayConfig>][])(
+  "resolves human delay %#",
+  (config, expected) => {
+    expect(resolveHumanDelayConfig(config, "main")).toEqual(expected);
+  },
+);

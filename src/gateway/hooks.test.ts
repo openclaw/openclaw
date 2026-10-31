@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigForRead } from "../config/io.read-helpers.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { setConfigResolutionFacts } from "../config/resolution-facts.js";
+import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -14,6 +15,7 @@ import {
   resolveHookSessionKey,
   normalizeAgentPayload,
   normalizeWakePayload,
+  publishHooksTokenEnvKey,
   resolveHooksConfig,
 } from "./hooks.js";
 
@@ -128,6 +130,29 @@ describe("gateway hooks helpers", () => {
     );
   });
 
+  test("an env-sourced hook token is withheld from host exec children", () => {
+    const env = { PATH: "/usr/bin:/bin", HOOK_SECRET: "synthetic-hook-secret" };
+    const resolution = resolveConfigForRead(
+      { hooks: { enabled: true, token: "${HOOK_SECRET}" } },
+      env,
+    );
+    const cfg = resolution.resolvedConfigRaw as OpenClawConfig;
+    setConfigResolutionFacts(cfg, resolution.resolutionFacts);
+    const hooks = resolveHooksConfig(cfg);
+    expect(hooks?.tokenEnvKey).toBe("HOOK_SECRET");
+    // Literal tokens have no env source to withhold.
+    expect(resolveHooksConfig(hookConfig())?.tokenEnvKey).toBeUndefined();
+    try {
+      publishHooksTokenEnvKey(hooks);
+      expect(sanitizeHostExecEnv({ baseEnv: env })).not.toHaveProperty("HOOK_SECRET");
+      // Reloading to hooks without an env source releases the name again.
+      publishHooksTokenEnvKey(resolveHooksConfig(hookConfig()));
+      expect(sanitizeHostExecEnv({ baseEnv: env }).HOOK_SECRET).toBe("synthetic-hook-secret");
+    } finally {
+      publishHooksTokenEnvKey(null);
+    }
+  });
+
   test("resolveHooksConfig rejects root path", () => {
     expect(() => resolveHooksConfig(hookConfig({ path: "/" }))).toThrow(
       "hooks.path may not be '/'",
@@ -168,13 +193,13 @@ describe("gateway hooks helpers", () => {
     });
   });
 
-  test("normalizeAgentPayload defaults + validates channel", () => {
-    expect(agentPayload()).toEqual({
+  test("normalizeAgentPayload defaults + validates channel and agent", () => {
+    expect(agentPayload({ timeoutSeconds: 0.5 })).toEqual({
       ok: true,
       value: expect.objectContaining({
         sessionKey: undefined,
         sessionMode: "isolated",
-        channel: "last",
+        timeoutSeconds: undefined,
         name: "Hook",
         deliver: true,
         delivery: { mode: "none" },
@@ -203,6 +228,9 @@ describe("gateway hooks helpers", () => {
       value: { sessionMode: "persistent" },
     });
     expectPayloadError({ sessionMode: "shared" }, "sessionMode must be isolated or persistent");
+    expect(agentPayload()).toMatchObject({ ok: true, value: { agentId: undefined } });
+    expectPayloadError({ agentId: 42 }, "agentId must be a non-empty string");
+    expectPayloadError({ agentId: "  " }, "agentId must be a non-empty string");
   });
 
   test("normalizeAgentPayload binds delivery only to a concrete channel and recipient", () => {
@@ -270,14 +298,11 @@ describe("gateway hooks helpers", () => {
     });
   });
 
-  test("normalizeAgentPayload passes agentId", () => {
-    expect(agentPayload({ agentId: "hooks" })).toMatchObject({
+  test.each([1, 1.9])("normalizeAgentPayload agent and timeout %s", (timeoutSeconds) => {
+    expect(agentPayload({ agentId: "hooks", timeoutSeconds })).toMatchObject({
       ok: true,
-      value: { agentId: "hooks" },
+      value: { agentId: "hooks", timeoutSeconds: 1 },
     });
-    expect(agentPayload()).toMatchObject({ ok: true, value: { agentId: undefined } });
-    expectPayloadError({ agentId: 42 }, "agentId must be a non-empty string");
-    expectPayloadError({ agentId: "  " }, "agentId must be a non-empty string");
   });
 
   test("hook target resolution keeps config fallback out of request payloads", () => {

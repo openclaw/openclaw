@@ -14,12 +14,6 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-function changelog(strings: TemplateStringsArray, ...values: string[]) {
-  return `${String.raw({ raw: strings }, ...values)
-    .replace(/^\n/u, "")
-    .trimEnd()}\n`;
-}
-
 const notes = (version: string, body: string) => `## ${version}\n${body}\n`;
 const current = notes("2026.5.28", "- Current fix.\n- Complete editorial release notes.");
 const cumulativeChangelog = `# Changelog\nDocs: https://docs.openclaw.ai\n${notes("Unreleased", "- Pending note.")}${current}${notes("2026.5.27", "- Older highlight.")}`;
@@ -122,38 +116,10 @@ describe("package-changelog", () => {
     );
   });
 
-  it("prefers an exact prerelease section when it exists", () => {
-    const source = changelog`
-# Changelog
-## 2026.5.28-beta.2
-- Beta 2 package notes with enough release detail.
-## 2026.5.28
-- Stable.
-`;
-
-    expect(extractCurrentPackageChangelog(source, "2026.5.28-beta.2")).toBe(changelog`
-# Changelog
-
-## 2026.5.28-beta.2
-- Beta 2 package notes with enough release detail.
-`);
-  });
-
-  it("extracts exact correction release sections", () => {
-    const source = changelog`
-# Changelog
-## 2026.5.28-1
-- Correction release notes with enough detail.
-## 2026.5.28
-- Stable.
-`;
-
-    expect(extractCurrentPackageChangelog(source, "2026.5.28-1")).toBe(changelog`
-# Changelog
-
-## 2026.5.28-1
-- Correction release notes with enough detail.
-`);
+  it.each(["2026.5.28-beta.2", "2026.5.28-1"])("prefers exact %s notes", (version) => {
+    const selected = notes(version, "- Package notes with enough release detail.");
+    const source = `# Changelog\n${selected}${notes("2026.5.28", "- Stable.")}`;
+    expect(extractCurrentPackageChangelog(source, version)).toBe(`# Changelog\n\n${selected}`);
   });
 
   it.each(["Unreleased", "2026.5.30 (Unreleased)", "2026.5.30 (Release notes)"])(

@@ -34,18 +34,13 @@ import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
 import { recordRuntimeActionDecision } from "../../audit/runtime-action-decision.js";
 import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { getGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
 import { logVerbose } from "../../globals.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { markDiagnosticSessionProgress } from "../../logging/diagnostic.js";
-import {
-  stripExtractedFileImageMetadata,
-  type ExtractedFileImage,
-} from "../../media-understanding/extracted-file-images.js";
-import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
+import { stripExtractedFileImageMetadata } from "../../media-understanding/extracted-file-images.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
@@ -53,16 +48,15 @@ import { classifySessionStateActor } from "../../sessions/session-state-events.j
 import { bindUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { shouldDeferFinalTtsText } from "../../tts/captioned-final.js";
-import { prepareTtsPreferences, type PreparedTtsPreferences } from "../../tts/tts-preferences.js";
+import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import type {
-  GetReplyOptions,
   ReplyDispatchRun,
   ReplyDispatchAssistantTranscript,
-  SourceReplyDeliveryMode,
 } from "../get-reply-options.types.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { createLazyAcpElicitationHandler } from "./acp-elicitation-handler-lazy.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
+import { resolveAcpProjectionSettings } from "./acp-stream-settings.js";
 import {
   collectDescribedImageAttachmentIndexes,
   loadAgentTurnMediaRuntime,
@@ -71,13 +65,15 @@ import {
 } from "./agent-turn-attachments.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
-import type { AcpDispatchDeliveryParams } from "./dispatch-acp-delivery.types.js";
+import type {
+  AcpDispatchAttemptParams,
+  AcpDispatchAttemptResult,
+} from "./dispatch-acp-delivery.types.js";
 import { finalizeAcpTurnOutput } from "./dispatch-acp-finalize.js";
 import { resolveAcpTurnText } from "./dispatch-acp-prompt.js";
-import type { InboundMessageAuditTerminalRecorder } from "./dispatch-from-config.audit.js";
 import { appendRecentHistoryImageContext } from "./history-media.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
-import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
+import { resolveInboundConversationToolPolicy } from "./reply-tool-authority-inbound.js";
 import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
 
 const loadDispatchAcpManagerRuntime = createLazyPromise(
@@ -99,33 +95,8 @@ function resolveAcpRequestId(ctx: FinalizedRuntimeMsgContext): string {
   );
 }
 
-export type AcpDispatchAttemptResult = {
-  queuedFinal: boolean;
-  counts: Record<ReplyDispatchKind, number>;
-};
-
 export async function tryDispatchAcpReplyCore(
-  params: Omit<
-    AcpDispatchDeliveryParams,
-    "agentId" | "ctx" | "suppressBlockUserDelivery" | "preparedTtsPreferences"
-  > & {
-    preparedTtsPreferences?: PreparedTtsPreferences;
-    ctx: FinalizedRuntimeMsgContext;
-    toolsAllow?: string[];
-    images?: Array<{ data: string; mimeType: string }>;
-    extractedFileImages?: ExtractedFileImage[];
-    sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-    shouldSendToolSummaries: () => Promise<boolean>;
-    shouldSendFullToolDetails: () => Promise<boolean>;
-    bypassForCommand: boolean;
-    onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
-    onPreparedAgentRunStart?: GetReplyOptions["onPreparedAgentRunStart"];
-    turnAdoption?: PluginHookReplyDispatchContext["turnAdoption"];
-    userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
-    prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
-    recordProcessed: InboundMessageAuditTerminalRecorder["note"];
-    markIdle: (reason: string) => void;
-  },
+  params: AcpDispatchAttemptParams,
 ): Promise<AcpDispatchAttemptResult | null> {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey || params.bypassForCommand) {
@@ -305,11 +276,22 @@ export async function tryDispatchAcpReplyCore(
   }
   const deliverDeferredTextFallback = async (): Promise<boolean> =>
     shouldDeferVisibleTextForTts ? await delivery.recoverBlockText() : false;
+  const isLive = resolveAcpProjectionSettings(params.cfg).deliveryMode === "live";
+  let streamedText = "";
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
     shouldSendFullToolDetails: params.shouldSendFullToolDetails,
-    deliver: delivery.deliver,
+    deliver: async (kind, payload, meta) => {
+      const delivered = await delivery.deliver(kind, payload, meta);
+      const text = isLive && kind === "block" ? delivery.getVisibleBlockDisplayText() : "";
+      const delta = text.startsWith(streamedText) ? text.slice(streamedText.length) : text;
+      if (delta && !auditOnly && !params.suppressUserDelivery) {
+        auditRuntime.emitAcpAssistantDelta({ runId: auditRunId, text, delta });
+        streamedText = text;
+      }
+      return delivered;
+    },
     getConversationContext: () => params.ctx.agentText,
     onProgress: markAcpProgress,
     provider: params.ctx.Surface ?? params.ctx.Provider,
@@ -469,10 +451,13 @@ export async function tryDispatchAcpReplyCore(
       auditTerminalOutcome = "blocked";
       throw dispatchPolicyError;
     }
+    const { ctx, cfg: config } = params;
     if (
       (params.toolsAllow !== undefined &&
         !params.toolsAllow.some((entry) => normalizeLowercaseStringOrEmpty(entry) === "*")) ||
-      toolPolicyRestrictsTools(params.ctx.ConversationToolPolicy)
+      toolPolicyRestrictsTools(
+        resolveInboundConversationToolPolicy({ ctx, config, sessionKey: params.sessionKey }),
+      )
     ) {
       auditTerminalOutcome = "blocked";
       throw new AcpRuntimeError(
@@ -747,4 +732,5 @@ export async function tryDispatchAcpReplyCore(
     }
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+export type { AcpDispatchAttemptResult } from "./dispatch-acp-delivery.types.js";

@@ -1,14 +1,15 @@
 /* @vitest-environment jsdom */
 
-import type { RouteLoaderOptions, RouteLocation } from "@openclaw/uirouter";
+import type { RouteLocation } from "@openclaw/uirouter";
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { createContext as createCustodianContext } from "./custodian-page.test-harness.ts";
 import { CustodianRoute } from "./custodian-page.tsx";
-import { page, type CustodianRouteData } from "./route.ts";
+import { page, type CustodianRouteData } from "./route.tsx";
 
 function location(search: string): RouteLocation {
   return { pathname: "/custodian", search, hash: "" };
@@ -18,14 +19,10 @@ function loadRoute(search: string): CustodianRouteData {
   if (!page.loader) {
     throw new Error("custodian route has no loader");
   }
-  return page.loader({} as ApplicationContext, {
-    signal: new AbortController().signal,
-    shouldRun: () => true,
-    revalidating: false,
-    location: location(search),
-    deps: search,
-    cause: "navigation",
-  } satisfies RouteLoaderOptions) as CustodianRouteData;
+  return page.loader(
+    {} as ApplicationContext,
+    createRouteLoaderOptions(location(search), search),
+  ) as CustodianRouteData;
 }
 
 function createContext(): ApplicationContext {

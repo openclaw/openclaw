@@ -4,7 +4,7 @@ import {
   patchLiveQaGatewayConfig,
   readLiveQaGatewayConfig,
 } from "../shared/live-gateway-config.runtime.js";
-import type { DiscordUser, DiscordObservedMessage } from "./discord-live.evidence.js";
+import type { DiscordUser } from "./discord-live.evidence.js";
 import {
   type DiscordQaScenarioImplementation,
   type DiscordQaRuntimeEnv,
@@ -26,7 +26,6 @@ export function createDiscordQaScenarioEnvironment(params: {
   runtimeEnv: DiscordQaRuntimeEnv;
   sutIdentity: DiscordUser;
 }) {
-  const observedMessages: DiscordObservedMessage[] = [];
   const prepareFlow = async (input: FlowPreparationInput) => {
     return {
       discordScenarioContext: {
@@ -116,7 +115,6 @@ export function createDiscordQaScenarioEnvironment(params: {
           };
         },
         driverIdentity: params.driverIdentity,
-        observedMessages,
         outputDir: input.outputDir,
         runtimeEnv: params.runtimeEnv,
         scenario: {

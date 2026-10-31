@@ -8,6 +8,7 @@ import type {
   PluginManifestProviderRequestProvider,
 } from "../plugins/manifest.js";
 import {
+  isPluginProviderEndpointClass,
   matchesPluginProviderEndpoint,
   normalizePluginProviderBaseUrl,
 } from "../plugins/plugin-metadata-provider-facts.js";
@@ -20,23 +21,15 @@ import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 
-type ProviderAttributionVerification =
-  | "vendor-documented"
-  | "vendor-hidden-api-spec"
-  | "vendor-sdk-hook-only"
-  | "internal-runtime";
-
-type ProviderAttributionHook =
-  | "request-headers"
-  | "default-headers"
-  | "user-agent-extra"
-  | "custom-user-agent";
-
 export type ProviderAttributionPolicy = {
   provider: string;
   enabledByDefault: boolean;
-  verification: ProviderAttributionVerification;
-  hook?: ProviderAttributionHook;
+  verification:
+    | "vendor-documented"
+    | "vendor-hidden-api-spec"
+    | "vendor-sdk-hook-only"
+    | "internal-runtime";
+  hook?: "request-headers" | "default-headers" | "user-agent-extra" | "custom-user-agent";
   docsUrl?: string;
   reviewNote?: string;
   product: string;
@@ -481,30 +474,7 @@ export function resolveProviderRequestCapabilities(
   const api = normalizeOptionalLowercaseString(input.api);
   const endpointClass = policy.endpointClass;
   const isKnownNativeEndpoint =
-    endpointClass === "anthropic-public" ||
-    endpointClass === "cerebras-native" ||
-    endpointClass === "chutes-native" ||
-    endpointClass === "deepseek-native" ||
-    endpointClass === "github-copilot-native" ||
-    endpointClass === "groq-native" ||
-    endpointClass === "meta-native" ||
-    endpointClass === "mistral-public" ||
-    endpointClass === "minimax-native" ||
-    endpointClass === "moonshot-native" ||
-    endpointClass === "modelstudio-native" ||
-    endpointClass === "novita-native" ||
-    endpointClass === "nvidia-native" ||
-    endpointClass === "openai-public" ||
-    endpointClass === "openai" ||
-    endpointClass === "opencode-native" ||
-    endpointClass === "opencode-go-native" ||
-    endpointClass === "azure-openai" ||
-    endpointClass === "openrouter" ||
-    endpointClass === "xai-native" ||
-    endpointClass === "xiaomi-native" ||
-    endpointClass === "zai-native" ||
-    endpointClass === "google-generative-ai" ||
-    endpointClass === "google-vertex";
+    isPluginProviderEndpointClass(endpointClass) && endpointClass !== "vercel-ai-gateway";
 
   const manifestProviderRequest = resolveManifestProviderRequest(
     provider,

@@ -1,6 +1,7 @@
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { WorkerWriteOperationContext } from "../../state/worker-operation-registry.js";
+import { readSandboxPersistentExecsInDatabase } from "./persistent-exec-store.kernel.js";
 import { importSandboxRegistryRow } from "./registry-import.worker.js";
 import { withSandboxRegistryWorkerReceipt } from "./registry-publication.js";
 import {
@@ -48,9 +49,17 @@ export const sandboxRegistryOperations = {
     input: SandboxRegistryOperations["sandboxRegistry.beginRemoval"]["input"],
     context: WorkerWriteOperationContext,
   ) =>
-    writeRegistry(context, "sandboxRegistry.beginRemoval", (db) =>
-      beginSandboxRegistryRemovalInDatabase(db, input),
-    ),
+    writeRegistry(context, "sandboxRegistry.beginRemoval", (db) => {
+      // Reservation and pruning share the same transaction and durable removal fence.
+      if (
+        input.preservePersistentExecs &&
+        readSandboxPersistentExecsInDatabase(db, { containerName: input.entry.containerName })
+          .length
+      ) {
+        return null;
+      }
+      return beginSandboxRegistryRemovalInDatabase(db, input);
+    }),
   "sandboxRegistry.finishRemoval": (
     input: SandboxRegistryCleanupOperations["sandboxRegistry.finishRemoval"]["input"],
     context: WorkerWriteOperationContext,

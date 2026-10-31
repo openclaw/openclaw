@@ -1,18 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnv } from "../../test-utils/env.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
+import {
+  apiKey,
+  authStore,
+  model,
+  providerConfig,
+} from "../model-catalog-fixtures.test-support.js";
 import type { ModelCatalogSnapshot } from "../model-catalog.types.js";
-import { preparePublishedModelCatalogOwnerIdentity } from "../prepared-model-catalog-owner.js";
 import {
   CATALOG_ALIAS_ID,
   EXTERNAL_AUTH_PATH_ENV,
   PROVIDER_ID,
+  catalogInput,
   createCatalogFixture,
+  startCatalogBuild,
 } from "../prepared-model-catalog-worker.test-support.js";
-import { startSerializedSnapshotBuildBatch } from "../prepared-model-runtime.build.js";
 import { retainPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
 
 export async function expectLegacyWorkerCatalogRetention(params: {
@@ -36,73 +41,34 @@ export async function expectLegacyWorkerCatalogRetention(params: {
   }
   withEnv(fixture.env, () =>
     saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          [`${PROVIDER_ID}:legacy`]: {
-            type: "api_key",
-            provider: PROVIDER_ID,
-            key: "legacy-worker-key-not-real",
-          },
-        },
-      },
+      authStore({ [`${PROVIDER_ID}:legacy`]: apiKey(PROVIDER_ID, "legacy-worker-key-not-real") }),
       fixture.agentDir,
     ),
   );
-  const config: OpenClawConfig = {
+  const config = {
     ...fixture.config,
-    models: {
-      providers: {
-        [PROVIDER_ID]: {
-          baseUrl: "https://worker-catalog.invalid/v1",
-          api: "openai-completions",
-          models: [
-            {
-              id: "configured-row",
-              name: "Configured-only model",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 8192,
-              maxTokens: 1024,
-            },
-          ],
-        },
-      },
-    },
+    ...providerConfig(PROVIDER_ID, {
+      baseUrl: "https://worker-catalog.invalid/v1",
+      api: "openai-completions",
+      models: [model("configured-row", "Configured-only model", { contextWindow: 8192 })],
+    }),
   };
-  const input = {
-    agentId: "main",
-    agentDir: fixture.agentDir,
-    inheritedAuthDir: fixture.agentDir,
-    workspaceDir: fixture.workspaceDir,
-    config,
-    env: fixture.env,
-  };
+  const input = catalogInput({ ...fixture, config });
   const retirement = new AbortController();
-  const isCurrent = () => !retirement.signal.aborted;
   params.retireAfterTest(() => retirement.abort());
   const build = (
-    await startSerializedSnapshotBuildBatch(
-      [
-        {
-          input,
-          catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
-          inventoryOwner: { provenance: "standalone" },
-          isGenerationCurrent: isCurrent,
-          retirementSignal: retirement.signal,
-          isBuildCurrent: isCurrent,
-        },
-      ],
-      new Map(),
-      30_000,
-      "static",
-    ).pending
+    await startCatalogBuild(input, retirement, { provenance: "standalone" }).pending
   )[0]!;
   await using _ = {
     [Symbol.asyncDispose]: retainPreparedPluginGeneration(build.pluginGeneration),
   };
   const snapshot = build.snapshot;
+  const refresh = (mode?: string) => {
+    if (mode) {
+      fs.writeFileSync(control, mode, "utf8");
+    }
+    return snapshot.loadFullModelCatalog!({ refresh: true });
+  };
   const learnedIds = (catalog: ModelCatalogSnapshot) =>
     catalog.entries
       .filter(
@@ -110,41 +76,33 @@ export async function expectLegacyWorkerCatalogRetention(params: {
       )
       .map(({ id }) => id)
       .toSorted();
+  const entry = (catalog: ModelCatalogSnapshot, id: string) =>
+    catalog.entries.find((row) => row.provider === PROVIDER_ID && row.id === id);
   const expectConfiguredRow = (catalog: ModelCatalogSnapshot, revision: number) => {
     expect(catalog.entries.filter(({ id }) => id.startsWith("proof-refresh-"))).toEqual([
       expect.objectContaining({
         id: expect.stringMatching(new RegExp(`^proof-refresh-${revision}-`)),
       }),
     ]);
-    expect(
-      catalog.entries.find(
-        ({ provider, id }) => provider === PROVIDER_ID && id === "configured-row",
-      )?.statusReason,
-    ).toBe(`refresh-${revision}`);
+    expect(entry(catalog, "configured-row")?.statusReason).toBe(`refresh-${revision}`);
   };
-  const initial = await snapshot.loadFullModelCatalog!({ refresh: true });
+  const initial = await refresh();
   expect(learnedIds(initial)).toEqual(params.catalogReturnsRows ? ["Learned", "learned"] : []);
-  fs.writeFileSync(control, "unavailable", "utf8");
-  const failed = await snapshot.loadFullModelCatalog!({ refresh: true });
+  const failed = await refresh("unavailable");
   expect(failed.providerOutcomes).toContainEqual({ provider: PROVIDER_ID, status: "unavailable" });
   // Failed discovery keeps the entire last-good provider snapshot, including overlays.
   expectConfiguredRow(failed, 1);
   if (params.catalogReturnsRows) {
     expect(learnedIds(failed)).toEqual(["Learned", "learned"]);
-    const repeated = await snapshot.loadFullModelCatalog!({ refresh: true });
+    const repeated = await refresh();
     expect(learnedIds(repeated)).toEqual(["Learned", "learned"]);
     expectConfiguredRow(repeated, 1);
-    fs.writeFileSync(control, "seed", "utf8");
-    const seeded = await snapshot.loadFullModelCatalog!({ refresh: true });
-    expect(
-      seeded.entries.find(({ provider, id }) => provider === PROVIDER_ID && id === "Learned")?.name,
-    ).toBe("Uppercase legacy model");
+    const seeded = await refresh("seed");
+    expect(entry(seeded, "Learned")?.name).toBe("Uppercase legacy model");
     expectConfiguredRow(seeded, 1);
-    fs.writeFileSync(control, "empty", "utf8");
-    const empty = await snapshot.loadFullModelCatalog!({ refresh: true });
+    const empty = await refresh("empty");
     expect(learnedIds(empty)).toEqual([]);
-    fs.writeFileSync(control, "unavailable", "utf8");
-    const afterEmpty = await snapshot.loadFullModelCatalog!({ refresh: true });
+    const afterEmpty = await refresh("unavailable");
     expect(learnedIds(afterEmpty)).toEqual([]);
     expectConfiguredRow(afterEmpty, 5);
   }

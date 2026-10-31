@@ -18,6 +18,8 @@ import {
   createNewSessionPageE2eSuite,
   installMockGateway,
   pollLocatorText,
+  captureUiProof,
+  controlUiSessionUrl,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -48,6 +50,7 @@ async function withDraft(
   operatorScopes: string[],
   run: (draft: Draft) => Promise<void>,
   featureMethods = [...chatMethods, "projects.list", "sessions.create", "sessions.dispatch"],
+  dispatchableProfileIds?: string[],
 ) {
   return suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
     const gateway = await installMockGateway(page, {
@@ -65,11 +68,21 @@ async function withDraft(
               workerSlots: { total: 1, available: 1 },
             },
           ],
-          profiles: [{ id: "aws", providerId: "crabbox" }],
+          profiles: [
+            { id: "aws", providerId: "crabbox" },
+            { id: "restricted", providerId: "crabbox" },
+          ],
+          dispatchableProfileIds:
+            dispatchableProfileIds ??
+            (operatorScopes.includes("operator.admin") ? ["aws", "restricted"] : []),
         },
         "projects.list": { projects: [] },
         "worktrees.branches": { branches: [], repositoryStatus: "git" },
-        "sessions.create": { key: "agent:main:operator-scope-proof", runStarted: true },
+        "sessions.create": {
+          key: "agent:main:operator-scope-proof",
+          ...(dispatchableProfileIds === undefined ? { runStarted: true } : {}),
+        },
+        "sessions.dispatch": { ok: true },
       },
     });
     await page.goto(`${suite.server.baseUrl}new`);
@@ -116,6 +129,87 @@ async function useFolderAndSubmit(page: Page, message: string) {
 }
 
 suite.define(() => {
+  it("keeps session-only browsing free of forbidden optional discovery", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const key = "agent:main:scoped-reader";
+      const forbidden = ["sessions.catalog.list", "plugins.list", "sessions.usage"];
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.sessions.read"],
+        featureMethods: [...chatMethods, ...forbidden, "sessions.create", "tools.effective"],
+        sessionKey: key,
+        sessions: [
+          {
+            key,
+            sessionId: "scoped-reader",
+            kind: "direct",
+            label: "Scoped reader",
+            model: "demo",
+            modelProvider: "example",
+            contextTokens: 100000,
+            totalTokens: 50000,
+            totalTokensFresh: true,
+          },
+        ],
+        agentModel: "example/demo",
+        models: [{ id: "demo", provider: "example", name: "Demo model", contextWindow: 100000 }],
+        historyMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "lookup", name: "example_lookup", arguments: {} }],
+            timestamp: 1,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "lookup",
+            toolName: "example_lookup",
+            content: [{ type: "text", text: "Synthetic result" }],
+            timestamp: 2,
+          },
+          { role: "assistant", content: "The scoped conversation remains readable.", timestamp: 3 },
+        ],
+        methodResponses: Object.fromEntries(
+          forbidden.map((method) => [
+            method,
+            {
+              __mockError: { code: "FORBIDDEN", message: "missing scope: operator.read" },
+            },
+          ]),
+        ),
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      const submit = page.getByRole("button", { name: "Start session" });
+      await pollDisabled(submit).toBe(true);
+      expect(await tooltipTitleText(submit)).toContain("operator.sessions.write");
+      const picker = page.locator(".chat-controls__model-picker > summary");
+      await picker.click();
+      await page.locator(".chat-controls__model-search").waitFor();
+      expect(await page.locator('[data-chat-model-target-group="cliAgents"]').count()).toBe(0);
+      await page.keyboard.press("Escape");
+      for (const method of [...forbidden, "sessions.create"]) {
+        expect(await gateway.getRequests(method), method).toHaveLength(0);
+      }
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+      await page.getByText("The scoped conversation remains readable.", { exact: true }).waitFor();
+      await page.locator(".context-ring").filter({ visible: true }).click();
+      const summary = page.locator(".context-usage__popover").filter({ visible: true });
+      await summary.getByRole("meter").waitFor();
+      expect(await summary.getByRole("meter").getAttribute("aria-valuenow")).toBe("50000");
+      await summary.getByRole("button", { name: "View context", exact: true }).click();
+      const panel = page.locator("openclaw-chat-context-panel");
+      await panel.getByText(/Ask the person who manages OpenClaw for access/).waitFor();
+      expect(await panel.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
+      for (const method of [...forbidden, "sessions.create"]) {
+        expect(await gateway.getRequests(method), method).toHaveLength(0);
+      }
+      await captureUiProof(suite, page, "scoped-reader-context.png");
+      await page.goto(`${suite.server.baseUrl}usage`);
+      await page.getByText(/Ask the person who manages OpenClaw for access/).waitFor();
+      for (const method of ["sessions.usage", "usage.status"]) {
+        expect(await gateway.getRequests(method), method).toHaveLength(0);
+      }
+    });
+  });
+
   it.each(["read-only", "missing-method", "disconnected"] as const)(
     "blocks new-session entry and submission when %s",
     async (reason) => {
@@ -188,6 +282,34 @@ suite.define(() => {
       await submit.click();
       await expectCreated(gateway, { agentId: "main", fastMode: true, message: "scope proof" });
     });
+  });
+
+  it("lets a write-scoped creator select a granted cloud profile without setup authority", async () => {
+    await withDraft(
+      writeScopes,
+      async ({ gateway, page }) => {
+        await gateway.waitForRequest("environments.list");
+        await page.locator("#new-session-where-trigger").click();
+        const where = page.locator(".oc-popover.new-session-page__where-popover");
+        await where.getByRole("button", { name: /Writer runner/u }).waitFor();
+        await captureUiProof(suite, page, "granted-cloud-picker.png");
+        expect(await where.locator('[data-value="cloud:aws"]').count()).toBe(1);
+        expect(await where.locator('[data-value="cloud:restricted"]').count()).toBe(0);
+        expect(await where.locator('[data-action="manage-cloud-workers"]').count()).toBe(0);
+        expect(await where.locator('[data-action="connect-machine"]').count()).toBe(0);
+        await where.locator('[data-value="cloud:aws"]').click();
+        await pollAttribute(page.locator("#new-session-where-trigger"), "data-cloud-profile").toBe(
+          "aws",
+        );
+        await page.keyboard.press("Escape");
+        await page.getByRole("button", { name: "Start session" }).click();
+        await expect(gateway.waitForRequest("sessions.dispatch")).resolves.toMatchObject({
+          params: { key: "agent:main:operator-scope-proof", agentId: "main", profileId: "aws" },
+        });
+      },
+      undefined,
+      ["aws"],
+    );
   });
 
   it.each(["full", "incognito"] as const)("allows admin-scoped %s creation", async (mode) => {

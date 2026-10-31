@@ -21,10 +21,8 @@ import {
   resolveSessionFilePathCore,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { loadSessionTranscriptEvents } from "../config/sessions/session-transcript-events.js";
@@ -34,19 +32,17 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { sleep } from "../utils/sleep.js";
-import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
+import {
+  loadCapturedSessionCostSummariesFromCache,
+  runUsageReportAfterRefresh,
+} from "./session-cost-usage-cache-runtime.js";
+import { dropInheritedTranscriptEvents } from "./session-cost-usage-inherited.js";
 import {
   createUsageCostResolver,
   parseUsageCostTranscriptEntryAsync,
-  resolveUsageCostPricingFingerprint,
 } from "./session-cost-usage-pricing-context.js";
 import { computeUsageTokenTotals } from "./session-cost-usage-pricing.js";
-import {
-  prepareUsageCostWorker,
-  resolveUsageCostWorkerDayBucket,
-  runUsageCostWorker,
-} from "./session-cost-usage-worker-runtime.js";
+import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 import type {
   DiscoveredSession,
   SessionCostSummary,
@@ -55,8 +51,6 @@ import type {
   SessionUsageTimeSeries,
   UsageDailyBucket,
 } from "./session-cost-usage.types.js";
-
-const USAGE_COST_DIRECT_REFRESH_RETRY_MS = 25;
 
 type SessionUsageDiagnosticParams = {
   sessionId?: string;
@@ -73,14 +67,11 @@ async function withSessionUsageDiagnosticSource<
   read: (scoped: Params, sessionFile: string) => Promise<Result>,
 ): Promise<Result | null> {
   const source = await resolveUsageSessionSource(params);
-  if (
-    !source ||
-    (!parseSqliteSessionFileMarker(source.sessionFile) && !fs.existsSync(source.sessionFile))
-  ) {
+  const marker = source && parseSqliteSessionFileMarker(source.sessionFile);
+  if (!source || (!marker && !fs.existsSync(source.sessionFile))) {
     return null;
   }
   const signal = getAsyncWorkSignal();
-  const marker = parseSqliteSessionFileMarker(source.sessionFile);
   const memory =
     marker &&
     captureSessionActorStorageOwner(marker, {
@@ -132,7 +123,6 @@ export async function discoverAllSessions(params: {
         sessionId,
         sessionFile,
         mtime: file.mtimeMs,
-        ...(file.transcriptFile ? { transcriptFile: file.transcriptFile } : {}),
       });
     }
   }
@@ -172,38 +162,17 @@ export async function loadSessionCostSummary(params: {
   if (inventory.files.length === 0) {
     return null;
   }
-  while (
-    (await refreshCostUsageCacheForAgent({
-      config: params.config,
-      agentId: params.agentId,
-      agentDir: prepared.agentDir,
-      databasePath: prepared.location.databasePath,
-      storePath: prepared.location.storePath,
-      env: prepared.location.env,
-      sessionFiles: [sessionFile],
-      sessionActor: prepared.sessionActor,
-    })) === "busy"
-  ) {
-    // Direct detail callers require the requested session, unlike background
-    // summary refreshes. Wait for the agent-wide writer to release, then retry.
-    await sleep(USAGE_COST_DIRECT_REFRESH_RETRY_MS);
-  }
-  const pricingFingerprint = await resolveUsageCostPricingFingerprint(
-    prepared.config,
-    prepared.agentDir,
+  const result = await runUsageReportAfterRefresh(prepared, params, () =>
+    loadCapturedSessionCostSummariesFromCache(
+      {
+        ...params,
+        sessions: [{ sessionId: params.sessionId, sessionFile }],
+        requestRefresh: false,
+        maxPublicationWaitMs: 0,
+      },
+      prepared,
+    ),
   );
-  const result = await runUsageCostWorker(prepared, {
-    kind: "sessions",
-    pricingFingerprint,
-    sessions: [{ sessionId: params.sessionId, sessionFile }],
-    startMs: params.startMs,
-    endMs: params.endMs,
-    includeUntimestamped: params.includeUntimestamped,
-    dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
-  });
-  if (result.kind !== "sessions") {
-    throw new Error("Usage worker returned an invalid session summary");
-  }
   return result.summaries[0] ?? null;
 }
 
@@ -218,18 +187,14 @@ export async function loadSessionUsageTimeSeries(
     }
 
     let points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
-    let usageUnavailable = false;
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
     const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
 
-    for await (const record of readTranscriptRecords(sessionFile)) {
+    // Copied history stays charted in its source session, as in the usage rollups.
+    for await (const record of readTranscriptRecords(sessionFile, { countedOnly: true })) {
       const entry = await parseUsageCostTranscriptEntryAsync(record, resolveCost, scoped.config);
       const timestamp = entry?.timestamp?.getTime();
       if (!entry?.usage || !timestamp) {
-        continue;
-      }
-      if (entry.usage.usageReport?.state === "unavailable") {
-        usageUnavailable = true;
         continue;
       }
       points.push({
@@ -275,7 +240,6 @@ export async function loadSessionUsageTimeSeries(
     let cumulativeCost = 0;
     return {
       sessionId: scoped.sessionId,
-      ...(usageUnavailable ? { usageReport: { state: "unavailable" as const } } : {}),
       points: points.map((point) => {
         cumulativeTokens += point.totalTokens;
         cumulativeCost += point.cost;
@@ -291,12 +255,11 @@ export async function loadSessionLogs(
   return withSessionUsageDiagnosticSource(params, async (scoped, sessionFile) => {
     const logs: SessionLogEntry[] = [];
     if (scoped.limit !== undefined && scoped.limit !== null) {
-      if (!Number.isFinite(scoped.limit) || scoped.limit <= 0) {
+      if (!Number.isInteger(scoped.limit) || scoped.limit <= 0) {
         return [];
       }
     }
     const limit = scoped.limit ?? 50;
-    const boundedLimit = Number.isInteger(limit);
     const retentionLimit = limit * 2;
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
     const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
@@ -389,17 +352,13 @@ export async function loadSessionLogs(
           content = truncateUtf16Safe(content, maxLen) + "…";
         }
       } catch {
-        // Ignore malformed records.
         continue;
       }
 
       // Logs share pricing and timestamp interpretation with summaries and charts.
       // Recomputing here can turn unknown prices into zero or ignore tiered rates.
       const entry = await parseUsageCostTranscriptEntryAsync(parsed, resolveCost, scoped.config);
-      const usage =
-        role === "assistant" && entry?.usage?.usageReport?.state !== "unavailable"
-          ? entry?.usage
-          : undefined;
+      const usage = role === "assistant" ? entry?.usage : undefined;
 
       logs.push({
         timestamp: entry?.timestamp?.getTime() ?? 0,
@@ -410,7 +369,7 @@ export async function loadSessionLogs(
       });
       // Timestamps can arrive out of order, so keep a bounded sorted window instead
       // of relying on transcript append order or retaining the whole file.
-      if (boundedLimit && logs.length > retentionLimit) {
+      if (logs.length > retentionLimit) {
         logs.sort((a, b) => a.timestamp - b.timestamp);
         logs.splice(0, logs.length - limit);
       }
@@ -421,7 +380,11 @@ export async function loadSessionLogs(
   });
 }
 
-async function* readTranscriptRecords(filePath: string): AsyncGenerator<Record<string, unknown>> {
+/** `countedOnly` drops copied history that its source transcript counts, as usage rollups do. */
+async function* readTranscriptRecords(
+  filePath: string,
+  options: { countedOnly?: boolean } = {},
+): AsyncGenerator<Record<string, unknown>> {
   const marker = parseSqliteSessionFileMarker(filePath);
   if (marker) {
     const signal = getAsyncWorkSignal();
@@ -456,15 +419,14 @@ async function* readTranscriptRecords(filePath: string): AsyncGenerator<Record<s
     } else {
       events = await loadSessionTranscriptEvents(marker);
     }
-    for (const event of selectVisibleTranscriptEvents(events)) {
-      if (isRecord(event)) {
-        yield event;
-      }
-    }
+    const records = events.filter(isRecord);
+    const visible = selectVisibleTranscriptEvents(records);
+    yield* options.countedOnly ? dropInheritedTranscriptEvents(records, visible) : visible;
     return;
   }
   // Durable byte-offset scans own their checkpoint reader. Diagnostic history
   // shares the canonical transcript stream and materializes archive bytes once.
+  // Legacy JSONL transcripts predate the inherited-history marker, as in their rollup scan.
   const transcriptPath = materializeSessionArchiveForRead(filePath);
   for await (const line of streamSessionTranscriptLines(transcriptPath)) {
     try {

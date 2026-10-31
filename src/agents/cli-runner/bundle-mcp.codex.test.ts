@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { retireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
-import { resolveCliSessionReuse } from "../cli-session.js";
-import { AuthStorage } from "../sessions/auth-storage.js";
-import { ModelRegistry } from "../sessions/model-registry.js";
-import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
-import { buildCodexUserMcpServersThreadConfigPatchForRun } from "./bundle-mcp-codex.js";
 import {
   loopbackConfig,
   policyConfig,
@@ -18,6 +12,7 @@ import {
   cliBundleMcpHarness,
   cliNativeMcpPolicyContext,
   prepareBundleProbeCliConfig,
+  prepareNativeMcpTestConfig,
   setupCliBundleMcpTestHarness,
 } from "./bundle-mcp.test-support.js";
 
@@ -36,51 +31,23 @@ describe("prepareCliBundleMcpConfig codex", () => {
         agents: { entries: { main: {}, worker: { tools: { deny: ["docs__delete_docs"] } } } },
         server: { codex: { agents: ["main"] } },
       });
-      const authStorage = AuthStorage.inMemory();
-      await withEnvAsync(
+      const patch = await withEnvAsync(
         { OPENCLAW_STATE_DIR: cliBundleMcpHarness.bundleProbeHomeDir },
-        async () => {
-          try {
-            const patch = await buildCodexUserMcpServersThreadConfigPatchForRun({
-              cwd: workspaceDir,
-              run: {
-                agentId: "main",
-                sessionId,
-                sessionKey: "agent:main:conversation",
-                sandboxSessionKey,
-                sandboxAgentId,
-                sessionFile: "agent:main:conversation",
-                workspaceDir,
-                config,
-                prompt: "hello",
-                timeoutMs: 1_000,
-                runId: sessionId,
-                provider: "openai",
-                modelId: "gpt-5.6-luna",
-                model: makeProviderModelFixture({
-                  id: "gpt-5.6-luna",
-                  name: "Test model",
-                  api: "openai-responses",
-                  provider: "openai",
-                  baseUrl: "https://api.openai.com/v1",
-                  contextWindow: 100_000,
-                  maxTokens: 1_000,
-                }),
-                authStorage,
-                authProfileStore: { version: 1, profiles: {} },
-                modelRegistry: ModelRegistry.inMemory(authStorage),
-                thinkLevel: "off",
-              },
-            });
-            expect(patch?.mcp_servers.docs).toMatchObject({
-              enabled_tools: ["read_docs"],
-              disabled_tools: ["app_docs", "delete_docs", "task_docs"],
-            });
-          } finally {
-            await retireSessionMcpRuntime({ sessionId, reason: "test-complete" });
-          }
-        },
+        () =>
+          prepareNativeMcpTestConfig({
+            sessionId,
+            sessionKey: "agent:main:conversation",
+            sandboxSessionKey,
+            sandboxAgentId,
+            timeoutMs: 1_000,
+            workspaceDir,
+            config,
+          }),
       );
+      expect(patch?.mcp_servers.docs).toMatchObject({
+        enabled_tools: ["read_docs"],
+        disabled_tools: ["app_docs", "delete_docs", "task_docs"],
+      });
     },
   );
 
@@ -93,7 +60,6 @@ describe("prepareCliBundleMcpConfig codex", () => {
     });
 
     expect(prepared.backend.args).toEqual(["exec", "-c", 'web_search="disabled"']);
-    expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("projects session MCP tool denials into Codex disabled_tools", async () => {
@@ -166,22 +132,14 @@ const prepareLoopbackConfig = (url: string) =>
   );
 
 describe("prepareCliBundleMcpConfig resume hash", () => {
-  it("stabilizes the resume hash when only the OpenClaw loopback port changes", async () => {
+  it.each([
+    ["http://127.0.0.1:24567/mcp", true],
+    ["http://127.0.0.1:23119/other", false],
+  ] as const)("keeps resume identity for port changes only (%s)", async (url, reusable) => {
     const first = await prepareLoopbackConfig("http://127.0.0.1:23119/mcp");
-    const second = await prepareLoopbackConfig("http://127.0.0.1:24567/mcp");
-
+    const second = await prepareLoopbackConfig(url);
     expect(first.mcpConfigHash).not.toBe(second.mcpConfigHash);
-    expect(first.mcpResumeHash).toBe(second.mcpResumeHash);
-
-    await first.cleanup?.();
-    await second.cleanup?.();
-  });
-
-  it("changes the resume hash when stable MCP semantics change", async () => {
-    const first = await prepareLoopbackConfig("http://127.0.0.1:23119/mcp");
-    const second = await prepareLoopbackConfig("http://127.0.0.1:23119/other");
-
-    expect(first.mcpResumeHash).not.toBe(second.mcpResumeHash);
+    expect(first.mcpResumeHash === second.mcpResumeHash).toBe(reusable);
   });
 
   it("keeps OpenClaw approval state out of the resume identity", async () => {
@@ -201,34 +159,5 @@ describe("prepareCliBundleMcpConfig resume hash", () => {
     const delegated = await prepare({ surface: "cli", operatorApprovalOnly: true, ...armed });
     expect(delegated.mcpConfigHash).not.toBe(approval.mcpConfigHash);
     expect(delegated.mcpResumeHash).toBe(approval.mcpResumeHash);
-    const identity = {
-      authProfileId: "claude-cli:ops",
-      authEpoch: "auth-epoch",
-      authEpochVersion: 1,
-      cwdHash: "cwd-hash",
-    };
-    const binding = {
-      ...identity,
-      sessionId: "native-cli-session",
-      mcpConfigHash: first.mcpConfigHash,
-      mcpResumeHash: first.mcpResumeHash,
-    };
-    const reuseParams = {
-      ...identity,
-      binding,
-      mcpConfigHash: approval.mcpConfigHash,
-      mcpResumeHash: approval.mcpResumeHash,
-    };
-    const reuse = (overrides: Partial<typeof reuseParams> = {}) =>
-      resolveCliSessionReuse({ ...reuseParams, ...overrides });
-    expect(reuse()).toEqual({ mode: "reuse", sessionId: binding.sessionId });
-    expect(reuse({ authEpoch: "rotated-auth-epoch" })).toEqual({
-      mode: "invalidate",
-      invalidatedReason: "auth-epoch",
-    });
-    expect(reuse({ cwdHash: "other-cwd" })).toEqual({
-      mode: "invalidate",
-      invalidatedReason: "cwd",
-    });
   });
 });

@@ -1,19 +1,22 @@
 import { Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { clampText } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ReplyLine } from "./chat-reply-attribution.ts";
-import { ReplyConnector } from "./chat-reply-connector.ts";
-
-type ReplyLineActions = {
-  onOpenReply?: (id: string) => void;
-  replyNavigationId?: string | null;
-};
-
-type ReplyLineProps = { line: ReplyLine; actions: ReplyLineActions; inline?: boolean };
+import { ReplyConnector, type ReplyConnectorElements } from "./chat-reply-connector.tsx";
 
 /** Inline lines live inside the bubble; other lines sit beside its avatar. */
-export function ReplyLineView(props: ReplyLineProps) {
+export function ReplyLineView(props: {
+  line: ReplyLine;
+  actions: {
+    onOpenReply?: (id: string) => void;
+    replyNavigationId?: string | null;
+    mediaReadAllowed?: boolean;
+  };
+  inline?: boolean;
+  elements?: ReplyConnectorElements;
+}) {
   const named = () => props.line.state === "named";
   const name = () => props.line.name ?? "";
   const loading = () =>
@@ -21,7 +24,11 @@ export function ReplyLineView(props: ReplyLineProps) {
   const person = () => (
     <>
       <Show when={named()}>
-        <ChatAuthorAvatar sender={props.line.sender} agentAvatar={props.line.agentAvatar} />
+        <ChatAuthorAvatar
+          sender={props.line.sender}
+          agentAvatar={props.line.agentAvatar}
+          mediaReadAllowed={props.actions.mediaReadAllowed}
+        />
       </Show>
       <span class="chat-reply-attribution__name" title={name()}>
         {name()}
@@ -31,6 +38,11 @@ export function ReplyLineView(props: ReplyLineProps) {
   return (
     <Show when={props.line.state !== "hidden"}>
       <div
+        ref={(element) => {
+          if (props.elements) {
+            props.elements.row = element;
+          }
+        }}
         class={[
           "chat-reply-attribution",
           `chat-reply-attribution--${props.inline ? "inline" : "reply"}`,
@@ -38,7 +50,14 @@ export function ReplyLineView(props: ReplyLineProps) {
         ]}
         aria-hidden={props.line.state === "reserved" ? "true" : undefined}
       >
-        <span class="chat-reply-attribution__label">
+        <span
+          ref={(element) => {
+            if (props.elements) {
+              props.elements.label = element;
+            }
+          }}
+          class="chat-reply-attribution__label"
+        >
           <Show when={!props.inline}>
             <span class="chat-reply-attribution__mobile-icon" aria-hidden="true">
               <Icon name="cornerUpLeft" />
@@ -70,6 +89,11 @@ export function ReplyLineView(props: ReplyLineProps) {
               {person()}
             </button>
           </Show>{" "}
+          <Show when={named() && props.line.text}>
+            <span class="chat-reply-attribution__excerpt" title={props.line.text}>
+              {clampText(props.line.text ?? "", 60)}
+            </span>
+          </Show>
           <Show when={!named()}>
             <span class="chat-reply-attribution__unavailable">
               {t("chat.messages.replyOriginalUnavailable")}
@@ -81,12 +105,16 @@ export function ReplyLineView(props: ReplyLineProps) {
   );
 }
 
-export function ReplyLineConnector(props: { line: ReplyLine; avatar: boolean | null | undefined }) {
+export function ReplyLineConnector(props: {
+  line: ReplyLine;
+  avatar: boolean | null | undefined;
+  elements: ReplyConnectorElements;
+}) {
   return (
     <Show
       when={props.avatar && (props.line.state === "named" || props.line.state === "unavailable")}
     >
-      <ReplyConnector />
+      <ReplyConnector elements={props.elements} />
     </Show>
   );
 }

@@ -1,7 +1,7 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
-import { expectDefined } from "@openclaw/normalization-core";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { asOptionalRecord, expectDefined } from "@openclaw/normalization-core";
+import { AsyncContext } from "../shared/async-context.js";
+import { runWithAsyncStore } from "../shared/async-store.js";
 
 const TRACEPARENT_VERSION = "00";
 const DEFAULT_TRACE_FLAGS = "01";
@@ -27,11 +27,6 @@ type DiagnosticTraceContextInput = Partial<DiagnosticTraceContext> & {
   traceparent?: string;
 };
 
-type DiagnosticTraceScopeState = {
-  marker: symbol;
-  storage: AsyncLocalStorage<DiagnosticTraceContext | undefined>;
-};
-
 function isNonZeroHex(value: string): boolean {
   return !/^0+$/.test(value);
 }
@@ -44,13 +39,7 @@ function randomNonZeroHex(bytes: number): string {
   return value;
 }
 
-const traceScopeState = resolveGlobalSingleton<DiagnosticTraceScopeState>(
-  DIAGNOSTIC_TRACE_SCOPE_STATE_KEY,
-  () => ({
-    marker: DIAGNOSTIC_TRACE_SCOPE_STATE_KEY,
-    storage: new AsyncLocalStorage<DiagnosticTraceContext | undefined>(),
-  }),
-);
+const traceContext = new AsyncContext<DiagnosticTraceContext>(DIAGNOSTIC_TRACE_SCOPE_STATE_KEY);
 
 /** Returns whether a value is a non-zero W3C trace id. */
 export function isValidDiagnosticTraceId(value: unknown): value is string {
@@ -65,6 +54,31 @@ export function isValidDiagnosticSpanId(value: unknown): value is string {
 /** Returns whether a value is a valid W3C trace-flags byte. */
 export function isValidDiagnosticTraceFlags(value: unknown): value is string {
   return typeof value === "string" && TRACE_FLAGS_RE.test(value);
+}
+
+/** Validates external trace fields without generating ids or changing their case. */
+export function normalizeDiagnosticTraceContext(
+  value: unknown,
+): DiagnosticTraceContext | undefined {
+  const candidate = asOptionalRecord(value);
+  if (!candidate || !isValidDiagnosticTraceId(candidate.traceId)) {
+    return undefined;
+  }
+  if (candidate.spanId !== undefined && !isValidDiagnosticSpanId(candidate.spanId)) {
+    return undefined;
+  }
+  if (candidate.parentSpanId !== undefined && !isValidDiagnosticSpanId(candidate.parentSpanId)) {
+    return undefined;
+  }
+  if (candidate.traceFlags !== undefined && !isValidDiagnosticTraceFlags(candidate.traceFlags)) {
+    return undefined;
+  }
+  return {
+    traceId: candidate.traceId,
+    ...(candidate.spanId ? { spanId: candidate.spanId } : {}),
+    ...(candidate.parentSpanId ? { parentSpanId: candidate.parentSpanId } : {}),
+    ...(candidate.traceFlags ? { traceFlags: candidate.traceFlags } : {}),
+  };
 }
 
 function normalizeTraceField(
@@ -190,7 +204,7 @@ export function freezeDiagnosticTraceContext(
 
 /** Returns the trace context bound to the current async scope. */
 export function getActiveDiagnosticTraceContext(): DiagnosticTraceContext | undefined {
-  return traceScopeState.storage.getStore();
+  return traceContext.getStore();
 }
 
 /** Runs a callback with a frozen trace context, or explicitly without a trace. */
@@ -198,7 +212,8 @@ export function runWithDiagnosticTraceContext<T>(
   trace: DiagnosticTraceContext | undefined,
   callback: () => T,
 ): T {
-  return traceScopeState.storage.run(
+  return runWithAsyncStore(
+    traceContext,
     trace === undefined ? undefined : freezeDiagnosticTraceContext(trace),
     callback,
   );

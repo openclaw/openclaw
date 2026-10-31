@@ -55,14 +55,17 @@ it.each(["recovered", "preparation-failure", "later-failure"] as const)(
     };
     const createCallbacks = attemptCallbacks.createAgentAttemptLifecycleCallbacks;
     let observedState: attemptCallbacks.AgentAttemptLifecycleState | undefined;
-    const observeState = vi
+    let observedRecorder: RunEmbeddedAgentInternalParams["userTurnTranscriptRecorder"];
+    using _ = vi
       .spyOn(attemptCallbacks, "createAgentAttemptLifecycleCallbacks")
       .mockImplementation((lifecycleState, onRuntimeTurnStarted) => {
         observedState = lifecycleState;
         return createCallbacks(lifecycleState, onRuntimeTurnStarted);
       });
     runEmbeddedAgent.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
-      params.onUserMessagePersisted?.({ role: "user", content: "Write once.", timestamp: 1 });
+      observedRecorder = params.userTurnTranscriptRecorder;
+      assert.isDefined(observedRecorder);
+      observedRecorder.markRuntimePersisted({ role: "user", content: "Write once.", timestamp: 1 });
       await params.onAgentEvent?.({
         stream: "lifecycle",
         data: {
@@ -99,56 +102,53 @@ it.each(["recovered", "preparation-failure", "later-failure"] as const)(
       }
       return result;
     });
-    try {
-      const pending = agentCommandFromGatewayIngress(
-        {
-          sessionKey,
-          sessionId,
-          runId,
-          message: "Write once.",
-          deliver: false,
-          allowModelOverride: false,
-        },
-        ...GATEWAY_INGRESS_ARGS,
+
+    const pending = agentCommandFromGatewayIngress(
+      {
+        sessionKey,
+        sessionId,
+        runId,
+        message: "Write once.",
+        deliver: false,
+        allowModelOverride: false,
+      },
+      ...GATEWAY_INGRESS_ARGS,
+    );
+    if (outcome === "preparation-failure") {
+      await expect(pending).rejects.toThrow("new attempt preparation failed");
+    } else {
+      const result = await pending;
+      expect(readAgentRunTerminalOutcome(result)).toBe(
+        outcome === "recovered" ? "completed" : "failed",
       );
-      if (outcome === "preparation-failure") {
-        await expect(pending).rejects.toThrow("new attempt preparation failed");
-      } else {
-        const result = await pending;
-        expect(readAgentRunTerminalOutcome(result)).toBe(
-          outcome === "recovered" ? "completed" : "failed",
-        );
-        expect(readAgentRunTerminalError(result)).toBe(
-          outcome === "recovered" ? undefined : "recovery persistence failed",
-        );
-      }
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      expect(observedState?.currentTurnUserMessagePersisted).toBe(true);
-      expect(observedState?.lifecycleEnded).toBe(true);
-      const terminals = state.emitAgentEventMock.mock.calls
-        .map(([event]) => event)
-        .filter(
-          (event) =>
-            event.runId === runId &&
-            event.stream === "lifecycle" &&
-            ["end", "error"].includes(event.data.phase),
-        );
-      expect(terminals).toHaveLength(1);
-      expect(terminals[0].data).toMatchObject({
-        phase: outcome === "recovered" ? "end" : "error",
-        executionSettled: true,
-        ...(outcome !== "preparation-failure" ? { terminalReceipt: receipt } : {}),
-      });
-      expect(terminals[0].data.error).toBe(
-        outcome === "recovered"
-          ? undefined
-          : outcome === "preparation-failure"
-            ? "new attempt preparation failed"
-            : "recovery persistence failed",
+      expect(readAgentRunTerminalError(result)).toBe(
+        outcome === "recovered" ? undefined : "recovery persistence failed",
       );
-      expect(terminals[0].data).not.toHaveProperty("errorObservation");
-    } finally {
-      observeState.mockRestore();
     }
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(observedRecorder?.hasPersisted()).toBe(true);
+    expect(observedState?.lifecycleEnded).toBe(true);
+    const terminals = state.emitAgentEventMock.mock.calls
+      .map(([event]) => event)
+      .filter(
+        (event) =>
+          event.runId === runId &&
+          event.stream === "lifecycle" &&
+          ["end", "error"].includes(event.data.phase),
+      );
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0].data).toMatchObject({
+      phase: outcome === "recovered" ? "end" : "error",
+      executionSettled: true,
+      ...(outcome !== "preparation-failure" ? { terminalReceipt: receipt } : {}),
+    });
+    expect(terminals[0].data.error).toBe(
+      outcome === "recovered"
+        ? undefined
+        : outcome === "preparation-failure"
+          ? "new attempt preparation failed"
+          : "recovery persistence failed",
+    );
+    expect(terminals[0].data).not.toHaveProperty("errorObservation");
   },
 );

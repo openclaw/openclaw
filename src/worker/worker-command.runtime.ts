@@ -9,6 +9,7 @@ import {
 } from "../agents/bash-process-observation.js";
 import {
   getActiveBackgroundExecSessionCount,
+  onBackgroundProcessesChanged,
   waitForExecScope,
 } from "../agents/bash-process-registry.js";
 import { toErrorObject } from "../infra/errors.js";
@@ -65,6 +66,8 @@ async function runManagedWorkerCommand(
   let idleCleanup: Promise<void> | undefined;
   let draining: Promise<void> | undefined;
   let closed = false;
+  let processChanges = false;
+  let unsubscribeProcesses = () => {};
   const framer = createBoundedLineFramer(
     WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
     "managed worker request exceeds the protocol payload limit",
@@ -107,6 +110,19 @@ async function runManagedWorkerCommand(
             }
           });
         });
+      // The command owns retained processes after the per-turn Gateway connection closes.
+      unsubscribeProcesses = onBackgroundProcessesChanged((target) => {
+        const owner = processBinding;
+        if (
+          !closed &&
+          processChanges &&
+          owner &&
+          target.sessionKey === "worker:" + owner.sessionId &&
+          (target.agentId === undefined || target.agentId === owner.agentId)
+        ) {
+          void write({ type: "processes-changed" }).catch(finish);
+        }
+      });
       const onLine = (line: Buffer) => {
         let value: unknown;
         try {
@@ -199,6 +215,7 @@ async function runManagedWorkerCommand(
             ownerEpoch: descriptor.admission.ownerEpoch,
             agentId: descriptor.assignment.agentId,
           };
+          processChanges = request.processChanges === true;
           if (closed) {
             return;
           }
@@ -237,8 +254,9 @@ async function runManagedWorkerCommand(
             await disposeWorkerGitHubEnvironment(stateDir, descriptor.assignment.turnId);
           };
           const canRetain =
-            result.status === "completed" ||
-            (result.status === "failed" && result.reason === "turn-failed");
+            !current.controller.signal.aborted &&
+            (result.status === "completed" ||
+              (result.status === "failed" && result.reason === "turn-failed"));
           let retention: WorkerProcessResult["retention"] =
             canRetain && getActiveBackgroundExecSessionCount() > 0
               ? "background"
@@ -324,6 +342,7 @@ async function runManagedWorkerCommand(
       }
     });
   } finally {
+    unsubscribeProcesses();
     framer.clear();
     try {
       await running;

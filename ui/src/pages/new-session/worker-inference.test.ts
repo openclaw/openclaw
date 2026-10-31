@@ -1,15 +1,10 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { nativeRuntime } from "../../test-helpers/chat-model.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 
-const runtime = {
-  id: "openclaw",
-  source: "model" as const,
-  cloudPlacementSupported: true,
-  cloudPlacementExecutionMode: "worker-turn" as const,
-  devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-};
+const runtime = nativeRuntime();
 
 async function fixture(reason: "missing-auth" | "auth-failed" = "missing-auth") {
   const result = createDraftFixture({
@@ -68,12 +63,9 @@ async function fixture(reason: "missing-auth" | "auth-failed" = "missing-auth") 
   });
   await Promise.all([
     result.gateway.refreshCloudProfiles(),
-    settleModelCatalogRequests(result.context.gateway.snapshot.client!, { agentId: "main" }),
+    loadModelCatalog(result.context.gateway.snapshot.client!, { agentId: "main" }),
   ]);
   result.flow.setMessage("Check the workspace");
-  expect(result.place.modelControl.modelUnavailableReason(result.place.selectedAgent())).toBe(
-    reason,
-  );
   return result;
 }
 

@@ -26,7 +26,6 @@ import {
   isDownloadableAttachment,
   isRedirectStatus,
   type MSTeamsAttachmentDownloadLogger,
-  type MSTeamsAttachmentFetchPolicy,
   normalizeContentType,
   resolveMSTeamsMediaKind,
   resolveAttachmentFetchPolicy,
@@ -146,34 +145,6 @@ function canonicalizeInlineBase64Payload(value: string): string | undefined {
   return cleaned.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(cleaned) ? cleaned : undefined;
 }
 
-function decodeInlineDataImage(
-  src: string,
-  maxBytes: number,
-  totalBytes: number,
-): { data: Buffer; contentType: string; estimatedBytes: number } | null {
-  const match = /^data:(image\/[a-z0-9.+-]+)?(;base64)?,(.*)$/i.exec(src);
-  if (!match) {
-    return null;
-  }
-  const contentType = normalizeLowercaseStringOrEmpty(match[1] ?? "");
-  const isBase64 = Boolean(match[2]);
-  if (!isBase64) {
-    return null;
-  }
-  const payload = match[3] ?? "";
-  const canonicalPayload = canonicalizeInlineBase64Payload(payload);
-  if (!canonicalPayload) {
-    return null;
-  }
-
-  // Validation above guarantees whitespace-free base64 for this allocation-free size check.
-  const estimatedBytes = Buffer.byteLength(canonicalPayload, "base64");
-  if (estimatedBytes <= 0 || estimatedBytes > maxBytes || totalBytes + estimatedBytes > maxBytes) {
-    return null;
-  }
-  return { data: Buffer.from(canonicalPayload, "base64"), contentType, estimatedBytes };
-}
-
 async function resolveInlineDataImageMime(inline: {
   data: Buffer;
   contentType?: string;
@@ -186,75 +157,6 @@ async function resolveInlineDataImageMime(inline: {
   return mime?.startsWith("image/") ? mime : undefined;
 }
 
-async function fetchWithAuthFallback(params: {
-  url: string;
-  tokenProvider?: MSTeamsAccessTokenProvider;
-  requestInit?: RequestInit;
-  policy: MSTeamsAttachmentFetchPolicy;
-  deadline?: MSTeamsRequestDeadline;
-  bearerToken?: string;
-}): Promise<Response> {
-  const fetchAttempt = (requestInit?: RequestInit) =>
-    safeFetchWithPolicy({
-      url: params.url,
-      policy: params.policy,
-      resolveFn: lookup,
-      requestInit,
-      timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
-    });
-  if (params.bearerToken !== undefined) {
-    const headers = ensureUserAgentHeader(params.requestInit?.headers);
-    applyAuthorizationHeaderForUrl({
-      headers,
-      url: params.url,
-      authAllowHosts: params.policy.authAllowHosts,
-      bearerToken: params.bearerToken,
-    });
-    return fetchAttempt({ ...params.requestInit, headers });
-  }
-  const firstAttempt = await fetchAttempt(params.requestInit);
-  if (firstAttempt.ok) {
-    return firstAttempt;
-  }
-  if (!params.tokenProvider) {
-    return firstAttempt;
-  }
-  const tokenProvider = params.tokenProvider;
-  if (firstAttempt.status !== 401 && firstAttempt.status !== 403) {
-    return firstAttempt;
-  }
-  if (!isUrlAllowed(params.url, params.policy.authAllowHosts)) {
-    return firstAttempt;
-  }
-  let fallbackAttempt = firstAttempt;
-  const scopes = scopeCandidatesForUrl(params.url);
-  for (const scope of scopes) {
-    try {
-      const token = await withMSTeamsRequestDeadline({
-        deadline: params.deadline,
-        label: "MS Teams attachment token",
-        work: () => tokenProvider.getAccessToken(scope),
-      });
-      const authHeaders = new Headers(params.requestInit?.headers);
-      authHeaders.set("Authorization", `Bearer ${token}`);
-      const authAttempt = await fetchAttempt({
-        ...params.requestInit,
-        headers: authHeaders,
-      });
-      await fallbackAttempt.body?.cancel().catch(() => undefined);
-      if (authAttempt.ok || isRedirectStatus(authAttempt.status)) {
-        // Redirects in guarded fetch mode must propagate to the outer guard.
-        return authAttempt;
-      }
-      fallbackAttempt = authAttempt;
-    } catch {
-      // Try the next scope.
-    }
-  }
-
-  return fallbackAttempt;
-}
-
 export async function downloadMSTeamsAttachments(params: {
   attachments: MSTeamsAttachmentLike[] | undefined;
   maxBytes: number;
@@ -262,8 +164,6 @@ export async function downloadMSTeamsAttachments(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   deadline?: MSTeamsRequestDeadline;
-  /** When true, embeds original filename in stored path for later extraction. */
-  preserveFilenames?: boolean;
   logger?: MSTeamsAttachmentDownloadLogger;
   /** Already-acquired Graph token for reference attachments from a Graph message. */
   graphReferenceToken?: string;
@@ -330,10 +230,35 @@ export async function downloadMSTeamsAttachments(params: {
       return undefined;
     }
     if (candidate.kind === "data") {
-      const decoded = decodeInlineDataImage(candidate.src, maxInlineBytes, totalInlineBytes);
-      if (!decoded) {
+      const match = /^data:(image\/[a-z0-9.+-]+)?(;base64)?,(.*)$/i.exec(candidate.src);
+      if (!match) {
         return undefined;
       }
+      const declaredContentType = normalizeLowercaseStringOrEmpty(match[1] ?? "");
+      const isBase64 = Boolean(match[2]);
+      if (!isBase64) {
+        return undefined;
+      }
+      const payload = match[3] ?? "";
+      const canonicalPayload = canonicalizeInlineBase64Payload(payload);
+      if (!canonicalPayload) {
+        return undefined;
+      }
+
+      // Validation above guarantees whitespace-free base64 for this allocation-free size check.
+      const estimatedBytes = Buffer.byteLength(canonicalPayload, "base64");
+      if (
+        estimatedBytes <= 0 ||
+        estimatedBytes > maxInlineBytes ||
+        totalInlineBytes + estimatedBytes > maxInlineBytes
+      ) {
+        return undefined;
+      }
+      const decoded = {
+        data: Buffer.from(canonicalPayload, "base64"),
+        contentType: declaredContentType,
+        estimatedBytes,
+      };
       // Accepted bytes still consume the message budget when MIME detection or saving fails.
       totalInlineBytes += decoded.estimatedBytes;
       try {
@@ -365,18 +290,73 @@ export async function downloadMSTeamsAttachments(params: {
         maxBytes: params.maxBytes,
         contentTypeHint: candidate.contentTypeHint,
         kind: candidate.graphReference ? undefined : candidate.mediaKind,
-        preserveFilenames: params.preserveFilenames,
         // `fetchImpl` below owns Teams auth fallback and enforces the
         // attachment fetch policy through `safeFetchWithPolicy`.
-        fetchImpl: (input, init) =>
-          fetchWithAuthFallback({
-            url: resolveRequestUrl(input),
-            tokenProvider: params.tokenProvider,
-            requestInit: init,
-            policy,
-            deadline: params.deadline,
-            bearerToken: candidate.graphReference ? params.graphReferenceToken : undefined,
-          }),
+        fetchImpl: async (input, init) => {
+          const url = resolveRequestUrl(input);
+          const providedTokenProvider = params.tokenProvider;
+          const deadline = params.deadline;
+          const bearerToken = candidate.graphReference ? params.graphReferenceToken : undefined;
+          const fetchAttempt = (requestInit?: RequestInit) =>
+            safeFetchWithPolicy({
+              url,
+              policy,
+              resolveFn: lookup,
+              requestInit,
+              timeoutMs: resolveMSTeamsRequestTimeoutMs(deadline),
+            });
+          if (bearerToken !== undefined) {
+            const headers = ensureUserAgentHeader(init?.headers);
+            applyAuthorizationHeaderForUrl({
+              headers,
+              url,
+              authAllowHosts: policy.authAllowHosts,
+              bearerToken,
+            });
+            return fetchAttempt({ ...init, headers });
+          }
+          const firstAttempt = await fetchAttempt(init);
+          if (firstAttempt.ok) {
+            return firstAttempt;
+          }
+          if (!providedTokenProvider) {
+            return firstAttempt;
+          }
+          const tokenProvider = providedTokenProvider;
+          if (firstAttempt.status !== 401 && firstAttempt.status !== 403) {
+            return firstAttempt;
+          }
+          if (!isUrlAllowed(url, policy.authAllowHosts)) {
+            return firstAttempt;
+          }
+          let fallbackAttempt = firstAttempt;
+          const scopes = scopeCandidatesForUrl(url);
+          for (const scope of scopes) {
+            try {
+              const token = await withMSTeamsRequestDeadline({
+                deadline,
+                label: "MS Teams attachment token",
+                work: () => tokenProvider.getAccessToken(scope),
+              });
+              const authHeaders = new Headers(init?.headers);
+              authHeaders.set("Authorization", `Bearer ${token}`);
+              const authAttempt = await fetchAttempt({
+                ...init,
+                headers: authHeaders,
+              });
+              await fallbackAttempt.body?.cancel().catch(() => undefined);
+              if (authAttempt.ok || isRedirectStatus(authAttempt.status)) {
+                // Redirects in guarded fetch mode must propagate to the outer guard.
+                return authAttempt;
+              }
+              fallbackAttempt = authAttempt;
+            } catch {
+              // Try the next scope.
+            }
+          }
+
+          return fallbackAttempt;
+        },
       });
     } catch (err) {
       if (candidate.graphReference) {

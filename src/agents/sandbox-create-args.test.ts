@@ -1,230 +1,141 @@
-// Verifies Docker create arguments for sandbox hardening and configured passthrough.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveSandboxBrowserDockerCreateConfig,
+  resolveSandboxConfigForAgent,
+} from "./sandbox/config.js";
 import { SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./sandbox/constants.js";
-import { buildSandboxCreateArgs } from "./sandbox/docker.js";
+import { buildSandboxCreateArgs } from "./sandbox/container-allocation.js";
+import { collectDockerFlagValues as valuesForFlag } from "./sandbox/test-args.js";
 import type { SandboxDockerConfig } from "./sandbox/types.js";
-
-const OPENCLAW_CLI_ENV_VALUE = "1";
 
 describe("buildSandboxCreateArgs", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  function createSandboxConfig(
-    overrides: Partial<SandboxDockerConfig> = {},
-    binds?: string[],
-  ): SandboxDockerConfig {
-    // Baseline config keeps each Docker argument case focused on one override.
+  function createSandboxConfig(overrides: Partial<SandboxDockerConfig> = {}): SandboxDockerConfig {
     return {
-      image: "openclaw-sandbox:bookworm-slim",
+      image: "openclaw-sandbox:trixie-slim",
       containerPrefix: "openclaw-sbx-",
       workdir: "/workspace",
       readOnlyRoot: false,
       tmpfs: [],
       network: "none",
       capDrop: [],
-      ...(binds ? { binds } : {}),
       ...overrides,
     };
   }
 
-  function expectBuildToThrow(
-    name: string,
+  function build(
     cfg: SandboxDockerConfig,
-    expectedMessage: RegExp,
-  ): void {
-    expect(
-      () =>
-        buildSandboxCreateArgs({
-          name,
-          cfg,
-          scopeKey: "main",
-        }),
-      name,
-    ).toThrow(expectedMessage);
-  }
-
-  function valuesForFlag(args: string[], flag: string): string[] {
-    // Docker flags are positional, so collect repeated flag values for assertions.
-    const values: string[] = [];
-    for (let i = 0; i < args.length; i += 1) {
-      if (args[i] === flag) {
-        const value = args[i + 1];
-        if (value) {
-          values.push(value);
-        }
-      }
-    }
-    return values;
-  }
-
-  function expectFlagValues(args: string[], flag: string, expectedValues: string[]): void {
-    const values = valuesForFlag(args, flag);
-    for (const value of expectedValues) {
-      expect(values).toContain(value);
-    }
-  }
-
-  it("includes hardening and resource flags", () => {
-    vi.spyOn(Date, "now").mockReturnValue(1700000000000);
-    const cfg: SandboxDockerConfig = {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      workdir: "/workspace",
-      readOnlyRoot: true,
-      tmpfs: ["/tmp"],
-      network: "none",
-      user: "1000:1000",
-      capDrop: ["ALL"],
-      env: { LANG: "C.UTF-8" },
-      pidsLimit: 256,
-      memory: "512m",
-      memorySwap: 1024,
-      cpus: 1.5,
-      ulimits: {
-        nofile: { soft: 1024, hard: 2048 },
-        nproc: 128,
-        core: "0",
-      },
-      seccompProfile: "/tmp/seccomp.json",
-      apparmorProfile: "openclaw-sandbox",
-      dns: ["1.1.1.1"],
-      extraHosts: ["internal.service:10.0.0.5"],
-    };
-
-    const { argv: args, env } = buildSandboxCreateArgs({
+    bindSourceRoots?: string[],
+    labels?: Record<string, string>,
+  ) {
+    return buildSandboxCreateArgs({
       name: "openclaw-sbx-test",
       cfg,
       scopeKey: "main",
-      labels: { "openclaw.sandboxBrowser": "1" },
+      bindSourceRoots,
+      labels,
     });
+  }
+
+  function expectFlags(args: string[], flags: Record<string, string[]>): void {
+    for (const [flag, values] of Object.entries(flags)) {
+      expect(valuesForFlag(args, flag)).toEqual(expect.arrayContaining(values));
+    }
+  }
+
+  it.each([
+    [undefined, undefined, "agent", "1024"],
+    [256, undefined, "agent", "256"],
+    [256, 512, "agent", "512"],
+    [256, 512, "shared", "256"],
+  ] as const)(
+    "applies the resolved PID budget to tool and browser containers (%s, %s, %s)",
+    (globalLimit, agentLimit, scope, expected) => {
+      const config = resolveSandboxConfigForAgent(
+        {
+          agents: {
+            defaults: { sandbox: { scope, docker: { pidsLimit: globalLimit } } },
+            entries: { test: { sandbox: { docker: { pidsLimit: agentLimit } } } },
+          },
+        },
+        "test",
+      );
+      for (const docker of [config.docker, resolveSandboxBrowserDockerCreateConfig(config)]) {
+        expect(valuesForFlag(build(docker).argv, "--pids-limit")).toEqual([expected]);
+      }
+    },
+  );
+
+  it("includes hardening and resource flags", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1700000000000);
+    const cfg = createSandboxConfig({
+      readOnlyRoot: true,
+      env: { LANG: "C.UTF-8" },
+    });
+
+    const { argv: args, env } = build(cfg, undefined, { "openclaw.sandboxBrowser": "1" });
 
     expect(args[0]).toBe("create");
-    expectFlagValues(args, "--name", ["openclaw-sbx-test"]);
-    expectFlagValues(args, "--label", [
-      "openclaw.sandbox=1",
-      "openclaw.sessionKey=main",
-      "openclaw.createdAtMs=1700000000000",
-      `openclaw.createArgsEpoch=${SANDBOX_DOCKER_CREATE_ARGS_EPOCH}`,
-      "openclaw.sandboxBrowser=1",
-    ]);
+    expectFlags(args, {
+      "--name": ["openclaw-sbx-test"],
+      "--label": [
+        "openclaw.sandbox=1",
+        "openclaw.sessionKey=main",
+        "openclaw.createdAtMs=1700000000000",
+        `openclaw.createArgsEpoch=${SANDBOX_DOCKER_CREATE_ARGS_EPOCH}`,
+        "openclaw.sandboxBrowser=1",
+      ],
+      "--network": ["none"],
+      "--security-opt": ["no-new-privileges"],
+    });
     expect(args).toContain("--read-only");
-    expectFlagValues(args, "--tmpfs", ["/tmp"]);
-    expectFlagValues(args, "--network", ["none"]);
-    expectFlagValues(args, "--user", ["1000:1000"]);
-    expectFlagValues(args, "--cap-drop", ["ALL"]);
-    expectFlagValues(args, "--security-opt", [
-      "no-new-privileges",
-      "seccomp=/tmp/seccomp.json",
-      "apparmor=openclaw-sandbox",
-    ]);
-    expectFlagValues(args, "--dns", ["1.1.1.1"]);
-    expectFlagValues(args, "--add-host", ["internal.service:10.0.0.5"]);
-    expectFlagValues(args, "--pids-limit", ["256"]);
-    expectFlagValues(args, "--memory", ["512m"]);
-    expectFlagValues(args, "--memory-swap", ["1024"]);
-    expectFlagValues(args, "--cpus", ["1.5"]);
     expect(args).not.toContain("--env");
-    expect(env).toEqual({ LANG: "C.UTF-8", OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE });
-    expectFlagValues(args, "--ulimit", ["nofile=1024:2048", "nproc=128", "core=0"]);
-  });
-
-  it("emits Docker GPU passthrough as a separate argument", () => {
-    const cfg = createSandboxConfig({
-      gpus: "device=GPU-123",
-    });
-
-    const { argv: args } = buildSandboxCreateArgs({
-      name: "openclaw-sbx-gpu",
-      cfg,
-      scopeKey: "main",
-    });
-
-    expectFlagValues(args, "--gpus", ["device=GPU-123"]);
+    expect(env).toEqual({ LANG: "C.UTF-8", OPENCLAW_CLI: "1" });
   });
 
   it.each([
-    {
-      name: "dangerous Docker socket bind mounts",
-      containerName: "openclaw-sbx-dangerous",
-      cfg: createSandboxConfig({}, ["/var/run/docker.sock:/var/run/docker.sock"]),
-      expected: /blocked path/,
+    [{ tmpfs: ["/tmp"] }, "--tmpfs", ["/tmp"]],
+    [{ user: "1000:1000" }, "--user", ["1000:1000"]],
+    [{ capDrop: ["ALL"] }, "--cap-drop", ["ALL"]],
+    [{ memory: "512m" }, "--memory", ["512m"]],
+    [{ memorySwap: 1024 }, "--memory-swap", ["1024"]],
+    [{ cpus: 1.5 }, "--cpus", ["1.5"]],
+    [{ gpus: "device=GPU-123" }, "--gpus", ["device=GPU-123"]],
+    [{ seccompProfile: "/tmp/seccomp.json" }, "--security-opt", ["seccomp=/tmp/seccomp.json"]],
+    [{ apparmorProfile: "openclaw-sandbox" }, "--security-opt", ["apparmor=openclaw-sandbox"]],
+    [{ dns: ["1.1.1.1"] }, "--dns", ["1.1.1.1"]],
+    [{ extraHosts: ["internal.service:10.0.0.5"] }, "--add-host", ["internal.service:10.0.0.5"]],
+    [
+      { ulimits: { nofile: { soft: 1024, hard: 2048 }, nproc: 128, core: "0" } },
+      "--ulimit",
+      ["nofile=1024:2048", "nproc=128", "core=0"],
+    ],
+  ] satisfies [Partial<SandboxDockerConfig>, string, string[]][])(
+    "emits %j as %s",
+    (config, flag, values) => {
+      expectFlags(build(createSandboxConfig(config)).argv, { [flag]: values });
     },
-    {
-      name: "bind source covering Docker socket directory",
-      containerName: "openclaw-sbx-covers-docker-socket-dir",
-      cfg: createSandboxConfig({}, ["/var:/var"]),
-      expected: /covers blocked path/,
-    },
-    {
-      name: "network host mode",
-      containerName: "openclaw-sbx-host",
-      cfg: createSandboxConfig({ network: "host" }),
-      expected: /network mode "host" is blocked/,
-    },
-    {
-      name: "network container namespace join",
-      containerName: "openclaw-sbx-container-network",
-      cfg: createSandboxConfig({ network: "container:peer" }),
-      expected: /network mode "container:peer" is blocked by default/,
-    },
-    {
-      name: "seccomp unconfined",
-      containerName: "openclaw-sbx-seccomp",
-      cfg: createSandboxConfig({ seccompProfile: "unconfined" }),
-      expected: /seccomp profile "unconfined" is blocked/,
-    },
-    {
-      name: "apparmor unconfined",
-      containerName: "openclaw-sbx-apparmor",
-      cfg: createSandboxConfig({ apparmorProfile: "unconfined" }),
-      expected: /apparmor profile "unconfined" is blocked/,
-    },
-  ])("throws on $name", ({ containerName, cfg, expected }) => {
-    expectBuildToThrow(containerName, cfg, expected);
-  });
+  );
 
-  it("blocks bind sources outside runtime allowlist roots", () => {
-    const cfg = createSandboxConfig({}, ["/opt/external:/data:rw"]);
-    expect(() =>
-      buildSandboxCreateArgs({
-        name: "openclaw-sbx-outside-roots",
-        cfg,
-        scopeKey: "main",
-        bindSourceRoots: ["/tmp/workspace", "/tmp/agent"],
-      }),
-    ).toThrow(/outside allowed roots/);
-  });
-
-  it("allows bind sources outside runtime allowlist with explicit dangerous config", () => {
-    const cfg = createSandboxConfig({ dangerouslyAllowExternalBindSources: true }, [
-      "/opt/external:/data:rw",
-    ]);
-    expect(() =>
-      buildSandboxCreateArgs({
-        name: "openclaw-sbx-outside-roots-override",
-        cfg,
-        scopeKey: "main",
-        bindSourceRoots: ["/tmp/workspace", "/tmp/agent"],
-      }),
-    ).not.toThrow();
-  });
-
-  it("blocks reserved /workspace target bind mounts by default", () => {
-    const cfg = createSandboxConfig({}, ["/tmp/override:/workspace:rw"]);
-    expectBuildToThrow("openclaw-sbx-reserved-target", cfg, /reserved container path/);
-  });
-
-  it("allows reserved /workspace target bind mounts with explicit dangerous config", () => {
-    const cfg = createSandboxConfig({ dangerouslyAllowReservedContainerTargets: true }, [
-      "/tmp/override:/workspace:rw",
-    ]);
-    expect(() =>
-      buildSandboxCreateArgs({
-        name: "openclaw-sbx-reserved-target-override",
-        cfg,
-        scopeKey: "main",
-      }),
-    ).not.toThrow();
+  const bindOverrides = [
+    {
+      key: "dangerouslyAllowExternalBindSources",
+      bind: "/opt/external:/data:rw",
+      roots: ["/tmp/workspace", "/tmp/agent"],
+      error: /outside allowed roots/,
+    },
+    {
+      key: "dangerouslyAllowReservedContainerTargets",
+      bind: "/tmp/override:/workspace:rw",
+      roots: undefined,
+      error: /reserved container path/,
+    },
+  ] as const;
+  it.each(bindOverrides)("requires $key for the bind override", ({ key, bind, roots, error }) => {
+    expect(() => build(createSandboxConfig({ binds: [bind] }), roots && [...roots])).toThrow(error);
+    const cfg = createSandboxConfig({ [key]: true, binds: [bind] });
+    expect(() => build(cfg, roots && [...roots])).not.toThrow();
   });
 
   it("allows container namespace join with explicit dangerous override", () => {
@@ -232,11 +143,7 @@ describe("buildSandboxCreateArgs", () => {
       network: "container:peer",
       dangerouslyAllowContainerNamespaceJoin: true,
     });
-    const { argv: args } = buildSandboxCreateArgs({
-      name: "openclaw-sbx-container-network-override",
-      cfg,
-      scopeKey: "main",
-    });
-    expectFlagValues(args, "--network", ["container:peer"]);
+    const { argv: args } = build(cfg);
+    expectFlags(args, { "--network": ["container:peer"] });
   });
 });

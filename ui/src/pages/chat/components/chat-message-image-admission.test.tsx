@@ -8,6 +8,7 @@ import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
+import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
 import {
   imageResponse,
@@ -16,14 +17,15 @@ import {
   ticketResponse,
 } from "./chat-message-media.test-helpers.ts";
 import {
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type ImageBlock,
   type ImageRenderOptions,
+  type AssistantAttachmentItem,
 } from "./chat-message-media.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 
 let container: HTMLDivElement;
-let onRequestUpdate: () => void;
+let onMediaChange: () => void;
 let disconnectMedia: Set<() => void>;
 let view:
   | {
@@ -39,7 +41,7 @@ const imageButton = () => container.querySelector<HTMLButtonElement>(".chat-mess
 beforeEach(() => {
   vi.useFakeTimers();
   container = document.body.appendChild(document.createElement("div"));
-  onRequestUpdate = vi.fn();
+  onMediaChange = vi.fn();
   disconnectMedia = new Set();
   vi.stubGlobal(
     "IntersectionObserver",
@@ -48,14 +50,23 @@ beforeEach(() => {
       readonly rootMargin = "240px 0px";
       readonly scrollMargin = "0px";
       readonly thresholds = [0];
-      constructor(callback: IntersectionObserverCallback) {
-        intersections.push(() =>
-          callback([{ isIntersecting: true } as IntersectionObserverEntry], this),
-        );
+      private readonly targets = new Set<Element>();
+      constructor(private readonly callback: IntersectionObserverCallback) {}
+      observe(target: Element) {
+        this.targets.add(target);
+        intersections.push(() => {
+          if (this.targets.has(target)) {
+            // SAFETY: The viewport owner reads only target and isIntersecting.
+            this.callback([{ target, isIntersecting: true } as IntersectionObserverEntry], this);
+          }
+        });
       }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
       takeRecords() {
         return [];
       }
@@ -66,7 +77,7 @@ beforeEach(() => {
 
 afterEach(() => {
   unmount();
-  releaseChatMediaResourceSubscriber(onRequestUpdate);
+  releaseChatMediaResourceOwner(onMediaChange);
   container.remove();
   intersections.length = 0;
   vi.clearAllTimers();
@@ -76,7 +87,7 @@ afterEach(() => {
 });
 
 function draw(images: ImageBlock[], options: ImageRenderOptions = {}) {
-  const props = { images, options: { onRequestUpdate, ...options } };
+  const props = { images, options: { mediaOwner: onMediaChange, ...options } };
   if (view) {
     view.update(props);
     return view;
@@ -122,13 +133,99 @@ async function loadAdmittedImage() {
   return loaded;
 }
 
+it("keeps saved network images inert until live admission while retaining local draft bytes", async () => {
+  const fetch = vi.fn(async () => imageResponse());
+  vi.stubGlobal("fetch", fetch);
+  const local = "data:image/png;base64,cG5n";
+  const remote = "https://images.example.test/saved.png";
+  const images = [{ url: managedSource() }, { url: remote }, { url: local }];
+  const options = { authToken: "saved-token", mediaReadAllowed: false };
+  draw(images, options);
+  for (const intersect of intersections) {
+    intersect();
+  }
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetch).not.toHaveBeenCalled();
+  expect(container.querySelector(`img[src="${remote}"]`)).toBeNull();
+  expect(container.querySelector(`img[src="${local}"]`)).not.toBeNull();
+
+  options.mediaReadAllowed = true;
+  draw(images, options);
+  for (const intersect of intersections) {
+    intersect();
+  }
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(container.querySelector(`img[src="${remote}"]`)).not.toBeNull();
+});
+
+it("holds saved audio sources and their authorization until live admission", async () => {
+  const fetch = vi.fn(async () => ticketResponse());
+  vi.stubGlobal("fetch", fetch);
+  const source = managedSource();
+  const resolveArtifactDownload = vi.fn(async () => ({ url: source + "?mediaTicket=live" }));
+  const attachments: AssistantAttachmentItem[] = [
+    {
+      type: "attachment",
+      attachment: {
+        kind: "audio",
+        label: "Local recording",
+        url: "/tmp/saved.wav",
+        mimeType: "audio/wav",
+      },
+    },
+    {
+      type: "attachment",
+      attachment: {
+        kind: "audio",
+        label: "Managed recording",
+        url: source,
+        artifactId: crypto.randomUUID(),
+        mimeType: "audio/mpeg",
+      },
+    },
+    {
+      type: "attachment",
+      attachment: {
+        kind: "audio",
+        label: "Remote recording",
+        url: "https://media.example.test/saved.mp3",
+        mimeType: "audio/mpeg",
+      },
+    },
+  ];
+  const [allowed, setAllowed] = createSignal(false);
+  const root = mountSolid(
+    () => (
+      <AssistantAttachments
+        attachments={attachments}
+        options={{ mediaReadAllowed: allowed(), authToken: "saved-token", resolveArtifactDownload }}
+      />
+    ),
+    { container },
+  );
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(resolveArtifactDownload).not.toHaveBeenCalled();
+    expect(container.querySelector("audio, video")).toBeNull();
+    setAllowed(true);
+    flush();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalled();
+    expect(resolveArtifactDownload).toHaveBeenCalledOnce();
+  } finally {
+    root.unmount();
+  }
+});
+
 it.each(["render", "click"] as const)(
   "does not replay an automatic image retry already claimed by %s",
   async (trigger) => {
     const images = [{ url: managedSource() }];
     const fetch = vi.fn(async () => new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetch);
-    onRequestUpdate = () => draw([...images]);
+    onMediaChange = () => draw([...images]);
     draw(images);
     intersections[0]!();
     await vi.advanceTimersByTimeAsync(0);
@@ -136,7 +233,7 @@ it.each(["render", "click"] as const)(
     if (trigger === "render") {
       // Claim the elapsed retry before its queued timer runs.
       vi.setSystemTime(Date.now() + 5_000);
-      onRequestUpdate();
+      onMediaChange();
     } else {
       const retry = container.querySelector<HTMLButtonElement>("button");
       expect(retry?.textContent).toContain("Retry");
@@ -240,7 +337,7 @@ it.each(["assistant", "managed", "omitted", "standalone", "aliases"] as const)(
       sessionKey: "agent:main:main",
       authToken: "must-not-be-forwarded",
       resolveArtifactDownload,
-      onRequestUpdate: kind === "standalone" ? undefined : onRequestUpdate,
+      mediaOwner: kind === "standalone" ? undefined : onMediaChange,
     };
     draw([image, alias], options);
 
@@ -480,8 +577,12 @@ it.each([
   unmount();
   await Promise.resolve();
   expect(loaded.parentNode).toBeNull();
-  expect(removeListener).toHaveBeenCalledWith("load", expect.any(Function));
-  expect(removeListener).toHaveBeenCalledWith("error", expect.any(Function));
+  expect(removeListener.mock.calls.map(([type, listener]) => [type, listener])).toEqual(
+    expect.arrayContaining([
+      ["load", expect.any(Function)],
+      ["error", expect.any(Function)],
+    ]),
+  );
   if (change === "expiry") {
     await vi.advanceTimersByTimeAsync(300_001);
   } else if (change === "connectionEpoch") {
@@ -570,11 +671,10 @@ it("ignores replaced observers and aborts detached artifact resolution before bl
 
 describe("message attachment availability", () => {
   const panes: { container: HTMLElement; draw: () => void; unmount: () => void }[] = [];
-  beforeEach(() => vi.stubGlobal("IntersectionObserver", undefined));
   afterEach(() => {
     for (const pane of panes.splice(0)) {
       pane.unmount();
-      releaseChatMediaResourceSubscriber(pane.draw);
+      releaseChatMediaResourceOwner(pane.draw);
       pane.container.remove();
     }
   });
@@ -582,13 +682,15 @@ describe("message attachment availability", () => {
     const target = document.body.appendChild(document.createElement("div"));
     const images = () => [{ url: source, width: 1200, height: 800 }];
     const redraw = () =>
-      root.update({ images: images(), options: { ...options, onRequestUpdate: redraw } });
+      root.update({ images: images(), options: { ...options, mediaOwner: redraw } });
     const root = mountImages(
-      { images: images(), options: { ...options, onRequestUpdate: redraw } },
+      { images: images(), options: { ...options, mediaOwner: redraw } },
       target,
     );
     const pane = { container: target, draw: redraw, unmount: root.unmount };
     panes.push(pane);
+    intersections.at(-1)!();
+    flush();
     return pane;
   }
   const availabilityTicket = (mediaTicket: string) => ticketResponse(mediaTicket, 60_000);

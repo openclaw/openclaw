@@ -16,15 +16,18 @@ import {
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  observeHostDataSql,
+  useSessionStoreTempDirs,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackListenerWriteClient } from "../../client.js";
 import { appendSlackStream, markSlackStreamsStopped, startSlackStream } from "../../streaming.js";
+import { registerSlackWorkspaceEvents } from "../events.js";
 import * as sessionEventRouting from "../message-handler/prepare-routing.js";
 import { deliverSlackSlashReplies } from "../replies.js";
 import { getSlackSessionRuns, registerSlackSessionRun } from "../session-run-targets.js";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "../slash.test-harness.js";
-import { registerSlackAgentEvents } from "./agent.js";
 import { createSlackSystemEventTestHarness } from "./system-event-test-harness.js";
 
 const { prepareSessionEntryPatch } = vi.hoisted(() => ({
@@ -108,7 +111,7 @@ function createSessionEventHarness(channelType: "im" | "channel" | "mpim" = "im"
   });
   Object.assign(harness.ctx.app, { client });
   setRuntimeConfigSnapshot(harness.ctx.cfg);
-  registerSlackAgentEvents({ ctx: harness.ctx });
+  registerSlackWorkspaceEvents({ ctx: harness.ctx });
   return {
     ...harness,
     storePath,
@@ -149,7 +152,30 @@ function createSessionEventHarness(channelType: "im" | "channel" | "mpim" = "im"
   };
 }
 
-describe("registerSlackAgentEvents", () => {
+function expectSessionOwner(type: string, sessionKey: string, last = false) {
+  const mock =
+    type === "agent_session_stopped" ? slashMocks.dispatchMock : prepareSessionEntryPatch;
+  const expected = expect.objectContaining(
+    type === "agent_session_stopped"
+      ? { ctx: expect.objectContaining({ CommandTargetSessionKey: sessionKey }) }
+      : { sessionKey },
+  );
+  if (last) {
+    expect(mock).toHaveBeenLastCalledWith(expected);
+  } else {
+    expect(mock).toHaveBeenCalledWith(expected);
+  }
+}
+
+function expectNoSessionMutation(harness: ReturnType<typeof createSessionEventHarness>) {
+  expect(slashMocks.dispatchMock).not.toHaveBeenCalled();
+  expect(prepareSessionEntryPatch).not.toHaveBeenCalled();
+  expect(harness.recordSlackSessionTitle).not.toHaveBeenCalled();
+  expect(markSlackStreamsStopped).not.toHaveBeenCalled();
+  expect(harness.setSlackSessionStatus).not.toHaveBeenCalled();
+}
+
+describe("Slack agent lifecycle events", () => {
   beforeEach(() => {
     tempDir = sessionDirs.make();
     vi.clearAllMocks();
@@ -172,7 +198,7 @@ describe("registerSlackAgentEvents", () => {
       if (dropped) {
         harness.ctx.shouldDropMismatchedSlackEvent = () => true;
       }
-      registerSlackAgentEvents({ ctx: harness.ctx, trackEvent });
+      registerSlackWorkspaceEvents({ ctx: harness.ctx, trackEvent });
 
       await harness.getHandler("app_context_changed")?.({
         event: { type: "app_context_changed", user: "U123", context: { entities: [] } },
@@ -333,30 +359,9 @@ describe("registerSlackAgentEvents", () => {
         ok: true,
         messages: [{ metadata: { event_type: "assistant_thread_context", event_payload: {} } }],
       });
-      await harness.getHandler(type)?.({
-        event: {
-          type,
-          channel: "D123",
-          thread_ts: "1712345678.000001",
-          user: "U123",
-          event_ts: "1712345679.000001",
-          title: "Assistant session",
-          streaming_message_ts: [],
-        },
-        body: {},
-      });
+      await harness.emit(type, { title: "Assistant session" });
       const sessionKey = "agent:main:main:thread:1712345678.000001";
-      if (type === "agent_session_stopped") {
-        expect(slashMocks.dispatchMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            ctx: expect.objectContaining({ CommandTargetSessionKey: sessionKey }),
-          }),
-        );
-      } else {
-        expect(prepareSessionEntryPatch).toHaveBeenCalledWith(
-          expect.objectContaining({ sessionKey }),
-        );
-      }
+      expectSessionOwner(type, sessionKey);
     },
   );
 
@@ -399,17 +404,7 @@ describe("registerSlackAgentEvents", () => {
           });
         }
         await harness.getHandler(type)?.({ event, body: {} });
-        if (type === "agent_session_stopped") {
-          expect(slashMocks.dispatchMock).toHaveBeenLastCalledWith(
-            expect.objectContaining({
-              ctx: expect.objectContaining({ CommandTargetSessionKey: sessionKey }),
-            }),
-          );
-        } else {
-          expect(prepareSessionEntryPatch).toHaveBeenLastCalledWith(
-            expect.objectContaining({ sessionKey }),
-          );
-        }
+        expectSessionOwner(type, sessionKey, true);
       }
       expect(harness.ctx.runtime.error).not.toHaveBeenCalled();
     },
@@ -441,11 +436,7 @@ describe("registerSlackAgentEvents", () => {
         }));
       }
       await harness.emit(type, { title: "Assistant title must not rename the ordinary DM" });
-      expect(slashMocks.dispatchMock).not.toHaveBeenCalled();
-      expect(prepareSessionEntryPatch).not.toHaveBeenCalled();
-      expect(harness.recordSlackSessionTitle).not.toHaveBeenCalled();
-      expect(markSlackStreamsStopped).not.toHaveBeenCalled();
-      expect(harness.setSlackSessionStatus).not.toHaveBeenCalled();
+      expectNoSessionMutation(harness);
       if (type === "agent_session_stopped") {
         expect(harness.postEphemeral).toHaveBeenCalledWith(
           expect.objectContaining({ text: "Sorry, something went wrong handling that command." }),
@@ -457,6 +448,42 @@ describe("registerSlackAgentEvents", () => {
       }
     },
   );
+
+  it("does not apply a title after another session wins the recorded conversation", async () => {
+    const harness = createSessionEventHarness("mpim");
+    const sessionKey = "agent:main:slack:group:g123";
+    const competitor = `${sessionKey}:thread:${threadTs}`;
+    const updatedAt = Date.now();
+    await harness.recordSession({ sessionKey, peerId: "G123", threadId: threadTs, updatedAt });
+    let hostQueries: string[] | undefined;
+    prepareSessionEntryPatch.mockImplementationOnce(async (params) => {
+      // Routing captured its real source; only the competing row changes before the writer.
+      await harness.recordSession({
+        sessionKey: competitor,
+        peerId: "G123",
+        threadId: threadTs,
+        updatedAt: updatedAt + 1000,
+      });
+      const observed = observeHostDataSql();
+      try {
+        return await prepareStoredSessionEntryPatch(params);
+      } finally {
+        hostQueries = [...observed.queries];
+        observed.restore();
+      }
+    });
+    await harness.emit("agent_session_title_changed", {
+      channel: "G123",
+      title: "Title for the previous conversation owner",
+    });
+    expect(harness.ctx.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Slack conversation owner changed before the title update"),
+    );
+    expect(harness.stored(sessionKey)).not.toHaveProperty("displayName");
+    expect(harness.stored(competitor)).not.toHaveProperty("displayName");
+    expect(harness.recordSlackSessionTitle).not.toHaveBeenCalled();
+    expect(hostQueries).toEqual([]);
+  });
 
   it.each(["moved", "reset", "live"] as const)(
     "revalidates a title owner after waiting for a %s session writer",
@@ -779,17 +806,7 @@ describe("registerSlackAgentEvents", () => {
         client: harness.ctx.app.client,
       });
       const sessionKey = "agent:main:main:account:default:team:t_other";
-      if (type === "agent_session_stopped") {
-        expect(slashMocks.dispatchMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            ctx: expect.objectContaining({ CommandTargetSessionKey: sessionKey }),
-          }),
-        );
-      } else {
-        expect(prepareSessionEntryPatch).toHaveBeenCalledWith(
-          expect.objectContaining({ sessionKey }),
-        );
-      }
+      expectSessionOwner(type, sessionKey);
     },
   );
 
@@ -801,11 +818,7 @@ describe("registerSlackAgentEvents", () => {
 
       await harness.getHandler(type)?.({ event: { type }, body: {} });
 
-      expect(slashMocks.dispatchMock).not.toHaveBeenCalled();
-      expect(markSlackStreamsStopped).not.toHaveBeenCalled();
-      expect(prepareSessionEntryPatch).not.toHaveBeenCalled();
-      expect(harness.recordSlackSessionTitle).not.toHaveBeenCalled();
-      expect(harness.setSlackSessionStatus).not.toHaveBeenCalled();
+      expectNoSessionMutation(harness);
     },
   );
 });

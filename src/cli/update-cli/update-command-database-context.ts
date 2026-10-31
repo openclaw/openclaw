@@ -1,13 +1,8 @@
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { resolveConfigPath } from "../../config/paths.js";
-import { resolveIdentityPathViaExistingAncestorSync as canonicalPath } from "../../infra/boundary-path.js";
-import { readGatewayLockProcessCmdline as readCmdline } from "../../infra/gateway-lock-process.js";
-import { readLockPayload, resolveGatewayLockPaths as lockPaths } from "../../infra/gateway-lock.js";
-import { classifyOpenClawArgv as classify } from "../../infra/gateway-process-argv.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
-import { isPidAlive } from "../../shared/pid-alive.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import {
   captureTargetDatabaseSchemaContext,
@@ -17,6 +12,7 @@ import {
   isCandidateAdmissionContextCovered,
 } from "./schema-preflight.js";
 import { UpdatePreMutationError } from "./shared.js";
+import { readUpdateChannelConfig } from "./update-command-config.js";
 import {
   formatUpdateAncestryBlockMessage,
   resolveForegroundUpdateAdmission,
@@ -25,9 +21,13 @@ import {
   captureOwnedManagedUpdatePreflightContext,
   resolveOwnedManagedUpdatePreflightEnv,
 } from "./update-command-managed-context.js";
-import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
-import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+import {
+  collectServiceInspectionFailureFacts,
+  GatewayServiceUpdateOwnershipError,
+} from "./update-command-service-plan.js";
+import { assertUnavailableGatewayPackageConsumerStopped } from "./update-command-service-revalidation.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   type PreManagedServiceStop,
@@ -36,6 +36,7 @@ import {
 type UpdateManagedServiceInspectionParams = {
   roots: readonly string[];
   updateInstallKind: "package" | "git";
+  packageAlreadyCurrent?: boolean;
   shouldRestart: boolean;
   jsonMode: boolean;
   timeoutMs: number;
@@ -104,22 +105,16 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
     }
     if (
       params.updateInstallKind === "package" &&
+      !params.packageAlreadyCurrent &&
       inspected.serviceUpdateVerdict?.kind === "unavailable"
     ) {
-      const owner = await readLockPayload(lockPaths(process.env).ownerLockPath);
-      const live = owner && isPidAlive(owner.pid) && (owner.role ?? "gateway") === "gateway";
-      const argv = live ? readCmdline(owner.pid, process.platform, params.timeoutMs) : null;
-      const entry = classify(argv ?? [], { requirePackageIdentity: true, pid: owner?.pid });
-      if (
-        live &&
-        ((process.platform === "win32" && (!argv || entry.kind === "unclassified")) ||
-          (entry.kind === "openclaw" &&
-            entry.packageIdentity &&
-            canonicalPath(entry.packageIdentity.root) === canonicalPath(params.roots[0] ?? root)))
-      ) {
-        const failure = createUpdatePreflightFailure("gateway-stop-unverified");
-        throw new UpdatePreMutationError("gateway-stop-unverified", failure.message, failure);
-      }
+      await assertUnavailableGatewayPackageConsumerStopped({
+        roots: params.roots,
+        env: process.env,
+        timeoutMs: params.timeoutMs,
+        assertCurrent: params.assertCurrent ?? (() => {}),
+        verdict: inspected.serviceUpdateVerdict,
+      });
     }
     if (
       foreground &&
@@ -170,11 +165,21 @@ export async function inspectUpdateDatabaseContexts(
     const configValidation = params.candidateAdmissionChecks?.includes("config")
       ? ("candidate" as const)
       : undefined;
+    // Already-current updates skip candidate admission. Preview Doctor's repair for
+    // the selected config so maintenance can persist it through the normal writer.
+    const legacyConfigPlan =
+      params.legacyConfigPlan ??
+      (params.packageAlreadyCurrent
+        ? await withOwnedManagedUpdateEnv(
+            inspected.managedEnv ?? process.env,
+            async () => (await readUpdateChannelConfig(true)).legacyConfigPlan,
+          )
+        : undefined);
     const managed = await captureOwnedManagedUpdatePreflightContext({
       stopState: inspected.service,
       processEnv: process.env,
       invocationCwd: params.invocationCwd,
-      legacyConfigPlan: params.legacyConfigPlan,
+      legacyConfigPlan,
       configValidation,
     });
     // Redirected package replacement does not own the invoking installation's stores.
@@ -185,7 +190,7 @@ export async function inspectUpdateDatabaseContexts(
             legacyConfigPlan:
               params.callerLegacyConfigPlan?.snapshot.path === resolveConfigPath()
                 ? params.callerLegacyConfigPlan
-                : params.legacyConfigPlan,
+                : legacyConfigPlan,
             configValidation,
           }),
         ];

@@ -1,3 +1,4 @@
+import "../../auth-profiles/external-auth.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,9 +12,16 @@ import {
   mintSecretSentinel,
   resolveSecretSentinel,
 } from "../../../secrets/sentinel.js";
+import { createOAuthRefreshError } from "../../../shared/oauth-refresh-outcome.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
+import { createOAuthManager } from "../../auth-profiles/oauth-manager.js";
+import { mockOAuthProviderOperations } from "../../auth-profiles/oauth-native-provider.test-support.js";
 import { OAuthRefreshFailureError } from "../../auth-profiles/oauth-refresh-failure.js";
 import { resolveAuthProfileOrder } from "../../auth-profiles/order.js";
+import { loadPersistedAuthProfileStore } from "../../auth-profiles/persisted.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "../../auth-profiles/store-runtime.js";
 import { FailoverError } from "../../failover-error.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
@@ -67,10 +75,16 @@ function apiKeyAuth(apiKey: string | undefined, source = "env", profileId?: stri
   return { apiKey, mode: "api-key" as const, source, ...(profileId ? { profileId } : {}) };
 }
 
-function runtimeAuth(apiKey: string, value: string, baseUrl?: string, expiresAt?: number) {
+function runtimeAuth(
+  apiKey: string,
+  value: string,
+  baseUrl?: string,
+  expiresAt?: number,
+  headerName = "api-key",
+) {
   return {
     apiKey,
-    request: { auth: { mode: "header" as const, headerName: "api-key", value } },
+    request: { auth: { mode: "header" as const, headerName, value } },
     ...(baseUrl ? { baseUrl } : {}),
     ...(expiresAt ? { expiresAt } : {}),
   };
@@ -84,27 +98,14 @@ function keyProfile(key: string) {
   return { type: "api_key" as const, provider: "custom-openai", key };
 }
 
-function expectProtected(value: string | undefined, plaintext: string): void {
+function expectProtected(value: string | null | undefined, plaintext: string): void {
   expect(value).not.toBe(plaintext);
   expect(looksLikeSecretSentinel(value ?? "")).toBe(true);
   expect(resolveSecretSentinel(value ?? "")).toBe(plaintext);
 }
 
-function createController(
-  params: Partial<
-    Pick<
-      Parameters<typeof createEmbeddedRunAuthController>[0],
-      | "profileCandidates"
-      | "authStore"
-      | "fallbackConfigured"
-      | "lockedProfileId"
-      | "allowTransientCooldownProbe"
-      | "agentDir"
-      | "prepareModelForAuthProfile"
-    >
-  > & { warn?: (message: string) => void } = {},
-) {
-  const { warn, ...overrides } = params;
+type ControllerParams = Parameters<typeof createEmbeddedRunAuthController>[0];
+function createController(params: Partial<ControllerParams> = {}) {
   return createEmbeddedRunAuthController({
     config: undefined,
     agentDir: "/tmp/agent",
@@ -119,12 +120,12 @@ function createController(
     provider: harness.models.runtime.provider,
     modelId: "test-model",
     state: harness,
-    ...overrides,
     log: {
       debug: () => undefined,
       info: () => undefined,
-      warn: warn ?? (() => undefined),
+      warn: () => undefined,
     },
+    ...params,
   });
 }
 
@@ -141,6 +142,129 @@ beforeEach(() => {
   setRuntimeApiKey = vi.fn();
   mocks.prepareProviderRuntimeAuth.mockReset();
   mocks.getApiKeyForModelCore.mockReset();
+});
+
+it.each(["credential resolution", "runtime auth exchange", "AWS runtime auth exchange"])(
+  "ends a hung %s at the run timeout without installing credentials",
+  async (step) => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    let exchangeSignal: AbortSignal | undefined;
+    const late = createDeferred<{ apiKey: string }>();
+    mocks.getApiKeyForModelCore.mockImplementation(({ signal }) => {
+      if (step === "credential resolution") {
+        exchangeSignal = signal;
+        return late.promise;
+      }
+      return Promise.resolve(
+        step.startsWith("AWS")
+          ? { mode: "aws-sdk", source: "aws-sdk default chain" }
+          : apiKeyAuth("synthetic-source"),
+      );
+    });
+    mocks.prepareProviderRuntimeAuth.mockImplementation(({ context }) => {
+      exchangeSignal = context.signal;
+      return late.promise;
+    });
+    const controller = createController({ timeoutMs: 100 });
+    onTestFinished(() => controller.stopRuntimeAuthRefreshTimer());
+    const result = controller.initializeAuthProfile().then(
+      () => "unexpected success",
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(100);
+    const outcome = await Promise.race([result, Promise.resolve("still pending")]);
+    expect(outcome).toMatchObject({
+      name: "AbortError",
+      message: expect.stringMatching(/custom-openai.*timed out.*100ms/i),
+    });
+    expect(outcome).toHaveProperty("message", expect.stringContaining(step.replace("AWS ", "")));
+    expect(exchangeSignal?.aborted).toBe(true);
+    late.resolve({ apiKey: "synthetic-late-token" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(setRuntimeApiKey).not.toHaveBeenCalled();
+    expect(harness.runtimeAuthState).toBeNull();
+  },
+);
+
+it.each([false, true])(
+  "settles slow runtime auth inside the budget (cancelled: %s)",
+  async (cancelled) => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const abort = new AbortController();
+    let exchangeSignal: AbortSignal | undefined;
+    mocks.getApiKeyForModelCore.mockResolvedValue(apiKeyAuth("synthetic-source"));
+    mocks.prepareProviderRuntimeAuth.mockImplementation(({ context }) => {
+      exchangeSignal = context.signal;
+      return new Promise((resolve) => {
+        setTimeout(() => resolve({ apiKey: "synthetic-runtime" }), 50);
+      });
+    });
+    const controller = createController({ timeoutMs: 100, signal: abort.signal });
+    onTestFinished(() => controller.stopRuntimeAuthRefreshTimer());
+    const result = controller.initializeAuthProfile().then(
+      () => "success",
+      () => "aborted",
+    );
+    await vi.advanceTimersByTimeAsync(25);
+    if (cancelled) {
+      abort.abort();
+    }
+    await vi.advanceTimersByTimeAsync(25);
+    expect(await result).toBe(cancelled ? "aborted" : "success");
+    if (cancelled) {
+      expect(exchangeSignal?.aborted).toBe(true);
+      expect(setRuntimeApiKey).not.toHaveBeenCalled();
+    } else {
+      expectProtected(setRuntimeApiKey.mock.calls[0]?.[1], "synthetic-runtime");
+    }
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
+
+it("shares the run deadline across credential lookup and token exchange", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  mocks.getApiKeyForModelCore.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        setTimeout(() => resolve(apiKeyAuth("synthetic-source")), 60);
+      }),
+  );
+  mocks.prepareProviderRuntimeAuth.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        setTimeout(() => resolve({ apiKey: "synthetic-runtime" }), 60);
+      }),
+  );
+  const controller = createController({ timeoutMs: 100 });
+  onTestFinished(() => controller.stopRuntimeAuthRefreshTimer());
+  const result = controller.initializeAuthProfile().catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(100);
+  expect(await Promise.race([result, Promise.resolve("still pending")])).toMatchObject({
+    name: "AbortError",
+    message: expect.stringContaining("runtime auth exchange timed out"),
+  });
+  await vi.advanceTimersByTimeAsync(20);
+  expect(setRuntimeApiKey).not.toHaveBeenCalled();
+});
+
+it("can select API-key auth after stopping a forwarded harness candidate", async () => {
+  mocks.getApiKeyForModelCore.mockImplementation(async ({ profileId }) => profileAuth(profileId));
+  mocks.prepareProviderRuntimeAuth.mockResolvedValue(undefined);
+  const controller = createController({ profileCandidates: ["default", "backup"] });
+  onTestFinished(() => controller.close());
+  await controller.initializeAuthProfile();
+  controller.stopRuntimeAuthRefreshTimer();
+  await controller.applyAuthProfileCandidate("backup");
+  expect(setRuntimeApiKey).toHaveBeenLastCalledWith("custom-openai", "backup-key");
 });
 
 it.each([false, true])(
@@ -341,17 +465,13 @@ it("clears prior runtime-auth transport overrides when rotating profiles", async
   );
   mocks.prepareProviderRuntimeAuth.mockImplementation(async ({ context }) =>
     context.profileId === "default"
-      ? {
-          apiKey: "default-runtime-key",
-          baseUrl: "https://default-runtime.example.com/v1",
-          request: {
-            auth: {
-              mode: "header" as const,
-              headerName: "x-profile-token",
-              value: "default-profile-token",
-            },
-          },
-        }
+      ? runtimeAuth(
+          "default-runtime-key",
+          "default-profile-token",
+          "https://default-runtime.example.com/v1",
+          undefined,
+          "x-profile-token",
+        )
       : undefined,
   );
 
@@ -394,11 +514,18 @@ it("exhausts the remaining auth profile after a non-cooling failure", async () =
 });
 
 it.each([
-  ["initial candidate", ["expired", "healthy"], ["healthy", "expired"], false],
-  ["rotated candidate", ["current", "expired", "healthy"], ["current", "healthy", "expired"], true],
-] satisfies [string, string[], string[], boolean][])(
+  ["initial candidate", ["expired", "healthy"], ["healthy", "expired"], false, false],
+  ["transient initial candidate", ["expired", "healthy"], ["healthy", "expired"], false, true],
+  [
+    "rotated candidate",
+    ["current", "expired", "healthy"],
+    ["current", "healthy", "expired"],
+    true,
+    false,
+  ],
+] satisfies [string, string[], string[], boolean, boolean][])(
   "records a failed OAuth refresh for the %s and prefers the healthy profile next",
-  async (_label, profileCandidates, expectedOrder, advanceAfterInitialization) => {
+  async (_label, profileCandidates, expectedOrder, advanceAfterInitialization, retryable) => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-controller-"));
     onTestFinished(() => fs.rm(agentDir, { recursive: true, force: true }));
     const authStore: AuthProfileStore = {
@@ -422,7 +549,10 @@ it.each([
         throw new OAuthRefreshFailureError({
           provider: "custom-openai",
           profileId,
-          message: "OAuth token refresh failed for custom-openai: invalid_grant",
+          message: retryable
+            ? "OAuth token refresh failed for custom-openai: 503 unavailable"
+            : "OAuth token refresh failed for custom-openai: invalid_grant",
+          retryable,
         });
       }
       return profileAuth(profileId);
@@ -433,7 +563,7 @@ it.each([
       profileCandidates,
       authStore,
       agentDir,
-      warn,
+      log: { debug() {}, info() {}, warn },
     });
 
     await controller.initializeAuthProfile();
@@ -443,11 +573,23 @@ it.each([
 
     expect(harness.lastProfileId).toBe("healthy");
     const persistedStore = ensureAuthProfileStore(agentDir, { syncExternalCli: false });
-    expect(persistedStore.usageStats?.expired).toMatchObject({
-      disabledReason: "auth_permanent",
-      failureCounts: { auth_permanent: 1 },
-    });
-    expect(persistedStore.usageStats?.expired?.disabledUntil).toBeGreaterThan(Date.now());
+    if (retryable) {
+      expect(persistedStore.usageStats?.expired).toMatchObject({
+        cooldownReason: "timeout",
+        failureCounts: { timeout: 1 },
+      });
+      expect(persistedStore.usageStats?.expired?.disabledUntil).toBeUndefined();
+      expect(persistedStore.usageStats?.expired?.cooldownUntil).toBeGreaterThan(Date.now());
+      expect(persistedStore.usageStats?.expired?.cooldownUntil).toBeLessThanOrEqual(
+        Date.now() + 30_000,
+      );
+    } else {
+      expect(persistedStore.usageStats?.expired).toMatchObject({
+        disabledReason: "auth_permanent",
+        failureCounts: { auth_permanent: 1 },
+      });
+      expect(persistedStore.usageStats?.expired?.disabledUntil).toBeGreaterThan(Date.now());
+    }
     expect(
       resolveAuthProfileOrder({
         store: persistedStore,
@@ -456,7 +598,9 @@ it.each([
       }),
     ).toEqual(expectedOrder);
     expect(warn).toHaveBeenCalledWith(
-      'auth profile "expired" failed for provider "custom-openai": OAuth token refresh failed for custom-openai: invalid_grant',
+      retryable
+        ? 'auth profile "expired" failed for provider "custom-openai": OAuth token refresh failed for custom-openai: 503 unavailable'
+        : 'auth profile "expired" failed for provider "custom-openai": OAuth token refresh failed for custom-openai: invalid_grant',
     );
   },
 );
@@ -766,7 +910,7 @@ it("ignores stale scheduled refresh results after auth profile rotation", async 
   controller.stopRuntimeAuthRefreshTimer();
 });
 
-it.each([false, true])(
+it.each([false, true, "provider-abort"])(
   "injects the AWS SDK sentinel and clears stale refresh state (exchange throws: %s)",
   async (exchangeThrows) => {
     vi.useFakeTimers();
@@ -788,11 +932,18 @@ it.each([false, true])(
       source: "aws-sdk default chain",
     });
     if (exchangeThrows) {
-      mocks.prepareProviderRuntimeAuth.mockRejectedValue(new Error("No runtime auth plugin"));
+      const error = new Error("No runtime auth plugin");
+      if (exchangeThrows === "provider-abort") {
+        error.name = "AbortError";
+      }
+      mocks.prepareProviderRuntimeAuth.mockRejectedValue(error);
     } else {
       mocks.prepareProviderRuntimeAuth.mockResolvedValue(null);
     }
-    const controller = createController({ profileCandidates: [undefined], warn });
+    const controller = createController({
+      profileCandidates: [undefined],
+      log: { debug() {}, info() {}, warn },
+    });
     await controller.initializeAuthProfile();
     expect(setRuntimeApiKey).toHaveBeenCalledWith("custom-openai", "__aws_sdk_auth__");
     expect(harness.runtimeAuthState).toBeNull();
@@ -804,3 +955,64 @@ it.each([false, true])(
     }
   },
 );
+
+it.each([
+  { authProfileStateMode: "read-only" as const },
+  { authProfileFailurePolicy: "local" as const },
+  { authProfileStateMode: "read-write" as const },
+])("keeps refresh health writes at the caller policy boundary: %j", async (policy) => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-policy-"));
+  const agentDir = path.join(stateDir, "agents/main/agent");
+  await fs.mkdir(agentDir, { recursive: true });
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: agentDir }, async () => {
+    const profileId = "expired";
+    const credential = {
+      type: "oauth" as const,
+      provider: "custom-openai",
+      access: "synthetic-access",
+      refresh: "synthetic-refresh",
+      expires: Date.now() - 60_000,
+    };
+    const authStore: AuthProfileStore = { version: 1, profiles: { [profileId]: credential } };
+    saveAuthProfileStore(authStore, agentDir, { filterExternalAuthProfiles: false });
+    mockOAuthProviderOperations({
+      // Only provider-owned evidence restores the claimed grant; the caller policy owns health writes.
+      refreshCredential: async () => {
+        throw createOAuthRefreshError("token endpoint unavailable", {
+          version: 1,
+          phase: "token-response",
+          outcome: "unchanged",
+          status: 503,
+          recovery: { kind: "later", evidence: "documented-reusable-grant" },
+        });
+      },
+    });
+    const manager = createOAuthManager();
+    mocks.getApiKeyForModelCore.mockImplementation(async () =>
+      manager.resolveOAuthAccess({ store: authStore, profileId, credential, agentDir }),
+    );
+    const controller = createController({
+      agentDir,
+      workspaceDir: stateDir,
+      authStore,
+      profileCandidates: [profileId],
+      fallbackConfigured: true,
+      ...policy,
+    });
+    try {
+      await expect(controller.initializeAuthProfile()).rejects.toThrow();
+      const persisted = loadPersistedAuthProfileStore(agentDir)!;
+      expect(persisted.profiles[profileId]).toEqual(credential);
+      if (policy.authProfileStateMode === "read-write") {
+        expect(persisted.usageStats?.[profileId]?.failureCounts).toEqual({ timeout: 1 });
+      } else {
+        expect(persisted.usageStats?.[profileId]).toBeUndefined();
+      }
+    } finally {
+      vi.restoreAllMocks();
+      await cleanupSessionStateForTest({ stateDir });
+      closeOpenClawStateDatabaseForTest();
+    }
+  });
+  await fs.rm(stateDir, { recursive: true, force: true });
+});

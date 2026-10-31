@@ -1,9 +1,11 @@
-import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type {
+  Transport,
+  RequestOptions,
+  StandardSchemaV1,
   CallToolRequest,
   CallToolResult,
   ListToolsRequest,
-} from "@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/client";
 import { onTestFinished, vi } from "vitest";
 import type { resolveMcpTransport } from "../agents/mcp-transport.js";
 import { startNodeHostMcpManager as startManager } from "./mcp.js";
@@ -13,8 +15,8 @@ const { clientConstructor, resolveTransport } = vi.hoisted(() => ({
   resolveTransport: vi.fn(),
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@modelcontextprotocol/sdk/client/index.js")>()),
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@modelcontextprotocol/client")>()),
   Client: clientConstructor,
 }));
 // mock-isolation: Fixtures own transport lifetimes instead of opening real MCP connections.
@@ -22,17 +24,13 @@ vi.mock("../agents/mcp-transport.js", () => ({ resolveMcpTransport: resolveTrans
 
 type TransportFixture = Pick<
   NonNullable<ReturnType<typeof resolveMcpTransport>>,
-  "transport" | "transportType" | "connectionTimeoutMs" | "requestTimeoutMs" | "detachStderr"
->;
+  "transportType" | "connectionTimeoutMs" | "requestTimeoutMs" | "detachStderr"
+> & { transport: Transport };
 
 type ClientFixture = {
   onclose?: () => void;
-  request(request: ListToolsRequest, schema: unknown, options?: RequestOptions): Promise<unknown>;
-  callTool(
-    params: CallToolRequest["params"],
-    schema?: undefined,
-    options?: RequestOptions,
-  ): Promise<CallToolResult>;
+  request(request: ListToolsRequest, options?: RequestOptions): Promise<unknown>;
+  callTool(params: CallToolRequest["params"], options?: RequestOptions): Promise<CallToolResult>;
 };
 
 export function startNodeHostMcpManager(
@@ -66,12 +64,14 @@ export function startNodeHostMcpManager(
       },
       request(
         request: ListToolsRequest | CallToolRequest,
-        schema: unknown,
+        schemaOrOptions?: StandardSchemaV1 | RequestOptions,
         requestOptions?: RequestOptions,
       ) {
+        const forwardedOptions =
+          schemaOrOptions && "~standard" in schemaOrOptions ? requestOptions : schemaOrOptions;
         return request.method === "tools/call"
-          ? client.callTool(request.params, undefined, requestOptions)
-          : client.request(request, schema, requestOptions);
+          ? client.callTool(request.params, forwardedOptions)
+          : client.request(request, forwardedOptions);
       },
     };
   });

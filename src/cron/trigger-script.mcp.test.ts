@@ -1,30 +1,21 @@
+import { once } from "node:events";
 import fs from "node:fs";
 import net, { type AddressInfo } from "node:net";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
-import {
-  bindSessionMcpRuntimeTestScheduler,
-  getSessionMcpRuntimeTestManager,
-} from "../agents/agent-bundle-mcp-manager.test-support.js";
+import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-manager.test-support.js";
 import * as mcpClientLifecycle from "../agents/mcp-client-lifecycle.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(bindSessionMcpRuntimeTestScheduler);
+afterEach(disposeAllSessionMcpRuntimes);
+afterEach(() => vi.restoreAllMocks());
 
-beforeEach(async () => {
-  await bindSessionMcpRuntimeTestScheduler();
-});
-
-afterEach(async () => {
-  await disposeAllSessionMcpRuntimes();
-});
-
-// Minimal stdio MCP server: records each start, and each call reports the serving pid.
-// With a port it ignores SIGTERM and stdin EOF and holds a socket until killed; "hang" skips replies.
+// Reports serving PIDs; optional socket + ignored SIGTERM/EOF expose forced retirement.
 const SOURCES_SERVER = `
 import fs from "node:fs";
 import net from "node:net";
@@ -47,192 +38,116 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   if (message.method === "tools/call") reply(message.id, { structuredContent: { pid: process.pid, tool: message.params.name, since: message.params.arguments?.since ?? null, sources: [] }, content: [{ type: "text", text: "listed" }] });
 }
 `;
-
-function createMcpFixture(params: { extra?: Partial<OpenClawConfig>; serverArgs?: string[] } = {}) {
+function createMcpFixture(serverArgs: string[] = [], deny?: string[]) {
   const root = tempDirs.make("openclaw-cron-mcp-");
   const serverPath = path.join(root, "sources.mjs");
   const startLog = path.join(root, "starts.log");
   fs.writeFileSync(serverPath, SOURCES_SERVER);
-  const config: OpenClawConfig = {
+  const command = (args: string[]) => ({ command: process.execPath, args });
+  const config = {
     agents: { defaults: { workspace: path.join(root, "workspace") } },
     plugins: { enabled: false },
+    tools: { deny },
     mcp: {
       servers: {
-        sources: {
-          command: process.execPath,
-          args: [serverPath, startLog, ...(params.serverArgs ?? [])],
-        },
+        sources: command([serverPath, startLog, ...serverArgs]),
         // Safe server names may themselves contain the `__` separator.
-        team__sources: { command: process.execPath, args: [serverPath, startLog] },
-        broken: { command: process.execPath, args: ["-e", "process.exit(3)"] },
+        team__sources: command([serverPath, startLog]),
+        broken: command(["-e", "process.exit(3)"]),
       },
     },
-    ...params.extra,
   };
+  const runtime = createCronScriptRuntime({ config });
   return {
-    config,
+    evaluate: (input: Partial<Parameters<typeof runtime.evaluateTrigger>[0]> = {}) =>
+      runtime.evaluateTrigger({
+        jobId: "mcp-trigger",
+        script: listScript(),
+        state: null,
+        ...input,
+      }),
     starts: () =>
       (fs.existsSync(startLog) ? fs.readFileSync(startLog, "utf8").split("\n") : []).filter(Boolean)
         .length,
   };
 }
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const QUIET_HOUR_SCRIPT = `
-const listed = await MCP.sources.listSources({ since: trigger.state?.cursor ?? "start" });
-return {
-  fire: false,
-  state: {
-    cursor: "next",
-    listed: listed.structuredContent,
-    deleteVisible: typeof MCP.sources.deleteSource === "function",
-  },
-};
+const listScript = (server = "sources") => `
+const listed = await MCP.${server}.listSources({ since: trigger.state?.cursor ?? "start" });
+return { fire: false, state: {
+    ...listed.structuredContent,
+    deleteVisible: typeof MCP.${server}.deleteSource === "function",
+} };
 `;
 
-describe("cron script MCP namespace", () => {
-  it.each([
-    { server: "sources", tool: "list_sources", cursor: "c1" },
-    { server: "team__sources", tool: "*", cursor: null },
-  ] as const)(
-    "calls authorized MCP tools and retires the runtime ($server/$tool)",
-    async ({ server, tool, cursor }) => {
-      const fixture = createMcpFixture({
-        extra: tool === "*" ? { tools: { deny: ["team__sources__delete_source"] } } : undefined,
-      });
-      const runtime = createCronScriptRuntime({ config: fixture.config });
-      const input = {
-        jobId: "mcp-trigger",
-        script: QUIET_HOUR_SCRIPT.replaceAll(
-          "MCP.sources",
-          server === "sources" ? "MCP.sources" : "MCP.teamSources",
-        ),
-        state: cursor === null ? null : { cursor },
-        toolsAllow: [`${server}__${tool}`],
-      };
-
-      const result = await runtime.evaluateTrigger(input);
-
-      expect(result).toMatchObject({
-        kind: "evaluated",
-        fire: false,
-        state: {
-          cursor: "next",
-          listed: { tool: "list_sources", since: cursor ?? "start", sources: [] },
-          deleteVisible: false,
-        },
-      });
-      const state = "state" in result ? (result.state as { listed: { pid: number } }) : undefined;
-      expect(isProcessAlive(state?.listed.pid ?? 0)).toBe(false);
-      expect(fixture.starts()).toBe(1);
-      expect(getSessionMcpRuntimeTestManager().listRuntimeKeys()).toEqual([]);
-    },
-  );
-
-  it.each([
-    { caps: "a wildcard", toolsAllow: ["*"], script: "typeof MCP" },
-    { caps: "no toolsAllow", toolsAllow: undefined, script: "typeof MCP" },
-  ])("starts no MCP server for $caps", async ({ toolsAllow, script }) => {
-    const fixture = createMcpFixture();
-    const runtime = createCronScriptRuntime({ config: fixture.config });
-
-    await expect(
-      runtime.evaluateTrigger({
-        jobId: "mcp-not-named",
-        script: `return { fire: false, state: ${script} };`,
-        state: null,
-        toolsAllow,
-      }),
-    ).resolves.toEqual({ kind: "evaluated", fire: false, state: "undefined" });
-    expect(fixture.starts()).toBe(0);
-    expect(getSessionMcpRuntimeTestManager().listRuntimeKeys()).toEqual([]);
+it.each([
+  { server: "sources", tool: "list_sources", cursor: "c1" },
+  { server: "team__sources", tool: "*", cursor: null },
+] as const)("authorizes $server/$tool and retires MCP", async ({ server, tool, cursor }) => {
+  const fixture = createMcpFixture([], tool === "*" ? ["team__sources__delete_source"] : undefined);
+  const result = await fixture.evaluate({
+    script: listScript(server === "sources" ? "sources" : "teamSources"),
+    state: cursor === null ? null : { cursor },
+    toolsAllow: [`${server}__${tool}`, "broken__*"],
   });
-
-  it("runs past a failed named server and names it when the script fails", async () => {
-    const runtime = createCronScriptRuntime({ config: createMcpFixture().config });
-    const toolsAllow = ["sources__list_sources", "broken__*"];
-
+  expect(result).toMatchObject({
+    kind: "evaluated",
+    fire: false,
+    state: { tool: "list_sources", since: cursor ?? "start", deleteVisible: false },
+  });
+  const state = "state" in result ? (result.state as { pid: number }) : undefined;
+  expect(() => process.kill(state?.pid ?? 0, 0)).toThrow();
+  expect(fixture.starts()).toBe(1);
+  if (server === "sources") {
     await expect(
-      runtime.evaluateTrigger({
-        jobId: "mcp-broken",
-        script: QUIET_HOUR_SCRIPT,
-        state: null,
-        toolsAllow,
+      fixture.evaluate({
+        script: "await MCP.broken.ping({}); return { fire: false };",
+        toolsAllow: ["sources__list_sources", "broken__*"],
       }),
-    ).resolves.toMatchObject({ kind: "evaluated", fire: false });
-    const result = await runtime.evaluateTrigger({
-      jobId: "mcp-broken",
-      script: "await MCP.broken.ping({}); return { fire: false };",
-      state: null,
-      toolsAllow,
+    ).resolves.toMatchObject({
+      kind: "error",
+      code: "internal_error",
+      error: expect.stringContaining('MCP server "broken" is unavailable'),
     });
+  }
+});
 
-    expect(result).toMatchObject({ kind: "error", code: "internal_error" });
-    expect(result.kind === "error" ? result.error : "").toContain(
-      'MCP server "broken" is unavailable',
-    );
-    expect(getSessionMcpRuntimeTestManager().listRuntimeKeys()).toEqual([]);
-  });
+it.each([
+  { caps: "a wildcard", toolsAllow: ["*"] },
+  { caps: "no toolsAllow", toolsAllow: undefined },
+])("starts no MCP server for $caps", async ({ toolsAllow }) => {
+  const fixture = createMcpFixture();
+  await expect(
+    fixture.evaluate({ script: "return { fire: false, state: typeof MCP };", toolsAllow }),
+  ).resolves.toEqual({ kind: "evaluated", fire: false, state: "undefined" });
+  expect(fixture.starts()).toBe(0);
+});
 
-  it.each(["evaluated", "aborted"] as const)(
-    "returns an %s evaluation while a stubborn MCP server keeps retiring",
-    async (outcome) => {
-      // Forced shutdown takes 3 s; a finished evaluation waits at most the 1 s cleanup grace.
-      const dispose = mcpClientLifecycle.disposeMcpClient;
-      const disposing = vi
-        .spyOn(mcpClientLifecycle, "disposeMcpClient")
-        .mockImplementation((session) => dispose(session, 3_000));
-      const connected = createDeferred<net.Socket>();
-      const listener = net.createServer((socket) => connected.resolve(socket));
-      await new Promise<void>((resolve) => {
-        listener.listen(0, "127.0.0.1", resolve);
-      });
-      try {
-        const port = (listener.address() as AddressInfo).port;
-        const fixture = createMcpFixture({
-          serverArgs: [`${port}`, outcome === "aborted" ? "hang" : "reply"],
-        });
-        const runtime = createCronScriptRuntime({ config: fixture.config });
-        const controller = new AbortController();
-        const evaluation = runtime.evaluateTrigger({
-          jobId: `mcp-stubborn-${outcome}`,
-          script: "await MCP.sources.listSources({}); return { fire: false };",
-          state: null,
-          toolsAllow: ["sources__*"],
-          abortSignal: controller.signal,
-        });
-        // The server holds this socket until it is killed, so its close proves retirement.
-        const socket = await connected.promise;
-        let retired = false;
-        const closed = new Promise<void>((resolve) => {
-          socket.once("close", () => {
-            retired = true;
-            resolve();
-          });
-        });
-        if (outcome === "aborted") {
-          controller.abort();
-        }
-
-        const result = await evaluation;
-
-        expect(result.kind === "error" ? result.code : result.kind).toBe(outcome);
-        expect(retired).toBe(false);
-        await closed;
-      } finally {
-        disposing.mockRestore();
-        await new Promise<void>((resolve) => {
-          listener.close(() => resolve());
-        });
-      }
-    },
+it.each(["evaluated", "aborted"] as const)("returns %s before MCP retirement", async (outcome) => {
+  // Forced shutdown takes 3 s; a finished evaluation waits at most the 1 s cleanup grace.
+  const dispose = mcpClientLifecycle.disposeMcpClient;
+  vi.spyOn(mcpClientLifecycle, "disposeMcpClient").mockImplementation((session) =>
+    dispose(session, 3_000),
   );
+  const connected = createDeferred<net.Socket>();
+  await using listener = net.createServer((socket) => connected.resolve(socket));
+  await new Promise<void>((resolve) => {
+    listener.listen(0, "127.0.0.1", resolve);
+  });
+  const port = (listener.address() as AddressInfo).port;
+  const fixture = createMcpFixture([`${port}`, outcome === "aborted" ? "hang" : "reply"]);
+  const controller = new AbortController();
+  const evaluation = fixture.evaluate({
+    toolsAllow: ["sources__*"],
+    abortSignal: controller.signal,
+  });
+  // The server holds this socket until it is killed, so its close proves retirement.
+  const socket = await connected.promise;
+  const closed = once(socket, "close");
+  if (outcome === "aborted") {
+    controller.abort();
+  }
+  const result = await evaluation;
+  expect(result.kind === "error" ? result.code : result.kind).toBe(outcome);
+  expect(socket.destroyed).toBe(false);
+  await closed;
 });

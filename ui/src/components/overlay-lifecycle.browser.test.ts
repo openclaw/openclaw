@@ -632,6 +632,24 @@ describe("native overlay lifecycle", () => {
     await hidden;
     expect(document.activeElement).toBe(outside);
   });
+  it("keeps a tapped overlay open when focus falls back to an ancestor of the release", async () => {
+    const fixture = mountOverlay();
+    const ancestor = fixture.surface.parentElement!;
+    ancestor.tabIndex = -1;
+    await open(fixture);
+    // Touch order: pointerup clears the press before compatibility mousedown moves focus.
+    pointer(fixture.item, "pointerdown", 6);
+    pointer(fixture.item, "pointerup", 6);
+    ancestor.focus();
+    await Promise.resolve();
+    expect(fixture.owner.open).toBe(true);
+    // The release explains only that focus change; a later one still dismisses.
+    const hidden = completion(fixture, "hidden");
+    fixture.item.focus();
+    ancestor.focus();
+    await hidden;
+    expect(fixture.owner.open).toBe(false);
+  });
   it("uses native dialog operations without menu peer arbitration or content assumptions", async () => {
     const fixture = mountOverlay(
       {

@@ -8,6 +8,7 @@
       { "id": "matrix-account-sqlite-schema" },
       { "id": "matrix-credentials-json-to-plugin-state" },
       { "id": "matrix-inbound-dedupe-to-claimable-dedupe" },
+      { "id": "matrix-replay-guard-to-ingress" },
       { "id": "matrix-sync-cache-json-to-plugin-state" }
     ]
   },

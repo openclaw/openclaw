@@ -1,9 +1,13 @@
+import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { markChatAbortTerminalOutcome } from "../chat-abort-lifecycle-internal.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
+import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
+import {
+  captureChatAbortRegistrationGuard,
+  markChatAbortTerminalOutcome,
+} from "../chat-abort-lifecycle-internal.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import { capLiveAssistantText } from "../live-chat-projector.js";
 import type { GatewayBroadcastOpts } from "../server-broadcast-types.js";
@@ -114,7 +118,7 @@ type ChatTerminal =
     };
 
 type ChatTerminalBroadcastParams = ChatBroadcastParams & {
-  terminalEntry: Pick<ChatAbortControllerEntry, "terminalOutcomeObserved"> | undefined;
+  terminalEntry: RpcSourceRef | undefined;
 };
 
 type ChatFrame = ChatTerminal | { state: "delta"; text: string };
@@ -122,6 +126,7 @@ type ChatFrame = ChatTerminal | { state: "delta"; text: string };
 function broadcastChatFrame(
   params: ChatBroadcastParams & ChatFrame,
   liveText?: GatewayBroadcastOpts["liveText"],
+  excludeClientCapability?: GatewayBroadcastOpts["excludeClientCapability"],
 ): void {
   const visibility = getAgentRunContext(params.runId);
   if (visibility?.isControlUiVisible === false && visibility.projectSessionMessages === false) {
@@ -166,6 +171,7 @@ function broadcastChatFrame(
       ? { group, settle: params.state === "final" || params.state === "error" ? true : undefined }
       : undefined);
   const opts: GatewayBroadcastOpts = {
+    ...(excludeClientCapability ? { excludeClientCapability } : {}),
     ...(delivery ? { liveText: delivery } : {}),
     ...(liveText ? { dropIfSlow: true } : {}),
     sessionKeys: resolveChatSessionKeys({
@@ -175,6 +181,15 @@ function broadcastChatFrame(
     }),
   };
   broadcastChatPayload({ ...params, agentId: payloadAgentId }, "chat", payload, opts);
+}
+
+/** Text-only clients need one acknowledgment; queue-aware clients use pending inputs. */
+export function broadcastChatQueueNotice(params: ChatBroadcastParams & { text: string }): void {
+  broadcastChatFrame(
+    { ...params, state: "delta" },
+    undefined,
+    GATEWAY_CLIENT_CAPS.CHAT_QUEUE_STATUS,
+  );
 }
 
 export function broadcastChatDelta(
@@ -207,6 +222,12 @@ export function broadcastChatDelta(
 }
 
 export function broadcastChatTerminal(params: ChatTerminalBroadcastParams & ChatTerminal): void {
+  if (
+    params.terminalEntry &&
+    !captureChatAbortRegistrationGuard([{ runId: params.runId, entry: params.terminalEntry }])()
+  ) {
+    return;
+  }
   markChatAbortTerminalOutcome(params.terminalEntry);
   broadcastChatFrame(params);
   params.context.agentRunSeq.delete(params.runId);

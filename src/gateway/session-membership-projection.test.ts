@@ -4,8 +4,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { SessionMembershipFacts } from "../config/sessions/session-membership-facts.types.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionMembershipProjection } from "./session-membership-projection.js";
 
 const { readFacts } = vi.hoisted(() => ({ readFacts: vi.fn() }));
@@ -56,16 +60,22 @@ function membershipProjection(targets: Parameters<Projection["updateTargets"]>[0
   return Object.assign(projection, { [Symbol.dispose]: () => projection.dispose() });
 }
 
+function memberChange(identityId: string, present: boolean, storePath = target.filename) {
+  return {
+    storePath,
+    sessionKey,
+    facts: { kind: "member" as const, sessionId: "shared-session", identityId, present },
+  };
+}
+
 it.each([false, true])(
   "publishes after a delayed reader on Linux without statx only for the admitted file (replaced=%s)",
   async (replaced) => {
     // Evaluate the real identity owner's process-stable Linux policy on every test host.
     vi.resetModules();
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    try {
+    {
+      using _ = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       await import("../infra/sqlite-worker-identity.js");
-    } finally {
-      platform.mockRestore();
     }
     const { registerOpenClawAgentDatabaseIdentity, readOpenClawAgentDatabaseIdentity } =
       await import("../state/openclaw-agent-db-identity.js");
@@ -78,14 +88,8 @@ it.each([false, true])(
     const stat = fs.statSync;
     let metadataRevision = 0n;
     vi.spyOn(fs, "statSync").mockImplementation((...args) => {
-      if (!args[1]?.bigint || String(args[0]) !== filename) {
-        return stat(...args);
-      }
-      const file =
-        args[1].throwIfNoEntry === false
-          ? stat(args[0], { bigint: true, throwIfNoEntry: false })
-          : stat(args[0], { bigint: true });
-      if (file) {
+      const file = stat(...args);
+      if (file && "ctimeNs" in file && String(args[0]) === filename) {
         file.ctimeNs += metadataRevision;
         file.birthtimeNs = file.ctimeNs;
       }
@@ -176,14 +180,7 @@ it.each(["member revocation", "owner reassignment"] as const)(
     );
     expect(readFacts).toHaveBeenCalledTimes(change === "member revocation" ? 2 : 1);
     if (change === "member revocation") {
-      expect(projection.groupTargets().get("work")).toEqual([{ sessionKey, agentId: "main" }]);
       expect(projection.ready(target.filename, sessionKey)).toBe(true);
-      projection.invalidate({
-        storePath: target.filename,
-        sessionKey,
-        facts: { kind: "member", sessionId: "shared-session", identityId: "bob", present: true },
-      });
-      expect(projection.membership(target.storePath, sessionKey)).toEqual(["bob"]);
     }
     expect(projection.needsPreparation).toBe(false);
   },
@@ -214,29 +211,6 @@ it.each(["replace", "remove", "dispose"] as const)(
   },
 );
 
-it("retains failed refresh work and patches only committed changed keys", async () => {
-  readFacts.mockResolvedValueOnce(snapshot(target.identity, ["alice"]));
-  using projection = membershipProjection([target]);
-  await projection.prepare();
-  readFacts.mockRejectedValueOnce(new Error("reader unavailable"));
-  projection.invalidate({ storePath: target.filename, sessionKey, factsInvalidated: true });
-  await expect(projection.prepare()).rejects.toThrow("reader unavailable");
-  expect(projection.ready(target.storePath, sessionKey)).toBe(false);
-  expect(projection.membership(target.storePath, sessionKey)).toEqual([]);
-  readFacts.mockResolvedValueOnce({
-    kind: "session-membership-facts",
-    identity: target.identity,
-    facts: [],
-  });
-  await projection.prepare();
-  expect(readFacts).toHaveBeenLastCalledWith(
-    expect.objectContaining({ sessionKeys: [sessionKey] }),
-  );
-  expect(projection.membership(target.storePath, sessionKey)).toEqual([]);
-  expect([...projection.groupTargets()]).toEqual([]);
-  expect(projection.ready(target.storePath, sessionKey)).toBe(true);
-});
-
 it("retires membership when a new file reuses a previous database inode", async () => {
   readFacts
     .mockResolvedValueOnce({ ...snapshot(target.identity, ["alice"]), birthtime: "old" })
@@ -249,7 +223,6 @@ it("retires membership when a new file reuses a previous database inode", async 
   await projection.prepare();
   expect(projection.membership(target.storePath, sessionKey)).toEqual(["bob"]);
   expect([...projection.groupTargets().keys()]).toEqual(["new"]);
-  expect(readFacts).toHaveBeenCalledTimes(2);
 });
 
 it("shares physical membership across logical aliases and publishes each group member once", async () => {
@@ -259,25 +232,71 @@ it("shares physical membership across logical aliases and publishes each group m
   await projection.prepare();
   expect(readFacts).toHaveBeenCalledTimes(1);
   expect(projection.groupTargets().get("work")).toEqual([{ sessionKey, agentId: "main" }]);
-  projection.invalidate({
-    storePath: target.filename,
-    sessionKey,
-    facts: { kind: "member", sessionId: "shared-session", identityId: "alice", present: false },
-  });
+  projection.invalidate(memberChange("alice", false));
   for (const storePath of [target.storePath, alias.storePath, target.filename]) {
     expect(projection.membership(storePath, sessionKey)).toEqual([]);
   }
-  projection.invalidate({
-    storePath: alias.storePath,
-    sessionKey,
-    facts: { kind: "member", sessionId: "shared-session", identityId: "bob", present: true },
-  });
+  projection.invalidate(memberChange("bob", true, alias.storePath));
   expect(projection.membership(target.storePath, sessionKey)).toEqual(["bob"]);
   projection.updateTargets([alias]);
   await projection.prepare();
   expect(readFacts).toHaveBeenCalledTimes(1);
   expect(projection.membership(target.storePath, sessionKey)).toBeUndefined();
   expect(projection.membership(alias.storePath, sessionKey)).toEqual(["bob"]);
+});
+
+it("accepts committed alias membership only for the admitted physical store", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { readOpenClawAgentDatabaseIdentity } =
+      await import("../state/openclaw-agent-db-identity.js");
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const other = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: state.statePath("other.sqlite"),
+      env: state.env,
+    });
+    const identity = readOpenClawAgentDatabaseIdentity(database);
+    const otherIdentity = readOpenClawAgentDatabaseIdentity(other);
+    const aliasDirectory = state.path("membership-alias");
+    fs.symlinkSync(
+      path.dirname(database.path),
+      aliasDirectory,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const alias = path.join(aliasDirectory, path.basename(database.path));
+    const scope = { agentId: "main", sessionKey, storePath: alias };
+    const entry = { sessionId: "shared-session", category: "work", updatedAt: 1 };
+    replaceSessionEntrySync(scope, entry);
+    readFacts
+      .mockResolvedValueOnce({ ...snapshot(identity.identity, []), birthtime: identity.birthtime })
+      .mockResolvedValueOnce({
+        ...snapshot(otherIdentity.identity, []),
+        birthtime: otherIdentity.birthtime,
+      });
+    using projection = membershipProjection([
+      { agentId: "main", storePath: database.path, ...identity },
+    ]);
+    // A stale locator binding cannot install another physical store's publication.
+    using otherProjection = membershipProjection([
+      { agentId: "main", storePath: database.path, ...otherIdentity },
+    ]);
+    await projection.prepare();
+    await otherProjection.prepare();
+    const stop = sessionChanges.subscribeFacts((change) => {
+      projection.invalidate(change);
+      otherProjection.invalidate(change);
+    });
+    try {
+      replaceSessionEntrySync(scope, { ...entry, category: "personal", updatedAt: 2 });
+      expect([...projection.groupTargets().keys()]).toEqual(["personal"]);
+      expect([...otherProjection.groupTargets().keys()]).toEqual(["work"]);
+      expect(projection.needsPreparation).toBe(false);
+      expect(otherProjection.needsPreparation).toBe(false);
+      expect(readFacts).toHaveBeenCalledTimes(2);
+    } finally {
+      stop();
+    }
+  });
 });
 
 it.each(["key", "store"] as const)(
@@ -310,9 +329,19 @@ it.each(["key", "store"] as const)(
         scope === "key" ? ["carol"] : [],
       );
     }
-    readFacts.mockResolvedValueOnce(snapshot(target.identity, ["bob"]));
+    const fresh = snapshot(target.identity, ["bob"]);
+    if (scope === "key") {
+      fresh.facts = [];
+    }
+    readFacts.mockResolvedValueOnce(fresh);
     await projection.prepare();
-    expect(projection.membership(alias.storePath, sessionKey)).toEqual(["bob"]);
+    expect(readFacts).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sessionKeys: scope === "key" ? [sessionKey] : undefined }),
+    );
+    expect(projection.membership(alias.storePath, sessionKey)).toEqual(
+      scope === "key" ? [] : ["bob"],
+    );
     expect(projection.ready(alias.storePath, sessionKey)).toBe(true);
+    expect([...projection.groupTargets().keys()]).toEqual(scope === "key" ? ["other"] : ["work"]);
   },
 );

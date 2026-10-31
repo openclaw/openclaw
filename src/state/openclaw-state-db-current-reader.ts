@@ -11,6 +11,7 @@ import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.
 import {
   getOpenClawDatabaseMaintenanceResourceScope,
   getOpenClawDatabaseMaintenanceScope,
+  isStateDatabaseReadAdmissionInvalidatedError,
 } from "./openclaw-state-db-async-lifecycle.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -35,17 +36,19 @@ import { admitStateSchemaFacts } from "./openclaw-state-db-schema-version.js";
 import { allowsMaintenanceLiveAuthorityReads } from "./openclaw-state-maintenance-context.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
+type CurrentWarmReadResult<T> = { available: false } | { available: true; value: T };
+
 /** Mutating maintenance can retain an independent current reader under its exact source lifetime. */
 export function createOpenClawStateCurrentWarmReader<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions,
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
-): () => { available: false } | { available: true; value: T } {
+): () => CurrentWarmReadResult<T> {
   let bound:
     | {
         path: string;
         scope: ReturnType<typeof getOpenClawDatabaseMaintenanceScope>;
-        read(): T;
+        read(): CurrentWarmReadResult<T>;
       }
     | undefined;
   return () => {
@@ -109,26 +112,52 @@ export function createOpenClawStateCurrentWarmReader<T>(
             throw new Error("Current shared-state reader is closed");
           }
           scope?.assertReadAdmission();
-          admission.assertCurrent();
+          try {
+            admission.assertCurrent();
+          } catch (error) {
+            if (!isStateDatabaseReadAdmissionInvalidatedError(error)) {
+              throw error;
+            }
+            // Maintenance revoked this generation; the fallback owns fresh admission.
+            close();
+            return false;
+          }
           retained?.assertCurrent();
           assertExistingDatabaseIdentity(pathname, identity.key);
           openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
             pathname,
             options.env ?? process.env,
           );
+          return true;
+        };
+        const close = () => {
+          if (!active) {
+            return;
+          }
+          if (!connection.close()) {
+            throw new Error("Current shared-state reader cleanup is incomplete");
+          }
+          retained?.release();
+          active = false;
+          if (bound === reader) {
+            bound = undefined;
+          }
+          unregister();
         };
         const reader = {
           path: pathname,
           scope,
-          read() {
-            assertCurrent();
+          read(): CurrentWarmReadResult<T> {
+            if (!assertCurrent()) {
+              return { available: false };
+            }
             const result = runOpenClawStateCurrentReadConnection(
               connection,
               operation,
               openStateSchemaReadAdmission,
             );
             retained?.observe();
-            return result;
+            return { available: true, value: result };
           },
         };
         const resource = {
@@ -141,20 +170,14 @@ export function createOpenClawStateCurrentWarmReader<T>(
             ) {
               return;
             }
-            connection.close();
-            retained?.release();
-            active = false;
-            if (bound === reader) {
-              bound = undefined;
-            }
-            unregister();
+            close();
           },
         };
         unregister = registerOpenClawStateDatabaseAsyncResource(resource);
         scope?.own(resource, "shared-resources", () => resource.close());
         bound = reader;
       }
-      return { available: true, value: bound.read() };
+      return bound.read();
     });
   };
 }
@@ -175,10 +198,11 @@ function runOpenClawStateCurrentReadConnection<T>(
     }
     // Explicit Doctor inspection retains its checks; ordinary runtime reads have no callback.
     closeAdmission = openStateSchemaReadAdmission?.(db);
+    const context = openStateSchemaReadAdmission ? "doctor-maintenance" : "runtime";
     runSqliteReadOperationSync(db, () => {
       // The schema owner already retains validation for this physical database.
-      admitStateSchemaFacts(db, pathname);
-      assertStateReadSchema(db, pathname);
+      admitStateSchemaFacts(db, pathname, context);
+      assertStateReadSchema(db, pathname, undefined, context);
     });
     result = runSqliteReadSnapshotSync(db, () => {
       const value = operation(connection.database);

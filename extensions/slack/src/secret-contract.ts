@@ -6,11 +6,14 @@ import {
   hasOwnProperty,
   isRecord,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { hasSlackAccountCredentialsFromConfig } from "./account-configured.js";
 
 export const channelSecrets = createChannelSecretContract({
   channelKey: "slack",
   account: ["appToken", "relay.authToken", "botToken", "signingSecret", "userToken"],
   channel: ["appToken", "botToken", "relay.authToken", "signingSecret", "userToken"],
+  hasImplicitDefaultAccount: ({ context }) =>
+    hasSlackAccountCredentialsFromConfig(context.sourceConfig.channels?.slack, context.env),
   collect(params) {
     const { channel: slack, surface } = params;
     const resolveMode = (value: unknown) =>

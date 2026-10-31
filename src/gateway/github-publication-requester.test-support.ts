@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { expect, onTestFinished, vi, type Mock } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginStateKeyedStore,
@@ -23,6 +24,7 @@ import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
+import { createVisitorAccessPluginConfig } from "../test-utils/visitor-access-config.test-support.js";
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
@@ -30,7 +32,7 @@ import { readGitHubPublicationRequest } from "./github-publication-store.worker.
 import {
   createRealPublicationWorkspace,
   createTestGitHubPublicationCoordinator,
-  githubPublicationTestMocks,
+  overrideCommands,
   persistPublicationTestSession,
   root,
 } from "./github-publication.test-support.js";
@@ -45,12 +47,91 @@ import {
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
-const mocks = githubPublicationTestMocks();
-
 type Backend = "local" | "repository";
 type Coordinator = ReturnType<typeof createTestGitHubPublicationCoordinator>;
 type Requester = NonNullable<Parameters<Coordinator["requestForSessionV2"]>[0]["requester"]>;
 export const guestScopes = [SESSION_READ_SCOPE, SESSION_WRITE_SCOPE];
+export const publicationGuestEmail = "publication-guest@example.test";
+export const publicationBackends = ["local", "repository"] as const;
+export const forPublicationBackends = <T extends string>(changes: readonly T[]) =>
+  publicationBackends.flatMap((backend) => changes.map((change) => ({ backend, change })));
+
+export function createPublicationRepositories(fork = false) {
+  const baseRepo = {
+    id: 10,
+    full_name: "openclaw/openclaw",
+    private: false,
+    archived: false,
+    owner: { type: "Organization" },
+    permissions: { push: true },
+  };
+  const headRepo = fork
+    ? {
+        ...baseRepo,
+        id: 20,
+        full_name: "contributor/openclaw",
+        owner: { type: "User" },
+        permissions: { push: false },
+      }
+    : baseRepo;
+  return { baseRepo, headRepo };
+}
+
+export function capturePublicationGuest(
+  f: Awaited<ReturnType<typeof createRequesterPolicyFixture>>,
+) {
+  return createGitHubPublicationRequesterFixture({
+    profileId: f.guestProfile,
+    scopes: guestScopes,
+    ...f.guestSource.session,
+  });
+}
+
+export async function startVisitorPublicationFixture(
+  f: Parameters<typeof prepareVisitorPublicationFixture>[0],
+) {
+  const visitors = await prepareVisitorPublicationFixture(f);
+  try {
+    await visitors.start();
+    await visitors.execute("visitor_invite", { email: publicationGuestEmail, days: 1 });
+    return Object.assign(visitors, { [Symbol.asyncDispose]: () => visitors.close() });
+  } catch (error) {
+    await visitors.close();
+    throw error;
+  }
+}
+
+export async function queueGuestPublication(
+  f: Awaited<ReturnType<typeof createRequesterPublicationFixture>>,
+  key: string,
+  claimBound = false,
+) {
+  const original = await capturePublicationGuest(f);
+  const claim =
+    claimBound && f.backend === "local"
+      ? await f.placements.claimTurn({
+          ...f.session,
+          agentId: "main",
+          owner: { kind: "local" },
+          claimId: "immediate-alias-retry-claim",
+          runId: "immediate-alias-retry-run",
+        })
+      : await holdWorkerTurn(f);
+  const input = f.request(key, original.requester);
+  const queued = claimBound
+    ? await f.coordinator.requestForClaimV2({ ...input, claim })
+    : await f.coordinator.requestForSessionV2(input);
+  expect(queued.status).toBe("requested");
+  return { original, claim, input, queued };
+}
+
+export async function resumePublicationFixture(
+  f: Awaited<ReturnType<typeof createRequesterPublicationFixture>>,
+) {
+  const restarted = f.restart();
+  await restarted.resumeSessionRequests();
+  return restarted;
+}
 
 export async function createGitHubPublicationRequesterFixture(params: {
   profileId: string;
@@ -89,8 +170,7 @@ async function createRequesterPolicySources(
   session: { sessionId: string; sessionKey: string },
   workspace: string,
 ) {
-  const guestProfile = (await ensureCanonicalUserProfileForEmail("publication-guest@example.test"))
-    .id;
+  const guestProfile = (await ensureCanonicalUserProfileForEmail(publicationGuestEmail)).id;
   const maintainerProfile = (
     await ensureCanonicalUserProfileForEmail("publication-maintainer@example.test")
   ).id;
@@ -115,7 +195,6 @@ async function createRequesterPolicySources(
     loadSessionEntryReadOnly({ agentId: "main", sessionKey: session.sessionKey }),
   ).toMatchObject({
     createdActor: { type: "human", source: "profile", id: guestProfile },
-    sandbox: "required",
   });
   const capture = (profileId: string, scopes: readonly string[]) =>
     createGitHubPublicationRequesterFixture({
@@ -129,15 +208,13 @@ async function createRequesterPolicySources(
   const database = openOpenClawStateDatabase();
   const publishedTitles: string[] = [];
   const externalWrites: string[] = [];
-  const transport = mocks.runCommand.getMockImplementation()!;
-  mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+  overrideCommands((argv, input) => {
     if (argv.includes("push") || argv.includes("POST") || argv.includes("graphql")) {
       externalWrites.push(argv.join(" "));
     }
     if (argv.includes("POST") && argv.some((arg) => arg.endsWith("/pulls"))) {
-      publishedTitles.push(JSON.parse(options!.input!).title);
+      publishedTitles.push(JSON.parse(input!).title);
     }
-    return await transport(argv, options);
   });
   return {
     config,
@@ -172,6 +249,7 @@ export async function createRequesterPublicationFixture(
   repositoryOptions: {
     requestedRef?: Parameters<typeof createRepositoryPublicationFixture>[1];
     baseFiles?: Record<string, string>;
+    initialCheckpoint?: boolean;
   } = {},
 ) {
   const repository =
@@ -181,6 +259,7 @@ export async function createRequesterPublicationFixture(
           repositoryOptions.requestedRef,
           session,
           repositoryOptions.baseFiles,
+          repositoryOptions.initialCheckpoint,
         )
       : undefined;
   await persistPublicationTestSession(session.sessionKey);
@@ -271,22 +350,30 @@ type StoredVisitorGrant = {
 };
 
 export function requireVisitorPublicationPolicy(f: { config: OpenClawConfig }): OpenClawConfig {
-  const roles = f.config.gateway!.roles!;
-  const guest = {
-    ...roles.definitions.guest!,
+  const config = withPublicationGuestRole(f.config, {
     sandbox: "required" as const,
     accessPolicyPlugin: "visitor-access",
     modelPolicy: {},
-  };
-  const config: OpenClawConfig = {
-    ...f.config,
-    gateway: {
-      ...f.config.gateway,
-      roles: { ...roles, definitions: { ...roles.definitions, guest } },
-    },
-  };
+  });
   setRuntimeConfigSnapshot(config);
   return config;
+}
+
+export function withPublicationGuestRole(
+  config: OpenClawConfig,
+  overrides: Partial<GatewayOperatorRoleDefinition>,
+): OpenClawConfig {
+  const roles = config.gateway!.roles!;
+  return {
+    ...config,
+    gateway: {
+      ...config.gateway,
+      roles: {
+        ...roles,
+        definitions: { ...roles.definitions, guest: { ...roles.definitions.guest!, ...overrides } },
+      },
+    },
+  };
 }
 
 export async function prepareVisitorPublicationFixture(f: {
@@ -303,20 +390,11 @@ export async function prepareVisitorPublicationFixture(f: {
   ]);
   const config: OpenClawConfig = {
     ...requireVisitorPublicationPolicy(f),
-    plugins: {
-      allow: ["visitor-access"],
-      slots: { memory: "none" },
-      entries: {
-        "visitor-access": {
-          enabled: true,
-          config: {
-            accountId: "publication-test",
-            appId: "publication-test",
-            apiToken: "synthetic-publication-policy-token",
-          },
-        },
-      },
-    },
+    plugins: createVisitorAccessPluginConfig(
+      "publication-test",
+      "publication-test",
+      "synthetic-publication-policy-token",
+    ),
   };
   setRuntimeConfigSnapshot(config);
   const env = {
@@ -369,6 +447,7 @@ export async function prepareVisitorPublicationFixture(f: {
     openPluginPanel: unexpected,
     readSessionFacts: unexpected,
     withSessionFacts: unexpected,
+    appendAgentMessage: unexpected,
     subscribeSessionChanges: unexpected,
     request: async () => unexpected(),
   };

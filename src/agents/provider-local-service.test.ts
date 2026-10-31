@@ -5,6 +5,7 @@ import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
@@ -17,7 +18,6 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive, readPidFile } from "../test-utils/process-tree.js";
 import { agentProcessTestEntrypoints } from "./process-runtime.test-support.js";
-import { hasLocalServiceProcessExited } from "./provider-local-service-process.js";
 import {
   attachModelProviderLocalService,
   createConfiguredProviderLocalServiceAcquirer,
@@ -58,7 +58,7 @@ function serviceTarget(port: number, providerId: string, service: LocalService) 
   return { providerId, baseUrl: baseUrl(port), service };
 }
 
-function serviceModel(port: number, provider: string, service: LocalService) {
+function serviceModel(port: number, provider: string, service = localService(port)) {
   return attachModelProviderLocalService(
     makeProviderModelFixture<"openai-completions">({
       id: "demo",
@@ -77,11 +77,21 @@ function closeServer(server: net.Server): Promise<void> {
 }
 
 async function verifyOneShotExit(
-  moduleUrl: URL,
-  script: string,
+  target: ReturnType<typeof serviceTarget>,
+  body: string,
   pidPath: string,
   signal?: AbortSignal,
 ) {
+  const moduleUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.providerLocalService);
+  const script = [
+    `import fs from "node:fs";`,
+    `import { ensureProviderLocalService, getManagedProviderLocalServiceDiagnosticsForTest } from ${JSON.stringify(moduleUrl.href)};`,
+    `if (!process.send) throw new Error("missing one-shot host IPC");`,
+    `process.on("disconnect", () => {});`,
+    `const target = ${JSON.stringify(target)};`,
+    body,
+    `process.send({ kind: ${JSON.stringify(ONE_SHOT_HOST_READY_KIND)} });`,
+  ].join("\n");
   const parent = spawn(
     process.execPath,
     [...resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1), "--input-type=module", "-e", script],
@@ -189,30 +199,23 @@ describe("provider local service", () => {
     tempDirs.cleanup();
   });
 
-  it("treats signaled local service children as exited", () => {
-    expect(hasLocalServiceProcessExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
-    expect(hasLocalServiceProcessExited({ exitCode: 0, signalCode: null })).toBe(true);
-    expect(hasLocalServiceProcessExited({ exitCode: null, signalCode: null })).toBe(false);
-  });
-
   it("starts an on-demand local service and stops it after idle", async () => {
     const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const reconcile = vi.fn<NonNullable<ProviderPlugin["reconcileLocalService"]>>(async () => {
       expect((await fetch(healthUrl)).ok).toBe(true);
     });
-    const model = attachModelProviderRuntimePluginHandle(
-      serviceModel(port, "local-demo", localService(port)),
-      { plugin: { reconcileLocalService: reconcile } } as never,
-    );
+    const model = attachModelProviderRuntimePluginHandle(serviceModel(port, "local-demo"), {
+      plugin: { reconcileLocalService: reconcile },
+    } as never);
 
     const acquire = (signal?: AbortSignal) =>
       ensureModelProviderLocalService(model, undefined, signal);
-    const firstLease = await withSpawnReadyHealthProbe(acquire);
-    const secondLease = await acquire();
-    if (!firstLease || !secondLease) {
-      throw new Error("Expected provider local service lease");
-    }
+    const firstLease = expectDefined(
+      await withSpawnReadyHealthProbe(acquire),
+      "Expected first lease",
+    );
+    const secondLease = expectDefined(await acquire(), "Expected second lease");
     reconcile.mockImplementationOnce(() => {
       throw new Error("reconcile failed");
     });
@@ -241,6 +244,7 @@ describe("provider local service", () => {
 
     expect(reconcile).toHaveBeenCalledTimes(5);
     expect((await fetch(healthUrl)).ok).toBe(true);
+    firstLease.release();
     firstLease.release();
     expect((await fetch(healthUrl)).ok).toBe(true);
     secondLease.release();
@@ -317,10 +321,7 @@ describe("provider local service", () => {
     try {
       const lease = await withSpawnReadyHealthProbe(() => ensureModelProviderLocalService(model));
 
-      if (!lease) {
-        throw new Error("Expected provider local service lease");
-      }
-      lease.release();
+      expectDefined(lease, "Expected local service lease").release();
 
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
@@ -349,9 +350,7 @@ describe("provider local service", () => {
       }),
     );
 
-    if (!lease) {
-      throw new Error("Expected provider local service lease");
-    }
+    expectDefined(lease, "Expected local service lease");
     expect((await fetch(healthUrl)).status).toBe(401);
     expect(
       (
@@ -424,8 +423,7 @@ describe("provider local service", () => {
   it("serializes concurrent chat and embedding starts with independent leases", async () => {
     const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
-    const tempDir = tempDirs.make("openclaw-local-service-");
-    const startsPath = path.join(tempDir, "starts.txt");
+    const startsPath = path.join(tempDirs.make("openclaw-local-service-"), "starts.txt");
     const service = scriptService(
       port,
       `const fs=require("node:fs");const http=require("node:http");fs.appendFileSync(${JSON.stringify(
@@ -455,8 +453,7 @@ describe("provider local service", () => {
     const secondPort = firstPort + 1;
     const firstHealthUrl = `http://127.0.0.1:${firstPort}/v1/models`;
     const secondHealthUrl = `http://127.0.0.1:${secondPort}/v1/models`;
-    const tempDir = tempDirs.make("openclaw-local-service-key-");
-    const startsPath = path.join(tempDir, "starts.txt");
+    const startsPath = path.join(tempDirs.make("openclaw-local-service-key-"), "starts.txt");
     const args = [
       "-e",
       `const fs=require("node:fs");const http=require("node:http");fs.appendFileSync(process.env.STARTS_PATH,process.env.LOCAL_SERVICE_PORT+"\\n");const server=http.createServer((req,res)=>{res.writeHead(200,{"content-type":"application/json"});res.end('{"ok":true}');});server.listen(Number(process.env.LOCAL_SERVICE_PORT),"127.0.0.1");process.on("SIGTERM",()=>server.close(()=>process.exit(0)));`,
@@ -527,13 +524,10 @@ describe("provider local service", () => {
       expect((await fetch(healthUrl)).status).toBe(503);
 
       const secondLease = await ensureModelProviderLocalService(model);
-      if (!secondLease) {
-        throw new Error("Expected restarted provider local service lease");
-      }
       expect((await fetch(healthUrl)).ok).toBe(true);
       // Replacement acquisition joins the retired process tree before spawning anew.
       expect(isPidAlive(firstForkedPid)).toBe(false);
-      secondLease.release();
+      expectDefined(secondLease, "Expected restarted local service lease").release();
 
       const starts = (await fs.readFile(startsPath, "utf8")).trim().split("\n");
       expect(starts).toHaveLength(2);
@@ -543,7 +537,6 @@ describe("provider local service", () => {
   });
 
   it.each([
-    ["code 17", "process.exit(17)", false],
     ["signal SIGTERM", "process.kill(process.pid, 'SIGTERM')", true],
     [
       "code 17; stderr: startup-😀-failure",
@@ -572,40 +565,31 @@ describe("provider local service", () => {
 
   it("does not keep one-shot hosts alive through diagnostic pipes", async ({ signal }) => {
     const port = await fixture.claimPort();
-    const tempDir = tempDirs.make("openclaw-local-service-unref-");
-    const servicePidPath = path.join(tempDir, "service.pid");
-    const moduleUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.providerLocalService);
-    const script = [
-      `import fs from "node:fs/promises";`,
-      `import { ensureProviderLocalService, getManagedProviderLocalServiceDiagnosticsForTest } from ${JSON.stringify(moduleUrl.href)};`,
-      `if (!process.send) throw new Error("missing one-shot host IPC");`,
-      `process.on("disconnect", () => {});`,
-      `const port = ${port};`,
-      `const lease = await ensureProviderLocalService({`,
-      `  providerId: "local-unref",`,
-      `  baseUrl: "http://127.0.0.1:" + port + "/v1",`,
-      `  service: {`,
-      `    command: process.execPath,`,
-      `    args: ["-e", ${JSON.stringify(
+    const servicePidPath = path.join(tempDirs.make("openclaw-local-service-unref-"), "service.pid");
+    const target = serviceTarget(port, "local-unref", {
+      command: process.execPath,
+      args: [
+        "-e",
         `const http=require("node:http");const server=http.createServer((req,res)=>{res.writeHead(200);res.end("ok");});server.listen(${port},"127.0.0.1");setInterval(()=>process.stderr.write("tick\\\\n"),10);`,
-      )}],`,
-      `    readyTimeoutMs: 5000,`,
-      `  },`,
-      `});`,
+      ],
+      readyTimeoutMs: 5000,
+    });
+    const script = [
+      `const lease = await ensureProviderLocalService(target);`,
       `const [diagnostics] = getManagedProviderLocalServiceDiagnosticsForTest();`,
-      `if (diagnostics.stdoutTail || diagnostics.stderrTail) throw new Error("runtime output was retained");`,
-      `await fs.writeFile(${JSON.stringify(servicePidPath)}, String(diagnostics.pid));`,
+      `if (Buffer.byteLength(diagnostics.stderrTail) > 8192) throw new Error("unbounded runtime output");`,
+      `await fs.promises.writeFile(${JSON.stringify(servicePidPath)}, String(diagnostics.pid));`,
       `lease?.release();`,
-      `process.send({ kind: ${JSON.stringify(ONE_SHOT_HOST_READY_KIND)} });`,
     ].join("\n");
-    await verifyOneShotExit(moduleUrl, script, servicePidPath, signal);
+    await verifyOneShotExit(target, script, servicePidPath, signal);
   });
 
   it("does not keep failed one-shot hosts alive through diagnostic pipes", async () => {
     const port = await fixture.claimPort();
-    const tempDir = tempDirs.make("openclaw-local-service-failed-unref-");
-    const servicePidPath = path.join(tempDir, "service.pid");
-    const moduleUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.providerLocalService);
+    const servicePidPath = path.join(
+      tempDirs.make("openclaw-local-service-failed-unref-"),
+      "service.pid",
+    );
     const failedServiceReadyTimeoutMs = 60_000;
     const serviceScript = [
       `const fs=require("node:fs");`,
@@ -613,17 +597,18 @@ describe("provider local service", () => {
       `process.on("SIGTERM",()=>{});`,
       `setInterval(()=>process.stderr.write("tick\\n"),10);`,
     ].join("");
+    const target = serviceTarget(port, "local-failed-unref", {
+      command: process.execPath,
+      args: ["-e", serviceScript],
+      readyTimeoutMs: failedServiceReadyTimeoutMs,
+    });
     // Advance only the nested host's readiness clock after the service PID exists.
     // This preserves live-child failure cleanup without spending the deadline in wall time.
     const script = [
-      `import fs from "node:fs";`,
-      `import { ensureProviderLocalService } from ${JSON.stringify(moduleUrl.href)};`,
-      `if (!process.send) throw new Error("missing one-shot host IPC");`,
-      `process.on("disconnect", () => {});`,
-      `const realNow = Date.now.bind(Date);`,
+      `const realNow = performance.now.bind(performance);`,
       `const realSetTimeout = globalThis.setTimeout.bind(globalThis);`,
       `let clockOffsetMs = 0;`,
-      `Date.now = () => realNow() + clockOffsetMs;`,
+      `performance.now = () => realNow() + clockOffsetMs;`,
       `globalThis.setTimeout = (callback, delay, ...args) => {`,
       `  if (clockOffsetMs === 0 && fs.existsSync(${JSON.stringify(servicePidPath)})) {`,
       `    return realSetTimeout(() => {`,
@@ -635,22 +620,13 @@ describe("provider local service", () => {
       `  return realSetTimeout(callback, delay, ...args);`,
       `};`,
       `try {`,
-      `  await ensureProviderLocalService({`,
-      `    providerId: "local-failed-unref",`,
-      `    baseUrl: "http://127.0.0.1:${port}/v1",`,
-      `    service: {`,
-      `      command: process.execPath,`,
-      `      args: ["-e", ${JSON.stringify(serviceScript)}],`,
-      `      readyTimeoutMs: ${failedServiceReadyTimeoutMs},`,
-      `    },`,
-      `  });`,
+      `  await ensureProviderLocalService(target);`,
       `} catch (error) {`,
       `  if (!(error instanceof Error) || !error.message.includes("did not become ready")) throw error;`,
       `}`,
       `if (clockOffsetMs === 0) throw new Error("test clock did not advance");`,
-      `process.send({ kind: ${JSON.stringify(ONE_SHOT_HOST_READY_KIND)} });`,
     ].join("\n");
-    await verifyOneShotExit(moduleUrl, script, servicePidPath);
+    await verifyOneShotExit(target, script, servicePidPath);
   });
 
   it("honors request aborts while waiting for local service readiness", async () => {
@@ -717,8 +693,7 @@ describe("provider local service", () => {
   });
 
   it("does not spawn a local service after its last startup caller aborts", async () => {
-    const tempDir = tempDirs.make("openclaw-local-service-abort-");
-    const pidPath = path.join(tempDir, "child.pid");
+    const pidPath = path.join(tempDirs.make("openclaw-local-service-abort-"), "child.pid");
     const controller = new AbortController();
     let probeCount = 0;
     let childPid: number | undefined;

@@ -109,7 +109,7 @@ type TalkSpeakReason =
   | "invalid_audio_result";
 
 function canReadTalkSecrets(client: { connect?: { scopes?: string[] } } | null): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  const scopes = client?.connect?.scopes ?? [];
   return scopes.includes(ADMIN_SCOPE) || scopes.includes(TALK_SECRETS_SCOPE);
 }
 
@@ -154,15 +154,6 @@ function withTalkBaseTtsSpeakerSelectionCompat(
         return [providerId, normalized];
       }),
     );
-  }
-  for (const [key, value] of Object.entries(baseTts)) {
-    if (key === "providers") {
-      continue;
-    }
-    const record = asOptionalRecord(value);
-    if (record) {
-      next[key] = withSpeakerSelectionCompat(record);
-    }
   }
   return next;
 }
@@ -343,7 +334,7 @@ function readTalkCatalog(
             { inheritRequestScope: false },
           ),
         );
-        if ((!expired || !retained.snapshot) && !lifetime?.aborted) {
+        if (!lifetime?.aborted) {
           retained.snapshot = snapshot;
         }
         if (!expired) {
@@ -563,6 +554,9 @@ async function buildTalkCatalog(
           if (capabilities?.voicesByModel) {
             entry.voicesByModel = capabilities.voicesByModel;
           }
+          if (capabilities?.modelFamilySettings) {
+            entry.modelFamilySettings = capabilities.modelFamilySettings;
+          }
           if (provider.aliases?.length) {
             entry.aliases = [...provider.aliases];
           }
@@ -642,15 +636,15 @@ async function resolveTalkResponseFromConfig(params: {
   const normalizedTalk = normalizeTalkSection(params.sourceConfig.talk);
   const configuredPayload = normalizedTalk ? buildTalkConfigResponse(normalizedTalk) : undefined;
   // Resolve provider selection from materialized config, but project provider-owned fields from
-  // source config so SecretRefs stay redacted. The requested provider also avoids re-resolving them.
+  // source config so SecretRefs stay redacted.
   const runtimeRealtime = await buildTalkRealtimeConfig(params.runtimeConfig);
   const effectiveProvider = canonicalizeRealtimeVoiceProviderId(
     runtimeRealtime.provider,
     params.runtimeConfig,
   );
-  const sourceRealtime = await buildTalkRealtimeConfig(params.sourceConfig, effectiveProvider);
   const sourceProviders: Record<string, TalkProviderConfig> = {};
-  for (const [providerId, providerConfig] of Object.entries(sourceRealtime.providers)) {
+  const configuredProviders = params.sourceConfig.talk?.realtime?.providers ?? {};
+  for (const [providerId, providerConfig] of Object.entries(configuredProviders)) {
     const canonicalProviderId =
       canonicalizeRealtimeVoiceProviderId(providerId, params.runtimeConfig) ?? providerId;
     sourceProviders[canonicalProviderId] = {

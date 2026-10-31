@@ -2,15 +2,16 @@ import {
   SSEClientTransport,
   SseError,
   type SSEClientTransportOptions,
-} from "@modelcontextprotocol/sdk/client/sse.js";
-import {
   StreamableHTTPClientTransport,
-  StreamableHTTPError,
+  SdkHttpError,
+  SdkErrorCode,
   type StreamableHTTPClientTransportOptions,
-} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { STDIO_DEFAULT_MAX_BUFFER_SIZE } from "@modelcontextprotocol/sdk/shared/stdio.js";
-import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+  STDIO_DEFAULT_MAX_BUFFER_SIZE,
+  type FetchLike,
+  type Transport,
+  type JSONRPCMessage,
+} from "@modelcontextprotocol/client";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 
 const STREAM_RETRY_EXHAUSTED_RE = /^Maximum reconnection attempts \(\d+\) exceeded\.$/;
 const SESSION_TERMINATION_TIMEOUT_MS = 5_000;
@@ -364,11 +365,12 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
     this.sessionReplacedError = new McpSseSessionExpiredError(
       `MCP SSE server reconnected onto a replacement session endpoint: ${endpoint}`,
     );
+    materializeErrorStack(this.sessionReplacedError);
     this.emitError(this.sessionReplacedError);
     void this.close();
     // EventSource can arm its reconnect timer after this callback returns.
     // Close again on the next turn so that new timer cannot survive.
-    setTimeout(() => void this.transport.close(), 0).unref?.();
+    setTimeout(() => void this.transport.close(), 0).unref();
   }
 
   protected onTransportError(error: Error): void {
@@ -380,7 +382,7 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
       void this.close();
       // EventSource schedules reconnect after its error callback returns.
       // Close again on the next turn so that new timer cannot survive.
-      setTimeout(() => void this.transport.close(), 0).unref?.();
+      setTimeout(() => void this.transport.close(), 0).unref();
     }
   }
 
@@ -395,12 +397,13 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
   }
 }
 
-/** Owns Streamable HTTP notification recovery and stateful cleanup around SDK 1.30.0. */
+/** Owns Streamable HTTP notification recovery and stateful cleanup. */
 export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransport {
   protected readonly transport: StreamableHTTPClientTransport;
   private readonly url: URL;
   private readonly cleanupFetch: FetchLike;
   private readonly requestInit?: RequestInit;
+  private failedStartupSessionId?: string;
   private pendingExpiredNotificationGet = false;
   private terminatedSessionId?: string;
 
@@ -414,6 +417,15 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
         throw new Error("MCP Streamable HTTP transport is closed");
       }
       const response = limitMcpHttpResponse(await this.cleanupFetch(input, init));
+      if (init?.method === "GET" && !response.ok) {
+        // Notification GETs have no error-body contract. Do not let a body that stays open block recovery.
+        void response.body?.cancel().catch(() => undefined);
+      }
+      if (init?.method === "POST" && !response.ok && this.transport.sessionId === undefined) {
+        // V2 only records successful handshakes. A failed startup can still allocate a session.
+        this.failedStartupSessionId =
+          response.headers.get("mcp-session-id") || this.failedStartupSessionId;
+      }
       if (init?.method === "GET" && response.status === 404 && this.sessionId !== undefined) {
         this.pendingExpiredNotificationGet = true;
       }
@@ -426,7 +438,7 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
   }
 
   get sessionId(): string | undefined {
-    return this.transport.sessionId;
+    return this.transport.sessionId ?? this.failedStartupSessionId;
   }
 
   get protocolVersion(): string | undefined {
@@ -437,14 +449,12 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
     if (this.closed) {
       // SDK reconnect callbacks can finish after close() cleared their old timer.
       // Defer a second close so any timer armed later in that callback is cancelled.
-      setTimeout(() => void this.transport.close(), 0).unref?.();
+      setTimeout(() => void this.transport.close(), 0).unref();
       return;
     }
     this.emitError(error);
     const sessionExpired =
-      this.pendingExpiredNotificationGet &&
-      error instanceof StreamableHTTPError &&
-      error.code === 404;
+      this.pendingExpiredNotificationGet && error instanceof SdkHttpError && error.status === 404;
     if (sessionExpired) {
       this.pendingExpiredNotificationGet = false;
     }
@@ -482,9 +492,10 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
     // A terminated session is no longer addressable; MCP servers report 404
     // for that id, which is already the desired outcome of cleanup.
     if (!response.ok && response.status !== 404 && response.status !== 405) {
-      throw new StreamableHTTPError(
-        response.status,
+      throw new SdkHttpError(
+        SdkErrorCode.ClientHttpFailedToTerminateSession,
         `Failed to terminate session: ${response.statusText}`,
+        { status: response.status, statusText: response.statusText },
       );
     }
     this.terminatedSessionId = sessionId;

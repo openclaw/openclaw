@@ -5,6 +5,7 @@ import {
   isPathInside,
   root as fsRoot,
 } from "openclaw/plugin-sdk/file-access-runtime";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type {
   DirectoryEntry,
   SandboxFsBridge,
@@ -29,14 +30,7 @@ type ResolvedMountPath = SandboxResolvedPath & {
   writable: boolean;
 };
 
-export function createOpenShellFsBridge(params: {
-  sandbox: OpenShellFsBridgeContext;
-  backend: OpenShellMirrorBackend;
-}) {
-  return new OpenShellFsBridge(params.sandbox, params.backend);
-}
-
-class OpenShellFsBridge implements SandboxFsBridge {
+export class OpenShellFsBridge implements SandboxFsBridge {
   private readonly resolveRenameTargets = createWritableRenameTargetResolver(
     (target) => this.resolveTarget(target),
     (target, action) => this.ensureWritable(target, action, true),
@@ -186,7 +180,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
   async stat(params: Parameters<SandboxFsBridge["stat"]>[0]): Promise<SandboxFsStat | null> {
     const target = this.resolveTarget(params);
     const hostPath = target.hostPath;
-    const stats = await fsPromises.lstat(hostPath).catch(() => null);
+    const stats = await lstatIfExists(hostPath, "ENOENT");
     if (!stats) {
       return null;
     }
@@ -230,7 +224,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     ];
   }
 
-  private containerMounts(readOnlyMounts = this.readOnlyMounts()) {
+  private containerMounts() {
     const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
     const agentRoot = path.resolve(this.sandbox.agentWorkspaceDir);
     const hasAgentMount = this.sandbox.workspaceAccess !== "none" && workspaceRoot !== agentRoot;
@@ -265,7 +259,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
         : []),
     ];
     containerMounts.unshift(
-      ...readOnlyMounts.map((mount) => ({
+      ...this.readOnlyMounts().map((mount) => ({
         remote: mount.containerPath,
         owner:
           resolveOpenShellWorkspaceRoot(containerMounts, mount.containerPath)?.owner ?? "workspace",
@@ -283,17 +277,12 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
   private resolveTarget(params: { filePath: string; cwd?: string }): ResolvedMountPath {
     const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
-    const agentRoot = path.resolve(this.sandbox.agentWorkspaceDir);
-    const hasAgentMount = this.sandbox.workspaceAccess !== "none" && workspaceRoot !== agentRoot;
-    const agentContainerRoot = (this.backend.remoteAgentWorkspaceDir || "/agent").replace(
-      /\\/g,
-      "/",
-    );
     const workspaceContainerRoot = this.sandbox.containerWorkdir.replace(/\\/g, "/");
-    const input = params.filePath.trim();
-    const readOnlyMounts = this.readOnlyMounts();
+    // The caller's whitespace is part of the filesystem identity; only the
+    // invocation base goes through the trimming resolver.
+    const input = params.filePath;
 
-    const containerMounts = this.containerMounts(readOnlyMounts);
+    const containerMounts = this.containerMounts();
     const resolveContainerTarget = (containerPath: string): ResolvedMountPath | undefined => {
       const containerMount = resolveOpenShellWorkspaceRoot(containerMounts, containerPath);
       if (!containerMount) {
@@ -350,17 +339,13 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
     // Resolve protected host aliases before the writable workspace that contains
     // them; virtual mount shadows still resolve through the container table below.
-    for (const mount of [
-      ...readOnlyMounts,
-      { hostPath: workspaceRoot, containerPath: workspaceContainerRoot },
-      ...(hasAgentMount ? [{ hostPath: agentRoot, containerPath: agentContainerRoot }] : []),
-    ]) {
-      if (isPathInside(mount.hostPath, hostPath)) {
+    for (const mount of containerMounts) {
+      if (isPathInside(mount.value.hostRoot, hostPath)) {
         const relative = path
-          .relative(mount.hostPath, hostPath)
+          .relative(mount.value.hostRoot, hostPath)
           .split(path.sep)
           .join(path.posix.sep);
-        const target = resolveContainerTarget(path.posix.join(mount.containerPath, relative));
+        const target = resolveContainerTarget(path.posix.join(mount.remote, relative));
         if (!target) {
           throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
         }
@@ -444,12 +429,7 @@ async function nearestExistingDirectoryStats(params: {
   const rootPath = path.resolve(params.root);
   let cursor = path.resolve(params.targetPath);
   while (isPathInside(rootPath, cursor)) {
-    const stats = await fsPromises.lstat(cursor).catch((err: unknown) => {
-      if (isNotFoundError(err)) {
-        return null;
-      }
-      throw err;
-    });
+    const stats = await lstatIfExists(cursor, "ENOENT");
     if (stats) {
       if (!stats.isDirectory()) {
         throw new Error(`Sandbox rename destination parent is not a directory: ${cursor}`);
@@ -479,14 +459,7 @@ async function assertLocalPathSafety(params: {
   const unlinkSymlink =
     params.allowFinalSymlinkForUnlink &&
     hostPath !== mountHostRoot &&
-    (
-      await fsPromises.lstat(hostPath).catch((error: unknown) => {
-        if (isNotFoundError(error)) {
-          return null;
-        }
-        throw error;
-      })
-    )?.isSymbolicLink();
+    (await lstatIfExists(hostPath, "ENOENT"))?.isSymbolicLink();
   await assertNoSymlinkParents({
     rootDir: mountHostRoot,
     targetPath: unlinkSymlink ? path.dirname(hostPath) : hostPath,

@@ -5,7 +5,7 @@ import { resolveJsoncOcPath } from "../../jsonc/resolve.js";
 import { parseOcPath } from "../../oc-path.js";
 
 function rs(raw: string, ocPath: string) {
-  const { ast } = parseJsonc(raw);
+  const ast = parseJsonc(raw);
   const path = parseOcPath(ocPath);
   return resolveJsoncOcPath(ast, path);
 }
@@ -52,7 +52,7 @@ describe("resolveJsoncOcPath", () => {
   });
 
   it("returns null on empty AST", () => {
-    const { ast } = parseJsonc("");
+    const ast = parseJsonc("");
     expect(resolveJsoncOcPath(ast, parseOcPath("oc://config/x"))).toBeNull();
   });
 });

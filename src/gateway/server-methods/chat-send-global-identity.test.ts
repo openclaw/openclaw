@@ -16,7 +16,8 @@ import { readSessionPendingInputByKey } from "../../config/sessions/session-acce
 import { SessionPendingInputCustodyError } from "../../config/sessions/session-pending-input-custody-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -288,6 +289,7 @@ it.each<IdentityScenario>([
         sessionKey: scenario.key,
         message,
         idempotencyKey: runId,
+        ...(scenario.pendingReplacement ? { queueMode: "steer" as const } : {}),
       };
       const send = (response: typeof respond, id = runId, admit?: () => Promise<boolean>) =>
         handleDirectExternalChatSend(
@@ -345,10 +347,9 @@ it.each<IdentityScenario>([
         );
         expect(observeDispatch).not.toHaveBeenCalled();
         expect(context.addChatRun).not.toHaveBeenCalled();
-        expect(context.chatAbortControllers.size).toBe(0);
-        expect(context.chatQueuedTurns.size).toBe(0);
+        expect(rpcSourceTesting.size).toBe(0);
         expect(
-          getSessionWorkAdmissionRelease({
+          captureSessionControllerSettlement({
             scope: storePath,
             identities: [scenario.key, "raw-session", "literal-session"],
           }),
@@ -363,7 +364,11 @@ it.each<IdentityScenario>([
       }
       expect(respond).toHaveBeenCalledWith(
         true,
-        { runId, status: "started" },
+        {
+          runId,
+          status: "started",
+          ...(!scenario.replaceDuringPersistence ? { messageSeq: 2 } : {}),
+        },
         undefined,
         expect.anything(),
       );
@@ -378,7 +383,7 @@ it.each<IdentityScenario>([
         "requested session row",
       );
       const admissionReleased = () =>
-        getSessionWorkAdmissionRelease({
+        captureSessionControllerSettlement({
           scope: session.storePath,
           identities: [session.sessionKey, selected.sessionId],
         });
@@ -428,7 +433,7 @@ it.each<IdentityScenario>([
           expect(settled).toBeDefined();
           release.resolve();
           await settled;
-          expect(context.chatAbortControllers.has(runId)).toBe(false);
+          expect(rpcSourceTesting.has(runId)).toBe(false);
           expect(readPending(source.path)).toEqual(pendingBefore);
           expect(readPending(originalPath)).toEqual(pendingBefore);
         }
@@ -492,7 +497,7 @@ it.each<IdentityScenario>([
       await Promise.allSettled(sending ? [sending] : []);
       const owned = observeDispatch.mock.calls.at(-1)?.[0];
       const settled = owned
-        ? getSessionWorkAdmissionRelease({
+        ? captureSessionControllerSettlement({
             scope: owned.session.storePath,
             identities: [owned.session.sessionKey, owned.session.entry?.sessionId],
           })

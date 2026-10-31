@@ -1,5 +1,7 @@
 import { fetchControlUiResource, subscribeBrowserAuthRestored } from "../../../app/browser-http.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { formatUiExternalText } from "../../../lib/format-error.ts";
 import { buildChatMediaFetchHeaders } from "./chat-media-playback.ts";
 import {
@@ -12,10 +14,15 @@ import {
   notifyChatMediaResourceSubscribers,
   observeChatMediaResource,
   readChatMediaResource,
+  releaseChatMediaResourceOwner,
   scheduleChatMediaResourceRefresh,
   type ChatMediaResource,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
+
+registerChatComposerEnglish();
+
+registerChatMediaEnglish();
 
 type AssistantAttachmentAvailability =
   | { status: "checking" }
@@ -52,6 +59,16 @@ export function resolveAssistantAttachmentAvailability(
   options: ImageRenderOptions = {},
   allowImage = false,
 ): AssistantAttachmentAvailability {
+  if (
+    options.mediaReadAllowed === false &&
+    !source.startsWith("data:") &&
+    !source.startsWith("blob:")
+  ) {
+    if (options.onMediaChange) {
+      releaseChatMediaResourceOwner(options.onMediaChange);
+    }
+    return { status: "checking" };
+  }
   if (!isLocalAssistantAttachmentSource(source)) {
     return { status: "available" };
   }
@@ -256,7 +273,7 @@ export function retryAssistantAttachmentAvailability(
   allowImage = false,
 ): void {
   if (!isLocalAssistantAttachmentSource(source)) {
-    options.onRequestUpdate?.();
+    options.onMediaChange?.();
     return;
   }
   const resource = observeAssistantAttachment(source, options);
@@ -265,7 +282,7 @@ export function retryAssistantAttachmentAvailability(
     resolveAssistantAttachmentAvailability(source, options, true);
   }
   notifyChatMediaResourceSubscribers(resource);
-  options.onRequestUpdate?.();
+  options.onMediaChange?.();
 }
 
 export function reportAssistantImageFailure(
@@ -397,7 +414,7 @@ function observeAssistantAttachment(source: string, options: ImageRenderOptions)
   const resource = observeChatMediaResource<AssistantAttachmentAvailability>(
     "assistant-attachment",
     JSON.stringify([cacheScope, options.policyKey]),
-    options.onRequestUpdate,
+    options.onMediaChange,
     source,
     cacheScope,
   );

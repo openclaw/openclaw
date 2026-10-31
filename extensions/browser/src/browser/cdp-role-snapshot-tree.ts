@@ -10,7 +10,6 @@ export type CdpRoleRef = RoleRefMap[string] & {
 
 export type CursorInteractiveInfo = {
   text: string;
-  tagName: string;
   hasOnClick?: boolean;
   hasCursorPointer?: boolean;
   hasTabIndex?: boolean;

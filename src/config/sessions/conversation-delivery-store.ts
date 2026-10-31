@@ -74,13 +74,12 @@ function readConversationDelivery(
     );
   }
   const { options, scope: preparedScope } = pinConversationDatabaseScope(scope);
-  const captured = structuredClone(lookup);
   // Reads share writer admission so they cannot overtake an accepted transition.
   return deliveryResult(() =>
     runOpenClawAgentWriteAdmission(options, () =>
       withSessionHistoryWorkerDatabase(
         options,
-        (reader) => reader.readConversationDelivery({ lookup: captured, env: preparedScope.env }),
+        (reader) => reader.readConversationDelivery({ lookup, env: preparedScope.env }),
         // Conflict cleanup retains this FIFO turn and must not drain independent readers.
         targetDiscoveryLane,
       ),
@@ -175,7 +174,6 @@ function writeConversationDelivery(
   }
   const { options } = pinConversationDatabaseScope(scope);
   const execution = captureOpenClawAgentDatabaseExecution(options);
-  const captured = structuredClone(input);
   return deliveryResult(async () => {
     try {
       const result = await runOpenClawAgentWorkerWrite(options, () =>
@@ -184,7 +182,7 @@ function writeConversationDelivery(
             assertCurrent,
             "Conversation delivery authority expired",
           ),
-          (worker) => worker.execute({ type, input: captured }),
+          (worker) => worker.execute({ type, input }),
         ),
       );
       if (!result) {

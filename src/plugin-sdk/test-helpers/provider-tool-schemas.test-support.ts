@@ -1,32 +1,25 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 
-/** Reuses real provider registrations while each case retains its own tool-schema inputs. */
 export function useProviderToolSchemaRuntimeForTest(pluginIds: readonly string[]): void {
+  const expectClean = (result: { failures: readonly unknown[] }) =>
+    expect(result.failures).toEqual([]);
   let install: () => void = () => {
     throw new Error("Provider tool-schema fixture was not prepared");
   };
   let close = async () => {};
   let restore = () => {};
   beforeAll(async () => {
-    const [
-      loader,
-      metadata,
-      caches,
-      generations,
-      handles,
-      runtime,
-      registryRuntime,
-      configSnapshots,
-    ] = await Promise.all([
-      import("../../plugins/loader.js"),
-      import("../../plugins/plugin-metadata-snapshot.js"),
-      import("../../plugins/plugin-cache.js"),
-      import("../../plugins/runtime/generation-scope.js"),
-      import("../../plugins/provider-hook-runtime.js"),
-      import("../../plugins/provider-runtime.js"),
-      import("../../plugins/runtime.js"),
-      import("../../config/runtime-snapshot.js"),
-    ]);
+    const [loader, metadata, caches, scopes, handles, runtime, registry, snapshots] =
+      await Promise.all([
+        import("../../plugins/loader.js"),
+        import("../../plugins/plugin-metadata-snapshot.js"),
+        import("../../plugins/plugin-cache.js"),
+        import("../../plugins/runtime/generation-scope.js"),
+        import("../../plugins/provider-hook-runtime.js"),
+        import("../../plugins/provider-runtime.js"),
+        import("../../plugins/runtime.js"),
+        import("../../config/runtime-snapshot.js"),
+      ]);
     const config = {
       plugins: {
         allow: [...pluginIds],
@@ -34,14 +27,12 @@ export function useProviderToolSchemaRuntimeForTest(pluginIds: readonly string[]
       },
     };
     const cache = caches.createPluginCache();
-    const closeCache = async () => {
-      expect((await caches.retirePluginCache(cache)).failures).toEqual([]);
-    };
+    const closeCache = async () => expectClean(await caches.retirePluginCache(cache));
     close = closeCache;
     const prepared = caches.withPluginCache(cache, () => {
-      const previousConfig = configSnapshots.getRuntimeConfigSnapshot();
-      const previousSource = configSnapshots.getRuntimeConfigSourceSnapshot();
-      configSnapshots.setRuntimeConfigSnapshot(config);
+      const previousConfig = snapshots.getRuntimeConfigSnapshot();
+      const previousSource = snapshots.getRuntimeConfigSourceSnapshot();
+      snapshots.setRuntimeConfigSnapshot(config);
       try {
         return {
           metadataSnapshot: metadata.loadPluginMetadataSnapshot({ config }),
@@ -54,9 +45,9 @@ export function useProviderToolSchemaRuntimeForTest(pluginIds: readonly string[]
         };
       } finally {
         if (previousConfig) {
-          configSnapshots.setRuntimeConfigSnapshot(previousConfig, previousSource ?? undefined);
+          snapshots.setRuntimeConfigSnapshot(previousConfig, previousSource ?? undefined);
         } else {
-          configSnapshots.clearRuntimeConfigSnapshot();
+          snapshots.clearRuntimeConfigSnapshot();
         }
       }
     });
@@ -68,7 +59,7 @@ export function useProviderToolSchemaRuntimeForTest(pluginIds: readonly string[]
       }
       return {
         ...params,
-        runtimeHandle: generations.withPluginRuntimeGenerationScope(prepared, () =>
+        runtimeHandle: scopes.withPluginRuntimeGenerationScope(prepared, () =>
           handles.resolveProviderRuntimePluginHandle({
             provider: params.provider,
             modelId: params.context.modelId,
@@ -93,9 +84,7 @@ export function useProviderToolSchemaRuntimeForTest(pluginIds: readonly string[]
     };
     close = async () => {
       try {
-        expect(
-          (await registryRuntime.disposePluginRegistryInstances(prepared.pluginRegistry)).failures,
-        ).toEqual([]);
+        expectClean(await registry.disposePluginRegistryInstances(prepared.pluginRegistry));
       } finally {
         await closeCache();
       }

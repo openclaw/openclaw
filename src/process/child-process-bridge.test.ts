@@ -10,7 +10,7 @@ describe("attachChildProcessBridge", () => {
     const kill = vi.spyOn(child, "kill").mockReturnValue(true);
     const onSignal = vi.fn();
     child.on("error", () => {});
-    const { detach } = attachChildProcessBridge(child, { signals: [signal], onSignal });
+    const { detach } = attachChildProcessBridge(child, onSignal);
     const signalListener = process
       .listeners(signal)
       .find((listener) => !existingListeners.has(listener));

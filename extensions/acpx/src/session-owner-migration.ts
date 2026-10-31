@@ -4,6 +4,8 @@ import { isDeepStrictEqual } from "node:util";
 import {
   archiveLegacyStateSource,
   asObjectRecord,
+  decodeUtf8Input,
+  Utf8InputError,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { movePathWithCopyFallback } from "openclaw/plugin-sdk/security-runtime";
@@ -301,8 +303,8 @@ async function migrateRecord(
   warnings: string[],
 ): Promise<void> {
   const sourcePath = recordPath(directory, oldId);
-  const sourceBytes = await fs.readFile(sourcePath, "utf8");
-  const raw = asObjectRecord(JSON.parse(sourceBytes));
+  const sourceBytes = await fs.readFile(sourcePath);
+  const raw = asObjectRecord(JSON.parse(decodeUtf8Input(sourceBytes, `ACP record ${sourcePath}`)));
   if (
     !raw ||
     raw.acpx_record_id !== oldId ||
@@ -403,7 +405,7 @@ async function migrateRecord(
     ) {
       throw new Error("rekey would alter interpreted history/event references; source retained");
     }
-    const existing = await fs.readFile(destinationPath, "utf8").catch((error: unknown) => {
+    const existing = await fs.readFile(destinationPath).catch((error: unknown) => {
       if (asObjectRecord(error)?.code === "ENOENT") {
         return undefined;
       }
@@ -413,7 +415,13 @@ async function migrateRecord(
     if (!oneshot && originalLocator.name === resource && existing === undefined) {
       throw new Error("migrated metadata has no published destination; source retained");
     }
-    if (existing !== undefined && !isDeepStrictEqual(JSON.parse(existing), candidate)) {
+    if (
+      existing !== undefined &&
+      !isDeepStrictEqual(
+        JSON.parse(decodeUtf8Input(existing, `ACP record ${destinationPath}`)),
+        candidate,
+      )
+    ) {
       throw new Error("destination conflicts; no files were overwritten");
     }
     // The source remains the recovery record until both file publication and canonical
@@ -427,10 +435,17 @@ async function migrateRecord(
     } finally {
       await publicationDirectory.close();
     }
-    if ((await fs.readFile(sourcePath, "utf8")) !== sourceBytes) {
+    if (!(await fs.readFile(sourcePath)).equals(sourceBytes)) {
       throw new Error("source changed during repair");
     }
-    if (!isDeepStrictEqual(JSON.parse(await fs.readFile(destinationPath, "utf8")), candidate)) {
+    if (
+      !isDeepStrictEqual(
+        JSON.parse(
+          decodeUtf8Input(await fs.readFile(destinationPath), `ACP record ${destinationPath}`),
+        ),
+        candidate,
+      )
+    ) {
       throw new Error("destination changed during repair");
     }
     for (const { row } of matchingLeases) {
@@ -552,6 +567,7 @@ export const acpxSessionOwnerMigration: PluginDoctorStateMigration = {
         ],
       };
     }
+    let recoverableWarnings = 0;
     for (const oldId of ids) {
       try {
         const current = await input.context.inspectAcpSessionClaims();
@@ -560,9 +576,18 @@ export const acpxSessionOwnerMigration: PluginDoctorStateMigration = {
         }
         await migrateRecord(input, directory, oldId, current.claims, changes, warnings);
       } catch (error) {
+        if (error instanceof Utf8InputError) {
+          recoverableWarnings++;
+        }
         warnings.push(`ACP record ${oldId} retained: ${String(error)}`);
       }
     }
-    return { changes, warnings };
+    return {
+      changes,
+      warnings,
+      ...(warnings.length > 0 && warnings.length === recoverableWarnings
+        ? { warningDisposition: "recoverable" as const }
+        : {}),
+    };
   },
 };

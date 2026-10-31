@@ -21,6 +21,7 @@ import {
   NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION,
   NextcloudTalkWebhookPayloadError,
   parseNextcloudTalkFileSharedActivity,
+  parseNextcloudTalkQuotedReply,
   parseRawObject,
   requiredString,
   type NextcloudTalkIngressPayload,
@@ -81,6 +82,7 @@ function parseClaimedMessage(payload: NextcloudTalkIngressPayload, claimedId: st
     );
   }
   const roomId = requiredString(webhook.target.id, "target.id");
+  const quote = parseNextcloudTalkQuotedReply(rawEnvelope);
   const message: NextcloudTalkInboundMessage = {
     messageId: webhook.object.id,
     roomToken: roomId,
@@ -95,6 +97,7 @@ function parseClaimedMessage(payload: NextcloudTalkIngressPayload, claimedId: st
     isGroupChat: true,
     ...(fileShare?.attachment ? { attachment: fileShare.attachment } : {}),
     ...(fileShare?.attachmentIssue ? { attachmentIssue: fileShare.attachmentIssue } : {}),
+    ...(quote ? { quote } : {}),
   };
   return message;
 }
@@ -157,7 +160,11 @@ export function createNextcloudTalkWebhookSpool(options: {
     NextcloudTalkIngressPayload
   >({
     queue: getQueue,
-    inspect: (rawEvent) => inspectNextcloudTalkWebhookEnvelope(rawEvent),
+    inspect: inspectNextcloudTalkWebhookEnvelope,
+    inspectAsync: async (rawEvent) => {
+      await startAfterMigration;
+      return inspectNextcloudTalkWebhookEnvelope(rawEvent);
+    },
     payload: {
       version: NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION,
       serialize: (rawEvent, { receivedAt }) => ({ receivedAt, rawEvent }),
@@ -188,9 +195,7 @@ export function createNextcloudTalkWebhookSpool(options: {
     drain: {
       startLimit: 32, // Keep the shared drain's active-delivery ceiling across repumps.
       resolveNonRetryableFailure,
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
+      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs,
       onLog: (message) => options.runtime.log?.(`nextcloud-talk ${message}`),
     },
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
@@ -199,7 +204,6 @@ export function createNextcloudTalkWebhookSpool(options: {
       options.runtime.error?.(`nextcloud-talk ingress drain failed: ${formatErrorMessage(error)}`),
   });
   let stopping = false;
-  const inFlightReceives = new Set<Promise<"accepted" | "ignored">>();
   const startAfterMigration = legacyMigration.then(() => {
     if (!stopping) {
       monitor.start();
@@ -212,9 +216,7 @@ export function createNextcloudTalkWebhookSpool(options: {
       if (stopping) {
         return Promise.reject(new Error("Nextcloud Talk ingress stopped"));
       }
-      const receiveTask = (async () => {
-        await startAfterMigration;
-        const result = await monitor.admit(rawEvent);
+      return monitor.admit(rawEvent).then((result): "accepted" | "ignored" => {
         if (result.kind === "ignored") {
           // These events are acknowledged without a durable row. Keep that intentional
           // non-outcome visible without inventing message content for the agent.
@@ -224,21 +226,13 @@ export function createNextcloudTalkWebhookSpool(options: {
           return "ignored";
         }
         return "accepted";
-      })();
-      inFlightReceives.add(receiveTask);
-      void receiveTask.then(
-        () => inFlightReceives.delete(receiveTask),
-        () => inFlightReceives.delete(receiveTask),
-      );
-      return receiveTask;
+      });
     },
     stop: async () => {
       stopping = true;
-      const pendingReceives = [...inFlightReceives];
       // Quiesce synchronously, but let callbacks accepted before stop finish durable admission.
       const pauseTask = monitor.pause();
       await startAfterMigration.catch(() => undefined);
-      await Promise.allSettled(pendingReceives);
       await monitor.stop();
       await pauseTask;
     },

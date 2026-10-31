@@ -32,6 +32,7 @@ import {
 } from "./subagent-exec-request-ownership.js";
 import { observeSubagentExecution } from "./subagent-execution-observation.js";
 import { captureSubagentListReadContext, type SubagentListReadContext } from "./subagent-list.js";
+import { captureSubagentRetainedWork } from "./subagent-registry-execution-cleanup.js";
 import {
   getCurrentSubagentRunOwner,
   getSubagentRunsForRequesterSession,
@@ -40,7 +41,6 @@ import {
 import {
   buildSubagentRunReadIndexFromRuns,
   listRunsForControllerFromRuns,
-  type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
@@ -82,6 +82,18 @@ export async function prepareSessionSubagentKillSelection(params: {
     ].map((entry) => [entry.runId, entry]),
   );
   const preparationErrors: string[] = [];
+  const hasRetainedWork = captureSubagentRetainedWork();
+  // Inert history needs no session preparation; its original incarnation may be gone.
+  // Select before any awaited notice retirement, which can publish new run state.
+  for (const entry of runs.values()) {
+    if (
+      entry.execution.suppressSessionEffects !== true &&
+      ownsRoot(entry) &&
+      !hasRetainedWork(entry)
+    ) {
+      runs.delete(entry.runId);
+    }
+  }
   for (const entry of runs.values()) {
     if (
       entry.execution.status !== "terminal" ||
@@ -106,9 +118,9 @@ export async function prepareSessionSubagentKillSelection(params: {
       }
     };
     try {
-      const { cancelSubagentRequesterSettleWake } = await import("./subagent-registry.js");
+      const { retireSubagentObligations } = await import("./subagent-registry.js");
       assertCurrent();
-      await cancelSubagentRequesterSettleWake(entry, assertCurrent);
+      await retireSubagentObligations(entry, assertCurrent, { requesterNotified: true });
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         throw error;
@@ -394,16 +406,29 @@ export type ControlledSubagentRunsReadContext = {
 };
 
 function selectControlledSubagentRunFacts(
-  index: SubagentRunReadIndex<SubagentRunReadRecord>,
+  snapshot: Map<string, SubagentRunReadRecord>,
   sessionKey: string,
   agentId: string,
   cfg?: OpenClawConfig,
+  selectedRunId?: string,
 ): SubagentRunReadRecord[] {
-  return [...index.runsByChildSessionKey.values()].flatMap((runs) =>
+  const children = new Map<string, SubagentRunReadRecord[]>();
+  for (const entry of snapshot.values()) {
+    const key = entry.childSessionKey.trim();
+    const runs = children.get(key);
+    if (runs) {
+      runs.push(entry);
+    } else {
+      children.set(key, [entry]);
+    }
+  }
+  children.delete("");
+  return [...children.values()].flatMap((runs) =>
     runs.filter(
       (entry) =>
         isSubagentRunVisibleToSession(entry, sessionKey, agentId, cfg) &&
-        (resolveSubagentChildAgentId(entry) === undefined ||
+        (entry.runId === selectedRunId ||
+          resolveSubagentChildAgentId(entry) === undefined ||
           latestSubagentRun(runs, (candidate) =>
             matchesSubagentChildSessionOwner(candidate, entry.childSessionKey, entry.childAgentId),
           ) === entry),
@@ -434,13 +459,9 @@ export async function buildControlledSubagentRunsReadContext(
   }
 
   const select = (snapshot: Map<string, SubagentRunReadRecord>) => {
-    const index = buildSubagentRunReadIndexFromRuns({
-      runs: snapshot,
-      inMemoryRuns: [...snapshot.keys()].flatMap((id) => subagentRuns.get(id) ?? []),
-    });
-    const visible = selectControlledSubagentRunFacts(index, key, agentId, cfg);
+    const visible = selectControlledSubagentRunFacts(snapshot, key, agentId, cfg);
     return {
-      index,
+      snapshot,
       runIds: visible.map((entry) => entry.runId),
       sessionKeys: visible
         .filter((entry) => entry.pauseReason === "sessions_yield")
@@ -453,7 +474,11 @@ export async function buildControlledSubagentRunsReadContext(
     (selection, snapshot) => {
       const visibleIds = new Set(selection.runIds);
       const runs = [...snapshot.values()].filter((entry) => visibleIds.has(entry.runId));
-      const list = captureSubagentListReadContext(runs, selection.index, snapshot, recentMinutes);
+      const index = buildSubagentRunReadIndexFromRuns({
+        runs: selection.snapshot,
+        inMemoryRuns: [...selection.snapshot.keys()].flatMap((id) => subagentRuns.get(id) ?? []),
+      });
+      const list = captureSubagentListReadContext(runs, index, snapshot, recentMinutes);
       return {
         runs: list.view.latest,
         list,
@@ -473,14 +498,18 @@ export function listControlledSubagentRunFacts(
   controllerSessionKey: string,
   controllerAgentId: string | undefined,
   cfg: OpenClawConfig,
+  selectedRunId?: string,
 ): SubagentRunReadRecord[] {
   if (!controllerAgentId) {
     return [];
   }
-  const index = buildSubagentRunReadIndexFromRuns({
-    runs: getSubagentControlRunsSnapshotForRead(controllerSessionKey),
-  });
-  return selectControlledSubagentRunFacts(index, controllerSessionKey, controllerAgentId, cfg);
+  return selectControlledSubagentRunFacts(
+    getSubagentControlRunsSnapshotForRead(controllerSessionKey),
+    controllerSessionKey,
+    controllerAgentId,
+    cfg,
+    selectedRunId,
+  );
 }
 
 export function ensureSubagentControllerOwnsRun(params: {

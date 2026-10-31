@@ -18,8 +18,8 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { prepareConfigWriteValues } from "./io.write-prepare.js";
-import { findLegacyConfigRuleIssues } from "./legacy.js";
 import { resolveLegacyAgentRosterOwner } from "./legacy.roster.js";
+import { findLegacyConfigRuleIssues } from "./legacy.shared.js";
 import type { OpenClawConfig } from "./types.js";
 import { materializeLegacyAgentOwnershipForActiveChannelsResultAsync } from "./validation.js";
 
@@ -95,9 +95,7 @@ export async function prepareConfigWriteTopology(
   const nextAgentIds = new Set(nextEntries.map((entry) => normalizeAgentId(entry.id)));
   const previousSoleAgentId = tryResolveDefaultAgentId(snapshot.config);
   const entersMultiAgent = previousEntries.length <= 1 && nextEntries.length > 1;
-  const previousSoleRemains = Boolean(
-    previousSoleAgentId && nextAgentIds.has(normalizeAgentId(previousSoleAgentId)),
-  );
+  const previousSoleRemains = Boolean(previousSoleAgentId && nextAgentIds.has(previousSoleAgentId));
   const writesOwnershipTopology =
     options.persistCanonicalAgentRoster === true ||
     !isDeepStrictEqual(previousEntries, nextEntries) ||
@@ -187,8 +185,8 @@ export async function prepareConfigWriteTopology(
         defaults: {
           ...nextConfig.agents?.defaults,
           sessionStore: {
-            ...(isRecord(nextSessionStoreConfig) ? nextSessionStoreConfig : {}),
-            agentId: normalizeAgentId(previousSoleAgentId),
+            ...nextSessionStoreConfig,
+            agentId: previousSoleAgentId,
           },
         },
       },

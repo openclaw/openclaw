@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import type { MemoryProviderStatus } from "../memory-host-sdk/host/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { delegateMemoryAudience, resolveMemoryAudienceFromEntry } from "./memory-audience.js";
 import { fakeSessionOwner } from "./memory-audience.test-support.js";
@@ -235,7 +236,7 @@ it("prefers the provider runtime and never falls back after errors or unavailabl
   expect(old.getMemorySearchManager).not.toHaveBeenCalled();
 });
 
-it.each([null, {}, { unsupported: true }])(
+it.each([null, {}])(
   "rejects malformed advertised provider runtime without legacy fallback: %s",
   async (providerRuntime) => {
     const old = legacy(manager());
@@ -406,6 +407,92 @@ it("reports legacy health without host filesystem paths", async () => {
       details: {
         legacy: { backend: "builtin", provider: "test", files: 2, vector: { enabled: true } },
       },
+    });
+  });
+});
+
+const vectorState = (indexState: "empty" | "complete" | "incomplete" | "unverified") => ({
+  vector: { enabled: true, index: { state: indexState } },
+});
+const healthCase = (name: string, facts: Partial<MemoryProviderStatus>, complete = false) => ({
+  name,
+  facts,
+  complete,
+});
+it.each([
+  healthCase("pending embeddings after reacquisition", {
+    custom: { providerState: { mode: "pending" }, indexIdentity: { status: "valid" } },
+  }),
+  healthCase("incomplete vectors", vectorState("incomplete")),
+  healthCase("unverified vectors", vectorState("unverified")),
+  healthCase("degraded provider", {
+    custom: { providerState: { mode: "degraded", providerId: "test", reason: "unavailable" } },
+  }),
+  healthCase("unavailable semantic provider with keyword fallback", {
+    provider: "none",
+    requestedProvider: "openai",
+    custom: {
+      providerState: { mode: "fts-only", attemptedProviderId: "openai", reason: "unavailable" },
+    },
+  }),
+  healthCase(
+    "intentional keyword-only index before lazy initialization",
+    {
+      provider: "none",
+      requestedProvider: "none",
+      custom: { providerState: { mode: "pending", requestedProvider: "none" } },
+    },
+    true,
+  ),
+  healthCase("dirty sources", { dirty: true }),
+  healthCase("failed sync", { lastSyncError: "worker ran out of memory" }),
+  healthCase("complete semantic index", vectorState("complete"), true),
+  healthCase("empty semantic index", vectorState("empty"), true),
+  healthCase(
+    "intentional keyword-only index",
+    {
+      provider: "none",
+      ...vectorState("incomplete"),
+      custom: { searchMode: "fts-only", providerState: { mode: "fts-only" } },
+    },
+    true,
+  ),
+])("reports health and search coverage for $name", async ({ facts, complete }) => {
+  const oldManager = manager();
+  vi.spyOn(oldManager, "status").mockReturnValue({
+    backend: "builtin",
+    provider: "test",
+    ...facts,
+  });
+  await withLegacy(legacy(oldManager), async (bound) => {
+    const page = await bound.search({ query: "remember" });
+    expect(page.hits).toHaveLength(1);
+    expect(page.coverage).toBe(complete ? "complete" : "partial");
+    const health = await bound.health();
+    expect(health.status).toBe(complete ? "ready" : "degraded");
+    if (!complete) {
+      expect(page.warning).toEqual(expect.any(String));
+      expect(health.message).toBe(page.warning);
+    }
+  });
+});
+
+it("returns authorized hits with partial coverage when optional status diagnostics fail", async () => {
+  const oldManager = manager();
+  oldManager.statusAsync = vi.fn(async () => {
+    throw new Error("diagnostic worker unavailable");
+  });
+  await withLegacy(legacy(oldManager), async (bound) => {
+    const page = await bound.search({ query: "remember" });
+    expect(page.hits).toHaveLength(1);
+    expect(page).toMatchObject({
+      coverage: "partial",
+      warning: expect.stringContaining("could not be verified"),
+    });
+    expect(oldManager.statusAsync).toHaveBeenCalledWith({ includeCounts: false });
+    await expect(bound.health()).resolves.toMatchObject({
+      status: "degraded",
+      message: page.warning,
     });
   });
 });

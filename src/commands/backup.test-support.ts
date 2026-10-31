@@ -1,10 +1,8 @@
 // Backup test support provides temp config/state fixtures and mocked backup runtime helpers.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { vi } from "vitest";
-import { deleteTestEnvValue } from "../test-utils/env.js";
-import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import * as backupShared from "./backup-shared.js";
 
 const backupTestMocks = vi.hoisted(() => ({
@@ -36,19 +34,10 @@ vi.mock("../infra/backup-tar-walk.js", () => ({
   walkBackupTar: backupTestMocks.backupWalkMock,
 }));
 
-export async function resetBackupTempHome(tempHome: { home: string }) {
-  await cleanupSessionStateForTest({ stateDir: path.join(tempHome.home, ".openclaw") });
-  await fs.rm(tempHome.home, { recursive: true, force: true });
-  await fs.mkdir(path.join(tempHome.home, ".openclaw"), { recursive: true });
-  deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-}
-
 export async function mockStateOnlyBackupPlan(stateDir: string) {
-  await fs.writeFile(
-    path.join(stateDir, "openclaw.json"),
-    JSON.stringify({ agents: { ownership: "explicit", entries: { main: {} } } }),
-    "utf8",
-  );
+  await writeFixtureJson(path.join(stateDir, "openclaw.json"), {
+    agents: { ownership: "explicit", entries: { main: {} } },
+  });
   const plan = await backupShared.resolveBackupPlanFromDisk({
     includeWorkspace: false,
     nowMs: 123,

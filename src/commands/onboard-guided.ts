@@ -10,7 +10,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 // Guided onboarding verifies the selected AI connection before persisting its route.
 import type { SetupInferenceDetection } from "../system-agent/setup-inference.js";
-import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { displayPath, resolveUserPath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import {
   resolveOnboardingAgentTarget,
@@ -69,7 +69,7 @@ async function runGuidedOnboardingFlow(
         : t("wizard.guided.invalidConfigUnknown");
     await prompter.note(
       t("wizard.guided.invalidConfigDetails", {
-        path: shortenHomePath(snapshot.path),
+        path: displayPath(snapshot.path),
         issues,
       }),
       t("wizard.setup.invalidConfigTitle"),
@@ -661,7 +661,6 @@ async function runGuidedOnboardingFlow(
   if (quickstart && !gatewayExternallyManaged) {
     await prompter.outro(t("wizard.guided.setupDone"));
     return {
-      workspace: hatchWorkspace,
       next: "foreground-gateway",
       ...(handoffAgentId ? { agentId: handoffAgentId } : {}),
     };
@@ -680,7 +679,7 @@ async function runGuidedOnboardingFlow(
     });
     if (handoff) {
       await prompter.outro(t("wizard.guided.browserHandoffReady"));
-      return { workspace: hatchWorkspace, next: "browser" };
+      return { next: "browser" };
     }
   }
   if (setupOnly) {

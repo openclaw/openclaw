@@ -1,3 +1,4 @@
+import fsSync, { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -5,10 +6,19 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as lifecycleWriteCustody from "../infra/lifecycle-write-custody.js";
 import { readLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+});
 
 const mocks = vi.hoisted(() => ({
   createGitBackup: vi.fn(),
+  initializeGitBackupRepository: vi.fn(),
+  readGitBackupLog: vi.fn(),
   getRuntimeConfig: vi.fn(),
   recordBackupRunOutcome: vi.fn(),
   restoreGitBackupRef: vi.fn(),
@@ -17,33 +27,33 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
+  const { createTestConfigReadMocks } = await import("./test-runtime-config-helpers.js");
   return {
     ...actual,
-    getRuntimeConfig: mocks.getRuntimeConfig,
-    loadConfig: mocks.getRuntimeConfig,
+    ...createTestConfigReadMocks(mocks, "getRuntimeConfig"),
     readConfigFileSnapshot: async () => ({ config: mocks.getRuntimeConfig() }),
-    captureRuntimeConfigAsyncReader:
-      (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
-      async () =>
-        mocks.getRuntimeConfig(...args),
   };
 });
 
-vi.mock("../snapshot/git-backup.js", () => ({
+vi.mock("../snapshot/git-backup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../snapshot/git-backup.js")>()),
   createGitBackup: mocks.createGitBackup,
-  initializeGitBackupRepository: vi.fn(),
-  readGitBackupLog: vi.fn(),
+  initializeGitBackupRepository: mocks.initializeGitBackupRepository,
+  readGitBackupLog: mocks.readGitBackupLog,
   restoreGitBackupRef: mocks.restoreGitBackupRef,
   verifyGitBackupRef: mocks.verifyGitBackupRef,
 }));
 
 // mock-isolation: Git backup settlement uses a controlled outcome; routing has real-ledger coverage.
-vi.mock("./backup-outcome.js", () => ({
-  recordBackupRunOutcomeWithOwner: mocks.recordBackupRunOutcome,
+vi.mock("../cli/local-state-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/local-state-owner.js")>()),
+  runWithLocalStateOwner: mocks.recordBackupRunOutcome,
 }));
 
 import {
   backupGitCreateCommand,
+  backupGitInitCommand,
+  backupGitLogCommand,
   backupGitRestoreCommand,
   backupGitVerifyCommand,
 } from "./backup-git.js";
@@ -57,7 +67,7 @@ function create(
 
 function restore(
   options: Parameters<typeof backupGitRestoreCommand>[1],
-  runtime = createTestRuntime(),
+  runtime: Parameters<typeof backupGitRestoreCommand>[0] = createTestRuntime(),
 ) {
   return backupGitRestoreCommand(runtime, { repository: "/tmp/repository", ...options });
 }
@@ -71,6 +81,8 @@ function verify(
 
 describe("Git backup command agent selection", () => {
   beforeEach(() => {
+    mocks.initializeGitBackupRepository.mockReset();
+    mocks.readGitBackupLog.mockReset();
     mocks.createGitBackup.mockReset().mockResolvedValue({
       commit: "backup-commit",
       noChanges: false,
@@ -82,6 +94,10 @@ describe("Git backup command agent selection", () => {
       agents: { entries: { main: {}, "ops-team": {} } },
     });
     mocks.recordBackupRunOutcome.mockReset();
+    const databasePath = resolveOpenClawStateSqlitePath();
+    vi.mocked(existsSync)
+      .mockReset()
+      .mockImplementation((value) => value === databasePath || fsSync.existsSync(value));
     mocks.restoreGitBackupRef.mockReset().mockResolvedValue({
       commit: "backup-commit",
       excludedTables: [],
@@ -97,6 +113,49 @@ describe("Git backup command agent selection", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("escapes repository and commit text while preserving JSON values", async () => {
+    const repositoryPath = "/tmp/café\x1b[31m\nforged\tpath\r\x00\x85end";
+    const entries = [
+      { commit: "a".repeat(40), date: "2026-10-23T00:00:00Z", message: "café\x1b[2J\tforged" },
+    ];
+    mocks.initializeGitBackupRepository.mockResolvedValue({ repositoryPath });
+    mocks.readGitBackupLog.mockResolvedValue(entries);
+    const runtime = createRuntimeEnv();
+    await backupGitInitCommand(runtime, { repository: repositoryPath });
+    expect(runtime.log).toHaveBeenLastCalledWith(
+      "Git backup repository ready: /tmp/café\\nforged\\tpath\\rend",
+    );
+    await backupGitLogCommand(runtime, { repository: repositoryPath });
+    expect(runtime.log).toHaveBeenLastCalledWith(
+      `${"a".repeat(40)}\t2026-10-23T00:00:00Z\tcafé\\tforged`,
+    );
+    await backupGitLogCommand(runtime, { repository: repositoryPath, json: true });
+    expect(runtime.writeJson).toHaveBeenCalledWith({ repositoryPath, entries }, 2);
+  });
+
+  it("escapes restore paths and omission diagnostics without rewriting the result", async () => {
+    const result = {
+      commit: "backup-commit",
+      targetPath: "/tmp/café\x1b[31m\nrestored",
+      excludedTables: ["café\x1b[2J\nforged-table"],
+      excludedConfigStateKeyPrefixes: ["café\x1b[31m\tforged-key"],
+    };
+    mocks.restoreGitBackupRef.mockResolvedValue(result);
+    const runtime = createRuntimeEnv();
+    await restore({ global: true, target: result.targetPath }, runtime);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Git backup restored: /tmp/café\\nrestored (backup-commit)",
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Warning: this redacted backup omits tables: café\\nforged-table",
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Warning: this redacted backup omits machine-state values under: café\\tforged-key",
+    );
+    await restore({ global: true, target: result.targetPath, json: true }, runtime);
+    expect(runtime.writeJson).toHaveBeenCalledWith(result, 2);
   });
 
   it.each([

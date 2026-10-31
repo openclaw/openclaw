@@ -23,7 +23,7 @@ import {
 } from "../config/sessions/session-transcript-writer-claim-error.js";
 import { ModelAccountConnectAuthorityError } from "../gateway/model-account-connect-errors.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
-import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
+import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner-errors.js";
 import {
   SqliteCoordinatorError,
   OpenClawStateExternalOwnershipError,
@@ -167,7 +167,7 @@ export function identifyError(error: Error) {
     return { type: "state-owner-contention" as const, databasePath: error.databasePath };
   }
   if (error instanceof OpenClawStateLeaseError) {
-    return { type: "state-lease" as const, leaseCode: error.code };
+    return { type: "state-lease" as const, leaseCode: error.code, leaseLoss: error.loss };
   }
   if (error instanceof OpenClawStateOwnershipMetadataError) {
     return { type: "ownership-metadata" as const, databasePath: error.databasePath };
@@ -205,10 +205,6 @@ export function identifyError(error: Error) {
   }
   return { type: error instanceof AggregateError ? ("aggregate" as const) : ("error" as const) };
 }
-function unreachableErrorNode(node: never): never {
-  throw new Error(`Unexpected shared-state worker error node: ${String(node)}`);
-}
-
 export function createError(node: ErrorIdentity & { message: string }): Error {
   if (isMessageOnlyErrorIdentity(node)) {
     const ErrorType = MESSAGE_ONLY_ERRORS[node.type];
@@ -269,16 +265,16 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
         ...(node.path === undefined ? {} : { path: node.path }),
       });
     case "state-lease":
-      return new OpenClawStateLeaseError(node.message, { code: node.leaseCode });
+      return new OpenClawStateLeaseError(node.message, {
+        code: node.leaseCode,
+        loss: node.leaseLoss,
+      });
     case "maintenance":
       return new StartupMaintenanceRequiredError(node.kind, node.message);
     case "state-migration":
       return new OpenClawStateDatabaseSchemaMigrationRequiredError(node.kind, node.pathname);
     case "agent-media-migration":
-      return new OpenClawAgentDatabaseMediaMigrationRequiredError(
-        node.pathname,
-        node.schemaVersion,
-      );
+      break;
   }
-  return unreachableErrorNode(node);
+  return new OpenClawAgentDatabaseMediaMigrationRequiredError(node.pathname, node.schemaVersion);
 }

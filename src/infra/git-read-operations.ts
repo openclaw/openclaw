@@ -10,6 +10,12 @@ export type GitCheckoutContext = {
   branch: string | null;
   root?: string;
   defaultBranch?: string;
+  /**
+   * Candidate head repositories from non-origin GitHub remotes tracking `branch`.
+   * The PR response must identify the same head repository; remote names alone
+   * do not establish fork membership. `owner`/`repo` stay the base identity.
+   */
+  forkHeadCandidates?: Array<{ owner: string; repo: string }>;
 };
 
 /** Lowercased merged-PR head, its target branch, and its merge commit. */
@@ -19,7 +25,13 @@ type GitPullRequestBranchFacts = {
   stats: { additions: number; deletions: number; changedFiles: number } | null;
 };
 
-export type GitCheckoutDiffInput = { cwd: string; baseCommit?: string } & (
+export type GitCheckoutDiffInput = {
+  cwd: string;
+  baseCommit?: string;
+  summaryOnly?: boolean;
+  /** The session's persisted managed-worktree binding owns index stat refreshes. */
+  refreshIndex?: boolean;
+} & (
   | {
       scope?: "all" | "uncommitted";
       commit?: never;
@@ -45,11 +57,19 @@ export type GitReadOperations = {
   "checkout.revision": {
     input: {
       root: string;
-      scope: "context" | "refs" | "worktree";
+      scope: "context" | "refs" | "worktree" | "diff";
       branch?: string;
       defaultBranch?: string;
+      summaryOnly?: boolean;
+      refreshIndex?: boolean;
+      /** Previously displayed paths whose Git attributes can affect the cached diff. */
+      paths?: string[];
     };
-    output: string | null;
+    output: {
+      key: string;
+      /** A successful status inventory, tied to its physical checkout and HEAD. */
+      worktreeStatus?: { root: string; head: string; clean: boolean; untrackedPaths: string[] };
+    } | null;
   };
   "checkout.context": {
     input: { root: string; githubHost?: string };

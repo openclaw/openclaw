@@ -1,4 +1,3 @@
-import { parentPort, workerData } from "node:worker_threads";
 import { createConfigIO } from "../config/io.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { callGateway } from "../gateway/call.js";
@@ -17,6 +16,8 @@ import {
   inspectManagedHandoffSentinel,
   recordManagedHandoffSentinelOutcome,
 } from "./restart-sentinel.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
 import {
@@ -43,11 +44,12 @@ export async function resolveManagedHandoffStateEngine(env: NodeJS.ProcessEnv) {
     import("./worker-task-pool.js"),
     import("./runtime-worker-generation.js"),
   ]);
-  const source = captureRuntimeWorkerSource(new URL(import.meta.url));
+  const source = captureRuntimeWorkerSource(
+    resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.managedHandoffEngine),
+  );
   const pool = new WorkerTaskPool<string, "sqlite" | "postgres" | undefined>({
     workerUrl: source.moduleUrl,
     maxWorkers: 1,
-    workerOptions: { workerData: { managedHandoffEngine: true } },
   });
   try {
     if ((await pool.run(resolveOpenClawStateSqlitePath(env), {})) === "postgres") {
@@ -62,21 +64,6 @@ export async function resolveManagedHandoffStateEngine(env: NodeJS.ProcessEnv) {
     pluginValidation: "core-only",
   }).readConfigFileSnapshot({ observe: false, isolateEnv: true });
   return resolveDatabaseFamilyEngines(snapshot.config).state;
-}
-
-if (parentPort && workerData?.managedHandoffEngine === true) {
-  const [{ existsSync }, { readBackupEngine }, { serveWorkerTasks }] = await Promise.all([
-    import("node:fs"),
-    import("../snapshot/database-backup.js"),
-    import("./worker-task-server.js"),
-  ]);
-  // Snapshot inspection may copy a large SQLite file; keep it off the calling thread.
-  serveWorkerTasks((pathname) => {
-    if (typeof pathname !== "string") {
-      throw new Error("Invalid managed handoff state path");
-    }
-    return existsSync(pathname) ? readBackupEngine(pathname).engine : undefined;
-  });
 }
 
 function prepareAuthority(input: ManagedHandoffSentinelRequest, child = false) {

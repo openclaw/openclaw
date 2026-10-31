@@ -1,6 +1,4 @@
 /**
- * Tool binary manager for agent-side helper commands.
- *
  * Locates or downloads pinned helper binaries such as fd and ripgrep.
  */
 import { spawnSync } from "node:child_process";
@@ -200,8 +198,6 @@ async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string
   }
   const assetName = `${config.name}-${config.tagPrefix}${version}-${archStr}-${target}`;
 
-  mkdirSync(toolsDir, { recursive: true });
-
   const downloadUrl = `https://github.com/${config.repo}/releases/download/${config.tagPrefix}${version}/${assetName}`;
   const binaryExt = plat === "win32" ? ".exe" : "";
   const binaryPath = join(toolsDir, config.binaryName + binaryExt);
@@ -260,7 +256,6 @@ async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string
       );
     }
 
-    // Make executable (Unix only)
     if (plat !== "win32") {
       chmodSync(binaryPath, 0o755);
     }

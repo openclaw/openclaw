@@ -31,20 +31,52 @@ Codex's own tool-search surface:
 available through the OpenClaw dynamic-tool bridge as the durable session status
 surface.
 
+When the native surface is disabled, OpenClaw publishes allowed dynamic tools
+directly instead of requiring unavailable native discovery. This includes managed
+GitHub identity and sandbox-backed execution. Native-enabled threads retain
+searchable, direct, and code-mode-only loading. In native JavaScript `exec`,
+`ALL_TOOLS` and `tools` are JavaScript globals, never shell environment variables.
+OpenClaw shell tools execute operating-system commands.
+
 When a finite runtime allowlist disables native Code Mode, OpenClaw sends an
 empty execution-environment selection. In that direct, unsandboxed case,
 OpenClaw keeps its policy-filtered `exec` and `process` tools as the shell
 fallback. Runtime allowlists and `codexDynamicToolsExclude` still apply.
 
+`tools.gatewayPolicy` adds a required allowlist for Gateway-supplied tools and
+their actions. The adapter applies it after tool additions and exclusions, to
+both declarations and executable callbacks. It does not restrict Codex-native
+coding tools or subagents. Existing ordinary restrictions and
+`codexDynamicToolsExclude` can narrow access further.
+
+Callbacks check the deployment policy captured when their tools are constructed,
+including calls from restored threads. Policy changes require a Gateway restart
+or replacement after affected old work ends. Reconstructed callbacks use the new
+policy; saved native declarations retain their fingerprint, so a previously
+advertised tool can return a policy denial. Direct human Gateway administration
+keeps its existing permissions.
+
+While native children protect a managed parent thread, OpenClaw retains the
+declarations accepted by that thread. Each turn still uses fresh executable
+bindings and current authority; removed tools and changed definitions remain
+unavailable until the thread can accept new declarations. Conversation context
+travels through the existing parent-local inference relay on each request, while
+configured policy stays in the native thread. Connections without that relay
+retain their existing creation-policy checks.
+
 Most remaining OpenClaw integration tools, such as messaging, media, cron,
-browser, nodes, gateway, `heartbeat_respond`, and `web_search`, are available
+browser, nodes, gateway, and `web_search`, are available
 through Codex tool search under that namespace. This keeps the initial model
 context smaller. A small set of tools stay directly callable regardless of
 `codexDynamicToolsLoading`, because Codex tool search can be unavailable or
 resolve a connector-only universe: `agents_list`, `sessions_spawn`, and
 `sessions_yield`. Developer instructions still steer normal Codex subagents
-toward native `spawn_agent` for Codex-native subagent work, while
-`sessions_spawn` remains available for explicit OpenClaw or ACP delegation.
+toward native `spawn_agent` for work using only Codex-native tools. New delegated
+work that needs OpenClaw tools uses the available `sessions_spawn` route with
+`runtime="subagent"` when its schema exposes that selector. Native children can
+inherit dynamic tool schemas without an OpenClaw executor. Existing native
+children keep their native follow-up path; tool failures do not migrate them
+to managed workers. Explicit ACP delegation still uses `sessions_spawn`.
 Message-tool-only source replies also stay direct, since that is a
 turn-control contract.
 
@@ -67,3 +99,29 @@ finish its turn while that approval is still waiting.
 Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom
 Codex app-server that cannot search deferred dynamic tools or when debugging
 the full tool payload.
+
+## Protected conversation continuity
+
+While native work protects a thread, OpenClaw retains its accepted tool declarations.
+Those declarations do not grant execution: current tools and fallback executors must
+still match the accepted description and canonical JSON schema after preparation.
+Changing object-key order is compatible; changing the declaration is not. Invalid
+saved catalog receipts stop reuse without replacing the thread or repairing its receipt.
+
+Inbound and private-completion producers identify their exact transient conversation
+context within `extraSystemPrompt`. Codex delivers the complete current snapshot,
+together with current tool bindings, through the existing parent-local inference
+and native developer-handoff paths. Managed inference receives it on every admitted
+parent request, including immediate post-compaction continuation; native
+additional-context deduplication is not used.
+
+Without a parent-local inference relay, OpenClaw also keeps the initial conversation
+snapshot in creation policy because native compaction can discard injected history
+before the host can refresh it. Reused threads receive a full handoff before each
+turn and after compaction, but a protected thread still refuses a changed creation
+snapshot instead of replacing or borrowing that thread. As with the existing native
+refresh handoff, an immediate native continuation can precede the host callback and
+therefore lack fresh turn context. No new durable cache is added.
+Configured conversation policy, execution hints, and caller-added instructions
+remain part of persistent thread identity. Invalid or stale annotations leave the
+full prompt persistent. Other harnesses still receive the complete prompt unchanged.

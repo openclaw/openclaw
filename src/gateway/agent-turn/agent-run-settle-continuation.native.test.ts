@@ -1,31 +1,93 @@
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { buildRequesterSettleWakeIdentity } from "../../agents/subagents/registry/subagent-requester-settle-identity.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
+  loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import * as pendingInputs from "../../config/sessions/session-accessor.pending-inputs.js";
 import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
-import { withSessionSendDelivery, type SessionSendDelivery } from "../session-send-delivery.js";
+import {
+  ensureCanonicalUserProfileForEmail,
+  setCanonicalUserProfileDisplayName,
+} from "../../state/user-profile-writes.js";
+import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
+import { withSessionSendDelivery } from "../session-send-delivery.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
-import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
+import { createAgentTurnTestContext } from "./agent-run-dispatch.test-support.js";
 import {
   prepareAgentRunUserTurn,
   reconcileAgentRunUserTurnCompletion as reconcileCompletion,
   releasePreparedAgentRunUserTurn as release,
 } from "./agent-run-user-turn.js";
+import { createTestRpcSource, testRpcSourceController } from "./rpc-source.test-support.js";
 
 const reads = vi.hoisted(() => ({ command: vi.fn() }));
 // mock-isolation: Keep model/tools outside this regression; the Gateway terminal dispatcher stays native.
 vi.mock("../../commands/agent.js", () => ({ agentCommandFromGatewayIngress: reads.command }));
 
+type TurnParams = Parameters<typeof prepareAgentRunUserTurn>[0];
+type Recorder = NonNullable<Awaited<ReturnType<typeof prepareAgentRunUserTurn>>["recorder"]>;
+function makeTurnParams(
+  target: { sessionKey: string; sessionId: string; storePath: string },
+  message: string,
+  runId: string,
+  overrides: Partial<Omit<TurnParams, "request">> & {
+    request?: Partial<TurnParams["request"]>;
+  } = {},
+): TurnParams {
+  return {
+    assertCurrent: () => {},
+    onUserTurnMediaPersisted: () => {},
+    cfg: { session: { store: target.storePath } },
+    resolvedSessionKey: target.sessionKey,
+    admittedSessionId: target.sessionId,
+    activeSessionAgentId: "main",
+    suppressVisibleSessionEffects: false,
+    requestedPromptPersistenceSuppression: false,
+    canUseInternalRuntimeHandoff: false,
+    message,
+    effectiveTranscriptInputText: message,
+    images: [],
+    offloadedRefs: [],
+    runId,
+    client: null,
+    context: createAgentTurnTestContext(),
+    ...overrides,
+    request: { message, idempotencyKey: runId, ...overrides.request },
+  };
+}
+async function withTurn<T>(params: TurnParams, body: (recorder: Recorder) => Promise<T>) {
+  const turn = await prepareAgentRunUserTurn(params);
+  try {
+    return await body(expectDefined(turn.recorder, "prepared recorder"));
+  } finally {
+    await release(turn);
+  }
+}
+
+const fixture = useTempSessionsFixture("settle-continuation-native-");
+async function expectUserInputs(scope: Parameters<typeof loadTranscriptEvents>[0], count: number) {
+  const users = (await loadTranscriptEvents(scope)).filter(
+    (entry) =>
+      isIndexedSessionEntry(entry) && entry.type === "message" && entry.message.role === "user",
+  );
+  expect(users).toHaveLength(count);
+}
+
 describe("requester-settle processing survives later user turns", () => {
-  const fixture = useTempSessionsFixture("settle-continuation-native-");
   const sessionKey = "agent:main:settle-continuation";
   const sessionId = "settle-continuation-session";
   const sourceSessionKey = "agent:main:subagent:completed-child";
@@ -33,43 +95,65 @@ describe("requester-settle processing survives later user turns", () => {
   const message = "Synthesize the completed child result";
   const request = { message, idempotencyKey: runId, deliver: false };
   const scope = () => ({ agentId: "main", sessionKey, sessionId, storePath: fixture.storePath() });
-  const preparationContext = createTrackedDispatch().context;
+  const preparationContext = createAgentTurnTestContext();
   const logGateway = { ...preparationContext.logGateway, warn: vi.fn() };
   const prepare = (overrides: Partial<Parameters<typeof prepareAgentRunUserTurn>[0]> = {}) =>
-    prepareAgentRunUserTurn({
-      assertCurrent: () => {},
-      onUserTurnMediaPersisted: () => {},
-      assertCompletionCurrent: () => {},
-      settleWakeReplay: { sourceSessionKeys: [sourceSessionKey], assertCurrent: () => {} },
-      getAbortStopReason: () => "rpc",
-      request,
-      cfg: { session: { store: fixture.storePath() } },
-      resolvedSessionKey: sessionKey,
-      admittedSessionId: sessionId,
-      activeSessionAgentId: "main",
-      suppressVisibleSessionEffects: false,
-      requestedPromptPersistenceSuppression: false,
-      canUseInternalRuntimeHandoff: false,
-      message,
-      effectiveTranscriptInputText: message,
-      images: [],
-      offloadedRefs: [],
-      inputProvenance: {
-        kind: "inter_session",
-        sourceSessionKey,
-        sourceTool: "subagent_settle",
-        sourceChannel: "internal",
-      },
-      runId,
-      client: null,
-      context: { ...preparationContext, logGateway },
-      ...overrides,
-    });
+    prepareAgentRunUserTurn(
+      makeTurnParams(scope(), message, runId, {
+        assertCompletionCurrent: () => {},
+        settleWakeReplay: { sourceSessionKeys: [sourceSessionKey], assertCurrent: () => {} },
+        getAbortStopReason: () => "rpc",
+        sessionEntry: loadSessionEntry(scope()) ?? undefined,
+        request,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey,
+          sourceTool: "subagent_settle",
+          sourceChannel: "internal",
+        },
+        context: { ...preparationContext, logGateway },
+        ...overrides,
+      }),
+    );
   const assistant = (stopReason: "toolUse" | "stop", text = "") => ({
     ...makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp: 2, stopReason }),
     __openclaw: { runId },
   });
+  const register = (instanceId: string) => {
+    const entry = createTestRpcSource(
+      { sessionKey, sessionId, operationalRunInstance: { runId, instanceId } },
+      runId,
+    );
+    rpcSourceTesting.set(runId, entry);
+    return entry;
+  };
+  const completedPayload = { status: "ok", summary: "completed", inputProcessingCompleted: true };
   type Prepared = Awaited<ReturnType<typeof prepare>>;
+  const dispatch = (turn: Prepared, entry: ReturnType<typeof createTestRpcSource>) => {
+    const controller = testRpcSourceController(entry);
+    const cleanupAbortController = vi.fn(() => {
+      rpcSourceTesting.deleteExpected(runId, entry);
+    });
+    const emitFinal = vi.fn();
+    const execute = () =>
+      dispatchAgentRunFromGateway({
+        admittedRunEntry: entry,
+        ingressOpts: {
+          message: turn.message,
+          sessionKey,
+          allowModelOverride: false,
+          userTurnTranscriptRecorder: turn.recorder,
+          abortSignal: controller.signal,
+        },
+        runId,
+        dedupeKeys: [],
+        abortController: controller,
+        cleanupAbortController,
+        io: { emitAcceptance: vi.fn(), emitFinal },
+        context: createAgentTurnTestContext(),
+      });
+    return { entry, controller, cleanupAbortController, emitFinal, execute };
+  };
   const completion = (turn: Prepared) => turn.recorder!.getProcessingCompletion!();
   const complete = (
     turn: Prepared,
@@ -105,7 +189,7 @@ describe("requester-settle processing survives later user turns", () => {
     await manager.appendMessageAsync(user);
     await manager.appendMessageAsync(assistant("stop", `${text} finished`));
   };
-  const expectCompletedReplays = async (
+  const expectCompletedReplay = async (
     before: Awaited<ReturnType<typeof loadTranscriptEvents>>,
     prepareReplay = prepare,
     count = 1,
@@ -114,11 +198,7 @@ describe("requester-settle processing survives later user turns", () => {
     for (let duplicate = 0; duplicate < count; duplicate++) {
       const replay = await prepareReplay();
       expect(completion(replay)).toMatchObject({ reason: "completed", status: "ok" });
-      await expectAcknowledgement(replay, {
-        status: "ok",
-        summary: "completed",
-        inputProcessingCompleted: true,
-      });
+      await expectAcknowledgement(replay, completedPayload);
       expect(await loadTranscriptEvents(scope())).toEqual(before);
       await release(replay);
     }
@@ -131,40 +211,59 @@ describe("requester-settle processing survives later user turns", () => {
     await upsertSessionEntryCore(scope(), entry);
   });
 
+  it.each([false, true])(
+    "reconciles prior private input but admits a fresh deliverable continuation (private=%s)",
+    async (privateCompletion) => {
+      const boundRequest = { ...request, expectedExistingSessionId: sessionId };
+      const original = await prepare({
+        privateCompletion: privateCompletion ? true : undefined,
+        request: boundRequest,
+      });
+      await original.recorder!.persistApproved();
+      await complete(original);
+      await release(original);
+      rotateAgentEventLifecycleGeneration();
+      const retryRunId = buildRequesterSettleWakeIdentity({
+        requesterSessionKey: sessionKey,
+        requesterAgentId: "main",
+        batchRunIds: ["child"],
+        rearmGeneration: 1,
+        hasPrivateCompletion: privateCompletion,
+        retainedWake: { status: "pending", attemptCount: 1, nextAttemptAt: 30_000 },
+      }).runId;
+      expect(retryRunId).toBe(privateCompletion ? runId : `${runId}:retry-1`);
+      const retryMessage = privateCompletion
+        ? message
+        : `${message}. Continue from the current transcript.`;
+      const retry = await prepare({
+        privateCompletion: privateCompletion ? true : undefined,
+        runId: retryRunId,
+        request: { ...boundRequest, idempotencyKey: retryRunId, message: retryMessage },
+        message: retryMessage,
+        effectiveTranscriptInputText: retryMessage,
+      });
+      if (privateCompletion) {
+        await expectAcknowledgement(retry, completedPayload);
+      } else {
+        expectNoReconciliation(retry);
+        expect(await retry.recorder!.persistApproved()).toMatchObject({ appended: true });
+        await complete(retry);
+      }
+      await release(retry);
+      await expectUserInputs(scope(), privateCompletion ? 1 : 2);
+      expect(reads.command).not.toHaveBeenCalled();
+    },
+  );
+
   it("reconciles one completed yielded input after two newer finished turns without reopening it", async () => {
     const original = await prepare();
-    await original.recorder!.persistApproved();
+    const persisted = await original.recorder!.persistApproved();
     const manager = await SessionManager.openAsync(scope(), fixture.sessionsDir());
     await manager.appendMessageAsync(assistant("toolUse"));
     await manager.appendCustomMessageEntryAsync("openclaw.sessions_yield", "", false, { runId });
-    const dispatch = createTrackedDispatch();
-    dispatch.context.chatAbortControllers.clear();
-    const entry = {
-      ...dispatch.entry,
-      sessionKey,
-      sessionId,
-      operationalRunInstance: { runId, instanceId: "settle-native-instance" },
-    };
-    dispatch.context.chatAbortControllers.set(runId, entry);
-    const emitFinal = vi.fn();
-    await dispatchAgentRunFromGateway({
-      admittedRunEntry: entry,
-      ingressOpts: {
-        message: original.message,
-        sessionKey,
-        allowModelOverride: false,
-        userTurnTranscriptRecorder: original.recorder,
-        abortSignal: entry.controller.signal,
-      },
-      runId,
-      dedupeKeys: [],
-      abortController: entry.controller,
-      cleanupAbortController: () => {
-        dispatch.context.chatAbortControllers.delete(runId);
-      },
-      io: { emitAcceptance: vi.fn(), emitFinal },
-      context: dispatch.context,
-    });
+    const entry = register("settle-native-instance");
+    const { emitFinal, execute } = dispatch(original, entry);
+    await execute();
     expect(emitFinal).toHaveBeenCalledWith(
       [true, expect.objectContaining({ status: "ok", inputProcessingCompleted: true }), undefined],
       { runId },
@@ -175,11 +274,13 @@ describe("requester-settle processing survives later user turns", () => {
       await appendNewerTurn(manager, key, "New user request");
     }
     const before = await loadTranscriptEvents(scope());
-    await expect(
-      manager.appendMessageAsync(original.recorder!.getPendingInputMessage!()!),
-    ).rejects.toThrow("outside the current turn");
+    expect(
+      await manager.appendMessageWithTranscriptAnchorAsync(
+        original.recorder!.getPendingInputMessage!()!,
+      ),
+    ).toMatchObject({ entryId: persisted?.messageId, appended: false });
     expect(completed).toMatchObject({ reason: "completed", status: "ok" });
-    await expectCompletedReplays(before, prepare, 2);
+    await expectCompletedReplay(before, prepare, 2);
     expect(reads.command).toHaveBeenCalledOnce();
   });
 
@@ -217,39 +318,6 @@ describe("requester-settle processing survives later user turns", () => {
     },
   );
 
-  it("retains legitimate unconsumed interrupted input instead of inferring processing completion", async () => {
-    const original = await prepare();
-    await release(original);
-    rotateAgentEventLifecycleGeneration();
-    const resumed = await prepare();
-    expect(completion(resumed)).toBeUndefined();
-    expect(await resumed.recorder!.persistApproved()).toMatchObject({ appended: true });
-    await complete(resumed);
-    await release(resumed);
-    const users = (await loadTranscriptEvents(scope())).filter(
-      (entry) =>
-        isIndexedSessionEntry(entry) && entry.type === "message" && entry.message.role === "user",
-    );
-    expect(users).toHaveLength(1);
-  });
-
-  it("never infers completion for legacy committed input and preserves its current-turn refusal", async () => {
-    const original = await prepare();
-    await original.recorder!.persistApproved();
-    await release(original);
-    const manager = await SessionManager.openAsync(scope(), fixture.sessionsDir());
-    await appendNewerTurn(manager, "newer:user", "Newer request");
-    const before = await loadTranscriptEvents(scope());
-    rotateAgentEventLifecycleGeneration();
-    const replay = await prepare();
-    expectNoReconciliation(replay);
-    await expect(
-      manager.appendMessageAsync(replay.recorder!.getPendingInputMessage!()!),
-    ).rejects.toThrow("outside the current turn");
-    expect(await loadTranscriptEvents(scope())).toEqual(before);
-    await release(replay);
-  });
-
   it("cannot publish a cancellation after losing completion authority", async () => {
     let current = true;
     const controller = new AbortController();
@@ -277,38 +345,57 @@ describe("requester-settle processing survives later user turns", () => {
     await expect(release(original)).rejects.toThrow("completion authority revoked");
   });
   it.each([false, true])(
-    "preserves producer timeout grace (producer settles=%s)",
-    async (producerSettles) => {
-      let finishGrace: (() => void) | undefined;
-      const controller = new AbortController();
+    "retains timeout input until its producer settles (classified=%s)",
+    async (classified) => {
+      const entry = register("settle-timeout-instance");
+      const controller = testRpcSourceController(entry);
       const original = await prepare({
         abortSignal: controller.signal,
         getAbortStopReason: () => "timeout",
-        deferTimeoutCompletion: (settle) => {
-          finishGrace = settle;
-          return true;
-        },
       });
+      const { cleanupAbortController, emitFinal, execute } = dispatch(original, entry);
       await original.recorder!.persistApproved();
-      controller.abort();
-      await original.recorder!.waitForPendingInputSettlement!();
-      expect(completion(original)).toBeUndefined();
-      expect(finishGrace).toBeTypeOf("function");
-      if (producerSettles) {
-        await complete(original, {
-          status: "timeout",
-          stopReason: "timeout",
-          timeoutPhase: "provider",
-          providerStarted: true,
-        });
-      }
-      finishGrace!();
-      await original.recorder!.waitForPendingInputSettlement!();
-      expect(completion(original)).toMatchObject({
-        status: "timeout",
-        reason: producerSettles ? "hard_timeout" : "timed_out",
+      const producerEntered = createDeferred();
+      const finishProducer = createDeferred();
+      reads.command.mockImplementationOnce(async () => {
+        producerEntered.resolve();
+        await finishProducer.promise;
+        return {
+          payloads: [],
+          meta: {
+            aborted: true,
+            ...(classified ? { timeoutPhase: "provider", providerStarted: true } : {}),
+          },
+        };
       });
-      await release(original);
+      const execution = withSessionTurn(
+        { sessionKey, sessionId, target: entry.input.target, controllerInput: entry.input },
+        execute,
+      );
+      try {
+        await awaitGateBeforeSettlement(
+          producerEntered.promise,
+          execution,
+          "Timeout continuation did not enter its producer",
+        );
+        controller.abort(new DOMException("Synthetic producer deadline", "TimeoutError"));
+        await original.recorder!.waitForPendingInputSettlement!();
+        expect(completion(original)).toBeUndefined();
+        expect(cleanupAbortController).not.toHaveBeenCalled();
+        expect(emitFinal).not.toHaveBeenCalled();
+        finishProducer.resolve();
+        await execution;
+        await original.recorder!.waitForPendingInputSettlement!();
+        expect(completion(original)).toMatchObject({
+          status: "timeout",
+          reason: classified ? "hard_timeout" : "timed_out",
+        });
+        expect(cleanupAbortController).toHaveBeenCalledOnce();
+      } finally {
+        finishProducer.resolve();
+        await execution;
+        await release(original);
+      }
       rotateAgentEventLifecycleGeneration();
       const replay = await prepare();
       // Timeouts remain nonfinal; they must not become a successful duplicate acknowledgement.
@@ -317,8 +404,8 @@ describe("requester-settle processing survives later user turns", () => {
     },
   );
 
-  it("preserves durable peer-delivery success and duplicate reconciliation", async () => {
-    const delivery: SessionSendDelivery = {
+  it("preserves live peer-delivery success and duplicate reconciliation", async () => {
+    const delivery: Parameters<typeof withSessionSendDelivery>[0]["delivery"] = {
       version: 1,
       runId,
       source: { agentId: "main", sessionId: "peer-source", sessionKey: sourceSessionKey },
@@ -337,11 +424,178 @@ describe("requester-settle processing survives later user turns", () => {
     await original.recorder!.persistApproved();
     expect(
       original.recorder!.getPendingInputMessage!()?.["__openclaw"]?.sessionSendDelivery,
-    ).toEqual(delivery);
+    ).toBeUndefined();
     await complete(original);
     await release(original);
     const before = await loadTranscriptEvents(scope());
-    await expectCompletedReplays(before, preparePeer);
+    await expectCompletedReplay(before, preparePeer);
     expect(reads.command).not.toHaveBeenCalled();
   });
 });
+
+it("keeps the committed child target and later owner metadata through input persistence", async () => {
+  const sessionKey = "agent:main:subagent:fresh-child";
+  const sessionId = "fresh-child-session";
+  const sessionEntry = { sessionId, updatedAt: 1, label: "Created child" };
+  const target = { agentId: "main", sessionKey, sessionId, storePath: fixture.storePath() };
+  await upsertSessionEntryCore(target, sessionEntry);
+  await upsertSessionEntryCore(target, { ...sessionEntry, updatedAt: 2, label: "Renamed child" });
+  const reroutedTarget = {
+    ...target,
+    sessionId: "unrelated-session",
+    storePath: path.resolve(fixture.sessionsDir(), "../../../rerouted/sessions.json"),
+  };
+  await upsertSessionEntryCore(reroutedTarget, {
+    sessionId: reroutedTarget.sessionId,
+    updatedAt: 1,
+  });
+  const params = makeTurnParams(target, "Child task", "fresh-child-run", {
+    cfg: { session: { store: reroutedTarget.storePath } },
+    sessionEntry,
+    freshChildStorePath: target.storePath,
+  });
+  await withTurn(params, async (recorder) => {
+    expect(recorder.getPendingInputMessage?.()).toMatchObject({ content: "Child task" });
+    expect(await loadTranscriptEvents(target)).toEqual([]);
+    expect(await recorder.persistApproved()).toMatchObject({ appended: true });
+    expect(await recorder.persistApproved()).toMatchObject({ appended: true });
+    const messages = (await loadTranscriptEvents(target)).filter(
+      (event) => isIndexedSessionEntry(event) && event.type === "message",
+    );
+    expect(messages).toMatchObject([{ message: { role: "user", content: "Child task" } }]);
+    expect(loadSessionEntry(target)).toMatchObject({ sessionId, label: "Renamed child" });
+    expect(await loadTranscriptEvents(reroutedTarget)).toEqual([]);
+  });
+});
+
+it("persists subagent completion handoff prompts as hidden inter-session turns", async () => {
+  const sessionKey = "agent:main:completion-handoff";
+  const sessionId = "completion-handoff-session";
+  const target = { agentId: "main", sessionKey, sessionId, storePath: fixture.storePath() };
+  await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+  const provenance = {
+    kind: "inter_session" as const,
+    sourceSessionKey: "agent:main:subagent:child",
+    sourceTool: "subagent_announce",
+  };
+  const message = "Continue the OpenClaw runtime event.";
+  const params = makeTurnParams(target, message, "announce:completion-handoff", {
+    inputProvenance: provenance,
+    request: {
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: provenance.sourceSessionKey,
+          childSessionId: "child-session-id",
+          announceType: "completion",
+          taskLabel: "child task",
+          status: "ok",
+          statusLabel: "completed",
+          result: "child result",
+          replyInstruction: "Deliver the child result.",
+        },
+      ],
+    },
+  });
+  // The completion's runtime context is saved after this turn; replay needs the turn itself.
+  await withTurn(params, async (recorder) => {
+    expect(await recorder.persistApproved()).toMatchObject({ appended: true });
+  });
+  const messages = (await loadTranscriptEvents(target)).filter(
+    (event) => isIndexedSessionEntry(event) && event.type === "message",
+  );
+  expect(messages).toMatchObject([
+    { message: { role: "user", display: false, content: message, provenance } },
+  ]);
+});
+
+it.each(["Original requester", null])(
+  "retains accepted sender presentation after a profile rename (%s)",
+  async (originalName) => {
+    const sessionKey = "agent:main:private-sender";
+    const sessionId = "private-sender-session";
+    const runId = "announce:private-sender";
+    const target = { agentId: "main", sessionKey, sessionId, storePath: fixture.storePath() };
+    await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+    const profileOptions = {
+      path: path.resolve(fixture.sessionsDir(), "../../../state/openclaw.sqlite"),
+    };
+    const profile = await ensureCanonicalUserProfileForEmail(
+      "private-sender@example.test",
+      profileOptions,
+    );
+    const rename = (name: string | null) =>
+      setCanonicalUserProfileDisplayName(profile.id, name, profileOptions);
+    const { profile: original } = await rename(originalName);
+    const clientFor = (displayName: string | null, profileId = profile.id) =>
+      createSyntheticPluginRuntimeClient({
+        authenticatedUserProfile: {
+          profileId,
+          displayName,
+          avatarRevision: "0",
+          hasAvatar: false,
+          updatedAt: original.updatedAt,
+        },
+      });
+    const params = makeTurnParams(target, "Retained private result", runId, {
+      privateCompletion: true,
+      request: {
+        expectedExistingSessionId: sessionId,
+        deliver: false,
+      },
+      inputProvenance: {
+        kind: "inter_session",
+        sourceTool: "subagent_announce",
+        sourceSessionKey: "agent:main:subagent:sender-child",
+      },
+      client: clientFor(original.displayName),
+    });
+    await withTurn(params, async (recorder) => {
+      const input = expectDefined(recorder.getPendingInputMessage?.(), "accepted input");
+      expect(input["__openclaw"]).toMatchObject({ senderId: profile.id, senderIsOwner: false });
+      if (originalName === null) {
+        expect(input["__openclaw"]).not.toHaveProperty("senderName");
+      } else {
+        expect(input["__openclaw"]).toHaveProperty("senderName", originalName);
+      }
+      const { profile: renamed } = await rename("Renamed requester");
+      const retryParams = { ...params, client: clientFor(renamed.displayName) };
+      expect(recorder.getPendingInputMessage?.()).toEqual(input);
+      const retained = await pendingInputs.listSessionPendingInputs(target);
+      expect(retained.items).toMatchObject([{ state: "queued", message: input }]);
+      const prepareAndRelease = (candidate: TurnParams) => withTurn(candidate, async () => {});
+      // A renamed connection still matches the accepted input, but cannot take its live custody.
+      await expect(prepareAndRelease(retryParams)).rejects.toThrow("already admitted");
+      for (const mismatch of [
+        { message: "Changed result", effectiveTranscriptInputText: "Changed result" },
+        { client: clientFor(original.displayName, "different-profile") },
+      ]) {
+        await expect(prepareAndRelease({ ...retryParams, ...mismatch })).rejects.toThrow(
+          "conflicts with the accepted input",
+        );
+      }
+      const readSubmitted = pendingInputs.readSessionSubmittedInput;
+      let current = true;
+      using _ = vi
+        .spyOn(pendingInputs, "readSessionSubmittedInput")
+        .mockImplementationOnce(async (...args) => {
+          const submitted = await readSubmitted(...args);
+          current = false;
+          return submitted;
+        });
+      await expect(
+        prepareAndRelease({
+          ...retryParams,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("Private source revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("Private source revoked");
+      expect(await pendingInputs.listSessionPendingInputs(target)).toEqual(retained);
+      expect(await loadTranscriptEvents(target)).toEqual([]);
+    });
+  },
+);

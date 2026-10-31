@@ -12,6 +12,7 @@ import type {
 } from "./persistence-types.js";
 
 export class WorkboardStoreRuntime {
+  protected boardList: Promise<{ boards: WorkboardBoardSummary[] }> | undefined;
   protected readonly cardLists = new Map<
     string | undefined,
     Promise<
@@ -30,7 +31,7 @@ export class WorkboardStoreRuntime {
   private sessionBoardRevision: WorkboardChange = { epoch: this.cardsRevision.epoch, revision: 1 };
   private writeToken: string | undefined;
   private revision = 0;
-  private readonly listeners = new Set<(change: WorkboardChange) => void>();
+  onChange: ((change: WorkboardChange) => void) | undefined;
   private readonly initialization: Promise<void>;
 
   constructor(
@@ -94,6 +95,7 @@ export class WorkboardStoreRuntime {
           await Promise.allSettled(this.operations);
         }
         this.cardLists.clear();
+        this.boardList = undefined;
         this.operationScope.disable();
         await this.closePersistence?.();
       })
@@ -177,11 +179,6 @@ export class WorkboardStoreRuntime {
     });
   }
 
-  subscribeChanges(listener: (change: WorkboardChange) => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
   invalidateSessionBoards(): void {
     this.sessionBoardRevision = {
       ...this.sessionBoardRevision,
@@ -237,6 +234,7 @@ export class WorkboardStoreRuntime {
     // Every list includes all board summaries, so even a board-scoped payload
     // depends on the whole store revision published by the owning writer.
     this.cardLists.clear();
+    this.boardList = undefined;
     this.cardsRevision = { ...this.cardsRevision, revision: this.cardsRevision.revision + 1 };
   }
 
@@ -248,12 +246,10 @@ export class WorkboardStoreRuntime {
       cardsRevision: this.cardsRevision.revision,
       sessionsRevision: this.sessionBoardRevision.revision,
     };
-    for (const listener of this.listeners) {
-      try {
-        listener(change);
-      } catch {
-        // Persistence already succeeded. Observers cannot turn it into a reported failure.
-      }
+    try {
+      this.onChange?.(change);
+    } catch {
+      // Persistence already succeeded. Notification cannot turn it into a reported failure.
     }
   }
 }

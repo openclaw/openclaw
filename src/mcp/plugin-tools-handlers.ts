@@ -78,7 +78,9 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
   const automationsEntry = automationsName ? toolMap.get(automationsName) : undefined;
 
   return {
-    listTools: async () => ({
+    listTools: async (): Promise<{
+      tools: { name: string; description: string; inputSchema: Tool["inputSchema"] }[];
+    }> => ({
       tools: wrappedTools.map((tool) => ({
         name: tool.name,
         description: tool.description ?? "",

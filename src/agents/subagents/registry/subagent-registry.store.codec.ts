@@ -1,6 +1,5 @@
 import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { decodeGatewayOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import type { SessionStateNotice } from "../../../sessions/session-state-events.kernel.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
@@ -59,16 +58,13 @@ export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRe
   payload.requesterSessionKey = row.requester_session_key;
   payload.requesterStorePath = row.requester_store_path ?? undefined;
   payload.controllerStorePath = row.controller_store_path ?? undefined;
-  if (payload.operatorRecoverySource !== undefined) {
-    try {
-      payload.operatorRecoverySource = decodeGatewayOperatorRecoverySource(
-        payload.operatorRecoverySource,
-      );
-    } catch {
-      // Preserve the interrupted result; unavailable evidence cannot authorize a continuation.
-      delete payload.operatorRecoverySource;
-    }
-  }
+  // Retired restart authority is ignored even when legacy rows still carry it.
+  Reflect.deleteProperty(payload, "operatorRecoverySource");
+  Reflect.deleteProperty(payload, "queuedLaunch");
+  Reflect.deleteProperty(payload.execution, "restartRecovery");
+  Reflect.deleteProperty(payload.execution, "interruptionReason");
+  Reflect.deleteProperty(payload.execution, "interruptedAt");
+  Reflect.deleteProperty(payload, "terminalOwner");
   const controllerSessionKey = row.controller_session_key?.trim();
   if (controllerSessionKey) {
     payload.controllerSessionKey = controllerSessionKey;
@@ -90,10 +86,11 @@ export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRe
 
 /** Canonically serializes a run before an outer transaction acquires the write lock. */
 export function bindSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqliteRow {
-  const normalized = normalizeSubagentRunState(structuredClone(entry));
-  if (!isCanonicalSubagentRunRecord(normalized)) {
+  if (!isCanonicalSubagentRunRecord(entry)) {
     throw new Error("subagent run is missing canonical nested state");
   }
+  // Normalization writes only these containers; the live postimage stays separate.
+  const normalized = normalizeSubagentRunState({ ...entry, completion: { ...entry.completion } });
   return {
     run_id: normalized.runId,
     child_session_key: normalized.childSessionKey,

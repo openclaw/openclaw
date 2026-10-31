@@ -2,7 +2,10 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
+import {
+  isGatewayExternallySupervised,
+  resolveGatewayPlatformSupervisor,
+} from "../infra/gateway-supervision.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   UPDATE_IN_PROGRESS_ENV,
@@ -44,10 +47,7 @@ export function resolveUpdateParentGatewayActivation(env: NodeJS.ProcessEnv): bo
 export async function shouldManageGatewayService(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<boolean> {
-  if (
-    isGatewayExternallySupervised(env) ||
-    (env.KUBERNETES_SERVICE_HOST?.trim() && env.KUBERNETES_SERVICE_PORT?.trim())
-  ) {
+  if (resolveGatewayPlatformSupervisor(env)) {
     return false;
   }
   if (!isContainerEnvironment()) {
@@ -84,9 +84,12 @@ export function resolveServiceRepairPolicy(
 }
 
 export function isServiceRepairExternallyManaged(
-  policy: ServiceRepairPolicy = resolveServiceRepairPolicy(),
+  policy?: ServiceRepairPolicy,
+  env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return policy === "external" || isGatewayExternallySupervised();
+  return (
+    (policy ?? resolveServiceRepairPolicy(env)) === "external" || isGatewayExternallySupervised(env)
+  );
 }
 
 /** Maintenance inspection remains separate from publishing or activating a service. */

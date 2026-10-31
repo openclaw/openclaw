@@ -1,5 +1,4 @@
-// Tests agent runner runtime config assembly from command and session state.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -7,98 +6,67 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
+import { createQueueTestRun } from "./queue.test-helpers.js";
 
 function makeRun(config: OpenClawConfig): FollowupRun["run"] {
-  return {
-    sessionId: "session-1",
-    agentId: "agent-1",
-    config,
-    provider: "openai",
-    model: "gpt-4.1",
-    agentDir: "/tmp/agent",
-    sessionKey: "agent:test:session",
-    sessionFile: "/tmp/session.json",
-    workspaceDir: "/tmp/workspace",
-    skillsSnapshot: [],
-    ownerNumbers: ["+15550001"],
-    enforceFinalTag: false,
-    skipProviderRuntimeHints: true,
-    thinkingCatalog: [
-      {
-        provider: "openai",
-        id: "gpt-4.1-mini",
-        input: ["text"],
-        baseUrl: "https://api.openai.com/v1",
-      },
-    ],
-    thinkLevel: "medium",
-    verboseLevel: "off",
-    reasoningLevel: "none",
-    execOverrides: {},
-    bashElevated: false,
-    timeoutMs: 60_000,
-  } as unknown as FollowupRun["run"];
+  return createQueueTestRun(
+    { prompt: "test" },
+    {
+      config,
+      sessionKey: "agent:test:session",
+      skipProviderRuntimeHints: true,
+      thinkingCatalog: [
+        {
+          provider: "openai",
+          id: "gpt-4.1-mini",
+          input: ["text"],
+          baseUrl: "https://api.openai.com/v1",
+        },
+      ],
+    },
+  ).run;
 }
 
-afterEach(() => {
-  clearRuntimeConfigSnapshot();
+function resolveRun(run: FollowupRun["run"]) {
+  return buildEmbeddedRunExecutionParams({
+    run,
+    provider: "openai",
+    model: "gpt-4.1-mini",
+    runId: "run-1",
+    sessionCtx: {},
+    hasRepliedRef: undefined,
+  });
+}
+
+function providerConfig(
+  apiKey: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]["apiKey"],
+): OpenClawConfig {
+  return {
+    models: { providers: { openai: { baseUrl: "https://api.openai.com/v1", apiKey, models: [] } } },
+  };
+}
+
+afterEach(clearRuntimeConfigSnapshot);
+
+it("keeps an already-resolved run config instead of reverting to a stale runtime snapshot", async () => {
+  const staleSnapshot = providerConfig({
+    source: "env",
+    provider: "default",
+    id: "OPENAI_API_KEY",
+  });
+  const resolvedRunConfig = providerConfig("resolved-runtime-key");
+  setRuntimeConfigSnapshot(staleSnapshot, staleSnapshot);
+
+  const resolved = await resolveRun(makeRun(resolvedRunConfig));
+
+  expect(resolved.config).toBe(resolvedRunConfig);
 });
 
-describe("buildEmbeddedRunExecutionParams runtime config", () => {
-  it("keeps an already-resolved run config instead of reverting to a stale runtime snapshot", async () => {
-    const staleSnapshot: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: {
-              source: "env",
-              provider: "default",
-              id: "OPENAI_API_KEY",
-            },
-            models: [],
-          },
-        },
-      },
-    };
-    const resolvedRunConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "resolved-runtime-key",
-            models: [],
-          },
-        },
-      },
-    };
-    setRuntimeConfigSnapshot(staleSnapshot, staleSnapshot);
+it("carries out-of-band tool bindings into the embedded run", async () => {
+  const run = makeRun({});
+  run.toolBindings = { browser: { kind: "tab", targetId: "target-1" } };
 
-    const resolved = await buildEmbeddedRunExecutionParams({
-      run: makeRun(resolvedRunConfig),
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      runId: "run-1",
-      sessionCtx: {},
-      hasRepliedRef: undefined,
-    });
+  const resolved = await resolveRun(run);
 
-    expect(resolved.config).toBe(resolvedRunConfig);
-  });
-
-  it("carries out-of-band tool bindings into the embedded run", async () => {
-    const run = makeRun({});
-    run.toolBindings = { browser: { kind: "tab", targetId: "target-1" } };
-
-    const resolved = await buildEmbeddedRunExecutionParams({
-      run,
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      runId: "run-1",
-      sessionCtx: {},
-      hasRepliedRef: undefined,
-    });
-
-    expect(resolved.toolBindings).toEqual(run.toolBindings);
-  });
+  expect(resolved.toolBindings).toEqual(run.toolBindings);
 });

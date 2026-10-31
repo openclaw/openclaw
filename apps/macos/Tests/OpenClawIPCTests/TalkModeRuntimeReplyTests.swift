@@ -17,6 +17,7 @@ private actor TalkReplyWire {
     enum Scenario: Equatable, Sendable {
         case terminalAck
         case terminalSendFailure
+        case startupRefusals
         case acceptedTimeout
         case stopWhileWaiting
         case terminalFailure
@@ -40,6 +41,7 @@ private actor TalkReplyWire {
     private var methods: [String] = []
     private var waitRunIDs: [String] = []
     private var sendKeys: [String] = []
+    private var sendMessages: [String] = []
     private var waitCount = 0
     private var historyCount = 0
     private var historyInputRunIDs: [[String]?] = []
@@ -72,8 +74,12 @@ private actor TalkReplyWire {
         self.routeSource.setURL(URL(string: "ws://127.0.0.1:2")!)
     }
 
-    func snapshot() -> (methods: [String], waitRunIDs: [String], sendKeys: [String]) {
-        (self.methods, self.waitRunIDs, self.sendKeys)
+    func snapshot() -> (methods: [String], waitRunIDs: [String], sendKeys: [String], sendMessages: [String]) {
+        (self.methods, self.waitRunIDs, self.sendKeys, self.sendMessages)
+    }
+
+    func rejectStartupSend() -> Bool {
+        self.scenario == .startupRefusals && self.sendKeys.count <= 2
     }
 
     func requestedCustodyRunIDs() -> [[String]] {
@@ -109,6 +115,7 @@ private actor TalkReplyWire {
             return #"{"provider":"fixture","audiobase64":""}"#
         case "chat.send":
             self.sendKeys.append(params["idempotencyKey"] as? String ?? "")
+            self.sendMessages.append(params["message"] as? String ?? "")
             let status = switch self.scenario {
             case .terminalAck: "ok"
             case .terminalSendFailure: "error"
@@ -335,6 +342,15 @@ private func makeTalkReplyFixture(
             }
             let isCustodyProbe = method == "chat.history" && params["inputRunIds"] != nil
             let payload = try await wire.payload(method: method, params: params)
+            if method == "chat.send", await wire.rejectStartupSend() {
+                socket.emitReceiveSuccess(.data(Data(
+                    #"""
+                    {"type":"res","id":"\#(id)","ok":false,"error":{"code":"UNAVAILABLE",
+                     "message":"Agent has not completed startup inspection and preparation",
+                     "retryable":true,"retryAfterMs":100,"details":{"reason":"startup-sidecars","method":"chat.send"}}}
+                    """#.utf8)))
+                return
+            }
             if method == "chat.history", let rejection = await wire.historyRejection(hasInputRunIDs: isCustodyProbe) {
                 try socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.errorResponseData(
                     id: id, code: rejection.code, message: rejection.message, details: [:])))
@@ -354,7 +370,7 @@ private func makeTalkReplyFixture(
         sessionBox: WebSocketSessionBox(session: socketSession))
     let live = TalkModeRuntime.Dependencies.live
     let dependencies = TalkModeRuntime.Dependencies(
-        permissions: .init(supported: { false }, granted: { false }, ensure: { _ in false }),
+        permissions: .init(granted: { false }, ensure: { _ in false }),
         audioCapture: live.audioCapture,
         pcmPlayer: live.pcmPlayer,
         selectedSession: { TalkReplyWire.sessionKey },
@@ -392,6 +408,17 @@ extension TalkModeRuntime {
 
 @Suite(.testWaitLimit)
 struct TalkModeRuntimeReplyTests {
+    @Test func `startup refusal keeps the spoken turn until admitted once`() async throws {
+        try await withTalkReplyFixture(.startupRefusals) { runtime, wire, sink in
+            await runtime.sendAndSpeak("synthetic")
+            let requests = await wire.snapshot()
+            #expect(requests.sendKeys.count == 3)
+            #expect(Set(requests.sendKeys).count == 1)
+            #expect(Set(requests.sendMessages).count == 1)
+            #expect(await sink.snapshot() == ["Matching reply"])
+        }
+    }
+
     @Test(arguments: [false, true])
     func `older Gateway history rejection retries without losing reply ownership`(truncated: Bool) async throws {
         try await withTalkReplyFixture(.unsupportedHistory(truncated: truncated)) { runtime, wire, sink in

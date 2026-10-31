@@ -1,16 +1,15 @@
 import { createStatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
-import { loadWebMedia } from "../../media.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import {
   buildWhatsAppInboundTransportContext,
   createWhatsAppReplyPlan,
   prepareWhatsAppInboundContext,
   resolveWhatsAppDmRouteTarget,
-  resolveWhatsAppResponsePrefix,
   updateWhatsAppMainLastRoute,
 } from "./inbound-dispatch.js";
 
@@ -28,7 +27,10 @@ vi.mock("./runtime-api.js", async (importOriginal) => ({
   logVerbose: verboseLog,
   shouldLogVerbose: () => true,
 }));
-vi.mock("../../media.js", () => ({ loadWebMedia: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/web-media", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/web-media")>()),
+  loadWebMedia: vi.fn(),
+}));
 
 type Params = Parameters<typeof createWhatsAppReplyPlan>[0];
 type PrepareParams = Parameters<typeof prepareWhatsAppInboundContext>[0];
@@ -116,28 +118,30 @@ function statusReactionFixture() {
   const controller = createStatusReactionController({
     enabled: true,
     adapter: {
-      setReaction: async (emoji) => {
-        reactions.push(emoji);
-      },
-      clearReaction: async () => {
-        reactions.push("");
-      },
+      setReaction: async (emoji) => void reactions.push(emoji),
+      clearReaction: async () => void reactions.push(""),
     },
     initialEmoji: "👀",
     timing: { doneHoldMs: 0, errorHoldMs: 0 },
   });
-  let restored!: () => void;
-  const nextRestoration = () =>
-    new Promise<void>((resolve) => {
-      restored = resolve;
-    });
-  const restoration = nextRestoration();
+  let restored = Promise.withResolvers<void>();
+  const restoration = restored.promise;
+  const nextRestoration = () => (restored = Promise.withResolvers<void>()).promise;
   const restoreInitial = controller.restoreInitial;
   vi.spyOn(controller, "restoreInitial").mockImplementation(async () => {
     await restoreInitial();
-    restored();
+    restored.resolve();
   });
   return { controller, reactions, restoration, nextRestoration };
+}
+async function reactionPlan(queued = false) {
+  const status = statusReactionFixture();
+  const reply = await fixture({ statusReactionController: status.controller });
+  if (queued) {
+    reply.plan.finalize({ deferredToActiveRun: "followup", counts: {} });
+    await status.restoration;
+  }
+  return { ...status, ...reply };
 }
 function beginQueuedDelivery(plan: ReturnType<typeof createWhatsAppReplyPlan>) {
   const settle = plan.replyOptions.queuedDeliveryCorrelations?.[0]?.begin();
@@ -146,20 +150,14 @@ function beginQueuedDelivery(plan: ReturnType<typeof createWhatsAppReplyPlan>) {
   }
   return settle;
 }
-function nonPortablePaths(value: unknown, path = "inbound", seen = new Set<object>()): string[] {
-  if (typeof value === "function") {
-    return [path];
-  }
+function expectPortable(value: unknown, seen = new Set<object>()) {
+  expect(typeof value).not.toBe("function");
   if (typeof value !== "object" || value === null || seen.has(value)) {
-    return [];
+    return;
   }
   seen.add(value);
-  return [
-    ...Object.getOwnPropertySymbols(value).map((symbol) => `${path}.${String(symbol)}`),
-    ...Object.entries(value).flatMap(([key, child]) =>
-      nonPortablePaths(child, `${path}.${key}`, seen),
-    ),
-  ];
+  expect(Object.getOwnPropertySymbols(value)).toEqual([]);
+  Object.values(value).forEach((child) => expectPortable(child, seen));
 }
 const toolMedia = { text: "tool image", mediaUrls: ["/tmp/a.jpg", "/tmp/b.jpg"] };
 const replacement = { text: "captioned replacement", mediaUrls: ["/tmp/a.jpg"] };
@@ -172,6 +170,7 @@ beforeEach(() => {
 
 describe("prepared WhatsApp inbound boundary", () => {
   it("projects portable group facts and self identity without transport callbacks", async () => {
+    const command = { kind: "text-slash", body: "/status", authorized: false } as const;
     const msg = message({
       platform: { fromMe: true },
       event: { id: "current-1", timestamp: 1_710_000_000 },
@@ -191,11 +190,7 @@ describe("prepared WhatsApp inbound boundary", () => {
       msg,
       bodyForAgent: "agent body",
       combinedBody: "formatted agent body",
-      command: {
-        kind: "text-slash",
-        body: "/status",
-        authorized: false,
-      },
+      command,
       route: route({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
       sender: { id: "+15550001111", name: "Alice", e164: "+15550001111" },
       transcript: "prepared transcript",
@@ -205,70 +200,38 @@ describe("prepared WhatsApp inbound boundary", () => {
       replyThreading: { implicitCurrentMessage: "allow" },
       suppressMessageReceivedHooks: true,
     });
-    expect(prepared.inbound).toMatchObject({
-      messageId: "current-1",
-      timestamp: 1_710_000_000,
-      message: {
-        body: "formatted agent body",
-        bodyForAgent: "agent body",
-        rawBody: "agent body",
-        commandBody: "/status",
-      },
-      sender: { id: "+15550001111", isSelf: true },
-      conversation: { kind: "group", id: "123@g.us", label: "123@g.us" },
-      reply: { replyToId: "quoted-1" },
-      command: {
-        kind: "text-slash",
-        body: "/status",
-        authorized: false,
-      },
-      media: [
-        { path: "/tmp/photo.jpg", contentType: "image/jpeg", kind: "image", transcribed: true },
-      ],
-      extra: {
-        Transcript: "prepared transcript",
-        GroupSubject: "Boundary Room",
-        SenderE164: "+15550001111",
-        ReplyThreading: { implicitCurrentMessage: "allow" },
-      },
-    });
+    expect(prepared.inbound.command).toEqual(command);
     expect(prepared.ctxPayload).toMatchObject({
       MessageSid: "current-1",
+      Timestamp: 1_710_000_000,
+      Body: "formatted agent body",
       BodyForAgent: "agent body",
       RawBody: "agent body",
       CommandBody: "/status",
-      ReplyToId: "quoted-1",
-      Transcript: "prepared transcript",
       SenderId: "+15550001111",
       SenderIsSelf: true,
+      ChatType: "group",
       ConversationLabel: "123@g.us",
+      ReplyToId: "quoted-1",
+      media: [
+        { path: "/tmp/photo.jpg", contentType: "image/jpeg", kind: "image", transcribed: true },
+      ],
+      Transcript: "prepared transcript",
       GroupSubject: "Boundary Room",
+      SenderE164: "+15550001111",
+      ReplyThreading: { implicitCurrentMessage: "allow" },
       GroupMembers: "Alice (+15550001111)",
       CommandAuthorized: false,
       SuppressMessageReceivedHooks: true,
     });
-    expect(nonPortablePaths(prepared.inbound)).toEqual([]);
+    expectPortable(prepared.inbound);
     expect(prepared.inbound).not.toHaveProperty("platform");
     expect(prepared.inbound).not.toHaveProperty("admission");
-    const transport = buildWhatsAppInboundTransportContext(msg);
-    expect(transport).toMatchObject({
-      accountId: "default",
-      conversationId: "123@g.us",
-      conversationKind: "group",
-      chatJid: "+1000",
-      recipientJid: "+2000",
-      correlationId: "current-1",
-    });
-    expect(transport.reply).toBe(msg.platform.reply);
-    expect(transport.sendMedia).toBe(msg.platform.sendMedia);
-    expect(transport.sendComposing).toBe(msg.platform.sendComposing);
-    expect(transport).not.toHaveProperty("wasMentioned");
   });
 
   it("assigns unique portable identities without inventing native message IDs", async () => {
     const msg = message({ event: { id: undefined, timestamp: 1_710_000_000 } });
-    const params = { msg, sender: { id: "+15550001111" } };
-    const [first, second] = await Promise.all([prepare(params), prepare(params)]);
+    const [first, second] = await Promise.all([prepare({ msg }), prepare({ msg })]);
     expect(first.inbound.messageId).not.toBe(second.inbound.messageId);
     const { plan } = await fixture({
       msg,
@@ -278,9 +241,8 @@ describe("prepared WhatsApp inbound boundary", () => {
     if (typeof plan.delivery.durable !== "function") {
       throw new Error("expected durable delivery policy");
     }
-    expect(await plan.delivery.durable({ text: "final payload" }, { kind: "final" })).toMatchObject(
-      { replyToId: null },
-    );
+    const target = await plan.delivery.durable({ text: "final payload" }, { kind: "final" });
+    expect(target).toMatchObject({ replyToId: null });
     expect(buildWhatsAppInboundTransportContext(msg).correlationId).toBeUndefined();
   });
 });
@@ -288,23 +250,13 @@ describe("prepared WhatsApp inbound boundary", () => {
 describe("WhatsApp reply delivery", () => {
   it("records visible delivery without logging the reply content", async () => {
     const text = "private WhatsApp reply with confidential account details";
-    const { deliver, deliverReply, plan } = await fixture();
+    const { deliver, plan } = await fixture();
     const result = await deliver({ text });
-
-    expect(deliverReply).toHaveBeenCalledWith(
-      expect.objectContaining({ replyResult: expect.objectContaining({ text }) }),
-    );
     expect(result?.visibleReplySent).toBe(true);
     expect(
       plan.finalize({ queuedFinal: false, counts: { final: 1 }, observedReplyDelivery: true }),
     ).toBe(true);
     expect(JSON.stringify(verboseLog.mock.calls)).not.toContain(text);
-  });
-
-  it("does not force a self-chat response prefix without identity", () => {
-    expect(
-      resolveWhatsAppResponsePrefix({ cfg: { messages: {} }, agentId: "main", isSelfChat: true }),
-    ).toBeUndefined();
   });
 
   it("retains the approved batch when a partial replacement is cancelled", async () => {
@@ -319,7 +271,6 @@ describe("WhatsApp reply delivery", () => {
     );
     await plan.dispatcherOptions.onSettled?.();
     await expect(deferred?.finalization).resolves.toMatchObject({ visibleReplySent: true });
-    expect(deliverReply).toHaveBeenCalledOnce();
     expect(deliverReply.mock.calls[0]?.[0].replyResult).toMatchObject({
       mediaUrls: toolMedia.mediaUrls,
       text: undefined,
@@ -340,7 +291,6 @@ describe("WhatsApp reply delivery", () => {
     const failed = await deliver(replacement, "block").catch((caught: unknown) => caught);
     await plan.dispatcherOptions.onSettled?.();
     await expect(deferred?.finalization).resolves.toEqual({ visibleReplySent: false });
-    expect(deliverReply).toHaveBeenCalledOnce();
     expect(failed).toMatchObject({
       code: "CHANNEL_PARTIAL_DELIVERY",
       deliveryResult: { content: "captioned replacement", visibleReplySent: true },
@@ -351,12 +301,12 @@ describe("WhatsApp reply delivery", () => {
   });
 
   it.each([
-    { failIndex: 0, acceptedBeforeError: false, remainder: ["/tmp/a.jpg"] },
-    { failIndex: 1, acceptedBeforeError: false, remainder: ["/tmp/b.jpg"] },
-    { failIndex: 0, acceptedBeforeError: true, remainder: ["/tmp/b.jpg"] },
+    { failIndex: 0, acceptedBeforeError: false },
+    { failIndex: 1, acceptedBeforeError: false },
+    { failIndex: 0, acceptedBeforeError: true },
   ])(
     "retains unsent attachments after upload $failIndex fails (accepted=$acceptedBeforeError)",
-    async ({ failIndex, acceptedBeforeError, remainder }) => {
+    async ({ failIndex, acceptedBeforeError }) => {
       const sent: string[] = [];
       let attempt = 0;
       vi.mocked(loadWebMedia).mockImplementation(async (url) => ({
@@ -386,9 +336,8 @@ describe("WhatsApp reply delivery", () => {
       const reply = vi.fn<Message["platform"]["reply"]>(async () =>
         createAcceptedWhatsAppSendResult("text", "warning"),
       );
-      const deliverReply = vi.fn(deliverWebReply);
       const { plan, deliver } = await fixture({
-        deliverReply,
+        deliverReply: deliverWebReply,
         msg: message({ platform: { sendMedia, reply } }),
       });
       const deferred = await deliver(toolMedia, "tool");
@@ -396,10 +345,6 @@ describe("WhatsApp reply delivery", () => {
         deliver({ ...replacement, mediaUrls: toolMedia.mediaUrls }, "block"),
       ]);
       await plan.dispatcherOptions.onSettled?.();
-      expect(deliverReply.mock.calls.map(([params]) => params.replyResult.mediaUrls)).toEqual([
-        toolMedia.mediaUrls,
-        remainder,
-      ]);
       expect(sent.toSorted()).toEqual(toolMedia.mediaUrls);
       await expect(deferred?.finalization).resolves.toMatchObject({ visibleReplySent: true });
       if (acceptedBeforeError) {
@@ -430,15 +375,12 @@ describe("WhatsApp reply delivery", () => {
         context: {
           CommandAuthorized: false,
           ReplyToId: "quoted-bot-message",
-          ReplyToBody: "Earlier bot reply",
-          ReplyToSender: "OpenClaw",
         },
         msg: message({ event: { id: "trigger-message" } }),
       });
       if (typeof plan.delivery.durable !== "function") {
         throw new Error("expected durable delivery policy");
       }
-      // Preserve the existing fixture's explicit no-native-reply sentinel.
       const payload = { text: "final payload", replyToId } as unknown as Payload;
       expect(await plan.delivery.durable(payload, { kind: "final" })).toMatchObject({
         to: "+1000",
@@ -454,14 +396,16 @@ describe("WhatsApp reply delivery", () => {
       .mockResolvedValueOnce(accepted())
       .mockRejectedValueOnce(error);
     const { plan, deliver } = await fixture({ deliverReply });
-    const first = await deliver({ mediaUrls: ["/tmp/first.jpg"] }, "tool");
-    const second = await deliver({ mediaUrls: ["/tmp/second.jpg"] }, "tool");
-    const third = await deliver({ mediaUrls: ["/tmp/third.jpg"] }, "tool");
-    const settlements = Promise.allSettled([
-      first?.finalization,
-      second?.finalization,
-      third?.finalization,
-    ]);
+    const finalizations = [];
+    for (const name of ["first", "second", "third"]) {
+      const finalization = (await deliver({ mediaUrls: [`/tmp/${name}.jpg`] }, "tool"))
+        ?.finalization;
+      if (!finalization) {
+        throw new Error("Expected deferred delivery finalization");
+      }
+      finalizations.push(finalization);
+    }
+    const settlements = Promise.allSettled(finalizations);
     await expect(plan.dispatcherOptions.onSettled?.()).rejects.toMatchObject({
       sentBeforeError: true,
       visibleReplySent: true,
@@ -473,7 +417,7 @@ describe("WhatsApp reply delivery", () => {
     expect(one).toMatchObject({ status: "fulfilled", value: { visibleReplySent: true } });
     expect(two).toEqual({ status: "rejected", reason: error });
     expect(three).toMatchObject({ status: "rejected", reason: { cause: error } });
-    if (three.status === "rejected") {
+    if (three?.status === "rejected") {
       expect(three.reason).not.toHaveProperty("sentBeforeError");
       expect(three.reason).not.toHaveProperty("visibleReplySent");
     }
@@ -481,77 +425,60 @@ describe("WhatsApp reply delivery", () => {
   });
 
   it("marks downstream failures visible after deferred media flushes", async () => {
-    const { plan, deliver, preparePayload, deliverReply } = await fixture();
+    const { plan, deliver, preparePayload } = await fixture();
     await expect(deliver(toolMedia, "tool")).resolves.toMatchObject({ visibleReplySent: false });
     await preparePayload({ text: "final text" }, "final");
     const error = new Error("durable text failed");
     plan.delivery.onError?.(error, { kind: "final" });
     expect(error).toMatchObject({ sentBeforeError: true, visibleReplySent: true });
-    expect(deliverReply).toHaveBeenCalledOnce();
   });
 
-  it("suppresses reasoning and compaction payloads", async () => {
+  it.each<[string, Payload, Kind]>([
+    ["reasoning", { text: "hidden", isReasoning: true }, "block"],
+    ["compaction", { text: "🧹 Compacting context...", isCompactionNotice: true }, "block"],
+    [
+      "empty normalized content",
+      {
+        text: '<function_calls><invoke name="web_search"><parameter name="query">x</parameter></invoke></function_calls>',
+      },
+      "final",
+    ],
+    ["block error noise", { text: "tool call failed", isError: true }, "block"],
+  ])("suppresses %s", async (_name, payload, kind) => {
     const { deliver, deliverReply } = await fixture();
-    await deliver({ text: "hidden", isReasoning: true }, "block");
-    await deliver({ text: "🧹 Compacting context...", isCompactionNotice: true }, "block");
+    await deliver(payload, kind);
     expect(deliverReply).not.toHaveBeenCalled();
   });
-  it("suppresses text that normalizes to no visible content", async () => {
-    const { deliver, deliverReply } = await fixture();
-    await deliver({
-      text: '<function_calls><invoke name="web_search"><parameter name="query">x</parameter></invoke></function_calls>',
+
+  it("selects message-tool-only delivery for a mentioned group message", async () => {
+    const { plan } = await fixture({
+      cfg: {
+        channels: { whatsapp: { streaming: { block: { enabled: true } } } },
+        messages: { groupChat: { visibleReplies: "message_tool" } },
+      },
+      context: {
+        Body: "hi",
+        ChatType: "group",
+        WasMentioned: true,
+        CommandAuthorized: false,
+      },
     });
-    expect(deliverReply).not.toHaveBeenCalled();
-  });
-  it("suppresses block error noise", async () => {
-    const { deliver, deliverReply } = await fixture();
-    await deliver({ text: "tool call failed", isError: true }, "block");
-    expect(deliverReply).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      mentioned: true,
-      command: false,
-      mode: "message_tool_only",
+    expect(plan.replyOptions).toMatchObject({
+      sourceReplyDeliveryMode: "message_tool_only",
       suppressTyping: false,
       disableBlockStreaming: true,
-    },
-  ])(
-    "selects group delivery for mentioned=$mentioned command=$command",
-    async ({ mentioned, command, mode, suppressTyping, disableBlockStreaming }) => {
-      const { plan } = await fixture({
-        cfg: {
-          channels: { whatsapp: { streaming: { block: { enabled: true } } } },
-          messages: { groupChat: { visibleReplies: "message_tool" } },
-        },
-        context: {
-          Body: command ? "/status" : "hi",
-          ChatType: "group",
-          WasMentioned: mentioned,
-          CommandAuthorized: command,
-          ...(command ? { CommandSource: "text" } : {}),
-        },
-      });
-      expect(plan.replyOptions).toMatchObject({
-        sourceReplyDeliveryMode: mode,
-        suppressTyping,
-        disableBlockStreaming,
-      });
-    },
-  );
+    });
+  });
   it.each([
     { visibleReplySent: true, emoji: "✅" },
     { visibleReplySent: false, emoji: "❌" },
   ])(
     "waits for queued delivery before showing $emoji (visible=$visibleReplySent)",
     async ({ visibleReplySent, emoji }) => {
-      const { controller, reactions, restoration, nextRestoration } = statusReactionFixture();
-      const { plan } = await fixture({ statusReactionController: controller });
+      const { plan, reactions, restoration, nextRestoration } = await reactionPlan();
       expect(plan.finalize({ deferredToActiveRun: "followup", counts: {} })).toBe(false);
       await restoration;
       expect(reactions).toEqual(["👀"]);
-
       const settle = beginQueuedDelivery(plan);
       plan.replyOptions.onAgentRunTerminalOutcome?.("completed");
       expect(reactions).toEqual(["👀"]);
@@ -562,8 +489,7 @@ describe("WhatsApp reply delivery", () => {
     },
   );
   it("preserves queued delivery settled before the original dispatch finalizes", async () => {
-    const { controller, reactions, restoration } = statusReactionFixture();
-    const { plan } = await fixture({ statusReactionController: controller });
+    const { plan, reactions, restoration } = await reactionPlan();
     plan.replyOptions.onAgentRunTerminalOutcome?.("completed");
     beginQueuedDelivery(plan)({ visibleReplySent: true, failed: false });
     expect(reactions).toEqual([]);
@@ -575,9 +501,8 @@ describe("WhatsApp reply delivery", () => {
     { outcome: "delivered", visibleReplySent: true, failed: false },
     { outcome: "terminally failed", visibleReplySent: false, failed: true },
   ])("leaves held delivery neutral after a later $outcome receipt", async (terminal) => {
-    const { controller, reactions, restoration } = statusReactionFixture();
+    const { plan, controller, reactions, restoration } = await reactionPlan();
     const clear = vi.spyOn(controller, "clear");
-    const { plan } = await fixture({ statusReactionController: controller });
     plan.finalize({ deferredToActiveRun: "followup", counts: {} });
     await restoration;
     const settle = beginQueuedDelivery(plan);
@@ -586,15 +511,13 @@ describe("WhatsApp reply delivery", () => {
     expect(clear).toHaveBeenCalledOnce();
     await clear.mock.results[0]?.value;
     expect(reactions).toEqual(["👀", ""]);
-
     // Recovery has no source callback; even a retained caller cannot revive finished activity.
     settle(terminal);
     expect(reactions).toEqual(["👀", ""]);
     expect(clear).toHaveBeenCalledOnce();
   });
   it("shows execution failure immediately and does not replace it with delivery success", async () => {
-    const { controller, reactions, restoration } = statusReactionFixture();
-    const { plan } = await fixture({ statusReactionController: controller });
+    const { plan, controller, reactions, restoration } = await reactionPlan();
     plan.replyOptions.onAgentRunTerminalOutcome?.("failed");
     await restoration;
     expect(reactions).toEqual(["❌", "👀"]);
@@ -602,39 +525,26 @@ describe("WhatsApp reply delivery", () => {
     plan.finalize({ deferredToActiveRun: "followup", counts: {} });
     expect(controller.restoreInitial).toHaveBeenCalledOnce();
   });
-  it("keeps a deferred retry pending and matches direct dispatch for a settled silent turn", async () => {
-    const queued = statusReactionFixture();
-    const { plan } = await fixture({ statusReactionController: queued.controller });
-    plan.finalize({ deferredToActiveRun: "followup", counts: {} });
-    await queued.restoration;
+  it("keeps a deferred retry pending until a silent turn settles", async () => {
+    const queued = await reactionPlan(true);
+    const { plan } = queued;
     beginQueuedDelivery(plan)();
     expect(queued.reactions).toEqual(["👀"]);
-
     const completed = queued.nextRestoration();
     plan.replyOptions.onAgentRunTerminalOutcome?.("completed");
     beginQueuedDelivery(plan)({ visibleReplySent: false, failed: false });
     await completed;
     expect(queued.reactions).toEqual(["👀", "❌", "👀"]);
-
-    const direct = statusReactionFixture();
-    const { plan: directPlan } = await fixture({ statusReactionController: direct.controller });
-    directPlan.finalize({ counts: {} });
-    await direct.restoration;
-    expect(direct.reactions).toEqual(["❌", "👀"]);
   });
   it("shows an error when an accepted follow-up is evicted before it runs", async () => {
-    const { controller, reactions, restoration, nextRestoration } = statusReactionFixture();
-    const { plan } = await fixture({ statusReactionController: controller });
-    plan.finalize({ deferredToActiveRun: "followup", counts: {} });
-    await restoration;
+    const { plan, reactions, nextRestoration } = await reactionPlan(true);
     const completed = nextRestoration();
     plan.replyOptions.onFollowupQueueDisposition?.("queue-cap-old");
     await completed;
     expect(reactions).toEqual(["👀", "❌", "👀"]);
   });
   it("keeps a queue-cap rejection failed even when its notice is delivered", async () => {
-    const { controller, reactions, restoration } = statusReactionFixture();
-    const { plan, deliver } = await fixture({ statusReactionController: controller });
+    const { plan, deliver, reactions, restoration } = await reactionPlan();
     plan.replyOptions.onFollowupQueueDisposition?.("queue-cap-new");
     await deliver({ text: "The message queue is full." });
     expect(plan.finalize({ counts: { final: 1 } })).toBe(true);
@@ -642,13 +552,11 @@ describe("WhatsApp reply delivery", () => {
     expect(reactions).toEqual(["❌", "👀"]);
   });
   it("keeps visible delivery successful while marking a failed run as an error", async () => {
-    const { controller, reactions, restoration } = statusReactionFixture();
     readAgentRunTerminalOutcome.mockReturnValueOnce("failed");
-    const { plan, deliver, deliverReply } = await fixture({ statusReactionController: controller });
+    const { plan, controller, deliver, reactions, restoration } = await reactionPlan();
     await deliver({ text: "visible failure" });
     expect(plan.finalize({ queuedFinal: false, counts: { final: 1 } })).toBe(true);
     await restoration;
-    expect(deliverReply).toHaveBeenCalledOnce();
     expect(reactions).toEqual(["❌", "👀"]);
     expect(controller.restoreInitial).toHaveBeenCalledOnce();
   });

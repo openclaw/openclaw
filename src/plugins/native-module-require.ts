@@ -5,11 +5,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
 
 /** Bun's native plugin resolver remains the owner even when Node hooks are available. */
 export function useNodeModuleHooks(): boolean {
-  return !process.versions.bun && typeof Module.registerHooks === "function";
+  return !process.versions.bun;
 }
 
 // Resolution and Jiti must accept the same source family, including typed JSX variants.
@@ -39,33 +40,6 @@ const moduleWithResolver = Module as typeof Module & {
   _resolveFilename?: ResolveFilename;
 };
 
-let nativeAliasHookSupport: boolean | undefined;
-
-/** Older Bun loses createRequire's parent when its private resolver is wrapped. */
-export function supportsNativeModuleAliasHooks(): boolean {
-  if (!process.versions.bun) {
-    return true;
-  }
-  if (nativeAliasHookSupport !== undefined) {
-    return nativeAliasHookSupport;
-  }
-  const previous = moduleWithResolver["_resolveFilename"];
-  if (!previous) {
-    return (nativeAliasHookSupport = false);
-  }
-  let retainsParent = false;
-  moduleWithResolver["_resolveFilename"] = (request, parent) => {
-    retainsParent = typeof parent?.filename === "string";
-    return request;
-  };
-  try {
-    createRequire(import.meta.url).resolve(fileURLToPath(import.meta.url));
-  } finally {
-    moduleWithResolver["_resolveFilename"] = previous;
-  }
-  return (nativeAliasHookSupport = retainsParent);
-}
-
 type CapturedModuleBinding = {
   resolve: (request: string, parent: string, resolve: () => string) => string | undefined;
   prepare: (request: string, parent: string, kind?: BunPluginImportKind) => string | undefined;
@@ -82,6 +56,7 @@ type BunPluginImportKind =
   | "entry-point-run"
   | "entry-point-build";
 export type BunPluginRuntime = {
+  main: string;
   resolveSync?: (specifier: string, parent: string) => string;
   Transpiler: new (options: {
     loader: "jsx" | "tsx";
@@ -102,7 +77,7 @@ export type BunPluginRuntime = {
           path: string;
           importer: string;
           kind?: BunPluginImportKind;
-        }) => { path: string; namespace: "file" } | undefined,
+        }) => { path: string; namespace: string } | undefined,
       ): void;
       onLoad(
         options: { filter: RegExp; namespace: "file" },
@@ -186,16 +161,15 @@ function installCapturedPluginModuleResolver(bun: BunPluginRuntime | undefined):
     bun.plugin({
       name: "openclaw-plugin-source-capture",
       setup(builder) {
-        builder.onResolve(
-          { filter: /.*/, namespace: "file" },
-          ({ path: request, importer, kind }) => {
-            const target = resolveCapturedPluginModule((owner) =>
-              owner.prepare(request, importer, kind),
-            );
-            // Package selection stays native; owners redirect only captured physical source paths.
-            return target ? { path: target, namespace: "file" } : undefined;
-          },
-        );
+        // Compiled Bun refuses hooks whose filter includes its immutable entrypoint.
+        const filter = new RegExp(`^(?!${escapeRegExp(bun.main)}(?![\\s\\S]))`);
+        builder.onResolve({ filter, namespace: "file" }, ({ path: request, importer, kind }) => {
+          const target = resolveCapturedPluginModule((owner) =>
+            owner.prepare(request, importer, kind),
+          );
+          // Package selection stays native; owners redirect only captured physical source paths.
+          return target ? { path: target, namespace: "file" } : undefined;
+        });
       },
     });
     return;
@@ -241,8 +215,6 @@ export function registerCapturedPluginModuleResolver(binding: CapturedModuleBind
   const bun = (globalThis as typeof globalThis & { Bun?: BunPluginRuntime }).Bun;
   if (!capturedModuleResolvers.installed) {
     installCapturedPluginModuleResolver(bun);
-    // Older Bun drops createRequire's ESM parent when this private hook is replaced.
-    // Its public resolver above retains the importer without changing native resolution.
     capturedModuleResolvers.installed = true;
   }
   if (binding.load && bun && !capturedModuleResolvers.loaderInstalled) {

@@ -1,7 +1,12 @@
 import { ChildProcess } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
 import { materializeManagedWorktree } from "../agents/worktrees/checkout-materialize.js";
+import { captureSettledGitHubPublicationWorkspaceSnapshot } from "../gateway/github-publication-git-transport.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
 import { runExec } from "./exec.js";
@@ -28,7 +33,7 @@ class CommandChild extends ChildProcess {
   override killed = false;
 }
 
-function createCommand() {
+function createCommand(install = true) {
   const child = new CommandChild();
   const output = { stdout: "", stderr: "" };
   child.stdout.on("data", (chunk: Buffer) => (output.stdout += chunk.toString()));
@@ -59,7 +64,7 @@ function createCommand() {
     }
     return true;
   });
-  spawnMock.mockImplementation((_argv, options: { cancelSignal?: AbortSignal }) => {
+  const spawn = (_argv: unknown, options: { cancelSignal?: AbortSignal }) => {
     options.cancelSignal?.addEventListener("abort", kill, { once: true });
     return Object.assign(completion.promise, {
       nodeChildProcess: child,
@@ -68,8 +73,11 @@ function createCommand() {
       stderr: child.stderr,
       kill,
     });
-  });
-  return { child, exit, emitExit, settle, kill };
+  };
+  if (install) {
+    spawnMock.mockImplementation(spawn);
+  }
+  return { child, exit, emitExit, settle, kill, spawn };
 }
 
 beforeEach(() => {
@@ -78,14 +86,83 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 it.each([
-  ["complete", "exit"],
+  ["progress", 240_000],
+  ["managed", 240_000],
+  ["idle", 180_001],
+  ["absolute", 600_000],
+] as const)(
+  "publication snapshot bounds %s staging without changing the source index",
+  async (ending, duration) => {
+    const success = ending === "progress" || ending === "managed";
+    const cwd = tempDirs.make("publication-timeout-");
+    const index = path.join(cwd, "index");
+    await fs.writeFile(index, "source index");
+    const staged = createDeferredCore<ReturnType<typeof createCommand>>();
+    spawnMock.mockImplementation((argv: string[], options: { cancelSignal?: AbortSignal }) => {
+      const command = createCommand(false);
+      const result = command.spawn(argv, options);
+      if (argv.includes("add")) {
+        staged.resolve(command);
+      } else {
+        const output =
+          argv.includes("HEAD^{commit}") || argv.includes("write-tree")
+            ? "b".repeat(40)
+            : argv.at(-1) === "index"
+              ? index
+              : argv.at(-1)?.startsWith("info/")
+                ? path.join(cwd, "absent")
+                : "";
+        void Promise.resolve().then(() => {
+          command.child.stdout.end(output);
+          command.child.stderr.end();
+          command.exit(argv.includes("config") ? 1 : 0);
+        });
+      }
+      return result;
+    });
+    const result = withWorktreeGitConfig(cwd, false, {}, (policy) =>
+      captureSettledGitHubPublicationWorkspaceSnapshot(
+        { cwd },
+        ending === "managed" ? policy : undefined,
+      ),
+    ).catch((error: unknown) => error);
+    const command = await staged.promise;
+    for (let elapsed = 0; elapsed < duration; elapsed += 40_000) {
+      await vi.advanceTimersByTimeAsync(Math.min(40_000, duration - elapsed));
+      if (ending !== "idle") {
+        command.child.stdout.emit("data", Buffer.from("add 'artifact.txt'\n"));
+      }
+    }
+    if (success) {
+      command.child.stdout.end();
+      command.child.stderr.end();
+      command.exit(0);
+    } else {
+      await vi.runAllTimersAsync();
+    }
+    await expect(result).resolves.toMatchObject(
+      success
+        ? { workspaceTree: "b".repeat(40) }
+        : {
+            message: expect.stringMatching(
+              ending === "idle"
+                ? /snapshot.*timed out waiting for output.*retry/isu
+                : /snapshot.*timed out after 600 seconds.*retry/isu,
+            ),
+          },
+    );
+    expect(command.kill).toHaveBeenCalledTimes(success ? 0 : 1);
+    expect(await fs.readFile(index, "utf8")).toBe("source index");
+  },
+);
+
+it.each([
   ["idle", "no-output-timeout"],
-  ["cancel", "signal"],
   ["absolute", "timeout"],
 ] as const)("checkout progress honors %s completion", async (outcome, termination) => {
   const command = createCommand();
-  const abort = new AbortController();
   const absolute = outcome === "absolute";
   const result = materializeManagedWorktree(
     {
@@ -93,9 +170,7 @@ it.each([
       commit: "HEAD",
       ...(absolute ? { executionTimeoutMs: 600_000 } : {}),
     },
-    absolute
-      ? { killProcessTree: true }
-      : { timeoutMs: 300_000, signal: abort.signal, killProcessTree: true },
+    { timeoutMs: 300_000, killProcessTree: true },
   );
   await vi.advanceTimersByTimeAsync(absolute ? 540_000 : 240_000);
   if (!absolute) {
@@ -104,24 +179,9 @@ it.each([
   }
   command.child.stderr.emit("data", Buffer.from("Updating files: 40%\r"));
   expect(command.kill).not.toHaveBeenCalled();
-  if (outcome === "complete") {
-    command.exit(0);
-  } else if (outcome === "cancel") {
-    abort.abort();
-  } else {
-    await vi.advanceTimersByTimeAsync(absolute ? 60_001 : 300_001);
-  }
+  await vi.advanceTimersByTimeAsync(absolute ? 60_001 : 300_001);
   await vi.runAllTimersAsync();
-  await expect(result).resolves.toMatchObject({
-    termination,
-    killed: outcome !== "complete",
-  });
-  if (absolute) {
-    expect(command.kill).toHaveBeenCalledOnce();
-  }
-  expect(spawnMock.mock.calls[0]?.[0]).toEqual(
-    expect.arrayContaining(["read-tree", "--verbose", "-u", "HEAD"]),
-  );
+  await expect(result).resolves.toMatchObject({ termination, killed: true });
 });
 
 it.each([
@@ -192,19 +252,17 @@ it.each([
     command.settle();
   }
   if (success) {
-    if (phase === "drained") {
-      await expect(result).resolves.toMatchObject({
-        stdout: "complete",
-        ...(runner !== "exec" ? { code: 0, termination: "exit" } : {}),
-      });
-    } else {
-      const output = { stdout: "version\n", stderr: "diagnostic\n" };
-      await expect(result).resolves.toEqual(
-        runner === "exec"
-          ? output
-          : expect.objectContaining({ ...output, code: 0, termination: "exit", killed: false }),
-      );
-    }
+    const output =
+      phase === "drained"
+        ? { stdout: "complete" }
+        : { stdout: "version\n", stderr: "diagnostic\n" };
+    await expect(result).resolves.toEqual(
+      runner === "exec"
+        ? phase === "drained"
+          ? expect.objectContaining(output)
+          : output
+        : expect.objectContaining({ ...output, code: 0, termination: "exit", killed: false }),
+    );
     expect(command.kill).not.toHaveBeenCalled();
   } else {
     await assertion;

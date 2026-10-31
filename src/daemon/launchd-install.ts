@@ -39,10 +39,7 @@ export async function uninstallLaunchAgent({
   const plistPath = resolveLaunchAgentPlistPath(env);
   const probe = await probeLaunchAgentState(`${domain}/${label}`);
   if (probe.state !== "not-loaded") {
-    const bootout = await execLaunchctl(["bootout", domain, plistPath]);
-    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
-      throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
-    }
+    await bootoutLaunchAgent(`${domain}/${label}`);
   }
 
   try {
@@ -113,40 +110,12 @@ export async function stageLaunchAgent(
   return { plistPath };
 }
 
-async function snapshotLaunchAgentLoadedState(
-  plistContents: Buffer | null,
-  serviceTarget: string,
-): Promise<boolean> {
-  const probe = await probeLaunchAgentState(serviceTarget);
-  if (probe.state === "unknown") {
-    throw new Error(
-      `launchctl print could not determine whether ${serviceTarget} is loaded: ${probe.detail ?? "unknown error"}`,
-    );
-  }
-  const loaded = probe.state !== "not-loaded";
-  if (loaded && plistContents === null) {
-    // launchd can retain a definition after its plist is deleted. Booting that
-    // job out would destroy the only copy, so no exact rollback is possible.
-    throw new Error(
-      `LaunchAgent ${serviceTarget} is loaded but its plist is missing; refusing an install that cannot restore the current definition if activation fails.`,
-    );
-  }
-  return loaded;
-}
-
-async function deactivateLaunchAgentDefinition(domain: string, plistPath: string): Promise<void> {
-  for (const args of [
-    ["bootout", domain, plistPath],
-    ["unload", plistPath],
-  ]) {
-    assertGatewayServiceUpdateCurrent();
-    const result = await execLaunchctl(args);
-    assertGatewayServiceUpdateCurrent();
-    if (result.code !== 0 && !isLaunchctlNotLoaded(result)) {
-      throw new Error(
-        `launchctl ${args[0]} failed during LaunchAgent install: ${formatLaunchctlResultDetail(result)}`,
-      );
-    }
+async function bootoutLaunchAgent(serviceTarget: string): Promise<void> {
+  assertGatewayServiceUpdateCurrent();
+  const result = await execLaunchctl(["bootout", serviceTarget]);
+  assertGatewayServiceUpdateCurrent();
+  if (result.code !== 0 && !isLaunchctlNotLoaded(result)) {
+    throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(result)}`);
   }
 }
 
@@ -157,27 +126,42 @@ export async function installLaunchAgent(
   const label = resolveLaunchAgentLabel(args.env);
   const domain = resolveLaunchAgentGuiDomain();
   const serviceTarget = `${domain}/${label}`;
-  const { publication, loaded, enabled } = await withGatewayServiceInstallationRecovery(
-    async () => {
-      await assertExternalLaunchAgentMutation(args.env, "install");
-      const captured = args.definitionTransaction
-        ? { kind: "transaction" as const, hooks: args.definitionTransaction }
-        : { kind: "local" as const, files: await captureLaunchAgentInstallFiles(args.env) };
-      const previous =
-        captured.kind === "local"
-          ? captured.files.originals.get(targetPlistPath)!.snapshot
-          : await readExistingLaunchAgentPlist(targetPlistPath);
-      const wasEnabled = args.preserveAutoStart
-        ? await isLaunchAgentEnabled({ env: args.env })
-        : undefined;
-      const wasLoaded = await snapshotLaunchAgentLoadedState(
-        previous?.contents ?? null,
-        serviceTarget,
-      );
-      return { publication: captured, loaded: wasLoaded, enabled: wasEnabled };
-    },
-    async () => false,
-  );
+  const { publication, loaded, restoreLoaded, enabled } =
+    await withGatewayServiceInstallationRecovery(
+      async () => {
+        await assertExternalLaunchAgentMutation(args.env, "install");
+        const captured = args.definitionTransaction
+          ? { kind: "transaction" as const, hooks: args.definitionTransaction }
+          : { kind: "local" as const, files: await captureLaunchAgentInstallFiles(args.env) };
+        const previous =
+          captured.kind === "local"
+            ? captured.files.originals.get(targetPlistPath)!.snapshot
+            : await readExistingLaunchAgentPlist(targetPlistPath);
+        const wasEnabled = args.preserveAutoStart
+          ? await isLaunchAgentEnabled({ env: args.env })
+          : undefined;
+        const probe = await probeLaunchAgentState(serviceTarget);
+        if (probe.state === "unknown") {
+          throw new Error(
+            `launchctl print could not determine whether ${serviceTarget} is loaded: ${probe.detail ?? "unknown error"}`,
+          );
+        }
+        const wasLoaded = probe.state !== "not-loaded";
+        const wasRestorable = wasLoaded && previous !== null;
+        if (wasLoaded && !wasRestorable) {
+          args.warn?.(
+            `LaunchAgent ${serviceTarget} plist is missing; replacing the registration without a previous definition to restore.`,
+          );
+        }
+        return {
+          publication: captured,
+          loaded: wasLoaded,
+          restoreLoaded: wasRestorable,
+          enabled: wasEnabled,
+        };
+      },
+      async () => false,
+    );
   const bootstrap = (plistPath: string, actionHint: string) =>
     bootstrapLaunchAgentOrThrow({
       domain,
@@ -203,7 +187,7 @@ export async function installLaunchAgent(
     assertGatewayServiceUpdateCurrent();
     activationAttempted = true;
     if (loaded) {
-      await deactivateLaunchAgentDefinition(domain, published.plistPath);
+      await bootoutLaunchAgent(serviceTarget);
     }
     await bootstrap(published.plistPath, "openclaw gateway install --force");
     assertGatewayServiceUpdateCurrent();
@@ -224,16 +208,11 @@ export async function installLaunchAgent(
             }
             if (current.state !== "not-loaded") {
               await files.assertCurrent();
-              const bootout = await execLaunchctl(["bootout", serviceTarget]);
-              if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
-                throw new Error(
-                  `launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`,
-                );
-              }
+              await bootoutLaunchAgent(serviceTarget);
             }
           }
           const restored = await files.restore();
-          if (activationAttempted && loaded) {
+          if (activationAttempted && restoreLoaded) {
             await files.assertCurrent();
             await assertNoSystemLaunchDaemonOwnership(label);
             await bootstrap(targetPlistPath, "openclaw gateway start");

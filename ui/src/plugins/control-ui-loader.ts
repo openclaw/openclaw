@@ -2,8 +2,10 @@ import type {
   ControlUiDisposer,
   ControlUiPlugin,
   ControlUiSettingsView,
+  ControlUiChannelSettingsView,
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
+import { beginForegroundActivity } from "../app/foreground-activity.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { controlUiPluginAssetUrls } from "./control-ui-assets.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
@@ -56,7 +58,7 @@ export async function initializeControlUiPlugin(
 export type ControlUiPluginModule = {
   default?: ControlUiPlugin;
   pluginId?: string;
-  settingsViews?: readonly ControlUiSettingsView[];
+  settingsViews?: readonly (ControlUiSettingsView | ControlUiChannelSettingsView)[];
 };
 
 /** Both activation and packaged Settings presentations share one asset loader. */
@@ -91,10 +93,15 @@ export async function loadControlUiPluginAssets(
     return loaded;
   });
   // Fetch code alongside CSS; publish only after this revision's styles are ready.
-  const [module]: [ControlUiPluginModule, void[]] = await Promise.all([
-    import(/* @vite-ignore */ urls.entry),
-    Promise.all(stylesLoaded),
-  ]);
-  signal.throwIfAborted();
-  return module;
+  const finishActivity = beginForegroundActivity();
+  try {
+    const [module]: [ControlUiPluginModule, void[]] = await Promise.all([
+      import(/* @vite-ignore */ urls.entry),
+      Promise.all(stylesLoaded),
+    ]);
+    signal.throwIfAborted();
+    return module;
+  } finally {
+    finishActivity();
+  }
 }

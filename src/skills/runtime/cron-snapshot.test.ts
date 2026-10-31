@@ -35,7 +35,6 @@ describe("resolveCronSkillsSnapshot", () => {
     resolveReusableWorkspaceSkillSnapshotMock.mockReturnValue({
       snapshot: { prompt: "fresh", skills: [] },
       shouldRefresh: true,
-      snapshotVersion: 0,
     });
   });
 

@@ -13,6 +13,8 @@ import {
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { readSessionPullRequestMetadata } from "./control-ui-session-pr-metadata.js";
+import { prepareSessionPullRequestGitHubRead } from "./control-ui-session-pr-request.js";
 import {
   githubJson,
   loadTestSessionPullRequests as loadControlUiSessionPullRequests,
@@ -31,58 +33,110 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
-it("marks retained PR data unavailable after a refresh fails, then recovers", async () => {
-  vi.useRealTimers();
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    await captureRuntimeConfigAsyncReader()();
-    const sessionKey = "agent:main:stale-preview";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "stale-preview-session", updatedAt: 1 },
-    );
-    vi.useFakeTimers();
-    try {
-      let failed = false;
-      const fetchImpl = routedFetch([
-        {
-          match: "/pulls?head=",
-          response: () =>
-            failed
-              ? githubJson({ message: "Unavailable" }, 503)
-              : githubJson([pullListItem({ state: "closed", merged_at: "2026-09-01T00:00:00Z" })]),
-        },
-      ]);
-      const load = () =>
-        loadControlUiSessionPullRequests(
-          { sessionKey },
-          {
-            fetchImpl,
-            resolveGitContext: async () => ({ ...testGitContext, branch: "stale-preview" }),
-          },
-        );
-      const fresh = await load();
-      expect(fresh.pullRequests[0]?.state).toBe("merged");
-      failed = true;
-      vi.advanceTimersByTime(91_000);
-      const stale = await load();
-      expect(stale.pullRequests).toEqual(fresh.pullRequests);
-      expect(stale.status).toBe("unavailable");
-      expect(stale.rateLimited).toBe(false);
-      const calls = fetchImpl.mock.calls.length;
-      expect(await load()).toEqual(stale);
-      expect(fetchImpl.mock.calls).toHaveLength(calls);
-      failed = false;
-      vi.advanceTimersByTime(31_000);
-      const recovered = await load();
-      expect(recovered.status).not.toBe("unavailable");
-      expect(recovered.pullRequests).toEqual(fresh.pullRequests);
-    } finally {
-      vi.useRealTimers();
+function holdGitContext(context = testGitContext) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const spy = vi.spyOn(gitWorker, "runGitWorkerOperation").mockImplementation(async (operation) => {
+    if (operation.type === "checkout.revision") {
+      return { key: "held-context" };
     }
+    if (operation.type === "checkout.context") {
+      entered.resolve();
+      await release.promise;
+      return context;
+    }
+    throw new Error("Unexpected held-context Git operation");
   });
-});
+  return { entered, release, spy };
+}
+
+it.each(["list", "warm metadata", "cold metadata"])(
+  "marks PR data unavailable after a %s failure, then retries after 30 seconds",
+  async (failure) => {
+    vi.useRealTimers();
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
+      const sessionKey = "agent:main:stale-preview";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        { sessionId: "stale-preview-session", updatedAt: 1 },
+      );
+      vi.useFakeTimers();
+      try {
+        let failed = false;
+        const metadata = failure !== "list";
+        const number = failure === "list" ? 103469 : failure === "warm metadata" ? 103470 : 103471;
+        const detailUrl = `https://api.github.com/repos/openclaw/openclaw/pulls/${number}`;
+        const fetchImpl = routedFetch([
+          {
+            match: "/pulls?head=",
+            response: () =>
+              failed && !metadata
+                ? githubJson({ message: "Unavailable" }, 503)
+                : githubJson([
+                    pullListItem({
+                      number,
+                      html_url: `https://github.com/openclaw/openclaw/pull/${number}`,
+                      ...(metadata ? {} : { state: "closed", merged_at: "2026-09-01T00:00:00Z" }),
+                    }),
+                  ]),
+          },
+          {
+            match: `/pulls/${number}`,
+            response: () => githubJson({ additions: 4 }, failed ? 503 : 200),
+          },
+          { match: "/check-runs", response: () => githubJson({ total_count: 0, check_runs: [] }) },
+        ]);
+        vi.stubGlobal("fetch", fetchImpl);
+        const load = () =>
+          loadControlUiSessionPullRequests(
+            { sessionKey },
+            {
+              resolveGitContext: async () => ({ ...testGitContext, branch: "stale-preview" }),
+            },
+          );
+        const fresh = failure === "cold metadata" ? undefined : await load();
+        if (fresh) {
+          expect(fresh.pullRequests[0]?.state).toBe(metadata ? "open" : "merged");
+        }
+        failed = true;
+        vi.advanceTimersByTime(91_000);
+        if (metadata) {
+          // Task-PR reads can cache a failed detail request before the branch list succeeds.
+          await expect(
+            readSessionPullRequestMetadata(
+              { owner: "openclaw", repo: "openclaw", number },
+              prepareSessionPullRequestGitHubRead("github.com", () => {}),
+              async (transport) => {
+                await transport.request(detailUrl);
+                throw new Error("Expected the synthetic GitHub 503 response");
+              },
+            ),
+          ).rejects.toMatchObject({ statusCode: 502 });
+        }
+        const stale = await load();
+        expect(stale.pullRequests).toEqual(fresh?.pullRequests ?? []);
+        expect(stale.status).toBe("unavailable");
+        expect(stale.rateLimited).toBe(false);
+        const calls = fetchImpl.mock.calls.length;
+        expect(await load()).toEqual(stale);
+        expect(fetchImpl.mock.calls).toHaveLength(calls);
+        failed = false;
+        vi.advanceTimersByTime(31_000);
+        const recovered = await load();
+        expect(recovered.status).not.toBe("unavailable");
+        expect(recovered.pullRequests).toMatchObject([
+          { number, state: metadata ? "open" : "merged" },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  },
+);
 
 it.each(["replacement", "metadata"] as const)(
   "keeps PR reads and warm caches bound to the session across %s updates",
@@ -108,8 +162,6 @@ it.each(["replacement", "metadata"] as const)(
             }
           : {}),
       });
-      const captured = createDeferred();
-      const release = createDeferred();
       const gitContext = { ...testGitContext, branch: `${change}-pr-snapshot` };
       let title = replaced ? "Retired session result" : "Current session result";
       const fetchImpl = routedFetch([
@@ -121,25 +173,16 @@ it.each(["replacement", "metadata"] as const)(
             ]),
         },
       ]);
-      const load = () =>
-        loadControlUiSessionPullRequests(
-          { sessionKey },
-          {
-            fetchImpl,
-            resolveGitContext: async () => {
-              captured.resolve();
-              await release.promise;
-              return gitContext;
-            },
-          },
-        );
+      vi.stubGlobal("fetch", fetchImpl);
+      const { entered, release, spy: gitRead } = holdGitContext(gitContext);
+      const load = () => loadControlUiSessionPullRequests({ sessionKey });
       const pending = load().then(
         (value) => ({ ok: true as const, value }),
         (error: unknown) => ({ ok: false as const, error }),
       );
       try {
         await Promise.race([
-          captured.promise,
+          entered.promise,
           pending.then(() => {
             throw new Error("PR read settled before the Git-context barrier");
           }),
@@ -188,6 +231,7 @@ it.each(["replacement", "metadata"] as const)(
       } finally {
         release.resolve();
         await pending;
+        gitRead.mockRestore();
       }
     });
   },
@@ -227,9 +271,10 @@ it("retires a repository-only target without falling back to its local workspace
       }
       throw new Error(`Unexpected repository-only request: ${url.pathname}`);
     });
+    vi.stubGlobal("fetch", fetchImpl);
     const git = vi.spyOn(gitWorker, "runGitWorkerOperation");
     try {
-      const result = await loadControlUiSessionPullRequests({ sessionKey }, { fetchImpl });
+      const result = await loadControlUiSessionPullRequests({ sessionKey }, {});
       expect(result.pullRequests).toMatchObject([{ number: 103469, state: "closed" }]);
       expect(new URL(requestUrl(fetchImpl.mock.calls[0]?.[0])).searchParams.get("head")).toBe(
         "openclaw:repository-only",
@@ -237,7 +282,7 @@ it("retires a repository-only target without falling back to its local workspace
       expect(git).not.toHaveBeenCalled();
       const fetched = fetchImpl.mock.calls.length;
       await repositories.delete({ workspaceId: repository.workspaceId, assertCurrent: () => {} });
-      expect(await loadControlUiSessionPullRequests({ sessionKey }, { fetchImpl })).toEqual({
+      expect(await loadControlUiSessionPullRequests({ sessionKey }, {})).toEqual({
         pullRequests: [],
         rateLimited: false,
       });
@@ -268,20 +313,10 @@ it("discards pending PR work after same-file reopen even when persisted rows are
     };
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
-    const entered = createDeferred();
-    const release = createDeferred();
     const fetchImpl = vi.fn<typeof fetch>();
-    const pending = loadControlUiSessionPullRequests(
-      { sessionKey },
-      {
-        fetchImpl,
-        resolveGitContext: async () => {
-          entered.resolve();
-          await release.promise;
-          return testGitContext;
-        },
-      },
-    ).then(
+    vi.stubGlobal("fetch", fetchImpl);
+    const { entered, release, spy: gitRead } = holdGitContext();
+    const pending = loadControlUiSessionPullRequests({ sessionKey }).then(
       () => true,
       () => false,
     );
@@ -300,6 +335,7 @@ it("discards pending PR work after same-file reopen even when persisted rows are
     } finally {
       release.resolve();
       await pending;
+      gitRead.mockRestore();
     }
   });
 });

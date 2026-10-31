@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
+import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -7,6 +8,7 @@ import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { ExitError } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   createUpdateCommandFailureResult,
@@ -93,8 +95,21 @@ export async function withUpdateCommandRecoveryUnwind(
     ) {
       throw await settlePending(error);
     }
+    // A forward deadline before activation leaves this live owner responsible
+    // for the failed receipt. Lost custody and activated state stay pending.
+    let preparationTimeout = false;
+    if (error instanceof UpdateActivationTimeoutError && !recoveryState.ledgerHandoffOwned) {
+      try {
+        const current = getUpdateRun(run.runId, run);
+        preparationTimeout =
+          current?.status === "running" &&
+          ["requested", "staging", "validating"].includes(current.phase);
+      } catch (cause) {
+        throw await settlePending(pendingFailure(cause, error));
+      }
+    }
     if (
-      error instanceof UpdateCommandRecoveryPendingError ||
+      (error instanceof UpdateCommandRecoveryPendingError && !preparationTimeout) ||
       error instanceof UpdateRecoveryRequiredError ||
       opts.recovery
     ) {

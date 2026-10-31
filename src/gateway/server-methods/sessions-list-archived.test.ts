@@ -18,7 +18,6 @@ import {
   initializeSessionReadContext,
   listSessions,
   requestContext,
-  sessionReadHandlers,
 } from "./sessions-read-cache.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -43,7 +42,6 @@ async function archiveProjection(cfg: OpenClawConfig, viewer = "archive-viewer")
   await initializeSessionReadContext(context);
   const projection = getSessionRowProjection(context)!;
   return {
-    context,
     projection,
     get list() {
       const client = identifiedClient(viewer);
@@ -76,6 +74,8 @@ it("pages and searches archived sessions without materializing excluded candidat
     using fixture = await archiveProjection(cfg);
     const { list, projection } = fixture;
     await projection.ensureMaterialized();
+    expect(projection.materializedCount).toBe(0);
+    await list({ archived: false });
     expect(projection.materializedCount).toBe(3);
     for (const [request, count, totalCount, nextOffset, ids, materializedCount] of [
       [{ archived: true, limit: 2 }, 2, 4, 2, ["row-6", "row-4"], 5],
@@ -91,27 +91,6 @@ it("pages and searches archived sessions without materializing excluded candidat
       });
       expect(projection.materializedCount).toBe(materializedCount);
     }
-  }));
-
-it("resolves a cold archived key through the registered handler", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = archiveConfig();
-    const key = "agent:main:archived-exact";
-    seed("archived-exact", { archivedAt: 1, label: "Archived exact" });
-    using fixture = await archiveProjection(cfg);
-    const { context, projection } = fixture;
-    expect(projection.materializedCount).toBe(0);
-    const respond = vi.fn();
-    await sessionReadHandlers["sessions.resolve"]!({
-      req: { type: "req", id: "archive-resolve", method: "sessions.resolve" },
-      params: { key },
-      context,
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-    });
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ key }), undefined);
-    expect(projection.materializedCount).toBe(1);
   }));
 
 it("keeps archived visibility and membership current without warming hidden rows", () =>

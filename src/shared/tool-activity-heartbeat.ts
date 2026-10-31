@@ -17,7 +17,7 @@ const { runListeners, runLastActivityMs } = resolveGlobalSingleton(
 );
 
 export function notifyToolActivity(runId: string): void {
-  runLastActivityMs.set(runId, Date.now());
+  runLastActivityMs.set(runId, performance.now());
   const listeners = runListeners.get(runId);
   if (!listeners) {
     return;

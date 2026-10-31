@@ -13,6 +13,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
@@ -215,6 +216,40 @@ describe("SQLite session handle lifecycle", () => {
     },
   );
 
+  it.each([false, true])(
+    "limits message facts to the active branch (fallback=%s)",
+    async (fallback) => {
+      await persist([
+        {
+          eventId: "root",
+          parentId: null,
+          message: { role: "user", content: "root", idempotencyKey: "root" },
+        },
+        {
+          eventId: "abandoned",
+          parentId: "root",
+          message: { role: "assistant", content: "old", idempotencyKey: "abandoned" },
+        },
+        {
+          eventId: "active",
+          parentId: "root",
+          message: { role: "assistant", content: "new", idempotencyKey: "active" },
+        },
+      ]);
+      await withTranscriptWriteLock(scope, async (transcript) => {
+        if (fallback) {
+          openDatabase().db.exec("DELETE FROM session_transcript_index_state");
+        }
+        const query = { idempotencyKeys: ["root", "abandoned", "active", "missing"] };
+        const all = await transcript.readMessageFacts(query);
+        expect([...all.existingIdempotencyKeys]).toEqual(["root", "abandoned", "active"]);
+        const visible = await transcript.readMessageFacts({ ...query, activeBranchOnly: true });
+        expect([...visible.existingIdempotencyKeys]).toEqual(["root", "active"]);
+        expect([...visible.messagesByIdempotencyKey.keys()]).toEqual(["root", "active"]);
+      });
+    },
+  );
+
   it("reads assistant run candidates alongside older idempotency keys", async () => {
     const messages = [
       runMessage("old-key", "assistant", "old answer", { idempotencyKey: "old-delivery" }),
@@ -229,6 +264,15 @@ describe("SQLite session handle lifecycle", () => {
       }),
     ];
     await persist(messages);
+    runOpenClawAgentWriteTransaction((database) => {
+      database.db
+        .prepare(`UPDATE transcript_events
+          SET navigation_type = NULL, navigation_custom_type = NULL,
+              navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
+              navigation_last_custom_type = NULL, navigation_valid = 1
+          WHERE session_id = ?`)
+        .run(scope.sessionId);
+    }, databaseOptions());
     const facts = await withTranscriptWriteLock(scope, (transcript) =>
       transcript.readMessageFacts({
         idempotencyKeys: ["old-delivery"],
@@ -305,7 +349,7 @@ describe("SQLite session handle lifecycle", () => {
       updateMode: "none",
     });
 
-    expect(result.appendedCount).toBe(1);
+    expect(result.messages.filter((m) => m.appended)).toHaveLength(1);
     await expect(loadTranscriptEvents(scope)).resolves.toContainEqual(
       expect.objectContaining({
         message: expect.objectContaining({ content: "append after close" }),

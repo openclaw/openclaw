@@ -1,6 +1,6 @@
-// Finds and cleans stale gateway process ids.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { formatErrorMessage as formatRawErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { readProcessAncestry } from "@openclaw/proc-safe/identity";
@@ -12,6 +12,7 @@ import {
   isPidAlive,
   isPidDefinitelyDead,
   MAX_ANCESTOR_WALK_DEPTH,
+  readLinuxProcessStat,
 } from "../shared/pid-alive.js";
 import { sleep } from "../utils/sleep.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
@@ -118,6 +119,39 @@ function sleepSync(ms: number): void {
   }
 }
 
+function inspectProcfsAncestors(
+  pids: Set<number>,
+  options: { requireVerifiedParent?: boolean; throughPid?: number },
+): { pids: Set<number>; complete: boolean } {
+  let pid = process.pid;
+  let current = readLinuxProcessStat(pid);
+  const seen = new Set([pid]);
+  for (let depth = 0; current && depth < MAX_ANCESTOR_WALK_DEPTH + 2; depth++) {
+    if (pid === options.throughPid || current.parentPid <= 1) {
+      if (current.parentPid === 1) {
+        pids.add(1);
+      }
+      return { pids, complete: true };
+    }
+    const parentPid = current.parentPid;
+    if (seen.has(parentPid)) {
+      break;
+    }
+    const parent = readLinuxProcessStat(parentPid);
+    if (!parent || parent.startedAt > current.startedAt) {
+      if (!parent && !options.requireVerifiedParent) {
+        pids.add(parentPid);
+      }
+      break;
+    }
+    pids.add(parentPid);
+    seen.add(parentPid);
+    pid = parentPid;
+    current = parent;
+  }
+  return { pids, complete: false };
+}
+
 /** Protect the caller and every known ancestor, including an unreadable parent, from cleanup. */
 export function inspectSelfAndAncestorPidsSync(
   _spawnTimeoutMs = PROCESS_INSPECTION_TIMEOUT_MS,
@@ -156,7 +190,8 @@ export function inspectSelfAndAncestorPidsSync(
     }
     return { pids, complete: ancestry.complete };
   } catch {
-    return { pids, complete: false };
+    // Older glibc hosts can read the same kernel identities without loading proc-safe.
+    return inspectProcfsAncestors(pids, options);
   }
 }
 
@@ -566,7 +601,8 @@ export function cleanStaleGatewayProcessesSync(
     // Even an already-exited PID can leave its socket bound briefly; always join port release.
     waitForPortFreeSync(port);
     return killed;
-  } catch {
+  } catch (error) {
+    restartLog.warn(`stale gateway process cleanup failed: ${formatRawErrorMessage(error)}`);
     return [];
   }
 }

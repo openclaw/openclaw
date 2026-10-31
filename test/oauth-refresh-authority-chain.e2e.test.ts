@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +18,7 @@ import {
 } from "../src/agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore, OAuthCredential } from "../src/agents/auth-profiles/types.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { createDeferredCore } from "../src/shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
@@ -115,14 +116,7 @@ function oauthCredential(params: {
   refresh: string;
   expires: number;
 }): OAuthCredential {
-  return {
-    type: "oauth",
-    provider: PROVIDER_ID,
-    accountId: params.accountId,
-    access: params.access,
-    refresh: params.refresh,
-    expires: params.expires,
-  };
+  return { type: "oauth", provider: PROVIDER_ID, ...params };
 }
 
 function authStore(credential?: OAuthCredential): AuthProfileStore {
@@ -172,15 +166,14 @@ function requestMarker(body: Record<string, unknown>): string {
   return REQUEST_MARKERS.find((marker) => serialized.includes(marker)) ?? "unknown";
 }
 
+function sendJson(response: ServerResponse, body: unknown, status = 200) {
+  response.writeHead(status, { "content-type": "application/json" });
+  response.end(JSON.stringify(body));
+}
+
 async function startControlledProvider(): Promise<ControlledProvider> {
-  let releaseRefresh: (() => void) | undefined;
-  let markRefreshStarted: (() => void) | undefined;
-  const refreshGate = new Promise<void>((resolve) => {
-    releaseRefresh = resolve;
-  });
-  const refreshStarted = new Promise<void>((resolve) => {
-    markRefreshStarted = resolve;
-  });
+  const refreshGate = createDeferredCore();
+  const refreshStarted = createDeferredCore();
   const tokenRequests: TokenClass[] = [];
   const modelRequests: ProviderRequest[] = [];
   let modelResponseIndex = 0;
@@ -190,33 +183,26 @@ async function startControlledProvider(): Promise<ControlledProvider> {
       if (request.method === "POST" && request.url === "/oauth/token") {
         const body = await readJsonBody(request);
         tokenRequests.push(classifyRefresh(body.refresh));
-        markRefreshStarted?.();
-        await refreshGate;
+        refreshStarted.resolve();
+        await refreshGate.promise;
         if (body.refresh !== REFRESH_A) {
-          response.writeHead(400, { "content-type": "application/json" });
-          response.end(JSON.stringify({ error: "invalid_refresh_generation" }));
+          sendJson(response, { error: "invalid_refresh_generation" }, 400);
           return;
         }
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({
-            access: ACCESS_A_ROTATED,
-            refresh: REFRESH_A_ROTATED,
-            expires: Date.now() + 60 * 60 * 1000,
-          }),
-        );
+        sendJson(response, {
+          access: ACCESS_A_ROTATED,
+          refresh: REFRESH_A_ROTATED,
+          expires: Date.now() + 60 * 60 * 1000,
+        });
         return;
       }
       if (request.method === "GET" && request.url === "/v1/models") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({
-            data: [
-              { id: OWNER_MODEL_ID, object: "model" },
-              { id: PEER_MODEL_ID, object: "model" },
-            ],
-          }),
-        );
+        sendJson(response, {
+          data: [
+            { id: OWNER_MODEL_ID, object: "model" },
+            { id: PEER_MODEL_ID, object: "model" },
+          ],
+        });
         return;
       }
       if (request.method === "POST" && request.url === "/v1/responses") {
@@ -251,15 +237,15 @@ async function startControlledProvider(): Promise<ControlledProvider> {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     modelRequests,
-    refreshStarted,
-    releaseRefresh: () => releaseRefresh?.(),
+    refreshStarted: refreshStarted.promise,
+    releaseRefresh: refreshGate.resolve,
     tokenRequests,
     stop: async () => {
       if (stopped) {
         return;
       }
       stopped = true;
-      releaseRefresh?.();
+      refreshGate.resolve();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
         server.closeAllConnections();
@@ -356,28 +342,16 @@ function createConfig(pluginDir: string, providerBaseUrl: string) {
           api: "openai-responses",
           auth: "oauth",
           request: { allowPrivateNetwork: true },
-          models: [
-            {
-              id: OWNER_MODEL_ID,
-              name: OWNER_MODEL_ID,
-              api: "openai-responses",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 16_000,
-              maxTokens: 2_048,
-            },
-            {
-              id: PEER_MODEL_ID,
-              name: PEER_MODEL_ID,
-              api: "openai-responses",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 16_000,
-              maxTokens: 2_048,
-            },
-          ],
+          models: [OWNER_MODEL_ID, PEER_MODEL_ID].map((id) => ({
+            id,
+            name: id,
+            api: "openai-responses",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 16_000,
+            maxTokens: 2_048,
+          })),
         },
       },
     },
@@ -418,17 +392,17 @@ function writeSharedStore(instance: OpenClawTestInstance, store: AuthProfileStor
   );
 }
 
-async function seedScenario(params: {
-  instance: OpenClawTestInstance;
-  shared?: OAuthCredential;
-  owner: OAuthCredential;
-  peer: OAuthCredential;
-}): Promise<void> {
-  writeSharedStore(params.instance, authStore(params.shared));
-  await params.instance.state.writeAuthProfiles(authStore(params.owner), "owner");
-  await params.instance.state.writeAuthProfiles(authStore(params.peer), "peer");
-  closeOpenClawAgentDatabasesForTest(params.instance.stateDir);
+async function startScenario(name: string, shared?: OAuthCredential | "same-account") {
+  const scenario = await createScenario(name);
+  const { instance } = scenario;
+  const expiredA = expiredAccountA();
+  writeSharedStore(instance, authStore(shared === "same-account" ? expiredA : shared));
+  await instance.state.writeAuthProfiles(authStore(expiredA), "owner");
+  await instance.state.writeAuthProfiles(authStore(expiredA), "peer");
+  closeOpenClawAgentDatabasesForTest(instance.stateDir);
   closeOpenClawStateDatabaseForTest();
+  await instance.startGateway();
+  return { ...scenario, client: await connect(instance) };
 }
 
 function readLocalCredential(
@@ -482,25 +456,25 @@ async function connect(instance: OpenClawTestInstance) {
   return client;
 }
 
-async function startTurn(params: {
-  client: Awaited<ReturnType<typeof connectGatewayClient>>;
-  agentId: "owner" | "peer";
-  marker: string;
-  runId: string;
-}): Promise<TurnHandle> {
-  const sessionKey = `agent:${params.agentId}:authority-proof:${params.runId}`;
-  const started = await params.client.request<AgentResult>("agent", {
+async function startTurn(
+  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  agentId: "owner" | "peer",
+  marker: string,
+): Promise<TurnHandle> {
+  const requestedRunId = marker.toLowerCase();
+  const sessionKey = `agent:${agentId}:authority-proof:${requestedRunId}`;
+  const started = await client.request<AgentResult>("agent", {
     sessionKey,
-    message: `Reply exactly ${params.marker}.`,
+    message: `Reply exactly ${marker}.`,
     deliver: false,
-    idempotencyKey: params.runId,
+    idempotencyKey: requestedRunId,
   });
-  const runId = started.runId ?? params.runId;
+  const runId = started.runId ?? requestedRunId;
   if (started.status === "ok") {
     return { runId, sessionKey, terminal: Promise.resolve(started) };
   }
   expect(started).toMatchObject({ status: "accepted", runId });
-  const terminal = params.client.request<AgentResult>(
+  const terminal = client.request<AgentResult>(
     "agent.wait",
     { runId, timeoutMs: REQUEST_TIMEOUT_MS },
     { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
@@ -509,55 +483,43 @@ async function startTurn(params: {
   return { runId, sessionKey, terminal };
 }
 
-async function executionPhaseBaseline(
+async function startPendingPeer(
+  scenario: Scenario,
   client: Awaited<ReturnType<typeof connectGatewayClient>>,
-): Promise<number> {
-  const snapshot = await client.request<{ lastSeq?: number }>("diagnostics.stability", {
+  marker: string,
+) {
+  await scenario.provider.refreshStarted;
+  const baseline = await client.request<{ lastSeq?: number }>("diagnostics.stability", {
     type: "run.execution_phase",
     limit: 1,
   });
-  return snapshot.lastSeq ?? 0;
-}
-
-async function waitForExecutionPhaseSince(params: {
-  client: Awaited<ReturnType<typeof connectGatewayClient>>;
-  sinceSeq: number;
-  model: string;
-  phase: string;
-}): Promise<void> {
+  const peer = await startTurn(client, "peer", marker);
   await vi.waitFor(
     async () => {
-      const snapshot = await params.client.request<{
+      const snapshot = await client.request<{
         events?: Array<{ model?: string; phase?: string }>;
       }>("diagnostics.stability", {
         type: "run.execution_phase",
-        sinceSeq: params.sinceSeq,
+        sinceSeq: baseline.lastSeq ?? 0,
         limit: 200,
       });
       expect(snapshot.events).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ model: params.model, phase: params.phase }),
+          expect.objectContaining({ model: PEER_MODEL_ID, phase: "model_resolution" }),
         ]),
       );
     },
     { interval: 20, timeout: REQUEST_TIMEOUT_MS },
   );
-}
-
-async function expectTurnPending(params: {
-  client: Awaited<ReturnType<typeof connectGatewayClient>>;
-  turn: TurnHandle;
-}): Promise<void> {
-  const result = await params.client.request<AgentResult>(
+  const result = await client.request<AgentResult>(
     "agent.wait",
-    { runId: params.turn.runId, timeoutMs: 0 },
+    { runId: peer.runId, timeoutMs: 0 },
     { timeoutMs: REQUEST_TIMEOUT_MS },
   );
-  expect(result).toEqual({ runId: params.turn.runId, status: "timeout" });
-}
-
-function emitEvidence(scenario: string, evidence: Record<string, unknown>): void {
-  console.log(`[oauth-refresh-authority-chain] ${JSON.stringify({ scenario, ...evidence })}`);
+  expect(result).toEqual({ runId: peer.runId, status: "timeout" });
+  expect(scenario.provider.tokenRequests).toEqual(["A"]);
+  expect(scenario.provider.modelRequests).toHaveLength(0);
+  return peer;
 }
 
 describe("OAuth refresh authority chain", () => {
@@ -565,45 +527,15 @@ describe("OAuth refresh authority chain", () => {
     "makes a pending peer wait and inherit only the same-account shared rotation",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const scenario = await createScenario("oauth-authority-same-account");
-      const expiredA = expiredAccountA();
-      await seedScenario({
-        instance: scenario.instance,
-        shared: expiredA,
-        owner: expiredA,
-        peer: expiredA,
-      });
-      await scenario.instance.startGateway();
-      let client = await connect(scenario.instance);
-
-      const owner = await startTurn({
-        client,
-        agentId: "owner",
-        marker: SAME_OWNER_MARKER,
-        runId: "authority-same-owner",
-      });
-      await scenario.provider.refreshStarted;
-
-      const peerPhaseBaseline = await executionPhaseBaseline(client);
-      const peer = await startTurn({
-        client,
-        agentId: "peer",
-        marker: SAME_PEER_MARKER,
-        runId: "authority-same-peer",
-      });
-      await waitForExecutionPhaseSince({
-        client,
-        sinceSeq: peerPhaseBaseline,
-        model: PEER_MODEL_ID,
-        phase: "model_resolution",
-      });
-      await expectTurnPending({ client, turn: peer });
-      expect(scenario.provider.tokenRequests).toEqual(["A"]);
-      expect(scenario.provider.modelRequests).toHaveLength(0);
+      const scenario = await startScenario("oauth-authority-same-account", "same-account");
+      let { client } = scenario;
+      const owner = await startTurn(client, "owner", SAME_OWNER_MARKER);
+      const peer = await startPendingPeer(scenario, client, SAME_PEER_MARKER);
 
       scenario.provider.releaseRefresh();
-      await expect(owner.terminal).resolves.toMatchObject({ status: "ok" });
-      await expect(peer.terminal).resolves.toMatchObject({ status: "ok" });
+      const [ownerTerminal, peerTerminal] = await Promise.all([owner.terminal, peer.terminal]);
+      expect(ownerTerminal.status, JSON.stringify(ownerTerminal)).toBe("ok");
+      expect(peerTerminal.status, JSON.stringify(peerTerminal)).toBe("ok");
       await vi.waitFor(() => expect(scenario.provider.modelRequests).toHaveLength(2), {
         interval: 20,
         timeout: REQUEST_TIMEOUT_MS,
@@ -632,12 +564,7 @@ describe("OAuth refresh authority chain", () => {
       await scenario.instance.startGateway();
       client = await connect(scenario.instance);
       const restartRequestOffset = scenario.provider.modelRequests.length;
-      const restarted = await startTurn({
-        client,
-        agentId: "peer",
-        marker: SAME_RESTART_MARKER,
-        runId: "authority-same-restart",
-      });
+      const restarted = await startTurn(client, "peer", SAME_RESTART_MARKER);
       await expect(restarted.terminal).resolves.toMatchObject({ status: "ok" });
       expect(scenario.provider.modelRequests.slice(restartRequestOffset)).toEqual([
         {
@@ -647,15 +574,6 @@ describe("OAuth refresh authority chain", () => {
         },
       ]);
       expect(scenario.provider.tokenRequests).toEqual(["A"]);
-
-      emitEvidence("same-account", {
-        refreshRequests: scenario.provider.tokenRequests,
-        modelRequests: scenario.provider.modelRequests,
-        peerWaitedForSettlement: true,
-        peerInheritedSharedCredential: readLocalCredential(scenario.instance, "peer") === undefined,
-        sharedAccount: readSharedCredential(scenario.instance)?.accountId,
-        restartedGatewayUsedAccount: scenario.provider.modelRequests.at(-1)?.auth,
-      });
     },
   );
 
@@ -663,46 +581,16 @@ describe("OAuth refresh authority chain", () => {
     "terminally fences a peer when the authoritative shared account differs",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const scenario = await createScenario("oauth-authority-account-mismatch");
-      const expiredA = expiredAccountA();
       const usableB = oauthCredential({
         accountId: ACCOUNT_B,
         access: ACCESS_B,
         refresh: REFRESH_B,
         expires: Date.now() + 60 * 60 * 1000,
       });
-      await seedScenario({
-        instance: scenario.instance,
-        shared: usableB,
-        owner: expiredA,
-        peer: expiredA,
-      });
-      await scenario.instance.startGateway();
-      const client = await connect(scenario.instance);
-
-      const owner = await startTurn({
-        client,
-        agentId: "owner",
-        marker: MISMATCH_OWNER_MARKER,
-        runId: "authority-mismatch-owner",
-      });
-      await scenario.provider.refreshStarted;
-      const peerPhaseBaseline = await executionPhaseBaseline(client);
-      const peer = await startTurn({
-        client,
-        agentId: "peer",
-        marker: MISMATCH_PEER_MARKER,
-        runId: "authority-mismatch-peer",
-      });
-      await waitForExecutionPhaseSince({
-        client,
-        sinceSeq: peerPhaseBaseline,
-        model: PEER_MODEL_ID,
-        phase: "model_resolution",
-      });
-      await expectTurnPending({ client, turn: peer });
-      expect(scenario.provider.tokenRequests).toEqual(["A"]);
-      expect(scenario.provider.modelRequests).toHaveLength(0);
+      const scenario = await startScenario("oauth-authority-account-mismatch", usableB);
+      const { client } = scenario;
+      const owner = await startTurn(client, "owner", MISMATCH_OWNER_MARKER);
+      const peer = await startPendingPeer(scenario, client, MISMATCH_PEER_MARKER);
 
       scenario.provider.releaseRefresh();
       await expect(owner.terminal).resolves.toMatchObject({ status: "ok" });
@@ -728,15 +616,6 @@ describe("OAuth refresh authority chain", () => {
         access: ACCESS_B,
         refresh: REFRESH_B,
       });
-
-      emitEvidence("account-mismatch", {
-        refreshRequests: scenario.provider.tokenRequests,
-        modelRequests: scenario.provider.modelRequests,
-        ownerAccount: readLocalCredential(scenario.instance, "owner")?.accountId,
-        peerTerminalStatus: peerTerminal.status,
-        peerTerminalFence: true,
-        sharedAccount: readSharedCredential(scenario.instance)?.accountId,
-      });
     },
   );
 
@@ -744,22 +623,9 @@ describe("OAuth refresh authority chain", () => {
     "lets real logout revoke a held generation before stale refresh settlement",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const scenario = await createScenario("oauth-authority-logout");
-      const expiredA = expiredAccountA();
-      await seedScenario({
-        instance: scenario.instance,
-        owner: expiredA,
-        peer: expiredA,
-      });
-      await scenario.instance.startGateway();
-      const client = await connect(scenario.instance);
-
-      const owner = await startTurn({
-        client,
-        agentId: "owner",
-        marker: LOGOUT_OWNER_MARKER,
-        runId: "authority-logout-owner",
-      });
+      const scenario = await startScenario("oauth-authority-logout");
+      const { client } = scenario;
+      const owner = await startTurn(client, "owner", LOGOUT_OWNER_MARKER);
       await scenario.provider.refreshStarted;
 
       const logout = await scenario.instance.cli(
@@ -787,12 +653,7 @@ describe("OAuth refresh authority chain", () => {
         client.request("models.authRefresh", { agentId: "owner", operation: "logout" }),
       ).resolves.toEqual({ refreshed: true });
 
-      const followup = await startTurn({
-        client,
-        agentId: "owner",
-        marker: LOGOUT_FOLLOWUP_MARKER,
-        runId: "authority-logout-followup",
-      });
+      const followup = await startTurn(client, "owner", LOGOUT_FOLLOWUP_MARKER);
       const followupTerminal = await followup.terminal;
       expectAuthError(
         followupTerminal,
@@ -804,17 +665,6 @@ describe("OAuth refresh authority chain", () => {
       expect(scenario.provider.tokenRequests).toEqual(["A"]);
       expect(readLocalCredential(scenario.instance, "owner")).toBeUndefined();
       expect(readLocalCredential(scenario.instance, "peer")).toBeUndefined();
-
-      emitEvidence("logout-during-refresh", {
-        refreshRequests: scenario.provider.tokenRequests,
-        modelRequests: scenario.provider.modelRequests,
-        logoutCode: logout.code,
-        staleTurnStatus: staleTerminal.status,
-        followupStatus: followupTerminal.status,
-        ownerProfilePresent: readLocalCredential(scenario.instance, "owner") !== undefined,
-        peerProfilePresent: readLocalCredential(scenario.instance, "peer") !== undefined,
-        sharedProfilePresent: readSharedCredential(scenario.instance) !== undefined,
-      });
     },
   );
 });

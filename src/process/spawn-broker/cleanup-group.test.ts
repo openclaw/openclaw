@@ -1,7 +1,13 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../supervisor/cancellation-policy.js";
 import { drainCurrentBrokerProcessGroup, terminateLostBrokerChild } from "./cleanup.js";
 
-const boundary = vi.hoisted(() => ({ census: vi.fn(), identity: vi.fn(), dead: vi.fn() }));
+const boundary = vi.hoisted(() => ({
+  census: vi.fn(),
+  identity: vi.fn(),
+  dead: vi.fn(),
+  delay: vi.fn(),
+}));
 vi.mock("../supervisor/service-child-group-ownership.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../supervisor/service-child-group-ownership.js")>()),
   readProcessGroupMembers: boundary.census,
@@ -11,8 +17,12 @@ vi.mock("../../shared/pid-alive.js", async (importOriginal) => ({
   getProcessInstanceStartTime: boundary.identity,
   isPidDefinitelyDead: boundary.dead,
 }));
-vi.mock("node:timers/promises", () => ({ setTimeout: async () => {} }));
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: boundary.delay,
+}));
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.resetAllMocks();
 });
@@ -80,5 +90,36 @@ it.each(["gone", "reused", "unavailable"] as const)(
     }
     cleanup.force();
     expect(kill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([]);
+  },
+);
+
+it.skipIf(process.platform === "win32").each([-60_000, 60_000])(
+  "preserves the cleanup grace period after a %i ms wall-clock step",
+  async (step) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    boundary.delay.mockImplementation(
+      (ms: number) =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, ms);
+        }),
+    );
+    const owner = { pid: process.pid, pgid: process.pid, state: "S" };
+    const child = { pid: 123456789, pgid: process.pid, state: "S" };
+    boundary.census.mockReturnValue([owner, child]);
+    boundary.identity.mockReturnValue(7);
+    boundary.dead.mockReturnValue(false);
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    const settled = drainCurrentBrokerProcessGroup();
+    try {
+      vi.setSystemTime(Date.now() + step);
+      await vi.advanceTimersByTimeAsync(GRACEFUL_CANCEL_TIMEOUT_MS - 1);
+      expect(kill).toHaveBeenCalledExactlyOnceWith(child.pid, "SIGTERM");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(kill).toHaveBeenCalledWith(child.pid, "SIGKILL");
+    } finally {
+      boundary.census.mockReturnValue([owner]);
+      await vi.advanceTimersByTimeAsync(50);
+      await settled;
+    }
   },
 );

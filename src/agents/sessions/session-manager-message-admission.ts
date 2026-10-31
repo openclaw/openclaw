@@ -11,8 +11,14 @@ import type { SqliteWorkerAdmissionRequest } from "../../infra/sqlite-worker-ope
 export function captureSessionMessageAdmission(
   assertCurrent: () => void,
   controls?: { beforeFreshMessageCommit?: () => void },
+  message?: { role: string; idempotencyKey?: unknown } | null,
 ) {
-  const pendingInput = captureSessionPendingInputWorkerCustody();
+  // Unknown multi-command/rewrite scopes retain custody; individual appends only promote keyed users.
+  const pendingInput =
+    message === undefined ||
+    (message?.role === "user" && typeof message.idempotencyKey === "string")
+      ? captureSessionPendingInputWorkerCustody()
+      : undefined;
   const control: SessionMetadataMessageControl = {
     ...(pendingInput
       ? { pendingInput: { facts: pendingInput.facts, relocation: pendingInput.relocation } }

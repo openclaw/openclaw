@@ -299,7 +299,6 @@ function createLoadedThreadBindingManager(
     getIdleTimeoutMs: () => idleTimeoutMs,
     getMaxAgeMs: () => maxAgeMs,
     getByThreadId: (threadId) => getBinding(threadId)?.record,
-    getBySessionKey: (targetSessionKey) => manager.listBySessionKey(targetSessionKey)[0],
     listBySessionKey: (targetSessionKey) =>
       resolveBindingIdsForSession({
         targetSessionKey,
@@ -594,7 +593,7 @@ function createLoadedThreadBindingManager(
     // Keep the production process free to exit, but avoid breaking fake-timer
     // sweeper tests where unref'd intervals may never fire.
     if (shouldDefaultPersist()) {
-      sweepTimer.unref?.();
+      sweepTimer.unref();
     }
   }
 

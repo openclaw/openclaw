@@ -12,6 +12,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { normalizeEnv } from "../infra/env.js";
+import {
+  withGatewayServiceInstallation,
+  type GatewayServiceInstallationContext,
+} from "../infra/gateway-service-installation-context.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
 import { getPluginCache } from "../plugins/plugin-cache.js";
@@ -34,7 +38,7 @@ import { tryRunGatewayServiceUpdateCapabilityProbe } from "./daemon-cli/update-c
 import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
 import {
   isGatewayRunInvocationArgv,
-  resolveGatewayCatalogCommandPath,
+  resolveGatewayCommandPath,
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import {
@@ -43,7 +47,6 @@ import {
   withConsoleLogsRoutedToStderr,
   withConsoleLogsRoutedToStderrForJson,
 } from "./json-output-mode.js";
-import { isMachineOutputStdoutTTY } from "./machine-output-argv.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
@@ -57,7 +60,6 @@ import {
 import { withCliPluginInvocation } from "./run-main-plugin-cache.js";
 import {
   isAgentExecInvocation,
-  isDebugProxyCaptureEnvEnabled,
   isGatewayRunFastPathArgv,
   isRemoteAgentDispatchInvocation,
   resolveBareRootLaunchPolicy,
@@ -71,6 +73,10 @@ import {
   shouldUseSetupOnboardConfigureHelpFastPath,
   TUI_REQUIRES_TTY,
 } from "./run-main-policy.js";
+import {
+  bootstrapCliProxyCaptureAndDispatcher,
+  ensureCliEnvProxyDispatcher,
+} from "./run-main-proxy.js";
 import { tryRunUpdateAdmissionBeforeStartup } from "./run-main-update-admission.js";
 import type {
   BareRootLaunchTarget,
@@ -123,7 +129,7 @@ async function tryRunGatewayRunFastPath(
       import("../runtime.js"),
     ]),
   );
-  const commandPath = resolveGatewayCatalogCommandPath(argv) ?? ["gateway"];
+  const commandPath = resolveGatewayCommandPath(argv) ?? ["gateway"];
   const startupPolicy = resolveCliStartupPolicyForArgv({
     argv,
     commandPath,
@@ -171,6 +177,9 @@ async function tryRunGatewayRunFastPath(
 }
 
 async function resolveBareRootLaunchTarget(): Promise<BareRootLaunchTarget> {
+  const { readConfigSnapshotForEngineSelection } =
+    await import("../commands/config-preflight-snapshot.js");
+  await readConfigSnapshotForEngineSelection();
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
   if (await shouldStartLocalOnboarding(snapshot)) {
@@ -254,14 +263,14 @@ async function resolveReachableGateway(
         ? { preauthHandshakeTimeoutMs: target.preauthHandshakeTimeoutMs }
         : {}),
     });
-    if (probe.kind === "configured") {
+    if (probe === "configured") {
       return { kind: "configured", gateway };
     }
-    if (probe.kind === "missing-configured-model") {
+    if (probe === "missing-configured-model") {
       missingModelGateway ??= gateway;
       continue;
     }
-    if (probe.kind === "reachable-unverified" && !reachableUnverifiedGateway) {
+    if (probe === "reachable-unverified" && !reachableUnverifiedGateway) {
       reachableUnverifiedGateway = gateway;
     }
   }
@@ -429,20 +438,6 @@ function isCommanderParseExit(error: unknown): error is { exitCode: number } {
   );
 }
 
-async function ensureCliEnvProxyDispatcher(): Promise<void> {
-  try {
-    const { hasEnvHttpProxyAgentConfigured } = await import("../infra/net/proxy-env.js");
-    if (!hasEnvHttpProxyAgentConfigured()) {
-      return;
-    }
-    const { ensureGlobalUndiciEnvProxyDispatcher } =
-      await import("../infra/net/undici-global-dispatcher.js");
-    ensureGlobalUndiciEnvProxyDispatcher();
-  } catch {
-    // Best-effort proxy bootstrap; CLI startup should continue without it.
-  }
-}
-
 function findBuiltInCommandDescriptor(primary: string) {
   return [...getCoreCliCommandDescriptors(), ...getSubCliEntriesCore()].find(
     (entry) => entry.name === primary,
@@ -455,7 +450,7 @@ function resolvesMachineOutput(
   },
   argv: readonly string[],
 ): boolean {
-  return descriptor.machineOutput?.({ argv, stdoutIsTTY: isMachineOutputStdoutTTY() }) ?? false;
+  return descriptor.machineOutput?.({ argv, stdoutIsTTY: process.stdout.isTTY || false }) ?? false;
 }
 
 function resolveBuiltInMachineOutput({
@@ -528,7 +523,6 @@ async function resolveCliCommandSurfaceOwner(params: {
   const manifestOwner = resolveManifestCliCommandSurfaceOwner({
     command: params.primary,
     config: params.config,
-    env: process.env,
   });
   if (manifestOwner) {
     return manifestOwner;
@@ -616,29 +610,6 @@ async function resolveExpectedPluginPolicyError(params: {
   return new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
 
-async function bootstrapCliProxyCaptureAndDispatcher(
-  startupTrace: ReturnType<typeof createGatewayDispatchStartupTrace>,
-  ensureDispatcher: boolean,
-): Promise<void> {
-  // Capture init and coverage warnings no-op unless the
-  // debug-proxy env requests capture; importing their sqlite-store graph anyway
-  // costs ~100 MB RSS on metadata-only commands such as `plugins list --json`.
-  if (isDebugProxyCaptureEnvEnabled()) {
-    const [{ initializeDebugProxyCaptureAsync }, { maybeWarnAboutDebugProxyCoverage }] =
-      await startupTrace.measure("proxy-imports", () =>
-        Promise.all([
-          import("../proxy-capture/runtime.js"),
-          import("../proxy-capture/coverage.js"),
-        ]),
-      );
-    await initializeDebugProxyCaptureAsync("cli");
-    maybeWarnAboutDebugProxyCoverage(undefined, (message) => console.warn(message));
-  }
-  if (ensureDispatcher) {
-    await startupTrace.measure("proxy-dispatcher", () => ensureCliEnvProxyDispatcher());
-  }
-}
-
 export async function runCli(
   argv: string[] = process.argv,
   options: {
@@ -659,18 +630,22 @@ export async function runCli(
       originalArgv,
       () => {
         const run = async (harnessCleanup?: CliHarnessCleanup) => {
+          const serviceInstallation: GatewayServiceInstallationContext = {};
           let gatewayCleanup: "drained" | "retained" | undefined;
           try {
             const invokeCommand = () =>
-              runCliWithPreparedOutputMode(originalArgv, {
-                ...options,
-                runtimeRecoveryEnv,
-                builtInMachineOutput,
-                harnessCleanup,
-                onGatewayResourcesSettled: (outcome) => {
-                  gatewayCleanup = outcome;
-                },
-              });
+              withGatewayServiceInstallation(serviceInstallation, () =>
+                runCliWithPreparedOutputMode(originalArgv, {
+                  ...options,
+                  runtimeRecoveryEnv,
+                  builtInMachineOutput,
+                  harnessCleanup,
+                  serviceInstallation,
+                  onGatewayResourcesSettled: (outcome) => {
+                    gatewayCleanup = outcome;
+                  },
+                }),
+              );
             const resources = harnessCleanup?.pluginResources;
             return await (resources ? resources.run(invokeCommand) : invokeCommand());
           } catch (error) {
@@ -726,6 +701,7 @@ async function runCliWithPreparedOutputMode(
     harnessCleanup?: CliHarnessCleanup;
     onGatewayResourcesSettled: (outcome: "drained" | "retained") => void;
     runtimeRecoveryEnv: NodeJS.ProcessEnv;
+    serviceInstallation: GatewayServiceInstallationContext;
   },
 ) {
   const startupTrace = createGatewayDispatchStartupTrace(originalArgv, "cli.main");
@@ -831,8 +807,8 @@ async function runCliWithPreparedOutputMode(
           normalizedInvocation.commandPath[1] === "worker")))
   ) {
     // Gateway config selection and CLI bootstrap can create SQLite workers before the action.
-    const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
-    await initializeSqliteRuntimeCapabilities();
+    const { initializeSqliteRuntime } = await import("../infra/sqlite-runtime-initialize.js");
+    await initializeSqliteRuntime();
   }
 
   if (
@@ -844,12 +820,26 @@ async function runCliWithPreparedOutputMode(
     await startupTrace.measure("dotenv", async () => {
       if (isRemoteAgentDispatchInvocation(normalizedArgv, normalizedInvocation.primary)) {
         const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
-        await loadGatewayDispatchCliDotEnv({ quiet: true });
+        await loadGatewayDispatchCliDotEnv();
       } else {
         const { loadCliDotEnv } = await import("./dotenv.js");
-        loadCliDotEnv({ loadGlobalEnv, quiet: true });
+        loadCliDotEnv({ loadGlobalEnv });
       }
     });
+  }
+  if (!isHelpOrVersionInvocation) {
+    const { inspectCliGatewayServiceInstallation } =
+      await import("./run-main-service-installation.js");
+    options.serviceInstallation.installation = await inspectCliGatewayServiceInstallation(
+      process.env,
+    );
+  }
+  const { prepareCliDatabaseEngine } = await import("./database-engine-selection.js");
+  const selectionHandled = await startupTrace.measure("database-engine-selection", () =>
+    prepareCliDatabaseEngine(normalizedArgv),
+  );
+  if (selectionHandled) {
+    return;
   }
   let doctorDatabasePreflight: DoctorDatabasePreflight | undefined;
   if (!isHelpOrVersionInvocation && normalizedInvocation.primary === "doctor") {
@@ -865,10 +855,10 @@ async function runCliWithPreparedOutputMode(
   await configureStartupTraces();
   if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
     await startupTrace.measure("gateway-run-select-environment", async () => {
-      const [{ selectGatewayRunEnvironment }, { defaultRuntime }] = await Promise.all([
-        import("./gateway-cli/pre-bootstrap.js"),
-        import("../runtime.js"),
-      ]);
+      const [{ selectGatewayRunEnvironment }, { defaultRuntime }] = await startupTrace.measure(
+        "gateway-run-select-environment-imports",
+        () => Promise.all([import("./gateway-cli/pre-bootstrap.js"), import("../runtime.js")]),
+      );
       const opts = resolveGatewayRunPreBootstrapOptions(normalizedArgv) ?? {};
       await selectGatewayRunEnvironment({ opts, runtime: defaultRuntime });
     });
@@ -978,10 +968,9 @@ async function runCliWithPreparedOutputMode(
       return;
     }
     unregisterProxySignalExitBarrier = registerSignalExitBarrier(stopStartedProxy);
-    const shutdown = (exitCode: number) => exitAfterSignalExitBarriers(exitCode);
     proxySignalHandlers = [
-      ["SIGTERM", () => shutdown(143)],
-      ["SIGINT", () => shutdown(130)],
+      ["SIGTERM", () => exitAfterSignalExitBarriers(143, "SIGTERM")],
+      ["SIGINT", () => exitAfterSignalExitBarriers(130, "SIGINT")],
       ["exit", killStartedProxy],
     ];
     for (const [signal, handler] of proxySignalHandlers) {
@@ -1212,23 +1201,13 @@ async function runCliWithPreparedOutputMode(
     try {
       const [
         { buildProgram },
-        { formatUncaughtError },
-        { formatCliFailureLines, formatCliJsonFailure },
-        { runFatalErrorHooks },
-        {
-          installUnhandledRejectionHandler,
-          isBenignUncaughtExceptionError,
-          isUncaughtExceptionHandled,
-        },
-        { defaultRuntime, restoreRuntimeTerminalState },
+        { handleCliUncaughtException },
+        { installUnhandledRejectionHandler },
       ] = await startupTrace.measure("core-imports", () =>
         Promise.all([
           import("./program/build-program.js"),
-          import("../infra/errors.js"),
           import("./failure-output.js"),
-          import("../infra/fatal-error-hooks.js"),
           import("../infra/unhandled-rejections.js"),
-          import("../runtime.js"),
         ]),
       );
       const program = await startupTrace.measure("build-program", () =>
@@ -1241,31 +1220,7 @@ async function runCliWithPreparedOutputMode(
       }
 
       process.on("uncaughtException", (error) => {
-        if (isUncaughtExceptionHandled(error)) {
-          return;
-        }
-        if (isBenignUncaughtExceptionError(error)) {
-          console.warn(
-            "[openclaw] Non-fatal uncaught exception (continuing):",
-            formatUncaughtError(error),
-          );
-          return;
-        }
-        if (isJsonOutputModeActive(normalizedArgv)) {
-          defaultRuntime.writeJson(formatCliJsonFailure(error));
-        }
-        for (const line of formatCliFailureLines({
-          title: "OpenClaw hit an unexpected runtime error.",
-          error,
-          argv: normalizedArgv,
-        })) {
-          console.error(line);
-        }
-        for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
-          console.error("[openclaw]", message);
-        }
-        restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
-        exitAfterSignalExitBarriers(1, "uncaught exception");
+        handleCliUncaughtException(error, normalizedArgv);
       });
 
       const invocation = resolveCliArgvInvocation(parseArgv);

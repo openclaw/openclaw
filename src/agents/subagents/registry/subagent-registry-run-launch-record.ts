@@ -9,25 +9,27 @@ export function createFailedQueuedRun(
   endedAt?: number,
   ownedSession = true,
 ): SubagentRunRecord {
-  const entry = structuredClone(current);
   const finishedAt = endedAt ?? Date.now();
-  entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
-  entry.execution = {
-    ...entry.execution,
-    status: "terminal",
-    endedAt: finishedAt,
-    outcome: { status: "error", error, endedAt: finishedAt },
-    ...(!ownedSession ? { suppressSessionEffects: true } : {}),
+  return {
+    ...current,
+    endedReason: SUBAGENT_ENDED_REASON_ERROR,
+    execution: {
+      ...current.execution,
+      status: "terminal",
+      endedAt: finishedAt,
+      outcome: { status: "error", error, endedAt: finishedAt },
+      ...(!ownedSession ? { suppressSessionEffects: true } : {}),
+    },
+    collectorLaunchCleanupPending: true,
+    completion: { required: false, resultText: error, capturedAt: finishedAt },
   };
-  entry.queuedLaunch = undefined;
-  entry.collectorLaunchCleanupPending = true;
-  entry.completion = { required: false, resultText: error, capturedAt: finishedAt };
-  return entry;
 }
 
 export type RegisterSubagentRunParams = {
   runId: string;
   requesterTurnRunId?: string;
+  nativePluginOwner?: SubagentRunRecord["nativePluginOwner"];
+  subagentProfile?: SubagentRunRecord["subagentProfile"];
   childSessionKey: string;
   childAgentId: string;
   sessionEntry?: SubagentRunRecord["childSessionIdentity"];
@@ -59,7 +61,6 @@ export type RegisterSubagentRunParams = {
   swarmLaunchRequestFingerprint?: string;
   groupId?: string;
   outputSchema?: Record<string, unknown>;
-  queuedLaunch?: SubagentRunRecord["queuedLaunch"];
   queued?: boolean;
   gatewayContextResolver?: GatewayContextResolver;
 };
@@ -86,6 +87,12 @@ export function createSubagentRegistrationRecord(
     runId,
     taskRunId: runId,
     ...(requesterTurnRunId ? { requesterTurnRunId } : {}),
+    ...(registerParams.nativePluginOwner
+      ? { nativePluginOwner: { ...registerParams.nativePluginOwner } }
+      : {}),
+    ...(registerParams.subagentProfile
+      ? { subagentProfile: { ...registerParams.subagentProfile } }
+      : {}),
     childSessionKey: registerParams.childSessionKey.trim(),
     childAgentId: prepared.childAgentId,
     childSessionIdentity: registerParams.sessionEntry
@@ -124,7 +131,6 @@ export function createSubagentRegistrationRecord(
     swarmLaunchPending: registerParams.collect === true,
     groupId: registerParams.groupId,
     outputSchema: registerParams.outputSchema,
-    queuedLaunch: registerParams.queuedLaunch,
     generation,
     createdAt: now,
     execution: {

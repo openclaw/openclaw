@@ -9,6 +9,10 @@ import {
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  prepareTrajectoryPayload,
+  readTrajectoryPayload,
+} from "../../trajectory/runtime-payload.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import type {
   SqliteSessionGenerationClaim,
@@ -27,7 +31,11 @@ import {
   reconcileSessionTranscriptIndexInTransaction,
 } from "./session-transcript-index.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import { transcriptEventJsonSql, type TranscriptPayloadRecord } from "./transcript-payload.js";
+import {
+  readTranscriptStorageEncoding,
+  transcriptEventJsonSql,
+  type TranscriptPayloadRecord,
+} from "./transcript-payload.js";
 import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 
 export function readSqliteSessionGenerationWindows(
@@ -145,34 +153,46 @@ function readSqliteSessionGenerationFacts(
       }
     }
   };
+  const events = getSessionKysely(database.db)
+    .selectFrom("transcript_events")
+    .where("session_id", "=", window.session_id)
+    .orderBy("seq");
+  if (coldArchive) {
+    // The archive owns content identity; retained navigation is only a derived custody fact.
+    hashRows("events", iterateSqliteQuerySync(database.db, events.selectAll()));
+  } else {
+    hashRows(
+      "events",
+      iterateSqliteQuerySync(
+        database.db,
+        events
+          .select(["session_id", "seq"])
+          .select(transcriptEventJsonSql(database.db).as("event_json"))
+          .select("created_at"),
+      ),
+      (row) => ["event", row.seq, row.event_json],
+    );
+  }
   hashRows(
-    "events",
-    iterateSqliteQuerySync(
-      database.db,
-      getSessionKysely(database.db)
-        .selectFrom("transcript_events")
-        .select(["session_id", "seq"])
-        .select(transcriptEventJsonSql(database.db).as("event_json"))
-        .select("created_at")
-        .where("session_id", "=", window.session_id)
-        .orderBy("seq"),
-    ),
-    (row) => ["event", row.seq, row.event_json],
+    "identities",
+    rows.identities,
+    coldArchive
+      ? undefined
+      : (row) => [
+          "identity",
+          row.event_id,
+          row.event_type,
+          row.parent_id,
+          row.seq,
+          row.message_idempotency_key,
+        ],
   );
-  hashRows("identities", rows.identities, (row) => [
-    "identity",
-    row.event_id,
-    row.event_type,
-    row.parent_id,
-    row.seq,
-    row.message_idempotency_key,
-  ]);
   hashRows("rewriteWatermarks", rows.rewriteWatermarks, () => ["rewrite"]);
   hashRows("trajectoryEvents", rows.trajectoryEvents, (row) => [
     "trajectory",
     row.seq,
     row.run_id,
-    row.event_json,
+    readTrajectoryPayload(row),
   ]);
   hashRows("parentStreamEvents", rows.parentStreamEvents, (row) => [
     "parentStream",
@@ -300,7 +320,7 @@ export function copySqliteSessionGenerationRows(params: {
   // UTF-8 SQLite can preserve encoded payloads without another codec round trip.
   const destinationEncoding = isPostgresSqlConnection(params.destination.db)
     ? undefined
-    : params.destination.db.prepare("PRAGMA encoding").get()?.encoding;
+    : readTranscriptStorageEncoding(params.destination.db);
   if (destinationEncoding !== "UTF-8") {
     for (const row of iterateSqliteQuerySync(
       params.source.db,
@@ -346,7 +366,18 @@ export function copySqliteSessionGenerationRows(params: {
   for (const row of trajectoryEvents) {
     executeSqliteQuerySync(
       params.destination.db,
-      destinationDb.insertInto("trajectory_runtime_events").values(row),
+      destinationDb.insertInto("trajectory_runtime_events").values(
+        destinationEncoding === "UTF-8"
+          ? row
+          : {
+              ...row,
+              ...prepareTrajectoryPayload(
+                params.destination.db,
+                readTrajectoryPayload(row),
+                destinationEncoding ?? "UTF-8",
+              ),
+            },
+      ),
     );
   }
   for (const row of parentStreamEvents) {

@@ -36,6 +36,8 @@ final class DashboardManager {
     @ObservationIgnored let connectionProvider: @Sendable (DashboardGatewayTarget) async -> GatewayConnection
     @ObservationIgnored let browserIdentityURLProvider:
         @Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws -> URL?
+    @ObservationIgnored let controlUiBasePathProvider:
+        @Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws -> String?
     @ObservationIgnored let legacyCredentialsProvider:
         @Sendable (DashboardGatewayTarget, GatewayConnection.EndpointSnapshot) async throws
         -> DashboardNativeGatewayAuth.LegacyCredentials
@@ -73,6 +75,8 @@ final class DashboardManager {
         },
         browserIdentityURLProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws
             -> URL?)? = nil,
+        controlUiBasePathProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws
+            -> String?)? = nil,
         legacyCredentialsProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.EndpointSnapshot) async throws
             -> DashboardNativeGatewayAuth.LegacyCredentials)? = nil,
         routeProbe: @escaping @Sendable (DashboardRouteProbePurpose) async -> Void = { purpose in
@@ -104,6 +108,10 @@ final class DashboardManager {
         self.browserIdentityURLProvider = browserIdentityURLProvider ?? { target, config in
             let connection = await connectionProvider(target)
             return try await connection.controlUiBrowserIdentityURL(config: config)
+        }
+        self.controlUiBasePathProvider = controlUiBasePathProvider ?? { target, config in
+            let connection = await connectionProvider(target)
+            return try await connection.controlUiBasePath(config: config)
         }
         self.legacyCredentialsProvider = legacyCredentialsProvider ?? { target, endpoint in
             let connection = await connectionProvider(target)
@@ -418,10 +426,20 @@ final class DashboardManager {
         return controller.auth
     }
 
+    /// Reopen restores the last focused Dashboard window instead of raising the main window over it.
+    /// A closed main window is still reopened by an explicit presentation.
+    private var lastFocusedDashboardToReopen: DashboardWindowController? {
+        guard let previous = self.lastFrontmostWindow?.windowController as? DashboardWindowController
+        else { return nil }
+        if previous.isHiddenForExperience { return previous }
+        guard previous !== self.controller, previous.isWindowOpen, self.controller?.isWindowOpen == true
+        else { return nil }
+        return previous
+    }
+
     @discardableResult
     func showConfiguredWindowIfPossible() -> Bool {
-        if let previous = self.lastFrontmostWindow?.windowController as? DashboardWindowController,
-           previous.isHiddenForExperience { return false }
+        if self.lastFocusedDashboardToReopen != nil { return false }
         guard self.mainTarget == .primary, self.controller?.pendingGatewaySwitch == nil else { return false }
         // Remote dashboards must resolve the server's sign-in route before any
         // document receives native credentials, including the synchronous fast path.
@@ -1367,9 +1385,7 @@ extension DashboardManager {
 
     private func showResolvedDashboard(userGesture: Bool) async throws {
         try Task.checkCancellation()
-        if let previous = self.lastFrontmostWindow?.windowController as? DashboardWindowController,
-           previous.isHiddenForExperience, let target = self.target(for: previous)
-        {
+        if let previous = self.lastFocusedDashboardToReopen, let target = self.target(for: previous) {
             await self.openWindow(for: target, reuseExisting: true).value
             return
         }

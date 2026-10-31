@@ -259,7 +259,7 @@ it.each([
       expect(result).toMatchObject({
         status: "failed",
         code: "github_rejected",
-        nextAction: expect.stringContaining("Ask a maintainer"),
+        nextAction: expect.stringMatching(/OpenClaw.*not a GitHub token scope/),
       });
       expect(workspace.effects).toEqual([]);
       expect(await workspace.git("rev-parse", "HEAD")).toBe(head);

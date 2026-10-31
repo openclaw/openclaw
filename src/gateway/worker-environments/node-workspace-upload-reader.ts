@@ -4,7 +4,10 @@ import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { writeFileWindowFully } from "../../infra/file-descriptor.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
-import type { NodeWorkspaceTransferInvalidReason } from "../../worker/node-workspace-transfer-protocol.js";
+import {
+  MAX_WORKSPACE_RESULT_GIT_PACK_BYTES,
+  type NodeWorkspaceTransferInvalidReason,
+} from "../../worker/node-workspace-transfer-protocol.js";
 import { nodeWorkspaceTransferEntryPath } from "./node-workspace-transfer-snapshot.js";
 import {
   MAX_WORKSPACE_INVENTORY_ENTRIES,
@@ -18,12 +21,19 @@ import {
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 import { assertWorkspaceMatchesManifest } from "./workspace-reconcile.js";
+import {
+  WorkerWorkspaceGitHistorySchema,
+  type WorkerWorkspaceGitHistory,
+} from "./workspace-result-inventory.js";
 
 const MAX_UPLOAD_BYTES =
   MAX_WORKSPACE_MANIFEST_BYTES * 2 +
   MAX_RECONCILIATION_TOTAL_BYTES +
   MAX_WORKSPACE_INVENTORY_ENTRIES * 8 +
   8;
+const MAX_GIT_HISTORY_BYTES = 1024;
+const MAX_V2_UPLOAD_BYTES =
+  MAX_UPLOAD_BYTES + MAX_GIT_HISTORY_BYTES + 12 + MAX_WORKSPACE_RESULT_GIT_PACK_BYTES;
 export class NodeWorkspaceTransferLimitError extends Error {
   readonly code = "workspace-transfer-limit";
 }
@@ -50,11 +60,18 @@ class RequestByteReader {
   readonly #iterator: AsyncIterator<unknown>;
   readonly #signal: AbortSignal;
   readonly #assertCurrent: () => void;
+  readonly #maxBytes: number;
   #pending: Buffer = Buffer.alloc(0);
   #done = false;
   bytesRead = 0;
 
-  constructor(request: IncomingMessage, signal: AbortSignal, assertCurrent: () => void) {
+  constructor(
+    request: IncomingMessage,
+    signal: AbortSignal,
+    assertCurrent: () => void,
+    maxBytes: number,
+  ) {
+    this.#maxBytes = maxBytes;
     this.#iterator = request[Symbol.asyncIterator]();
     this.#signal = signal;
     this.#assertCurrent = assertCurrent;
@@ -89,7 +106,7 @@ class RequestByteReader {
     this.#pending =
       count === this.#pending.length ? Buffer.alloc(0) : this.#pending.subarray(count);
     this.bytesRead += value.byteLength;
-    if (this.bytesRead > MAX_UPLOAD_BYTES) {
+    if (this.bytesRead > this.#maxBytes) {
       throw new NodeWorkspaceTransferLimitError("Workspace transfer upload exceeds its byte limit");
     }
     return value;
@@ -168,30 +185,63 @@ export type NodeWorkspaceTransferUpload = {
   currentManifestRef: string;
   currentRaw: string;
   stagingRoot: string;
+  gitHistory?: WorkerWorkspaceGitHistory;
+  gitPackPath?: string;
 };
+
+/** The upload owns both the manifest tree and its optional sibling Git pack. */
+export async function removeNodeWorkspaceUpload(
+  upload: Pick<NodeWorkspaceTransferUpload, "stagingRoot" | "gitPackPath">,
+): Promise<void> {
+  try {
+    await fsp.rm(upload.stagingRoot, { recursive: true, force: true });
+  } finally {
+    if (upload.gitPackPath) {
+      await fsp.rm(upload.gitPackPath, { force: true });
+    }
+  }
+}
 
 /** Stages one bounded upload before its context owner publishes the authenticated result. */
 export async function readNodeWorkspaceUpload(params: {
   request: IncomingMessage;
   baseManifestRef: string;
+  resultVersion?: 2;
   temporaryRoot: string;
   signal: AbortSignal;
   assertCurrent: () => void;
   isAuthorized: () => boolean;
 }): Promise<NodeWorkspaceTransferUpload> {
   const { assertCurrent } = params;
+  const wrapValidationError = (
+    error: unknown,
+    reason: NodeWorkspaceTransferInvalidReason,
+    message: string,
+  ) =>
+    error instanceof WorkerTaskError || (params.signal.aborted && error === params.signal.reason)
+      ? error
+      : new NodeWorkspaceTransferInvalidError(reason, message, { cause: error });
+
   let stagingRoot: string | undefined;
   try {
     assertCurrent();
-    const contentLength = Number(params.request.headers["content-length"]);
+    const maxBytes = params.resultVersion === 2 ? MAX_V2_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
+    const contentType = params.request.headers["content-type"];
     if (
-      !Number.isSafeInteger(contentLength) ||
-      contentLength < 8 ||
-      contentLength > MAX_UPLOAD_BYTES
+      contentType !== undefined &&
+      contentType !==
+        `application/vnd.openclaw.worker-workspace-reconcile-v${params.resultVersion ?? 1}`
     ) {
+      throw new NodeWorkspaceTransferInvalidError(
+        "payload",
+        "Workspace result version was not negotiated",
+      );
+    }
+    const contentLength = Number(params.request.headers["content-length"]);
+    if (!Number.isSafeInteger(contentLength) || contentLength < 8 || contentLength > maxBytes) {
       throw new NodeWorkspaceTransferLimitError("Workspace transfer upload exceeds its byte limit");
     }
-    const reader = new RequestByteReader(params.request, params.signal, assertCurrent);
+    const reader = new RequestByteReader(params.request, params.signal, assertCurrent, maxBytes);
     const readManifest = async (expectedRef?: string) => {
       const bytes = (await reader.readExactly(4)).readUInt32BE();
       if (bytes < 2 || bytes > MAX_WORKSPACE_MANIFEST_BYTES) {
@@ -204,17 +254,7 @@ export async function readNodeWorkspaceUpload(params: {
         const decoded = await decodeWorkspaceManifest(raw, expectedRef, params.signal);
         return { raw, ref: decoded.manifestRef, manifest: decoded.manifest };
       } catch (error) {
-        if (
-          error instanceof WorkerTaskError ||
-          (params.signal.aborted && error === params.signal.reason)
-        ) {
-          throw error;
-        }
-        throw new NodeWorkspaceTransferInvalidError(
-          "manifest",
-          "Workspace transfer manifest is invalid",
-          { cause: error },
-        );
+        throw wrapValidationError(error, "manifest", "Workspace transfer manifest is invalid");
       }
     };
     const base = await readManifest(params.baseManifestRef);
@@ -235,7 +275,6 @@ export async function readNodeWorkspaceUpload(params: {
         { cause: error },
       );
     }
-    assertCurrent();
     stagingRoot = await fsp.mkdtemp(path.join(params.temporaryRoot, "upload-"));
     for (const entry of transferEntries) {
       try {
@@ -268,6 +307,60 @@ export async function readNodeWorkspaceUpload(params: {
         );
       }
     }
+    let gitHistory: WorkerWorkspaceGitHistory | undefined;
+    let gitPackPath: string | undefined;
+    if (params.resultVersion === 2) {
+      const historyBytes = (await reader.readExactly(4)).readUInt32BE();
+      if (historyBytes > MAX_GIT_HISTORY_BYTES) {
+        throw new NodeWorkspaceTransferLimitError(
+          "Workspace Git history metadata exceeds its byte limit",
+        );
+      }
+      try {
+        const metadata: unknown = JSON.parse(
+          (await reader.readExactly(historyBytes)).toString("utf8"),
+        );
+        gitHistory =
+          metadata === null ? undefined : WorkerWorkspaceGitHistorySchema.parse(metadata);
+        if (gitHistory && gitHistory.baseCommit !== base.manifest.baseCommit) {
+          throw new Error("Git history does not match dispatch base");
+        }
+      } catch (error) {
+        throw wrapValidationError(error, "payload", "Workspace Git history is invalid");
+      }
+      const packBytes = (await reader.readExactly(8)).readBigUInt64BE();
+      if (packBytes > BigInt(MAX_WORKSPACE_RESULT_GIT_PACK_BYTES)) {
+        throw new NodeWorkspaceTransferLimitError("Workspace Git pack exceeds its byte limit");
+      }
+      const needsPack =
+        gitHistory?.descendsFromBase &&
+        !gitHistory.unavailableReason &&
+        gitHistory.headCommit !== gitHistory.baseCommit;
+      if (Boolean(needsPack) !== packBytes > 0n) {
+        throw new NodeWorkspaceTransferInvalidError(
+          "payload",
+          "Workspace Git pack does not match its history",
+        );
+      }
+      if (packBytes > 0n) {
+        // A sibling keeps transport data outside manifest-controlled workspace paths.
+        gitPackPath = path.join(stagingRoot, "../", `${path.basename(stagingRoot)}.pack`);
+        const handle = await fsp.open(gitPackPath, "wx", 0o600);
+        try {
+          let offset = 0;
+          while (offset < Number(packBytes)) {
+            const chunk = await reader.readExactly(Math.min(64 * 1024, Number(packBytes) - offset));
+            await writeFileWindowFully(handle, chunk, offset, {
+              assertBeforeMutation: assertCurrent,
+            });
+            assertCurrent();
+            offset += chunk.length;
+          }
+        } finally {
+          await handle.close();
+        }
+      }
+    }
     await reader.assertEnd();
     assertCurrent();
     if (reader.bytesRead !== contentLength) {
@@ -284,16 +377,10 @@ export async function readNodeWorkspaceUpload(params: {
       });
     } catch (error) {
       // Discard joins this validation; a later cancellation must not hide its failure.
-      if (
-        error instanceof WorkerTaskError ||
-        (params.signal.aborted && error === params.signal.reason)
-      ) {
-        throw error;
-      }
-      throw new NodeWorkspaceTransferInvalidError(
+      throw wrapValidationError(
+        error,
         "staging",
         "Workspace transfer payload did not match its staged result",
-        { cause: error },
       );
     }
     assertCurrent();
@@ -305,10 +392,12 @@ export async function readNodeWorkspaceUpload(params: {
       currentManifestRef: current.ref,
       currentRaw: current.raw,
       stagingRoot,
+      ...(gitHistory ? { gitHistory } : {}),
+      ...(gitPackPath ? { gitPackPath } : {}),
     };
   } catch (error) {
     if (stagingRoot) {
-      await fsp.rm(stagingRoot, { recursive: true, force: true });
+      await removeNodeWorkspaceUpload({ stagingRoot, gitPackPath: `${stagingRoot}.pack` });
     }
     throw error;
   }

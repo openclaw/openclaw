@@ -11,10 +11,7 @@ import {
 } from "../lib/config-form-utils.ts";
 import { arrayItemSchema, arrayItemSchemaIndexes } from "./config-form.array-items.ts";
 
-export type ConfigSearchCriteria = {
-  text: string;
-  tags: string[];
-};
+export type ConfigSearchCriteria = ReturnType<typeof parseConfigSearchQuery>;
 
 type ConfigSearchTextMatcher = (value: string, query: string) => boolean;
 
@@ -22,7 +19,7 @@ export function hasConfigSearchCriteria(criteria: ConfigSearchCriteria | undefin
   return Boolean(criteria && (criteria.text.length > 0 || criteria.tags.length > 0));
 }
 
-export function parseConfigSearchQuery(query: string): ConfigSearchCriteria {
+export function parseConfigSearchQuery(query: string) {
   const tags = new Set<string>();
   const stripped = query.replace(/(?:^|\s)tag:([^\s]+)/gi, (_, token: string) => {
     const normalized = normalizeLowercaseStringOrEmpty(token);

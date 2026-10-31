@@ -11,12 +11,14 @@ export type ToastOptions = {
   /** Positions a compact toast at the top center of the owning surface. */
   anchor?: Element;
   /** Bottom placement suits settings feedback without covering the page heading. */
-  placement?: "top" | "bottom";
+  placement?: "top" | "top-center" | "bottom";
+  severity?: "error";
   icon?: IconName;
   /** Agent identity shown for session notifications, using the shared avatar loader. */
   avatar?: AgentIdentity;
   actionLabel?: string;
-  onAction?: () => void;
+  actionHref?: string;
+  onAction?: (event?: MouseEvent) => void;
   onDismiss?: (reason: ToastDismissReason) => void;
   durationMs?: number;
   /** Wait behind the active toast instead of replacing it. */
@@ -40,9 +42,20 @@ function activeModalToastLayer() {
 }
 
 function restingToastLayer() {
+  const connected = [...toastContainers].filter(([element]) => element.isConnected);
   return (
-    document.querySelector(".shell-nav[aria-modal='true']") ?? document.querySelector(".shell")
+    connected.findLast(
+      ([element, role]) => role === "drawer" && element.ariaModal === "true",
+    )?.[0] ?? connected.findLast(([, role]) => role === "shell")?.[0]
   );
+}
+
+const toastContainers = new Map<HTMLElement, "shell" | "drawer">();
+const connectedHosts = new Set<OpenClawToastHost>();
+
+export function registerToastContainer(element: HTMLElement, role: "shell" | "drawer") {
+  toastContainers.set(element, role);
+  return () => toastContainers.delete(element);
 }
 
 // Outcomes reported during startup (a restored post-update result, for example)
@@ -61,6 +74,9 @@ class ToastOwner {
   private remainingMs = 0;
   private deadline = 0;
   private hovered = false;
+  private presentationSyncPending = false;
+  private homeLayer: HTMLElement | undefined;
+  private stopPlacementSync: (() => void) | undefined;
 
   hover(hovered: boolean) {
     this.hovered = hovered;
@@ -74,10 +90,36 @@ class ToastOwner {
   }
 
   connect() {
-    this.host.style.display = "contents";
-    this.host.dataset.toastPlacement = this.host.parentElement?.matches(".shell")
-      ? "shell"
-      : "overlay";
+    connectedHosts.add(this.host);
+    this.stopPlacementSync?.();
+    this.stopPlacementSync = undefined;
+    const inModal = Boolean(this.host.closest("openclaw-modal-dialog"));
+    if (!inModal) {
+      const parent = this.host.parentElement;
+      // Document roots survive app teardown and must not resurrect removed hosts.
+      this.homeLayer =
+        parent !== this.host.ownerDocument.body &&
+        parent !== this.host.ownerDocument.documentElement
+          ? (parent ?? undefined)
+          : undefined;
+    }
+    // Modal layers can be siblings of the shell. Keep its responsive chrome
+    // offset while the host is away, then return to ordinary CSS inheritance.
+    const homeLayer = this.homeLayer;
+    if (inModal && homeLayer) {
+      const syncPlacement = () =>
+        this.host.style.setProperty(
+          "--app-toast-shell-top",
+          getComputedStyle(homeLayer).getPropertyValue("--app-toast-shell-top"),
+        );
+      syncPlacement();
+      this.stopPlacementSync = listen(window, "resize", syncPlacement);
+    } else {
+      this.host.style.removeProperty("--app-toast-shell-top");
+    }
+    this.host.popover = "manual";
+    this.host.dataset.toastPlacement = this.homeLayer?.matches(".shell") ? "shell" : "overlay";
+    this.syncPresentation();
     // Moving the light-DOM host can drop focus without a focusout event.
     this.hovered = this.body?.matches(":hover") ?? false;
     this.syncDismissTimer();
@@ -94,12 +136,27 @@ class ToastOwner {
     if (this.host.isConnected) {
       return;
     }
-    const target = activeModalToastLayer()?.container ?? restingToastLayer();
-    if (this.host.closest("openclaw-modal-dialog") && target) {
-      target.append(this.host);
-    } else {
-      this.dismiss("disconnected");
+    this.stopPlacementSync?.();
+    this.stopPlacementSync = undefined;
+    connectedHosts.delete(this.host);
+    if (this.host.closest("openclaw-modal-dialog") && this.restorePresentationLayer()) {
+      return;
     }
+    this.homeLayer = undefined;
+    this.dismiss("disconnected");
+  }
+
+  restorePresentationLayer(): boolean {
+    // Native hosts can present a toast before their shell registers its layers.
+    const target =
+      activeModalToastLayer()?.container ??
+      restingToastLayer() ??
+      (this.homeLayer?.isConnected ? this.homeLayer : undefined);
+    if (!target) {
+      return false;
+    }
+    target.append(this.host);
+    return true;
   }
 
   show(options: ToastOptions) {
@@ -133,6 +190,33 @@ class ToastOwner {
       this.deadline = performance.now() + this.remainingMs;
       this.dismissTimer = globalThis.setTimeout(() => this.dismiss("timeout"), this.remainingMs);
     }
+  }
+
+  private syncPresentation() {
+    if (!this.host.isConnected) {
+      return;
+    }
+    // Stay inside the modal's non-inert subtree, but escape its transformed
+    // containing block so fixed toast coordinates still refer to the viewport.
+    if (this.host.toast) {
+      this.host.showPopover();
+    } else {
+      this.host.hidePopover();
+    }
+  }
+
+  afterPropertyChange() {
+    if (this.presentationSyncPending) {
+      return;
+    }
+    this.presentationSyncPending = true;
+    queueMicrotask(() => {
+      void this.host.updateComplete.then(() => {
+        this.presentationSyncPending = false;
+        this.syncPresentation();
+        this.syncDismissTimer();
+      });
+    });
   }
 
   private clearDismissTimer() {
@@ -189,7 +273,11 @@ class ToastOwner {
 
 export type ToastProperties = { toast: ToastOptions | null; active: boolean };
 export type ToastMethods = { show(options: ToastOptions): void };
-type OpenClawToastHost = HTMLElement & ToastProperties & ToastMethods;
+type OpenClawToastHost = HTMLElement &
+  ToastProperties &
+  ToastMethods & {
+    readonly updateComplete: Promise<boolean>;
+  };
 const owners = new WeakMap<OpenClawToastHost, ToastOwner>();
 export function toastOwnerFor(host: OpenClawToastHost) {
   let owner = owners.get(host);
@@ -204,12 +292,7 @@ export function showToast(options: ToastOptions): boolean {
   if (typeof document === "undefined") {
     return false;
   }
-  // A modal can carry the host into a shadow root, outside document queries.
-  const host =
-    document.querySelector<OpenClawToastHost>("openclaw-toast-host") ??
-    [...(document.openClawModalLayers ?? [])]
-      .map((layer) => layer.querySelector<OpenClawToastHost>("openclaw-toast-host"))
-      .find((candidate) => candidate?.isConnected);
+  const host = [...connectedHosts].find((candidate) => candidate.isConnected);
   if (!host) {
     queuedToast = options;
     return false;
@@ -222,9 +305,7 @@ export function showToast(options: ToastOptions): boolean {
         return;
       }
       stopHandoff();
-      queueMicrotask(() =>
-        (activeModalToastLayer()?.container ?? restingToastLayer())?.append(host),
-      );
+      queueMicrotask(() => toastOwnerFor(host).restorePresentationLayer());
     };
     const stopHandoff = listen(modal.owner, "overlay-after-hide", handoff);
   }

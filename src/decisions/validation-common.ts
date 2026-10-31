@@ -127,3 +127,25 @@ export function decisionEntry(value: unknown): boolean {
     isPlainDecisionRecord(value)
   );
 }
+
+export function validDecisionCriteria(type: unknown, criteria: unknown): boolean {
+  if (type === "choice" || type === "tags") {
+    return (
+      isPlainDecisionRecord(criteria) &&
+      Object.keys(criteria).length >= (type === "choice" ? 2 : 1) &&
+      Object.entries(criteria).every(([label, entry]) => label.length > 0 && decisionEntry(entry))
+    );
+  }
+  if (type === "score") {
+    return Array.isArray(criteria) && criteria.length >= 2 && criteria.every(decisionEntry);
+  }
+  return (
+    type === "boolean" &&
+    (criteria === undefined ||
+      criteria === null ||
+      (isPlainDecisionRecord(criteria) &&
+        Object.entries(criteria).every(
+          ([key, entry]) => (key === "true" || key === "false") && decisionEntry(entry),
+        )))
+  );
+}

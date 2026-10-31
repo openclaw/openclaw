@@ -4,6 +4,13 @@ Use this before selecting backports for any OpenClaw release line: regular
 beta/stable, extended-stable, or a release-repair branch. It is an audit before the candidate is
 mutated, not a title search and not permission to expand a frozen release.
 
+## Start from the shared ledger
+
+Start with [shared candidates and assessments](hotfix-ledger-management.md),
+including carry-forward and sibling-release evidence; sync new findings and
+decisions back. Empty/incomplete records do not replace the pinned inventory
+or P0/P1 discovery below. Use local evidence when access is unavailable.
+
 ## Freeze the Audit
 
 1. Pin the exact maintenance-line baseline and the exact `origin/main` SHA.
@@ -26,8 +33,10 @@ bounds and pinned SHAs, baseline identity, total/equivalent/non-equivalent
 counts, filters, every candidate decision, applicability result, exclusions,
 dependency groups, and carry-forward blocked items. Security rows in public
 evidence must remain opaque; retain private identifiers only in the approved
-security record. The next accepted audit uses this ledger's `scan_end` as its
-cursor.
+security record. Keep scan bounds, counts, and the full commit inventory in the
+existing staging evidence, linked from the service assessments; they need not
+be separate API fields or one hotfix record per unrelated commit. The next
+accepted audit uses that evidence's `scan_end` as its cursor.
 
 ## Reconcile Stable-Maturity Issues
 
@@ -69,27 +78,27 @@ configuration, plugins, or major channels. Benign titles, dependency bumps,
 missing PRs, and broad batches can conceal operational fixes; they require a
 decision with evidence, not a cursory skip.
 
-For each such production diff, mechanically probe applicability in a temporary
-detached worktree at the pinned baseline before judging it:
+For each such production diff, mechanically probe applicability against the
+pinned baseline before judging it. Repeat `--candidate` to emit one TSV report
+for the batch:
 
 ```bash
-audit_root=$(mktemp -d)
-git worktree add --detach "$audit_root/baseline" "$baseline_sha"
-(
-  cd "$audit_root/baseline"
-  git cherry-pick --no-commit "$candidate_sha"
-  git diff --check
-  git reset --hard HEAD
-)
-git worktree remove --force "$audit_root/baseline"
-rmdir "$audit_root"
+pnpm release:backport-probe -- \
+  --baseline "$baseline_sha" \
+  --candidate "$candidate_sha" > backport-probe.tsv
 ```
 
-Record whether the probe was clean, conflicted, empty/already-covered, or
-failed, along with the exact reason. A clean probe is triage evidence only; it
-does not approve a backport. If the commit needs companions, probe and assess
-the smallest ordered final fix rather than treating each clean commit as an
-independent candidate.
+The helper uses `git merge-tree --write-tree` with the candidate's parent as
+the explicit merge base, so it simulates that single patch without checking out
+or resetting a worktree. The TSV binds the resolved candidate and baseline,
+classification (`clean`, `conflicted`, or `already-covered`), conflict count,
+touched-file count, every touched path, and whether that path conflicts. It
+refuses root and merge commits whose cherry-pick mainline is ambiguous.
+
+Record a failed probe with its exact reason. A clean probe is triage evidence
+only; it does not approve a backport. If the commit needs companions, probe and
+assess the smallest ordered final fix rather than treating each clean commit as
+an independent candidate.
 
 ## Close Selected Contracts Before Qualification
 
@@ -114,6 +123,32 @@ git show <selected-main-sha> -- <consumer-path>
 git show <baseline-sha>:<producer-path>
 git log -p -S '<contract-symbol>' <pinned-main-sha> -- <producer-path>
 ```
+
+Run the bounded companion audit for every selected commit. Repeat `--selected`
+for an ordered group. Before picks, omit `--candidate`; after picks, supply the
+final candidate so the report compares the selected main file set with the
+actual baseline-to-candidate delta.
+
+```bash
+pnpm release:backport-companions -- \
+  --baseline <pinned-maintenance-baseline> \
+  --scan-end <pinned-main-sha> \
+  --selected <selected-main-sha> \
+  --candidate <final-candidate-sha>
+```
+
+Disposition every reported later same-path commit, later mention of the
+selected PR number, existing neighbor test, selected-file reference/registry,
+candidate file-set difference, and candidate content difference. A whole-file
+difference is inspection evidence, not a failure: a release adaptation or the
+final selected companion sequence can differ legitimately. This scan is
+heuristic and never establishes dependency closure or approval: manually trace
+symbols, callers, imports/exports, producers, workflows, registries, generated
+inputs, and differently named or cross-directory tests. Record
+`present-equivalent`, `selected`, `missing`, or `not-applicable` in the
+existing backport ledger. Missing or unverified rows keep the group blocked.
+Do not silence a candidate merely because it is not a dependency, and do not
+automatically cherry-pick it.
 
 Read callers and sibling consumers too. For an IPC-readiness consumer, check
 that the baseline's fixture producer emits the expected receipt and preserves
@@ -152,7 +187,10 @@ substitute convenient dependency bumps for a complete candidate audit. A
 backport is a cherry-pick of a merged `main` commit onto the release branch;
 never re-cut the candidate from newer `main` to absorb one unless Peter
 explicitly asks for it in that release. After dispatch, only confirmed release
-blockers qualify, each named in the handoff record.
+blockers qualify, each named in the handoff record, unless the operator explicitly
+reopens intake under the [owner lifecycle](release-owner.md#prepare-and-admit-hotfixes).
+That decision invalidates affected evidence; it never authorizes publication of
+untested changes.
 
 Before changing release refs, present the complete categorized ledger and the
 proposed set for maintainer approval. After approval, backport with provenance,
@@ -160,3 +198,34 @@ update the ledger, run focused proof plus the release-appropriate validation,
 and keep the final branch/tag/version/SHA identity in that record. Dispatch npm
 preflight only after the canonical release branch or tag has that exact final
 version and SHA.
+
+## Port with Bounded Workers
+
+Read-only audit lanes may fan out. Porting lanes write to the release candidate
+and share one host, so run at most eight concurrent writing workers, and do not
+launch or resume workers close to a session usage limit. A worker does not
+spawn its own agents unless its brief allows it. A 17-lane porting wave on
+2026.10.8 saturated the Mac and lost 16 lanes mid-port when the session limit
+hit. The lead keeps a watcher on every worker and never ends a turn waiting on
+one; once the required fixes and P0s are integrated, push and dispatch
+validation, and add stragglers in a later cycle.
+
+Every porting brief contains these steps for each pick, in order:
+
+1. Run the companion audit for the pick (`pnpm release:backport-companions`
+   above) and `git log <pinned-main-sha> --grep '#<PR>'`. List each later
+   follow-up and its disposition in the commit body. Missing follow-ups caused
+   most 2026.10.8 validation failures, including a macOS regression found only
+   after tagging.
+2. Confirm the defect exists on the baseline (`git show <baseline>:<path>`)
+   before porting.
+3. Cherry-pick with `-x`, resolve conflicts, and note any adaptation as
+   `Release adaptation:` in the commit body.
+4. Run targeted tests and typechecks for the touched owners only. Wrap every
+   local command in `timeout`; full local gates are not a worker's job.
+5. Commit, then append the pick's result to the lane report before the next
+   pick. Time-box a pick to about 40 minutes and report it as blocked rather
+   than continuing past that.
+
+Reuse the lead checkout's dependencies instead of a fresh install per lane when
+the lockfile matches.

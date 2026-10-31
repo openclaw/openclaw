@@ -164,7 +164,12 @@ class GatewaySessionInvokeTest {
   @Test
   fun talkCatalogRetriesOnlyTheCorrelatedWarmingResponse() =
     runBlocking {
-      for ((method, retryable) in listOf("talk.catalog" to true, "talk.catalog" to false, "models.list" to true)) {
+      for ((method, retryable, timeoutMs) in listOf(
+        Triple("talk.catalog", true, null),
+        Triple("talk.catalog", true, 0L),
+        Triple("talk.catalog", false, null),
+        Triple("models.list", true, null),
+      )) {
         val connected = CompletableDeferred<Unit>()
         val lastDisconnect = AtomicReference("")
         val requests = AtomicInteger()
@@ -187,7 +192,7 @@ class GatewaySessionInvokeTest {
         try {
           connectNodeSession(harness.session, server.port)
           awaitConnectedOrThrow(connected, lastDisconnect, server)
-          val result = harness.session.requestDetailed(method, "{}")
+          val result = harness.session.requestDetailed(method, "{}", timeoutMs = timeoutMs)
           val shouldRetry = method == "talk.catalog" && retryable
           assertEquals(shouldRetry, result.ok)
           assertEquals(if (shouldRetry) 2 else 1, requests.get())

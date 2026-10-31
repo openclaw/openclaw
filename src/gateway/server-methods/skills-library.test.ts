@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -20,6 +19,7 @@ import {
   addSessionMemberInWorker,
   removeSessionMemberInWorker,
 } from "../../config/sessions/session-sharing-store.async.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import * as fsSafe from "../../infra/fs-safe.js";
 import * as libraryBundle from "../../skills/library/bundle.js";
 import { seedSkillLibrarySelection } from "../../skills/library/selection.js";
@@ -34,6 +34,7 @@ import {
 } from "../../test-utils/session-state-cleanup.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import * as sessionAuthorization from "../session-sharing-authorization-async.js";
 import type { GatewayClient } from "./client-types.js";
 import { skillsLibraryHandlers } from "./skills-library.js";
@@ -86,14 +87,12 @@ function retainedFilesHarness() {
   );
   const call = async (method: string, params: Record<string, unknown>, profileId = alice.id) => {
     const client: GatewayClient = {
-      authenticatedUserProfile: { profileId, displayName: null, hasAvatar: false, updatedAt: 1 },
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "operator",
-        scopes: ["operator.read", "operator.write"],
-        client: { id: "test", mode: "test", platform: "test", version: "1" },
-      },
+      authenticatedUserProfile: gatewayProfile(profileId),
+      connect: gatewayConnect(["operator.read", "operator.write"], {
+        id: "test",
+        mode: "test",
+        version: "1",
+      }),
     };
     const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
     await handleGatewayRequest({
@@ -163,7 +162,7 @@ describe("skill library retained support files", () => {
     expect(admissionReached).toBe(true);
     // A later denial and cleanup must not hide an earlier successful file creation.
     expect(imageCreated).toBe(false);
-    const files = await fs.readdir(root, { recursive: true, withFileTypes: true });
+    const files = (await listDirectoryTreeStrict(root)).map((walkEntry) => walkEntry.dirent);
     expect(files.filter((entry) => entry.isFile() && entry.name === "pixel.png")).toEqual([]);
   });
 
@@ -188,7 +187,7 @@ describe("skill library retained support files", () => {
       .soft(result[2])
       .toMatchObject({ code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } });
     expect(staged).toHaveBeenCalledOnce();
-    const files = await fs.readdir(root, { recursive: true, withFileTypes: true });
+    const files = (await listDirectoryTreeStrict(root)).map((walkEntry) => walkEntry.dirent);
     expect(files.filter((entry) => entry.isFile() && entry.name === "pixel.png")).toEqual([]);
   });
 
@@ -219,7 +218,7 @@ describe("skill library retained support files", () => {
     expect(read[0]).toBe(true);
     expect(read[1] as SkillsLibraryReadResult).toMatchObject({
       content: params.content,
-      files: [image, { path: executable.path, encoding: "base64", executable: true }],
+      files: [image, { ...executable, encoding: "utf8" }],
     });
     expect(Buffer.from((read[1] as SkillsLibraryReadResult).files[0]!.content, "base64")).toEqual(
       Buffer.from(image.content, "base64"),
@@ -261,8 +260,8 @@ describe("skill library retained support files", () => {
       { ...image, executable: false },
       {
         path: "notes.txt",
-        content: Buffer.from("New support file").toString("base64"),
-        encoding: "base64",
+        content: "New support file",
+        encoding: "utf8",
         executable: false,
       },
     ]);
@@ -362,6 +361,52 @@ describe("skill library retained support files", () => {
 });
 
 describe("session skill library projection and activation", () => {
+  it.each(["pins", "plugin ownership"])(
+    "does not disclose a selected revision after %s changes during its file read",
+    async (change) => {
+      const { alice, actor, cfg, call } = retainedFilesHarness();
+      setRuntimeConfigSnapshot(cfg);
+      const saved = await saveSkillLibrary(actor(alice.id), {
+        slug: "selected-revision",
+        content,
+        expectedRevision: null,
+      });
+      const key = "agent:main:selected-revision";
+      const scope = { agentId: "main", sessionKey: key };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "selected-revision",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: alice.id },
+        skillLibrarySelections: await seedSkillLibrarySelection(actor(alice.id)),
+      });
+      const readManifest = libraryBundle.readSkillLibraryManifestTree;
+      using manifest = vi
+        .spyOn(libraryBundle, "readSkillLibraryManifestTree")
+        .mockImplementation(async (...args) => {
+          const files = await readManifest(...args);
+          await patchSessionEntryCore(scope, () =>
+            change === "pins"
+              ? { skillLibrarySelections: [] }
+              : { pluginOwnerId: "replacement-plugin" },
+          );
+          return files;
+        });
+      const response = await call("skills.library.read", {
+        sessionKey: key,
+        skillId: saved.entry.skillId,
+        revision: saved.entry.revision,
+      });
+      expect(manifest).toHaveBeenCalledOnce();
+      expect(loadSessionEntry(scope)).toMatchObject(
+        change === "pins"
+          ? { skillLibrarySelections: [] }
+          : { pluginOwnerId: "replacement-plugin" },
+      );
+      expect(response[0]).toBe(false);
+      expect(response[1]).toBeUndefined();
+    },
+  );
+
   it.each(["success", "missing session", "invalid selection"])(
     "releases activation authorization after %s",
     async (outcome) => {

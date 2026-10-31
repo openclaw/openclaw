@@ -1,7 +1,7 @@
 import { Dynamic, type JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import { isSessionRouteId } from "../app-route-paths.ts";
-import type { SolidRouteProps } from "../app-route-types.ts";
+import type { SolidRouteProps } from "../app-route-types.tsx";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { createMcpAppUnmountGate } from "../components/mcp-app-unmount.ts";
 import { AgentStartupState, LazyViewError } from "../components/solid/lazy-view-error.tsx";
@@ -11,6 +11,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
+import { RouteElements, type RouteElementEvent } from "./route-elements.ts";
 import {
   createRouterOutletPresentation,
   selectRenderedRouteMatch,
@@ -33,13 +34,6 @@ type RouteErrorProps = {
 
 function RouteError(props: RouteErrorProps) {
   const staleChunk = () => isStaleChunkImportError(props.error);
-  // Browser reload recovery follows the currently displayed resource error.
-  createEffect(staleChunk, (stale) => {
-    if (stale) {
-      // Reload also resets failed browser imports and Vite stylesheet preloads.
-      void scheduleStaleChunkReload();
-    }
-  });
   const handleRetry = (event: Event) => {
     if (!staleChunk()) {
       if (props.retryContext !== undefined) {
@@ -68,17 +62,27 @@ function RouteError(props: RouteErrorProps) {
   };
   // Resource errors alone cannot establish that a newer build exists.
   return (
-    <Show
-      when={!isAgentDatabaseInspectionPendingError(props.error)}
-      fallback={<AgentStartupState />}
-    >
-      <LazyViewError
-        error={props.error}
-        onRetry={handleRetry}
-        inline={props.inline}
-        stale={staleChunk()}
-      />
-    </Show>
+    <>
+      <Show when={staleChunk()}>
+        {(_stale) => {
+          onSettled(() => {
+            void scheduleStaleChunkReload();
+          });
+          return <></>;
+        }}
+      </Show>
+      <Show
+        when={!isAgentDatabaseInspectionPendingError(props.error)}
+        fallback={<AgentStartupState />}
+      >
+        <LazyViewError
+          error={props.error}
+          onRetry={handleRetry}
+          inline={props.inline}
+          stale={staleChunk()}
+        />
+      </Show>
+    </>
   );
 }
 
@@ -101,7 +105,9 @@ function renderRouterOutlet(
     ? { router, retryContext, error: renderedMatch.error, routeId }
     : undefined;
   if (!renderedMatch.module) {
-    return { state: error ? "empty" : "loading", error };
+    return error
+      ? { state: "empty", error }
+      : { state: "loading", composer: renderedMatch.routeId === "chat" };
   }
   const routeModule = renderedMatch.module;
   if (
@@ -139,7 +145,9 @@ type RouteContent =
       props: SolidRouteProps;
       error?: RouteErrorProps;
     }
-  | { state: "empty" | "loading" | "startup"; error?: RouteErrorProps };
+  | { state: "empty" | "startup"; error?: RouteErrorProps }
+  // A chat route's loading frame keeps the boot composer typeable.
+  | { state: "loading"; composer?: boolean };
 
 type Presentation = { key: string; render: (presented: boolean) => RouteContent };
 
@@ -161,6 +169,10 @@ function RoutePresentation(props: {
   const state = () => {
     const current = value();
     return "state" in current ? current.state : undefined;
+  };
+  const composer = () => {
+    const current = value();
+    return "composer" in current && current.composer === true;
   };
   const page = (
     <>
@@ -184,7 +196,7 @@ function RoutePresentation(props: {
         <AgentStartupState />
       </Show>
       <Show when={state() === "loading"}>
-        <LoadingState />
+        <LoadingState route composer={composer()} />
       </Show>
     </>
   );
@@ -205,7 +217,9 @@ function RoutePresentation(props: {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-router-outlet": HTMLAttributes<HTMLElement>;
+      "openclaw-router-outlet": HTMLAttributes<HTMLElement> & {
+        "onOpenclaw-route-element"?: (event: RouteElementEvent) => void;
+      };
       "openclaw-route-presentation": HTMLAttributes<HTMLElement>;
       "openclaw-route-fragment": HTMLAttributes<HTMLElement>;
     }
@@ -214,6 +228,7 @@ declare module "@solidjs/web" {
 
 /** Solid owns route presentation and retained page lifetimes. */
 export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
+  const elements = new RouteElements();
   let host!: HTMLElement;
   let retainedRegion: HTMLElement | undefined;
   let transientRegion: HTMLElement | undefined;
@@ -355,6 +370,7 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     const retainedKey = `${scopeGeneration}:${retainedOwnerKey ?? "empty"}`;
     const transientKey = presentRetained ? "empty" : (explicitOwnerKey ?? routeKey);
     const retryContext = props.retryContext;
+    const loading: RouteContent = { state: "loading", composer: renderedMatch?.routeId === "chat" };
     const renderTransient = (): RouteContent => {
       if (snapshot.startupPending) {
         return { state: "startup" };
@@ -370,13 +386,13 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
                 routeId: renderedMatch.routeId,
               },
             }
-          : { state: "loading" };
+          : loading;
       }
       if (module?.retainOnNavigate && waiting) {
         if (renderedMatch?.routeId === "chat" && snapshot.settled?.routeId === "new-session") {
           return renderRouterOutlet(router, snapshot.settled, retryContext);
         }
-        return { state: "loading" };
+        return loading;
       }
       return renderRouterOutlet(router, renderedMatch, retryContext);
     };
@@ -452,7 +468,7 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     }
   };
 
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
     notify();
   });
@@ -461,14 +477,23 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     <openclaw-router-outlet
       inert={props.inert}
       aria-disabled={props["aria-disabled"]}
+      onOpenclaw-route-element={elements.register}
       ref={(element) => {
         host = element;
         const readinessHost = Object.defineProperties(element, {
           presentationSettled: { configurable: true, get: isSettled },
           settlePresentation: { configurable: true, value: settlePresentation },
+          renderedElement: {
+            configurable: true,
+            value: elements.renderedElement.bind(elements),
+          },
+          renderedElements: {
+            configurable: true,
+            value: elements.renderedElements.bind(elements),
+          },
         }) as ControlUiReadinessOutlet; // SAFETY: These descriptors define the outlet contract.
         // Publish this mount's element contract once, with its original ref callback.
-        untrack(() => props.ref?.(readinessHost));
+        props.ref?.(readinessHost);
       }}
     >
       <Show when={presentation().retained?.key} keyed>
@@ -491,7 +516,7 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
       </Show>
       <Show when={presentation().waiting}>
         <openclaw-route-fragment style={{ display: "contents" }}>
-          <LoadingState />
+          <LoadingState route />
         </openclaw-route-fragment>
       </Show>
     </openclaw-router-outlet>

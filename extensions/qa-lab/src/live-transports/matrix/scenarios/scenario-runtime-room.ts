@@ -11,10 +11,8 @@ import {
 } from "./scenario-runtime-reaction.js";
 import {
   assertThreadReplyArtifact,
-  advanceMatrixQaActorCursor,
   buildMatrixQaToken,
   buildMatrixBlockStreamingPrompt,
-  buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
   buildMentionPrompt,
   createMatrixQaScenarioClient,
@@ -49,6 +47,7 @@ export {
   runToolProgressPreviewOptOutScenario,
   runToolProgressPreviewScenario,
 } from "./scenario-runtime-tool-progress.js";
+export { runToolProgressMediaCaptionScenario } from "./scenario-runtime-tool-progress-media.js";
 export async function runBlockStreamingScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_BLOCK_ROOM_KEY);
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
@@ -88,21 +87,7 @@ export async function runBlockStreamingScenario(context: MatrixQaScenarioContext
       "Matrix block streaming scenario reused one event instead of preserving blocks",
     );
   }
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: secondBlock.since,
-    startSince,
-  });
   return {
-    artifacts: {
-      blockEventIds: [firstBlock.event.eventId, secondBlock.event.eventId],
-      driverEventId,
-      reply: buildMatrixReplyArtifact(secondBlock.event, secondText),
-      roomId,
-      token: secondText,
-      triggerBody,
-    },
     details: [
       `room id: ${roomId}`,
       `driver event: ${driverEventId}`,
@@ -132,12 +117,6 @@ export async function runRoomAutoJoinInviteScenario(context: MatrixQaScenarioCon
     timeoutMs: context.timeoutMs,
   });
   const joinEvent = joinResult.event;
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: joinResult.since,
-    startSince,
-  });
 
   const result = await runAssertedDriverTopLevelScenario({
     context,
@@ -147,14 +126,6 @@ export async function runRoomAutoJoinInviteScenario(context: MatrixQaScenarioCon
   });
 
   return {
-    artifacts: {
-      driverEventId: result.driverEventId,
-      joinedRoomId: dynamicRoomId,
-      membershipJoinEventId: joinEvent.eventId,
-      reply: result.reply,
-      token: result.token,
-      triggerBody: result.body,
-    },
     details: [
       `joined room id: ${dynamicRoomId}`,
       `join event: ${joinEvent.eventId}`,
@@ -217,13 +188,6 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
     });
 
     return {
-      artifacts: {
-        ...recovered.artifacts,
-        membershipJoinEventId: joinEvent.eventId,
-        membershipLeaveEventId: leaveEvent.eventId,
-        recoveredDriverEventId: recovered.artifacts?.driverEventId,
-        recoveredReply: recovered.artifacts?.reply,
-      },
       details: [
         `room key: ${MATRIX_QA_MEMBERSHIP_ROOM_KEY}`,
         `room id: ${roomId}`,
@@ -262,7 +226,6 @@ export async function runReactionThreadedScenario(context: MatrixQaScenarioConte
     label: "threaded reaction reply",
   });
   const reaction = await observeReactionScenario({
-    actorId: "driver",
     actorUserId: context.driverUserId,
     accessToken: context.driverAccessToken,
     baseUrl: context.baseUrl,
@@ -271,20 +234,7 @@ export async function runReactionThreadedScenario(context: MatrixQaScenarioConte
     roomId: context.roomId,
     timeoutMs: context.timeoutMs,
   });
-  advanceMatrixQaActorCursor({
-    actorId: reaction.actorId,
-    syncState: context.syncState,
-    nextSince: reaction.since,
-    startSince: reaction.startSince,
-  });
   return {
-    artifacts: {
-      driverEventId: thread.driverEventId,
-      ...buildMatrixQaReactionArtifacts(reaction),
-      reply: thread.reply,
-      rootEventId: thread.rootEventId,
-      token: thread.token,
-    },
     details: [
       ...buildMatrixQaThreadDetailLines({
         result: thread,

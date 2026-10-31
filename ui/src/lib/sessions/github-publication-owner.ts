@@ -30,10 +30,12 @@ type PublicationOwner = {
 };
 type Presentation = {
   scope: GitHubPublicationPresentation | null;
-  changed: (() => void) | null;
+  listeners: Set<() => void>;
+  lifetime: PromiseWithResolvers<void> | null;
 };
 export type GitHubPublicationPresentationBinding = {
-  sync: (scope: GitHubPublicationPresentation) => void;
+  subscribe: (listener: () => void) => () => void;
+  sync: (scope: GitHubPublicationPresentation | null) => void;
   view: () => GitHubPublicationView | undefined;
   reset: () => void;
   detach: () => void;
@@ -42,6 +44,7 @@ export type GitHubPublicationPresentationBinding = {
 type GitHubPublicationActivity = "read" | "publish" | "confirm";
 
 export type GitHubPublicationView = {
+  readiness: { read: Promise<void> | null; retired: Promise<void> };
   activity: GitHubPublicationActivity | null;
   canPublishShared: boolean;
   canPublishPersonal: boolean;
@@ -55,10 +58,10 @@ export type GitHubPublicationView = {
   optionsUnavailable: boolean;
   personalReady: boolean;
   onSelect?: (source: "shared" | "personal") => void;
-  onPublish?: () => void;
-  onConfirm?: () => void;
-  onRefresh: () => void;
-  onNewAction?: () => void;
+  onPublish?: () => void | Promise<void>;
+  onConfirm?: () => void | Promise<void>;
+  onRefresh: () => void | Promise<void>;
+  onNewAction?: () => void | Promise<void>;
 };
 
 function terminal(result: SessionGitHubPublicationResult | null): boolean {
@@ -96,6 +99,7 @@ export class GitHubPublicationOwner {
   private errorActivity: GitHubPublicationActivity | null = null;
   private reviewedRequestId: string | null = null;
   private refreshPending = false;
+  private readCompletion: PromiseWithResolvers<void> | null = null;
 
   constructor(private readonly owner: PublicationOwner) {}
 
@@ -108,6 +112,14 @@ export class GitHubPublicationOwner {
   }
 
   reset(): void {
+    this.readCompletion?.resolve();
+    this.readCompletion = null;
+    for (const presentation of this.presentations) {
+      presentation.lifetime?.resolve();
+      if (presentation.lifetime) {
+        presentation.lifetime = Promise.withResolvers<void>();
+      }
+    }
     this.owner.release();
     this.version += 1;
     this.activity = null;
@@ -152,7 +164,9 @@ export class GitHubPublicationOwner {
   }
 
   private changed(): void {
-    this.presentations.forEach((presentation) => presentation.changed?.());
+    this.presentations.forEach((presentation) =>
+      presentation.listeners.forEach((listener) => listener()),
+    );
   }
 
   private presented(presentation: Presentation): boolean {
@@ -173,16 +187,26 @@ export class GitHubPublicationOwner {
     }
   }
 
-  bind(changed: () => void): GitHubPublicationPresentationBinding {
-    const presentation: Presentation = { scope: null, changed };
+  bind(): GitHubPublicationPresentationBinding {
+    const presentation: Presentation = { scope: null, listeners: new Set(), lifetime: null };
     this.presentations.add(presentation);
     const getResult = () => this.result;
     return {
+      subscribe: (listener) => {
+        presentation.listeners.add(listener);
+        return () => presentation.listeners.delete(listener);
+      },
       sync: (scope) => {
         if (!this.presentations.has(presentation)) {
           return;
         }
         presentation.scope = scope;
+        if (this.presented(presentation)) {
+          presentation.lifetime ??= Promise.withResolvers<void>();
+        } else {
+          presentation.lifetime?.resolve();
+          presentation.lifetime = null;
+        }
         this.retireIdleOptions();
         if (
           this.presented(presentation) &&
@@ -206,8 +230,10 @@ export class GitHubPublicationOwner {
         }
       },
       detach: () => {
+        presentation.lifetime?.resolve();
+        presentation.lifetime = null;
         presentation.scope = null;
-        presentation.changed = null;
+        presentation.listeners.clear();
         this.presentations.delete(presentation);
         this.retireIdleOptions();
         if (!this.hasBindings) {
@@ -263,17 +289,25 @@ export class GitHubPublicationOwner {
     const version = ++this.version;
     const current = () => this.version === version && this.owner.isCurrent();
     this.activity = activity;
+    const readCompletion = activity === "read" ? Promise.withResolvers<void>() : null;
+    this.readCompletion = readCompletion;
     this.error = null;
     this.errorActivity = null;
-    this.changed();
     try {
-      await action(this.owner, current);
+      const completion = action(this.owner, current);
+      // Publish the admitted attempt together with its activity to every pane.
+      this.changed();
+      await completion;
     } catch (error) {
       if (current()) {
         this.error = formatUiError(error);
         this.errorActivity = activity;
       }
     } finally {
+      if (this.readCompletion === readCompletion) {
+        this.readCompletion = null;
+      }
+      readCompletion?.resolve();
       if (this.version === version) {
         if (current()) {
           this.activity = null;
@@ -470,7 +504,7 @@ export class GitHubPublicationOwner {
 
   private view(presentation: Presentation): GitHubPublicationView | undefined {
     const scope = presentation.scope;
-    if (!scope || !this.presented(presentation)) {
+    if (!scope || !this.presented(presentation) || !presentation.lifetime) {
       return undefined;
     }
     const version = this.version;
@@ -481,12 +515,17 @@ export class GitHubPublicationOwner {
     );
     // Each callback belongs to the displayed operation state, not whichever
     // publication or confirmation happens to occupy this session later.
-    const invoke = (action: () => void) => {
+    const invoke = <T>(action: () => T): T | undefined => {
       if (version === this.version && this.presented(presentation)) {
-        action();
+        return action();
       }
+      return undefined;
     };
     return {
+      readiness: {
+        read: this.readCompletion?.promise ?? null,
+        retired: presentation.lifetime.promise,
+      },
       activity: this.activity,
       canPublishShared: scope.canPublishShared,
       canPublishPersonal: scope.canPublishPersonal,
@@ -505,22 +544,22 @@ export class GitHubPublicationOwner {
           : undefined,
       onPublish:
         canPublish && (!this.locked || this.attempt !== null) && !terminal(this.result)
-          ? () => invoke(() => void this.publish(presentation))
+          ? () => invoke(() => this.publish(presentation))
           : undefined,
       onConfirm:
         scope.canPublishPersonal && this.confirmation
-          ? () => invoke(() => void this.confirm(presentation))
+          ? () => invoke(() => this.confirm(presentation))
           : undefined,
-      onRefresh: () => invoke(() => void this.refresh(presentation)),
+      onRefresh: () => invoke(() => this.refresh(presentation)),
       // Acknowledgement releases local custody; publication and confirmation remain write-gated.
       onNewAction: terminal(this.result)
         ? () =>
             invoke(() => {
               if (this.busy) {
-                return;
+                return undefined;
               }
               this.resetPresentation();
-              void this.refresh(presentation);
+              return this.refresh(presentation);
             })
         : undefined,
     };

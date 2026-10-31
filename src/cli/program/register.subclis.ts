@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { shouldEagerRegisterSubcommands } from "../command-registration-policy.js";
-import { buildCommandGroupEntries } from "./command-group-descriptors.js";
+import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 import { removeCommandByName } from "./command-tree.js";
 import {
   findCommandGroupEntry,
@@ -23,23 +23,27 @@ function shouldRegisterGatewayRunOnly(name: string, argv: string[]): boolean {
   return invocation.commandPath.length === 1 || invocation.commandPath[1] === "run";
 }
 
-async function registerGatewayRunOnly(program: Command): Promise<void> {
-  // Hot path for `gateway run`: avoid loading the full gateway command tree.
-  const { addGatewayRunCommand } = await import("../gateway-cli/run-command.js");
-  removeCommandByName(program, "gateway");
-  const gateway = addGatewayRunCommand(
-    program.command("gateway").description("Run, inspect, and query the WebSocket Gateway"),
-  );
-  addGatewayRunCommand(
-    gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
-  );
-}
-
 function resolveSubCliCommandGroups(
   argv: string[],
   context: SubCliRegistrationContext = {},
 ): CommandGroupEntry[] {
-  return buildCommandGroupEntries(getSubCliEntriesCore(), argv, context);
+  const descriptors = getSubCliEntriesCore();
+  const groups = new Map<
+    (typeof descriptors)[number]["register"],
+    { placeholders: NamedCommandDescriptor[]; register: (program: Command) => Promise<void> | void }
+  >();
+  for (const descriptor of descriptors) {
+    const group = groups.get(descriptor.register);
+    if (group) {
+      group.placeholders.push(descriptor);
+    } else {
+      groups.set(descriptor.register, {
+        placeholders: [descriptor],
+        register: (program: Command) => descriptor.register(program, argv, context),
+      });
+    }
+  }
+  return [...groups.values()];
 }
 
 export function getSubCliCompletionGroups(argv: string[] = process.argv) {
@@ -64,7 +68,15 @@ export async function registerSubCliByName(
   context: SubCliRegistrationContext = {},
 ): Promise<boolean> {
   if (shouldRegisterGatewayRunOnly(name, argv)) {
-    await registerGatewayRunOnly(program);
+    // Hot path for `gateway run`: avoid loading the full gateway command tree.
+    const { addGatewayRunCommand } = await import("../gateway-cli/run-command.js");
+    removeCommandByName(program, "gateway");
+    const gateway = addGatewayRunCommand(
+      program.command("gateway").description("Run, inspect, and query the WebSocket Gateway"),
+    );
+    addGatewayRunCommand(
+      gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
+    );
     return true;
   }
   return registerCommandGroupByName(program, resolveSubCliCommandGroups(argv, context), name);

@@ -1,8 +1,5 @@
-/**
- * Tests delivery queue runtime ordering and retry behavior.
- */
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -12,7 +9,9 @@ import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-
 import { drainPendingDeliveries } from "./delivery-queue-runtime.js";
 
 const mocks = vi.hoisted(() => ({
-  coreDrainPendingDeliveries: vi.fn(async () => {}),
+  coreDrainPendingDeliveries: vi.fn<
+    typeof import("../infra/outbound/delivery-queue-recovery.js").drainPendingDeliveriesCore
+  >(async () => {}),
   deliverOutboundPayloads: vi.fn(async () => []),
   deliverRuntimeModuleLoads: 0,
 }));
@@ -29,19 +28,23 @@ vi.mock("../infra/outbound/deliver-runtime.js", () => {
   };
 });
 
-const log = {
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-};
+const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+function drain(deliver?: Parameters<typeof drainPendingDeliveries>[0]["deliver"]) {
+  return drainPendingDeliveries({
+    drainKey: "demo:test",
+    logLabel: "Demo reconnect drain",
+    cfg: {},
+    log,
+    deliver,
+    selectEntry: () => ({ match: false }),
+  });
+}
 
 beforeEach(() => {
   resetGatewayWorkAdmission();
   mocks.coreDrainPendingDeliveries.mockReset().mockResolvedValue(undefined);
   mocks.deliverOutboundPayloads.mockReset().mockResolvedValue([]);
-  log.info.mockClear();
-  log.warn.mockClear();
-  log.error.mockClear();
 });
 
 afterEach(resetGatewayWorkAdmission);
@@ -51,13 +54,7 @@ describe("plugin-sdk delivery queue drainPendingDeliveries", () => {
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);
 
-    const pending = drainPendingDeliveries({
-      drainKey: "demo:test",
-      logLabel: "Demo reconnect drain",
-      cfg: {},
-      log,
-      selectEntry: () => ({ match: false }),
-    });
+    const pending = drain();
     await Promise.resolve();
 
     expect(mocks.deliverRuntimeModuleLoads).toBe(0);
@@ -68,38 +65,48 @@ describe("plugin-sdk delivery queue drainPendingDeliveries", () => {
 
     expect(mocks.deliverRuntimeModuleLoads).toBe(1);
     expect(mocks.coreDrainPendingDeliveries).toHaveBeenCalledOnce();
+    expect(mocks.coreDrainPendingDeliveries.mock.calls[0]?.[0].deliver).toBe(
+      mocks.deliverOutboundPayloads,
+    );
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it("counts a reconnect drain independently from its admitted parent", async () => {
-    let finishDrain = () => {};
-    const drainStarted = new Promise<void>((resolveStarted) => {
-      mocks.coreDrainPendingDeliveries.mockImplementationOnce(
-        () =>
-          new Promise<void>((resolveDrain) => {
-            finishDrain = resolveDrain;
-            resolveStarted();
-          }),
-      );
+    const started = createDeferred();
+    const finished = createDeferred();
+    mocks.coreDrainPendingDeliveries.mockImplementationOnce(() => {
+      started.resolve();
+      return finished.promise;
     });
-    const deliver = vi.fn(async () => []);
+    const receipt = { messageId: "queued-message" };
+    const deliver = vi.fn(async () => {
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      return receipt;
+    });
 
     await runWithGatewayRootWorkAdmissionForTest(async () => {
       expect(getActiveGatewayRootWorkCount()).toBe(1);
-      const pending = drainPendingDeliveries({
-        drainKey: "demo:test",
-        logLabel: "Demo reconnect drain",
-        cfg: {},
-        log,
-        deliver,
-        selectEntry: () => ({ match: false }),
-      });
-      await drainStarted;
+      const pending = drain(deliver);
+      await started.promise;
 
-      expect(getActiveGatewayRootWorkCount()).toBe(2);
-      finishDrain();
-      await pending;
+      try {
+        expect(getActiveGatewayRootWorkCount()).toBe(2);
+        const params = {
+          cfg: {},
+          channel: "telegram" as const,
+          to: "chat",
+          payloads: [{ text: "Queued notice." }],
+        };
+        const coreDeliver = mocks.coreDrainPendingDeliveries.mock.calls[0]![0].deliver;
+        expect(await coreDeliver(params)).toBe(receipt);
+        expect(deliver).toHaveBeenCalledExactlyOnceWith(params);
+      } finally {
+        finished.resolve();
+        await pending;
+      }
       expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(mocks.coreDrainPendingDeliveries).toHaveBeenCalledOnce();
+      expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     });
 
     expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -111,55 +118,8 @@ describe("plugin-sdk delivery queue drainPendingDeliveries", () => {
       throw new Error("drain failed");
     });
 
-    await expect(
-      drainPendingDeliveries({
-        drainKey: "demo:test",
-        logLabel: "Demo reconnect drain",
-        cfg: {},
-        log,
-        deliver: vi.fn(async () => []),
-        selectEntry: () => ({ match: false }),
-      }),
-    ).rejects.toThrow("drain failed");
+    await expect(drain(vi.fn(async () => []))).rejects.toThrow("drain failed");
 
     expect(getActiveGatewayRootWorkCount()).toBe(0);
-  });
-
-  it("injects the lazy outbound deliver runtime when no deliver fn is provided", async () => {
-    await drainPendingDeliveries({
-      drainKey: "demo:test",
-      logLabel: "Demo reconnect drain",
-      cfg: {},
-      log,
-      selectEntry: () => ({ match: false }),
-    });
-
-    expect(mocks.coreDrainPendingDeliveries).toHaveBeenCalledTimes(1);
-    const [{ deliver: lazyDeliver }] = expectDefined(
-      (mocks.coreDrainPendingDeliveries.mock.calls as unknown as Array<[{ deliver?: unknown }]>)[0],
-      "(mocks.coreDrainPendingDeliveries.mock.calls as unknown as Array<[{ deliver?: unknown }]>)[0] test invariant",
-    );
-    expect(lazyDeliver).toBe(mocks.deliverOutboundPayloads);
-  });
-
-  it("preserves an explicit deliver fn without loading the lazy runtime", async () => {
-    const deliver = vi.fn(async () => []);
-
-    await drainPendingDeliveries({
-      drainKey: "demo:test",
-      logLabel: "Demo reconnect drain",
-      cfg: {},
-      log,
-      deliver,
-      selectEntry: () => ({ match: false }),
-    });
-
-    expect(mocks.coreDrainPendingDeliveries).toHaveBeenCalledTimes(1);
-    const [{ deliver: explicitDeliver }] = expectDefined(
-      (mocks.coreDrainPendingDeliveries.mock.calls as unknown as Array<[{ deliver?: unknown }]>)[0],
-      "(mocks.coreDrainPendingDeliveries.mock.calls as unknown as Array<[{ deliver?: unknown }]>)[0] test invariant",
-    );
-    expect(explicitDeliver).toBe(deliver);
-    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 });

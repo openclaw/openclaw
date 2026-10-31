@@ -18,10 +18,11 @@ import {
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { pinDirectory, sha256File } from "./directory-durability.js";
-import { hasErrnoCode } from "./errno.js";
+import { formatErrorMessage } from "./errors.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { root as safeRoot } from "./fs-safe.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
+import { lstatIfExists } from "./path-existence.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { resolveLegacyStateDirMigrationCandidates } from "./state-migrations.state-dir.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
@@ -57,39 +58,27 @@ export async function withVerifiedUpdateRecoveryBackup<T>(
     if (manifest.entries.length > 4096) {
       throw new Error("Preservation inspection exceeds its 4096-resource bound.");
     }
-    const verify = async () => {
-      for (const entry of manifest.entries) {
-        if (entry.kind !== "file") {
-          continue;
-        }
-        const pathname = path.join(ref.directory, entry.archivePath);
-        if (entry.sqlite) {
-          for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
-            if (await statOrMissing(`${pathname}${suffix}`)) {
-              throw new Error(
-                `Preservation requires a consolidated SQLite payload: ${entry.sourcePath}`,
-              );
-            }
+    for (const entry of manifest.entries) {
+      if (entry.kind !== "file") {
+        continue;
+      }
+      const pathname = path.join(ref.directory, entry.archivePath);
+      if (entry.sqlite) {
+        for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+          if (await lstatIfExists(`${pathname}${suffix}`, "ENOENT")) {
+            throw new Error(
+              `Preservation requires a consolidated SQLite payload: ${entry.sourcePath}`,
+            );
           }
         }
-        const actual = await fileDigest(pathname);
-        if (actual.sha256 !== entry.sha256 || actual.size !== entry.size) {
-          throw new Error(`Preservation payload does not match its manifest: ${entry.sourcePath}`);
-        }
       }
-      await pin.assertCurrent();
-    };
-    await verify();
-    const result = await inspect(manifest);
-    await verify();
-    const source = await safeRoot(ref.directory, { symlinks: "reject", hardlinks: "reject" });
-    if (
-      sha256Hex(await source.readBytes("manifest.json", { maxBytes: MAX_MANIFEST_BYTES })) !==
-      ref.manifestSha256
-    ) {
-      throw new Error("Preservation manifest changed during inspection.");
+      const actual = await fileDigest(pathname);
+      if (actual.sha256 !== entry.sha256 || actual.size !== entry.size) {
+        throw new Error(`Preservation payload does not match its manifest: ${entry.sourcePath}`);
+      }
     }
-    return result;
+    await pin.assertCurrent();
+    return await inspect(manifest);
   });
 }
 
@@ -103,17 +92,6 @@ type Outcome = {
   status: "pending" | "restored" | "committed" | "restore-failed";
   error?: string;
 };
-
-async function statOrMissing(pathname: string) {
-  try {
-    return await fs.lstat(pathname);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
-}
 
 async function fileDigest(pathname: string): Promise<{ size: number; sha256: string }> {
   const source = await (
@@ -260,7 +238,7 @@ async function withRecoveryMetadata<T>(
     const manifest = parseUpdateRecoveryBackupManifest(bytes.toString("utf8"));
     assertManifestLocation(ref, manifest);
     let outcome: RecordedOutcome | undefined;
-    const outcomeEntry = await statOrMissing(path.join(ref.directory, "outcome.json"));
+    const outcomeEntry = await lstatIfExists(path.join(ref.directory, "outcome.json"), "ENOENT");
     assertOwned?.();
     if (outcomeEntry) {
       outcome = recordedOutcomeSchema.parse(
@@ -339,9 +317,8 @@ async function fingerprintIncompleteRecoveryGeneration(directory: string): Promi
   return sha256Hex(JSON.stringify(inventory));
 }
 /** This records repair of current state, never reverse publication or permission to delete B/C/T. */
-async function readBinding(ref: UpdateRecoveryBackupRef) {
+async function readBinding(ref: UpdateRecoveryBackupRef, run: UpdateRunRecord | undefined) {
   return withRecoveryMetadata(ref, async ({ manifest, outcome, pin }) => {
-    const run = await getUpdateRunAsync(manifest.runId);
     const capture = run?.origin.updateRecoveryCapture;
     if (
       outcome ||
@@ -363,11 +340,11 @@ async function readBinding(ref: UpdateRecoveryBackupRef) {
     const incompleteGenerations: Partial<Record<"candidate" | "prepared", string>> = {};
     for (const kind of ["candidate", "prepared"] as const) {
       const directory = path.join(ref.directory, kind);
-      if (!(await statOrMissing(directory))) {
+      if (!(await lstatIfExists(directory, "ENOENT"))) {
         continue;
       }
       await assertUpdateRecoverySealComplete(directory);
-      if (!(await statOrMissing(path.join(directory, "manifest.json")))) {
+      if (!(await lstatIfExists(path.join(directory, "manifest.json"), "ENOENT"))) {
         // Preparation can stop before the final seal. Retain and bind all of
         // those bytes, but never label them a verified rollback generation.
         incompleteGenerations[kind] = await fingerprintIncompleteRecoveryGeneration(directory);
@@ -422,14 +399,14 @@ async function readBinding(ref: UpdateRecoveryBackupRef) {
 /** Missing receipt keeps admission closed. Malformed or contradictory receipts fail closed. */
 export async function hasUpdateRecoveryForwardResolution(
   ref: UpdateRecoveryBackupRef,
+  run: UpdateRunRecord | undefined,
 ): Promise<boolean> {
-  return withRecoveryMetadata(ref, async ({ manifest, outcome }) => {
-    const run = await getUpdateRunAsync(manifest.runId);
+  return withRecoveryMetadata(ref, async ({ outcome }) => {
     const receipt = run?.origin.updateRecoveryCapture?.forwardResolution;
     if (!receipt) {
       return false;
     }
-    if (outcome || !isDeepStrictEqual(receipt.binding, await readBinding(ref))) {
+    if (outcome || !isDeepStrictEqual(receipt.binding, await readBinding(ref, run))) {
       throw new Error("Forward recovery receipt is stale or contradicts its failed capture.");
     }
     return true;
@@ -459,7 +436,7 @@ export async function readUpdateRecoveryBaselineIdentity(params: {
     : [...scopes.keys()].map((stateDir) => captureDirectory(params.runId, stateDir));
   const present: string[] = [];
   for (const directory of candidates) {
-    const entry = await statOrMissing(directory);
+    const entry = await lstatIfExists(directory, "ENOENT");
     params.assertCurrent();
     if (!entry) {
       continue;
@@ -534,7 +511,7 @@ export async function readUpdateRecoveryBaselineIdentity(params: {
         throw new Error("A terminal update capture cannot be reused as the original baseline.");
       }
       for (const kind of ["candidate", "prepared"] as const) {
-        const entry = await statOrMissing(path.join(directory, kind));
+        const entry = await lstatIfExists(path.join(directory, kind), "ENOENT");
         assertReuseCurrent();
         if (entry) {
           throw new Error("Original update capture already has later recovery generations.");
@@ -556,87 +533,91 @@ type UpdateRecoveryBackupRead =
       ref: UpdateRecoveryBackupRef;
       manifest: UpdateRecoveryBackupManifest;
       outcome: Outcome;
+      run: UpdateRunRecord | undefined;
     }
-  | { kind: "incomplete"; directory: string };
+  | { kind: "incomplete"; directory: string }
+  | { kind: "unreadable"; directory: string; error: string };
 
-export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupRead[]> {
+export async function readUpdateRecoveryBackups(
+  readRun = getUpdateRunAsync,
+): Promise<UpdateRecoveryBackupRead[]> {
   const result: UpdateRecoveryBackupRead[] = [];
   const scopes = captureScopes(process.env);
   for (const stateDir of scopes.keys()) {
     const store = resolveUpdateCaptureRoot(stateDir);
-    if (!(await statOrMissing(store))) {
+    if (!(await lstatIfExists(store, "ENOENT"))) {
       continue;
     }
     for (const captureId of await fs.readdir(store)) {
-      if (captureId === UPDATE_CAPTURE_PRIVACY_MARKER) {
-        continue;
-      }
       const directory = path.join(store, captureId);
-      const entry = await statOrMissing(directory);
-      // Doctor's schema archives share this root but are not recovery captures.
-      if (entry?.isFile() && /^agent-schema-.+\.tar\.gz$/u.test(captureId)) {
-        continue;
-      }
-      const manifestPath = path.join(directory, "manifest.json");
-      const manifestEntry = entry?.isDirectory() ? await statOrMissing(manifestPath) : undefined;
-      // Rehearsal scratch uses this prefix on every platform. A present manifest
-      // still belongs to recovery validation, even under a scratch-like name.
+      const entry = await lstatIfExists(directory, "ENOENT");
+      // Producers mark capture directories before staging payloads. Other entries
+      // (including OS metadata, schema archives, and rehearsal scratch) are unrelated.
       if (
-        entry?.isDirectory() &&
-        /^openclaw-update-canary-.+$/u.test(captureId) &&
-        !manifestEntry
+        !entry?.isDirectory() ||
+        !(
+          await lstatIfExists(path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER), "ENOENT")
+        )?.isFile()
       ) {
         continue;
       }
-      if (
-        entry?.isDirectory() &&
-        /^[a-zA-Z0-9_-]{1,128}$/u.test(captureId) &&
-        (!manifestEntry || (await hasPendingUpdateRecoverySeal(directory)))
-      ) {
-        result.push({ kind: "incomplete", directory });
-        continue;
-      }
-      if (!entry?.isDirectory() || !manifestEntry?.isFile()) {
-        throw new Error(
-          `Unresolved update capture ${directory} has incomplete publication. Inspection only: openclaw update status --json; npx openclaw@latest doctor --fix. Earlier captures are retained.`,
-        );
-      }
-      const source = await safeRoot(directory, { symlinks: "reject", hardlinks: "reject" });
-      const raw = await source.readText("manifest.json", {
-        maxBytes: MAX_MANIFEST_BYTES,
-      });
-      const manifest = parseUpdateRecoveryBackupManifest(raw);
-      const ref = { directory, manifestPath, manifestSha256: sha256Hex(raw) };
-      assertManifestLocation(ref, manifest);
-      assertManifestSelectedScope(manifest, scopes);
-      const capture = (await getUpdateRunAsync(manifest.runId))?.origin.updateRecoveryCapture;
-      if (capture && capture.manifestSha256 !== ref.manifestSha256) {
-        throw new Error(
-          `Update capture identity changed: ${manifestPath}. Inspect with openclaw update status --json; npx openclaw@latest doctor --fix.`,
-        );
-      }
-      const terminalPath = path.join(directory, "outcome.json");
-      let outcome: Outcome;
-      if (await statOrMissing(terminalPath)) {
-        const terminal = recordedOutcomeSchema.parse(
-          await source.readJson("outcome.json", {
-            maxBytes: MAX_UPDATE_RECOVERY_OUTCOME_BYTES,
-          }),
-        );
-        if (terminal.manifestSha256 !== ref.manifestSha256) {
-          throw new Error(`Update recovery outcome refers to another manifest: ${manifestPath}`);
+      try {
+        const manifestPath = path.join(directory, "manifest.json");
+        const manifestEntry = await lstatIfExists(manifestPath, "ENOENT");
+        if (
+          /^[a-zA-Z0-9_-]{1,128}$/u.test(captureId) &&
+          (!manifestEntry || (await hasPendingUpdateRecoverySeal(directory)))
+        ) {
+          result.push({ kind: "incomplete", directory });
+          continue;
         }
-        outcome = terminal;
-      } else {
-        outcome = { status: capture?.status ?? "pending", error: capture?.error };
+        if (!manifestEntry?.isFile()) {
+          throw new Error(
+            `Unresolved update capture ${directory} has incomplete publication. Inspection only: openclaw update status --json; npx openclaw@latest doctor --fix. Earlier captures are retained.`,
+          );
+        }
+        const source = await safeRoot(directory, { symlinks: "reject", hardlinks: "reject" });
+        const raw = await source.readText("manifest.json", {
+          maxBytes: MAX_MANIFEST_BYTES,
+        });
+        const manifest = parseUpdateRecoveryBackupManifest(raw);
+        const ref = { directory, manifestPath, manifestSha256: sha256Hex(raw) };
+        assertManifestLocation(ref, manifest);
+        assertManifestSelectedScope(manifest, scopes);
+        const run = await readRun(manifest.runId);
+        const capture = run?.origin.updateRecoveryCapture;
+        if (capture && capture.manifestSha256 !== ref.manifestSha256) {
+          throw new Error(
+            `Update capture identity changed: ${manifestPath}. Inspect with openclaw update status --json; npx openclaw@latest doctor --fix.`,
+          );
+        }
+        const terminalPath = path.join(directory, "outcome.json");
+        let outcome: Outcome;
+        if (await lstatIfExists(terminalPath, "ENOENT")) {
+          const terminal = recordedOutcomeSchema.parse(
+            await source.readJson("outcome.json", {
+              maxBytes: MAX_UPDATE_RECOVERY_OUTCOME_BYTES,
+            }),
+          );
+          if (terminal.manifestSha256 !== ref.manifestSha256) {
+            throw new Error(`Update recovery outcome refers to another manifest: ${manifestPath}`);
+          }
+          outcome = terminal;
+        } else {
+          outcome = { status: capture?.status ?? "pending", error: capture?.error };
+        }
+        // One ledger observation owns this projection; known absence is not a reason to reread.
+        result.push({ kind: "sealed", ref, manifest, outcome, run });
+      } catch (error) {
+        // A damaged marked capture remains evidence; it cannot hide verified neighbors.
+        result.push({ kind: "unreadable", directory, error: formatErrorMessage(error) });
       }
-      result.push({ kind: "sealed", ref, manifest, outcome });
     }
   }
   return result.toSorted((a, b) => {
-    if (a.kind === "incomplete") {
-      return b.kind === "incomplete" ? a.directory.localeCompare(b.directory) : 1;
+    if (a.kind !== "sealed") {
+      return b.kind !== "sealed" ? a.directory.localeCompare(b.directory) : 1;
     }
-    return b.kind === "incomplete" ? -1 : b.manifest.createdAt.localeCompare(a.manifest.createdAt);
+    return b.kind !== "sealed" ? -1 : b.manifest.createdAt.localeCompare(a.manifest.createdAt);
   });
 }

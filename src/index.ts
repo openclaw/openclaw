@@ -9,6 +9,7 @@ import {
   resolveOpenClawCompileCacheRespawnEnv,
 } from "../node-compile-cache.mjs";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
+import { resolveCliDatabaseProcessRole } from "./cli/database-process-role.js";
 import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
 import {
   isForegroundGmailRunArgv,
@@ -19,12 +20,17 @@ import {
   configureGatewayStartupTraceConsoleFormatting,
   createGatewayDispatchStartupTrace,
 } from "./cli/startup-trace.js";
+import { normalizeWindowsArgv } from "./cli/windows-argv.js";
+import { installDatabaseProcessRole } from "./infra/database-engine/admission-scope.js";
 import { isMainModule } from "./infra/is-main.js";
 import "./shared/detached-async-context.js";
 
 const isMain = isMainModule({
   currentFile: fileURLToPath(import.meta.url),
 });
+if (isMain) {
+  installDatabaseProcessRole(resolveCliDatabaseProcessRole(normalizeWindowsArgv(process.argv)));
+}
 const handledAdmission =
   isMain && (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv)));
 const packageRootUrl = new URL("../", import.meta.url);
@@ -164,59 +170,28 @@ if (shouldRunCli && !compileCacheRespawnEnv) {
     foregroundGateway: isForegroundGatewayRunArgv(process.argv),
   });
   const [
-    { formatCliFailureLines, formatCliJsonFailure, isExpectedCliError },
+    { formatCliFailureLines, formatCliJsonFailure, handleCliUncaughtException, isExpectedCliError },
     { isJsonOutputModeActive },
     { runCliWithExitFinalization },
     { withCliProcessScope },
-    { formatUncaughtError },
     { runFatalErrorHooks },
-    {
-      installUnhandledRejectionHandler,
-      isBenignUncaughtExceptionError,
-      isUncaughtExceptionHandled,
-    },
+    { installUnhandledRejectionHandler },
   ] = await Promise.all([
     import("./cli/failure-output.js"),
     import("./cli/json-output-mode.js"),
     import("./cli/one-shot-exit.js"),
     import("./cli/runtime-cleanup-scope.js"),
-    import("./infra/errors.js"),
     import("./infra/fatal-error-hooks.js"),
     import("./infra/unhandled-rejections.js"),
   ]);
 
   const { defaultRuntime, restoreRuntimeTerminalState } = await import("./runtime.js");
-  const { exitAfterSignalExitBarriers } = await import("./cli/signal-exit-barrier.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
-    if (isUncaughtExceptionHandled(error)) {
-      return;
-    }
-    if (isBenignUncaughtExceptionError(error)) {
-      console.warn(
-        "[openclaw] Non-fatal uncaught exception (continuing):",
-        formatUncaughtError(error),
-      );
-      return;
-    }
-    if (isJsonOutputModeActive(process.argv)) {
-      defaultRuntime.writeJson(formatCliJsonFailure(error));
-    }
-    for (const line of formatCliFailureLines({
-      title: "OpenClaw hit an unexpected runtime error.",
-      error,
-      argv: process.argv,
-    })) {
-      console.error(line);
-    }
-    for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
-      console.error("[openclaw]", message);
-    }
-    restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
-    exitAfterSignalExitBarriers(1, "uncaught exception");
+    handleCliUncaughtException(error);
   });
 
   void runCliWithExitFinalization({
@@ -243,7 +218,7 @@ if (shouldRunCli && !compileCacheRespawnEnv) {
           console.error("[openclaw]", message);
         }
       }
-      restoreRuntimeTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
+      restoreRuntimeTerminalState("legacy cli failure");
       process.exitCode = 1;
     },
   });

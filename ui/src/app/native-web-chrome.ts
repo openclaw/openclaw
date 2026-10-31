@@ -7,12 +7,6 @@ export type NativeHistoryState = {
   canGoForward: boolean;
 };
 
-type NativeEmbedHost = {
-  platform: "ios" | "macos" | "android";
-  formFactor: "phone" | "pad" | "desktop";
-  surface?: "conversation";
-};
-
 type NativeWebChromeWindow = Window & {
   __OPENCLAW_NATIVE_EMBED__?: unknown;
   __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
@@ -29,7 +23,11 @@ export function isNativeWebChromeHost(): boolean {
   return (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_WEB_CHROME__"] === true;
 }
 
-export function nativeEmbedHost(): NativeEmbedHost | null {
+export function nativeEmbedHost(): {
+  platform: "ios" | "macos" | "android";
+  formFactor: "phone" | "pad" | "desktop";
+  surface?: "conversation";
+} | null {
   // SAFETY: the host adds this optional document-start value; its shape is validated below.
   const host = (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_EMBED__"];
   if (!isRecord(host)) {
@@ -41,6 +39,31 @@ export function nativeEmbedHost(): NativeEmbedHost | null {
     (surface === undefined || surface === "conversation")
     ? { platform, formFactor, ...(surface ? { surface } : {}) }
     : null;
+}
+
+// Startup consumes native authentication metadata. Retain only its host provenance,
+// never credentials, for WebViews that do not opt into embedded chrome.
+let nativeControlHost = false;
+
+export function setNativeControlHost(value: boolean): void {
+  nativeControlHost = value;
+}
+
+export function isNativeMobileHost(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const embed = nativeEmbedHost();
+  if (embed) {
+    return embed.platform === "ios" || embed.platform === "android";
+  }
+  // iPad can request a desktop user agent. A mobile browser alone is not a
+  // native host, and a narrow desktop window must keep desktop behavior.
+  return (
+    nativeControlHost &&
+    (/Android|iPhone|iPad|iPod/u.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1))
+  );
 }
 
 export function isNativeEmbedHost(): boolean {

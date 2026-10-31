@@ -6,7 +6,6 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { readOpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/openclaw-agent-db-lifecycle.js";
-import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import * as nativeExecution from "../../state/openclaw-agent-execution-native.js";
@@ -24,8 +23,7 @@ export function createFixture(sessionIds = ["first", "second"], agentId = "main"
   const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("reclamation-reuse-")) };
   const options = { agentId, env };
   const scopes = sessionIds.map((sessionId) => ({
-    agentId: options.agentId,
-    env,
+    ...options,
     sessionId,
     sessionKey: `agent:main:${sessionId}`,
   }));
@@ -65,29 +63,11 @@ export function leasesFor(fixture: ReturnType<typeof createFixture>) {
 }
 
 export function createNativeReclamationSource(
-  fixture: Pick<ReturnType<typeof createFixture>, "database" | "options">,
-  revokeDuringOpen: boolean,
-) {
-  const { database, options } = fixture;
+  options: ReturnType<typeof createFixture>["options"],
+): AgentDatabaseRequestExecutionSource {
   const context = captureOpenClawStateWorkerContext(options);
   const assertCurrent = () => context.admission.assertCurrent();
-  let revokedDuringOpen = false;
-  if (revokeDuringOpen) {
-    probe.admission(workerAdmission, (request, grant, admit) => {
-      if (
-        !revokedDuringOpen &&
-        request.stage === "prepare" &&
-        isRecord(request.facts) &&
-        isRecord(request.facts.identity) &&
-        request.facts.identity.nativeLocation === database.path
-      ) {
-        invalidateOpenClawAgentDatabaseValidation(database.path);
-        revokedDuringOpen = true;
-      }
-      admit(request, grant);
-    });
-  }
-  const source: AgentDatabaseRequestExecutionSource = {
+  return {
     assertCurrent,
     createAdmission(binding) {
       return () => ({
@@ -102,7 +82,6 @@ export function createNativeReclamationSource(
       });
     },
   };
-  return { source, wasRevokedDuringOpen: () => revokedDuringOpen };
 }
 
 export function observeNativeGenerationRetirement(databasePath: string) {
@@ -143,13 +122,12 @@ export function observeReclamationLeaseReceipts(database: { agentId: string; pat
     }
   });
   return {
-    onSpawn: (worker: Worker) => {
-      worker.on("message", (message: SqliteReclamationWorkerMessage) => {
+    onSpawn: (worker: Worker) =>
+      void worker.on("message", (message: SqliteReclamationWorkerMessage) => {
         if (message.type === "lease" && message.receipt.path === database.path) {
           reclamationLeaseId = message.receipt.leaseId;
         }
-      });
-    },
+      }),
     read: () => ({ admittedLeaseId, reclamationLeaseId }),
   };
 }

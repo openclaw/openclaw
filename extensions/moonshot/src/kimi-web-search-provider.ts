@@ -1,6 +1,7 @@
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createWebSearchProviderContractFields,
+  WEB_SEARCH_QUERY_COUNT_PROPERTIES,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 
@@ -13,13 +14,7 @@ const loadKimiWebSearchProviderRuntime = createLazyRuntimeModule(
 const KimiSearchSchema = {
   type: "object",
   properties: {
-    query: { type: "string", description: "Search query string." },
-    count: {
-      type: "integer",
-      description: "Number of results to return (1-10).",
-      minimum: 1,
-      maximum: 10,
-    },
+    ...WEB_SEARCH_QUERY_COUNT_PROPERTIES,
     country: { type: "string", description: "Not supported by Kimi." },
     language: { type: "string", description: "Not supported by Kimi." },
     freshness: { type: "string", description: "Not supported by Kimi." },

@@ -1,6 +1,7 @@
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import type { Api, Context } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
+import { transformMessages } from "../../packages/ai/src/transcript-transform.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
@@ -8,12 +9,12 @@ import { transformTransportMessages } from "./transport-message-transform.js";
 
 const EXPECTED_FAILURE_MARKER =
   "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
-const NO_CONTENT_PLACEHOLDER = "[assistant turn failed before producing content]";
 
 const makeModel = (api: Api, provider: string, id: string) =>
   makeProviderModelFixture({ api, provider, id, baseUrl: "https://example.test" });
 
 type ToolResultMessage = Extract<Context["messages"][number], { role: "toolResult" }>;
+type AssistantMessage = Extract<Context["messages"][number], { role: "assistant" }>;
 const userMessage = (content: string, timestamp = Date.now()) => ({
   role: "user" as const,
   content,
@@ -37,7 +38,7 @@ function toolResult(
   };
 }
 function thinkingMessage(
-  overrides: Partial<Extract<Context["messages"][number], { role: "assistant" }>>,
+  overrides: Partial<AssistantMessage>,
   thinking: string,
   thinkingSignature: string,
   visible?: string,
@@ -57,8 +58,8 @@ function thinkingMessage(
 function assistantToolCall(
   id: string,
   name = "read",
-  stopReason: Extract<Context["messages"][number], { role: "assistant" }>["stopReason"] = "toolUse",
-): Extract<Context["messages"][number], { role: "assistant" }> {
+  stopReason: AssistantMessage["stopReason"] = "toolUse",
+): AssistantMessage {
   return makeAgentAssistantMessage({
     model: "gpt-5.4",
     stopReason,
@@ -66,48 +67,40 @@ function assistantToolCall(
   });
 }
 
-it.each(["openai-completions"] as const)(
-  "compacts sparse %s history without changing the source or sharing assistant arrays",
-  (api) => {
-    const hidden = makeAssistantMessageFixture({
-      api,
-      content: [{ type: "thinking", thinking: "unfinished reasoning" }],
-    });
-    const failed = makeAssistantMessageFixture({
-      api,
-      content: [{ type: "text", text: "unfinished answer" }],
-    });
-    const retained = makeAssistantMessageFixture({
-      api,
-      stopReason: "stop",
-      content: [{ type: "text", text: "completed answer" }],
-    });
-    const user = userMessage("continue", 1);
-    const messages: Context["messages"] = [];
-    messages[1] = hidden;
-    messages[3] = failed;
-    messages[4] = retained;
-    messages[6] = user;
-    messages.length = 8;
-    const original = structuredClone(messages);
+it("compacts sparse history without changing the source or sharing assistant arrays", () => {
+  const api = "openai-completions";
+  const assistant = (
+    content: AssistantMessage["content"],
+    stopReason?: AssistantMessage["stopReason"],
+  ) => makeAssistantMessageFixture({ api, content, ...(stopReason ? { stopReason } : {}) });
+  const hidden = assistant([{ type: "thinking", thinking: "unfinished reasoning" }]);
+  const failed = assistant([text("unfinished answer")]);
+  const retained = assistant([text("completed answer")], "stop");
+  const user = userMessage("continue", 1);
+  const messages: Context["messages"] = [];
+  messages[1] = hidden;
+  messages[3] = failed;
+  messages[4] = retained;
+  messages[6] = user;
+  messages.length = 8;
+  const original = structuredClone(messages);
 
-    const result = transformTransportMessages(messages, makeModel(api, "openai", "test-model"));
+  const result = transformTransportMessages(messages, makeModel(api, "openai", "test-model"));
 
-    expect(result).toStrictEqual([
-      { ...failed, content: [{ type: "text", text: EXPECTED_FAILURE_MARKER }] },
-      retained,
-      user,
-    ]);
-    const replayedAssistant = result[1];
-    if (replayedAssistant?.role !== "assistant") {
-      throw new Error("expected the completed assistant turn");
-    }
-    replayedAssistant.stopReason = "length";
-    replayedAssistant.content.push({ type: "text", text: "replay-only addition" });
-    result.pop();
-    expect(messages).toStrictEqual(original);
-  },
-);
+  expect(result).toStrictEqual([
+    { ...failed, content: [text(EXPECTED_FAILURE_MARKER)] },
+    retained,
+    user,
+  ]);
+  const replayedAssistant = result[1];
+  if (replayedAssistant?.role !== "assistant") {
+    throw new Error("expected the completed assistant turn");
+  }
+  replayedAssistant.stopReason = "length";
+  replayedAssistant.content.push(text("replay-only addition"));
+  result.pop();
+  expect(messages).toStrictEqual(original);
+});
 
 it("preserves unframed tool results only for a selected compaction replay window", () => {
   const messages = [
@@ -139,8 +132,7 @@ it("preserves unframed tool results only for a selected compaction replay window
   ).toHaveLength(1);
 });
 
-// Live-verified 2026-09-02 with thinking-binding-controls: these replays return
-// input_transformations: [] on claude-fable-5-1, so the earlier reasoning stays usable.
+// Live-verified 2026-09-02: equivalent response-model bindings retain usable reasoning.
 it.each([
   {
     source: { provider: "anthropic", model: "claude-sonnet-4-6" },
@@ -157,20 +149,33 @@ it.each([
     keepThinking: true,
   },
 ])("applies thinking binding when switching to $target", ({ source, target, keepThinking }) => {
-  const result = transformTransportMessages(
-    [thinkingMessage(source, "earlier reasoning", "sig_readable", "visible answer")],
-    makeModel("anthropic-messages", "anthropic", target),
-  );
+  for (const transform of [transformTransportMessages, transformMessages]) {
+    let targetReads = 0;
+    const model = {
+      ...makeModel("anthropic-messages", "anthropic", target),
+      get params() {
+        targetReads++;
+        return undefined;
+      },
+    };
+    const result = transform(
+      Array.from({ length: 40 }, () =>
+        thinkingMessage(source, "earlier reasoning", "sig_readable", "visible answer"),
+      ),
+      model,
+    );
 
-  expect(result[0]).toMatchObject({
-    role: "assistant",
-    content: [
-      ...(keepThinking
-        ? [{ type: "thinking", thinking: "earlier reasoning", thinkingSignature: "sig_readable" }]
-        : []),
-      { type: "text", text: "visible answer" },
-    ],
-  });
+    expect(targetReads).toBe(1);
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: [
+        ...(keepThinking
+          ? [{ type: "thinking", thinking: "earlier reasoning", thinkingSignature: "sig_readable" }]
+          : []),
+        text("visible answer"),
+      ],
+    });
+  }
 });
 
 it.each([
@@ -192,18 +197,6 @@ it.each([
   const result = transformTransportMessages(messages, openai);
   expect(result[0]).toMatchObject({ role: "assistant", content: expected });
   expect(result[1]).toMatchObject({ role: "user" });
-});
-
-it("drops the no-content placeholder with hidden reasoning across a model change", () => {
-  const failed = makeAssistantMessageFixture({
-    model: "source-model",
-    content: [
-      { type: "text", text: NO_CONTENT_PLACEHOLDER },
-      { type: "thinking", thinking: "hidden partial reasoning" },
-    ],
-  });
-  const user = userMessage("what is the weather?", 3);
-  expect(transformTransportMessages([failed, user], openai)).toEqual([user]);
 });
 
 it("drops max-token reasoning-only transport assistant turns before replay", () => {
@@ -252,7 +245,7 @@ it("does not reassign a dropped errored turn's repeated-id result to an older tu
     role: "toolResult",
     toolCallId: "call_repeated",
     isError: true,
-    content: [{ type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT }],
+    content: [text(DEFAULT_MISSING_TOOL_RESULT_TEXT)],
   });
   expect(JSON.stringify(result)).not.toContain("failed turn output");
 });

@@ -109,9 +109,25 @@ export function toImageDataUrl(params: {
   return `data:${mimeType};base64,${params.buffer.toString("base64")}`;
 }
 
-export function parseImageDataUrl(
-  dataUrl: string,
-): { mimeType: string; base64: string } | undefined {
+/** Prefer a supplied image URL; inline bytes only when no URL is available. */
+export function resolveImageSourceUrl(
+  image: { url?: string; buffer?: Buffer; mimeType?: string } | undefined,
+  missingDataMessage: string,
+): string | undefined {
+  if (!image) {
+    return undefined;
+  }
+  const url = normalizeOptionalString(image.url);
+  if (url) {
+    return url;
+  }
+  if (!image.buffer) {
+    throw new Error(missingDataMessage);
+  }
+  return toImageDataUrl({ buffer: image.buffer, mimeType: image.mimeType });
+}
+
+function readImageDataUrlParts(dataUrl: string) {
   const match = dataUrl.match(/^data:(image\/[^;,]+)(?:;[^,]*)?;base64,(.+)$/is);
   if (!match) {
     return undefined;
@@ -121,11 +137,21 @@ export function parseImageDataUrl(
   if (!mimeType || !base64) {
     return undefined;
   }
-  const canonicalBase64 = canonicalizeBase64(base64);
+  return { mimeType, base64 };
+}
+
+export function parseImageDataUrl(
+  dataUrl: string,
+): { mimeType: string; base64: string } | undefined {
+  const parsed = readImageDataUrlParts(dataUrl);
+  if (!parsed) {
+    return undefined;
+  }
+  const canonicalBase64 = canonicalizeBase64(parsed.base64);
   if (!canonicalBase64) {
     return undefined;
   }
-  return { mimeType, base64: canonicalBase64 };
+  return { mimeType: parsed.mimeType, base64: canonicalBase64 };
 }
 
 // Public conversion path for OpenAI-compatible base64 payloads. Invalid or
@@ -171,7 +197,7 @@ export function generatedImageAssetFromDataUrl(params: {
   index: number;
   fileNamePrefix?: string;
 }): GeneratedImageAsset | undefined {
-  const parsed = parseImageDataUrl(params.dataUrl);
+  const parsed = readImageDataUrlParts(params.dataUrl);
   if (!parsed) {
     return undefined;
   }

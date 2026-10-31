@@ -1,14 +1,19 @@
 import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
 import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog-paging";
 import { z } from "zod";
-import type { CodexThreadItem } from "./app-server/protocol.js";
+import { readItem } from "./app-server/event-projector-values.js";
+import { jsonObjectSchema } from "./app-server/json-schema.js";
+import { isJsonObject, type CodexThreadItem } from "./app-server/protocol.js";
 import {
   CatalogParamsError,
   MAX_TRANSCRIPT_PAGE_BYTES,
   parseTranscriptPage,
   readControlCursor,
 } from "./session-catalog-parsing.js";
-import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
+import {
+  codexCatalogDisplayFacts,
+  toGenericTranscriptItem,
+} from "./session-catalog-transcript-item.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 
 type TranscriptRequest = { threadId: string; cursor?: string; limit: number };
@@ -23,7 +28,7 @@ const transcriptPageSchema = z.strictObject({
       id: z.string(),
       type: z.enum(["userMessage", "agentMessage", "reasoning", "toolCall", "toolResult", "other"]),
       text: z.string().optional(),
-      raw: z.record(z.string(), z.json()).optional(),
+      raw: jsonObjectSchema.optional(),
       truncated: z.boolean().optional(),
     }),
   ),
@@ -32,6 +37,23 @@ const transcriptPageSchema = z.strictObject({
 
 export function parseCodexCatalogTranscriptPage(value: unknown): TranscriptPage {
   return transcriptPageSchema.parse(value);
+}
+
+/** Enrich local and released-node source pages once, without changing their rows or cursor. */
+export function projectCodexCatalogTranscriptPageForDisplay(page: TranscriptPage): TranscriptPage {
+  const projected: TranscriptPage = {
+    ...page,
+    items: page.items.map((item) => {
+      const native = isJsonObject(item.raw) ? readItem(item.raw) : undefined;
+      if (!native) {
+        return item;
+      }
+      // The source owns bounded text and identity; display facts do not replace them.
+      return { ...item, ...codexCatalogDisplayFacts(native) };
+    }),
+  };
+  // Released nodes already chose their cursor. Never remove their source rows.
+  return fitDisplayInputsToNodeTransport(projected) ? projected : page;
 }
 
 function projectTranscriptPage(
@@ -55,6 +77,30 @@ function pageFitsNodeTransport(page: TranscriptPage): boolean {
     Buffer.byteLength(JSON.stringify({ payloadJSON: JSON.stringify(page) }), "utf8") <=
     MAX_TRANSCRIPT_PAGE_BYTES
   );
+}
+
+function fitDisplayInputsToNodeTransport(page: TranscriptPage): boolean {
+  if (pageFitsNodeTransport(page)) {
+    return true;
+  }
+  // Inputs duplicate native raw fields; optional presentation must not evict
+  // source history or make a previously readable single item unreadable.
+  for (const item of page.items) {
+    if (item.toolDetails !== undefined) {
+      delete item.toolDetails;
+      item.truncated = true;
+    }
+  }
+  if (pageFitsNodeTransport(page)) {
+    return true;
+  }
+  for (const item of page.items) {
+    if (item.toolInput !== undefined) {
+      delete item.toolInput;
+      item.toolInputOmitted = true;
+    }
+  }
+  return pageFitsNodeTransport(page);
 }
 
 function encodeTurnItemCursor(turnCursor: string, itemId: string): string {

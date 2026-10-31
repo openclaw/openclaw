@@ -6,6 +6,7 @@ import {
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
 import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
+import { hasUnchangedCronSchedule, parseCronScheduleAt } from "../../lib/cron/form-schedule.ts";
 import type { CronFormState } from "../../lib/cron/types.ts";
 import { formatMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -17,6 +18,7 @@ import {
   CronInput,
   CronSelect,
 } from "./view-fields.tsx";
+import { describeJobNextRun } from "./view-job-status.tsx";
 import type { CronProps } from "./view-types.ts";
 const EVERY_SUMMARY_KEYS = {
   seconds: ["cron.form.summaryEverySecondOne", "cron.form.summaryEverySeconds"],
@@ -35,8 +37,8 @@ function describeFormSchedule(form: CronFormState): string | null {
     return Number(amount) === 1 ? t(singular) : t(plural, { amount });
   }
   if (form.scheduleKind === "at") {
-    const ms = Date.parse(form.scheduleAt);
-    return Number.isFinite(ms) ? t("cron.form.summaryOnce", { at: formatMs(ms) }) : null;
+    const at = parseCronScheduleAt(form.scheduleAt);
+    return at ? t("cron.form.summaryOnce", { at: formatMs(Date.parse(at)) }) : null;
   }
   if (form.scheduleKind === "cron") {
     const expr = form.cronExpr.trim();
@@ -110,20 +112,17 @@ export function ScheduleSection(props: CronProps) {
   const isStream = () => form().scheduleKind === "stream";
   // Process-backed schedules stay selectable only while current: jobs can
   // convert to an editable schedule, but never synthesize a command in the UI.
-  const processSchedule = createMemo(() =>
+  const processSchedule = () =>
     isOnExit()
       ? { value: "on-exit" as const, label: t("cron.form.repeatOnExit") }
       : isStream()
         ? { value: "stream" as const, label: t("cron.form.repeatStream") }
-        : null,
-  );
-  const kinds = createMemo<
-    Array<{
-      value: CronFormState["scheduleKind"];
-      label: string;
-      testId: string;
-    }>
-  >(() => {
+        : null;
+  const kinds = (): Array<{
+    value: CronFormState["scheduleKind"];
+    label: string;
+    testId: string;
+  }> => {
     const process = processSchedule();
     return [
       ...(process ? [{ ...process, testId: `cron-schedule-kind-${process.value}` }] : []),
@@ -141,8 +140,26 @@ export function ScheduleSection(props: CronProps) {
           ]
         : []),
     ];
+  };
+  // The form owns the authored occurrence; runtime deadlines may move after
+  // a continuation or retry. Never copy that deadline into the editable time.
+  const savedOneShot = createMemo(
+    () => {
+      const job = props.editingJob;
+      return job?.schedule.kind === "at" && hasUnchangedCronSchedule(form(), job) ? job : undefined;
+    },
+    { equals: false },
+  );
+  const summary = createMemo(() => {
+    const job = savedOneShot();
+    return job?.schedule.kind === "at"
+      ? t("cron.form.summaryConfiguredAt", { at: formatMs(Date.parse(job.schedule.at)) })
+      : describeFormSchedule(form());
   });
-  const summary = createMemo(() => describeFormSchedule(form()));
+  const runtimeSummary = () => {
+    const job = savedOneShot();
+    return job ? describeJobNextRun(job, true) : null;
+  };
   return (
     <SettingsSection title={t("cron.detail.scheduleSection")}>
       <SettingsRow
@@ -173,7 +190,11 @@ export function ScheduleSection(props: CronProps) {
         <CronInput
           {...props}
           field="scheduleAt"
-          label={t("cron.form.runAt")}
+          label={t(
+            props.editingJob?.schedule.kind === "at"
+              ? "cron.form.configuredTime"
+              : "cron.form.runAt",
+          )}
           required
           errorKey="scheduleAt"
           type="datetime-local"
@@ -194,6 +215,7 @@ export function ScheduleSection(props: CronProps) {
           <CronInput
             {...props}
             field="cronTz"
+            errorKey="cronTz"
             label={t("cron.form.timezoneOptional")}
             help={t("cron.form.timezoneHelp")}
             list="cron-tz-suggestions"
@@ -205,7 +227,15 @@ export function ScheduleSection(props: CronProps) {
       {summary() ? (
         <div class="cron-schedule-summary">
           <Icon name="clock" />
-          <span>{summary()}</span>
+          <span>
+            {summary()}
+            {runtimeSummary() ? (
+              <>
+                {" · "}
+                <strong>{runtimeSummary()}</strong>
+              </>
+            ) : undefined}
+          </span>
         </div>
       ) : undefined}
     </SettingsSection>

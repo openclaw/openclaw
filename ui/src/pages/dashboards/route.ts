@@ -1,7 +1,4 @@
-import { definePage } from "@openclaw/uirouter";
-import { createComponent } from "solid-js";
-import { routePageSpec } from "../../app-route-paths.ts";
-import type { SolidRouteProps } from "../../app-route-types.ts";
+import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionListSnapshot } from "../../lib/sessions/index.ts";
 import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
@@ -40,17 +37,10 @@ async function loadDashboardsRoute(context: ApplicationContext): Promise<Dashboa
   return dashboardsRouteData(context, snapshot);
 }
 
-export const page = definePage({
-  ...routePageSpec("dashboards"),
-  loader: loadDashboardsRoute,
-  component: () =>
-    import("./dashboards-page.tsx").then((module) => ({
-      header: true,
-      renderSolid: (props: SolidRouteProps<DashboardsRouteData>) =>
-        createComponent(module.DashboardsPage, {
-          get routeData() {
-            return props.data;
-          },
-        }),
-    })),
-});
+export const page = defineSolidPage<"dashboards", ApplicationContext, DashboardsRouteData>(
+  "dashboards",
+  () => import("./dashboards-page.tsx").then((module) => module.DashboardsPage),
+  {
+    loader: loadDashboardsRoute,
+  },
+);

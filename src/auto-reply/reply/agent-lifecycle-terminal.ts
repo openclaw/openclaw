@@ -1,12 +1,14 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { classifyOAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
+import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
 import { getFailoverErrorCode } from "../../agents/failover/error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 
 export type AgentLifecycleTerminalBackstop = {
   beginAttempt: () => void;
@@ -36,6 +38,7 @@ const DEFERRED_TERMINAL_METADATA_KEYS = [
   "stopReason",
   "yielded",
   "timeoutPhase",
+  "executionStarted",
   "providerStarted",
   "aborted",
   "livenessState",
@@ -127,6 +130,7 @@ export function createAgentLifecycleTerminalBackstop(params: {
     } else if (terminalPhase === "error") {
       const oauthFailure = classifyOAuthRefreshFailureError(terminalValue);
       data.error =
+        renderStorageFailureSummary(classifyGatewayStorageFailure(terminalValue)) ??
         renderAgentHarnessPreflightUserMessage(terminalValue) ??
         renderFailoverCodeUserCopy(getFailoverErrorCode(terminalValue)) ??
         (oauthFailure?.summary ? `⚠️ ${oauthFailure.summary}` : undefined) ??

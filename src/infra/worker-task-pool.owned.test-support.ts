@@ -1,10 +1,10 @@
 import { EventEmitter } from "node:events";
 import type { MessagePort, WorkerOptions } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { vi } from "vitest";
+import { expect, vi, type MockInstance } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 
-export type PostedTask = {
+type PostedTask = {
   input?: string;
   taskId?: number;
   responseId?: number;
@@ -19,6 +19,12 @@ export type MockWorker<Task> = EventEmitter & {
   terminate: ReturnType<typeof vi.fn<() => Promise<number>>>;
 };
 export type FakeWorker = MockWorker<PostedTask>;
+
+export function expectCalls(count: number, ...callbacks: MockInstance[]) {
+  for (const callback of callbacks) {
+    expect(callback).toHaveBeenCalledTimes(count);
+  }
+}
 
 export function createMockWorkerClass<Task>(
   workers: MockWorker<Task>[],

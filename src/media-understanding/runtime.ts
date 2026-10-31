@@ -4,10 +4,11 @@ import path from "node:path";
 import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { resolveImageCompressionModelPolicy } from "../agents/image-compression-policy.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
-import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
+import { MEDIA_CAPABILITY_DEFAULTS } from "./defaults.constants.js";
 import {
   normalizeImageDescriptionInput,
   optimizeImageDescriptionInput,
@@ -42,12 +43,10 @@ import type {
   RunMediaUnderstandingFileResult,
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
-import type { MediaUnderstandingCapability, MediaUnderstandingOutput } from "./types.js";
 export type {
   DescribePreparedImageWithModelParams,
   DescribeImageFileParams,
   DescribeImageFileWithModelParams,
-  PreparedImageDescriptionInput,
   PrepareImageDescriptionInputParams,
   DescribeVideoFileParams,
   ExtractStructuredWithModelParams,
@@ -55,12 +54,6 @@ export type {
   RunMediaUnderstandingFileResult,
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
-
-const KIND_BY_CAPABILITY: Record<MediaUnderstandingCapability, MediaUnderstandingOutput["kind"]> = {
-  audio: "audio.transcription",
-  image: "image.description",
-  video: "video.description",
-};
 
 function buildFileContext(
   params: Pick<
@@ -206,7 +199,7 @@ async function runFile(
       );
     }
     const output = result.outputs.find(
-      (entry) => entry.kind === KIND_BY_CAPABILITY[params.capability],
+      (entry) => entry.kind === MEDIA_CAPABILITY_DEFAULTS[params.capability].kind,
     );
     const text = output?.text?.trim();
     return {
@@ -242,7 +235,7 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
   try {
     const media = await cache.getBuffer({
       attachmentIndex: 0,
-      maxBytes: DEFAULT_MAX_BYTES.image,
+      maxBytes: MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
       timeoutMs,
     });
     image = {
@@ -258,7 +251,7 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
     buffer: image.buffer,
     fileName: image.fileName,
     mime: image.mime,
-    maxBytes: DEFAULT_MAX_BYTES.image,
+    maxBytes: MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
   });
   return {
     buffer: normalizedImage.buffer,
@@ -279,12 +272,14 @@ export async function describePreparedImageWithModel(params: DescribePreparedIma
       : resolveDefaultAgentDir(params.cfg));
   const image = await optimizeImageDescriptionInput({
     ...params.image,
-    maxBytes: DEFAULT_MAX_BYTES.image,
-    cfg: params.cfg,
-    provider: params.provider,
-    model: params.model,
-    agentDir,
-    workspaceDir: params.workspaceDir,
+    maxBytes: MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
+    modelPolicy: await resolveImageCompressionModelPolicy({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+      agentDir,
+      workspaceDir: params.workspaceDir,
+    }),
   });
   return await describeImage({
     buffer: image.buffer,

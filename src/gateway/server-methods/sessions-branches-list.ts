@@ -4,14 +4,13 @@ import {
   type SessionsBranchesListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listSessionBranches } from "../../config/sessions/session-accessor.js";
-import {
-  getSessionActorStorageBinding,
-  withSessionActorStorage,
-} from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
+import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import {
   captureSessionUpstreamLinkReadSource,
   prepareSessionUpstreamLink,
 } from "../../sessions/session-upstream-links-runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
@@ -23,7 +22,7 @@ export async function listSessionBranchesForGateway(
   const { params, respond, context } = options;
   const sessionKey = params.sessionKey.trim();
   const cfg = context.getRuntimeConfig();
-  const requestedAgent = resolveRequestedGlobalAgentId(cfg, sessionKey, params.agentId);
+  const requestedAgent = resolveRequestedGlobalAgentId(cfg, sessionKey, params.agentId, "read");
   if (!requestedAgent.ok) {
     respond(false, undefined, requestedAgent.error);
     return;
@@ -73,6 +72,7 @@ export async function listSessionBranchesForGateway(
               sessionKey: current.canonicalKey,
               sessionStoreKey: current.canonicalKey,
               storePath: current.storePath,
+              signal: getAsyncWorkSignal(),
             });
         assertCurrent();
         read?.assertCurrent();

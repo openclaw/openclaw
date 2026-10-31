@@ -29,13 +29,13 @@ function projectAuthProfileAuthorization(
   if (
     credential.type === "oauth" &&
     typeof credential.access === "string" &&
-    typeof credential.refresh === "string" &&
+    (credential.refresh === undefined || typeof credential.refresh === "string") &&
     typeof credential.expires === "number"
   ) {
     const marker = {
       type: "oauth",
       access: credential.access,
-      refresh: credential.refresh,
+      refresh: credential.refresh ?? "",
       expires: credential.expires,
     } satisfies Parameters<typeof isOAuthRefreshFence>[0];
     const status = isPendingOAuthRefreshFence(marker)
@@ -150,10 +150,8 @@ export function retainAuthProfileAuthorizationObservation(inputPath: string, pro
           throw new AuthProfileAuthorizationError("unavailable");
         }
         const fact = projectAuthProfileAuthorization(raw, profileId);
-        if (!isDeepStrictEqual(retained.fact, fact)) {
-          retained.fact = fact;
-          retained.revision = {};
-        }
+        // Only credential writers invalidate concurrent reads.
+        retained.fact = fact;
         return fact;
       };
     },

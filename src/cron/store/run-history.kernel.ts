@@ -334,11 +334,9 @@ function collectExpiredCronRunIds(records: readonly CronRunRecord[], now: number
 
 function pruneCronRunHistoryInDatabase(
   db: EngineConnection,
-  now: number,
+  ids: readonly string[],
   schema: CronRunReceiptWriteSchema,
-  records = readCronRunRecordsInDatabase(db),
 ): number {
-  const ids = [...collectExpiredCronRunIds(records, now)];
   for (let offset = 0; offset < ids.length; offset += 500) {
     const batch = ids.slice(offset, offset + 500);
     executeSqliteQuerySync(
@@ -370,8 +368,11 @@ export function planCronRunHistoryMaintenance(
     JSON.stringify([cronRunRecordStoreKey(row), row.jobId, row.runId]);
   const firstByRun = new Map<string, CronRunRecord>();
   for (const row of records) {
-    if (row.jobId?.trim() && row.runId?.trim() && !firstByRun.has(key(row))) {
-      firstByRun.set(key(row), row);
+    if (row.jobId?.trim() && row.runId?.trim()) {
+      const runKey = key(row);
+      if (!firstByRun.has(runKey)) {
+        firstByRun.set(runKey, row);
+      }
     }
   }
   const reconciliations: CronRunRecord[] = [];
@@ -437,8 +438,7 @@ export function planCronRunHistoryMaintenance(
   }
   return {
     reconciliations,
-    pruneCandidates,
-    prune: expired.size > 0,
+    pruneIds: [...expired],
     nextSweepAtMs: Number.isFinite(nextSweepAtMs) ? nextSweepAtMs : null,
   };
 }
@@ -446,7 +446,6 @@ export function planCronRunHistoryMaintenance(
 export function applyCronRunHistoryMaintenanceInDatabase(
   db: EngineConnection,
   plan: ReturnType<typeof planCronRunHistoryMaintenance>,
-  now: number,
   schema: CronRunReceiptWriteSchema,
 ): { reconciled: number; pruned: number } {
   for (const next of plan.reconciliations) {
@@ -471,6 +470,6 @@ export function applyCronRunHistoryMaintenanceInDatabase(
   }
   return {
     reconciled: plan.reconciliations.length,
-    pruned: plan.prune ? pruneCronRunHistoryInDatabase(db, now, schema, plan.pruneCandidates) : 0,
+    pruned: pruneCronRunHistoryInDatabase(db, plan.pruneIds, schema),
   };
 }

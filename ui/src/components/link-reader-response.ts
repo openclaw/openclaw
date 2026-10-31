@@ -30,6 +30,7 @@ export function linkReaderAuthorHref(value: unknown, source: string): string | u
 
 // Committed reader facts refresh projections, never another identity's cache.
 export const LINK_READER_METADATA_UPDATED_EVENT = "openclaw:link-reader-metadata-updated";
+export const LINK_READER_METADATA_REQUEST_EVENT = "openclaw:link-reader-metadata-request";
 export type LinkReaderMetadataUpdate = {
   client: GatewayBrowserClient;
   agentId: string | undefined;

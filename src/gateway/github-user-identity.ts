@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -8,6 +9,8 @@ import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { getRepositoryIntegration } from "../plugins/repository-integration-runtime.js";
+import type { RepositoryConnectionIdentity } from "../plugins/repository-integration.types.js";
 import { parseEnterpriseGitHubPrincipal } from "../shared/enterprise-github-principal.js";
 import { createLazyPromise, getOrCreatePromise } from "../shared/lazy-promise.js";
 import { normalizeVerifiedEmail } from "../shared/verified-email.js";
@@ -22,7 +25,10 @@ import type { CachedGitHubIdentityBinding } from "../state/user-profiles.types.j
 import { normalizeGitHubLogin } from "../utils/github-login.js";
 import type { GatewayAuthResult } from "./auth.js";
 import { gitHubPublicApi, githubApiToken } from "./github-public-api.js";
-import type { AuthenticatedGitHubIdentitySync } from "./github-user-identity.types.js";
+import type {
+  AuthenticatedGitHubIdentitySync,
+  GitHubIdentityPreparationTiming,
+} from "./github-user-identity.types.js";
 import { firstHeaderValue } from "./http-header-value.js";
 
 const CLOUDFLARE_ACCESS_USER_HEADER = "cf-access-authenticated-user-email";
@@ -31,6 +37,8 @@ const CLOUDFLARE_ACCESS_HOST_SUFFIX = ".cloudflareaccess.com";
 const CLOUDFLARE_ACCESS_IDENTITY_PATH = "/cdn-cgi/access/get-identity";
 const ACCESS_ASSERTION_MAX_BYTES = 16 * 1024;
 const ACCESS_IDENTITY_MAX_BYTES = 64 * 1024;
+const ACCESS_IDENTITY_CACHE_MS = 5 * 60_000;
+const ACCESS_IDENTITY_CACHE_LIMIT = 200;
 const JWT_SEGMENT_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const GITHUB_IDENTITY_CACHE_MS = 15 * 60_000;
 const GITHUB_IDENTITY_CACHE_LIMIT = 200;
@@ -46,8 +54,12 @@ type GitHubIdentityMetadataCache = {
   pending: Map<string, Promise<ResolvedGitHubUserIdentity>>;
 };
 const identityMetadataCaches = new WeakMap<typeof fetch, GitHubIdentityMetadataCache>();
+const accessIdentityCaches = new WeakMap<
+  typeof fetch,
+  Map<string, { identity: Promise<ResolvedCloudflareAccessIdentity>; expiresAt: number }>
+>();
 
-function cloudflareAccessIssuer(assertion: string): URL {
+function cloudflareAccessAssertionClaims(assertion: string): { issuer: URL; expiresAt: number } {
   if (Buffer.byteLength(assertion, "utf8") > ACCESS_ASSERTION_MAX_BYTES) {
     throw new Error("Cloudflare Access assertion is invalid");
   }
@@ -78,7 +90,13 @@ function cloudflareAccessIssuer(assertion: string): URL {
   ) {
     throw new Error("Cloudflare Access assertion issuer is invalid");
   }
-  return issuer;
+  return {
+    issuer,
+    expiresAt:
+      typeof payload.exp === "number" && Number.isFinite(payload.exp)
+        ? Math.min(payload.exp * 1_000, Date.now() + ACCESS_IDENTITY_CACHE_MS)
+        : 0,
+  };
 }
 
 async function resolveCloudflareAccessIdentity(
@@ -86,10 +104,48 @@ async function resolveCloudflareAccessIdentity(
   authenticatedPrincipal: string,
   oidcConfig?: GatewayTrustedProxyConfig["cloudflareAccessOidc"],
 ): Promise<ResolvedCloudflareAccessIdentity> {
-  const issuer = cloudflareAccessIssuer(assertion);
+  const { issuer, expiresAt } = cloudflareAccessAssertionClaims(assertion);
+  // Keep the cache key and verification on the same policy across the fetch.
+  const oidcPolicy = oidcConfig && { ...oidcConfig };
+  const fetchImpl = fetch;
+  const load = () =>
+    fetchCloudflareAccessIdentity(fetchImpl, issuer, assertion, authenticatedPrincipal, oidcPolicy);
+  // The assertion only bounds reuse; Access still verifies it, and each caller's
+  // principal and OIDC trust configuration must match the verified result.
+  if (expiresAt <= Date.now()) {
+    return load();
+  }
+  const key = createHash("sha256")
+    .update(JSON.stringify([assertion, authenticatedPrincipal.trim().toLowerCase(), oidcPolicy]))
+    .digest("hex");
+  const cache: NonNullable<ReturnType<typeof accessIdentityCaches.get>> =
+    accessIdentityCaches.get(fetchImpl) ?? new Map();
+  accessIdentityCaches.set(fetchImpl, cache);
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.identity;
+  }
+  const identity = load();
+  cache.set(key, { identity, expiresAt });
+  pruneMapToMaxSize(cache, ACCESS_IDENTITY_CACHE_LIMIT);
+  void identity.catch(() => {
+    if (cache.get(key)?.identity === identity) {
+      cache.delete(key);
+    }
+  });
+  return identity;
+}
+
+async function fetchCloudflareAccessIdentity(
+  fetchImpl: typeof fetch,
+  issuer: URL,
+  assertion: string,
+  authenticatedPrincipal: string,
+  oidcConfig?: GatewayTrustedProxyConfig["cloudflareAccessOidc"],
+): Promise<ResolvedCloudflareAccessIdentity> {
   let payload: unknown;
   try {
-    const response = await fetch(`${issuer.origin}${CLOUDFLARE_ACCESS_IDENTITY_PATH}`, {
+    const response = await fetchImpl(`${issuer.origin}${CLOUDFLARE_ACCESS_IDENTITY_PATH}`, {
       headers: { Cookie: `CF_Authorization=${assertion}` },
       redirect: "manual",
       signal: AbortSignal.timeout(gitHubPublicApi.GITHUB_REQUEST_TIMEOUT_MS),
@@ -163,18 +219,16 @@ export async function resolveGitHubUserIdentityByLogin(
   let payload: unknown;
   try {
     const request = async (requestToken: string | undefined) => {
-      const response = await gitHubPublicApi.fetchGitHubApi(
+      const { value } = await gitHubPublicApi.fetchGitHubJsonPage(
         `${gitHubPublicApi.GITHUB_API_ORIGIN}/users/${encodeURIComponent(requestedLogin)}`,
         fetch,
         requestToken,
-        undefined,
-        undefined,
-        undefined,
-        options?.signal,
-        undefined,
-        gitHubPublicApi.GITHUB_API_ORIGIN,
+        {
+          signal: options?.signal,
+          apiBaseUrl: gitHubPublicApi.GITHUB_API_ORIGIN,
+        },
       );
-      return await gitHubPublicApi.readGitHubJsonResponse(response);
+      return value;
     };
     payload =
       options?.allowAnonymousRetry === false
@@ -282,31 +336,6 @@ function resolveGitHubUserIdentityById(
   return promise.then((identity) => ({ identity, refreshed: true }));
 }
 
-function cloudflareAccessAssertion(params: {
-  authResult: GatewayAuthResult;
-  authConfig?: GatewayAuthConfig;
-  config?: OpenClawConfig;
-  requestHeaders?: IncomingHttpHeaders;
-}): { assertion: string; principal: string } | undefined {
-  const trustedProxy = params.authConfig?.trustedProxy;
-  if (
-    !params.authResult.ok ||
-    params.authResult.method !== "trusted-proxy" ||
-    params.authConfig?.mode !== "trusted-proxy" ||
-    normalizeLowercaseStringOrEmpty(trustedProxy?.userHeader) !== CLOUDFLARE_ACCESS_USER_HEADER ||
-    !trustedProxy?.requiredHeaders?.some(
-      (header) => normalizeLowercaseStringOrEmpty(header) === CLOUDFLARE_ACCESS_ASSERTION_HEADER,
-    )
-  ) {
-    return undefined;
-  }
-  const principal = params.authResult.user?.trim();
-  const assertion = firstHeaderValue(
-    params.requestHeaders?.[CLOUDFLARE_ACCESS_ASSERTION_HEADER],
-  )?.trim();
-  return principal && assertion ? { assertion, principal } : undefined;
-}
-
 /** An Enterprise GitHub principal is authoritative only after trusted-proxy admission. */
 export function resolveTrustedEnterpriseGitHubAccountId(params: {
   authResult: Pick<GatewayAuthResult, "ok" | "method" | "user">;
@@ -328,52 +357,40 @@ export function resolveTrustedEnterpriseGitHubAccountId(params: {
     : undefined;
 }
 
-/** Metadata is accepted only from the same trusted hop that asserted the immutable account. */
-function resolveTrustedEnterpriseGitHubMetadata(params: {
+/** Repository metadata is interpreted only by the explicitly selected integration. */
+export function resolveRepositoryConnectionIdentity(params: {
   authResult: Pick<GatewayAuthResult, "ok" | "method" | "user">;
   authConfig?: GatewayAuthConfig;
   config?: OpenClawConfig;
-  requestHeaders?: IncomingHttpHeaders;
-}) {
-  const accountId = resolveTrustedEnterpriseGitHubAccountId(params);
-  if (!accountId) {
+  requestHeaders: IncomingHttpHeaders;
+  assertCurrent: () => void;
+}): RepositoryConnectionIdentity | undefined {
+  if (!params.authResult.ok) {
     return undefined;
   }
-  const rawLogin = firstHeaderValue(params.requestHeaders?.["x-factory-github-login"]);
-  const login = rawLogin && rawLogin.length <= 39 ? normalizeGitHubLogin(rawLogin) : undefined;
-  const rawName = firstHeaderValue(params.requestHeaders?.["x-factory-github-name"]);
-  const name =
-    rawName && rawName.length <= 128 && !/[\p{Cc}\p{Cf}]/u.test(rawName)
-      ? rawName.trim()
-      : undefined;
-  const rawAvatar = firstHeaderValue(params.requestHeaders?.["x-factory-github-avatar-url"]);
-  const email = normalizeVerifiedEmail(params.requestHeaders?.["x-factory-github-email"]);
-  let avatarUrl: string | undefined;
-  if (rawAvatar && rawAvatar.length <= 512) {
-    try {
-      const url = new URL(rawAvatar);
-      if (
-        url.origin === `https://${resolveConfiguredGitHubHost(params.config)}` &&
-        url.pathname === `/avatars/u/${accountId}` &&
-        !url.username &&
-        !url.password &&
-        !url.hash
-      ) {
-        avatarUrl = url.href;
-      }
-    } catch {
-      /* Invalid metadata never grants authority. */
-    }
+  const integration = getRepositoryIntegration(params.config);
+  if (!integration) {
+    return undefined;
   }
-  return login
-    ? {
-        accountId,
-        login,
-        ...(email ? { email } : {}),
-        ...(name ? { name } : {}),
-        ...(avatarUrl ? { avatarUrl } : {}),
-      }
-    : undefined;
+  const assertCurrent = () => {
+    params.assertCurrent();
+    if (getRepositoryIntegration(params.config) !== integration) {
+      throw new Error("Repository identity owner changed");
+    }
+  };
+  assertCurrent();
+  const identity = integration.resolveConnectionIdentity({
+    authentication: {
+      ...params.authResult,
+      mode: params.authConfig?.mode,
+      userHeader: params.authConfig?.trustedProxy?.userHeader,
+    },
+    headers: params.requestHeaders,
+    host: resolveConfiguredGitHubHost(params.config),
+    assertCurrent,
+  });
+  assertCurrent();
+  return identity;
 }
 
 export function createAuthenticatedGitHubIdentitySync(params: {
@@ -382,24 +399,37 @@ export function createAuthenticatedGitHubIdentitySync(params: {
   config?: OpenClawConfig;
   requestHeaders?: IncomingHttpHeaders;
   assertCurrent?: () => void;
+  recordTiming?: (phase: GitHubIdentityPreparationTiming, startedAt: number) => void;
+  repositoryIdentity?: RepositoryConnectionIdentity;
 }): AuthenticatedGitHubIdentitySync | undefined {
   const options = { assertCurrent: params.assertCurrent };
+  const measure = <T>(phase: GitHubIdentityPreparationTiming, run: () => Promise<T>) => {
+    if (!params.recordTiming) {
+      return run();
+    }
+    const startedAt = performance.now();
+    return run().finally(() => params.recordTiming?.(phase, startedAt));
+  };
   // A retryable GitHub outage may reuse only an exact binding verified earlier.
   const reuseVerifiedBinding = async (error: unknown, binding: CachedGitHubIdentityBinding) => {
     if (!(error instanceof gitHubPublicApi.ControlUiGitHubError && error.retryable)) {
       return undefined;
     }
     params.assertCurrent?.();
-    const cached = await resolveCanonicalCachedGitHubIdentity(binding);
+    const cached = await measure("profileBindingReadMs", () =>
+      resolveCanonicalCachedGitHubIdentity(binding),
+    );
     params.assertCurrent?.();
     return cached;
   };
-  const enterprise = resolveTrustedEnterpriseGitHubMetadata(params);
-  if (enterprise) {
+  // Metadata is accepted only from the same trusted hop that asserted the immutable account.
+  const enterprise = params.authResult.ok ? params.repositoryIdentity?.profile : undefined;
+  if (enterprise && params.repositoryIdentity) {
+    const accountId = params.repositoryIdentity.accountId;
     return createLazyPromise(async () => {
       params.assertCurrent?.();
       const profile = await ensureCanonicalEnterpriseGitHubProfile(
-        params.authResult.user!,
+        enterprise.principal,
         enterprise.name ?? enterprise.login,
         options,
         { login: enterprise.login, email: enterprise.email },
@@ -409,12 +439,65 @@ export function createAuthenticatedGitHubIdentitySync(params: {
         profileId: profile.id,
         updatedAt: profile.updatedAt,
         enterprise: {
-          accountId: enterprise.accountId,
+          accountId,
           login: enterprise.login,
           ...(enterprise.avatarUrl ? { avatarUrl: enterprise.avatarUrl } : {}),
         },
       };
     });
+  }
+  // Preserve the native trusted-proxy contract only when no integration was selected.
+  const accountId = getRepositoryIntegration(params.config)
+    ? undefined
+    : resolveTrustedEnterpriseGitHubAccountId(params);
+  if (accountId) {
+    const rawLogin = firstHeaderValue(params.requestHeaders?.["x-factory-github-login"]);
+    const login = rawLogin && rawLogin.length <= 39 ? normalizeGitHubLogin(rawLogin) : undefined;
+    const rawName = firstHeaderValue(params.requestHeaders?.["x-factory-github-name"]);
+    const name =
+      rawName && rawName.length <= 128 && !/[\p{Cc}\p{Cf}]/u.test(rawName)
+        ? rawName.trim()
+        : undefined;
+    const rawAvatar = firstHeaderValue(params.requestHeaders?.["x-factory-github-avatar-url"]);
+    const email = normalizeVerifiedEmail(params.requestHeaders?.["x-factory-github-email"]);
+    let avatarUrl: string | undefined;
+    if (rawAvatar && rawAvatar.length <= 512) {
+      try {
+        const url = new URL(rawAvatar);
+        if (
+          url.origin === `https://${resolveConfiguredGitHubHost(params.config)}` &&
+          url.pathname === `/avatars/u/${accountId}` &&
+          !url.username &&
+          !url.password &&
+          !url.hash
+        ) {
+          avatarUrl = url.href;
+        }
+      } catch {
+        /* Invalid metadata never grants authority. */
+      }
+    }
+    if (login) {
+      return createLazyPromise(async () => {
+        params.assertCurrent?.();
+        const profile = await measure("profileWriteMs", () =>
+          ensureCanonicalEnterpriseGitHubProfile(params.authResult.user!, name || login, options, {
+            login,
+            email,
+          }),
+        );
+        params.assertCurrent?.();
+        return {
+          profileId: profile.id,
+          updatedAt: profile.updatedAt,
+          enterprise: {
+            accountId,
+            login,
+            ...(avatarUrl ? { avatarUrl } : {}),
+          },
+        };
+      });
+    }
   }
   const tailscaleLogin = params.authResult.tailscaleIdentity
     ? classifyTailscaleLogin(params.authResult.tailscaleIdentity.login)
@@ -424,7 +507,9 @@ export function createAuthenticatedGitHubIdentitySync(params: {
       params.assertCurrent?.();
       let identity: ResolvedGitHubUserIdentity;
       try {
-        identity = await resolveGitHubUserIdentityByLogin(tailscaleLogin.subject);
+        identity = await measure("profileGitHubMetadataMs", () =>
+          resolveGitHubUserIdentityByLogin(tailscaleLogin.subject),
+        );
       } catch (error) {
         const cached = await reuseVerifiedBinding(error, { login: tailscaleLogin.subject });
         if (cached) {
@@ -433,44 +518,67 @@ export function createAuthenticatedGitHubIdentitySync(params: {
         throw error;
       }
       params.assertCurrent?.();
-      const profile = await syncCanonicalGitHubIdentity(
-        {
-          identity,
-          authenticationAlias: { kind: "github-login", login: tailscaleLogin.subject },
-          initialDisplayName: params.authResult.tailscaleIdentity?.name,
-        },
-        options,
+      const profile = await measure("profileWriteMs", () =>
+        syncCanonicalGitHubIdentity(
+          {
+            identity,
+            authenticationAlias: { kind: "github-login", login: tailscaleLogin.subject },
+            initialDisplayName: params.authResult.tailscaleIdentity?.name,
+          },
+          options,
+        ),
       );
       params.assertCurrent?.();
       return { profileId: profile.id, updatedAt: profile.updatedAt };
     });
   }
 
-  const access = cloudflareAccessAssertion(params);
-  if (!access) {
+  const trustedProxy = params.authConfig?.trustedProxy;
+  if (
+    !params.authResult.ok ||
+    params.authResult.method !== "trusted-proxy" ||
+    params.authConfig?.mode !== "trusted-proxy" ||
+    normalizeLowercaseStringOrEmpty(trustedProxy?.userHeader) !== CLOUDFLARE_ACCESS_USER_HEADER ||
+    !trustedProxy?.requiredHeaders?.some(
+      (header) => normalizeLowercaseStringOrEmpty(header) === CLOUDFLARE_ACCESS_ASSERTION_HEADER,
+    )
+  ) {
+    return undefined;
+  }
+  const principal = params.authResult.user?.trim();
+  const assertion = firstHeaderValue(
+    params.requestHeaders?.[CLOUDFLARE_ACCESS_ASSERTION_HEADER],
+  )?.trim();
+  if (!principal || !assertion) {
     return undefined;
   }
   return createLazyPromise(async () => {
     params.assertCurrent?.();
-    const accessIdentity = await resolveCloudflareAccessIdentity(
-      access.assertion,
-      access.principal,
-      params.authConfig?.trustedProxy?.cloudflareAccessOidc,
+    const accessIdentity = await measure("profileAccessIdentityMs", () =>
+      resolveCloudflareAccessIdentity(
+        assertion,
+        principal,
+        params.authConfig?.trustedProxy?.cloudflareAccessOidc,
+      ),
     );
     params.assertCurrent?.();
-    const accountId = accessIdentity.accountId;
-    if (accountId === undefined) {
-      const profile = await ensureCanonicalUserProfileForEmail(access.principal, options);
+    const accessAccountId = accessIdentity.accountId;
+    if (accessAccountId === undefined) {
+      const profile = await measure("profileWriteMs", () =>
+        ensureCanonicalUserProfileForEmail(principal, options),
+      );
       params.assertCurrent?.();
       return { profileId: profile.id, updatedAt: profile.updatedAt };
     }
-    const identityBinding = { accountId, email: access.principal };
+    const identityBinding = { accountId: accessAccountId, email: principal };
     // Service auth raises public-data quota; Access still owns the signed-in account id.
     const token = githubApiToken(process.env, undefined, "github.com");
     let lookup: GitHubIdentityLookup;
     try {
-      lookup = await gitHubPublicApi.withOptionalGitHubAuth(token, (requestToken) =>
-        resolveGitHubUserIdentityById(accountId, requestToken, fetch),
+      lookup = await measure("profileGitHubMetadataMs", () =>
+        gitHubPublicApi.withOptionalGitHubAuth(token, (requestToken) =>
+          resolveGitHubUserIdentityById(accessAccountId, requestToken, fetch),
+        ),
       );
     } catch (error) {
       const cached = await reuseVerifiedBinding(error, identityBinding);
@@ -479,10 +587,12 @@ export function createAuthenticatedGitHubIdentitySync(params: {
       }
       if (accessIdentity.provider === "oidc") {
         params.assertCurrent?.();
-        const profile = await ensureCanonicalUserProfileForEmail(access.principal, {
-          ...options,
-          expectedGitHubAccountId: accountId,
-        });
+        const profile = await measure("profileWriteMs", () =>
+          ensureCanonicalUserProfileForEmail(principal, {
+            ...options,
+            expectedGitHubAccountId: accessAccountId,
+          }),
+        );
         params.assertCurrent?.();
         return { profileId: profile.id, updatedAt: profile.updatedAt };
       }
@@ -494,21 +604,25 @@ export function createAuthenticatedGitHubIdentitySync(params: {
     if (!lookup.refreshed) {
       // Re-read the exact current binding: unchanged metadata must not write profiles
       // and broadcast roster changes on each authenticated HTTP request.
-      const cached = await resolveCanonicalCachedGitHubIdentity(identityBinding);
+      const cached = await measure("profileBindingReadMs", () =>
+        resolveCanonicalCachedGitHubIdentity(identityBinding),
+      );
       params.assertCurrent?.();
       if (cached) {
         return cached;
       }
     }
-    const profile = await syncCanonicalGitHubIdentity(
-      {
-        identity: lookup.identity,
-        authenticationAlias: { kind: "email", email: access.principal },
-        initialDisplayName:
-          accessIdentity.provider === "github" ? accessIdentity.initialDisplayName : undefined,
-        preserveEmailProfile: accessIdentity.provider === "oidc",
-      },
-      options,
+    const profile = await measure("profileWriteMs", () =>
+      syncCanonicalGitHubIdentity(
+        {
+          identity: lookup.identity,
+          authenticationAlias: { kind: "email", email: principal },
+          initialDisplayName:
+            accessIdentity.provider === "github" ? accessIdentity.initialDisplayName : undefined,
+          preserveEmailProfile: accessIdentity.provider === "oidc",
+        },
+        options,
+      ),
     );
     params.assertCurrent?.();
     return { profileId: profile.id, updatedAt: profile.updatedAt };

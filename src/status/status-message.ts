@@ -22,7 +22,7 @@ import {
 } from "../agents/model-runtime-aliases.js";
 import { buildModelAliasIndex, resolveModelRefFromString } from "../agents/model-selection.js";
 import { resolveOpenAITextVerbosity } from "../agents/openai-text-verbosity.js";
-import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
+import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import type { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { formatCompactionStatus } from "../auto-reply/reply/compaction-notice.js";
 import type {
@@ -123,7 +123,6 @@ type StatusArgs = {
   activeModelAuth?: string;
   activeModel?: { modelProvider: string; model: string };
   usageLine?: string;
-  timeLine?: string;
   uptimeValue?: string;
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
@@ -131,7 +130,6 @@ type StatusArgs = {
   pluginHealthLine?: string;
   channelFeatureLine?: string;
   transcriptUsage?: SessionTranscriptUsageSnapshot | null;
-  now?: number;
 };
 
 function normalizeAuthMode(value?: string) {
@@ -148,27 +146,6 @@ function normalizeAuthMode(value?: string) {
     return "unknown";
   }
   return undefined;
-}
-
-function resolveConfiguredTextVerbosity(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-  provider?: string | null;
-  model?: string | null;
-}): "low" | "medium" | "high" | undefined {
-  const provider = params.provider?.trim();
-  const model = params.model?.trim();
-  if (!provider || !model || provider !== "openai") {
-    return undefined;
-  }
-  return resolveOpenAITextVerbosity(
-    resolveExtraParams({
-      cfg: params.config,
-      provider,
-      modelId: model,
-      agentId: params.agentId,
-    }),
-  );
 }
 
 function resolveExecutionLabel(
@@ -389,70 +366,13 @@ const formatVoiceModeLine = (
   return parts.join(" · ");
 };
 
-function resolveChannelModelNote(params: {
-  config?: OpenClawConfig;
-  entry?: SessionEntry;
-  selectedProvider: string;
-  selectedModel: string;
-  parentSessionKey?: string;
-}): string | undefined {
-  if (!params.config || !params.entry) {
-    return undefined;
-  }
-  if (
-    normalizeOptionalString(params.entry.modelOverride) ||
-    normalizeOptionalString(params.entry.providerOverride)
-  ) {
-    return undefined;
-  }
-  const channelOverride = resolveChannelModelOverride({
-    cfg: params.config,
-    channel: sessionDeliveryChannel(params.entry),
-    groupId: params.entry.groupId,
-    groupChatType: params.entry.chatType ?? sessionDeliveryOrigin(params.entry)?.chatType,
-    groupChannel: params.entry.groupChannel,
-    groupSubject: params.entry.subject,
-    parentSessionKey: params.parentSessionKey,
-    directUserIds: [
-      sessionDeliveryOrigin(params.entry)?.nativeDirectUserId,
-      sessionDeliveryOrigin(params.entry)?.from,
-      sessionDeliveryOrigin(params.entry)?.to,
-    ],
-  });
-  if (!channelOverride) {
-    return undefined;
-  }
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.config,
-    defaultProvider: DEFAULT_PROVIDER,
-    allowPluginNormalization: false,
-  });
-  const resolvedOverride = resolveModelRefFromString({
-    raw: channelOverride.model,
-    defaultProvider: DEFAULT_PROVIDER,
-    aliasIndex,
-    allowPluginNormalization: false,
-  });
-  if (!resolvedOverride) {
-    return undefined;
-  }
-  if (
-    resolvedOverride.ref.provider !== params.selectedProvider ||
-    resolvedOverride.ref.model !== params.selectedModel
-  ) {
-    return undefined;
-  }
-  return "channel override";
-}
-
 export type StatusMessageParts = ReturnType<typeof buildStatusMessageParts>;
 
 export function buildStatusMessageParts(args: StatusArgs) {
-  const now = args.now ?? Date.now();
+  const now = Date.now();
   // Derive the live wall clock here so both /status and session_status expose
   // the same configured timezone without duplicating formatting at each caller.
   const cronNow = resolveCronStyleNow(args.config, now);
-  const timeLine = args.timeLine ?? cronNow?.timeLine;
   const uptimeLine = args.uptimeValue ? `⏱️ Uptime: ${args.uptimeValue}` : undefined;
   const entry = args.sessionEntry;
   const contextConfig = {
@@ -622,13 +542,46 @@ export function buildStatusMessageParts(args: StatusArgs) {
     allowAsyncLoad: false,
     allowCacheLookup: false,
   });
-  const channelModelNote = resolveChannelModelNote({
-    config: args.config,
-    entry,
-    selectedProvider: selectedLookupProvider,
-    selectedModel: selectedLookupModel,
-    parentSessionKey: args.parentSessionKey,
-  });
+  const channelOverride =
+    args.config &&
+    entry &&
+    !normalizeOptionalString(entry.modelOverride) &&
+    !normalizeOptionalString(entry.providerOverride)
+      ? resolveChannelModelOverride({
+          cfg: args.config,
+          channel: sessionDeliveryChannel(entry),
+          groupId: entry.groupId,
+          groupChatType: entry.chatType ?? sessionDeliveryOrigin(entry)?.chatType,
+          groupChannel: entry.groupChannel,
+          groupSubject: entry.subject,
+          parentSessionKey: args.parentSessionKey,
+          directUserIds: [
+            sessionDeliveryOrigin(entry)?.nativeDirectUserId,
+            sessionDeliveryOrigin(entry)?.from,
+            sessionDeliveryOrigin(entry)?.to,
+          ],
+        })
+      : undefined;
+  const channelModelAliasIndex = channelOverride
+    ? buildModelAliasIndex({
+        cfg: args.config,
+        defaultProvider: DEFAULT_PROVIDER,
+        allowPluginNormalization: false,
+      })
+    : undefined;
+  const resolvedChannelOverride = channelOverride
+    ? resolveModelRefFromString({
+        raw: channelOverride.model,
+        defaultProvider: DEFAULT_PROVIDER,
+        aliasIndex: channelModelAliasIndex,
+        allowPluginNormalization: false,
+      })
+    : undefined;
+  const channelModelNote =
+    resolvedChannelOverride?.ref.provider === selectedLookupProvider &&
+    resolvedChannelOverride.ref.model === selectedLookupModel
+      ? "channel override"
+      : undefined;
   const projectedActiveContextTokens = resolveProjectedSessionContextTokens({
     entry,
     provider: contextLookupProvider,
@@ -739,12 +692,19 @@ export function buildStatusMessageParts(args: StatusArgs) {
         ? "elevated"
         : `elevated:${elevatedLevel}`
       : null;
-  const textVerbosity = resolveConfiguredTextVerbosity({
-    config: args.config,
-    agentId: args.agentId,
-    provider: activeProvider,
-    model: activeModel,
-  });
+  const textVerbosityProvider = activeProvider?.trim();
+  const textVerbosityModel = activeModel?.trim();
+  const textVerbosity =
+    textVerbosityProvider === "openai" && textVerbosityModel
+      ? resolveOpenAITextVerbosity(
+          resolveExtraParams({
+            cfg: args.config,
+            provider: textVerbosityProvider,
+            modelId: textVerbosityModel,
+            agentId: args.agentId,
+          }),
+        )
+      : undefined;
   const fastModeValue = formatFastModeStatusValue({
     mode: fastMode,
     fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
@@ -891,7 +851,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   );
 
   const text = [
-    [versionLine, timeLine, uptimeLine],
+    [versionLine, cronNow?.timeLine, uptimeLine],
     [
       `🧠 Model: ${modelValue}`,
       `🌐 Endpoint: ${selectedEndpoint ?? "unknown"}`,
@@ -958,7 +918,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   // renders keep one compact time-and-uptime line under the table.
   const presentationClockValue = cronNow
     ? `${cronNow.formattedTime} (${cronNow.userTimezone})`
-    : args.timeLine;
+    : undefined;
   const clockUptimeValue = [
     presentationClockValue,
     args.uptimeValue ? `⏱️ ${args.uptimeValue}` : null,

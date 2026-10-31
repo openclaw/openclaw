@@ -1,25 +1,15 @@
 import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
-import type { ChatAbortControllerEntry, ChatAbortOps } from "../chat-abort.js";
+import type { SessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
+import type {
+  SessionStopHookContext,
+  SessionStopSource,
+} from "../../sessions/session-controller.stop.js";
+import type { ChatAbortOps } from "../chat-abort.js";
 import type { ChatAbortRequester } from "./chat-abort-authorization.js";
 import type { abortControlledSubagents } from "./chat-abort-descendants.js";
 import type { ChatAbortOrigin, ChatAbortSessionSnapshot } from "./chat-aborted-partial.js";
 import type { GatewayRequestContext } from "./types.js";
-
-export type ChatSessionEmbeddedAbortOutcome = {
-  capturedRunId?: string;
-  controller?: ChatAbortControllerEntry;
-  wasActive: boolean;
-  aborted: boolean;
-};
-
-export type ChatAbortLifecycle = {
-  onAuthorizedBeforeEmbeddedAbort?: () => boolean;
-  onAuthorizedAfterQueuedAbort?: (embedded: ChatSessionEmbeddedAbortOutcome) => boolean;
-  onDescendantsCancelled?: (
-    result: NonNullable<Awaited<ReturnType<typeof abortControlledSubagents>>>,
-  ) => void;
-  cascadeDescendants?: true;
-};
 
 export type ChatSessionAbortParams = {
   context: GatewayRequestContext;
@@ -35,27 +25,23 @@ export type ChatSessionAbortParams = {
   defaultAgentId?: string;
   abortOrigin: ChatAbortOrigin;
   stopReason?: string;
+  stopSource: SessionStopSource;
+  hookContext?: SessionStopHookContext;
+  controllerTargets?: readonly SessionTarget[];
   requester: ChatAbortRequester;
   assertCurrent?: () => void;
   /** Prepare persisted request facts immediately before the synchronous cancellation effects. */
   beforeAbort?: () => Promise<void>;
-  /**
-   * Session Stop owners also stop admitted or embedded controller-less producers
-   * and record their cancellation. They must supply their live authority as assertCurrent.
-   */
-  stopEmbeddedRun?: true;
+  /** Explicit user Stop also cancels and suppresses Workshop Experience Review for the stopped runs. */
+  cancelExperienceReview?: true;
   preserveSideRuns?: boolean;
   cascadeDescendants?: true;
+  /** Current session lifecycle owner; reporting only, never descendant selection. */
+  yieldedRequesterRunId?: string;
   /** Exact lifecycle owners may include hidden and side runs for this one session. */
   includeProtectedRuns?: boolean;
   /** Captures exact registrations before cancellation can remove them. */
-  onControllerTargets?: (
-    targets: Array<{ runId: string; entry: ChatAbortControllerEntry }>,
-  ) => void;
-  /** Clear lifecycle queues before signaling the embedded producer. */
-  onAuthorizedBeforeEmbeddedAbort?: () => boolean;
-  /** Internal session-wide cleanup consumes the shared producer's Stop outcome. */
-  onAuthorizedAfterQueuedAbort?: (embedded: ChatSessionEmbeddedAbortOutcome) => boolean;
+  onControllerTargets?: (targets: Array<{ runId: string; entry: RpcSourceRef }>) => void;
   /** Runs after authorized synchronous abort, before terminal/partial persistence can yield. */
   onCancellationStarted?: () => void;
 };

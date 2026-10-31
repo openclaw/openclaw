@@ -75,6 +75,7 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
     normalizePluginId: lookup.normalizePluginId,
   });
   addConfiguredSlotPluginIds(scope, {
+    index: params.index,
     activationSourceConfig,
     activationSourcePlugins,
     lookup,

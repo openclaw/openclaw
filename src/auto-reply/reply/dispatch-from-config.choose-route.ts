@@ -11,7 +11,6 @@ import { createPluginSubagentRequesterContext } from "../../plugins/runtime/suba
 import {
   buildCaptionedFinalTextFallback,
   cleanDeferredFinalText,
-  isCaptionedFinalTextPayload,
   mergeDeferredFinalText,
   shouldDeferFinalTtsText,
 } from "../../tts/captioned-final.js";
@@ -20,18 +19,24 @@ import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../reply-payload.js";
 import { renderPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
 import { recoverBlockReplySources, setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
+import { commandTranscriptMirror } from "./channel-command-user-turn.js";
 import { resolveCommandContextText } from "./context-text.js";
 import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
 import { createDispatchCommentaryProgress } from "./dispatch-from-config.commentary.js";
+import {
+  acquireAcpDispatchTurn,
+  acquireDispatchTurn,
+} from "./dispatch-from-config.dispatch-admission.js";
 import { admittedSessionSettingsRestrictRuntime } from "./dispatch-from-config.events.js";
 import {
   hasExecApprovalPayload,
@@ -195,8 +200,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         agentId: sessionAgentId,
         expectedSessionId: binding?.sessionId,
         storePath: binding?.storePath ?? sessionStoreEntry.storePath,
-        commandText,
-        commandId,
+        ...commandTranscriptMirror(state, commandText, commandId),
         preferText: true,
         idempotencyKey: `command-block:${commandId}:${++commandReplyIndex}`,
         deliveryMirror: { kind: "channel-final", sourceMessageId: commandId },
@@ -314,9 +318,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     throwIfFinalDeliveryAborted();
     const preparation = prepareReplyPayloadForDispatcher(dispatcher, "final", inputPayload);
     if (preparation.kind === "suppress") {
-      await suppressPendingFinalDelivery(inputPayload, {
-        preserveActivity: state.replyOperationRunState.heartbeat !== undefined,
-      });
+      await suppressPendingFinalDelivery(inputPayload);
       return {
         queuedFinal: false,
         routedFinalCount: 0,
@@ -354,7 +356,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       markInboundDedupeReplayUnsafe();
       finalReplyDeliveryStarted = true;
     }
-    const shouldAttachDeferredText = deferFinalTtsText && isCaptionedFinalTextPayload(payload);
+    const shouldAttachDeferredText = deferFinalTtsText && isReplyPayloadTerminalContent(payload);
     const deferredRawText = shouldAttachDeferredText
       ? mergeDeferredFinalText(options.deferredTtsText ?? "", payload.text)
       : undefined;
@@ -430,9 +432,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         text: undefined,
       });
       if (pendingBlock) {
-        await suppressPendingFinalDelivery(payload, {
-          preserveActivity: state.replyOperationRunState.heartbeat !== undefined,
-        });
+        await suppressPendingFinalDelivery(payload);
       }
       if (pendingBlock || sourceRecovery) {
         setReplyPayloadMetadata(normalizedPayload, { pendingFinalDeliveryCompletion: undefined });
@@ -471,7 +471,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
               agentId: sessionAgentId,
               ...transcriptWriterMetadata(transcriptMirrorSessionBinding),
               preferText: true,
-              ...(isCommandReply && commandText && commandId ? { commandText, commandId } : {}),
+              ...(isCommandReply && commandText && commandId
+                ? commandTranscriptMirror(state, commandText, commandId)
+                : {}),
               ...(hasTranscriptOwner ? { transcriptOwner: true } : {}),
               idempotencyKey: transcriptMirrorSourceId
                 ? `channel-final:${commandId ?? transcriptMirrorSourceId}:${options.deliveryId ?? "single"}`
@@ -653,6 +655,10 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     };
   }
 
+  const acpRefusal = state.dispatchKind === "acp" ? await acquireAcpDispatchTurn(state) : undefined;
+  if (acpRefusal) {
+    return acpRefusal;
+  }
   const replyDispatchTakeover = await runReplyDispatchHook(state, {
     shouldSendToolSummaries,
     shouldSendToolSummariesAsync,
@@ -668,19 +674,10 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       }),
     };
   }
-
-  const dispatchPhase = state.activeRunSafeCommandTurn ? "command_resolution" : "dispatch";
-  const dispatchAcquisition = await traceReplyPhase(`reply.admit_${dispatchPhase}`, () =>
-    state.ensureDispatchReplyOperation(dispatchPhase),
-  );
-  if (dispatchAcquisition.status === "aborted") {
-    return { status: "complete" as const, result: state.finishReplyOperationAbortedDispatch() };
-  }
-  if (dispatchAcquisition.status === "busy") {
-    return {
-      status: "complete" as const,
-      result: state.finishReplyOperationBusyDispatch({ dedupeDisposition: "release" }),
-    };
+  const dispatchRefusal =
+    state.dispatchKind === "acp" ? undefined : await acquireDispatchTurn(state);
+  if (dispatchRefusal) {
+    return dispatchRefusal;
   }
   const nextState = Object.assign(state, {
     shouldSuppressProgressDelivery,

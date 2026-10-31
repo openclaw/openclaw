@@ -5,8 +5,8 @@ import {
   type SessionRowChange,
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
+import { invalidateOpenClawAgentWritableProjections } from "../../state/openclaw-agent-db-borrower.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { invalidateOpenClawAgentWritableProjections } from "../../state/openclaw-agent-db-lifecycle.js";
 import { invalidateOpenClawAgentReadOnlyProjections } from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
   publishRetainedSessionEntryChange,
@@ -98,9 +98,7 @@ export function emitPreparedSessionSharingChange(
     const seal = () => sealSessionEntryPublicationSource(record.prepared.source);
     if (
       !stageSqliteTransactionState(sqlPublicationAnchor(database.db), {
-        stage() {},
         commit: seal,
-        rollback() {},
       })
     ) {
       seal();
@@ -137,11 +135,13 @@ export function publishSessionEntryWorkerMetadataInvalidation(params: {
   databaseIdentity: string;
   sessionKey: string;
   entry?: SessionEntry;
+  fullEntry?: SessionEntry;
 }): void {
   invalidateSessionEntryCaches(params.databaseIdentity);
   for (const read of retainedSharingReads(params.databaseIdentity, params.sessionKey) ?? []) {
     publishRetainedSessionEntryPredicate(read, params.entry, params.entry !== undefined, {
       preserveMatchingEntry: true,
+      fullEntry: params.fullEntry,
     });
   }
   const change: SessionRowChange = {
@@ -330,6 +330,7 @@ export function publishSessionSharingEntryChange(
   update: {
     sessionKey: string;
     entry?: SessionEntry;
+    fullEntry?: SessionEntry;
     previousEntry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
     facts?: SessionRowFacts;
   },
@@ -345,7 +346,13 @@ export function publishSessionSharingEntryChange(
     publishTrackedCacheUpdate(
       database,
       () =>
-        recordCommittedSessionMetadataPublication(database, update.sessionKey, facts, update.entry),
+        recordCommittedSessionMetadataPublication(
+          database,
+          update.sessionKey,
+          facts,
+          update.entry,
+          update.fullEntry,
+        ),
       undefined,
       () => invalidateSessionEntryPublication(database, update.sessionKey, false),
     );
@@ -365,6 +372,7 @@ export function publishSessionSharingEntryChange(
           previousIdentity,
           sharingEntry !== undefined || facts?.kind === "removed",
           update.entry,
+          update.fullEntry,
         );
       },
       () => stageSessionSharingPublication(database, update.sessionKey),

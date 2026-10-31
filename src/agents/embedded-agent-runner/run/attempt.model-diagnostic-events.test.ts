@@ -8,6 +8,7 @@ import {
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeTranscriptJsonValue } from "../../../config/sessions/transcript-json.js";
 import {
   onInternalDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
@@ -102,11 +103,16 @@ async function drain(stream: AsyncIterable<unknown>): Promise<void> {
   }
 }
 
-function withFinalResult<T>(stream: AsyncIterable<T>) {
-  return Object.assign(stream, {
-    result: async () =>
-      makeAssistantMessageFixture({ stopReason: "stop", errorMessage: undefined, content: [] }),
-  });
+function completedChunks<T>(...chunks: T[]) {
+  return Object.assign(
+    (async function* () {
+      yield* chunks;
+    })(),
+    {
+      result: async () =>
+        makeAssistantMessageFixture({ stopReason: "stop", errorMessage: undefined, content: [] }),
+    },
+  );
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
@@ -142,8 +148,13 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       observed.push(`create${formatModelTransportContext()}`);
       return {
         async *[Symbol.asyncIterator]() {
+          for (let index = 0; index < 2; index++) {
+            await Promise.resolve();
+            observed.push(`iterate-${index}${formatModelTransportContext()}`);
+            yield { type: "text_delta", contentIndex: 0, delta: String(index) } as const;
+          }
           await Promise.resolve();
-          observed.push(`iterate${formatModelTransportContext()}`);
+          observed.push(`iterate-2${formatModelTransportContext()}`);
           yield {
             type: "done",
             reason: "stop",
@@ -163,19 +174,26 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       api: "openai-responses",
       baseUrl: "https://example.invalid",
     });
-    await Promise.all(
-      [1, 2].map(async (number) => {
-        const stream = await wrap(source, {
+    const streams = await Promise.all(
+      [1, 2].map(async (number) =>
+        wrap(source, {
           runId: `run-${number}`,
           sessionKey: `session-${number}`,
           nextCallId: () => `run-${number}:model:7`,
-        })(model, { messages: [] });
-        await drain(stream);
-        await stream.result();
-      }),
+        })(model, { messages: [] }),
+      ),
     );
+    const iterators = streams.map((stream) => stream[Symbol.asyncIterator]());
+    for (let index = 0; index < 3; index++) {
+      const values = await Promise.all(iterators.map((iterator) => iterator.next()));
+      expect(values.every((value) => !value.done)).toBe(true);
+      expect(formatModelTransportContext()).toBe("");
+    }
+    const exhausted = await Promise.all(iterators.map((iterator) => iterator.next()));
+    expect(exhausted.every((value) => value.done)).toBe(true);
+    await Promise.all(streams.map((stream) => stream.result()));
     expect(observed.toSorted()).toEqual(
-      ["create", "iterate", "result"].flatMap((phase) => [
+      ["create", "iterate-0", "iterate-1", "iterate-2", "result"].flatMap((phase) => [
         `${phase} sessionKey="session-1" runId="run-1" requestId="run-1:model:7" requestNumber=7`,
         `${phase} sessionKey="session-2" runId="run-2" requestId="run-2:model:7" requestNumber=7`,
       ]),
@@ -199,23 +217,31 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       .fn<() => AssistantMessageEvent>()
       .mockReturnValueOnce(firstChunk)
       .mockReturnValue({ type: "text_delta", contentIndex: 0, delta: "second value" });
+    let nextReads = 0;
+    let nextCalls = 0;
     const source: Awaited<ReturnType<StreamFn>> = {
       [Symbol.asyncIterator]() {
         let emitted = false;
-        return {
-          async next(): Promise<IteratorResult<AssistantMessageEvent>> {
-            if (emitted) {
-              return { done: true, value: undefined };
-            }
-            emitted = true;
-            return {
-              done: false,
-              get value() {
-                return readChunk();
-              },
+        const iterator: AsyncIterator<AssistantMessageEvent> = {
+          get next() {
+            nextReads++;
+            return async function (this: AsyncIterator<AssistantMessageEvent>) {
+              expect(this).toBe(iterator);
+              nextCalls++;
+              if (emitted) {
+                return { done: true as const, value: undefined };
+              }
+              emitted = true;
+              return {
+                done: false as const,
+                get value() {
+                  return readChunk();
+                },
+              };
             };
           },
         };
+        return iterator;
       },
       async result() {
         return makeAssistantMessageFixture({
@@ -242,6 +268,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
 
     expect(chunks).toEqual([firstChunk]);
     expect(readChunk).toHaveBeenCalledOnce();
+    expect(nextReads).toBe(1);
+    expect(nextCalls).toBe(2);
     expect(events.map((event) => event.type)).toEqual([
       "model.call.started",
       "model.call.completed",
@@ -255,12 +283,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     let callSequence = 0;
     const requestTimeouts: Array<number | undefined> = [];
     const wrapped = wrap(
-      (() =>
-        withFinalResult(
-          (async function* () {
-            yield { type: "text", text: "ok" };
-          })(),
-        )) as unknown as StreamFn,
+      (() => completedChunks({ type: "text", text: "ok" })) as unknown as StreamFn,
       {
         runId: "run-timeouts",
         sessionKey: "session-key",
@@ -472,6 +495,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     const observer = createModelObserver({
       streamContext: { messages, tools },
       capturePromptStats: true,
+      captureByteStats: true,
       measurePromptStats,
     });
     observer.assignRequestPayloadBytes(value);
@@ -490,6 +514,112 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
         toolDefinitionsChars: JSON.stringify(tools).length,
       });
     }
+  });
+
+  it("matches native JSON sizes for owned, mutable, edited and compacted histories", () => {
+    let seed = 7;
+    const random = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0);
+    const alphabet = ['"', "\\", "\n", "\u0000", "漢", "🦞", "\ud800", "\udfff", "a"];
+    const messages = Array.from({ length: 64 }, (_, index) => {
+      const text = Array.from(
+        { length: random() % 80 },
+        () => alphabet[random() % alphabet.length],
+      ).join("");
+      const message = {
+        role: "user" as const,
+        content: [{ type: "text" as const, text }],
+        timestamp: index,
+        extra: {
+          [text]: [undefined, null, Number.NaN, Infinity, -0, text],
+          omitted: undefined,
+          fn: () => "omitted",
+          custom: { toJSON: (key: string) => ({ key, text }) },
+        },
+      };
+      if (index % 3 === 0) {
+        return normalizeTranscriptJsonValue({ message }, "") as { message: typeof message };
+      }
+      if (index % 3 === 1) {
+        return { message: normalizeTranscriptJsonValue(message, "") as typeof message };
+      }
+      return { message };
+    }).map(({ message }) => message);
+    const measure = createModelPromptStats();
+    for (const change of [
+      () => {},
+      // oxlint-disable-next-line unicorn/no-array-reverse -- Exercise an in-place hook reorder of the same history array.
+      () => messages.reverse(),
+      () => {
+        messages[0] = { ...messages[0]!, content: [{ type: "text", text: "hook edit" }] };
+      },
+      () => {
+        messages[1]!.content[0]!.text = "mutable edit";
+      },
+      () => messages.splice(0, 50),
+    ]) {
+      change();
+      const expected = JSON.stringify(messages).length;
+      expect(measure({ messages })?.inputMessagesChars).toBe(expected);
+      expect(measure({ messages })?.inputMessagesChars).toBe(expected);
+    }
+  });
+
+  it("does not serialize unchanged owned history payloads again on model calls", async () => {
+    setDiagnosticsEnabledForProcess(true);
+    const makeMessage = (text: string) => {
+      const message = {
+        role: "user" as const,
+        content: [{ type: "text" as const, text }],
+        timestamp: 1,
+      };
+      normalizeTranscriptJsonValue({ message }, "");
+      return message;
+    };
+    const first = makeMessage("owned prefix");
+    const second = makeMessage("owned append");
+    const messages = [first];
+    const wrapped = wrap(() => createAssistantMessageEventStream());
+    const expected = [JSON.stringify(messages).length, JSON.stringify([first, second]).length];
+    const nativeStringify = JSON.stringify;
+    const visits: string[] = [];
+    type FunctionReplacer = (this: unknown, key: string, part: unknown) => unknown;
+    using stringify = vi.spyOn(JSON, "stringify");
+    stringify.mockImplementation(
+      (
+        value: unknown,
+        replacer?: FunctionReplacer | (string | number)[] | null,
+        space?: string | number,
+      ) => {
+        if (typeof replacer !== "function") {
+          return nativeStringify(value, replacer, space);
+        }
+        return nativeStringify(
+          value,
+          function (key, part: unknown) {
+            if (key === "text" && typeof part === "string") {
+              visits.push(part);
+            }
+            return replacer.call(this, key, part);
+          },
+          space,
+        );
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await wrapped({} as never, { messages });
+      visits.length = 0;
+      await wrapped({} as never, { messages });
+      expect(visits).toEqual([]);
+      messages.push(second);
+      await wrapped({} as never, { messages });
+      expect(visits).toEqual(["owned append"]);
+    });
+    expect(
+      events.flatMap((event) =>
+        event.type === "model.call.started" ? [event.promptStats?.inputMessagesChars] : [],
+      ),
+    ).toEqual([expected[0], expected[0], expected[1]]);
   });
 
   it("reuses prompt text sizes across appends while observing rewrites and compaction", async () => {
@@ -520,24 +650,15 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
           toolDefinitionsChars: 2,
           totalChars: inputMessagesChars + 8,
         });
-        const stringify = vi.spyOn(JSON, "stringify");
-        try {
-          await wrapped({} as never, context);
-          // Unchanged prefix text must not be encoded again on an append.
-          if (
-            messages.length === 2 &&
-            messages[0] === first &&
-            first.content.startsWith("prefix")
-          ) {
-            expect(stringify.mock.calls.filter(([value]) => value === first.content)).toHaveLength(
-              0,
-            );
-            expect(stringify.mock.calls.filter(([value]) => value === second.content)).toHaveLength(
-              1,
-            );
-          }
-        } finally {
-          stringify.mockRestore();
+        using stringify = vi.spyOn(JSON, "stringify");
+
+        await wrapped({} as never, context);
+        // Unchanged prefix text must not be encoded again on an append.
+        if (messages.length === 2 && messages[0] === first && first.content.startsWith("prefix")) {
+          expect(stringify.mock.calls.filter(([value]) => value === first.content)).toHaveLength(0);
+          expect(stringify.mock.calls.filter(([value]) => value === second.content)).toHaveLength(
+            1,
+          );
         }
       }
     });
@@ -558,6 +679,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     const observer = createModelObserver({
       streamContext: { messages },
       capturePromptStats: true,
+      captureByteStats: true,
     });
     observer.assignRequestPayloadBytes({ messages });
     const largestJsonString = Math.max(
@@ -635,18 +757,14 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
   it("updates diagnostic run activity from throttled stream chunks", async () => {
     let now = 1_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
-    async function* stream() {
-      yield { type: "text_delta", delta: "first" };
-      yield { type: "text_delta", delta: "second" };
-      yield { type: "text_delta", delta: "third" };
-    }
+    const chunks = ["first", "second", "third"].map((delta) => ({ type: "text_delta", delta }));
     const runProgressEvents: DiagnosticEventPayload[] = [];
     const stop = onInternalDiagnosticEvent((event) => {
       if (event.type === "run.progress") {
         runProgressEvents.push(event);
       }
     });
-    const wrapped = wrap((() => withFinalResult(stream())) as unknown as StreamFn, {
+    const wrapped = wrap((() => completedChunks(...chunks)) as unknown as StreamFn, {
       sessionKey: "session-key",
       sessionId: "session-id",
       provider: "vllm",
@@ -687,9 +805,6 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
   });
 
   it("counts async onPayload replacements instead of raw payload content", async () => {
-    async function* stream() {
-      yield { type: "text_delta", delta: "safe" };
-    }
     const originalPayload = { input: "secret sk-original-secret" };
     const replacementPayload = { input: "redacted" };
     const wrapped = wrap((async (
@@ -698,7 +813,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       options: Parameters<StreamFn>[2],
     ) => {
       await options?.onPayload?.(originalPayload, model);
-      return withFinalResult(stream());
+      return completedChunks({ type: "text_delta", delta: "safe" });
     }) as unknown as StreamFn);
 
     const events = await collectModelCallEvents(async () => {
@@ -754,10 +869,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
               content: [{ type: "text", text: text.repeat(200_000) }],
             },
           }));
-      async function* stream() {
-        yield* sourceChunks;
-      }
-      const wrapped = wrap((() => withFinalResult(stream())) as unknown as StreamFn);
+      const wrapped = wrap((() => completedChunks(...sourceChunks)) as unknown as StreamFn);
       const chunks: unknown[] = [];
       const events = await collectModelCallEvents(async () => {
         for await (const chunk of wrapped(
@@ -892,29 +1004,38 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     },
   );
 
-  it("skips prompt stat computation when diagnostics are disabled", async () => {
-    setDiagnosticsEnabledForProcess(false);
-    let promptInspected = false;
-    const streamContext = {
-      systemPrompt: "system",
-      get messages() {
-        promptInspected = true;
-        return [{ role: "user", content: "x", timestamp: 1 }];
-      },
-      get tools() {
-        promptInspected = true;
-        return [{ name: "lookup", description: "d", parameters: { type: "object" } }];
-      },
-    };
-    async function* stream() {
-      yield { type: "text_delta", delta: "ok" };
-    }
-    const wrapped = wrap((() => withFinalResult(stream())) as unknown as StreamFn);
-
-    await drain(
-      wrapped({} as never, streamContext as never, {} as never) as AsyncIterable<unknown>,
-    );
-
-    expect(promptInspected).toBe(false);
-  });
+  it.each(["model.call.started", "model.call.completed", "model.call.error"] as const)(
+    "preserves prompt stats for a listener interested only in %s",
+    async (type) => {
+      resetDiagnosticEventsForTest();
+      const events: DiagnosticEventPayload[] = [];
+      onTrustedInternalDiagnosticEvent((event) => events.push(event), { includeTrusted: [type] });
+      const wrapped = wrap(() => {
+        if (type === "model.call.error") {
+          throw new Error("synthetic provider failure");
+        }
+        const stream = createAssistantMessageEventStream();
+        stream.end(makeAssistantMessageFixture({ stopReason: "stop", errorMessage: undefined }));
+        return stream;
+      });
+      const context = { messages: [], systemPrompt: "system" };
+      if (type === "model.call.error") {
+        expect(() => wrapped({} as never, context)).toThrow("synthetic provider failure");
+      } else {
+        await (await wrapped({} as never, context)).result();
+      }
+      await waitForDiagnosticEventsDrained();
+      expect(events).toEqual([
+        expect.objectContaining({
+          type,
+          promptStats: {
+            inputMessagesCount: 0,
+            inputMessagesChars: 2,
+            systemPromptChars: 6,
+            totalChars: 8,
+          },
+        }),
+      ]);
+    },
+  );
 });

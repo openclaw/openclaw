@@ -1,6 +1,7 @@
 /** Serializes run-owned transcript callbacks and bounds teardown settlement. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "../../../infra/errors.js";
+import { runWithAsyncStore } from "../../../shared/async-store.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { settlesWithin } from "../../../shared/settle-within.js";
 import { log } from "../logger.js";
@@ -19,7 +20,8 @@ const lifecycleOwners = new AsyncLocalStorage<LifecycleOwner>();
 
 export type EmbeddedAttemptTranscriptLifecycle = {
   withTranscriptWrite<T>(run: () => Promise<T> | T): Promise<T>;
-  beginCleanup(): Promise<void>;
+  /** Retire callbacks after the actual drain, including when owner release fails. */
+  beginCleanup(onDrained?: () => void): Promise<void>;
   dispose(): Promise<void>;
 };
 
@@ -74,7 +76,7 @@ export function createEmbeddedAttemptTranscriptLifecycle(params: {
     let value: T | undefined;
     let primaryError: Error | undefined;
     try {
-      value = await lifecycleOwners.run(owner, async () => await run());
+      value = await runWithAsyncStore(lifecycleOwners, owner, async () => await run());
     } catch (error) {
       primaryError = toErrorObject(error, "transcript write failed");
     }
@@ -140,16 +142,20 @@ export function createEmbeddedAttemptTranscriptLifecycle(params: {
       );
     }
   };
-  const beginCleanup = async (): Promise<void> => {
+  const beginCleanup = async (onDrained?: () => void): Promise<void> => {
     if (currentOwner()?.active) {
       throw new Error("cannot start attempt cleanup inside a transcript write callback");
     }
     // Accepted descendants retain their owner until the drain settles, even when
     // the bounded teardown budget expires. Cleanup never disables the shared carrier.
     cleanupDrain ??= settleWithinTeardownBudget(
-      serializeLifecycle(() => {
+      serializeLifecycle(async () => {
         currentOwner()!.active = false;
-        return params.onDrained?.();
+        try {
+          await params.onDrained?.();
+        } finally {
+          onDrained?.();
+        }
       }),
     );
     await cleanupDrain;

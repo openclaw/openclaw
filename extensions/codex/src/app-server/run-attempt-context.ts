@@ -197,7 +197,10 @@ export async function prepareCodexAttemptContext(
     ) || undefined;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
-      dynamicTools: toolBridge.availableSpecs,
+      // The lifecycle restores this section to creation policy if no relay is selected.
+      omitConversationTurnContext: true,
+      dynamicTools: toolBridge.specs,
+      nativeCodeModeEnabled: runtime.nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled:
         runtime.nativeToolSurfaceEnabled && connection.appServer.codeModeOnly,
     }),
@@ -226,7 +229,10 @@ export async function prepareCodexAttemptContext(
     promptContextRange: CodexProjectedContextRange | undefined;
     developerInstructions: string;
     contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
-    historyBootstrapItems: JsonValue[] | undefined;
+    historyBootstrapItems:
+      | JsonValue[]
+      | ((assertCurrent: () => void) => Promise<JsonValue[]>)
+      | undefined;
     historyDeltaItems: JsonValue[] | undefined;
     noEngineContinuityProjectionApplied: boolean;
   } = {

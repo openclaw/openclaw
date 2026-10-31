@@ -1,3 +1,7 @@
+import {
+  projectUpdateRunHistory,
+  type UpdateRunServingIdentity,
+} from "../../../src/infra/update-run-history-projection.ts";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -24,14 +28,15 @@ export function isReleaseUpdateAvailable(
 export function isUpdateRunAttentionVisible(
   run: UpdateRunRecord | null,
   acknowledged: boolean,
-  nowMs = Date.now(),
+  serving?: UpdateRunServingIdentity,
 ): boolean {
   return Boolean(
     run &&
+    !projectUpdateRunHistory(run, serving) &&
     (run.status === "running" ||
       (!acknowledged &&
         run.finishedAtMs !== null &&
-        nowMs - run.finishedAtMs < 24 * 60 * 60 * 1000)),
+        Date.now() - run.finishedAtMs < 24 * 60 * 60 * 1000)),
   );
 }
 
@@ -41,7 +46,13 @@ export function resolveSidebarUpdateAttention(
   const snapshot = context.overlays.snapshot;
   const campaign = snapshot.updateSchedule?.campaign;
   const run = snapshot.updateRun;
-  const runVisible = isUpdateRunAttentionVisible(run, snapshot.updateRunAcknowledged);
+  const runVisible = isUpdateRunAttentionVisible(
+    run,
+    snapshot.updateRunAcknowledged,
+    context.gateway.snapshot.phase === "connected"
+      ? context.gateway.snapshot.hello?.server
+      : undefined,
+  );
   const statusBanner =
     snapshot.updateStatusCheckBanner ?? (run ? null : snapshot.updateStatusBanner);
   const busy =

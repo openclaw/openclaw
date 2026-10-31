@@ -9,7 +9,6 @@ import type {
 import { isApprovalNotFoundError, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
-import { resolveCodexGatewayTimeoutWithGraceMs } from "./attempt-timeouts.js";
 
 type AgentHarnessHostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"];
 
@@ -84,7 +83,7 @@ export async function requestPluginApproval(params: {
       ? { mcpTool: params.mcpTool, isMcpToolApprovalActive: params.isMcpToolApprovalActive }
       : {}),
     timeoutMs,
-    transportTimeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs),
+    transportTimeoutMs: timeoutMs + 10_000,
     ...(params.allowedDecisions ? { allowedDecisions: params.allowedDecisions } : {}),
   });
 }
@@ -100,7 +99,7 @@ export async function waitForPluginApprovalDecision(params: {
     .waitForApproval({
       approvalId: params.approvalId,
       timeoutMs,
-      transportTimeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs),
+      transportTimeoutMs: timeoutMs + 10_000,
       signal: params.signal,
     })
     .catch((error: unknown) => {

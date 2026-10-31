@@ -12,6 +12,8 @@ const history = "## 2026.8.31\n\n### Fixes\n\n- Previous release.\n";
 const releaseSection = (version: string) =>
   `## ${version}\n\n### Fixes\n\n- Shipped repair (#42).\n\n`;
 
+const changelog = (section: string) => preamble + section + history;
+
 function runCloseout(options: {
   version?: string;
   branch?: string;
@@ -36,13 +38,23 @@ function runCloseout(options: {
       cwd: repo,
       encoding: "utf8",
     }).trim();
+  const commit = (message: string) => {
+    git("add", ".");
+    git("commit", "-qm", message);
+  };
+  const writeChangelog = (tag: string, contents: string, section = releaseSection(tag)) => {
+    if (options.split) {
+      writeReleaseChangelog({ rootDir: repo, version: tag, section });
+    } else {
+      writeFileSync(join(repo, "CHANGELOG.md"), contents);
+    }
+  };
   git("init", "-q");
   writeFileSync(join(repo, "CHANGELOG.md"), options.before ?? preamble + history);
   if (options.split) {
     splitChangelog({ rootDir: repo });
   }
-  git("add", ".");
-  git("commit", "-qm", "base");
+  commit("base");
   let mainSha = git("rev-parse", "HEAD");
   // A real local tag alone must not authorize closeout: origin owns publication.
   if (options.published !== false) {
@@ -53,36 +65,18 @@ function runCloseout(options: {
   if (options.published === false) {
     git("tag", `v${version}`);
   }
-  const after = options.after ?? preamble + releaseSection(version) + history;
-  if (options.split) {
-    writeReleaseChangelog({
-      rootDir: repo,
-      version,
-      section: options.section ?? releaseSection(version),
-    });
-  } else {
-    writeFileSync(join(repo, "CHANGELOG.md"), after);
-  }
+  const after = options.after ?? changelog(releaseSection(version));
+  writeChangelog(version, after, options.section);
   for (const [file, content] of Object.entries(options.afterFiles ?? {})) {
     mkdirSync(join(repo, file, ".."), { recursive: true });
     writeFileSync(join(repo, file), content);
   }
-  git("add", ".");
-  git("commit", "-qm", "closeout");
+  commit("closeout");
   if (options.advanceMain) {
     const head = git("rev-parse", "HEAD");
     git("checkout", "-q", "--detach", mainSha);
-    if (options.split) {
-      writeReleaseChangelog({
-        rootDir: repo,
-        version: "2026.9.2",
-        section: releaseSection("2026.9.2"),
-      });
-    } else {
-      writeFileSync(join(repo, "CHANGELOG.md"), preamble + releaseSection("2026.9.2") + history);
-    }
-    git("add", ".");
-    git("commit", "-qm", "new main release");
+    writeChangelog("2026.9.2", changelog(releaseSection("2026.9.2")));
+    commit("new main release");
     mainSha = git("rev-parse", "HEAD");
     git("checkout", "-q", "--detach", head);
   }
@@ -96,6 +90,10 @@ function runCloseout(options: {
     isCrossRepository: options.fork ?? false,
   };
   writeFileSync(join(repo, "metadata.json"), JSON.stringify(metadata));
+  writeFileSync(
+    join(repo, ".local/prep-context.env"),
+    `PR_NUMBER=42\nPR_HEAD=${metadata.headRefName}\nPR_HEAD_SHA_BEFORE=${metadata.headRefOid}\n`,
+  );
   writeFileSync(
     join(repo, ".local/gates-hosted-checks.json"),
     JSON.stringify({ headSha: metadata.headRefOid }),
@@ -142,9 +140,10 @@ source "$SCRIPTS/pr-lib/common.sh"
 source "$SCRIPTS/pr-lib/changelog.sh"
 source "$SCRIPTS/pr-lib/gates.sh"
 source "$SCRIPTS/pr-lib/review.sh"
+source "$SCRIPTS/pr-lib/prepare-core.sh"
 enter_worktree() { PR_MAIN_SHA="$MAIN_SHA"; }
 refresh_prep_branch_for_reviewed_head() { :; }
-checkout_prep_branch() { :; }
+checkout_prep_branch() { source .local/prep-context.env; }
 # Review authority is covered by the preparation fixtures; this isolates release classification.
 require_prepared_review() { :; }
 run_quiet_logged() {
@@ -198,67 +197,82 @@ describe("release closeout prepare gates", () => {
     );
   });
 
-  const rejectedSplitCases: (Parameters<typeof runCloseout>[0] & { name: string })[] = [
-    {
-      name: "normal PR release entry without an index change",
-      branch: "fix/notes",
-      before: preamble + releaseSection("2026.9.1").replace("Shipped", "Draft") + history,
-    },
-    {
-      name: "another release",
-      afterFiles: { "CHANGELOG/2026.8.31.md": history.replace("Previous", "Changed") },
-    },
-    { name: "unrelated changelog file", afterFiles: { "CHANGELOG/notes.md": "unrelated\n" } },
-    { name: "index rewrite", afterFiles: { "CHANGELOG.md": "# Rewritten index\n" } },
-    {
-      name: "mismatched record",
-      afterFiles: {
-        "CHANGELOG/records/2026.9.1.md":
-          "## 2026.9.1\n\n### Complete contribution record\n\n- Lost credit.\n",
+  type Options = Parameters<typeof runCloseout>[0];
+  const record = "### Complete contribution record\n\n- Credit (#42). Thanks @alice.\n";
+  const changedFile = (path: string, content: string): Options => ({
+    split: true,
+    afterFiles: { [path]: content },
+  });
+  const rejectionCases: [string, Options, boolean?][] = [
+    [
+      "ordinary release edit",
+      {
+        split: true,
+        branch: "fix/notes",
+        before: changelog(releaseSection("2026.9.1").replace("Shipped", "Draft")),
       },
-    },
+    ],
+    [
+      "older release",
+      changedFile("CHANGELOG/2026.8.31.md", history.replace("Previous", "Changed")),
+    ],
+    ["unrelated file", changedFile("CHANGELOG/notes.md", "unrelated\n")],
+    ["index rewrite", changedFile("CHANGELOG.md", "# Rewritten index\n")],
+    [
+      "mismatched record",
+      changedFile(
+        "CHANGELOG/records/2026.9.1.md",
+        "## 2026.9.1\n\n### Complete contribution record\n\n- Lost credit.\n",
+      ),
+    ],
+    ["main snapshot", { advanceMain: true }],
+    ["split main snapshot", { split: true, advanceMain: true }],
+    [
+      "frozen record",
+      {
+        ...changedFile(
+          "CHANGELOG/records/2026.9.1.md",
+          "## 2026.9.1\n\n" + record.replace("alice", "bob"),
+        ),
+        branch: "fix/record",
+        before: changelog(releaseSection("2026.9.1") + record + "\n"),
+        section: releaseSection("2026.9.1") + record,
+      },
+      true,
+    ],
+    ["title", { title: "chore: release" }, true],
+    ["target", { base: "release/2026.9.1" }, true],
+    ["fork", { fork: true }, true],
+    ["beta", { version: "2026.9.1-beta.1" }, true],
+    ["local tag", { published: false }, true],
+    ["section version", { after: changelog(releaseSection("2026.9.2")) }, true],
+    ["newer train", { before: changelog(releaseSection("2026.9.2 (Unreleased)")) }, true],
+    [
+      "old history",
+      { after: changelog(releaseSection("2026.9.1")).replace("Previous", "Changed") },
+      true,
+    ],
+    ["duplicate sections", { after: changelog(releaseSection("2026.9.1").repeat(2)) }, true],
   ];
-  it.each(rejectedSplitCases)("rejects split $name", ({ name: _name, ...options }) => {
-    const { result } = runCloseout({ split: true, ...options });
+  it.each(rejectionCases)("rejects %s", (_name, options, releaseOwned) => {
+    const { result } = runCloseout(options);
     expect(result.status, result.stdout + result.stderr).toBe(1);
+    if (releaseOwned) {
+      expect(result.stdout).toContain("CHANGELOG.md is release-owned");
+    }
     expect(result.stdout).not.toContain("gate:hosted");
   });
 
-  it.each([false, true])(
-    "preserves the captured main snapshot instead of only the merge base (split=%s)",
-    (split) => {
-      const { result } = runCloseout({ split, advanceMain: true });
-      expect(result.status, result.stdout + result.stderr).toBe(1);
-      expect(result.stdout).not.toContain("gate:hosted");
-    },
-  );
-
-  it("rejects a normal PR that changes only a frozen contribution record", () => {
-    const record = "### Complete contribution record\n\n- Credit (#42). Thanks @alice.\n";
-    const section = releaseSection("2026.9.1") + record;
-    const { result } = runCloseout({
-      split: true,
-      branch: "fix/record",
-      before: preamble + section + "\n" + history,
-      section,
-      afterFiles: {
-        "CHANGELOG/records/2026.9.1.md": "## 2026.9.1\n\n" + record.replace("alice", "bob"),
-      },
-    });
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stdout).toContain("CHANGELOG.md is release-owned");
-    expect(result.stdout).not.toContain("gate:hosted");
-  });
   it.each([
     { name: "accepts stable correction tags", version: "2026.9.1-2" },
     {
       name: "finalizes an earlier correction draft",
       version: "2026.9.1-10",
-      before: preamble + releaseSection("2026.9.1-2 (Unreleased)") + history,
+      before: changelog(releaseSection("2026.9.1-2 (Unreleased)")),
     },
     {
       name: "preserves a newer unreleased train while adding the shipped release",
-      before: preamble + releaseSection("2026.9.2 (Unreleased)") + history,
+      before: changelog(releaseSection("2026.9.2 (Unreleased)")),
       after:
         preamble + releaseSection("2026.9.1") + releaseSection("2026.9.2 (Unreleased)") + history,
     },
@@ -268,32 +282,6 @@ describe("release closeout prepare gates", () => {
     expect(result.stdout).toContain("gate:hosted CI/Testbox gates");
     expect(readFileSync(join(repo, "CHANGELOG.md"), "utf8")).toBe(after);
     expect(readFileSync(join(repo, "gh-calls.log"), "utf8").trim().split("\n")).toHaveLength(1);
-  });
-
-  it.each([
-    { name: "wrong title", title: "chore: release" },
-    { name: "non-main target", base: "release/2026.9.1" },
-    { name: "fork identity", fork: true },
-    { name: "beta version", version: "2026.9.1-beta.1" },
-    { name: "local-only tag", published: false },
-    { name: "different section version", after: preamble + releaseSection("2026.9.2") + history },
-    {
-      name: "replaces a newer unreleased train",
-      before: preamble + releaseSection("2026.9.2 (Unreleased)") + history,
-    },
-    {
-      name: "edits older release",
-      after: preamble + releaseSection("2026.9.1") + history.replace("Previous", "Changed"),
-    },
-    {
-      name: "duplicate sections",
-      after: preamble + releaseSection("2026.9.1").repeat(2) + history,
-    },
-  ])("rejects $name", ({ name: _name, ...options }) => {
-    const { result } = runCloseout(options);
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("CHANGELOG.md is release-owned");
-    expect(result.stdout).not.toContain("gate:hosted");
   });
 
   it("retains the explicit release automation override", () => {

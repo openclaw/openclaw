@@ -11,6 +11,10 @@ import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtim
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
 import { buildMetaProvider } from "./provider-catalog.js";
 import { wrapMetaProviderStream } from "./stream.js";
 
@@ -234,13 +238,7 @@ async function expectLiveTextCompletion(modelId: string): Promise<void> {
   await expectLiveCompletion({
     modelId,
     context: {
-      messages: [
-        {
-          role: "user",
-          content: "Reply with exactly: PATCH_OK",
-          timestamp: Date.now(),
-        },
-      ],
+      messages: [makeUserMessage("Reply with exactly: PATCH_OK", Date.now())],
     },
     expectedText: /PATCH_OK/i,
   });
@@ -250,13 +248,7 @@ async function expectLiveCatalogCapCompletion(modelId: string): Promise<void> {
   await expectLiveCompletion({
     modelId,
     context: {
-      messages: [
-        {
-          role: "user",
-          content: "Reply with exactly: CATALOG_CAP_OK",
-          timestamp: Date.now(),
-        },
-      ],
+      messages: [makeUserMessage("Reply with exactly: CATALOG_CAP_OK", Date.now())],
     },
     expectedText: /CATALOG_CAP_OK/i,
     useZeroMaxTokens: true,
@@ -331,13 +323,7 @@ describeLive("meta plugin live", () => {
         modelId: "muse-wonder-1.0",
         reasoningLevel,
         context: {
-          messages: [
-            {
-              role: "user",
-              content: "Reply with exactly: WONDER_EFFORT_OK",
-              timestamp: Date.now(),
-            },
-          ],
+          messages: [makeUserMessage("Reply with exactly: WONDER_EFFORT_OK", Date.now())],
         },
         expectedText: "WONDER_EFFORT_OK",
       });
@@ -348,12 +334,10 @@ describeLive("meta plugin live", () => {
   it("replays muse-wonder-1.0 encrypted reasoning across a tool-call round trip", async () => {
     const context: Context = {
       messages: [
-        {
-          role: "user",
-          content:
-            "Call get_probe_token exactly once. After the tool returns, reply with only its token. Do not invent the token.",
-          timestamp: Date.now(),
-        },
+        makeUserMessage(
+          "Call get_probe_token exactly once. After the tool returns, reply with only its token. Do not invent the token.",
+          Date.now(),
+        ),
       ],
       tools: [
         {
@@ -373,14 +357,10 @@ describeLive("meta plugin live", () => {
     const call = calls[0]!;
     expect(call.name).toBe("get_probe_token");
     expect(call.arguments).toEqual({});
-    context.messages.push(first.result, {
-      role: "toolResult",
-      toolCallId: call.id,
-      toolName: call.name,
-      content: [{ type: "text", text: "WONDER_REPLAY_OK_47A1" }],
-      isError: false,
-      timestamp: Date.now(),
-    });
+    context.messages.push(
+      first.result,
+      makeTextToolResult(call.id, call.name, "WONDER_REPLAY_OK_47A1", false, Date.now()),
+    );
     const second = await expectLiveCompletion({
       modelId: "muse-wonder-1.0",
       context,

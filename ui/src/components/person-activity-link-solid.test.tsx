@@ -4,11 +4,7 @@ import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import {
-  PersonAvatarLink,
-  PersonName,
-  StandalonePersonLink,
-} from "./person-activity-link-solid.tsx";
+import { PersonAvatarLink, PersonName } from "./person-activity-link-solid.tsx";
 import { personActivityLink } from "./person-activity-link.ts";
 
 describe("person activity links", () => {
@@ -21,9 +17,9 @@ describe("person activity links", () => {
           <span role="img" aria-label="Ada" />
         </PersonAvatarLink>
         <PersonName label="Ada" link={link} class="chat-sender-name" />
-        <StandalonePersonLink link={link}>
+        <PersonAvatarLink standalone link={link}>
           <span role="img" aria-label="Ada" />
-        </StandalonePersonLink>
+        </PersonAvatarLink>
       </>
     ));
     const links = [...view.container.querySelectorAll("a")];
@@ -49,9 +45,9 @@ describe("person activity links", () => {
     const navigate = vi.fn();
     const [person, setPerson] = createSignal<string | null>("ada");
     const view = mountSolid(() => (
-      <StandalonePersonLink link={personActivityLink(person(), { basePath: "", navigate })}>
+      <PersonAvatarLink standalone link={personActivityLink(person(), { basePath: "", navigate })}>
         <span role="img" aria-label="Owner" />
-      </StandalonePersonLink>
+      </PersonAvatarLink>
     ));
     setPerson("bob");
     flush();

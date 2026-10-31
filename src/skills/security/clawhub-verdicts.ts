@@ -1,6 +1,7 @@
 import { resolveClawHubBaseUrl } from "../../infra/clawhub-client.js";
 import { fetchExactClawHubSkillSecurityVerdicts } from "../../infra/clawhub-skill-security.js";
 import type { ClawHubSkillSecurityVerdictItem } from "../../infra/clawhub-skills.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import type { buildWorkspaceSkillStatus } from "../discovery/status.js";
 
 type ClawHubVerdictTarget = {
@@ -110,12 +111,7 @@ export function collectClawHubVerdictTargets(
 export async function fetchOpenClawSkillSecurityVerdicts(
   targets: ClawHubVerdictTarget[],
 ): Promise<OpenClawSkillSecurityVerdictItem[]> {
-  const byRegistry = new Map<string, ClawHubVerdictTarget[]>();
-  for (const target of targets) {
-    const registryTargets = byRegistry.get(target.registry) ?? [];
-    registryTargets.push(target);
-    byRegistry.set(target.registry, registryTargets);
-  }
+  const byRegistry = groupRecords(targets, (target) => target.registry);
 
   const items: OpenClawSkillSecurityVerdictItem[] = [];
   for (const [registry, registryTargets] of byRegistry) {

@@ -294,7 +294,8 @@ export function projectWorkerPlacementAgentRuntime(
   const workspaceEnvironment = getRegisteredAgentHarness(runtime.id)?.harness.workspaceEnvironment;
   return {
     ...identity,
-    ...(workspaceEnvironment ? { workspaceEnvironment } : {}),
+    // Registered harness metadata can be a managed view; rows own the JSON they freeze.
+    ...(workspaceEnvironment ? { workspaceEnvironment: { ...workspaceEnvironment } } : {}),
     cloudPlacementSupported: executionMode !== undefined,
     ...(executionMode ? { cloudPlacementExecutionMode: executionMode } : {}),
     ...(devicePlacement ? { devicePlacement } : {}),

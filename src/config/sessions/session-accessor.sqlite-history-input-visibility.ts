@@ -16,12 +16,16 @@ import {
   resolveVisibleHistoryRange,
 } from "./session-accessor.sqlite-history-projection.js";
 import {
-  getActiveTranscriptKysely,
+  selectActiveTranscriptEventRows,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import { resolveVisibleMessagePositions } from "./session-accessor.sqlite-reset-window.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import { transcriptEventNavigationSql, transcriptEventRunIdSql } from "./transcript-payload.js";
+import {
+  transcriptEventNavigationSql,
+  transcriptEventRunIdSql,
+  transcriptPredicateSql,
+} from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 // These derived facts omit transcript bodies and remain inside the admitted snapshot.
@@ -67,7 +71,6 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
     isHiddenInput: (message: unknown) => boolean;
   },
 ): RunInputVisibility {
-  const db = getActiveTranscriptKysely(projection.database);
   // Validate custody without applying execution-only bounds to requested display history.
   resolveSqliteSessionTranscriptReadFence({
     database: projection.database,
@@ -77,16 +80,12 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
   const keptPositions =
     /* kysely-allow-raw: Bind the exact retained display positions without SQLite's variable limit. */
     sql<number>`(SELECT CAST(value AS BIGINT) FROM ${jsonArrayElements(projection.database.db, sql.val(JSON.stringify(visible.kept)))})`;
-  const userInputs = db
-    .selectFrom("session_transcript_active_events as active")
-    .innerJoin("transcript_events as event", (join) =>
-      join
-        .onRef("event.session_id", "=", "active.session_id")
-        .onRef("event.seq", "=", "active.event_seq"),
-    )
+  const userInputs = selectActiveTranscriptEventRows(projection.database)
     .select([
       "active.message_position",
-      "event.navigation_valid",
+      transcriptPredicateSql(projection.database.db, "navigation_valid", "event").as(
+        "navigation_valid",
+      ),
       inputMessageJson(projection.database.db).as("message_json"),
     ])
     .where("active.session_id", "=", projection.resolved.sessionId)
@@ -100,7 +99,10 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
         : eb("active.message_position", ">=", visible.postStart),
     )
     .where((eb) =>
-      eb.or([eb("event.message_role", "=", "user"), eb("event.navigation_valid", "=", 0)]),
+      eb.or([
+        eb(transcriptPredicateSql(projection.database.db, "message_role", "event"), "=", "user"),
+        eb(transcriptPredicateSql(projection.database.db, "navigation_valid", "event"), "=", 0),
+      ]),
     )
     .$narrowType<{ message_position: number }>();
   let readAfter = params.previous?.scannedThroughMessagePosition;

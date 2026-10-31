@@ -6,6 +6,7 @@ import {
 import { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../auto-reply/reply/session-fork.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import {
+  attributeDelegatedSessionCreator,
   inheritSessionCreationPolicy,
   inheritSessionGitContributorProfileIds,
   inheritSpawnSessionOwner,
@@ -25,15 +26,54 @@ import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-
 type SessionCreation = NonNullable<CreateGatewaySessionParams["creation"]> &
   Pick<SessionEntry, "inheritedGitContributorProfileIds">;
 
+/**
+ * Classify a create request. A standalone root is a new top-level conversation:
+ * no requested parent, fork, plugin owner, incognito boundary, or main target.
+ * Durable dashboard roots parent to main for follow-up notices and sidebar threads
+ * only under the default DM and session scopes. Incognito roots omit durable
+ * lineage so notices cannot cross the storage boundary.
+ */
+export function resolveSessionCreateRoot(
+  params: Pick<CreateGatewaySessionParams, "cfg" | "authorizedPluginId" | "fork">,
+  facts: {
+    parentSessionKey: string | undefined;
+    incognito: boolean;
+    targetSessionKey: string;
+    mainSessionKey: string;
+  },
+): { standalone: boolean; mainParentSessionKey?: string } {
+  const standalone =
+    !facts.parentSessionKey &&
+    !params.authorizedPluginId &&
+    !facts.incognito &&
+    params.fork !== true &&
+    facts.targetSessionKey !== facts.mainSessionKey;
+  const groupedUnderMain =
+    standalone &&
+    (params.cfg.session?.dmScope ?? "main") === "main" &&
+    params.cfg.session?.scope !== "global";
+  return {
+    standalone,
+    ...(groupedUnderMain ? { mainParentSessionKey: facts.mainSessionKey } : {}),
+  };
+}
+
 /** Inherit parent selection without replacing explicitly requested choices. */
 export function inheritSessionCreateParentFields(params: {
   parent: SessionEntry | undefined;
   newExplicitChild: boolean;
   newDashboardRoot: boolean;
+  /** A new standalone root created by an operator, under any DM or session scope. */
+  newOperatorRoot: boolean;
   selectedModel?: string;
   overrides: Pick<
     CreateGatewaySessionParams,
-    "catalogTarget" | "model" | "toolOverrides" | "fastMode" | "communication"
+    | "catalogTarget"
+    | "model"
+    | "toolOverrides"
+    | "fastMode"
+    | "communication"
+    | "cyberAccessProgram"
   >;
 }): Partial<InternalSessionEntry> {
   const { parent, overrides } = params;
@@ -43,6 +83,9 @@ export function inheritSessionCreateParentFields(params: {
       : inheritSessionSelection(parent);
   if (overrides.toolOverrides !== undefined) {
     delete inherited.toolOverrides;
+  }
+  if (overrides.cyberAccessProgram !== undefined) {
+    delete inherited.cyberAccessProgram;
   }
   if (overrides.fastMode !== undefined) {
     // Explicit choices have already been validated by the canonical patch owner.
@@ -56,6 +99,13 @@ export function inheritSessionCreateParentFields(params: {
   // Main groups dashboard roots; it must not supply their reply-time model.
   if (params.newDashboardRoot && !params.selectedModel) {
     inherited.modelOverrideSource = "default";
+  }
+  // An operator-created root is a direct chat with its operator, whichever turn
+  // path (chat.send, sessions_send, cron, the agent method) first runs it.
+  // Memory audience resolution reads this durable root fact; each turn still
+  // decides owner status.
+  if (params.newOperatorRoot) {
+    inherited.chatType = "direct";
   }
   return inherited;
 }
@@ -118,27 +168,47 @@ function resolveResidentProfileId(profileId: string): string | undefined {
 
 /** Derives trusted child policy and ownership from the locked spawn parent. */
 export function resolveSessionCreateInheritance(params: {
-  creation: SessionCreation | undefined;
-  parent: SessionEntry | undefined;
+  request: Pick<CreateGatewaySessionParams, "cfg" | "creation">;
+  parent: {
+    entry: SessionEntry | undefined;
+    target: { agentId: string; canonicalKey: string } | undefined;
+  };
 }): {
   creation: SessionCreation | undefined;
   ownerAssignment?: SessionOwnerAssignment;
 } {
-  if (params.creation?.via !== "spawn") {
-    return { creation: params.creation };
+  if (params.request.creation?.via !== "spawn") {
+    return { creation: params.request.creation };
   }
   const ownerAssignment = inheritSpawnSessionOwner(
-    params.parent,
-    params.creation.actor,
-    params.creation.requesterProfileId,
+    params.parent.entry,
+    params.request.creation.actor,
+    params.request.creation.requesterProfileId,
     Date.now(),
     resolveResidentProfileId,
   );
+  const policy = inheritSessionCreationPolicy(params.parent.entry, params.request.creation.actor);
   return {
     creation: {
-      ...params.creation,
-      ...inheritSessionCreationPolicy(params.parent, params.creation.actor),
-      inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(params.parent),
+      ...params.request.creation,
+      ...policy,
+      actor: attributeDelegatedSessionCreator(
+        policy.actor,
+        params.request.creation.actor?.delegatedBy?.type === "human"
+          ? params.request.creation.actor.delegatedBy.id
+          : undefined,
+        params.request.creation.actor?.type === "agent"
+          ? params.request.creation.actor.id
+          : undefined,
+      ),
+      inheritedGitContributorProfileIds: params.parent.target
+        ? inheritSessionGitContributorProfileIds(params.parent.entry, {
+            config: params.request.cfg,
+            agentId: params.parent.target.agentId,
+            sessionKey: params.parent.target.canonicalKey,
+            requesterProfileId: params.request.creation.gitContributorProfileId,
+          })
+        : [],
     },
     ...(ownerAssignment ? { ownerAssignment } : {}),
   };

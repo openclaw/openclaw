@@ -90,7 +90,6 @@ function setInstallTimestamp(packageDir: string, timestampMs: number): void {
 
 describe("managed npm generation-dir loader precedence", () => {
   it("matches the authoritative generation case-insensitively on Windows", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const stateDir = tempDirs.make("openclaw-plugin-generation-precedence-");
     const newerPackageDir = writeManaged(stateDir, "3.0.0", "discord-newer-on-windows");
     const downgradedPackageDir = writeManaged(stateDir, "1.0.0");
@@ -101,6 +100,8 @@ describe("managed npm generation-dir loader precedence", () => {
     );
 
     await seedAuthority(stateDir, differentlyCasedActivePath);
+    // Prepare native storage before simulating Windows path comparisons in the loader.
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
 
     const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });

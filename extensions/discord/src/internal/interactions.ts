@@ -1,6 +1,7 @@
 import {
   InteractionResponseType,
   InteractionType,
+  MessageFlags,
   Routes,
   type APIApplicationCommandAutocompleteInteraction,
   type APIApplicationCommandInteraction,
@@ -13,7 +14,6 @@ import {
   type APIUser,
 } from "discord-api-types/v10";
 import { OptionsHandler } from "./interaction-options.js";
-import { needsComponentsV2Query, type InteractionResponseState } from "./interaction-response.js";
 import { extractModalFields, ModalFields } from "./modal-fields.js";
 import { serializePayload, type MessagePayload } from "./payload.js";
 import { assertDiscordInteractionPayload } from "./schemas.js";
@@ -25,6 +25,12 @@ import {
   type DiscordChannel,
   type StructureClient,
 } from "./structures.js";
+
+type InteractionResponseState = "unacknowledged" | "deferred" | "deferred-update" | "replied";
+
+function needsComponentsV2Query(body: ReturnType<typeof serializePayload>): boolean {
+  return "flags" in body && ((body.flags ?? 0) & MessageFlags.IsComponentsV2) !== 0;
+}
 
 type InteractionClient = StructureClient & {
   options: { clientId: string };

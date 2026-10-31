@@ -1,5 +1,6 @@
-import { For, Show, createEffect, createMemo } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import type { UpdateRunServingIdentity } from "../../../src/infra/update-run-history-projection.ts";
 import type { UpdateRunRecord, UpdateRunStep } from "../../../src/infra/update-run-record.ts";
 import { projectUpdateRun, updateRunStepOwner } from "../app/update-run-projection.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
@@ -83,31 +84,29 @@ function RunStep(props: { step: UpdateRunStep; label?: string }) {
   );
 }
 
-export function UpdateRunView(props: { run: UpdateRunRecord | null; connected: boolean }) {
+export function UpdateRunView(props: {
+  run: UpdateRunRecord | null;
+  connected: boolean;
+  serving?: UpdateRunServingIdentity;
+}) {
   let details: HTMLPreElement | undefined;
   let steps: HTMLOListElement | undefined;
   const identity = () => props.run?.runId;
   const logFollow = useStreamAutoFollow({
     container: () => details,
+    content: () => props.run,
     identity,
     enabled: () => true,
   });
   const stepsFollow = useStreamAutoFollow({
     container: () => steps,
+    content: () => props.run,
     identity,
     enabled: () => Boolean(steps?.parentElement?.hasAttribute("open")),
   });
-  createEffect(
-    () => props.run,
-    (run, previous) => {
-      const changedRun = run?.runId !== previous?.runId;
-      logFollow.schedule(changedRun);
-      stepsFollow.schedule(changedRun);
-    },
-  );
   const view = createMemo(() => {
     i18nRevision();
-    return props.run ? projectUpdateRun(props.run, props.connected) : null;
+    return props.run ? projectUpdateRun(props.run, props.connected, props.serving) : null;
   });
   return (
     <openclaw-update-run-view>

@@ -1,4 +1,6 @@
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { copyOwnedBuffer } from "../shared/owned-buffer.js";
 
 const REALTIME_VOICE_MAX_PENDING_AUDIO_CHUNKS = 320;
 const REALTIME_VOICE_MAX_PENDING_AUDIO_BYTES = 1024 * 1024;
@@ -11,7 +13,7 @@ export function createRealtimeVoiceAudioQueue(
   overflowPolicy: RealtimeVoiceAudioOverflowPolicy,
   onOverflow?: () => void,
 ) {
-  let chunks: Buffer[] = [];
+  let chunks: Buffer<ArrayBuffer>[] = [];
   let bytes = 0;
 
   const clear = () => {
@@ -59,7 +61,7 @@ export function createRealtimeVoiceAudioQueue(
       }
       // Capture transports can recycle caller-owned views before provider readiness,
       // so the queue owns an immutable copy of every accepted chunk.
-      const chunk = Buffer.from(audio);
+      const chunk = copyOwnedBuffer(audio);
       chunks.push(chunk);
       bytes += chunk.byteLength;
       return true;
@@ -290,6 +292,7 @@ export class RealtimeVoiceSessionLifecycle {
     state.phase = "terminal";
     state.terminalOutcome = "completed";
     state.controller.abort(new Error(`${this.label} realtime voice session canceled`));
+    materializeErrorStack(state.controller.signal.reason);
     return true;
   }
 
@@ -302,6 +305,7 @@ export class RealtimeVoiceSessionLifecycle {
     state.phase = "terminal";
     state.terminalOutcome = "error";
     state.controller.abort(new Error(`${this.label} realtime voice session failed`));
+    materializeErrorStack(state.controller.signal.reason);
     return true;
   }
 
@@ -318,6 +322,7 @@ export class RealtimeVoiceSessionLifecycle {
       state.phase = "terminal";
       state.terminalOutcome = outcome;
       state.controller.abort(new Error(`${this.label} realtime voice session closed`));
+      materializeErrorStack(state.controller.signal.reason);
     }
     if (state.terminalNotified) {
       return undefined;
@@ -371,6 +376,7 @@ export class RealtimeVoiceSessionLifecycle {
   private createFreshConnection(): RealtimeVoiceSessionConnection {
     if ("controller" in this.state) {
       this.state.controller.abort(new Error(`${this.label} realtime voice connection replaced`));
+      materializeErrorStack(this.state.controller.signal.reason);
     }
     const controller = new AbortController();
     const connection = this.createConnection(controller);

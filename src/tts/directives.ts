@@ -37,48 +37,6 @@ type TtsDirectiveTextStreamCleaner = {
   hasBufferedDirectiveText: () => boolean;
 };
 
-function resolveDirectiveProvider(
-  providers: readonly SpeechProviderPlugin[],
-  providerId: string,
-): SpeechProviderPlugin | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(providerId);
-  if (!normalized) {
-    return undefined;
-  }
-  return providers.find(
-    (provider) =>
-      provider.id === normalized ||
-      provider.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias) === normalized),
-  );
-}
-
-function parseGenericSpeakerDirective(params: {
-  key: string;
-  value: string;
-  policy: SpeechModelOverridePolicy;
-}): SpeechProviderOverrides | undefined {
-  if (!params.policy.allowVoice) {
-    return undefined;
-  }
-  switch (params.key) {
-    case "speakervoice":
-    case "speaker_voice":
-      return {
-        speakerVoice: params.value,
-        voice: params.value,
-        voiceName: params.value,
-      };
-    case "speakervoiceid":
-    case "speaker_voice_id":
-      return {
-        speakerVoiceId: params.value,
-        voiceId: params.value,
-      };
-    default:
-      return undefined;
-  }
-}
-
 function classifyTtsTag(body: string): "hidden-open" | "hidden-close" | "tts" | "other" {
   const normalized = body.trim().replace(/\s+/g, "").toLowerCase();
   if (normalized === "tts:text") {
@@ -220,10 +178,18 @@ export function resolveTtsDirectiveFacts(
     providers ??= (options?.providers ?? listSpeechProviders(options?.cfg)).toSorted(
       compareSpeechProviderOrder,
     );
-    const selectedProvider = resolveDirectiveProvider(
-      providers,
+    const normalizedProviderId = normalizeLowercaseStringOrEmpty(
       declaredProviderId || normalizeLowercaseStringOrEmpty(options?.preferredProviderId),
     );
+    const selectedProvider = normalizedProviderId
+      ? providers.find(
+          (provider) =>
+            provider.id === normalizedProviderId ||
+            provider.aliases?.some(
+              (alias) => normalizeLowercaseStringOrEmpty(alias) === normalizedProviderId,
+            ),
+        )
+      : undefined;
     if (declaredProviderId && !selectedProvider) {
       warnings.push(`unknown provider "${declaredProviderId}"`);
       continue;
@@ -238,13 +204,15 @@ export function resolveTtsDirectiveFacts(
       : providers;
 
     for (const [key, value] of values) {
+      const genericSpeakerOverrides: SpeechProviderOverrides | undefined = !policy.allowVoice
+        ? undefined
+        : key === "speakervoice" || key === "speaker_voice"
+          ? { speakerVoice: value, voice: value, voiceName: value }
+          : key === "speakervoiceid" || key === "speaker_voice_id"
+            ? { speakerVoiceId: value, voiceId: value }
+            : undefined;
       let handled = false;
       for (const provider of directiveProviders) {
-        const genericSpeakerOverrides = parseGenericSpeakerDirective({
-          key,
-          value,
-          policy,
-        });
         const parsed: SpeechDirectiveTokenParseResult | undefined = genericSpeakerOverrides
           ? { handled: true, overrides: genericSpeakerOverrides }
           : provider.parseDirectiveToken?.({

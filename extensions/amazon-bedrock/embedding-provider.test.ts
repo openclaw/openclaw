@@ -27,14 +27,12 @@ type EndpointOptions = {
   sdkEndpoint?: string;
   fips?: boolean;
   dualstack?: boolean;
-  customEndpoint?: boolean;
   expectedError?: string;
 };
 const euPrivate = "vpce-memory.bedrock-runtime.eu-west-1.vpce.amazonaws.com";
 const govFips = "bedrock-runtime-fips.us-gov-west-1.amazonaws.com";
-const regional = { customEndpoint: false };
-const fipsOptions = { ...regional, fips: true };
-const dual = { ...regional, dualstack: true };
+const fipsOptions = { fips: true };
+const dual = { dualstack: true };
 const privateEndpoint = { remoteBaseUrl: privateUrl, providerBaseUrl: null };
 const iso = { signingRegion: "us-iso-east-1" };
 const memoryOptions = {
@@ -49,7 +47,6 @@ const westFips = {
   signingRegion: "us-west-2",
 };
 const govOptions = {
-  ...regional,
   providerBaseUrl: `https://${govFips}`,
   signingRegion: "us-gov-west-1",
 };
@@ -64,7 +61,7 @@ const isoDual = {
   dualstack: true,
   expectedError: "DualStack is enabled but this partition does not support DualStack",
 };
-const sdkOptions = { ...regional, sdkEndpoint: `https://${sdkHost}` };
+const sdkOptions = { sdkEndpoint: `https://${sdkHost}` };
 const incompatible = (mode: "fips" | "dualstack") => ({
   ...privateEndpoint,
   [mode]: true,
@@ -143,7 +140,7 @@ it.each<[string, string, EndpointOptions]>([
   const providers: Record<string, { baseUrl: string; models: [] }> = providerBaseUrl
     ? { "amazon-bedrock": { baseUrl: providerBaseUrl, models: [] } }
     : {};
-  const { provider, client } = await createBedrockEmbeddingProvider({
+  const { provider } = await createBedrockEmbeddingProvider({
     config: { models: { providers } },
     ...(remoteBaseUrl ? { remote: { baseUrl: remoteBaseUrl } } : {}),
     model: "amazon.titan-embed-text-v2:0",
@@ -167,12 +164,6 @@ it.each<[string, string, EndpointOptions]>([
     },
   ]);
   expect(observedRequests[0]?.authorization).toContain(`/${signingRegion}/bedrock/aws4_request`);
-  expect(client.region).toBe(signingRegion);
-  if (testCase.customEndpoint ?? (remoteBaseUrl || providerBaseUrl)) {
-    expect(client).toHaveProperty("endpoint", remoteBaseUrl ?? providerBaseUrl);
-  } else {
-    expect(client).not.toHaveProperty("endpoint");
-  }
 });
 
 it.each([

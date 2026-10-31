@@ -4,28 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData } from "node:worker_threads";
-import {
-  resetPluginStateStoreForTests,
-  resolveDatabaseFamilyEngines,
-  withDatabaseEngineSelection,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import * as state from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getMatrixRuntime } from "../runtime.js";
 import { resolveMatrixAccountStorageRoot } from "../storage-paths.js";
-import { installMatrixTestRuntime } from "../test-runtime.js";
+import { installMatrixTestRuntime, resetMatrixTestStores } from "../test-runtime.js";
 import { resolveMatrixStoragePaths, writeStorageMeta } from "./client/storage.js";
-import {
-  readMatrixRecoveryKeyStateForPathAsync,
-  writeMatrixRecoveryKeyStateForPathAsync,
-} from "./crypto-state-store.js";
+import type { MatrixStoragePaths } from "./client/types.js";
+import * as recovery from "./crypto-state-store.js";
 import { persistIdbToDisk, restoreIdbFromDisk } from "./sdk/idb-persistence.js";
-import {
-  clearAllIndexedDbState,
-  readDatabaseRecords,
-  seedDatabase,
-} from "./sdk/idb-persistence.test-helpers.js";
+import * as idb from "./sdk/idb-persistence.test-helpers.js";
 import type { MatrixStoredRecoveryKey } from "./sdk/types.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -38,6 +28,7 @@ const auth = {
   accessToken: "synthetic-matrix-token",
   deviceId: "SYNTHETIC_DEVICE",
 };
+type Anchor = { engine: string; schema: string };
 const recoveryKey: MatrixStoredRecoveryKey = {
   version: 1,
   createdAt: "2026-10-01T00:00:00.000Z",
@@ -51,7 +42,7 @@ describe.skipIf(!connection)("Matrix account-root PostgreSQL persistence", () =>
   let stateDir: string;
 
   const selected = (stateEngine: "postgres" | "sqlite") => ({
-    effectiveEngines: resolveDatabaseFamilyEngines({
+    effectiveEngines: state.resolveDatabaseFamilyEngines({
       database: {
         engine: "sqlite",
         families: { state: { engine: stateEngine }, workboard: { engine: "postgres" } },
@@ -60,37 +51,46 @@ describe.skipIf(!connection)("Matrix account-root PostgreSQL persistence", () =>
     postgres: { connection: connection!, schemaPrefix: "matrix_conformance" },
   });
 
-  const withPostgres = <T>(run: () => T) => withDatabaseEngineSelection(selected("postgres"), run);
+  const withPostgres = <T>(run: () => T) =>
+    state.withDatabaseEngineSelection(selected("postgres"), run);
 
   async function accountPaths(accountId: string, accessToken = auth.accessToken) {
     const input = { ...auth, accountId, accessToken, stateDir };
     roots.add(resolveMatrixAccountStorageRoot(input).rootDir);
     const paths = await resolveMatrixStoragePaths(input);
     roots.add(paths.rootDir);
+    await expect(writeStorageMeta({ storagePaths: paths, ...auth, accountId })).resolves.toBe(true);
     return paths;
   }
 
-  function readAnchor(root: string): { engine: string; schema: string } | undefined {
-    const anchor = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), {
+  const writeKey = (paths: MatrixStoragePaths) =>
+    recovery.writeMatrixRecoveryKeyStateForPathAsync({
+      recoveryKeyPath: paths.recoveryKeyPath,
+      payload: recoveryKey,
+      stateRuntime: getMatrixRuntime().state,
+    });
+  const readKey = (paths: MatrixStoragePaths) =>
+    recovery.readMatrixRecoveryKeyStateForPathAsync(
+      paths.recoveryKeyPath,
+      getMatrixRuntime().state,
+    );
+
+  function readAnchor(root: string): Anchor | undefined {
+    using anchor = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), {
       readOnly: true,
     });
-    try {
-      if (
-        !anchor.prepare("SELECT 1 FROM sqlite_master WHERE name = ?").get("openclaw_engine_anchor")
-      ) {
-        return undefined;
-      }
-      return anchor.prepare("SELECT engine, schema FROM openclaw_engine_anchor").get() as
-        | { engine: string; schema: string }
-        | undefined;
-    } finally {
-      anchor.close();
+    if (
+      !anchor.prepare("SELECT 1 FROM sqlite_master WHERE name = ?").get("openclaw_engine_anchor")
+    ) {
+      return undefined;
     }
+    return anchor.prepare("SELECT engine, schema FROM openclaw_engine_anchor").get() as
+      | Anchor
+      | undefined;
   }
 
   async function restartStores() {
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
+    await resetMatrixTestStores();
     installMatrixTestRuntime({ stateDir });
   }
 
@@ -101,9 +101,8 @@ describe.skipIf(!connection)("Matrix account-root PostgreSQL persistence", () =>
   });
 
   afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-    await clearAllIndexedDbState({ databasePrefix });
+    await resetMatrixTestStores();
+    await idb.clearAllIndexedDbState({ databasePrefix });
     try {
       for (const root of roots) {
         if (!fs.existsSync(path.join(root, "state", "openclaw.sqlite"))) {
@@ -126,41 +125,28 @@ describe.skipIf(!connection)("Matrix account-root PostgreSQL persistence", () =>
     await withPostgres(async () => {
       const primary = await accountPaths("primary");
       const secondary = await accountPaths("secondary");
-      for (const paths of [primary, secondary]) {
-        expect(
-          await writeStorageMeta({ storagePaths: paths, ...auth, accountId: paths.accountKey }),
-        ).toBe(true);
-      }
-      await writeMatrixRecoveryKeyStateForPathAsync({
-        recoveryKeyPath: primary.recoveryKeyPath,
-        payload: recoveryKey,
-        stateRuntime: getMatrixRuntime().state,
-      });
+      await writeKey(primary);
       const records = Array.from({ length: 24 }, (_, index) => ({
         key: `room-${String(index).padStart(2, "0")}`,
         value: { session: `session-${index}:🦞${"x".repeat(15_000)}` },
       }));
-      await seedDatabase({ name: cryptoDatabase, storeName: "sessions", records });
+      await idb.seedDatabase({ name: cryptoDatabase, storeName: "sessions", records });
       await persistIdbToDisk({
         snapshotPath: primary.idbSnapshotPath,
         databasePrefix,
         strict: true,
       });
-      await clearAllIndexedDbState({ databasePrefix });
+      await idb.clearAllIndexedDbState({ databasePrefix });
       await restartStores();
 
       await expect(
         restoreIdbFromDisk(primary.idbSnapshotPath, undefined, databasePrefix),
       ).resolves.toBe(true);
       await expect(
-        readDatabaseRecords({ name: cryptoDatabase, storeName: "sessions" }),
+        idb.readDatabaseRecords({ name: cryptoDatabase, storeName: "sessions" }),
       ).resolves.toEqual(records);
-      await expect(
-        readMatrixRecoveryKeyStateForPathAsync(primary.recoveryKeyPath, getMatrixRuntime().state),
-      ).resolves.toEqual(recoveryKey);
-      await expect(
-        readMatrixRecoveryKeyStateForPathAsync(secondary.recoveryKeyPath, getMatrixRuntime().state),
-      ).resolves.toBeNull();
+      await expect(readKey(primary)).resolves.toEqual(recoveryKey);
+      await expect(readKey(secondary)).resolves.toBeNull();
       expect(fs.existsSync(primary.idbSnapshotPath)).toBe(false);
 
       await closeOpenClawStateDatabaseAsync();
@@ -180,39 +166,24 @@ describe.skipIf(!connection)("Matrix account-root PostgreSQL persistence", () =>
   it("keeps a populated account root and its namespace across a token rotation", async () => {
     await withPostgres(async () => {
       const original = await accountPaths("rotated", "synthetic-old-token");
-      expect(
-        await writeStorageMeta({ storagePaths: original, ...auth, accountId: "rotated" }),
-      ).toBe(true);
-      await writeMatrixRecoveryKeyStateForPathAsync({
-        recoveryKeyPath: original.recoveryKeyPath,
-        payload: recoveryKey,
-        stateRuntime: getMatrixRuntime().state,
-      });
+      await writeKey(original);
       await restartStores();
       const originalAnchor = readAnchor(original.rootDir);
       const rotated = await accountPaths("rotated", "synthetic-new-token");
       expect(rotated.rootDir).toBe(original.rootDir);
-      await expect(
-        readMatrixRecoveryKeyStateForPathAsync(rotated.recoveryKeyPath, getMatrixRuntime().state),
-      ).resolves.toEqual(recoveryKey);
+      await expect(readKey(rotated)).resolves.toEqual(recoveryKey);
       await closeOpenClawStateDatabaseAsync();
       expect(readAnchor(rotated.rootDir)).toEqual(originalAnchor);
     });
   });
 
   it("keeps Matrix native when state is SQLite and workboard is PostgreSQL", async () => {
-    await withDatabaseEngineSelection(selected("sqlite"), async () => {
+    await state.withDatabaseEngineSelection(selected("sqlite"), async () => {
       await restartStores();
       const native = await accountPaths("native");
-      await writeMatrixRecoveryKeyStateForPathAsync({
-        recoveryKeyPath: native.recoveryKeyPath,
-        payload: recoveryKey,
-        stateRuntime: getMatrixRuntime().state,
-      });
+      await writeKey(native);
       await restartStores();
-      await expect(
-        readMatrixRecoveryKeyStateForPathAsync(native.recoveryKeyPath, getMatrixRuntime().state),
-      ).resolves.toEqual(recoveryKey);
+      await expect(readKey(native)).resolves.toEqual(recoveryKey);
       await closeOpenClawStateDatabaseAsync();
       expect(readAnchor(native.rootDir)).toBeUndefined();
     });

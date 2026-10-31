@@ -15,19 +15,12 @@ import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-co
 
 export type RenderMessageGroupOptions = Omit<
   GroupedMessageOptions,
-  | "isStreaming"
-  | "duplicateCount"
-  | "assistantMessageDisclosure"
-  | "messageActions"
-  | "entryId"
-  | "entryRef"
-  | "replyLine"
+  "isStreaming" | "assistantMessageDisclosure" | "messageActions" | "entryId" | "replyLine"
 > &
   ChatSendStatusActions &
   ForwardedAvatarOptions & {
     /** A run frame's line, from its final answer; other groups resolve their own. */
     frameReplyLine?: ReplyLine;
-    entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
     latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
     /** Configured main-session key; an agent's main source labels as the agent. */
     mainKey?: string;
@@ -38,7 +31,6 @@ export type RenderMessageGroupOptions = Omit<
       messageId: string,
     ) => AssistantMessageExpansionState | undefined;
     onToggleAssistantMessageExpanded?: (messageId: string) => void;
-    userId?: string | null;
     userName?: string | null;
     showOwnSenderName?: boolean;
     /** Routing for peer sender names; absent leaves them plain text. */
@@ -56,7 +48,9 @@ export type RenderMessageGroupOptions = Omit<
     /** Only this run may supply live copy for an activity disclosure. */
     activityRunId?: string | null;
     activityGroupKey?: string;
+    bubbleActivityGroupKey?: string;
     turnRecap?: TurnRecap;
+    hideTurnRecapDuration?: boolean;
     /** Frame bodies are pre-rendered by the frame owner; ordinary groups omit them. */
     frameContent?: readonly unknown[];
     frameActionOwner?: MessageGroup["messages"][number] | null;

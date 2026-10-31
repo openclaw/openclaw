@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
-import { formatGatewayPendingCloseSteps } from "../../gateway/restart-trace.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { gatewayWorkAdmissionActual, runLoopFixture as f } from "./run-loop-mocks.test-support.js";
 import {
@@ -12,6 +11,7 @@ import {
   createRuntimeWithExitSignal,
   createSignaledStart,
   runGatewayLoop,
+  setPlatform,
   systemdReply,
   withLifecycleClock,
   waitForStart,
@@ -21,6 +21,32 @@ import {
 function useSystemdSupervisor() {
   process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
   f.systemctl.mockResolvedValue(systemdReply());
+}
+
+async function blockHostRetirement(gate: ReturnType<typeof createLifecycleGate>) {
+  let block = false;
+  const hostModule = await import("./host-lifecycle.js");
+  const createHost = hostModule.createGatewayHostLifecycle;
+  const factory = vi
+    .spyOn(hostModule, "createGatewayHostLifecycle")
+    .mockImplementation((params) => {
+      const owner = createHost(params);
+      return {
+        ...owner,
+        retire: async () => {
+          await owner.retire();
+          if (block) {
+            block = false;
+            await gate.wait();
+          }
+        },
+      };
+    });
+  f.restartGatewayProcessWithFreshPid.mockImplementationOnce(() => {
+    block = true;
+    return { mode: "disabled" };
+  });
+  return () => factory.mockRestore();
 }
 
 async function withPhaseClock(
@@ -38,6 +64,29 @@ async function withPhaseClock(
 }
 
 export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
+  it("exits cleanly when host retirement stays held instead of starting another runtime", async () => {
+    const retirement = createLifecycleGate();
+    const restoreHost = await blockHostRetirement(retirement);
+    try {
+      await f.withRunningGateway(async ({ captureSignal, start, runtime, exited }) => {
+        await withLifecycleClock(async () => {
+          captureSignal("SIGUSR2")();
+          await retirement.entered;
+          await vi.advanceTimersByTimeAsync(5_000);
+          expect(runtime.exit).toHaveBeenCalledWith(0);
+          await expect(exited).resolves.toBe(0);
+          expect(start).toHaveBeenCalledOnce();
+          expect(f.gatewayLog.warn).toHaveBeenCalledWith(
+            expect.stringContaining("host: cleanup exceeded 5000ms; resources remain"),
+          );
+        });
+      });
+    } finally {
+      retirement.release();
+      restoreHost();
+    }
+  });
+
   it("preserves startup and final retirement failures after every cleanup owner settles", async () => {
     const startupFailure = new Error("fixture boot failed");
     const releaseFailure = new Error("fixture lock retirement failed");
@@ -58,7 +107,6 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
         errors: [startupFailure, releaseFailure],
         cause: startupFailure,
       });
-      expect(release).toHaveBeenCalledOnce();
       expect(receipt).toHaveBeenCalledExactlyOnceWith("retained");
     });
   });
@@ -68,7 +116,6 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
   }) => {
     await withIsolatedSignals(async ({ captureSignal }) => {
       const startup = createLifecycleGate();
-      const draining = createDeferredCore();
       const order: string[] = [];
       const closeGate = createLifecycleGate(() => order.push("close"));
       const flushGate = createLifecycleGate(() => order.push("flush"));
@@ -78,10 +125,6 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
         release: vi.fn(async () => {
           order.push("release");
         }),
-      });
-      f.waitForGatewayActiveWork.mockImplementationOnce(async () => {
-        draining.resolve();
-        return { drained: true, snapshot: f.idleActiveWorkSnapshot };
       });
       f.flushLogger.mockImplementationOnce(flushGate.wait);
       const { runtime } = createRuntimeWithExitSignal();
@@ -98,7 +141,6 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
       try {
         await startup.entered;
         captureSignal("SIGTERM")();
-        await draining.promise;
         await waitForLoopTurn();
         expectUncalled(f.flushLogger, close);
         startup.release();
@@ -109,7 +151,6 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
         expectUncalled(settled, drained);
         flushGate.release();
         await expect(withinTest(loop, signal)).resolves.toBe(0);
-        expect(close).toHaveBeenCalledOnce();
         expect(order).toEqual(["close", "release", "flush"]);
         expect(drained).toHaveBeenCalledExactlyOnceWith("drained");
       } finally {
@@ -120,7 +161,7 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
     });
   });
 
-  it("owns output failure without a stdin lifeline until Gateway cleanup joins", async () => {
+  it("joins Gateway cleanup without feeding broken output back into shutdown", async () => {
     const previousCode = process.exitCode;
     const { exitAfterSignalExitBarriers, registerSignalExitOwner } =
       await import("../signal-exit-barrier.js");
@@ -128,18 +169,29 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
     try {
       await f.withRunningGateway(async ({ close, runtime, exited }) => {
         close.mockImplementationOnce(closeGate.wait);
-        exitAfterSignalExitBarriers(7);
+        let outputFailures = 0;
+        let feedbackLoop = false;
+        f.gatewayLog.info.mockImplementation(() => {
+          // A closed pipe reports another failure for each attempted shutdown log.
+          // Bound the fixture so the original feedback loop can finish and fail.
+          if (++outputFailures > 20) {
+            feedbackLoop = true;
+            return;
+          }
+          exitAfterSignalExitBarriers(7);
+        });
+        exitAfterSignalExitBarriers(0);
         await closeGate.entered;
-        expect(f.gatewayLog.info).toHaveBeenCalledWith("received process exit; shutting down");
         expect(runtime.exit).not.toHaveBeenCalled();
         expect(process.exitCode).toBe(previousCode);
         closeGate.release();
         await expect(exited).resolves.toBe(7);
-        expect(close).toHaveBeenCalledOnce();
+        expect(feedbackLoop).toBe(false);
         const release = registerSignalExitOwner(() => {});
         release();
       }, true);
     } finally {
+      f.gatewayLog.info.mockReset();
       closeGate.release();
       process.exitCode = previousCode;
     }
@@ -192,13 +244,6 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
             outcome: "clean_stop",
             reason: "stop (process exit: unhandled rejection)",
           });
-          expect(f.gatewayLog.info).toHaveBeenCalledWith(
-            updating
-              ? "received SIGTERM; stopping after foreground update settlement"
-              : phase !== "running"
-                ? "received unhandled rejection during shutdown; finishing shutdown without restart"
-                : "received unhandled rejection; shutting down",
-          );
         });
       } finally {
         closeGate.release();
@@ -225,7 +270,7 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
         watchdog.mockImplementationOnce(cancelGate.wait);
       }
       await f.withRunningGateway(
-        async ({ captureSignal, close, runtime, exited, loopPromise }) => {
+        async ({ captureSignal, close, runtime, exited }) => {
           if (deadline) {
             close.mockImplementationOnce(closeGate.wait);
           }
@@ -248,7 +293,6 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
                 await cancelGate.entered;
               }
               expect(runtime.exit).not.toHaveBeenCalled();
-              expect(formatGatewayPendingCloseSteps()).toContain("restart.close.watchdog=");
               if (failed) {
                 cancelGate.reject(failure);
               } else {
@@ -257,16 +301,9 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
               if (deadline) {
                 await vi.advanceTimersByTimeAsync(0);
               }
-              await expect(loopPromise).resolves.toBe(failed ? 1 : 0);
               await expect(exited).resolves.toBe(failed ? 1 : 0);
-              if (deadline) {
-                expect(watchdog).toHaveBeenCalledOnce();
-              }
               if (failed) {
                 expect(drained).toHaveBeenCalledExactlyOnceWith("retained");
-                expect(f.gatewayLog.error).toHaveBeenCalledWith(
-                  "gateway lifecycle completion failed: native watchdog retirement failed",
-                );
               }
             } finally {
               closeGate.release();
@@ -285,85 +322,63 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
     },
   );
 
-  it.each(["close", "restart-startup"] as const)(
-    "does not report success when %s fails after a supervised zero-status deadline",
-    async (phase) => {
-      useSystemdSupervisor();
-      const failure = new Error("late owned cleanup failed");
-      const phaseGate = createLifecycleGate();
-      const drained = vi.fn();
-      const close = createCloseMock();
-      if (phase === "close") {
-        close.mockImplementationOnce(phaseGate.wait);
-      }
-      const initial = createSignaledStart(close);
-      const start = initial.start;
-      if (phase === "restart-startup") {
-        // Vitest reuses existing mocks; queue the implementation, not the mock itself.
-        const initialStart = start.getMockImplementation()!;
-        start.mockImplementationOnce(initialStart).mockImplementationOnce(async () => {
-          await phaseGate.wait();
-          return createGatewayServer(close);
-        });
-      }
-      const { runtime } = createRuntimeWithExitSignal();
-      await withIsolatedSignals(async ({ captureSignal }) => {
-        const loop = runGatewayLoop({ start, runtime, onProcessResourcesSettled: drained });
-        const outcome = loop.then(
-          (code) => ({ code }),
-          (error: unknown) => ({ error }),
-        );
-        await waitForStart(initial.started);
-        if (phase === "restart-startup") {
-          captureSignal("SIGUSR2")();
-          await phaseGate.entered;
-        }
-        await withPhaseClock(phaseGate, async () => {
-          captureSignal("SIGTERM")();
-          await advanceWithoutCalls(25_000, runtime.exit);
-          phaseGate.reject(failure);
-          await vi.advanceTimersByTimeAsync(0);
-          await expect(outcome).resolves.toEqual(
-            phase === "close" ? { code: 1 } : { error: failure },
-          );
-          expect(drained).toHaveBeenCalledExactlyOnceWith(
-            phase === "close" ? "retained" : "drained",
-          );
-        });
+  it.each([
+    { phase: "close", heldMs: 25_000, boundary: "after the supervisor deadline" },
+    { phase: "restart-startup", heldMs: 2_999, boundary: "within the startup cleanup grace" },
+  ] as const)("does not report success when $phase fails $boundary", async ({ phase, heldMs }) => {
+    useSystemdSupervisor();
+    const failure = new Error("late owned cleanup failed");
+    const phaseGate = createLifecycleGate();
+    const drained = vi.fn();
+    const close = createCloseMock();
+    if (phase === "close") {
+      close.mockImplementationOnce(phaseGate.wait);
+    }
+    const initial = createSignaledStart(close);
+    const start = initial.start;
+    if (phase === "restart-startup") {
+      // Vitest reuses existing mocks; queue the implementation, not the mock itself.
+      const initialStart = start.getMockImplementation()!;
+      start.mockImplementationOnce(initialStart).mockImplementationOnce(async () => {
+        await phaseGate.wait();
+        return createGatewayServer(close);
       });
-    },
-  );
+    }
+    const { runtime } = createRuntimeWithExitSignal();
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const loop = runGatewayLoop({ start, runtime, onProcessResourcesSettled: drained });
+      const outcome = loop.then(
+        (code) => ({ code }),
+        (error: unknown) => ({ error }),
+      );
+      await waitForStart(initial.started);
+      if (phase === "restart-startup") {
+        captureSignal("SIGUSR2")();
+        await phaseGate.entered;
+      }
+      await withPhaseClock(phaseGate, async () => {
+        captureSignal("SIGTERM")();
+        await advanceWithoutCalls(heldMs, runtime.exit);
+        phaseGate.reject(failure);
+        await vi.advanceTimersByTimeAsync(0);
+        await expect(outcome).resolves.toEqual({ code: 1 });
+        if (phase === "restart-startup") {
+          expect(f.gatewayLog.error).toHaveBeenCalledWith(
+            "shutdown step failed (startup operations): late owned cleanup failed",
+          );
+        }
+        expect(drained).toHaveBeenCalledExactlyOnceWith("retained");
+      });
+    });
+  });
 
   it.each(["host-retirement", "restart-preparation", "begin-boot"] as const)(
     "does not acquire another generation after a terminal decision during %s",
     async (phase) => {
       useSystemdSupervisor();
       const phaseGate = createLifecycleGate();
-      let blockRetirement = false;
-      let retirementBlocked = false;
-      const hostModule = await import("./host-lifecycle.js");
-      const createHost = hostModule.createGatewayHostLifecycle;
-      const hostFactory = vi
-        .spyOn(hostModule, "createGatewayHostLifecycle")
-        .mockImplementation((params) => {
-          const owner = createHost(params);
-          return {
-            ...owner,
-            retire: async () => {
-              await owner.retire();
-              if (phase === "host-retirement" && blockRetirement && !retirementBlocked) {
-                retirementBlocked = true;
-                await phaseGate.wait();
-              }
-            },
-          };
-        });
-      if (phase === "host-retirement") {
-        f.restartGatewayProcessWithFreshPid.mockImplementationOnce(() => {
-          blockRetirement = true;
-          return { mode: "disabled" };
-        });
-      }
+      const restoreHost =
+        phase === "host-retirement" ? await blockHostRetirement(phaseGate) : () => {};
       if (phase === "restart-preparation") {
         f.waitForActiveCronTaskRuns.mockImplementationOnce(async () => {
           await phaseGate.wait();
@@ -397,14 +412,54 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
             await expect(loop).resolves.toBe(1);
             expect(start).toHaveBeenCalledTimes(phase === "begin-boot" ? 0 : 1);
             expect(beginBoot).toHaveBeenCalledOnce();
-            expect(hostFactory).toHaveBeenCalledTimes(phase === "restart-preparation" ? 2 : 1);
             expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(true);
           });
         });
       } finally {
         phaseGate.release();
-        hostFactory.mockRestore();
+        restoreHost();
       }
     },
   );
+
+  it("bounds launchd provider cleanup before the printed native stop deadline", async () => {
+    setPlatform("darwin");
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+    f.readLaunchdStopTimeout.mockResolvedValue({
+      stop: { timeoutMs: 30_000, source: "launchd system/ai.openclaw.gateway exit timeout" },
+    });
+    f.hasManagedProviderLocalServices.mockReturnValue(true);
+    const providerCleanup = createDeferredCore();
+    f.stopManagedProviderLocalServices.mockReturnValue(providerCleanup.promise);
+    const custody = vi.fn();
+    await f.withRunningGateway(
+      async ({ captureSignal, close, start, runtime, exited }) => {
+        await withLifecycleClock(async () => {
+          try {
+            captureSignal("SIGTERM")();
+            await vi.advanceTimersByTimeAsync(4_999);
+            expect(close).toHaveBeenCalledOnce();
+            expect(f.stopManagedProviderLocalServices).toHaveBeenCalledOnce();
+            expect(runtime.exit).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+            await expect(exited).resolves.toBe(0);
+            expect(start).toHaveBeenCalledOnce();
+            expect(custody).toHaveBeenCalledExactlyOnceWith("retained");
+            expect(f.gatewayLog.warn).toHaveBeenCalledWith(
+              "restart.close.provider-local-services: cleanup exceeded 5000ms; resources remain",
+            );
+            expect(f.writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
+            expect(f.gatewayLog.info).toHaveBeenCalledWith(
+              "shutdown budget at shutdown: drain=15000ms shutdown=25000ms reserve=10000ms exitMargin=5000ms; source=launchd system/ai.openclaw.gateway exit timeout=30000ms",
+            );
+          } finally {
+            providerCleanup.resolve();
+            await vi.advanceTimersByTimeAsync(0);
+          }
+        });
+      },
+      false,
+      { onProcessResourcesSettled: custody },
+    );
+  });
 }

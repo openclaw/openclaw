@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { TsdownPlugin } from "tsdown";
+import type { InlineConfig, TsdownPlugin } from "tsdown";
 import { isTypeScriptPackageEntry } from "../../src/plugins/package-entrypoints.ts";
 import {
   PLUGIN_ACTIVITY_ICON_PATH,
@@ -20,6 +20,11 @@ import { createPluginInventoryModuleRefsPlugin } from "./plugin-inventory-module
 import { preparePackageRuntimeAssets } from "./plugin-npm-runtime-assets.mts";
 import { collectPluginThemeAssetPaths } from "./plugin-theme-assets.mts";
 import { isRecord } from "./record-shared.mjs";
+import { standaloneRuntimeProcessBuildEntries } from "./runtime-process-core-build-entries.mts";
+import {
+  createStandaloneSourceModuleUrlPlugin,
+  updateStandaloneSourceModuleUrlChunks,
+} from "./standalone-source-module-urls.mjs";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 
 const env = {
@@ -187,6 +192,7 @@ type PluginNpmRuntimeBuildParams = {
   packageDir: string;
   logLevel?: "silent" | "error" | "warn" | "info";
   profile?: "qa-gateway-fixture";
+  controlUiAssetsPrepared?: boolean;
 };
 
 function readJsonFile(filePath: string) {
@@ -342,10 +348,14 @@ export function listPluginNpmRuntimeBuildOutputs(plan: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function rewriteCommonJsRuntimeSpecifiers(plan: PluginNpmRuntimeBuildPlan) {
+export function rewritePluginNpmRuntimeSpecifiers(
+  plan: PluginNpmRuntimeBuildPlan,
+  original: string,
+) {
   if (plan.runtimeFormat !== "cjs") {
-    return;
+    return original;
   }
+  let text = original;
   const specifierRewrites = new Map(
     plan.runtimeBuildOutputs.map((output) => {
       const cjsSpecifier = output.replace(/^\.\/dist\//u, "./");
@@ -353,22 +363,32 @@ function rewriteCommonJsRuntimeSpecifiers(plan: PluginNpmRuntimeBuildPlan) {
     }),
   );
 
+  // Source entries stay .js for the root bundled build; package-local CJS
+  // artifacts must point at their generated .cjs sidecars instead.
+  for (const [fromSpecifier, toSpecifier] of specifierRewrites) {
+    text = text.replaceAll(
+      `specifier: ${JSON.stringify(fromSpecifier)}`,
+      `specifier: ${JSON.stringify(toSpecifier)}`,
+    );
+  }
+  return text;
+}
+
+function rewriteCommonJsRuntimeSpecifiers(plan: PluginNpmRuntimeBuildPlan) {
+  if (plan.runtimeFormat !== "cjs") {
+    return;
+  }
+  const rewrites: { filename: string; original: string; rewritten: string }[] = [];
   for (const output of plan.runtimeBuildOutputs) {
     const outputPath = path.join(plan.packageDir, output.replace(/^\.\//u, ""));
-    let text = fs.readFileSync(outputPath, "utf8");
-    const original = text;
-    // Source entries stay .js for the root bundled build; package-local CJS
-    // artifacts must point at their generated .cjs sidecars instead.
-    for (const [fromSpecifier, toSpecifier] of specifierRewrites) {
-      text = text.replaceAll(
-        `specifier: ${JSON.stringify(fromSpecifier)}`,
-        `specifier: ${JSON.stringify(toSpecifier)}`,
-      );
-    }
+    const original = fs.readFileSync(outputPath, "utf8");
+    const text = rewritePluginNpmRuntimeSpecifiers(plan, original);
     if (text !== original) {
       fs.writeFileSync(outputPath, text, "utf8");
+      rewrites.push({ filename: outputPath, original, rewritten: text });
     }
   }
+  updateStandaloneSourceModuleUrlChunks({ outputRoot: plan.outDir, rewrites });
 }
 
 /** Resolve package `files` entries needed for runtime build outputs and plugin metadata. */
@@ -643,6 +663,78 @@ export type PluginNpmRuntimeBuildPlan = NonNullable<
   ReturnType<typeof resolvePluginNpmRuntimeBuildPlan>
 >;
 
+/** Share exact build contexts with native source-module URL resolution. */
+export function createPluginNpmRuntimeBuildOptions(
+  plan: PluginNpmRuntimeBuildPlan,
+  {
+    inputFiles = new Set<string>(),
+    logLevel = "info",
+  }: { inputFiles?: Set<string>; logLevel?: PluginNpmRuntimeBuildParams["logLevel"] } = {},
+) {
+  // The 9.6 host lacks Telegram's final-observation contract. This canonical factory
+  // owns isolated per-turn state; its host error formatter stays external below.
+  // Retire this binding when Telegram's declared host floor includes that contract.
+  const { bundleTelegramLifecycle, bundledSdkExports, bundledSdkImports } = plan;
+  const bundledSdkSpecifiers = new Set([
+    ...Object.keys(bundledSdkImports),
+    ...Object.keys(bundledSdkExports),
+  ]);
+  const privateWorkers = Object.entries(plan.entry).filter(([name]) =>
+    Object.hasOwn(standaloneRuntimeProcessBuildEntries, `extensions/${plan.pluginDir}/${name}`),
+  );
+  const sharedEntries = { ...plan.entry };
+  for (const [name] of privateWorkers) {
+    delete sharedEntries[name];
+  }
+  // Worker isolates must not inherit unrelated SDK imports from shared plugin chunks.
+  return [sharedEntries, ...privateWorkers.map(([name, source]) => ({ [name]: source }))].map(
+    (entry) =>
+      ({
+        clean: false,
+        config: false,
+        dts: false,
+        alias: bundledSdkImports,
+        deps: {
+          alwaysBundle: (id) => bundledSdkSpecifiers.has(id),
+          neverBundle: createNeverBundleDependencyMatcher(plan.packageJson, bundledSdkSpecifiers),
+        },
+        entry,
+        plugins: [
+          createStandaloneSourceModuleUrlPlugin({ rootDir: plan.repoRoot }),
+          {
+            name: "openclaw:runtime-build-inputs",
+            moduleParsed({ id }) {
+              if (path.isAbsolute(id) && !id.split(path.sep).includes("node_modules")) {
+                inputFiles.add(path.relative(plan.repoRoot, id).split(path.sep).join("/"));
+              }
+            },
+          },
+          createBundledSdkExportsPlugin(plan.repoRoot, bundledSdkExports, bundleTelegramLifecycle),
+          createPluginInventoryModuleRefsPlugin(plan.packageDir),
+          createStateSchemaInlinePlugin(plan.repoRoot),
+        ],
+        outputOptions: {
+          // Published plugins still support hosts predating these private source facades.
+          paths: {
+            "openclaw/plugin-sdk/media-ffmpeg": "openclaw/plugin-sdk/media-runtime",
+            "openclaw/plugin-sdk/realtime-voice-playback": "openclaw/plugin-sdk/realtime-voice",
+          },
+          chunkFileNames: `.setup/[name]-[hash]${plan.runtimeFormat === "cjs" ? ".cjs" : ".mjs"}`,
+          entryFileNames: (chunk) =>
+            Object.hasOwn(entry, chunk.name)
+              ? `[name]${pluginRuntimeExtension(plan.runtimeFormat)}`
+              : `.setup/[name]-[hash]${plan.runtimeFormat === "cjs" ? ".cjs" : ".mjs"}`,
+        },
+        env,
+        fixedExtension: plan.runtimeFormat === "cjs",
+        format: plan.runtimeFormat,
+        logLevel,
+        outDir: plan.outDir,
+        platform: "node",
+      }) satisfies InlineConfig,
+  );
+}
+
 /**
  * Build isolated runtime files and static assets for publication or source-checkout use.
  * @internal Shared repository-script contract.
@@ -653,60 +745,25 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
     return null;
   }
 
-  // The 9.6 host lacks Telegram's final-observation contract. This canonical factory
-  // owns isolated per-turn state; its host error formatter stays external below.
-  // Retire this binding when Telegram's declared host floor includes that contract.
-  const { bundleTelegramLifecycle, bundledSdkExports, bundledSdkImports } = plan;
   const inputFiles = new Set<string>();
-  const bundledSdkSpecifiers = new Set([
-    ...Object.keys(bundledSdkImports),
-    ...Object.keys(bundledSdkExports),
-  ]);
   const { build } = await import("tsdown");
   assertRealOutputRoot(plan.outDir);
-  fs.rmSync(plan.outDir, { recursive: true, force: true });
-  await build({
-    clean: false,
-    config: false,
-    dts: false,
-    alias: bundledSdkImports,
-    deps: {
-      alwaysBundle: (id) => bundledSdkSpecifiers.has(id),
-      neverBundle: createNeverBundleDependencyMatcher(plan.packageJson, bundledSdkSpecifiers),
-    },
-    entry: plan.entry,
-    plugins: [
-      {
-        name: "openclaw:runtime-build-inputs",
-        moduleParsed({ id }) {
-          if (path.isAbsolute(id) && !id.split(path.sep).includes("node_modules")) {
-            inputFiles.add(path.relative(plan.repoRoot, id).split(path.sep).join("/"));
-          }
-        },
-      },
-      createBundledSdkExportsPlugin(plan.repoRoot, bundledSdkExports, bundleTelegramLifecycle),
-      createPluginInventoryModuleRefsPlugin(plan.packageDir),
-      createStateSchemaInlinePlugin(plan.repoRoot),
-    ],
-    outputOptions: {
-      // Published plugins still support hosts predating these private source facades.
-      paths: {
-        "openclaw/plugin-sdk/media-ffmpeg": "openclaw/plugin-sdk/media-runtime",
-        "openclaw/plugin-sdk/realtime-voice-playback": "openclaw/plugin-sdk/realtime-voice",
-      },
-      chunkFileNames: `.setup/[name]-[hash]${plan.runtimeFormat === "cjs" ? ".cjs" : ".mjs"}`,
-      entryFileNames: (chunk) =>
-        Object.hasOwn(plan.entry, chunk.name)
-          ? `[name]${pluginRuntimeExtension(plan.runtimeFormat)}`
-          : `.setup/[name]-[hash]${plan.runtimeFormat === "cjs" ? ".cjs" : ".mjs"}`,
-    },
-    env,
-    fixedExtension: plan.runtimeFormat === "cjs",
-    format: plan.runtimeFormat,
-    logLevel: params.logLevel ?? "info",
-    outDir: plan.outDir,
-    platform: "node",
-  });
+  if (params.controlUiAssetsPrepared && fs.existsSync(plan.outDir)) {
+    // The composed root build already published these source-owned browser assets.
+    for (const entry of fs.readdirSync(plan.outDir)) {
+      if (entry !== "control-ui" && entry !== "openclaw.plugin.json") {
+        fs.rmSync(path.join(plan.outDir, entry), { recursive: true, force: true });
+      }
+    }
+  } else {
+    fs.rmSync(plan.outDir, { recursive: true, force: true });
+  }
+  for (const options of createPluginNpmRuntimeBuildOptions(plan, {
+    inputFiles,
+    logLevel: params.logLevel,
+  })) {
+    await build(options);
+  }
   const missingHostExports = listMissingPluginNpmRuntimeHostExports(plan);
   if (missingHostExports.length > 0) {
     throw new Error(
@@ -717,7 +774,9 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
   return {
     ...plan,
     inputFiles: [...inputFiles].toSorted(),
-    ...(await preparePackageRuntimeAssets(plan)),
+    ...(await preparePackageRuntimeAssets(plan, {
+      controlUiAssetsPrepared: params.controlUiAssetsPrepared,
+    })),
   };
 }
 

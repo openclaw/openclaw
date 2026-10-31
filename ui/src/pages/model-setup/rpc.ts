@@ -14,11 +14,16 @@ type ModelSetupDetectTaskResult = ModelSetupTaskResult<SystemAgentSetupDetectRes
   token: object;
 };
 
+export type ModelSetupDetection = {
+  completion: Promise<ModelSetupDetectTaskResult | undefined>;
+};
+
 function createSetupRequest<Args, Result>(
   request: (args: Args, signal: AbortSignal) => Promise<Result | undefined>,
-  onComplete?: (result: Result) => void,
+  onComplete?: (result: Result) => boolean | void,
 ) {
   let controller: AbortController | undefined;
+  // Request primitives also retire when their owner is disposed before its first settle.
   onCleanup(() => {
     const retired = controller;
     controller = undefined;
@@ -32,8 +37,9 @@ function createSetupRequest<Args, Result>(
     if (controller !== current || current.signal.aborted) {
       return undefined;
     }
-    if (result !== undefined) {
-      onComplete?.(result);
+    // Owner rejection also retires the result exposed to async readers.
+    if (result !== undefined && onComplete?.(result) === false) {
+      return undefined;
     }
     return result;
   };
@@ -41,7 +47,7 @@ function createSetupRequest<Args, Result>(
 
 export function createModelSetupDetectRequest(options: {
   getHello: () => ModelSetupConnection["hello"];
-  onComplete: (outcome: ModelSetupDetectTaskResult) => void;
+  onComplete: (outcome: ModelSetupDetectTaskResult) => boolean | void;
 }) {
   return createSetupRequest<
     readonly [GatewayBrowserClient | null, string | null, object | null],

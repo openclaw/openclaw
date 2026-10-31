@@ -28,6 +28,10 @@ import {
   postgresCatalogQuery,
   readPostgresCatalog,
 } from "./postgres-catalog.js";
+import {
+  refreshPostgresPlannerStatistics,
+  type PostgresPlannerStatistics,
+} from "./postgres-planner-statistics.js";
 export {
   admitDatabasePortDescriptor,
   DatabasePortDataError,
@@ -155,7 +159,7 @@ async function* readBatches(
       rows = statement.iterate(...params);
     } else {
       const result = await endpoint.db.query(sql, params.map(binding));
-      rows = decodePostgresRows({ ...result, rowCount: result.rowCount ?? 0 }, true);
+      rows = decodePostgresRows(result, true);
     }
     let count = 0,
       bytes = 0;
@@ -413,6 +417,8 @@ async function catalogEvidence(
       (fact) =>
         fact.kind === "viewDefinition" ||
         (fact.kind === "triggerDefinition" &&
+          // Derived search tables carry only their generated maintenance triggers.
+          !descriptor.postgresDerivedTables?.includes(fact.table) &&
           !descriptor.triggers?.some(
             (trigger) =>
               fact.value !== null &&
@@ -577,6 +583,7 @@ export async function materializeDatabasePort(params: {
   maxRowBytes?: number;
   sourceAllocations?: PortVerification["allocations"];
   activeFragments?: readonly string[];
+  onPlannerStatistics?: (result: PostgresPlannerStatistics) => void;
   /** Export-only redaction before hashing/copying; retained rows preserve keys and column types. */
   transformRow?: (table: string, row: PortRow) => PortRow | undefined;
 }): Promise<PortVerification> {
@@ -697,6 +704,11 @@ export async function materializeDatabasePort(params: {
     if (destination.engine === "postgres") {
       assertCurrent();
       await destination.db.query("COMMIT");
+      const statistics = await refreshPostgresPlannerStatistics(
+        destination.db,
+        destination.namespace,
+      );
+      params.onPlannerStatistics?.(statistics);
     }
     return verified;
   } catch (error) {

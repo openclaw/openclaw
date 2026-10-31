@@ -44,8 +44,9 @@ export async function waitForQueuedSubagentClaim(params: {
       };
       stops.push(
         registerOpenClawStateDatabaseAsyncResource({
-          close: async (identity) => {
-            if (!settled && (!identity || identity.key === params.admission.identity.key)) {
+          admission: params.admission,
+          close: async () => {
+            if (!settled) {
               settled = true;
               reject(new Error("Queued registration registry was retired during claim wait"));
             }

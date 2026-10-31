@@ -24,6 +24,8 @@ type TranscriptMirror = NonNullable<ReplyPayloadMetadata["sourceReplyTranscriptM
   deliveryMirror?: SessionTranscriptDeliveryMirror;
   commandText?: string;
   commandId?: string;
+  /** A native command turn already committed this command's input. */
+  commandInputCommitted?: boolean;
 };
 
 function transcriptMirrorExpectations(mirror: TranscriptMirror) {
@@ -57,6 +59,7 @@ export async function mirrorDeliveredReplyToTranscript(params: {
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
         commandText: mirror.commandText,
         commandId: mirror.commandId,
+        ...(mirror.commandInputCommitted ? { commandInputCommitted: true } : {}),
         replyText: mirror.text,
         replyId: mirror.idempotencyKey ?? mirror.text,
       });

@@ -1,7 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /**
- * PCM resampling and G.711 mu-law conversion helpers for Talk audio bridges.
- *
  * Telephony providers generally expect 8 kHz mu-law frames, while local audio
  * capture and realtime providers can produce higher-rate signed 16-bit PCM.
  */
@@ -179,30 +177,6 @@ function createResamplePlan(inputSampleRate: number, outputSampleRate: number): 
   };
 }
 
-function sampleResampledPcm(
-  input: Int16Array,
-  inputStartSample: number,
-  outputIndex: number,
-  plan: ResamplePlan,
-): number {
-  const sourcePosition = (outputIndex * plan.inputSampleRate) / plan.outputSampleRate;
-  return Math.round(
-    sampleBandlimited(
-      input,
-      (plan.kernel ? Math.floor(sourcePosition) : outputIndex * plan.ratio) - inputStartSample,
-      plan.cutoffCyclesPerSample,
-      plan.kernel
-        ? expectDefined(
-            plan.kernel.coefficients[
-              (outputIndex * plan.kernel.inputStep) % plan.kernel.phaseCount
-            ],
-            "coefficients entry at (output index * kernel input step) % kernel phase count",
-          )
-        : undefined,
-    ),
-  );
-}
-
 function renderResampledPcm(
   input: Buffer,
   inputStartSample: number,
@@ -214,8 +188,24 @@ function renderResampledPcm(
   const inputView = readInt16Samples(input);
   const outputView = canUseInt16View(output) ? int16View(output) : undefined;
   for (let offset = 0; offset < outputSamples; offset += 1) {
+    const outputIndex = firstOutputIndex + offset;
+    const sourcePosition = (outputIndex * plan.inputSampleRate) / plan.outputSampleRate;
     const sample = clamp16(
-      sampleResampledPcm(inputView, inputStartSample, firstOutputIndex + offset, plan),
+      Math.round(
+        sampleBandlimited(
+          inputView,
+          (plan.kernel ? Math.floor(sourcePosition) : outputIndex * plan.ratio) - inputStartSample,
+          plan.cutoffCyclesPerSample,
+          plan.kernel
+            ? expectDefined(
+                plan.kernel.coefficients[
+                  (outputIndex * plan.kernel.inputStep) % plan.kernel.phaseCount
+                ],
+                "coefficients entry at (output index * kernel input step) % kernel phase count",
+              )
+            : undefined,
+        ),
+      ),
     );
     if (outputView) {
       outputView[offset] = sample;

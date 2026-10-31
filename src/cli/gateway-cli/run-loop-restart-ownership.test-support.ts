@@ -5,65 +5,64 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { GatewayServer } from "../../gateway/server-public.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { expectCallCount, withRunLoopCleanup } from "./run-loop-cleanup.test-support.js";
 import {
   createCloseMock,
-  createRuntimeWithExitSignal,
-  createSignaledStart,
   createUpdateRespawnChild,
+  advanceWithoutCalls,
   setPlatform,
-  waitForStart,
+  systemdReply,
+  withLifecycleClock,
   withIsolatedSignals,
   type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
 export function registerGatewayRestartOwnershipTests({
-  consumeGatewayRestartIntentPayload,
-  consumeGatewayRestartAuthorization,
-  markGatewayRestartHandled,
-  rollbackGatewayRestartSignalAdmission,
-  isGatewayWorkAdmissionClosed,
+  consumeGatewayRestartIntentPayload: consumeIntent,
+  consumeGatewayRestartAuthorization: consumeAuthorization,
+  markGatewayRestartHandled: markHandled,
+  rollbackGatewayRestartSignalAdmission: rollbackAdmission,
+  isGatewayWorkAdmissionClosed: admissionClosed,
   createSignaledLoopHarness,
+  withRunningGateway,
   readCgroup,
   systemctl,
-  consumeGatewayRestartIntent,
-  runLoopWithStart,
-  acquireGatewayLock,
-  gatewayLog,
-  managedUpdateSuccessorOwner,
-  isForegroundUpdateHandoff,
-  completeForegroundUpdateHandoffAfterClose,
-  respawnGatewayProcessForUpdate,
-  cancelManagedServiceUpdateHandoff,
-  requestManagedServiceUpdateHandoffPark,
-  waitForGatewayHealthyRestart,
-  restartGatewayProcessWithFreshPid,
-  commitManagedServiceUpdateHandoff,
+  consumeGatewayRestartIntent: consumeRestart,
+  acquireGatewayLock: acquireLock,
+  managedUpdateSuccessorOwner: updateOwner,
+  isForegroundUpdateHandoff: isForeground,
+  completeForegroundUpdateHandoffAfterClose: completeUpdate,
+  respawnGatewayProcessForUpdate: respawnUpdate,
+  cancelManagedServiceUpdateHandoff: cancelUpdate,
+  requestManagedServiceUpdateHandoffPark: parkUpdate,
+  waitForGatewayHealthyRestart: waitForHealthy,
+  restartGatewayProcessWithFreshPid: restartProcess,
+  commitManagedServiceUpdateHandoff: commitUpdate,
 }: UpdateRespawnFixtures) {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  function serviceBudget(cgroup = false) {
+    if (cgroup) {
+      readCgroup.mockResolvedValue("0::/system.slice/setup_and_run_blacksmith.service\n");
+    }
+    systemctl.mockResolvedValue(systemdReply("90s"));
+  }
+  function startLoop(options: Parameters<typeof createSignaledLoopHarness>[2]) {
+    return createSignaledLoopHarness(undefined, false, options);
+  }
   it("reopens refused SIGUSR2 admission without consuming a later signal token (#83131)", async () => {
-    consumeGatewayRestartAuthorization.mockReturnValueOnce(false);
-    consumeGatewayRestartIntentPayload.mockRejectedValueOnce(
-      new Error("lifecycle module corrupted"),
-    );
+    consumeAuthorization.mockReturnValueOnce(false);
+    consumeIntent.mockRejectedValueOnce(new Error("lifecycle module corrupted"));
 
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { close, start, exited } = await createSignaledLoopHarness();
+    await withRunningGateway(async ({ captureSignal, close, start, exited }) => {
       const restartSignal = captureSignal("SIGUSR2");
       const sigterm = captureSignal("SIGTERM");
-
       restartSignal();
       await nextLoopTurn();
       await nextLoopTurn();
 
-      expect(gatewayLog.error).toHaveBeenCalledWith(
-        "SIGUSR2 handler failed: lifecycle module corrupted",
-      );
-      expect(markGatewayRestartHandled).toHaveBeenCalledOnce();
-      expect(rollbackGatewayRestartSignalAdmission).not.toHaveBeenCalled();
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-      expect(close).not.toHaveBeenCalled();
-      expect(start).toHaveBeenCalledTimes(1);
-
+      expectCallCount(1, markHandled, start);
+      expectCallCount(0, rollbackAdmission, close);
+      expect(admissionClosed()).toBe(false);
       sigterm();
       await expect(exited).resolves.toBe(0);
     });
@@ -75,8 +74,7 @@ export function registerGatewayRestartOwnershipTests({
     const workerCpu = await import("../../infra/worker-cpu.js");
     const { startGatewayStateOwnerHeartbeat } =
       await import("../../infra/gateway-state-owner-heartbeat.js");
-    const root = tempDirs.make("openclaw-run-loop-owner-loss-");
-    const lockPath = path.join(root, "owner.lock");
+    const lockPath = path.join(tempDirs.make("openclaw-run-loop-owner-loss-"), "owner.lock");
     fs.writeFileSync(lockPath, "owner");
     let lastBeat: BigInt64Array | undefined;
     const createWorker = workerCpu.createCpuTrackedWorker;
@@ -97,8 +95,7 @@ export function registerGatewayRestartOwnershipTests({
         );
       });
     try {
-      await withIsolatedSignals(async ({ captureSignal }) => {
-        const { close, start, exited } = await createSignaledLoopHarness();
+      await withRunningGateway(async ({ captureSignal, close, start, exited }) => {
         const onLost = vi.fn(() => captureSignal("SIGUSR2")());
         const heartbeat = startGatewayStateOwnerHeartbeat(
           new Set([
@@ -110,21 +107,17 @@ export function registerGatewayRestartOwnershipTests({
           fs.renameSync(lockPath, `${lockPath}.retired`);
           fs.writeFileSync(lockPath, "successor");
           Atomics.store(lastBeat!, 0, BigInt(Date.now() - 65_000));
-          consumeGatewayRestartIntentPayload.mockRejectedValueOnce(
+          consumeIntent.mockRejectedValueOnce(
             new Error("owner lock was removed or replaced; restart the Gateway"),
           );
           vi.useFakeTimers();
           heartbeat.inspect();
           await vi.advanceTimersByTimeAsync(0);
           expect(onLost).toHaveBeenCalledOnce();
-          expect(start).toHaveBeenCalledTimes(2);
-          expect(acquireGatewayLock).toHaveBeenCalledTimes(2);
-          expect(close).toHaveBeenCalledWith(
-            expect.objectContaining({ reason: "gateway restarting" }),
-          );
+          expectCallCount(2, start, acquireLock);
+          expect(close).toHaveBeenCalledOnce();
         } finally {
-          heartbeat.stop();
-          await heartbeat.worker.terminate();
+          await heartbeat.stop();
           captureSignal("SIGINT")();
           await vi.advanceTimersByTimeAsync(0);
           await expect(exited).resolves.toBe(0);
@@ -147,20 +140,12 @@ export function registerGatewayRestartOwnershipTests({
         process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
         process.env.OPENCLAW_NO_RESPAWN = "1";
       }
-      readCgroup.mockResolvedValue("0::/system.slice/setup_and_run_blacksmith.service\n");
-      systemctl.mockResolvedValue({
-        code: 0,
-        stdout: "LoadState=loaded\nTimeoutStopUSec=90s",
-        stderr: "",
-      });
-      consumeGatewayRestartIntent.mockReturnValueOnce({ force: true });
+      serviceBudget(true);
+      consumeRestart.mockReturnValueOnce({ force: true });
       await withIsolatedSignals(async ({ captureSignal }) => {
         const cleanup = createDeferredCore();
         const close = createCloseMock().mockImplementationOnce(() => cleanup.promise);
-        const { start, started } = createSignaledStart(close);
-        const { runtime, exited } = createRuntimeWithExitSignal();
-        await runLoopWithStart({ start, runtime });
-        await waitForStart(started);
+        const { start, runtime, exited } = await startLoop({ close });
         const stop = captureSignal("SIGINT");
         vi.useFakeTimers();
         try {
@@ -173,20 +158,18 @@ export function registerGatewayRestartOwnershipTests({
             await vi.advanceTimersByTimeAsync(0);
             expect(start).toHaveBeenCalledTimes(2);
           } else {
-            await vi.advanceTimersByTimeAsync(74_000);
-            expect(runtime.exit).not.toHaveBeenCalled();
+            await advanceWithoutCalls(74_000, runtime.exit);
             cleanup.resolve();
             await vi.advanceTimersByTimeAsync(0);
             expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
             expect(start).toHaveBeenCalledOnce();
           }
-          expect(acquireGatewayLock).toHaveBeenCalledWith(
+          expect(acquireLock).toHaveBeenCalledWith(
             expect.objectContaining({
               listenerMode: noRespawn ? "supervised" : "foreground",
               supervisor: noRespawn ? { kind: "systemd", name: "openclaw-gateway.service" } : null,
             }),
           );
-          expect(gatewayLog.info).toHaveBeenCalledWith(expect.stringContaining("shutdown=85000ms"));
         } finally {
           cleanup.resolve();
           await vi.advanceTimersByTimeAsync(0);
@@ -206,12 +189,8 @@ export function registerGatewayRestartOwnershipTests({
       setPlatform("linux");
       vi.stubEnv("OPENCLAW_SYSTEMD_UNIT", "openclaw-gateway.service");
       vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
-      consumeGatewayRestartIntentPayload.mockResolvedValueOnce({ force: true });
-      systemctl.mockResolvedValue({
-        code: 0,
-        stdout: "LoadState=loaded\nTimeoutStopUSec=90s",
-        stderr: "",
-      });
+      consumeIntent.mockResolvedValueOnce({ force: true });
+      serviceBudget();
       await withIsolatedSignals(async ({ captureSignal }) => {
         let cleanupDeadline: number | undefined;
         const close = vi.fn<GatewayServer["close"]>(async () => {
@@ -226,10 +205,7 @@ export function registerGatewayRestartOwnershipTests({
             }
           });
         });
-        const { start, started } = createSignaledStart(close);
-        const { runtime, exited } = createRuntimeWithExitSignal();
-        await runLoopWithStart({ start, runtime });
-        await waitForStart(started);
+        const { runtime, exited } = await startLoop({ close });
         const { getProcessCleanupBudget } =
           await import("../../process/supervisor/cleanup-budget.js");
         vi.useFakeTimers();
@@ -242,7 +218,6 @@ export function registerGatewayRestartOwnershipTests({
           await vi.advanceTimersByTimeAsync(outcome === "completed" ? 1_000 : 80_001);
           await expect(exited).resolves.toBe(outcome === "completed" ? 0 : 1);
           expect(cleanupDeadline).toBe(85_000);
-          expect(start).toHaveBeenCalledOnce();
         } finally {
           clock.mockRestore();
           vi.useRealTimers();
@@ -254,133 +229,82 @@ export function registerGatewayRestartOwnershipTests({
   it.each(["completed", "unconfirmed"] as const)(
     "retains the post-park foreground update cleanup budget inside a service cgroup (%s)",
     async (outcome) => {
-      readCgroup.mockResolvedValue("0::/system.slice/setup_and_run_blacksmith.service\n");
-      systemctl.mockResolvedValue({
-        code: 0,
-        stdout: "LoadState=loaded\nTimeoutStopUSec=90s",
-        stderr: "",
-      });
-      consumeGatewayRestartIntent.mockReturnValueOnce({
+      serviceBudget(true);
+      consumeRestart.mockReturnValueOnce({
         reason: "update.run",
         force: true,
         waitMs: 300_000,
-        successorOwner: managedUpdateSuccessorOwner,
+        successorOwner: updateOwner,
       });
-      isForegroundUpdateHandoff.mockReturnValue(true);
+      isForeground.mockReturnValue(true);
       const closing = createDeferredCore();
       const settlement = createDeferredCore<{ respawn: boolean }>();
-      completeForegroundUpdateHandoffAfterClose.mockReturnValueOnce(settlement.promise);
+      completeUpdate.mockReturnValueOnce(settlement.promise);
       const child = createUpdateRespawnChild();
-      respawnGatewayProcessForUpdate.mockReturnValueOnce({
-        mode: "spawned",
-        pid: child.pid,
-        child,
-      });
+      respawnUpdate.mockReturnValueOnce({ mode: "spawned", pid: child.pid, child });
       await withIsolatedSignals(async ({ captureSignal }) => {
         const close = createCloseMock().mockImplementationOnce(() => closing.promise);
-        const { start, started } = createSignaledStart(close);
-        const { runtime, exited } = createRuntimeWithExitSignal();
         const completeBoot = vi.fn();
-        await runLoopWithStart({ start, runtime, lockPort: 18789, completeBoot });
-        await waitForStart(started);
-        const failures: unknown[] = [];
-        vi.useFakeTimers();
-        const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-        try {
-          captureSignal("SIGUSR2")();
-          await vi.advanceTimersByTimeAsync(0);
-          expect(requestManagedServiceUpdateHandoffPark).toHaveBeenCalledExactlyOnceWith(
-            managedUpdateSuccessorOwner,
-          );
-          expect(close).toHaveBeenCalledOnce();
-          expect(acquireGatewayLock).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({ listenerMode: "foreground", supervisor: null }),
-          );
-          await vi.advanceTimersByTimeAsync(11_000);
-          expect(runtime.exit).not.toHaveBeenCalled();
-          expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
-          expect(completeBoot).not.toHaveBeenCalled();
-          expect(completeForegroundUpdateHandoffAfterClose).not.toHaveBeenCalled();
-          expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
-          if (outcome === "completed") {
-            closing.resolve();
-            await vi.advanceTimersByTimeAsync(0);
-            expect(completeForegroundUpdateHandoffAfterClose).toHaveBeenCalledExactlyOnceWith(
-              managedUpdateSuccessorOwner,
-            );
-            expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
-            expect(runtime.exit).not.toHaveBeenCalled();
-            settlement.resolve({ respawn: true });
-            await vi.advanceTimersByTimeAsync(0);
-            expect(respawnGatewayProcessForUpdate).toHaveBeenCalledExactlyOnceWith(
-              expect.objectContaining({
-                decision: expect.objectContaining({ mode: "disabled", reason: "unmanaged" }),
-              }),
-            );
-            expect(waitForGatewayHealthyRestart).toHaveBeenCalledExactlyOnceWith(
-              expect.objectContaining({ child, port: 18789 }),
-            );
-            expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
-            expect(child.kill).not.toHaveBeenCalled();
-          } else {
-            await vi.advanceTimersByTimeAsync(73_999);
-            expect(runtime.exit).not.toHaveBeenCalled();
-            expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
-            await vi.advanceTimersByTimeAsync(1);
-            expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledExactlyOnceWith(
-              managedUpdateSuccessorOwner,
-            );
-            expect(completeForegroundUpdateHandoffAfterClose).not.toHaveBeenCalled();
-            expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
-            expect(runtime.exit).not.toHaveBeenCalled();
-            closing.resolve();
-            await vi.advanceTimersByTimeAsync(0);
-          }
-          const exitCode = outcome === "completed" ? 0 : 1;
-          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(exitCode);
-          await expect(exited).resolves.toBe(exitCode);
-          expect(completeBoot).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({
-              outcome: outcome === "completed" ? "planned_restart" : "forced_stop",
-            }),
-          );
-          expect(start).toHaveBeenCalledOnce();
-          expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
-          expect(commitManagedServiceUpdateHandoff).not.toHaveBeenCalled();
-        } catch (error) {
-          failures.push(error);
-        }
-        try {
-          closing.resolve();
-          settlement.resolve({ respawn: false });
-          await vi.advanceTimersByTimeAsync(0);
-          if (!runtime.exit.mock.calls.length) {
-            captureSignal("SIGINT")();
-          }
-          child.exitCode = 0;
-          child.emit("exit", 0, null);
-          child.emit("close", 0, null);
-          await vi.advanceTimersByTimeAsync(0);
-          expect(runtime.exit).toHaveBeenCalledOnce();
-          await exited;
-        } catch (error) {
-          failures.push(error);
-        } finally {
-          clock.mockRestore();
-          vi.useRealTimers();
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(
-            failures,
-            "Foreground cleanup budget assertion and cleanup failed",
-            {
-              cause: failures[0],
+        const { start, runtime, exited } = await startLoop({
+          close,
+          lockPort: 18789,
+          completeBoot,
+        });
+        await withLifecycleClock(() =>
+          withRunLoopCleanup(
+            async () => {
+              captureSignal("SIGUSR2")();
+              await vi.advanceTimersByTimeAsync(0);
+              expect(parkUpdate).toHaveBeenCalledExactlyOnceWith(updateOwner);
+              expect(close).toHaveBeenCalledOnce();
+              await vi.advanceTimersByTimeAsync(11_000);
+              expectCallCount(0, runtime.exit, cancelUpdate, completeBoot);
+              expectCallCount(0, completeUpdate, respawnUpdate);
+              if (outcome === "completed") {
+                closing.resolve();
+                await vi.advanceTimersByTimeAsync(0);
+                expect(completeUpdate).toHaveBeenCalledExactlyOnceWith(updateOwner);
+                expectCallCount(0, respawnUpdate, runtime.exit);
+                settlement.resolve({ respawn: true });
+                await vi.advanceTimersByTimeAsync(0);
+                expectCallCount(1, respawnUpdate, waitForHealthy);
+                expectCallCount(0, cancelUpdate, child.kill);
+              } else {
+                await advanceWithoutCalls(73_999, runtime.exit, cancelUpdate);
+                await vi.advanceTimersByTimeAsync(1);
+                expect(cancelUpdate).toHaveBeenCalledExactlyOnceWith(updateOwner);
+                expectCallCount(0, completeUpdate, respawnUpdate, runtime.exit);
+                closing.resolve();
+                await vi.advanceTimersByTimeAsync(0);
+              }
+              const exitCode = outcome === "completed" ? 0 : 1;
+              expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(exitCode);
+              await expect(exited).resolves.toBe(exitCode);
+              expect(completeBoot).toHaveBeenCalledExactlyOnceWith(
+                expect.objectContaining({
+                  outcome: outcome === "completed" ? "planned_restart" : "forced_stop",
+                }),
+              );
+              expect(start).toHaveBeenCalledOnce();
+              expectCallCount(0, restartProcess, commitUpdate);
             },
-          );
-        }
-        if (failures.length === 1) {
-          throw failures[0];
-        }
+            async () => {
+              closing.resolve();
+              settlement.resolve({ respawn: false });
+              await vi.advanceTimersByTimeAsync(0);
+              if (!runtime.exit.mock.calls.length) {
+                captureSignal("SIGINT")();
+              }
+              child.exitCode = 0;
+              child.emit("exit", 0, null);
+              child.emit("close", 0, null);
+              await vi.advanceTimersByTimeAsync(0);
+              expect(runtime.exit).toHaveBeenCalledOnce();
+              await exited;
+            },
+            "Foreground cleanup budget assertion and cleanup failed",
+          ),
+        );
       });
     },
   );

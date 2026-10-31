@@ -1,26 +1,17 @@
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   BlockReplyContext,
   PartialReplyPayload,
-  SourceReplyDeliveryMode,
-  TaskSuggestionDeliveryMode,
 } from "../../auto-reply/get-reply-options.types.js";
-import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
-import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { CommandLaneConfiguration } from "../../process/lanes.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
-import type { SkillSnapshot } from "../../skills/types.js";
 import type { AdmittedRunContext, PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { BlockReplyPayload } from "../embedded-agent-payloads.js";
@@ -28,9 +19,10 @@ import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
+import type { RequesterOrigin } from "../requester-origin.js";
 import type { AgentMessage } from "../runtime/index.js";
-import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { SessionManager } from "../sessions/index.js";
+import type { QueuedAgentRunParams } from "./queued-run-params.types.js";
 
 /** Best-effort provider stream parameter overrides for an agent command. */
 export type AgentStreamParams = {
@@ -58,22 +50,24 @@ export type ClientToolDefinition = {
   };
 };
 
-export type AgentRunClientContext = {
-  /** Profile selected from the session's assigned human owner or authenticated human creator, never its latest sender. */
-  bootstrapUserProfileId?: string;
-  /** Capabilities declared by the gateway client that originated this run. */
-  clientCaps?: string[];
-  gatewayUiCommandTarget?: import("../../gateway/ui-command-target.types.js").GatewayUiCommandTarget;
+export type AgentRunClientContext = Pick<
+  QueuedAgentRunParams,
+  "clientCaps" | "bootstrapUserProfileId" | "gatewayUiCommandTarget"
+> & {
   /** Host-admitted dashboard authoring without an originating inline renderer. */
   pinnedWidgetAuthoring?: boolean;
 };
 
-export type AgentRunMessageContext = {
-  agentAccountId?: string;
+export type AgentRunMessageContext = Pick<
+  QueuedAgentRunParams,
+  | "agentAccountId"
+  | "senderIsOwner"
+  | "gitContributorProfileId"
+  | "sourceReplyDeliveryMode"
+  | "taskSuggestionDeliveryMode"
+> & {
   /** Opaque host-issued capability for current-turn channel message actions. */
   messageActionTurnCapability?: string;
-  /** Trusted sender identity bit for command/channel-action auth. */
-  senderIsOwner?: boolean;
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */
@@ -85,21 +79,26 @@ export type AgentRunMessageContext = {
   currentInboundAudio?: boolean;
   /** Reply-to mode for Slack auto-threading. */
   replyToMode?: ReplyToMode;
-  /** Visible source replies must use the message tool when set to message_tool_only. */
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  /** Action sink available for model-proposed follow-up tasks. */
-  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Require explicit message tool targets (no implicit last-route sends). */
   requireExplicitMessageTarget?: boolean;
+  /**
+   * Whether a delivered source send that omits `final` ends the turn. Absent means yes:
+   * a send answers the inbound message. Runs that only deliver to a configured target
+   * set false, so post-send work still runs.
+   */
+  messageToolFinalByDefault?: boolean;
 };
 
-export type AgentRunChannelContext = {
+export type AgentRunChannelContext = Pick<
+  QueuedAgentRunParams,
+  "messageProvider" | "chatType" | "channelContext" | "approvalReviewerDeviceId"
+> & {
+  requesterOrigin?: RequesterOrigin;
+  operatorProfileId?: string;
+  /** Original authenticated conversation, independent of destination routing. */
+  conversationId?: string | null;
   /** Canonical transport channel when it differs from the tool-policy provider. */
   messageChannel?: string;
-  messageProvider?: string;
-  chatType?: ChatType;
-  /** Channel-specific identity metadata surfaced to plugin hooks. */
-  channelContext?: PluginHookChannelContext;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -112,11 +111,17 @@ export type AgentRunChannelContext = {
   groupSpace?: string | null;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
-  /** Device-scoped operator session allowed to review approvals initiated by this run. */
-  approvalReviewerDeviceId?: string;
 };
 
-export type AgentRunModelOptions = {
+type AgentRunModelOptions = Pick<
+  QueuedAgentRunParams,
+  | "authProfileId"
+  | "thinkLevel"
+  | "thinkingExplicit"
+  | "fastMode"
+  | "fastModeAutoOnSeconds"
+  | "cyberAccessProgram"
+> & {
   /** Vision capability resolved by the run owner from its prepared model catalog. */
   modelHasVision?: boolean;
   /** Session-selected context-window option id carried by the run owner. */
@@ -124,27 +129,27 @@ export type AgentRunModelOptions = {
   model?: string;
   /** Outer model-fallback owner facts for this admitted attempt. */
   modelRoutingProvenance?: ModelFallbackAttemptProvenance;
-  thinkLevel?: ThinkLevel;
-  /** Run-scoped selection intent for declared chat-template effort. */
-  thinkingExplicit?: boolean;
-  fastMode?: FastMode;
   /** Stable outer-run start time for auto fast-mode cutoff across retries/fallbacks. */
   fastModeStartedAtMs?: number;
-  /** Effective auto fast-mode cutoff for this run, in seconds. */
-  fastModeAutoOnSeconds?: number;
   /** Shared notification state for nested harnesses that can observe the same tool boundary. */
   fastModeAutoProgressState?: FastModeAutoProgressState;
   isFinalFallbackAttempt?: boolean;
-  authProfileId?: string;
 };
 
-export type AgentRunInputContext = {
-  workspaceDir: string;
+type AgentRunInputContext = Pick<
+  QueuedAgentRunParams,
+  | "workspaceDir"
+  | "cwd"
+  | "toolOverrides"
+  | "skillsSnapshot"
+  | "ownerNumbers"
+  | "inputProvenance"
+  | "extraSystemPrompt"
+  | "extraSystemPromptTurnContext"
+> & {
   /** Canonical agent workspace used for bootstrap files when execution runs elsewhere. */
   bootstrapWorkspaceDir?: string;
   agentDir?: string;
-  /** Task working directory for tool/runtime execution. Defaults to workspaceDir. */
-  cwd?: string;
   /**
    * Run config consumed by core paths (model selection, tools, plugin
    * activation). Plugin harnesses resolve `plugins.entries.<id>.config` from
@@ -152,51 +157,46 @@ export type AgentRunInputContext = {
    * overrides are unsupported; use an explicit run param instead.
    */
   config?: OpenClawConfig;
-  toolOverrides?: SessionToolOverrides;
   prompt: string;
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
   currentInboundEventKind?: InboundEventKind;
-  inputProvenance?: InputProvenance;
-  heartbeatEventQueueSessionKey?: string;
-  extraSystemPrompt?: string;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   /** Ordered facts represented by attachment text in the current prompt. */
   media?: MediaFact[];
-  skillsSnapshot?: SkillSnapshot;
-  ownerNumbers?: string[];
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   bootstrapContextRunKind?: BootstrapContextRunKind;
 };
 
-export type AgentRunTranscriptContext = {
+export type AgentRunTranscriptContext = Pick<
+  QueuedAgentRunParams,
+  "sessionId" | "sessionKey" | "suppressNextUserMessagePersistence"
+> & {
+  /** Host-admitted private completion; retain its transcript without user-facing projection. */
+  privateCompletion?: true;
   /** Caller-owned in-memory transcript for ephemeral helper runs. */
   sessionManager?: SessionManager;
-  sessionId: string;
-  sessionKey?: string;
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   /** Context engine resolved once by the outer logical-turn owner. */
   contextEngineLogicalTurnLease?: ContextEngineLogicalTurnLease;
   /** Emits immutable attempt facts for selection by the outer logical-turn owner. */
   onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
-  suppressNextUserMessagePersistence?: boolean;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
 };
 
-export type AgentRunLifecycle = {
-  providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
+type AgentRunLifecycle = Pick<
+  QueuedAgentRunParams,
+  "providerReviewAcknowledgment" | "timeoutMs" | "runTimeoutOverrideMs" | "scheduledToolPolicy"
+> & {
   /** Already-admitted internal execution; mutually exclusive with preparedRunAdmission. */
   admittedRunContext?: AdmittedRunContext;
   /** Host-only post-prepare continuation, removed before plugin invocation. */
   preparedRunAdmission?: PreparedAgentRunAdmission;
   agentId?: string;
-  timeoutMs: number;
-  /** Explicit timeout override; equality with the configured default does not imply inheritance. */
-  runTimeoutOverrideMs?: number;
   runId: string;
   /** Exact attempt authority attached to the active steering backend. */
   toolAuthorityFingerprint?: string;
@@ -206,8 +206,6 @@ export type AgentRunLifecycle = {
   swarmExecutionLane?: CommandLaneConfiguration;
   /** Stable cron job identifier populated for cron-triggered runs. */
   jobId?: string;
-  /** Trusted server-stamped authority for an explicitly capped scheduled run. */
-  scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Disable built-in tools for this run (LLM-only mode). */
   disableTools?: boolean;
   abortSignal?: AbortSignal;
@@ -223,3 +221,11 @@ export type AgentRunLifecycle = {
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
 };
+
+export type AgentRunExecutionContext = AgentRunClientContext &
+  AgentRunMessageContext &
+  AgentRunChannelContext &
+  AgentRunModelOptions &
+  AgentRunInputContext &
+  AgentRunTranscriptContext &
+  AgentRunLifecycle;

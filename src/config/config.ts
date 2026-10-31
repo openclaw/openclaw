@@ -29,6 +29,7 @@ export {
   resolveConfigSnapshotHash,
   resolveRuntimeConfigCacheKey,
   selectApplicableRuntimeConfig,
+  selectLiveRuntimeConfig,
   setRuntimeConfigSnapshotRefreshHandler,
   setRuntimeConfigSnapshot,
   writeConfigFile,

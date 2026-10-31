@@ -55,28 +55,25 @@ export type RetainedClaim = {
   released: boolean;
   listeners: Set<() => void>;
 };
-export type RetainedPlacement = {
-  placement: WorkerSessionPlacementRecord | undefined;
-  sequence: number;
-  revoked: boolean;
-};
 export type PlacementAuthorityOwner = {
   identity: DatabasePathIdentity;
   active: boolean;
+  localClaimSessions: Set<string>;
+  localAdmissionReservations: Map<string, number>;
+  localMutationSettlements: Map<string, Set<Promise<void>>>;
   changeListeners: Set<(placement: WorkerSessionPlacementIdentity) => void>;
   claims: Map<string, Set<RetainedClaim>>;
   placements: Map<
     string,
     { placement: WorkerSessionPlacementRecord | undefined; sequence: number }
   >;
-  observations: Map<string | undefined, Set<{ revokedBy: Set<string>; indeterminate: boolean }>>;
-  placementReaders: Map<string, Set<RetainedPlacement>>;
+  observations: Map<string | undefined, Set<{ revoked: boolean; indeterminate: boolean }>>;
   pending: Set<ClaimChange>;
   sequence: number;
   published: Map<string, number>;
   tools: Map<string, { sequence: number; authority?: ToolAuthority }>;
   workspaceResults: Map<string, WorkspaceResultFacts>;
   projections: Map<string, WorkerSessionPlacementReadResult>;
-  preservation?: WorkerSessionPlacementRecord[];
+  preservation?: ReadonlyMap<string, WorkerSessionPlacementRecord>;
   recoveryCandidatesEmpty?: true;
 };

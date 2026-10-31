@@ -3,6 +3,7 @@ import { constants, lstatSync, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
+import { ignoreMissingPath } from "./errno.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { repairPackagePermissions } from "./package-update-activation-paths.js";
@@ -163,12 +164,12 @@ export function packageLauncherDifferences(
   options?: { checkMode?: boolean },
 ): string[] {
   const symlink = expected.type === "symlink" && actual.type === "symlink";
-  // A copied launcher must restore the same bytes or link target; npm may
-  // recreate its metadata. Exact-object mutation authority is checked separately.
+  // Symlink modes vary with umask. Exact-object mutation authority is checked separately.
   return (["type", "mode", "contents"] as const)
     .filter(
       (field) =>
-        (field !== "mode" || options?.checkMode === true) && expected[field] !== actual[field],
+        (field !== "mode" || (!symlink && options?.checkMode === true)) &&
+        expected[field] !== actual[field],
     )
     .map((field) =>
       field === "contents" && symlink
@@ -297,12 +298,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     return children.toSorted();
   }
 
-  async function hashFile(
-    file: string,
-    stat: BigIntStats,
-    remainingBytes: number,
-    readBuffer?: Buffer,
-  ) {
+  async function hashFile(file: string, stat: BigIntStats, remainingBytes: number) {
     if (!stat.isFile()) {
       throw new Error("Package rollback verification byte limit exceeded");
     }
@@ -318,7 +314,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         throw new Error("Package rollback file changed before reading");
       }
       const hash = createHash("sha256");
-      const buffer = readBuffer ?? Buffer.allocUnsafe(64 * 1024);
+      const buffer = Buffer.allocUnsafe(64 * 1024);
       const size = Number(stat.size);
       let position = 0;
       // The final stat detects growth; an extra EOF read costs one OS call per file.
@@ -364,7 +360,8 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     const digest = createHash("sha256");
     const fullModeDigest = createHash("sha256");
     const observed: Array<{ file: string; stat: BigIntStats }> = [];
-    const permissive: Array<{ file: string; stat: BigIntStats }> = [];
+    // One chmod covers every alias; a second repair would use a pre-chmod stat.
+    const permissive = new Map<string, { file: string; stat: BigIntStats }>();
     const entriesObserved = new Map<string, EntryObservation>();
     let bytes = 0;
     let remainingEntries = MAX_TREE_ENTRIES - 1;
@@ -453,7 +450,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       }
       observed.push({ file, stat });
       if ((stat.isFile() || stat.isDirectory()) && (stat.mode & 0o077n) !== 0n) {
-        permissive.push({ file, stat });
+        permissive.set(identity(stat), { file, stat });
       }
       // npm's disposable hidden lockfile is a cache, not package content:
       // https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json#hidden-lockfiles
@@ -579,14 +576,18 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       if (!version) {
         throw new Error("Package rollback version is unavailable");
       }
-      for (const entry of observed) {
-        if (
-          !packageStatUnchanged(
-            entry.stat,
-            await read(() => fs.lstat(entry.file, { bigint: true })),
-          )
-        ) {
-          throw new Error("Package rollback tree changed during verification");
+      for (let start = 0; start < observed.length; start += 32) {
+        const results = await Promise.allSettled(
+          observed.slice(start, start + 32).map(async ({ file, stat }) => {
+            if (!packageStatUnchanged(stat, await read(() => fs.lstat(file, { bigint: true })))) {
+              throw new Error("Package rollback tree changed during verification");
+            }
+          }),
+        );
+        // Preserve traversal-order refusals, even when a later read times out first.
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure) {
+          throw failure.reason;
         }
       }
       if (legacy) {
@@ -617,7 +618,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       observations.set(fingerprint, entriesObserved);
       if (!legacy) {
         fullModeDigests.set(fingerprint, fullModeDigest.digest("hex"));
-        permissionRepairs.set(fingerprint, permissive);
+        permissionRepairs.set(fingerprint, [...permissive.values()]);
       }
       if (historicalDevices) {
         settlementObservations.set(fingerprint, observed);
@@ -701,10 +702,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       await read(() => fs.lstat(file));
       return true;
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return false;
-      }
-      throw error;
+      return ignoreMissingPath(error) ?? false;
     }
   }
 

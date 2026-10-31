@@ -2,21 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
-import { hashFileDescriptorSync } from "./file-descriptor.js";
+import { flushAndHashFileSync as syncAndHash } from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { repairSqliteIndexCorruption } from "./sqlite-index-schema.js";
 import { createPrivateSqliteTempDirectorySync } from "./sqlite-private-directory.js";
 import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
-
-function syncAndHash(pathname: string) {
-  const descriptor = fs.openSync(pathname, "r+");
-  try {
-    fs.fsyncSync(descriptor);
-    return hashFileDescriptorSync(descriptor);
-  } finally {
-    fs.closeSync(descriptor);
-  }
-}
 
 /** Preserve original pages through the snapshot owner before a Doctor repair writes. */
 export function backupDoctorSqliteRepair(
@@ -27,6 +17,7 @@ export function backupDoctorSqliteRepair(
     | "transcript-headers"
     | "transcript-labels"
     | "media-persistence"
+    | "cold-navigation"
     | "transcript-directives",
 ): string {
   // Closing a source descriptor here would release this process's SQLite locks on POSIX.
@@ -61,12 +52,20 @@ export function backupDoctorSqliteRepair(
 export function repairDoctorSqliteIndexCorruption(
   database: DatabaseSync,
   pathname: string,
-  options: { label: string; assertCurrent: () => void },
+  options: {
+    label: string;
+    assertCurrent: () => void;
+    ftsSchemas?: readonly string[];
+    ftsOnly?: boolean;
+    describeRepair?: (indexes: readonly string[]) => string;
+  },
 ): string[] {
   let backupPath: string | undefined;
   let indexes: string[];
   try {
     indexes = repairSqliteIndexCorruption(database, pathname, {
+      ftsSchemas: options.ftsSchemas,
+      ftsOnly: options.ftsOnly,
       assertCurrent: options.assertCurrent,
       backup: () => {
         options.assertCurrent();
@@ -84,7 +83,8 @@ export function repairDoctorSqliteIndexCorruption(
   return indexes.length > 0
     ? [
         `Saved pre-repair SQLite backup: ${backupPath}`,
-        `Warning: Rebuilt corrupt ${options.label} SQLite indexes: ${indexes.join(", ")}. No table rows were removed.`,
+        options.describeRepair?.(indexes) ??
+          `Warning: Rebuilt corrupt ${options.label} SQLite indexes: ${indexes.join(", ")}. No table rows were removed.`,
       ]
     : [];
 }

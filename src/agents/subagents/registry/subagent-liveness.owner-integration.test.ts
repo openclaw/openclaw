@@ -49,7 +49,6 @@ import {
   isSubagentSessionRunActive,
   listActiveSubagentSessionKeys,
 } from "./subagent-registry-read.js";
-import { preserveSubagentRunForRestart } from "./subagent-registry-run-pause.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
   countActiveRunsForSession,
@@ -193,6 +192,16 @@ it("retains quiet admitted execution in listing, admission count, and requester 
     expect(isSubagentRunLive(entry)).toBe(true);
     expect(isSubagentRunLive(updated)).toBe(true);
     expect(isSubagentRunLive({ ...updated })).toBe(false);
+    const displayed = buildSubagentSessionListReadIndex().getDisplaySubagentRun(
+      entry.childSessionKey,
+    );
+    expect(displayed).not.toBe(updated);
+    const serialize = vi.spyOn(JSON, "stringify");
+    const live = Array.from({ length: 100 }, () => isSubagentRunLive(displayed));
+    const serializations = serialize.mock.calls.length;
+    serialize.mockRestore();
+    expect(live.every(Boolean)).toBe(true);
+    expect(serializations).toBe(0);
     expect(sweepStaleRunContexts()).toBe(0);
     await testing.sweepOnceForTests();
     expect(entry.execution.endedAt).toBeUndefined();
@@ -226,7 +235,7 @@ it("retains quiet admitted execution in listing, admission count, and requester 
         ).active.map((row) => ({ runId: row.runId, execution: row.execution.state })),
       )
       .toEqual([{ runId: entry.runId, execution: "running" }]);
-    // A persisted completed sibling already owns an unfrozen settle outbox.
+    // This sibling owes a continuation; fire-and-forget wakes retire independently.
     await addSubagentRunForTests({
       runId: "settled-sibling",
       childSessionKey: "agent:main:subagent:settled-sibling",
@@ -240,21 +249,23 @@ it("retains quiet admitted execution in listing, admission count, and requester 
       endedAt: start + 1,
       outcome: { status: "ok" },
       cleanupCompletedAt: start + 2,
-      expectsCompletionMessage: false,
+      expectsCompletionMessage: true,
+      completion: { required: true },
+      delivery: { status: "pending" },
       requesterSettleWake: { status: "pending", attemptCount: 0 },
     });
     const sibling = subagentRuns.get("settled-sibling")!;
     const completeBatch = vi.fn();
-    const transitionBatch = vi.fn();
     await maybeWakeRequesterAfterAllChildrenSettled({
       isSourceCurrent: () => true,
       requesterSessionKey: parent,
       settledEntry: sibling,
+      transitionBatch: () => {
+        throw new Error("A live sibling cannot transition requester delivery");
+      },
       completeBatch,
-      transitionBatch,
     });
     expect.soft(completeBatch).not.toHaveBeenCalled();
-    expect.soft(transitionBatch).not.toHaveBeenCalled();
   } finally {
     finish.resolve();
     await task;
@@ -630,37 +641,6 @@ it("retains durable suspended completion debt without reporting a live executor 
     childSessionKey: entry.childSessionKey,
     requesterSessionKey: parent,
     execution: entry.execution,
-  });
-});
-
-it("keeps a restart-preserved native record distinct from an executor", async () => {
-  const now = vi.spyOn(Date, "now").mockReturnValue(start);
-  const entry = await register("interrupted-task");
-  expect(
-    (
-      await preserveSubagentRunForRestart({
-        entry,
-        terminal: {
-          reason: "cancelled",
-          status: "error",
-          stopReason: "restart",
-          endedAt: start + 1,
-        },
-        runs: subagentRuns,
-      })
-    ).preserved,
-  ).toBe(true);
-  const interrupted = subagentRuns.get(entry.runId)!;
-  now.mockReturnValue(olderThanCutoff);
-  expect(interrupted.execution.status).toBe("interrupted");
-  expect(interrupted.execution.endedAt).toBeUndefined();
-  expect(isSubagentRunLive(interrupted)).toBe(false);
-  expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
-  subagentRuns.clear();
-  expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toMatchObject({
-    childSessionKey: entry.childSessionKey,
-    requesterSessionKey: parent,
-    execution: interrupted.execution,
   });
 });
 

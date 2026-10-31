@@ -21,6 +21,7 @@ import {
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 import { GatewayClient } from "../gateway/client.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
@@ -136,12 +137,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       console.warn(`acp: state database close failed during shutdown: ${formatErrorMessage(err)}`);
       errors.push(err);
     }
-    if (errors.length === 1) {
-      throw errors[0];
-    }
-    if (errors.length > 1) {
-      throw new AggregateError(errors, "ACP capture and state database shutdown failed.");
-    }
+    throwCollectedErrors(errors, "ACP capture and state database shutdown failed.");
   };
 
   const gateway = new GatewayClient({
@@ -156,7 +152,11 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     clientDisplayName: "ACP",
     clientVersion: "acp",
     mode: GATEWAY_CLIENT_MODES.CLI,
-    caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+    caps: [
+      GATEWAY_CLIENT_CAPS.EXEC_APPROVALS,
+      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+      GATEWAY_CLIENT_CAPS.NO_QUESTION_INPUT,
+    ],
     onEvent: (evt) => {
       if (stopped) {
         return;

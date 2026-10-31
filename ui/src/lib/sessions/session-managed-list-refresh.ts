@@ -9,33 +9,24 @@ import {
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { appendSessionResults } from "./reconcile.ts";
 import type {
-  SessionConnectionOwner,
-  SessionGateway,
-  SessionListScope,
-  SessionListSnapshot,
-  SessionState,
-} from "./session-capability.ts";
-import type {
   ManagedSessionList,
   ManagedSessionListRefresh,
   ObservedSessionList,
 } from "./session-list-query.ts";
 import { sessionListReadNeedsEventRefresh } from "./session-list-query.ts";
+import type { SessionListRefreshHost } from "./session-refresh-types.ts";
 import {
   normalizeManagedSessionListQuery,
   requestSessionListParams,
   sessionListQueryKey,
 } from "./session-requests.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
+import type { SessionListScope, SessionListSnapshot } from "./session-types.ts";
 
 export function getManagedSessionList(
   lists: Map<string, ManagedSessionList>,
   scope: SessionListScope,
-  refresh: (
-    entry: ManagedSessionList,
-    isCurrent: () => boolean,
-    immediate: boolean,
-  ) => Promise<void>,
+  refresh: (entry: ManagedSessionList, isCurrent: () => boolean) => Promise<void>,
 ): ManagedSessionList {
   const key = sessionListQueryKey(scope);
   const current = lists.get(key);
@@ -57,7 +48,7 @@ export function getManagedSessionList(
     listeners: new Set(),
     coordinator: createSessionEventRefreshCoordinator({
       active: false,
-      refresh: (isCurrent, immediate) => refresh(entry, isCurrent, immediate),
+      refresh: (isCurrent) => refresh(entry, isCurrent),
     }),
     pending: null,
     queued: null,
@@ -79,22 +70,6 @@ export function publishManagedList(
     listener(snapshot);
   }
 }
-
-export type SessionListRefreshHost = {
-  background: (key: string | object, task: () => Promise<unknown>) => Promise<void>;
-  connection: SessionConnectionOwner;
-  snapshot: () => SessionGateway["snapshot"];
-  readState: () => SessionState;
-  decorate: (
-    result: SessionsListResult | null,
-    owner: { scope: SessionListScope },
-  ) => SessionsListResult | null;
-  reconcileList: (
-    result: SessionsListResult | null,
-    issuedRevision: number,
-    agentId?: string,
-  ) => SessionsListResult | null;
-};
 
 /** Owns each managed window's pending request and queued replacement drain. */
 export function createSessionManagedListRefresh(
@@ -134,7 +109,7 @@ export function createSessionManagedListRefresh(
         (!refresh.background || !entry.queued || entry.queued.background)
       ) {
         entry.readGeneration += 1;
-        entry.queued = { ...refresh, immediate: refresh.immediate || entry.queued?.immediate };
+        entry.queued = refresh;
       }
       return entry.pending;
     }
@@ -331,7 +306,7 @@ export function createSessionManagedListRefresh(
         entry.pending = null;
         if (entry.queued?.background && isCurrent() && isPageActive()) {
           // Release this request's admission before scheduling its automatic successor.
-          entry.coordinator.schedule(entry.queued.immediate);
+          entry.coordinator.schedule();
         }
       }
     });
@@ -348,7 +323,7 @@ export function createSessionManagedListRefresh(
       return refreshManagedList(entry, refresh);
     }
     if (!entry.queued || (refresh.invalidated && entry.queued.background)) {
-      entry.queued = { ...refresh, immediate: refresh.immediate || entry.queued?.immediate };
+      entry.queued = refresh;
     }
     return host.background(entry, async () => {
       if (isCurrent() && managedLists.get(entry.key) === entry && entry.listeners.size > 0) {

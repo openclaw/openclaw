@@ -45,10 +45,9 @@ export function migrateLegacyDockVisibility(params: {
   sessionKey: string;
   browserAvailable: boolean;
   desktopAvailable: boolean;
-  storage?: Storage | null;
 }): UiSettings {
   const sessionKey = params.sessionKey.trim();
-  const storage = params.storage === undefined ? getSafeLocalStorage() : params.storage;
+  const storage = getSafeLocalStorage();
   if (!sessionKey || !storage || migrationIsComplete(storage)) {
     return params.settings;
   }

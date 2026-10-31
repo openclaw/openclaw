@@ -32,9 +32,6 @@ export async function readAcpResumeSessionOwner(
     if (!result) {
       return [];
     }
-    if (!result.ok || result.type !== "acpSessions.resume") {
-      throw new Error("Unexpected ACP resume lookup result");
-    }
     return result.rows;
   };
   const rows = await lookup();

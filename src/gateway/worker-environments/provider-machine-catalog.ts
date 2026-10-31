@@ -5,7 +5,7 @@ import type {
   WorkerOperatingSystem,
   WorkerProfile,
 } from "../../plugins/types.js";
-import { notifyListeners, registerListener } from "../../shared/listeners.js";
+import { notifyListeners } from "../../shared/listeners.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import {
   normalizeWorkerMachineOptions,
@@ -25,15 +25,14 @@ export function createWorkerMachineCatalog(
     providerId: string;
     settings: WorkerProfile;
     requests: Partial<Record<keyof CatalogValues, Promise<CatalogValues[keyof CatalogValues]>>>;
-    warmup?: Promise<void>;
   } & Partial<CatalogValues>;
   const machineCatalogs = new Map<string, MachineCatalog>();
-  const machineShapeListeners = new Set<(profileId: string) => void>();
+  const machineShapeNotifications = { onChanged: (_profileId: string) => {} };
   let machineShapeVersion = 0;
 
   const machineCatalogChanged = (profileId: string) => {
     machineShapeVersion += 1;
-    notifyListeners(machineShapeListeners, profileId, () => {
+    notifyListeners([machineShapeNotifications.onChanged], profileId, () => {
       options.warn("Worker machine metadata change reporting failed");
     });
   };
@@ -95,24 +94,17 @@ export function createWorkerMachineCatalog(
 
   const loadMachineShape = async (profileId: string): Promise<void> => {
     const catalog = machineCatalogFor(profileId);
-    if (!catalog || catalog.warmup) {
-      return catalog?.warmup;
+    if (!catalog) {
+      return;
     }
-    const warmup = Promise.allSettled([
+    const results = await Promise.allSettled([
       catalog.machines === undefined ? listMachineOptions(profileId) : undefined,
       catalog.systems === undefined ? listOperatingSystems(profileId) : undefined,
-    ])
-      .then((results) => {
-        const failure = results.find((result) => result.status === "rejected");
-        if (failure) {
-          throw failure.reason;
-        }
-      })
-      .finally(() => {
-        catalog.warmup = undefined;
-      });
-    catalog.warmup = warmup;
-    return warmup;
+    ]);
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure) {
+      throw failure.reason;
+    }
   };
 
   const readMachineShape = (
@@ -175,9 +167,7 @@ export function createWorkerMachineCatalog(
         options.warn(`Worker machine catalog warmup failed for profile ${profileId}`),
       );
     },
-    subscribeMachineShapeChanged: (listener: (profileId: string) => void) =>
-      registerListener(machineShapeListeners, listener),
-    clearMachineShapeListeners: () => machineShapeListeners.clear(),
+    machineShapeNotifications,
     machineShapeVersion: () => machineShapeVersion,
   };
 }

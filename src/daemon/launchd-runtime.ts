@@ -1,18 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import {
-  parseStrictInteger,
-  parseStrictPositiveInteger,
-} from "@openclaw/normalization-core/number-coercion";
-import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
+import { isStringArray, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
-import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import {
+  hasCommandProcessCleanupError,
+  ignoreNonCleanupCommandError,
+} from "../process/exec-result.js";
 import { sleep } from "../utils.js";
 import { GATEWAY_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
+import { parseLaunchctlJob, type LaunchctlPrintInfo } from "./launchctl-job.js";
 import {
   execLaunchctl,
   formatLaunchctlResultDetail,
@@ -62,53 +63,6 @@ export type LoadedLaunchAgentState = GatewayServiceState & {
     readonly environment: Readonly<Record<string, string>>;
   };
 };
-
-/** Parse only the selected job's root fields; nested jobs and environments are not its identity. */
-export function parseLaunchctlJob(output: string, serviceTarget: string) {
-  if (!output.startsWith(`${serviceTarget} = {\n`)) {
-    throw new Error(`Cannot parse launchd job ${serviceTarget}`);
-  }
-  const fields = new Map<string, string>();
-  for (const [, name, value] of output.matchAll(/^\t([^\t\n=]+) = (.+)$/gm)) {
-    if (fields.has(name!)) {
-      throw new Error(`Duplicate launchd job field ${name}`);
-    }
-    fields.set(name!, value!);
-  }
-  const block = (name: string) =>
-    output.match(new RegExp(`^\\t${name} = \\{\\n([\\s\\S]*?)^\\t\\}`, "m"))?.[1];
-  const runtime: LaunchctlPrintInfo = {};
-  const state = fields.get("state")?.trim();
-  if (state) {
-    runtime.state = state;
-  }
-  const pid = parseStrictPositiveInteger(fields.get("pid"));
-  if (pid !== undefined) {
-    runtime.pid = pid;
-  }
-  const status = parseStrictInteger(fields.get("last exit status"));
-  if (status !== undefined) {
-    runtime.lastExitStatus = status;
-  }
-  const exitReason = fields.get("last exit reason")?.trim();
-  if (exitReason) {
-    runtime.lastExitReason = exitReason;
-  }
-  return {
-    fields,
-    runtime,
-    arguments: block("arguments")
-      ?.split("\n")
-      .filter((line) => line.startsWith("\t\t"))
-      .map((line) => line.slice(2)),
-    environment: block("environment") ?? "",
-    environmentBlocks: [
-      ...output.matchAll(/^\t(?:inherited |default )?environment = \{\n([\s\S]*?)^\t\}/gm),
-    ]
-      .map((match) => match[1] ?? "")
-      .join("\n"),
-  };
-}
 
 /** Observe the discovered job's loaded command and runtime without granting lifecycle authority. */
 export async function readLoadedLaunchAgentState(
@@ -206,8 +160,7 @@ export async function readCorrespondingLaunchAgentCommand(
   const args = plist?.ProgramArguments;
   const environment = plist?.EnvironmentVariables ?? {};
   if (
-    !Array.isArray(args) ||
-    !args.every((arg): arg is string => typeof arg === "string") ||
+    !isStringArray(args) ||
     !isStringRecord(environment) ||
     (plist?.Program ?? args[0]) !== observation.program
   ) {
@@ -248,13 +201,13 @@ export async function readLaunchAgentProgramArguments(
     ...resolveLaunchAgentEnvironmentReadOptions(env, label),
     ...options,
   });
-  if (!command && options?.requireEffective) {
+  if (!command && options?.requireEffective && !options.allowMissingDefinition) {
     // A removed plist can leave its job registered; only launchd can prove absence.
     const timeoutMs =
       options.timeoutMs && options.timeoutMs > 0 ? Math.min(options.timeoutMs, 5_000) : 5_000;
     const [probe, system] = await Promise.all([
       probeLaunchAgentState(`${resolveLaunchAgentGuiDomain()}/${label}`, timeoutMs).catch(
-        () => null,
+        ignoreNonCleanupCommandError,
       ),
       inspectSystemLaunchDaemonOwnership(label, { timeoutMs, scanInstalledPlists: false }),
     ]);
@@ -287,7 +240,7 @@ export async function resolveLaunchAgentGatewayContext(env: GatewayServiceEnv): 
   if (serviceKind && serviceKind !== GATEWAY_SERVICE_KIND) {
     return { env, port: null, probeHosts: [] };
   }
-  const command = await readLaunchAgentProgramArguments(env).catch(() => null);
+  const command = await readLaunchAgentProgramArguments(env).catch(ignoreNonCleanupCommandError);
   return {
     env: mergeGatewayServiceEnv(env, command),
     port:
@@ -374,15 +327,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
         failures.push(error);
       }
     }
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(
-        failures,
-        "LaunchAgent bootstrap and disabled-policy restoration failed.",
-      );
-    }
+    throwCollectedErrors(failures, "LaunchAgent bootstrap and disabled-policy restoration failed.");
     if (boot.status === "rejected") {
       throw boot.reason;
     }
@@ -398,7 +343,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
       params.onMutation?.("enable");
     }
   }
-  const teardownDeadline = Date.now() + LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_TIMEOUT_MS;
+  const teardownDeadline = performance.now() + LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_TIMEOUT_MS;
   for (;;) {
     params.assertCurrent?.();
     const boot = await execLaunchctl(
@@ -430,7 +375,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
         return "already-loaded";
       }
     }
-    const remainingMs = teardownDeadline - Date.now();
+    const remainingMs = teardownDeadline - performance.now();
     if (
       !params.retryPendingTeardown ||
       !isLaunchctlBootstrapPendingTeardown(boot) ||
@@ -448,12 +393,6 @@ export async function bootstrapLaunchAgentOrThrow(params: {
     );
   }
 }
-type LaunchctlPrintInfo = {
-  state?: string;
-  pid?: number;
-  lastExitStatus?: number;
-  lastExitReason?: string;
-};
 
 export function parseLaunchAgentEnabled(output: string, label: string): boolean {
   const labelPrefix = `"${label}"`;

@@ -68,7 +68,11 @@ it.each([
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("Doctor gateway-restoration failed"),
     );
-    expect(maintenance!.warnings).toEqual([]);
+    expect(maintenance!.warnings).toEqual([
+      expect.stringMatching(
+        /repair children have exited.*openclaw doctor --fix.*After repair succeeds.*openclaw gateway status --deep.*openclaw gateway start/s,
+      ),
+    ]);
   }
   expect(boundary.log).not.toHaveBeenCalledWith(
     "Gateway restarted and verified after Doctor repair.",

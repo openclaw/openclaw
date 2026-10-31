@@ -1,6 +1,5 @@
 /** Resolves agent runtime config, including SecretRef materialization for agent command use. */
 
-import { collectClawToolPolicyCandidates } from "../claws/tool-policy-candidates.js";
 import {
   getAgentRuntimeCommandSecretTargetIds,
   getAgentRuntimeOptionalCommandSecretPaths,
@@ -15,6 +14,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
+import { collectTemplateToolPolicyCandidates } from "../templates/tool-policy-candidates.js";
 import { listAgentEntries } from "./agent-scope.js";
 import { measureAgentStartup } from "./startup-timing.js";
 
@@ -29,11 +29,32 @@ export async function resolveAgentRuntimeConfig(
   const loadedRaw = await captureRuntimeConfigAsyncReader()();
   const includeChannelTargets = params?.runtimeTargetsChannelSecrets === true;
   const channelSecretScope = params?.runtimeChannelSecretScope;
-  const hasRuntimeSecretRefs = hasAgentRuntimeSecretRefs({
-    config: loadedRaw,
-    includeChannelTargets,
-    channel: channelSecretScope?.channel,
-  });
+  const channel = channelSecretScope?.channel;
+  const hasRuntimeSecretRefs =
+    hasNestedSecretRef(loadedRaw.models?.providers) ||
+    hasNestedSecretRef(loadedRaw.memory?.search?.remote) ||
+    listAgentEntries(loadedRaw).some((agent) =>
+      hasNestedSecretRef({
+        memoryRemote: agent.memory?.search?.remote,
+        tts: agent.tts,
+      }),
+    ) ||
+    hasNestedSecretRef(loadedRaw.tts) ||
+    hasNestedSecretRef(loadedRaw.skills?.entries) ||
+    hasNestedSecretRef(loadedRaw.tools?.web?.search) ||
+    Object.values(loadedRaw.plugins?.entries ?? {}).some((entry) =>
+      hasNestedSecretRef({
+        webSearch: entry?.config?.webSearch,
+        webFetch: entry?.config?.webFetch,
+      }),
+    ) ||
+    hasNestedSecretRef(
+      includeChannelTargets
+        ? loadedRaw.channels
+        : channel
+          ? (loadedRaw.channels as Record<string, unknown> | undefined)?.[channel]
+          : undefined,
+    );
   const activeSecretsConfig = getActiveSecretsRuntimeConfigSnapshot();
   let pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
   const sourceConfig = activeSecretsConfig
@@ -57,24 +78,41 @@ export async function resolveAgentRuntimeConfig(
       );
   let cfg = loadedRaw;
   if (hasRuntimeSecretRefs) {
-    const runtimeSecretTargets = resolveAgentRuntimeSecretTargets({
+    const baseTargetIds = getAgentRuntimeCommandSecretTargetIds({
       config: loadedRaw,
       includeChannelTargets,
-      channelSecretScope,
     });
+    const optionalActivePaths = getAgentRuntimeOptionalCommandSecretPaths(loadedRaw);
+    let targetIds = baseTargetIds;
+    let allowedPaths: Set<string> | undefined;
+    if (!includeChannelTargets && channelSecretScope) {
+      const channelTargets = getScopedChannelsCommandSecretTargets({
+        config: loadedRaw,
+        channel: channelSecretScope.channel,
+        accountId: channelSecretScope.accountId,
+        defaultAccountWhenMissing: true,
+      });
+      targetIds = new Set(baseTargetIds);
+      for (const targetId of channelTargets.targetIds) {
+        targetIds.add(targetId);
+      }
+      if (channelTargets.allowedPaths) {
+        // Account scoping must not exclude the agent's model/tool secrets from the same resolution.
+        allowedPaths = new Set(channelTargets.allowedPaths);
+        for (const target of discoverConfigSecretTargetsByIds(loadedRaw, baseTargetIds)) {
+          allowedPaths.add(target.path);
+        }
+      }
+    }
     const { resolveCommandConfigWithSecrets } =
       await import("../cli/command-config-resolution.runtime.js");
     cfg = (
       await resolveCommandConfigWithSecrets({
         config: loadedRaw,
         commandName: "agent",
-        targetIds: runtimeSecretTargets.targetIds,
-        ...(runtimeSecretTargets.allowedPaths
-          ? { allowedPaths: runtimeSecretTargets.allowedPaths }
-          : {}),
-        ...(runtimeSecretTargets.optionalActivePaths.size > 0
-          ? { optionalActivePaths: runtimeSecretTargets.optionalActivePaths }
-          : {}),
+        targetIds,
+        ...(allowedPaths ? { allowedPaths } : {}),
+        ...(optionalActivePaths.size > 0 ? { optionalActivePaths } : {}),
         runtime,
       })
     ).resolvedConfig;
@@ -91,8 +129,8 @@ export async function resolveAgentRuntimeConfig(
       () => import("../secrets/runtime.js"),
       { config: cfg },
     );
-    const hasClawToolPolicies = collectClawToolPolicyCandidates(cfg).length > 0;
-    const [snapshot, provenance, clawToolPolicyRuntime] = await Promise.all([
+    const hasTemplateToolPolicies = collectTemplateToolPolicyCandidates(cfg).length > 0;
+    const [snapshot, provenance, templateToolPolicyRuntime] = await Promise.all([
       measureAgentStartup(
         "secrets-snapshot",
         () =>
@@ -104,18 +142,18 @@ export async function resolveAgentRuntimeConfig(
           }),
         { config: cfg },
       ),
-      hasClawToolPolicies
-        ? import("../claws/provenance-runtime-read.js").then(
-            ({ prepareClawInstallSchemaVersions }) =>
-              prepareClawInstallSchemaVersions({ artifactPreservingReadOnly: false }),
+      hasTemplateToolPolicies
+        ? import("../templates/provenance-runtime-read.js").then(
+            ({ prepareTemplateInstallSchemaVersions }) =>
+              prepareTemplateInstallSchemaVersions({ artifactPreservingReadOnly: false }),
           )
         : undefined,
-      hasClawToolPolicies ? import("../claws/tool-policy-runtime.js") : undefined,
+      hasTemplateToolPolicies ? import("../templates/tool-policy-runtime.js") : undefined,
     ]);
     provenance?.publish();
     secretsRuntime.activateSecretsRuntimeSnapshot(snapshot);
     // Activation publishes a clone; this caller retains the captured config.
-    clawToolPolicyRuntime?.prepareCapturedClawToolPolicyConsent(cfg, {});
+    templateToolPolicyRuntime?.prepareCapturedTemplateToolPolicyConsent(cfg, {});
   }
   return cfg;
 }
@@ -131,77 +169,4 @@ function hasNestedSecretRef(value: unknown): boolean {
     return false;
   }
   return Object.values(value).some(hasNestedSecretRef);
-}
-
-function hasAgentRuntimeSecretRefs(params: {
-  config: OpenClawConfig;
-  includeChannelTargets: boolean;
-  channel?: string;
-}): boolean {
-  const { config } = params;
-  return (
-    hasNestedSecretRef(config.models?.providers) ||
-    hasNestedSecretRef(config.memory?.search?.remote) ||
-    listAgentEntries(config).some((agent) =>
-      hasNestedSecretRef({
-        memoryRemote: agent.memory?.search?.remote,
-        tts: agent.tts,
-      }),
-    ) ||
-    hasNestedSecretRef(config.tts) ||
-    hasNestedSecretRef(config.skills?.entries) ||
-    hasNestedSecretRef(config.tools?.web?.search) ||
-    Object.values(config.plugins?.entries ?? {}).some((entry) =>
-      hasNestedSecretRef({
-        webSearch: entry?.config?.webSearch,
-        webFetch: entry?.config?.webFetch,
-      }),
-    ) ||
-    hasNestedSecretRef(
-      params.includeChannelTargets
-        ? config.channels
-        : params.channel
-          ? (config.channels as Record<string, unknown> | undefined)?.[params.channel]
-          : undefined,
-    )
-  );
-}
-
-function resolveAgentRuntimeSecretTargets(params: {
-  config: OpenClawConfig;
-  includeChannelTargets: boolean;
-  channelSecretScope?: { channel: string; accountId?: string };
-}): {
-  targetIds: Set<string>;
-  allowedPaths?: Set<string>;
-  optionalActivePaths: Set<string>;
-} {
-  const baseTargetIds = getAgentRuntimeCommandSecretTargetIds({
-    config: params.config,
-    includeChannelTargets: params.includeChannelTargets,
-  });
-  const optionalActivePaths = getAgentRuntimeOptionalCommandSecretPaths(params.config);
-  if (params.includeChannelTargets || !params.channelSecretScope) {
-    return { targetIds: baseTargetIds, optionalActivePaths };
-  }
-  const channelTargets = getScopedChannelsCommandSecretTargets({
-    config: params.config,
-    channel: params.channelSecretScope.channel,
-    accountId: params.channelSecretScope.accountId,
-    defaultAccountWhenMissing: true,
-  });
-  const targetIds = new Set(baseTargetIds);
-  for (const targetId of channelTargets.targetIds) {
-    targetIds.add(targetId);
-  }
-  if (!channelTargets.allowedPaths) {
-    return { targetIds, optionalActivePaths };
-  }
-
-  // Account scoping must not exclude the agent's model/tool secrets from the same resolution.
-  const allowedPaths = new Set(channelTargets.allowedPaths);
-  for (const target of discoverConfigSecretTargetsByIds(params.config, baseTargetIds)) {
-    allowedPaths.add(target.path);
-  }
-  return { targetIds, allowedPaths, optionalActivePaths };
 }

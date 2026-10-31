@@ -1,4 +1,3 @@
-// Verifies sandbox config merge precedence across global, agent, and shared scopes.
 import { describe, expect, it } from "vitest";
 import type { AgentSandboxConfig } from "../config/types.agents-shared.js";
 import { resolveSandboxConfigForAgent, resolveSandboxScope } from "./sandbox/config.js";
@@ -31,106 +30,44 @@ describe("sandbox config merges", () => {
     ).docker;
 
     expect(resolved.env).toEqual({ LANG: "C.UTF-8", FOO: "2", BAR: "3" });
-    expect(resolved.ulimits).toEqual({
-      nofile: { soft: 10, hard: 20 },
-      nproc: 256,
-    });
+    expect(resolved.ulimits).toEqual({ nofile: { soft: 10, hard: 20 }, nproc: 256 });
   });
 
   it("resolves docker binds and shared-scope override behavior", () => {
     // Shared scope intentionally ignores agent-specific Docker overrides.
-    for (const scenario of [
-      {
-        name: "merges sandbox docker binds (global + agent combined)",
-        defaults: {
-          scope: "agent" as const,
-          docker: {
-            binds: ["/var/run/docker.sock:/var/run/docker.sock"],
-          },
-        },
-        agent: {
-          docker: {
-            binds: ["/home/user/source:/source:rw"],
-          },
-        },
-        assert: (resolved: ReturnType<typeof resolveSandboxConfigForAgent>["docker"]) => {
-          expect(resolved.binds).toEqual([
-            "/var/run/docker.sock:/var/run/docker.sock",
-            "/home/user/source:/source:rw",
-          ]);
-        },
-      },
-      {
-        name: "returns undefined binds when neither global nor agent has binds",
-        defaults: {
-          scope: "agent" as const,
-          docker: {},
-        },
-        agent: { docker: {} },
-        assert: (resolved: ReturnType<typeof resolveSandboxConfigForAgent>["docker"]) => {
-          expect(resolved.binds).toBeUndefined();
-        },
-      },
-      {
-        name: "ignores agent binds under shared scope",
-        defaults: {
-          scope: "shared" as const,
-          docker: {
-            binds: ["/var/run/docker.sock:/var/run/docker.sock"],
-          },
-        },
-        agent: {
-          docker: {
-            binds: ["/home/user/source:/source:rw"],
-          },
-        },
-        assert: (resolved: ReturnType<typeof resolveSandboxConfigForAgent>["docker"]) => {
-          expect(resolved.binds).toEqual(["/var/run/docker.sock:/var/run/docker.sock"]);
-        },
-      },
-      {
-        name: "ignores agent docker overrides under shared scope",
-        defaults: {
-          scope: "shared" as const,
-          docker: { image: "global" },
-        },
-        agent: { docker: { image: "agent" } },
-        assert: (resolved: ReturnType<typeof resolveSandboxConfigForAgent>["docker"]) => {
-          expect(resolved.image).toBe("global");
-        },
-      },
-    ]) {
-      const resolved = resolve(scenario.defaults, scenario.agent).docker;
-      scenario.assert(resolved);
+    const globalBind = "/var/run/docker.sock:/var/run/docker.sock";
+    const agentBind = "/home/user/source:/source:rw";
+    for (const [scope, globalBinds, agentBinds, expected] of [
+      ["agent", [globalBind], [agentBind], [globalBind, agentBind]],
+      ["agent", undefined, undefined, undefined],
+      ["shared", [globalBind], [agentBind], [globalBind]],
+    ] as const) {
+      expect(
+        resolve(
+          { scope, docker: { binds: globalBinds && [...globalBinds] } },
+          { docker: { binds: agentBinds && [...agentBinds] } },
+        ).docker.binds,
+      ).toEqual(expected);
     }
+    expect(
+      resolve({ scope: "shared", docker: { image: "global" } }, { docker: { image: "agent" } })
+        .docker.image,
+    ).toBe("global");
   });
 
   it("applies per-agent browser and prune overrides (ignored under shared scope)", () => {
-    const browser = resolve(
-      { scope: "agent", browser: { enabled: false, headless: false, noVncEnabled: true } },
-      { browser: { enabled: true, headless: true, noVncEnabled: false } },
-    ).browser;
-    expect(browser.enabled).toBe(true);
-    expect(browser.headless).toBe(true);
-    expect(browser.noVncEnabled).toBe(false);
-
-    const prune = resolve(
-      { scope: "agent", prune: { idleHours: 24, maxAgeDays: 7 } },
-      { prune: { idleHours: 0, maxAgeDays: 1 } },
-    ).prune;
-    expect(prune).toEqual({ idleHours: 0, maxAgeDays: 1 });
-
-    const browserShared = resolve(
-      { scope: "shared", browser: { enabled: false } },
-      { browser: { enabled: true } },
-    ).browser;
-    expect(browserShared.enabled).toBe(false);
-
-    const pruneShared = resolve(
-      { scope: "shared", prune: { idleHours: 24, maxAgeDays: 7 } },
-      { prune: { idleHours: 0, maxAgeDays: 1 } },
-    ).prune;
-    expect(pruneShared).toEqual({ idleHours: 24, maxAgeDays: 7 });
+    const browser = { enabled: false, headless: false, noVncEnabled: true };
+    const agentBrowser = { enabled: true, headless: true, noVncEnabled: false };
+    const prune = { idleHours: 24, maxAgeDays: 7 };
+    const agentPrune = { idleHours: 0, maxAgeDays: 1 };
+    for (const scope of ["agent", "shared"] as const) {
+      const resolved = resolve(
+        { scope, browser, prune },
+        { browser: agentBrowser, prune: agentPrune },
+      );
+      expect(resolved.browser).toMatchObject(scope === "agent" ? agentBrowser : browser);
+      expect(resolved.prune).toEqual(scope === "agent" ? agentPrune : prune);
+    }
   });
 
   it("merges sandbox ssh settings and ignores agent overrides under shared scope", () => {
@@ -152,11 +89,13 @@ describe("sandbox config merges", () => {
         },
       },
     ).ssh;
-    expect(ssh.target).toBe("agent@example.com:2222");
-    expect(ssh.command).toBe("ssh");
-    expect(ssh.identityFile).toBe("~/.ssh/global");
-    expect(ssh.certificateFile).toBe("~/.ssh/agent-cert.pub");
-    expect(ssh.strictHostKeyChecking).toBe(false);
+    expect(ssh).toMatchObject({
+      target: "agent@example.com:2222",
+      command: "ssh",
+      identityFile: "~/.ssh/global",
+      certificateFile: "~/.ssh/agent-cert.pub",
+      strictHostKeyChecking: false,
+    });
 
     const sshShared = resolve(
       { scope: "shared", ssh: { target: "global@example.com:22" } },

@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import type { ZaloFetch } from "./api.js";
 import { probeZalo } from "./probe.js";
 
@@ -52,19 +53,9 @@ describe("probeZalo", () => {
         }),
       );
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback Zalo API address");
-    }
+    const port = await listenOnLoopback(server);
     const originalApiUrl = process.env.ZALO_API_URL;
-    process.env.ZALO_API_URL = `http://127.0.0.1:${String(address.port)}`;
+    process.env.ZALO_API_URL = `http://127.0.0.1:${String(port)}`;
 
     try {
       await expect(probeZalo("controlled-token", 1000)).resolves.toMatchObject({
@@ -78,9 +69,7 @@ describe("probeZalo", () => {
         process.env.ZALO_API_URL = originalApiUrl;
       }
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server[Symbol.asyncDispose]();
     }
   });
 

@@ -1,19 +1,20 @@
 import {
   createUnionActionGate,
   listTokenSourcedAccounts,
+  optionalPositiveIntegerSchema,
   readStringParam,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
-  ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import { Type } from "typebox";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   createTelegramActionGate,
@@ -22,11 +23,6 @@ import {
 } from "./accounts.js";
 import { TELEGRAM_MESSAGE_ACTION_MAP } from "./action-names.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
-import {
-  createTelegramPollExtraToolSchemas,
-  createTelegramReactionEmojiSchema,
-  createTelegramRichSendExtraToolSchemas,
-} from "./message-tool-schema.js";
 import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 
 const loadTelegramActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.js"));
@@ -60,31 +56,6 @@ const TELEGRAM_TOOL_DELIVERY_ACTIONS = new Set(
   ),
 );
 
-async function prepareTelegramSendPayload({
-  ctx,
-  payload,
-}: Parameters<NonNullable<ChannelMessageActionAdapter["prepareSendPayload"]>>[0]) {
-  rejectTelegramNativeButtonParams(ctx.params);
-  if (
-    ctx.action !== "send" ||
-    (!payload.presentation && !payload.location && payload.videoAsNote !== true)
-  ) {
-    return null;
-  }
-  const quoteText = readStringParam(ctx.params, "quoteText", { trim: false });
-  if (!quoteText) {
-    return payload;
-  }
-  const telegramData = asNonArrayRecord(payload.channelData?.telegram);
-  return {
-    ...payload,
-    channelData: {
-      ...payload.channelData,
-      telegram: { ...telegramData, quoteText },
-    },
-  };
-}
-
 function resolveTelegramActionDiscovery({
   cfg,
   accountId,
@@ -116,59 +87,8 @@ function resolveTelegramActionDiscovery({
   };
 }
 
-function describeTelegramMessageTool({
-  cfg,
-  accountId,
-}: Parameters<
-  NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
->[0]): ChannelMessageToolDiscovery {
-  const discovery = resolveTelegramActionDiscovery({ cfg, accountId });
-  if (!discovery) {
-    return {
-      actions: [],
-      capabilities: [],
-      schema: null,
-    };
-  }
-  const sendEnabled = discovery.isEnabled("sendMessage");
-  const reactionsEnabled = discovery.isEnabled("reactions");
-  const actions: ChannelMessageActionName[] = [
-    "read",
-    ...(sendEnabled ? ["send" as const] : []),
-    ...(discovery.pollEnabled ? ["poll" as const] : []),
-    ...(reactionsEnabled ? (["react", "emoji-list"] as const) : []),
-    ...(discovery.isEnabled("deleteMessage") ? ["delete" as const] : []),
-    ...(discovery.isEnabled("editMessage") ? ["edit" as const] : []),
-    ...(discovery.isEnabled("sticker", false) ? (["sticker", "sticker-search"] as const) : []),
-    ...(discovery.isEnabled("createForumTopic") ? ["topic-create" as const] : []),
-    ...(discovery.isEnabled("editForumTopic") ? ["topic-edit" as const] : []),
-  ];
-  const schema: ChannelMessageToolSchemaContribution[] = [];
-  if (discovery.pollEnabled) {
-    schema.push({
-      properties: createTelegramPollExtraToolSchemas(),
-      visibility: "all-configured",
-    });
-  }
-  if (reactionsEnabled) {
-    schema.push({
-      properties: createTelegramReactionEmojiSchema(),
-      // The shared emoji parameter keeps react valid across channels; this
-      // contribution only adds Telegram-specific guidance for that parameter.
-      actions: [],
-    });
-  }
-  if (sendEnabled) {
-    schema.push({
-      properties: createTelegramRichSendExtraToolSchemas(),
-      visibility: "all-configured",
-    });
-  }
-  return {
-    actions,
-    capabilities: discovery.buttonsEnabled ? ["presentation", "delivery-pin"] : ["delivery-pin"],
-    schema,
-  };
+function optionalBoolean(description: string) {
+  return Type.Optional(Type.Boolean({ description }));
 }
 
 export function telegramMessageToolHints({
@@ -183,7 +103,100 @@ export function telegramMessageToolHints({
 }
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: describeTelegramMessageTool,
+  describeMessageTool: ({ cfg, accountId }) => {
+    const discovery = resolveTelegramActionDiscovery({ cfg, accountId });
+    if (!discovery) {
+      return {
+        actions: [],
+        capabilities: [],
+        schema: null,
+      };
+    }
+    const sendEnabled = discovery.isEnabled("sendMessage");
+    const reactionsEnabled = discovery.isEnabled("reactions");
+    const actions: ChannelMessageActionName[] = [
+      "read",
+      ...(sendEnabled ? ["send" as const] : []),
+      ...(discovery.pollEnabled ? ["poll" as const] : []),
+      ...(reactionsEnabled ? (["react", "emoji-list"] as const) : []),
+      ...(discovery.isEnabled("deleteMessage") ? ["delete" as const] : []),
+      ...(discovery.isEnabled("editMessage") ? ["edit" as const] : []),
+      ...(discovery.isEnabled("sticker", false) ? (["sticker", "sticker-search"] as const) : []),
+      ...(discovery.isEnabled("createForumTopic") ? ["topic-create" as const] : []),
+      ...(discovery.isEnabled("editForumTopic") ? ["topic-edit" as const] : []),
+    ];
+    const schema: ChannelMessageToolSchemaContribution[] = [];
+    if (discovery.pollEnabled) {
+      schema.push({
+        properties: {
+          pollDurationSeconds: optionalPositiveIntegerSchema(),
+          pollAnonymous: optionalBoolean(
+            "Send a display-only anonymous poll. Anonymous votes do not create agent turns. This is the default unless pollPublic is true.",
+          ),
+          pollPublic: optionalBoolean(
+            "Send a public poll whose votes route into the originating agent conversation. Voter identities are visible.",
+          ),
+        },
+        visibility: "all-configured",
+      });
+    }
+    if (reactionsEnabled) {
+      schema.push({
+        properties: {
+          emoji: Type.Optional(
+            Type.String({
+              description:
+                'Telegram reaction emoji: use a supported Unicode reaction, or pass the numeric custom_emoji_id identifier returned by action:"emoji-list" directly as emoji. ' +
+                'Use action:"emoji-list" to inspect reactions allowed in the current chat; arbitrary Unicode may be rejected by Telegram.',
+            }),
+          ),
+        },
+        // The shared emoji parameter keeps react valid across channels; this
+        // contribution only adds Telegram-specific guidance for that parameter.
+        actions: [],
+      });
+    }
+    if (sendEnabled) {
+      schema.push({
+        properties: {
+          asVideoNote: optionalBoolean(
+            "Send one video attachment as a round Telegram video note. Captions are delivered separately.",
+          ),
+          location: Type.Optional(
+            Type.Object(
+              {
+                latitude: Type.Number({ minimum: -90, maximum: 90 }),
+                longitude: Type.Number({ minimum: -180, maximum: 180 }),
+                accuracy: Type.Optional(
+                  Type.Number({
+                    description: "Pin uncertainty radius in meters.",
+                    minimum: 0,
+                    maximum: 1500,
+                  }),
+                ),
+                name: Type.Optional(
+                  Type.String({ description: "Venue name; requires address.", minLength: 1 }),
+                ),
+                address: Type.Optional(
+                  Type.String({ description: "Venue address; requires name.", minLength: 1 }),
+                ),
+              },
+              {
+                description:
+                  "Standalone Telegram location. Coordinates send a pin; name plus address sends a venue. Do not combine with message or media.",
+              },
+            ),
+          ),
+        },
+        visibility: "all-configured",
+      });
+    }
+    return {
+      actions,
+      capabilities: discovery.buttonsEnabled ? ["presentation", "delivery-pin"] : ["delivery-pin"],
+      schema,
+    };
+  },
   providerOwnedReadGates: ["react", "edit", "delete", "emoji-list", "read"],
   readAuthorityActions: ["read"],
   writeAuthorityActions: ["delete", "edit"],
@@ -194,7 +207,27 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     edit: { aliases: ["messageId"], deliveryTargetAliases: [] },
     delete: { aliases: ["messageId"], deliveryTargetAliases: [] },
   },
-  prepareSendPayload: prepareTelegramSendPayload,
+  prepareSendPayload: async ({ ctx, payload }) => {
+    rejectTelegramNativeButtonParams(ctx.params);
+    if (
+      ctx.action !== "send" ||
+      (!payload.presentation && !payload.location && payload.videoAsNote !== true)
+    ) {
+      return null;
+    }
+    const quoteText = readStringParam(ctx.params, "quoteText", { trim: false });
+    if (!quoteText) {
+      return payload;
+    }
+    const telegramData = asNonArrayRecord(payload.channelData?.telegram);
+    return {
+      ...payload,
+      channelData: {
+        ...payload.channelData,
+        telegram: { ...telegramData, quoteText },
+      },
+    };
+  },
   resolveCliActionRequest: ({ action, args }) => {
     if (action !== "thread-create") {
       return { action, args };

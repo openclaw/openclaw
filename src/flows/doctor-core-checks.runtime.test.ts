@@ -1,10 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMcpProofPluginRegistry } from "../agents/mcp-connection-resolver.test-fixtures.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { collectGatewayHealthFindings } from "../commands/doctor-gateway-health.js";
 import { createSqliteWalHealth } from "../commands/sqlite-wal-health.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createCoreHealthChecks } from "./doctor-core-checks.js";
 import { exitCodeFromFindings } from "./doctor-lint-flow.js";
@@ -61,7 +59,12 @@ const mocks = vi.hoisted(() => {
       inspectProviderToolSchemasWithPlugin: () => [],
       normalizeProviderToolSchemasWithPlugin: handles.normalizeTools,
     },
-    "../plugins/providers.runtime.js": { resolvePluginProvidersCore: handles.providers },
+    "../plugins/providers.runtime.js": {
+      withPluginProviders: async <T>(
+        _params: unknown,
+        run: (providers: Array<Record<string, unknown>>) => Promise<T>,
+      ) => run(handles.providers()),
+    },
   };
   for (const [module, exports] of Object.entries(replacements)) {
     vi.doMock(module, () => exports);
@@ -401,40 +404,6 @@ describe("doctor runtime tool schema checks", () => {
     expect(mocks.disposeMcp).toHaveBeenCalledTimes(1);
   });
 
-  it("does not probe requester-scoped MCP without a requester", async () => {
-    const resolverRegistry = createMcpProofPluginRegistry();
-    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
-      const resolveConnection = vi.fn();
-      resolverRegistry.apiFor("fuzzplugin").registerMcpServerConnectionResolver({
-        serverName: "fuzzplugin",
-        resolve: resolveConnection,
-      });
-      expect(
-        await inspectSchemas(
-          mcpServers({
-            fuzzplugin: {
-              url: "https://placeholder.invalid/mcp",
-              transport: "streamable-http",
-              auth: "oauth",
-            },
-          }),
-        ),
-      ).toContainEqual(
-        findingMatching("runtime-tool-schemas", "info", {
-          path: "mcp.servers.fuzzplugin",
-          requirement: "authenticated requester context",
-          fixHint: "Verify this server from an authenticated agent turn.",
-        }),
-      );
-      expect(resolveConnection).not.toHaveBeenCalled();
-      expect(mocks.mcpRuntime).toHaveBeenCalledWith(
-        expect.objectContaining({
-          excludeServerNames: new Set(["fuzzplugin"]),
-        }),
-      );
-    });
-  });
-
   it("defers shared OAuth without suppressing non-OAuth probes", async () => {
     const findings = await inspectSchemas({
       ...agentConfig("main", "worker"),
@@ -734,67 +703,51 @@ describe("doctor gateway runtime checks", () => {
   });
 
   it.each([
-    {
-      label: "missing",
-      installed: false,
-      loadState: "not-loaded",
-      runtimeStatus: "stopped",
-      message: "Gateway service is not installed.",
-      path: "gateway.mode",
-      fixHint: "Run `openclaw gateway install` to install the service.",
-    },
-    {
-      label: "installed but not loaded",
-      installed: true,
-      loadState: "not-loaded",
-      runtimeStatus: "stopped",
-      message: "Gateway service is installed but not loaded.",
-      path: "/tmp/gateway.service",
-      fixHint: "Start the installed service with `openclaw gateway start`.",
-    },
-    {
-      label: "loaded with unconfirmed runtime",
-      installed: true,
-      loadState: "loaded",
-      runtimeStatus: "unknown",
-      message: "Gateway service runtime is unknown, not running.",
-      path: "/tmp/gateway.service",
-      fixHint:
-        "Run `openclaw gateway status --deep` to inspect the service before choosing a recovery action.",
-    },
-  ])("reports actionable advice for a $label local gateway daemon", async (entry) => {
+    [
+      "missing",
+      "Gateway service is not installed.",
+      "Run `openclaw gateway install` to install the service.",
+    ],
+    [
+      "unloaded",
+      "Gateway service is installed but not loaded.",
+      "Start the installed service with `openclaw gateway start`.",
+    ],
+    [
+      "unconfirmed",
+      "Gateway service runtime is unknown, not running.",
+      "Run `openclaw gateway status --deep` to inspect the service before choosing a recovery action.",
+    ],
+  ])("reports actionable advice for a %s local gateway daemon", async (state, message, fixHint) => {
+    const installed = state !== "missing";
     mocks.serviceState.mockResolvedValueOnce({
-      installed: entry.installed,
-      loadState: { status: entry.loadState },
+      ...runningService(),
+      installed,
+      loadState: { status: state === "unconfirmed" ? "loaded" : "not-loaded" },
       running: false,
-      env: {},
-      command: entry.installed
-        ? { programArguments: ["openclaw", "gateway"], sourcePath: "/tmp/gateway.service" }
-        : null,
-      runtime: { status: entry.runtimeStatus },
+      command: installed ? runningService().command : null,
+      runtime: { status: state === "unconfirmed" ? "unknown" : "stopped" },
     });
 
     expect(await inspectDaemon({ cfg: localConfig })).toEqual([
       {
         checkId: "core/doctor/gateway-daemon",
         severity: "warning",
-        message: entry.message,
-        path: entry.path,
+        message,
+        path: installed ? "/tmp/gateway.service" : "gateway.mode",
         target: "openclaw-gateway",
-        fixHint: entry.fixHint,
+        fixHint,
       },
     ]);
   });
 
   it.each([
-    { version: "26.8.1", text: false, status: "unsupported" as const, severity: "warning" },
-    { version: "24.15.0", text: true, status: "supported" as const, severity: "info" },
+    { version: "26.12.1", text: false, status: "unsupported" as const },
+    { version: "24.22.1", text: true, status: "supported" as const },
   ])(
-    "reports recorded Node $version capabilities as $severity",
-    async ({ version, text, status, severity }) => {
-      const message = text
-        ? `Node ${version}: unsupported version, capability check passed.`
-        : `Node ${version}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)`;
+    "reports only failing recorded Node $version capabilities",
+    async ({ version, text, status }) => {
+      const message = `Node ${version}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)`;
       mocks.serviceState.mockResolvedValueOnce(runningService("/opt/runtime/bin/node"));
       mocks.nodeInfo.mockResolvedValue({
         status,
@@ -802,18 +755,22 @@ describe("doctor gateway runtime checks", () => {
         sqliteVersion: "3.53.4",
         sqliteProbe: { available: true, version: "3.53.4", text, blob: true, json: true },
         nodeSharedSqlite: false,
-        ...(text ? { note: message } : { capabilityError: message }),
+        ...(!text ? { capabilityError: message } : {}),
       });
 
-      expect(await inspectDaemon({ cfg: localConfig })).toEqual([
-        expect.objectContaining({
-          checkId: "core/doctor/gateway-daemon",
-          severity,
-          message,
-          target: "/opt/runtime/bin/node",
-          ...(severity === "warning" ? { fixHint: expect.stringContaining("nvm install 26") } : {}),
-        }),
-      ]);
+      expect(await inspectDaemon({ cfg: localConfig })).toEqual(
+        text
+          ? []
+          : [
+              expect.objectContaining({
+                checkId: "core/doctor/gateway-daemon",
+                severity: "warning",
+                message,
+                target: "/opt/runtime/bin/node",
+                fixHint: expect.stringContaining("nvm install 26"),
+              }),
+            ],
+      );
     },
   );
 

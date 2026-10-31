@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { AgentDatabaseSchemaAdmissionInvalidError } from "../../state/agent-database-admission-error.js";
 import {
+  AgentDatabaseAdmissionError,
   createAgentDatabaseInspectionRefusal,
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
@@ -73,6 +75,71 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+it("omits only the current inherited owner's pending admission", () => {
+  const databasePath = path.join(mainDir, "openclaw-agent.sqlite");
+  const pending = createAgentDatabaseInspectionRefusal({
+    agentId: "main",
+    paths: [databasePath],
+    pending: true,
+    reason: "Startup inspection is still preparing the owner",
+  });
+  recordAgentDatabaseAdmissions([pending], { env, source: "startup" });
+  const error = new AgentDatabaseAdmissionError(pending);
+  const read = () => {
+    throw error;
+  };
+  expect(loadInheritedAuthProfileStore(read, mainDir, env)).toBeUndefined();
+  expect(() => loadInheritedAuthProfileStore(read, workerDir, env)).toThrow(error);
+  const wrongOwner = new AgentDatabaseAdmissionError({ ...pending, agentId: "worker" });
+  expect(() =>
+    loadInheritedAuthProfileStore(
+      () => {
+        throw wrongOwner;
+      },
+      mainDir,
+      env,
+    ),
+  ).toThrow(wrongOwner);
+
+  // A failed or replaced admission must not be hidden by an earlier pending read.
+  const failed = createAgentDatabaseInspectionRefusal({
+    agentId: "main",
+    paths: [databasePath],
+    reason: "Owner inspection failed",
+  });
+  recordAgentDatabaseAdmissions([failed], { env, source: "startup" });
+  expect(() => loadInheritedAuthProfileStore(read, mainDir, env)).toThrow(error);
+  const failure = new AgentDatabaseAdmissionError(failed);
+  expect(() =>
+    loadInheritedAuthProfileStore(
+      () => {
+        throw failure;
+      },
+      mainDir,
+      env,
+    ),
+  ).toThrow(failure);
+});
+
+it("preserves unreadable, schema and unexpected inherited-store failures", () => {
+  recordAgentDatabaseAdmissions([], { env, source: "startup" });
+  for (const error of [
+    new AuthProfileStoreUnreadableError(path.join(mainDir, "openclaw-agent.sqlite")),
+    new AgentDatabaseSchemaAdmissionInvalidError(),
+    new Error("Owner store read failed"),
+  ]) {
+    expect(() =>
+      loadInheritedAuthProfileStore(
+        () => {
+          throw error;
+        },
+        mainDir,
+        env,
+      ),
+    ).toThrow(error);
+  }
+});
+
 it.each(["shared-only", "local-and-shared"] as const)(
   "selects the scoped shared snapshot for %s auth reads",
   (mode) => {
@@ -125,7 +192,12 @@ it.each([
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   const original = fs.readFileSync(mainPath);
-  const runtime = createAuthProfileStoreRuntime(createExternalAuthRuntime(() => []));
+  const runtime = createAuthProfileStoreRuntime(
+    createExternalAuthRuntime(
+      () => [],
+      async (_params, run) => run(),
+    ),
+  );
   const options = {
     inheritedAuthDir: mainDir,
     allowKeychainPrompt: false,
@@ -233,7 +305,9 @@ it.each(["explicit empty ids", "authoritative empty", "no overlay", "published o
       fs.writeFileSync(database.path, "The unused persisted source is unavailable");
     }
     const external = vi.fn(() => []);
-    const runtime = createAuthProfileStoreRuntime(createExternalAuthRuntime(external));
+    const runtime = createAuthProfileStoreRuntime(
+      createExternalAuthRuntime(external, async (_params, run) => run()),
+    );
     const result = await prepareModel(runtime, agentDir);
     if (emptyOverlay) {
       expect(result?.profiles["openai:default"]).toEqual(durable.profiles["openai:default"]);

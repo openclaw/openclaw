@@ -61,19 +61,20 @@ stop/start.
 
 Use `rerun_group` to avoid repeating unrelated release boxes:
 
-| Handle              | Scope                                                                                                                                              |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `all`               | Profile-selected qualification; standard beta without soak uses `npm-beta-v1`; regular stable uses `npm-stable-v1`, which defers native apps only. |
-| `ci`                | Manual full CI child only.                                                                                                                         |
-| `plugin-prerelease` | Plugin Prerelease child only.                                                                                                                      |
-| `install-smoke`     | Install Smoke through release checks.                                                                                                              |
-| `cross-os`          | Cross-OS release checks.                                                                                                                           |
-| `live-e2e`          | Repo/live E2E and Docker release-path validation.                                                                                                  |
-| `package`           | Package Acceptance.                                                                                                                                |
-| `qa-parity`         | QA parity, runtime-pair/restart, and runtime tool coverage.                                                                                        |
-| `qa-live`           | QA live Matrix, Buzz, and Telegram plus gated Discord, WhatsApp, and Slack lanes when enabled.                                                     |
-| `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`.                                                    |
-| `performance`       | Product performance evidence only.                                                                                                                 |
+| Handle              | Scope                                                                                                                                                            |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `all`               | Profile-selected qualification; standard beta without soak uses `npm-beta-v1`; regular stable uses `npm-stable-v1`, which defers native apps except macOS Swift. |
+| `ci`                | Manual full CI child only.                                                                                                                                       |
+| `plugin-prerelease` | Plugin Prerelease child only.                                                                                                                                    |
+| `install-smoke`     | Install Smoke through release checks.                                                                                                                            |
+| `cross-os`          | Cross-OS release checks.                                                                                                                                         |
+| `windows-node`      | Candidate package with stable/prerelease Windows-node release artifacts and pinned main source.                                                                  |
+| `live-e2e`          | Repo/live E2E and Docker release-path validation.                                                                                                                |
+| `package`           | Package Acceptance.                                                                                                                                              |
+| `qa-parity`         | QA parity, runtime-pair/restart, and runtime tool coverage.                                                                                                      |
+| `qa-live`           | QA live Matrix, Buzz, and Telegram plus gated Discord, WhatsApp, and Slack lanes when enabled.                                                                   |
+| `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`.                                                                  |
+| `performance`       | Product performance evidence only.                                                                                                                               |
 
 Use `live_suite_filter` with `rerun_group=live-e2e` when one live suite failed.
 The former `release-checks` aggregate retry handle is invalid. It silently
@@ -104,11 +105,12 @@ for example `windows/packaged-upgrade`, `windows`, or `packaged-fresh`.
 All-group runs must keep every OS/suite pair: `-f cross_os_suite_filter=ubuntu,windows,macos`
 or `packaged-fresh,installer-fresh,packaged-upgrade` are accepted, while any all-group
 filter that omits one of the nine Linux/Windows/macOS install and upgrade pairs is
-rejected before scheduling. All selected cross-OS outcomes block on failure. Every all-group run must retain
-all nine install/upgrade combinations. Every selected lane must succeed. No
-operator waiver can authorize publication with
-failed selected tests. Stable publication requires stable/full evidence,
-soak, and blocking performance.
+rejected before scheduling. All selected cross-OS outcomes block on failure. Every
+all-group run must retain all nine install/upgrade combinations; these cannot be
+waived. Only exact failed live-provider or Telegram leaves may use the
+[release-tooling policy](/reference/full-release-validation/evidence#release-tooling-waivers).
+Publication always requires successful FRV. Stable publication also requires
+stable/full evidence, soak, and blocking performance.
 
 Skipped or deferred attempts are never reported as passed. When
 `live_suite_filter` explicitly requests a gated QA live lane such as Discord,

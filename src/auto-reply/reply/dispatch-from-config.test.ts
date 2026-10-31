@@ -40,7 +40,7 @@ describe("dispatchReplyFromConfig", () => {
       inboundPluginRegistry: preparedRegistry,
       pluginGeneration: {} as never,
     });
-    const preparedLookup = vi
+    using preparedLookup = vi
       .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
       .mockResolvedValueOnce(preparedRuntime)
       .mockResolvedValue(
@@ -58,28 +58,26 @@ describe("dispatchReplyFromConfig", () => {
         return { text: "hi" } satisfies ReplyPayload;
       },
     );
-    try {
-      await dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          SessionKey: "agent:main:main",
-          MessageSid: "prepared",
-        }),
-        cfg,
-        dispatcher: createDispatcher(),
-        replyResolver,
-      });
-      expect(preparedLookup).toHaveBeenCalledTimes(2);
-      expect(preparedLookup).toHaveBeenNthCalledWith(1, {
-        agentId: "main",
-        demand: "interactive",
-        onRuntimeLease: expect.any(Function),
-      });
-      expect(preparedLookup).toHaveBeenNthCalledWith(2, { agentId: "main" });
-      expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
-      expect(receivedPreparedRuntime).toBe(preparedRuntime);
-      expect(replacementPreparedRuntime).not.toBe(preparedRuntime);
-    } finally {
-      preparedLookup.mockRestore();
-    }
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        SessionKey: "agent:main:main",
+        MessageSid: "prepared",
+      }),
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+    expect(preparedLookup).toHaveBeenCalledTimes(2);
+    expect(preparedLookup).toHaveBeenNthCalledWith(1, {
+      abortSignal: expect.any(AbortSignal),
+      agentId: "main",
+      demand: "interactive",
+      onRuntimeLease: expect.any(Function),
+    });
+    expect(preparedLookup).toHaveBeenNthCalledWith(2, { agentId: "main" });
+    expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+    expect(receivedPreparedRuntime).toBe(preparedRuntime);
+    expect(replacementPreparedRuntime).not.toBe(preparedRuntime);
   });
 });

@@ -6,19 +6,16 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { bindReplyInputChannel } from "../../agents/harness/host-private-capabilities.js";
+import { resolveRequesterPrincipalKey } from "../../agents/requester-origin.js";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
-import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
+import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority.js";
 import {
-  beginReplyMessageInjectionTarget,
-  createReplyOperation,
-  finalizeReplyMessageInjectionAttempt,
-  replyRunRegistry,
-  type ReplyMessageInjectionTarget,
-} from "../../auto-reply/reply/reply-run-registry.js";
-import {
-  beginReplyMessageInjectionTarget as beginActualReplyMessageInjectionTarget,
-  finalizeReplyMessageInjectionAttempt as finalizeActualReplyMessageInjectionAttempt,
-} from "../../auto-reply/reply/reply-run-registry.message-injection.js";
+  bindRequesterProfile,
+  transferRequesterProfile,
+} from "../../auto-reply/requester-profile.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import {
   recordSessionParticipant,
@@ -26,9 +23,31 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { logMessageProcessed } from "../../logging/diagnostic.js";
+import {
+  replyMessageInjectionTargetOwner,
+  type ReplyBackendMessageInjectionV2,
+} from "../../sessions/session-controller.contracts.js";
+import {
+  beginReplyMessageInjectionTarget,
+  createReplyOperation,
+  bindSessionControllerSourceTurnId,
+  captureReplyMessageInjectionTarget,
+  finalizeReplyMessageInjectionAttempt,
+  type ReplyMessageInjectionAttempt,
+  type ReplyMessageInjectionTarget,
+} from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import {
+  captureSessionControllerSourceSettlement,
+  reserveSessionControllerSource,
+  retireSessionControllerInput,
+} from "../../sessions/session-controller.mailbox.js";
+import { prepareReplyMessageContinuation } from "../../sessions/session-controller.message-join.js";
+import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -44,13 +63,25 @@ import type { GatewayRequestContext } from "./types.js";
 vi.mock("../../auto-reply/reply/dispatch-from-config.audit.js", () => ({
   emitInboundMessageAuditTerminal: vi.fn(),
 }));
-vi.mock(import("../../auto-reply/reply/reply-run-registry.js"), async (importOriginal) => {
+vi.mock(
+  import("../../sessions/session-controller.message-injection.js"),
+  async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+      ...actual,
+      beginReplyMessageInjectionTarget: vi.fn<typeof actual.beginReplyMessageInjectionTarget>(),
+      finalizeReplyMessageInjectionAttempt:
+        vi.fn<typeof actual.finalizeReplyMessageInjectionAttempt>(),
+    };
+  },
+);
+// mock-isolation: a prepared same-requester join needs a full continuation
+// owner; the test supplies its result and keeps the real admission comparison.
+vi.mock(import("../../sessions/session-controller.message-join.js"), async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    beginReplyMessageInjectionTarget: vi.fn<typeof actual.beginReplyMessageInjectionTarget>(),
-    finalizeReplyMessageInjectionAttempt:
-      vi.fn<typeof actual.finalizeReplyMessageInjectionAttempt>(),
+    prepareReplyMessageContinuation: vi.fn(actual.prepareReplyMessageContinuation),
   };
 });
 vi.mock("../../auto-reply/reply/message-received-hooks.js", () => ({
@@ -87,6 +118,16 @@ vi.mock("../../auto-reply/reply/reply-tool-authority.js", () => ({
   resolveInboundReplyToolAuthorityOverlay: vi.fn(() => ({})),
 }));
 
+const {
+  beginReplyMessageInjectionTarget: beginActualReplyMessageInjectionTarget,
+  finalizeReplyMessageInjectionAttempt: finalizeActualReplyMessageInjectionAttempt,
+} = await vi.importActual<typeof import("../../sessions/session-controller.message-injection.js")>(
+  "../../sessions/session-controller.message-injection.js",
+);
+const actualToolAuthority = await vi.importActual<
+  typeof import("../../auto-reply/reply/reply-tool-authority.js")
+>("../../auto-reply/reply/reply-tool-authority.js");
+
 function makeParams() {
   const context = {
     logGateway: { warn: vi.fn() },
@@ -111,20 +152,35 @@ function makeParams() {
   } as unknown as Parameters<typeof finalizeAcceptedChatSendMessageInjection>[0];
 }
 
-function makeFailClosedEntry() {
-  return {
-    sessionId: "session-1",
-    restartRecoveryDeliveryRunId: "recovery-1",
-    restartRecoveryDeliverySourceRunId: "source-1",
-    restartRecoveryDeliveryReceiptState: "terminal-pending",
-    restartRecoveryDeliveryToolCallId: "message-call-1",
-    updatedAt: 1,
-  } as never;
+function reserveTestSource(
+  sessionKey = "agent:main:dashboard:s",
+  sessionId = "session-1",
+  storeScope = "/synthetic/chat-injection",
+): RpcSourceRef {
+  const adapter = { scope: storeScope };
+  const input = reserveSessionControllerSource(sessionKey, {
+    adapter,
+    policy: { mode: "steer" },
+    target: captureSessionTarget({
+      storeScope,
+      agentId: "main",
+      sessionKey,
+      incarnation: sessionId,
+    }),
+  });
+  onTestFinished(() => retireSessionControllerInput(input));
+  return { input, adapter };
 }
 
-function makeStarterParams(params?: { entry?: unknown }) {
+function makeStarterParams(params?: { entry?: unknown; sessionKey?: string; storePath?: string }) {
+  const sessionKey = params?.sessionKey ?? "agent:main:dashboard:s";
   return {
-    target: { runId: "run-1" } as ReplyMessageInjectionTarget,
+    sourceRef: reserveTestSource(sessionKey, "session-1", params?.storePath),
+    // These terminal/custody fixtures exercise the legacy path without prepared authority.
+    target: {
+      runId: "run-1",
+      [replyMessageInjectionTargetOwner]: { toolAuthorityFingerprint: undefined },
+    },
     request: {
       p: {},
       rawMessage: "steer",
@@ -135,8 +191,8 @@ function makeStarterParams(params?: { entry?: unknown }) {
       cfg: {},
       clientRunId: "run-1",
       entry: params?.entry as never,
-      sessionKey: "agent:main:dashboard:s",
-      storePath: "",
+      sessionKey,
+      storePath: params?.storePath ?? "",
     },
     turn: {
       ctx: { Provider: "dashboard", From: "user", To: "user", Body: "steer" },
@@ -225,14 +281,128 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
 });
 
 describe("createChatSendMessageInjectionStarter admission fence", () => {
+  it.each([
+    { mode: "gateway", legacy: false },
+    { mode: undefined, legacy: false },
+    { mode: "gateway", legacy: true },
+  ] as const)(
+    "retains the incumbent task surface ($mode, legacy=$legacy)",
+    async ({ mode, legacy }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const entry = { sessionId: "session-1", updatedAt: 1 };
+        const sessionKey = "agent:main:dashboard:task-surface";
+        const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+        await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, entry);
+        const operation = createReplyOperation({
+          sessionKey,
+          sessionId: entry.sessionId,
+          resetTriggered: false,
+          target: captureSessionTarget({
+            storeScope: storePath,
+            sessionKey,
+            incarnation: entry.sessionId,
+            agentId: "main",
+          }),
+        });
+        onTestFinished(() => operation.complete());
+        const params = makeStarterParams({ entry, sessionKey, storePath });
+        params.request.supportsTaskSuggestions = mode !== "gateway";
+        Object.assign(params.turn.ctx, {
+          Provider: legacy || !mode ? "webchat" : "telegram",
+          SessionKey: sessionKey,
+          SenderId: "owner",
+          ChatId: "owner-chat",
+        });
+        bindRequesterProfile(params.turn.ctx, {
+          id: "task-owner",
+          displayName: null,
+          isCurrent: () => true,
+        });
+        const run = createQueueTestRun(
+          { prompt: "original work" },
+          {
+            agentId: "main",
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+            sessionKey,
+            sessionId: entry.sessionId,
+            messageProvider: mode ? "webchat" : "telegram",
+            conversationId: "owner-chat",
+            senderId: "owner",
+            senderIsOwner: true,
+            traceAuthorized: true,
+            gitContributorProfileId: "task-owner",
+            taskSuggestionDeliveryMode: mode,
+          },
+        );
+        transferRequesterProfile(params.turn.ctx, run);
+        bindReplyInputChannel(run.run, run.run.messageProvider);
+        await operation.bindToolAuthoritySnapshotAsync(
+          legacy
+            ? actualToolAuthority.prepareReplyToolAuthority(run)
+            : actualToolAuthority.prepareReplyRunToolAuthority(run, entry),
+        );
+        const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
+        const requester = operation.requesterPrincipalKey;
+        const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
+          async (_text, options, assertCurrent) => {
+            assertCurrent();
+            options?.onQueueAccepted?.(true);
+          },
+        );
+        operation.attachBackend({
+          kind: "embedded",
+          runId: "task-owner-run",
+          toolAuthorityFingerprint: fingerprint,
+          taskSuggestionDeliveryMode: mode,
+          supportsTranscriptCommitWait: true,
+          cancel() {},
+          messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+        });
+        operation.setPhase("running");
+        params.session.resolvedSessionModel = { provider: run.run.provider, model: run.run.model };
+        params.target = expectDefined(
+          captureReplyMessageInjectionTarget(operation),
+          "active target",
+        );
+        onTestFinished(() => {
+          vi.mocked(resolveInboundReplyToolAuthorityOverlay).mockReset().mockReturnValue({
+            senderIsOwner: true,
+            disableTools: false,
+            traceAuthorized: false,
+          });
+          vi.mocked(beginReplyMessageInjectionTarget).mockReset();
+        });
+        vi.mocked(resolveInboundReplyToolAuthorityOverlay).mockImplementationOnce(
+          actualToolAuthority.resolveInboundReplyToolAuthorityOverlay,
+        );
+        vi.mocked(beginReplyMessageInjectionTarget).mockImplementationOnce(
+          beginActualReplyMessageInjectionTarget,
+        );
+        const attempt = expectDefined(
+          await createChatSendMessageInjectionStarter(params)(),
+          "attempt",
+        );
+        await expect(attempt.outcome).resolves.toEqual(
+          legacy
+            ? { status: "rejected", reason: "task_suggestion_delivery_mode_mismatch" }
+            : { status: "accepted" },
+        );
+        expect(queueMessage).toHaveBeenCalledTimes(legacy ? 0 : 1);
+        expect(operation.requesterPrincipalKey).toBe(requester);
+        expect(operation.toolAuthorityFingerprint).toBe(fingerprint);
+      });
+    },
+  );
+
   it.for([
     "normal",
-    "terminal receipt",
-    "active source tombstone",
-    "unrelated tombstone",
     "caller revoked",
+    "source canceled",
+    "backend unavailable",
+    "backend replaced",
   ] as const)(
-    "rechecks terminal admission after awaited projection: %s",
+    "rechecks collaborative admission after awaited projection: %s",
     async (change, { signal }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const initial = { sessionId: "session-1", updatedAt: 1 };
@@ -242,47 +412,77 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
         await upsertSessionEntryCore(scope, initial);
         let callerCurrent = true;
         const refusal = new Error("caller authority revoked during projection");
+        const source = new AbortController();
+        let available = true;
         const entered = createDeferred();
         const resume = createDeferred();
-        const params = makeStarterParams({ entry: initial });
-        params.session.sessionKey = sessionKey;
-        params.session.storePath = storePath;
+        const operation = createReplyOperation({
+          sessionKey,
+          sessionId: initial.sessionId,
+          target: captureSessionTarget({
+            storeScope: storePath,
+            sessionKey,
+            incarnation: initial.sessionId,
+            agentId: "main",
+          }),
+          resetTriggered: false,
+        });
+        const params = makeStarterParams({ entry: initial, sessionKey, storePath });
+        params.session.cfg = { messages: { queue: { allowCollaborativeSteering: true } } };
+        params.abortSignal = source.signal;
         params.assertCurrent = () => {
           if (!callerCurrent) {
             throw refusal;
           }
         };
-        const operation = createReplyOperation({
-          sessionKey: expectDefined(params.session.sessionKey, "steering session key"),
-          sessionId: initial.sessionId,
-          resetTriggered: false,
+        const ownerAuthority = createAdmittedRunOperatorAuthority({
+          profileId: "projection-owner",
+          scopes: ["operator.write"],
+          gatewayAccessGrant: null,
+          assertCurrent: () => operation.abortSignal.throwIfAborted(),
+        });
+        params.operatorAuthority = createAdmittedRunOperatorAuthority({
+          ...ownerAuthority,
+          profileId: "projection-participant",
+          assertCurrent: params.assertCurrent,
+        });
+        vi.mocked(resolveInboundReplyToolAuthorityOverlay).mockReturnValueOnce({
+          operatorAuthority: params.operatorAuthority,
+          senderIsOwner: true,
+          disableTools: false,
+          traceAuthorized: false,
         });
         operation.bindToolAuthoritySnapshot({
+          requesterPrincipalKey: resolveRequesterPrincipalKey({
+            operatorAuthority: ownerAuthority,
+          }),
           fingerprint: () => "authority",
-          project: () => "authority",
-          projectAsync: async () => {
+          project: (caller) => (caller.allowCollaborativeSteering ? "authority" : "caller-policy"),
+          projectAsync: async (caller) => {
             entered.resolve();
             await withinTest(resume.promise, signal);
-            return "authority";
+            return caller.allowCollaborativeSteering ? "authority" : "caller-policy";
           },
         });
         operation.bindToolAuthorityRoute({ provider: "test", model: "test" });
         const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
-          async (_text, _options, assertCurrent) => {
+          async (_text, options, assertCurrent) => {
             assertCurrent();
+            expect(options?.isInboundUserMessage).toBe(false);
           },
         );
         operation.attachBackend({
           kind: "embedded",
           runId: "active-run",
+          supportsTranscriptCommitWait: true,
           toolAuthorityFingerprint: "authority",
           cancel() {},
-          messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+          messageInjectionV2: { version: 2, isAvailable: () => available, queueMessage },
         });
         operation.setPhase("running");
-        replyRunRegistry.bindSourceTurnId(operation, "source-1");
+        bindSessionControllerSourceTurnId(operation, "source-1");
         params.target = expectDefined(
-          replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key),
+          captureReplyMessageInjectionTarget(operation),
           "active injection target",
         );
         vi.mocked(beginReplyMessageInjectionTarget).mockImplementationOnce(
@@ -300,36 +500,43 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
             signal,
           );
           expect(queueMessage).not.toHaveBeenCalled();
-          if (change === "terminal receipt" || change === "caller revoked") {
-            await upsertSessionEntryCore(scope, {
-              restartRecoveryDeliveryRunId: "recovery-1",
-              restartRecoveryDeliverySourceRunId: "source-1",
-              restartRecoveryDeliveryReceiptState: "delivered-terminal",
-            });
-          } else if (change === "active source tombstone" || change === "unrelated tombstone") {
-            await upsertSessionEntryCore(scope, {
-              restartRecoveryTerminalRunIds: [
-                change === "active source tombstone" ? "source-1" : "source-old",
-              ],
+          callerCurrent = change !== "caller revoked";
+          if (change === "source canceled") {
+            source.abort(refusal);
+          } else if (change === "backend unavailable") {
+            available = false;
+          } else if (change === "backend replaced") {
+            operation.attachBackend({
+              kind: "embedded",
+              runId: "replacement-run",
+              toolAuthorityFingerprint: "authority",
+              cancel() {},
+              messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
             });
           }
-          callerCurrent = change !== "caller revoked";
           resume.resolve();
           const result = await outcome;
           sql.expectIdle();
-          if (change === "caller revoked") {
+          if (change === "caller revoked" || change === "source canceled") {
             expect(result).toEqual({ error: refusal });
             expect(queueMessage).not.toHaveBeenCalled();
-          } else if (change === "normal" || change === "unrelated tombstone") {
+          } else if (change === "normal") {
             if (!("attempt" in result) || !result.attempt) {
-              throw new Error("Expected current terminal authority to admit steering", {
+              throw new Error("Expected current authority to admit steering", {
                 cause: result,
               });
             }
             await expect(result.attempt.outcome).resolves.toMatchObject({ status: "accepted" });
             expect(queueMessage).toHaveBeenCalledOnce();
-          } else {
-            expect(result).toEqual({ attempt: undefined });
+          } else if (change === "backend unavailable" || change === "backend replaced") {
+            if (!("attempt" in result) || !result.attempt) {
+              throw new Error("Expected a rejected stale-target attempt", { cause: result });
+            }
+            await expect(result.attempt.acceptance).resolves.toBe(false);
+            await expect(result.attempt.outcome).resolves.toEqual({
+              status: "rejected",
+              reason: change === "backend replaced" ? "no_active_run" : "injection_unavailable",
+            });
             expect(queueMessage).not.toHaveBeenCalled();
           }
         } finally {
@@ -345,67 +552,16 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     },
   );
 
-  it.each(["unbound", "current", "refused"] as const)(
-    "composes captured terminal admission with %s authority",
-    async (authority) => {
-      // A captured terminal receipt rejects steering, but must not swallow
-      // an independent authority refusal into the follow-up return value.
-      const params = makeStarterParams({ entry: makeFailClosedEntry() });
-      const refusal = new Error("injection authority refused");
-      const assertCurrent = () => {
-        if (authority === "refused") {
-          throw refusal;
-        }
-      };
-      if (authority !== "unbound") {
-        params.assertCurrent = assertCurrent;
-      }
-      const begin = createChatSendMessageInjectionStarter(params);
-
-      if (authority === "refused") {
-        await expect(begin()).rejects.toBe(refusal);
-        expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
-      } else {
-        expect(await begin()).toBeUndefined();
-        expect(params.logGateway.warn).toHaveBeenCalled();
-      }
-    },
-  );
-
-  it("reads current terminal eligibility when the captured request snapshot is stale", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:dashboard:initial-steering",
-        storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-      };
-      for (const blocked of [true, false]) {
-        await upsertSessionEntryCore(scope, {
-          sessionId: "session-1",
-          updatedAt: 1,
-          restartRecoveryDeliveryReceiptState: blocked ? "terminal-pending" : undefined,
-        });
-        const params = makeStarterParams({ entry: blocked ? undefined : makeFailClosedEntry() });
-        Object.assign(params.session, scope);
-        const attempt = await createChatSendMessageInjectionStarter(params)();
-        if (blocked) {
-          expect(attempt).toBeUndefined();
-          expect(params.logGateway.warn).toHaveBeenCalled();
-        } else {
-          await expect(attempt?.outcome).resolves.toMatchObject({ status: "accepted" });
-        }
-      }
-    });
-  });
-
-  it("falls back without queuing when durable terminal metadata is unreadable", async () => {
+  it("falls back without queuing when session execution metadata is unreadable", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = await state.writeText(
         "agents/main/agent/openclaw-agent.sqlite",
         "unreadable session database",
       );
-      const params = makeStarterParams({ entry: { sessionId: "session-1", updatedAt: 1 } });
-      params.session.storePath = storePath;
+      const params = makeStarterParams({
+        entry: { sessionId: "session-1", updatedAt: 1 },
+        storePath,
+      });
 
       await expect(createChatSendMessageInjectionStarter(params)()).resolves.toBeUndefined();
       expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
@@ -418,22 +574,45 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
 });
 
 describe("gateway steer contract after the injection-start fence", () => {
-  it.each([false, true])(
-    "keeps work alive after an uncertain steer (statusOnly=%s)",
+  it.each([false, true, "prepared", "unsupported"] as const)(
+    "keeps uncertain custody and the incumbent task-suggestion surface (%s)",
     async (statusOnly) => {
+      const browser = typeof statusOnly === "string";
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:dashboard:s",
+        sessionId: "session-1",
+        target: captureSessionTarget({
+          storeScope: "/synthetic/chat-injection",
+          sessionKey: "agent:main:dashboard:s",
+          incarnation: "session-1",
+          agentId: "main",
+        }),
+        resetTriggered: false,
+      });
+      onTestFinished(() => operation.complete());
       const starter = makeStarterParams();
-      if (statusOnly) {
+      if (statusOnly === true) {
         starter.turn.ctx.InputProvenance = {
           kind: "internal_system",
           sourceTool: "progress_card_refresh",
         };
       }
-      const operation = createReplyOperation({
-        sessionKey: starter.session.sessionKey!,
-        sessionId: "session-1",
-        resetTriggered: false,
-      });
-      onTestFinished(() => operation.complete());
+      starter.request.supportsTaskSuggestions = browser;
+      if (browser) {
+        vi.mocked(prepareReplyMessageContinuation).mockResolvedValueOnce(
+          statusOnly === "prepared"
+            ? {
+                kind: "prepared",
+                fingerprint: "steer-authority",
+                continuationKind: undefined,
+                allowPendingUserInputAnswer: undefined,
+                read: () => "steer-authority",
+                prepareCurrent: async () => {},
+                release() {},
+              }
+            : { kind: "unsupported" },
+        );
+      }
       const cancel = vi.fn();
       operation.bindToolAuthoritySnapshot({
         fingerprint: () => "steer-authority",
@@ -445,19 +624,20 @@ describe("gateway steer contract after the injection-start fence", () => {
         async (_text, options, assertCurrent) => {
           assertCurrent();
           options?.onQueueAccepted?.(true);
-          return { transcriptCommit: "unconfirmed", errorMessage };
+          return browser ? undefined : { transcriptCommit: "unconfirmed", errorMessage };
         },
       );
       operation.attachBackend({
         kind: "embedded",
         runId: "backing-run",
+        supportsTranscriptCommitWait: true,
         toolAuthorityFingerprint: "steer-authority",
         cancel,
         messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
       });
       operation.setPhase("running");
       starter.target = expectDefined(
-        replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key),
+        captureReplyMessageInjectionTarget(operation),
         "active steering target",
       );
       vi.mocked(beginReplyMessageInjectionTarget).mockImplementationOnce(
@@ -470,6 +650,15 @@ describe("gateway steer contract after the injection-start fence", () => {
         await createChatSendMessageInjectionStarter(starter)(),
         "steering attempt",
       );
+      if (browser) {
+        await expect(attempt.outcome).resolves.toEqual(
+          statusOnly === "prepared"
+            ? { status: "accepted" }
+            : { status: "rejected", reason: "task_suggestion_delivery_mode_mismatch" },
+        );
+        expect(queueMessage).toHaveBeenCalledTimes(statusOnly === "prepared" ? 1 : 0);
+        return;
+      }
       await expect(attempt.outcome).resolves.toMatchObject({
         status: "indeterminate",
         errorMessage,
@@ -502,28 +691,6 @@ describe("gateway steer contract after the injection-start fence", () => {
       );
     },
   );
-
-  it("routes a fail-closed inbound to follow-up dispatch exactly once, with no steer enqueued", async () => {
-    // Mock-gateway contract: the pre-ACK path creates the starter, invokes
-    // it after preparation, and hands the inbound to follow-up dispatch whenever
-    // no injection attempt exists. A terminal receipt present at the
-    // injection-start boundary must yield exactly one delivery path — the
-    // follow-up dispatch — and zero runtime queueMessage calls, instead of
-    // the old post-enqueue rejection (steer already queued + fallback
-    // second dispatch = inbound double delivery).
-    const dispatchFollowup = vi.fn();
-    const begin = createChatSendMessageInjectionStarter(
-      makeStarterParams({ entry: makeFailClosedEntry() }),
-    );
-
-    const attempt = await begin();
-    if (attempt) {
-      throw new Error("unexpected injection attempt for a fail-closed session");
-    }
-    dispatchFollowup();
-
-    expect(dispatchFollowup).toHaveBeenCalledOnce();
-  });
 });
 
 describe("createChatSendMessageInjectionStarter", () => {
@@ -537,57 +704,33 @@ describe("createChatSendMessageInjectionStarter", () => {
     replyOptionImages?: ChatImageContent[];
     isInternalTextSlashCommandTurn?: boolean;
   }): Parameters<typeof createChatSendMessageInjectionStarter>[0] {
-    const sessionKey = "agent:main:steer-test";
-    const sessionId = "steer-test-session";
+    const starter = makeStarterParams();
     const rawMessage = params?.rawMessage ?? params?.body ?? "raw steer";
-    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-    onTestFinished(() => operation.complete());
-    operation.setPhase("running");
-    operation.attachBackend({
-      kind: "embedded",
-      runId: "active-run",
-      supportsQueueMessageImages: true,
-      cancel: vi.fn(),
-      messageInjection: {
-        isAvailable: () => true,
-        queueMessage: vi.fn(async () => {}),
+    starter.request = {
+      p: {
+        sessionKey: starter.session.sessionKey,
+        message: rawMessage,
+        idempotencyKey: "steer-input",
       },
-    });
-    const target = expectDefined(
-      replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey),
-      "Expected the running test operation to accept steering",
-    );
-
-    return {
-      target,
-      abortSignal: new AbortController().signal,
-      request: {
-        p: { sessionKey, message: rawMessage, idempotencyKey: "steer-input" },
-        rawMessage,
-        supportsTaskSuggestions: false,
-      },
-      session: {
-        agentId: "main",
-        cfg: {},
-        entry: undefined,
-        sessionKey,
-        storePath: "",
-        clientRunId: "active-run",
-      },
-      turn: {
-        ctx: { Provider: "dashboard", Body: params?.body, media: params?.media },
-        isInternalTextSlashCommandTurn: params?.isInternalTextSlashCommandTurn ?? false,
-        replyOptionImages: params?.replyOptionImages ?? [],
-        replyOptionMedia: [],
-      },
-      imageOrder: [],
-      documentContext: params?.documentContext,
-      userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
-        input: { text: params?.body ?? rawMessage, media: params?.media },
-        target: createTestUserTurnTranscriptTarget({ sessionKey, sessionId }),
-      }),
-      logGateway: { warn: () => {} } as never,
+      rawMessage,
+      supportsTaskSuggestions: false,
     };
+    starter.session.resolvedSessionModel = { provider: "openai", model: "test-model" };
+    starter.turn = {
+      ctx: { Provider: "dashboard", Body: params?.body, media: params?.media },
+      isInternalTextSlashCommandTurn: params?.isInternalTextSlashCommandTurn ?? false,
+      replyOptionImages: params?.replyOptionImages ?? [],
+      replyOptionMedia: [],
+    };
+    starter.documentContext = params?.documentContext;
+    starter.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      input: { text: params?.body ?? rawMessage, media: params?.media },
+      target: createTestUserTurnTranscriptTarget({
+        sessionKey: starter.session.sessionKey,
+        sessionId: "session-1",
+      }),
+    });
+    return starter;
   }
 
   async function expectSteer(
@@ -671,9 +814,7 @@ describe("createChatSendMessageInjectionStarter", () => {
           kind: "document",
         },
       ],
-      replyOptionImages: [
-        { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
-      ],
+      replyOptionImages: [{ type: "image", data: "inbound-photo", mimeType: "image/png" }],
       documentContext: {
         status: "rendered",
         text: "[PDF content rendered to images]",
@@ -691,9 +832,9 @@ describe("createChatSendMessageInjectionStarter", () => {
         "see attached\n\n[PDF content rendered to images]",
       {
         images: [
-          { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
-          { type: "image", data: "page-1", mimeType: "image/png", sourceIndex: 1 },
-          { type: "image", data: "page-2", mimeType: "image/png", sourceIndex: 1 },
+          { type: "image", data: "inbound-photo", mimeType: "image/png" },
+          { type: "image", data: "page-1", mimeType: "image/png" },
+          { type: "image", data: "page-2", mimeType: "image/png" },
         ],
       },
     );
@@ -715,7 +856,7 @@ describe("createChatSendMessageInjectionStarter", () => {
       expect.anything(),
       "scan attached\n\n[PDF content rendered to images]",
       expect.objectContaining({
-        images: [{ type: "image", data: "page-1", mimeType: "image/png", sourceIndex: 0 }],
+        images: [{ type: "image", data: "page-1", mimeType: "image/png" }],
       }),
     );
   });
@@ -728,4 +869,31 @@ describe("createChatSendMessageInjectionStarter", () => {
     ).toBeUndefined();
     expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
   });
+});
+
+it("retains failed-acknowledgment steering custody until its native outcome actually settles", async () => {
+  const params = makeStarterParams();
+  const acknowledgment = createDeferredCore<boolean>();
+  const nativeOutcome = createDeferredCore<Awaited<ReplyMessageInjectionAttempt["outcome"]>>();
+  vi.mocked(beginReplyMessageInjectionTarget).mockResolvedValueOnce({
+    targetRunId: "target",
+    acceptance: acknowledgment.promise,
+    outcome: nativeOutcome.promise,
+  });
+  const attempt = await createChatSendMessageInjectionStarter(params)();
+  expect(attempt).toBeDefined();
+  const receipt = captureSessionControllerSourceSettlement(params.sourceRef.input);
+  let settled = false;
+  void receipt.then(() => {
+    settled = true;
+  });
+  const failure = new Error("acknowledgment transport failed");
+  acknowledgment.reject(failure);
+  await expect(attempt!.acceptance).rejects.toBe(failure);
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  nativeOutcome.resolve({ status: "rejected", reason: "runtime_rejected" });
+  await expect(attempt!.outcome).rejects.toBe(failure);
+  await receipt;
+  expect(settled).toBe(true);
 });

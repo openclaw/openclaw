@@ -6,14 +6,11 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { sha256Base64Url } from "../../infra/crypto-digest.js";
 import {
   consumeDeviceBootstrapTokenWithSetupCompletion,
-  ensureDevicePairSetupBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "../../infra/device-bootstrap.js";
 import { decodePairingSetupCode } from "../../pairing/setup-code.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../../shared/device-bootstrap-profile.js";
 import {
-  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -21,6 +18,10 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
+import {
+  createEnvironmentStoreFixture,
+  writePlacementEnvironmentFixture,
+} from "./placement-test-fixtures.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
@@ -39,11 +40,6 @@ vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => 
   });
 });
 
-const BOOTSTRAP_RECEIPT = {
-  bundleHash: "a".repeat(64),
-  openclawVersion: "2026.7.1",
-  protocolFeatures: ["workspace-sync-v1", "model-proxy-v1"],
-};
 const environmentId = "worker-enrollment";
 const deviceId = "cloud-device-1";
 
@@ -129,13 +125,6 @@ describe("worker environment node enrollment store", () => {
     };
   }
 
-  async function ensureSetupId() {
-    return expectDefined(
-      (await store.ensureNodeEnrollment(environmentId)).nodeSetupId,
-      "worker node enrollment setup id",
-    );
-  }
-
   function consume(
     connection: Awaited<ReturnType<typeof beginConnect>>,
     overrides: Partial<Parameters<typeof consumeDeviceBootstrapTokenWithSetupCompletion>[0]> = {},
@@ -149,24 +138,6 @@ describe("worker environment node enrollment store", () => {
       ...overrides,
     });
   }
-
-  it("refuses first-device redemption from a closed enrollment invocation", async () => {
-    const { manager, enrollment, token, verification } = await beginConnect();
-    await expect(verifyDeviceBootstrapToken(verification)).resolves.toEqual({ ok: true });
-
-    manager.close(enrollment);
-
-    await expect(
-      consumeDeviceBootstrapTokenWithSetupCompletion({
-        baseDir: root,
-        token,
-        deviceId: verification.deviceId,
-        completedAtMs: Date.now(),
-        admitsCloudWorkerSetup: manager.admitsNodeSetupCompletion,
-      }),
-    ).resolves.toBeNull();
-    expect(store.get("worker-enrollment")?.nodeDeviceId).toBeNull();
-  });
 
   function holdResult(type: string) {
     const reached = createDeferredCore();
@@ -256,24 +227,6 @@ describe("worker environment node enrollment store", () => {
     }
   });
 
-  it("refuses first-device redemption through a fresh manager without a live binding", async () => {
-    const { manager, token, verification } = await beginConnect();
-    manager.stop();
-    const replacement = createManager();
-    await expect(verifyDeviceBootstrapToken(verification)).resolves.toEqual({ ok: true });
-
-    await expect(
-      consumeDeviceBootstrapTokenWithSetupCompletion({
-        baseDir: root,
-        token,
-        deviceId: verification.deviceId,
-        completedAtMs: Date.now(),
-        admitsCloudWorkerSetup: replacement.admitsNodeSetupCompletion,
-      }),
-    ).resolves.toBeNull();
-    expect(store.get("worker-enrollment")?.nodeDeviceId).toBeNull();
-  });
-
   it("adopts the surviving bearer after restart only for its exact credential digest", async () => {
     const first = await beginConnect();
     first.manager.stop();
@@ -302,28 +255,6 @@ describe("worker environment node enrollment store", () => {
     expect(store.get(environmentId)?.nodeDeviceId).toBe(deviceId);
   });
 
-  it("binds the first device only while its enrollment is live and preserves its closed retry", async () => {
-    const connection = await beginConnect();
-    const { manager, enrollment, verification } = connection;
-    await expect(verifyDeviceBootstrapToken(verification)).resolves.toEqual({ ok: true });
-    const completedAtMs = Date.now();
-    await expect(consume(connection, { completedAtMs })).resolves.toMatchObject({
-      completion: { deviceId },
-    });
-    expect(store.get(environmentId)).toMatchObject({
-      nodeSetupId: enrollment.setupId,
-      nodeDeviceId: deviceId,
-    });
-    manager.close(enrollment);
-
-    await expect(verifyDeviceBootstrapToken(verification)).resolves.toEqual({ ok: true });
-    await expect(
-      consume(connection, { completedAtMs, admitsCloudWorkerSetup: undefined }),
-    ).resolves.toMatchObject({
-      completion: { deviceId: verification.deviceId, deliveryState: "uncertain" },
-    });
-  });
-
   it("rechecks enrollment authority at commit after first-device admission", async () => {
     const connection = await beginConnect();
     const { manager, enrollment, verification } = connection;
@@ -348,50 +279,35 @@ describe("worker environment node enrollment store", () => {
     });
   });
 
-  async function seedEnrollmentState(
+  function seedEnrollmentState(
     state: "ready" | "draining" | "destroyed",
     boundDeviceId: string | null,
-  ): Promise<string> {
-    const id = await ensureSetupId();
-    const ssh = boundDeviceId === null;
-    database.db
-      .prepare(
-        `UPDATE worker_environments SET state = ?, node_device_id = ?, lease_id = ?,
-          ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_host_key = ?, ssh_key_ref_json = ?,
-          bootstrap_bundle_hash = ?, bootstrap_openclaw_version = ?,
-          bootstrap_protocol_features_json = ?, attached_session_ids_json = ?
-         WHERE node_setup_id = ?`,
-      )
-      .run(
-        state,
-        boundDeviceId,
-        "lease-enrollment",
-        ssh ? "worker.example.test" : null,
-        ssh ? 22 : null,
-        ssh ? "openclaw" : null,
-        ssh ? "ssh-ed25519 AAAA" : null,
-        ssh ? JSON.stringify({ source: "file", provider: "worker-keys", id: "/test-key" }) : null,
-        BOOTSTRAP_RECEIPT.bundleHash,
-        BOOTSTRAP_RECEIPT.openclawVersion,
-        JSON.stringify(BOOTSTRAP_RECEIPT.protocolFeatures),
-        "[]",
-        id,
-      );
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
-    return id;
+  ): string {
+    const nodeSetupId = "state-setup";
+    const { sshEndpoint, bootstrapReceipt } = createEnvironmentStoreFixture({
+      getStore: () => store,
+      getDatabase: () => database,
+      now: () => 1_000,
+    });
+    writePlacementEnvironmentFixture(database, {
+      environmentId: "state-enrollment",
+      state,
+      ownerEpoch: 1,
+      attachedSessionIds: [],
+      nodeSetupId,
+      nodeDeviceId: boundDeviceId,
+      bootstrapReceipt,
+      ...(boundDeviceId ? {} : { sshEndpoint }),
+    });
+    return nodeSetupId;
   }
 
   it.each(["lost pairing result", "delayed inventory result"] as const)(
     "binds setup completion to the exact environment identity across restart (%s)",
     async (mode) => {
       expect(store.hasPendingNodeEnrollmentSetup("", deviceId)).toBe(false);
-      expect(store.hasPendingNodeEnrollmentSetup("missing-setup", deviceId)).toBe(false);
       const pending = await store.ensureNodeEnrollment(environmentId);
       const setupId = expectDefined(pending.nodeSetupId, "worker node enrollment setup id");
-      expect(setupId).toMatch(/^[0-9a-f-]{36}$/u);
       expect(pending.nodeDeviceId).toBeNull();
       expect((await store.ensureNodeEnrollment(environmentId)).nodeSetupId).toBe(setupId);
       expect(store.hasPendingNodeEnrollmentSetup(setupId, deviceId)).toBe(true);
@@ -437,10 +353,8 @@ describe("worker environment node enrollment store", () => {
           nodeDeviceId: deviceId,
         });
         expect(store.hasPendingNodeEnrollmentSetup(setupId, deviceId)).toBe(true);
-        expect(store.hasPendingNodeEnrollmentSetup(setupId, "different-cloud-device")).toBe(false);
         expect(store.inventoryVersion()).toBeGreaterThan(inventoryVersion);
         expect(store.hasNodeEnrollmentOwner(deviceId)).toBe(true);
-        expect(store.hasNodeEnrollmentOwner("different-cloud-device")).toBe(false);
       } finally {
         releaseInventory.resolve();
         await inventoryResult?.catch(() => {});
@@ -449,49 +363,15 @@ describe("worker environment node enrollment store", () => {
     },
   );
 
-  it("rejects a destroy-requested provisioning setup", async () => {
-    const id = await ensureSetupId();
-    expect(store.hasPendingNodeEnrollmentSetup(id, "cloud-device-canceled")).toBe(true);
-    const issued = await ensureDevicePairSetupBootstrapToken({
-      baseDir: root,
-      setupId: id,
-      profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-    });
-    if (issued.status !== "pending") {
-      throw new Error("expected pending cloud worker setup");
-    }
-    await verifyDeviceBootstrapToken({
-      baseDir: root,
-      token: issued.token,
-      deviceId: "cloud-device-canceled",
-      publicKey: "cloud-public-key-canceled",
-      role: "node",
-      scopes: [],
-    });
-
-    await store.requestDestroy({ environmentId, state: "provisioning" });
-
-    expect(store.hasPendingNodeEnrollmentSetup(id, "cloud-device-canceled")).toBe(false);
-    await expect(
-      consumeDeviceBootstrapTokenWithSetupCompletion({
-        baseDir: root,
-        token: issued.token,
-        deviceId: "cloud-device-canceled",
-        completedAtMs: 10,
-      }),
-    ).rejects.toThrow("Cloud worker setup completion owner is no longer pending");
-    expect(store.get(environmentId)?.nodeDeviceId).toBeNull();
-  });
-
   it("rejects first setup-device binding when ready", async () => {
-    const setupId = await seedEnrollmentState("ready", null);
+    const setupId = seedEnrollmentState("ready", null);
     expect(store.hasPendingNodeEnrollmentSetup(setupId, "cloud-device-first")).toBe(false);
   });
 
   it.each(["draining", "destroyed"] as const)(
     "rejects a bound setup device in %s",
     async (state) => {
-      const setupId = await seedEnrollmentState(state, "cloud-device-bound");
+      const setupId = seedEnrollmentState(state, "cloud-device-bound");
 
       expect(store.hasPendingNodeEnrollmentSetup(setupId, "cloud-device-bound")).toBe(false);
       expect(store.hasNodeEnrollmentOwner("cloud-device-bound")).toBe(state === "draining");

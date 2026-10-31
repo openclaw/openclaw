@@ -4,7 +4,7 @@ import {
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type {
   GitHubPublicationRow,
   RepositoryGitHubPublicationRow,
@@ -96,7 +96,7 @@ function readSharedGitHubPublicationWorkspace(
   return {
     kind: "worktree" as const,
     worktreeId: worktree.id,
-    branch: worktree.branch,
+    branch: entry.worktree.githubPullRequest?.head.branch ?? worktree.branch,
     repositoryFingerprint: worktree.repo_fingerprint,
   };
 }
@@ -108,8 +108,15 @@ export function readSharedGitHubPublicationRequestInDatabase(
   selector: SharedGitHubPublicationReadInput["selector"],
   entry: SharedGitHubPublicationReadInput["entry"],
 ): GitHubPublicationRow | undefined {
-  return runSqliteDeferredTransactionSync(db, () => {
+  return runSqliteReadSnapshotSync(db, () => {
     if (!tableExists(db, "github_publication_requests")) {
+      return undefined;
+    }
+    if (
+      "authorEligibilityOnly" in selector &&
+      selector.authorEligibilityOnly &&
+      entry.worktree?.githubPullRequest?.origin === "external-pr"
+    ) {
       return undefined;
     }
     let selection = githubPublicationDatabase(db)
@@ -198,7 +205,7 @@ export function readSharedRepositoryGitHubPublicationInDatabase(
   selector: SharedGitHubPublicationReadInput["selector"],
   entry: SharedGitHubPublicationReadInput["entry"],
 ): RepositoryGitHubPublicationRow | undefined {
-  return runSqliteDeferredTransactionSync(db, () => {
+  return runSqliteReadSnapshotSync(db, () => {
     if (!tableExists(db, table)) {
       return undefined;
     }

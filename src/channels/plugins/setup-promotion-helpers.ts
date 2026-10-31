@@ -1,10 +1,51 @@
 import { getLoadedChannelPluginForRead } from "./registry-loaded.js";
 import type { ChannelSetupAdapter } from "./setup-adapter.types.js";
-import {
-  collectSingleAccountPromotionEntries,
-  isCommonSingleAccountPromotionKey,
-  isSetupSingleAccountPromotionKey,
-} from "./setup-promotion-keys.js";
+
+/**
+ * Common root-level channel config keys safe to promote into a single account.
+ */
+const COMMON_SINGLE_ACCOUNT_PROMOTION_KEYS = [
+  "name",
+  "token",
+  "tokenFile",
+  // Tencent's out-of-tree @wecom/wecom-openclaw-plugin still writes root
+  // botId/secret. Keep promoting them until WeCom publishes plugin declarations.
+  "botId",
+  "secret",
+  "botToken",
+  "webhookPath",
+  "webhookUrl",
+  "dmPolicy",
+  "allowFrom",
+  "groupPolicy",
+  "groupAllowFrom",
+  "defaultTo",
+] as const;
+
+/**
+ * Setup-only config keys that can move during single-account migration.
+ */
+const SETUP_SINGLE_ACCOUNT_PROMOTION_KEYS = [
+  ...COMMON_SINGLE_ACCOUNT_PROMOTION_KEYS,
+  "streaming",
+  "allowBots",
+  "blockStreaming",
+  "replyToMode",
+  "textChunkLimit",
+  "chunkMode",
+  "responsePrefix",
+  "ackReaction",
+  "ackReactionScope",
+  "reactionNotifications",
+  "threadBindings",
+  "mediaMaxMb",
+  "dm",
+  "groups",
+  "actions",
+] as const;
+
+const commonSingleAccountPromotionKeys = new Set<string>(COMMON_SINGLE_ACCOUNT_PROMOTION_KEYS);
+const setupSingleAccountPromotionKeys = new Set<string>(SETUP_SINGLE_ACCOUNT_PROMOTION_KEYS);
 
 export type ChannelSetupPromotionSurface = Pick<
   ChannelSetupAdapter,
@@ -14,14 +55,6 @@ export type ChannelSetupPromotionSurface = Pick<
   | "namedAccountPromotionKeys"
   | "resolveSingleAccountPromotionTarget"
 >;
-
-type SingleAccountPromotionParams = {
-  channelKey: string;
-  channel: Record<string, unknown>;
-  setupSurface?: ChannelSetupPromotionSurface;
-  includeSetupKeys?: boolean;
-  resolveBundledSurface?: (channelKey: string) => ChannelSetupPromotionSurface | null;
-};
 
 type SingleAccountPromotion =
   | { kind: "preserve-root" }
@@ -69,9 +102,13 @@ function getLoadedChannelSetupPromotionSurface(
 /**
  * Resolves all root-level keys eligible for single-account promotion.
  */
-export function resolveSingleAccountPromotion(
-  params: SingleAccountPromotionParams,
-): SingleAccountPromotion {
+export function resolveSingleAccountPromotion(params: {
+  channelKey: string;
+  channel: Record<string, unknown>;
+  setupSurface?: ChannelSetupPromotionSurface;
+  includeSetupKeys?: boolean;
+  resolveBundledSurface?: (channelKey: string) => ChannelSetupPromotionSurface | null;
+}): SingleAccountPromotion {
   const setupSurface =
     params.setupSurface === undefined
       ? (getLoadedChannelSetupPromotionSurface(params.channelKey) ??
@@ -82,17 +119,24 @@ export function resolveSingleAccountPromotion(
   if (setupSurface?.configPromotion === "preserve-root") {
     return { kind: "preserve-root" };
   }
-  const { entries, hasNamedAccounts } = collectSingleAccountPromotionEntries(params.channel);
+  const channel = params.channel;
+  const hasNamedAccounts = Object.keys(channel.accounts ?? {}).some(Boolean);
+  const entries = Object.entries(channel)
+    .filter(
+      ([key, value]) =>
+        key !== "accounts" && key !== "defaultAccount" && key !== "enabled" && value !== undefined,
+    )
+    .map(([key]) => key);
   if (entries.length === 0) {
     return { kind: "promote", keysToMove: [], shouldDeferPromotion: false };
   }
-  const isGenericPromotionKey = params.includeSetupKeys
-    ? isSetupSingleAccountPromotionKey
-    : isCommonSingleAccountPromotionKey;
+  const genericPromotionKeys = params.includeSetupKeys
+    ? setupSingleAccountPromotionKeys
+    : commonSingleAccountPromotionKeys;
   const isLegacyPromotionKey = (key: string) =>
     isLegacyUndeclaredAdapterPromotionKey(key, params.includeSetupKeys === true);
   const hasUncoveredRootKeys = entries.some(
-    (key) => !isGenericPromotionKey(key) && !isLegacyPromotionKey(key),
+    (key) => !genericPromotionKeys.has(key) && !isLegacyPromotionKey(key),
   );
   const buildResult = (keysToMove: string[]): SingleAccountPromotion => ({
     kind: "promote",
@@ -101,7 +145,7 @@ export function resolveSingleAccountPromotion(
   });
 
   const keysToMove = entries.filter((key) => {
-    if (isGenericPromotionKey(key)) {
+    if (genericPromotionKeys.has(key)) {
       return true;
     }
     return hasPromotionDeclarations(setupSurface)

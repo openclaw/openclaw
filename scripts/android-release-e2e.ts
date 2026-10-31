@@ -16,7 +16,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { callGateway } from "../src/gateway/call.js";
-import { registerSealedRuntimeProcessEntrypoint } from "../src/infra/runtime-process-url.js";
+import { registerSealedRuntimeProcessEntrypoints } from "../src/infra/runtime-process-url.js";
+import { writeSealedRuntimeProcessFixture } from "../src/test-utils/sealed-runtime-process-fixture.js";
 import { createOpenClawTestInstance } from "../test/helpers/openclaw-test-instance.js";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import {
@@ -45,6 +46,8 @@ import { resolveAndroidSdkEnv } from "./run-android-gradle.mts";
 
 const repo = resolveRepoRoot(import.meta.url);
 const applicationId = ANDROID_RELEASE_APPLICATION_ID;
+const vsockPacketBytes = 16384;
+const vsockParameter = "vmw_vsock_virtio_transport_common.virtio_transport_max_vsock_pkt_buf_size";
 
 type Device = {
   role: "phone" | "wear";
@@ -428,10 +431,14 @@ export async function main(argv = process.argv.slice(2)) {
         outputOptions: getStandaloneRuntimeProcessOutputOptions(name),
         logLevel: "warn",
       });
-      registerSealedRuntimeProcessEntrypoint(
-        "serviceChildGroupAnchor",
-        pathToFileURL(path.join(outDir, `${name}.js`)),
+      const bootstrap = await writeSealedRuntimeProcessFixture(
+        path.join(root, "process-owner", "sealed"),
+        "serviceChildRelay",
+        {
+          serviceChildGroupAnchor: pathToFileURL(path.join(outDir, `${name}.js`)),
+        },
       );
+      registerSealedRuntimeProcessEntrypoints("serviceChildRelay", bootstrap);
     }
     phase("gateway-start");
     service(
@@ -563,6 +570,10 @@ export async function main(argv = process.argv.slice(2)) {
           "2",
           "-memory",
           role === "phone" ? "2048" : "1024",
+          // 64 KiB VSOCK packets can fail contiguous guest allocations and disconnect ADB.
+          "-qemu",
+          "-append",
+          `${vsockParameter}=${vsockPacketBytes}`,
         ],
         env,
       );
@@ -582,6 +593,21 @@ export async function main(argv = process.argv.slice(2)) {
       if (!(await deviceCommand(device, ["emu", "avd", "name"])).split(/\r?\n/u).includes(name)) {
         throw new Error("emulator-identity-mismatch");
       }
+      phase(`${role}-vsock-limit`);
+      const packetLimit = await deviceCommand(device, [
+        "shell",
+        "su",
+        "0",
+        "cat",
+        "/sys/module/vmw_vsock_virtio_transport_common/parameters/virtio_transport_max_vsock_pkt_buf_size",
+      ]);
+      if (packetLimit !== String(vsockPacketBytes)) {
+        throw new Error("emulator-vsock-limit-mismatch");
+      }
+      process.stdout.write(
+        `Android release validation: ${role} VSOCK packet limit ${packetLimit}\n`,
+      );
+      phase("emulators");
       await deviceCommand(device, [
         "shell",
         "settings",
@@ -634,6 +660,7 @@ export async function main(argv = process.argv.slice(2)) {
       fresh: true,
       phone: `android-36/google_apis/${abi}`,
       wear: `android-34/android-wear/${abi}`,
+      vsockPacketBytes,
       // Metadata must use the same headless backend as the CI emulators.
       sdkEmulator: await command(path.join(sdk, "emulator/emulator"), ["-no-window", "-version"]),
     };

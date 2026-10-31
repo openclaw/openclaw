@@ -3,7 +3,13 @@
  * This bypasses shared model runtime's content type system which does not have a "document" type.
  */
 
+import {
+  buildAnthropicClaudeCodeIdentity,
+  buildAnthropicSystemBlocks,
+  isAnthropicOAuthApiKey,
+} from "@openclaw/ai/internal/anthropic";
 import { resolveAnthropicMessagesUrl } from "@openclaw/ai/transports";
+import "../../llm/ai-transport-host.js";
 import { readResponseBodySnippet } from "../../infra/http-error-body.js";
 import {
   postJsonRequest,
@@ -116,8 +122,6 @@ async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<s
   }
 }
 
-type AnthropicResponseContent = Array<{ type: string; text?: string }>;
-
 export async function anthropicAnalyzePdf(
   params: NativePdfAnalysisParams & { maxTokens?: number },
 ): Promise<string> {
@@ -126,6 +130,41 @@ export async function anthropicAnalyzePdf(
     throw new Error("Anthropic PDF: apiKey required");
   }
 
+  const request = params.requestConfig?.request;
+  const headers = new Headers(params.requestConfig?.headers);
+  for (const [name, value] of Object.entries(request?.headers ?? {})) {
+    if (value === null) {
+      headers.delete(name);
+    } else {
+      headers.set(name, value);
+    }
+  }
+  const hasExplicitAuthOverride =
+    (request?.auth?.mode !== undefined && request.auth.mode !== "provider-default") ||
+    ["authorization", "x-api-key", "api-key"].some((name) => headers.has(name));
+  const usesOAuthApiKey = !hasExplicitAuthOverride && isAnthropicOAuthApiKey(apiKey);
+  if (!hasExplicitAuthOverride) {
+    headers.set(
+      usesOAuthApiKey ? "authorization" : "x-api-key",
+      usesOAuthApiKey ? `Bearer ${apiKey}` : apiKey,
+    );
+  }
+  headers.set("anthropic-version", "2023-06-01");
+  headers.set(
+    "anthropic-beta",
+    [
+      headers.get("anthropic-beta"),
+      "pdfs-2024-09-25",
+      ...(usesOAuthApiKey ? ["claude-code-20250219", "oauth-2025-04-20"] : []),
+    ]
+      .filter(Boolean)
+      .join(","),
+  );
+  const identity = usesOAuthApiKey
+    ? buildAnthropicClaudeCodeIdentity(undefined, Object.fromEntries(headers))
+    : undefined;
+  const requestHeaders = identity?.headers ?? Object.fromEntries(headers);
+
   const json = await postNativePdfJson({
     provider: "anthropic",
     api: "anthropic-messages",
@@ -133,15 +172,11 @@ export async function anthropicAnalyzePdf(
     baseUrl: params.baseUrl,
     defaultBaseUrl: resolveAnthropicMessagesUrl(undefined).replace(/\/messages$/u, ""),
     resolveUrl: resolveAnthropicMessagesUrl,
-    headers: {
-      ...params.requestConfig?.headers,
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "pdfs-2024-09-25",
-    },
+    headers: requestHeaders,
     body: {
       model: params.modelId,
       max_tokens: params.maxTokens ?? 4096,
+      system: buildAnthropicSystemBlocks(undefined, usesOAuthApiKey, undefined, identity?.version),
       messages: [
         {
           role: "user",
@@ -155,19 +190,21 @@ export async function anthropicAnalyzePdf(
         },
       ],
     },
-    request: params.requestConfig?.request,
-    defaultAuthHeader: "x-api-key",
+    request: request ? { ...request, headers: requestHeaders } : undefined,
+    defaultAuthHeader: usesOAuthApiKey ? "authorization" : "x-api-key",
     signal: params.signal,
   });
 
-  const responseContent = json.content as AnthropicResponseContent | undefined;
+  const responseContent = json.content;
   if (!Array.isArray(responseContent)) {
     throw new Error("Anthropic PDF response missing content array.");
   }
 
   const text = responseContent
     .flatMap((block) =>
-      block.type === "text" && typeof block.text === "string" ? [block.text] : [],
+      isRecord(block) && block.type === "text" && typeof block.text === "string"
+        ? [block.text]
+        : [],
     )
     .join("");
 
@@ -177,10 +214,6 @@ export async function anthropicAnalyzePdf(
 
   return text.trim();
 }
-
-type GeminiCandidate = {
-  content?: { parts?: Array<{ text?: string }> };
-};
 
 export async function geminiAnalyzePdf(params: NativePdfAnalysisParams): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
@@ -223,13 +256,15 @@ export async function geminiAnalyzePdf(params: NativePdfAnalysisParams): Promise
     signal: params.signal,
   });
 
-  const candidates = json.candidates as GeminiCandidate[] | undefined;
+  const candidates = json.candidates;
   const candidate = Array.isArray(candidates) ? candidates[0] : undefined;
   if (!candidate) {
     throw new Error("Gemini PDF returned no candidates.");
   }
-  const text = (candidate.content?.parts ?? [])
-    .flatMap((part) => (typeof part.text === "string" ? [part.text] : []))
+  const content = isRecord(candidate) ? candidate.content : undefined;
+  const parts = isRecord(content) && Array.isArray(content.parts) ? content.parts : [];
+  const text = parts
+    .flatMap((part) => (isRecord(part) && typeof part.text === "string" ? [part.text] : []))
     .join("");
 
   if (!text.trim()) {

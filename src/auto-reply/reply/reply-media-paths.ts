@@ -3,7 +3,7 @@ import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
-import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { detectMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -18,8 +18,11 @@ import {
   resolveAllowedManagedMediaPath,
   resolveSandboxedMediaSource,
 } from "../../agents/sandbox-paths.js";
-import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "../../agents/sandbox.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
+import {
+  ensureSandboxWorkspaceForSession,
+  resolveSandboxContext,
+} from "../../agents/sandbox/context.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import type { SandboxContext, SandboxWorkspaceAccess } from "../../agents/sandbox/types.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
@@ -28,13 +31,16 @@ import { logVerbose } from "../../globals.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import { ImageOptimizationLimitError } from "../../media/image-optimization-error.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
+import { resolveLocalMediaPath } from "../../media/local-media-path.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedHostOutboundMediaAccess } from "../../media/read-capability.js";
-import { resolveWebchatAttachmentFromUrl } from "../../media/webchat-attachment.js";
+import { saveMediaFile } from "../../media/store.js";
+import { SaveMediaSourceError } from "../../media/store.shared.js";
 import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import {
   appendReplyMediaFailures,
@@ -73,6 +79,13 @@ function resolveReplyMediaFailureCode(error: unknown): ReplyMediaFailure["code"]
   let current: unknown = error;
   // Media loaders wrap filesystem/policy errors; bound cause traversal so malformed cycles fail safe.
   for (let depth = 0; current instanceof Error && depth < 4; depth += 1) {
+    if (
+      ((current instanceof FsSafeError || current instanceof SaveMediaSourceError) &&
+        current.code === "too-large") ||
+      current instanceof ImageOptimizationLimitError
+    ) {
+      return "file-too-large";
+    }
     if (
       (current instanceof LocalMediaAccessError || current instanceof FsSafeError) &&
       current.code === "not-found"
@@ -145,6 +158,8 @@ type ReplyMediaSourcePreparationParams = {
   sandboxContainerWorkdir?: string;
   mediaAccess?: OutboundMediaAccess;
   workspaceMediaAccess?: OutboundMediaAccess;
+  /** Supplied only by the explicit current-source send owner, never by reply text. */
+  htmlPublication?: "explicit";
   /** Physical remote alias of the captured logical workspace. */
   workspaceMediaRoot?: string;
   /** Streams local audio/video up to this size instead of the channel cap. */
@@ -254,14 +269,45 @@ export function createReplyMediaSourcePreparer(
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
     });
-    const persistPromise = (
-      params.localMediaMaxBytes
-        ? resolveWebchatAttachmentFromUrl(media, maxBytes, {
-            mediaAccess,
-            localMediaMaxBytes: params.localMediaMaxBytes,
-          })
-        : resolveOutboundAttachmentFromUrl(media, maxBytes, { mediaAccess })
-    )
+    const localMediaMaxBytes = params.localMediaMaxBytes;
+    const persistPromise = (async () => {
+      const localPath = localMediaMaxBytes ? resolveLocalMediaPath(media) : undefined;
+      const localKind = localPath ? mediaKindFromMime(mimeTypeFromFilePath(localPath)) : undefined;
+      if (
+        localPath &&
+        (localKind === "audio" || localKind === "video") &&
+        localMediaMaxBytes &&
+        mediaAccess.openFile
+      ) {
+        await using opened = await mediaAccess.openFile(localPath, {
+          maxBytes: localMediaMaxBytes,
+        });
+        if (opened) {
+          // Native host media keeps the same magic-byte requirement as buffered host reads.
+          const header = Buffer.alloc(8192);
+          const { bytesRead } = await opened.handle.read(header, 0, header.length, 0);
+          const prefix = header.subarray(0, bytesRead);
+          const kind = mediaKindFromMime(await detectMime({ buffer: prefix }));
+          if (kind !== "audio" && kind !== "video") {
+            throw new HostReadMediaTypeError(
+              "Host-local audio/video sends require a buffer-verified media type.",
+            );
+          }
+          const saved = await saveMediaFile(
+            opened,
+            "outbound",
+            localMediaMaxBytes,
+            path.basename(localPath),
+            prefix,
+          );
+          return { path: saved.path, contentType: saved.contentType };
+        }
+      }
+      return await resolveOutboundAttachmentFromUrl(media, maxBytes, {
+        mediaAccess,
+        htmlPublication: params.htmlPublication,
+      });
+    })()
       .then((saved) => ({
         ...saved,
         contentType: saved.contentType ?? mimeTypeFromFilePath(media) ?? "application/octet-stream",
@@ -393,7 +439,11 @@ export function createReplyMediaSourcePreparer(
         prepared.push({ source, outcome: await normalize(source) });
       } catch (error) {
         const failure = createReplyMediaFailure(source, index, error);
-        if (params.workspaceMediaRoot && isLikelyLocalMediaSource(source)) {
+        if (
+          failure.code !== "file-too-large" &&
+          params.workspaceMediaRoot &&
+          isLikelyLocalMediaSource(source)
+        ) {
           failure.label = truncateUtf16Safe(
             `Remote file: ${failure.label}`,
             MAX_FAILURE_LABEL_LENGTH,

@@ -1,4 +1,4 @@
-import { createMemo, Show, For } from "solid-js";
+import { action, createMemo, createOptimistic, Errored, Loading, Show, For } from "solid-js";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import {
   normalizeCatalogOpenTarget,
@@ -6,20 +6,34 @@ import {
   normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
-} from "../../app/settings.ts";
+} from "../../app/settings-contract.ts";
+import { Picker } from "../../components/select-picker.ts";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsDefaultDescription,
   SettingsRow,
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
-import { t } from "../../lib/reactive/i18n.ts";
-import { languageLabel, LanguageSelect } from "./language-select.tsx";
+import { SUPPORTED_LOCALES, type Locale } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { LocalToggleRow } from "./local-toggle-row.tsx";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
-import { SessionObserverSettings } from "./session-observer-settings.tsx";
+import { SessionObserverSettings } from "./session-observer-settings-view.tsx";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
 import type { ConfigProps } from "./view-types.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
+
+registerEnglishCatalog(registerSettingsEnglish);
+
+function languageLabel(locale: Locale) {
+  const key = locale.replace(/-([a-zA-Z])/g, (_, character) => character.toUpperCase());
+  return t(`languages.${key}`);
+}
 
 export { LobsterPetSection } from "./view-appearance-lobster.tsx";
 export function serverUiPrefProvenanceHint(provenance: ServerUiPrefProvenance): string {
@@ -41,7 +55,7 @@ export function LanguageSection(props: ConfigProps) {
       overridden={props.localeOverridden}
     />
   );
-  const provenance = createMemo(() => serverUiPrefProvenanceHint(props.localeProvenance));
+  const provenance = () => serverUiPrefProvenanceHint(props.localeProvenance);
   return (
     <section id={APPEARANCE_SETTINGS_TARGET_IDS.language} class="settings-section">
       <SettingsSectionHeader title={t("quickSettings.language")} />
@@ -54,10 +68,21 @@ export function LanguageSection(props: ConfigProps) {
             </>
           }
           control={
-            <LanguageSelect
-              localeOverride={props.localeOverride}
-              systemLocale={props.systemLocale}
-              onLocaleChange={props.onLocaleChange}
+            <Picker
+              params={{
+                label: t("quickSettings.language"),
+                value: props.localeOverride ?? "system",
+                options: [
+                  {
+                    value: "system",
+                    label: `${t("common.system")} (${languageLabel(props.systemLocale)})`,
+                  },
+                  ...SUPPORTED_LOCALES.map((value) => ({ value, label: languageLabel(value) })),
+                ],
+                showOptionTooltips: false,
+                onChange: (value) =>
+                  props.onLocaleChange(SUPPORTED_LOCALES.find((locale) => locale === value)),
+              }}
             />
           }
         />
@@ -68,10 +93,18 @@ export function LanguageSection(props: ConfigProps) {
 function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "camera" }) {
   const state = createMemo(() => props.config[props.kind]);
   const title = createMemo(() => t(`chat.composer.${props.kind}Input`));
-  const onSelect = createMemo(() =>
-    props.kind === "microphone" ? props.config.onMicrophoneSelect : props.config.onCameraSelect,
+  const onSelect = () =>
+    props.kind === "microphone" ? props.config.onMicrophoneSelect : props.config.onCameraSelect;
+  const [selectedDeviceId, setSelectedDeviceId] = createOptimistic(
+    () => state()?.selectedDeviceId.trim() ?? "",
   );
-  const selectedDeviceId = createMemo(() => state()?.selectedDeviceId.trim() ?? "");
+  const [selectingCamera, setSelectingCamera] = createOptimistic(false);
+  const selectCamera = action(function* (deviceId: string, completion: Promise<void> | undefined) {
+    setSelectedDeviceId(deviceId);
+    setSelectingCamera(true);
+    // The retained owner receipt reports errors through the status boundary.
+    yield completion?.catch(() => {});
+  });
   const selectOptions = createMemo(() => {
     const devices = state()?.devices ?? [];
     return [
@@ -111,12 +144,12 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
       ? props.config.onMicrophoneRefresh
       : props.config.onCameraRefresh)?.();
   };
-  const note = createMemo(() =>
-    state()?.error ? (
-      <span role="alert">{state()?.error}</span>
-    ) : !state()?.loading && state()?.devices.length === 0 ? (
-      t(props.kind === "microphone" ? "chat.composer.noMicrophones" : "chat.composer.noCameras")
-    ) : undefined,
+  const discovery = createMemo(
+    () => ({ promise: state()?.discovery, selection: state()?.selection }),
+    {
+      equals: (previous, next) =>
+        previous.promise === next.promise && previous.selection === next.selection,
+    },
   );
   return (
     <Show when={state() && onSelect()}>
@@ -124,12 +157,43 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
         title={title()}
         description={
           <>
-            {note() ? (
-              <>
-                {note()}
-                <br />
-              </>
-            ) : undefined}
+            <Show when={!selectingCamera()}>
+              <Show when={discovery()} keyed>
+                {(request) => {
+                  const ready = createMemo(async () => {
+                    await request.selection;
+                    const issue = await request.promise;
+                    if (issue) {
+                      throw new Error(issue);
+                    }
+                    return true;
+                  });
+                  return (
+                    <Errored
+                      fallback={(error) => (
+                        <>
+                          <span role="alert">{formatUiError(error())}</span>
+                          <br />
+                        </>
+                      )}
+                    >
+                      <Loading fallback={null}>
+                        {ready() && state()?.devices.length === 0 && (
+                          <>
+                            {t(
+                              props.kind === "microphone"
+                                ? "chat.composer.noMicrophones"
+                                : "chat.composer.noCameras",
+                            )}
+                            <br />
+                          </>
+                        )}
+                      </Loading>
+                    </Errored>
+                  );
+                }}
+              </Show>
+            </Show>
             {t("quickSettings.personal.browserOnly")}
           </>
         }
@@ -150,7 +214,14 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
                 requestAccess();
               }
             }}
-            onChange={(event) => onSelect()?.(event.currentTarget.value)}
+            onChange={(event) => {
+              const deviceId = event.currentTarget.value;
+              if (props.kind === "camera") {
+                void selectCamera(deviceId, props.config.onCameraSelect?.(deviceId));
+              } else {
+                props.config.onMicrophoneSelect?.(deviceId);
+              }
+            }}
           >
             <For each={selectOptions()} keyed={(option) => option.value}>
               {(option) => (
@@ -168,13 +239,12 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
 export function ChatPreferencesSection(props: ConfigProps) {
   const followUpSelection = createMemo(() => props.chatFollowUpMode ?? "server");
   const serverQueueMode = createMemo(() => props.serverQueueMode ?? t("chat.followUpModeLoading"));
-  const followUpDescription = createMemo(() =>
+  const followUpDescription = () =>
     props.chatFollowUpMode
       ? t("chat.followUpModeOverriding", {
           mode: serverQueueMode(),
         })
-      : undefined,
-  );
+      : undefined;
   // The value binding rewrites the DOM whenever it reruns. Track only the stored
   // width so unrelated settings refreshes keep an uncommitted draft.
   const messageWidth = createMemo(() => props.chatMessageMaxWidth ?? "");
@@ -194,12 +264,8 @@ export function ChatPreferencesSection(props: ConfigProps) {
       overridden={props.chatSendShortcutOverridden}
     />
   );
-  const sendShortcutProvenance = createMemo(() =>
-    serverUiPrefProvenanceHint(props.chatSendShortcutProvenance),
-  );
-  const followUpProvenance = createMemo(() =>
-    serverUiPrefProvenanceHint(props.chatFollowUpModeProvenance),
-  );
+  const sendShortcutProvenance = () => serverUiPrefProvenanceHint(props.chatSendShortcutProvenance);
+  const followUpProvenance = () => serverUiPrefProvenanceHint(props.chatFollowUpModeProvenance);
   const catalogTargetDefaultDescription = (
     <SettingsDefaultDescription
       value={t("chat.catalogOpenTargetViewer")}
@@ -265,6 +331,8 @@ export function ChatPreferencesSection(props: ConfigProps) {
           setting={"send-shortcut"}
           description={
             <>
+              {t("chat.sendShortcutHint")}
+              <br />
               {sendShortcutDefaultDescription} {sendShortcutProvenance()}
             </>
           }
@@ -293,8 +361,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
           }
           control={
             <>
-              <select
-                class="settings-select"
+              <SettingsSelect
                 data-settings-follow-up-mode
                 aria-label={t("chat.followUpMode")}
                 value={followUpSelection()}
@@ -305,19 +372,15 @@ export function ChatPreferencesSection(props: ConfigProps) {
                       value === "server" ? undefined : normalizeChatFollowUpMode(value),
                   });
                 }}
-              >
-                <option value="server" selected={followUpSelection() === "server"}>
-                  {t("chat.followUpModeServer", {
-                    mode: serverQueueMode(),
-                  })}
-                </option>
-                <option value="steer" selected={followUpSelection() === "steer"}>
-                  {t("chat.followUpModeSteer")}
-                </option>
-                <option value="queue" selected={followUpSelection() === "queue"}>
-                  {t("chat.followUpModeQueue")}
-                </option>
-              </select>
+                options={[
+                  {
+                    value: "server",
+                    label: t("chat.followUpModeServer", { mode: serverQueueMode() }),
+                  },
+                  { value: "steer", label: t("chat.followUpModeSteer") },
+                  { value: "queue", label: t("chat.followUpModeQueue") },
+                ]}
+              />
               {props.chatFollowUpModeOverridden ? (
                 <button
                   type="button"
@@ -383,14 +446,21 @@ export function ChatPreferencesSection(props: ConfigProps) {
     </section>
   );
 }
-export function SidebarPreferencesSection(props: ConfigProps) {
+export function SidebarPreferencesSection(
+  props: ConfigProps & { sectionRef?: (element: HTMLElement) => void },
+) {
+  const catalogLabelsScope = createMemo(() => props.hiddenSessionCatalogLabels.scope);
   const hiddenCatalogIds = createMemo(() => [...props.hiddenSessionCatalogIds].toSorted());
-
   // The delete dialog's "Don't ask me again" writes this off; this row is where
   // the operator turns it back on, so it has to stay next to the session prefs.
 
   return (
-    <section id={APPEARANCE_SETTINGS_TARGET_IDS.sidebar} class="settings-section">
+    <section
+      ref={(element) => props.sectionRef?.(element)}
+      id={APPEARANCE_SETTINGS_TARGET_IDS.sidebar}
+      class="settings-section"
+      onFocusIn={() => props.onAppearanceDataNeeded?.()}
+    >
       <SettingsSectionHeader title={t("configView.sidebarPrefs.title")} />
       <p class="settings-section__desc">{t("configView.sidebarPrefs.hint")}</p>
       <div class="settings-group">
@@ -416,7 +486,13 @@ export function SidebarPreferencesSection(props: ConfigProps) {
             <For each={hiddenCatalogIds()}>
               {(catalogId) => (
                 <SettingsRow
-                  title={props.hiddenSessionCatalogLabels.get(catalogId) ?? catalogId}
+                  title={
+                    <Errored fallback={(_error) => <>{catalogId}</>}>
+                      <Loading on={catalogLabelsScope()} fallback={catalogId}>
+                        {props.hiddenSessionCatalogLabels.read().get(catalogId) ?? catalogId}
+                      </Loading>
+                    </Errored>
+                  }
                   description={t("quickSettings.personal.browserOnly")}
                   control={
                     <button
@@ -433,20 +509,7 @@ export function SidebarPreferencesSection(props: ConfigProps) {
           </div>
         </>
       ) : undefined}
-      <div class="settings-section__header settings-section__header--subsection">
-        <h3 class="settings-section__heading">{t("configView.sessionObserver.title")}</h3>
-      </div>
-      <p class="settings-section__desc">{t("configView.sessionObserver.hint")}</p>
-      <SessionObserverSettings
-        enabled={props.sessionObserverEnabled !== false}
-        utilityModel={props.sessionObserverUtilityModel}
-        resolvedUtilityModel={props.sessionObserverResolvedModel}
-        models={props.sessionObserverModels ?? []}
-        modelsUnavailable={props.sessionObserverModelsUnavailable === true}
-        disabled={props.sessionObserverDisabled === true}
-        onEnabledChange={(enabled) => props.setSessionObserverEnabled?.(enabled)}
-        onUtilityModelChange={(selection) => props.setSessionObserverUtilityModel?.(selection)}
-      />
+      <SessionObserverSettings config={props} />
     </section>
   );
 }

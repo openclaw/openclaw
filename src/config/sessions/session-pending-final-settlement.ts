@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import { mergeRestartRecoveryTerminalDeliveryEvidence } from "./restart-recovery-state.js";
 import type { SessionActorDeliveryEvidence } from "./session-actor-delivery-evidence.types.js";
 import { projectSessionEntryPatch } from "./session-entry-patch-operation.js";
 import type { InternalSessionEntry } from "./types.js";
@@ -17,7 +16,6 @@ export type PendingFinalDeliverySettlementInput = {
   /** Only the settled delivery owner may clear custody; pre-ACK receipts omit this. */
   cleanup?: {
     sessionKey: string;
-    recoveryRunId?: string;
     now: number;
     preserveActivity?: boolean;
   };
@@ -31,7 +29,6 @@ export function projectPendingFinalDeliverySettlement(
 ): {
   patch: Partial<InternalSessionEntry> | null;
   state: PendingFinalDeliveryState | "stale";
-  wakeRecovery: boolean;
 } {
   const settlement = projectPendingFinalDeliveryState(entry, input, evidence);
   if (!input.cleanup) {
@@ -47,7 +44,6 @@ export function projectPendingFinalDeliverySettlement(
       kind: "pending-final-clear",
       sessionId: input.sessionId,
       intentId: input.intentId,
-      recoveryRunId: input.cleanup.recoveryRunId,
       now: input.cleanup.now,
     },
   });
@@ -68,11 +64,11 @@ function projectPendingFinalDeliveryState(
     !deliveries ||
     index < 0
   ) {
-    return { patch: null, state: "stale", wakeRecovery: false };
+    return { patch: null, state: "stale" };
   }
   const current = deliveries[index]!.state;
   if (input.expectedStates && !input.expectedStates.some((expected) => expected === current)) {
-    return { patch: null, state: "stale", wakeRecovery: false };
+    return { patch: null, state: "stale" };
   }
   const terminal =
     current === "delivered" ||
@@ -98,7 +94,6 @@ function projectPendingFinalDeliveryState(
   const result = evidence?.result;
   const platformMessageId = result?.platformMessageId?.trim();
   const context = pending.context;
-  const sourceRunId = pending.sourceRunId ?? evidence?.claim?.sourceRunId;
   const validResult =
     result &&
     platformMessageId &&
@@ -114,7 +109,7 @@ function projectPendingFinalDeliveryState(
       ));
   const receipt = terminal
     ? deliveries[index]!.receipt
-    : settled === "delivered" && sourceRunId && validResult
+    : settled === "delivered" && validResult
       ? { platformMessageId, resultCount: result.resultCount ?? 1 }
       : undefined;
   const updatedDeliveries = deliveries.with(index, {
@@ -122,41 +117,6 @@ function projectPendingFinalDeliveryState(
     state: settled,
     ...(receipt ? { receipt } : {}),
   });
-  const finalReceipt = updatedDeliveries[index]!.receipt;
-  // Commit the original source receipt before queue ACK, even if run cleanup
-  // already retired its active claim. Never borrow the current requester source.
-  const terminalEvidence =
-    sourceRunId &&
-    (!evidence?.claim || evidence.claim.sourceRunId === sourceRunId) &&
-    finalReceipt &&
-    context &&
-    settled === "delivered" &&
-    updatedDeliveries.every((delivery) => delivery.state === "delivered" && delivery.receipt)
-      ? mergeRestartRecoveryTerminalDeliveryEvidence(
-          entry.restartRecoveryTerminalDeliveryEvidence,
-          [
-            {
-              runId: sourceRunId,
-              ...(evidence?.claim ? { harnessCompletion: evidence.claim } : {}),
-              deliveryContext: context,
-              captured: true,
-              payloads: [{ visible: true }],
-              deliveryStatus: {
-                status: "sent",
-                resultCount: updatedDeliveries.reduce(
-                  (count, delivery) => count + (delivery.receipt?.resultCount ?? 0),
-                  0,
-                ),
-              },
-              durableFinalReceipt: {
-                intentId: input.intentId,
-                deliveryId: input.deliveryId,
-                platformMessageId: finalReceipt.platformMessageId,
-              },
-            },
-          ],
-        )
-      : undefined;
   const clearsNotice =
     existingNotice?.state !== "acknowledged" &&
     !updatedDeliveries.some((delivery) => delivery.state === "unknown") &&
@@ -164,24 +124,14 @@ function projectPendingFinalDeliveryState(
     settled !== "unknown" &&
     existingNotice?.intentId === pending.intentId;
   // One resolved sibling cannot erase another's ambiguity or owe an acknowledged notice again.
-  if (settled === current && !owedNotice && !clearsNotice && !terminalEvidence) {
-    return { patch: null, state: settled, wakeRecovery: false };
+  if (settled === current && !owedNotice && !clearsNotice) {
+    return { patch: null, state: settled };
   }
   return {
     state: settled,
-    wakeRecovery: settled !== "queued" && entry.abortedLastRun === true,
     patch: {
-      ...(entry.mainRestartRecovery
-        ? {
-            mainRestartRecovery: {
-              ...entry.mainRestartRecovery,
-              revision: entry.mainRestartRecovery.revision + 1,
-            },
-          }
-        : {}),
       pendingFinalDelivery: { ...pending, deliveries: updatedDeliveries },
       ...(clearsNotice ? { pendingDeliveryNotice: undefined } : owedNotice),
-      ...(terminalEvidence ? { restartRecoveryTerminalDeliveryEvidence: terminalEvidence } : {}),
     },
   };
 }

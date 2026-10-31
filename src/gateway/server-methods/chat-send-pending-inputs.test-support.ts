@@ -5,25 +5,30 @@ import type { ChatSendParamsSchema } from "../../../packages/gateway-protocol/sr
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginHookBeforeMessageWriteEvent } from "../../plugins/types.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import {
+  captureSessionTarget,
+  captureSessionControllerSettlement,
+} from "../../sessions/session-controller.lifecycle.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { disposeSessionReadContexts } from "../session-read-contexts.test-support.js";
 import { dispatchInboundMessageMock, testState, writeSessionStore } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
@@ -37,12 +42,7 @@ export function setClientProfile(
   profile: { id: string; updatedAt: number },
   displayName: string | null = null,
 ) {
-  client.authenticatedUserProfile = {
-    profileId: profile.id,
-    displayName,
-    hasAvatar: false,
-    updatedAt: profile.updatedAt,
-  };
+  client.authenticatedUserProfile = gatewayProfile(profile.id, displayName, profile.updatedAt);
 }
 
 export function setNativeIosClient(client: GatewayClient) {
@@ -68,6 +68,7 @@ export function useBrowserFollowupFixture() {
   return async function createBrowserFollowupFixture(
     options: {
       active?: boolean;
+      sessionKey?: string;
       createdActor?: SessionCreatedActor;
       sandbox?: "required";
       preserveContent?: boolean;
@@ -86,7 +87,9 @@ export function useBrowserFollowupFixture() {
     const memoryIncognito = options.storage === "memory";
     const scope = {
       agentId: "main",
-      sessionKey: memoryIncognito ? "agent:main:dashboard:incognito-custody" : "agent:main:main",
+      sessionKey: memoryIncognito
+        ? "agent:main:dashboard:incognito-custody"
+        : (options.sessionKey ?? "agent:main:main"),
       sessionId: "cloud-session",
       storePath,
     };
@@ -99,7 +102,7 @@ export function useBrowserFollowupFixture() {
     };
     await writeSessionStore({
       entries: {
-        ...(!memoryIncognito ? { main: entry } : {}),
+        ...(!memoryIncognito ? { [scope.sessionKey]: entry } : {}),
         unrelated: {
           sessionId: "unrelated-browser-session",
           updatedAt: Date.now(),
@@ -148,11 +151,21 @@ export function useBrowserFollowupFixture() {
     };
     const activeTranscript = readTranscript();
     const activeRun = active
-      ? createReplyOperation({ ...scope, resetTriggered: false })
+      ? createReplyOperation({
+          ...scope,
+          target: captureSessionTarget({
+            storeScope: scope.storePath,
+            sessionKey: scope.sessionKey,
+            incarnation: scope.sessionId,
+            agentId: scope.agentId,
+          }),
+          resetTriggered: false,
+        })
       : undefined;
     // Cloud workers expose a running owner but explicitly reject message injection.
     activeRun?.attachBackend({
       kind: "embedded",
+      supportsTranscriptCommitWait: true,
       runId: "active-cloud-run",
       cancel: vi.fn(),
       messageInjection: { isAvailable: () => false, queueMessage: vi.fn() },
@@ -200,19 +213,16 @@ export function useBrowserFollowupFixture() {
       }
       return {};
     });
-    // The process-local placement fallback would retain the previous case's deleted home.
+    // Use a fresh placement store for each fixture's Gateway home.
     const context = createDirectChatContext({
+      getRuntimeConfig,
       workerSessionPlacementService: createWorkerSessionPlacementStore(),
     });
     const client: GatewayClient = {
       connId: "browser-custody-client",
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "operator",
-        scopes: ["operator.read", "operator.write", "operator.admin"],
-        client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
-      },
+      connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"], {
+        platform: "web",
+      }),
     };
     const params: Static<typeof ChatSendParamsSchema> = {
       sessionKey: scope.sessionKey,
@@ -255,7 +265,7 @@ export function useBrowserFollowupFixture() {
       return respond;
     };
     const finishDispatch = async () => {
-      const completion = getSessionWorkAdmissionRelease({
+      const completion = captureSessionControllerSettlement({
         scope: scope.storePath,
         identities: [scope.sessionKey, scope.sessionId],
       });
@@ -282,6 +292,7 @@ export function useBrowserFollowupFixture() {
       readTranscript,
       send,
       dispatchedRecorder: dispatchedRecorder.promise,
+      releaseDispatch: () => dispatchRelease.resolve(),
       finishDispatch,
       cleanup,
       [Symbol.asyncDispose]: cleanup,

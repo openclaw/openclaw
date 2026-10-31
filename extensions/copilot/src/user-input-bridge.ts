@@ -34,11 +34,6 @@ export function createCopilotUserInputBridge(params: {
       pending?.abort(new Error("Copilot user input request replaced"));
       const abort = new AbortController();
       pending = abort;
-      const abortFromRun = () => abort.abort(params.signal?.reason);
-      params.signal?.addEventListener("abort", abortFromRun, { once: true });
-      if (params.signal?.aborted) {
-        abortFromRun();
-      }
       try {
         const question = toQuestion(request);
         const result = await runAgentHarnessGatewayQuestion({
@@ -53,7 +48,7 @@ export function createCopilotUserInputBridge(params: {
             intro: "Copilot needs input:",
             formatText: formatCopilotDisplayText,
           },
-          signal: abort.signal,
+          signal: params.signal ? AbortSignal.any([params.signal, abort.signal]) : abort.signal,
         });
         if (result.status !== "answered") {
           return emptyCopilotUserInputResponse();
@@ -67,7 +62,6 @@ export function createCopilotUserInputBridge(params: {
         embeddedAgentLog.warn("failed to bridge copilot user input through gateway", { error });
         return emptyCopilotUserInputResponse();
       } finally {
-        params.signal?.removeEventListener("abort", abortFromRun);
         if (pending === abort) {
           pending = undefined;
         }

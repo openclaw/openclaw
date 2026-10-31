@@ -15,13 +15,16 @@ import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import * as commands from "../process/exec.js";
 import { runCommandBuffered, runUtf8CommandWithTimeout } from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { hasErrnoCode } from "./errno.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { runtimeProcessScriptEntrypoints } from "./runtime-process-manifest.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import {
+  captureUpdateCandidateDeadline,
   inventoryUpdateCandidateStateWorker,
   materializeUpdateCandidateStateWorker,
 } from "./update-candidate-state.test-support.js";
@@ -39,12 +42,15 @@ afterAll(async () => {
 // published before the fault or reply that settles the operation.
 async function fixtureEventBeforeSettlement(
   file: string,
-  operation: PromiseLike<unknown>,
+  operation: PromiseLike<void | { value: unknown } | { error: unknown }>,
   message = `Worker did not reach ${path.basename(file)}`,
 ): Promise<void> {
-  const settled = Promise.resolve(operation).then(async () => {
+  const settled = Promise.resolve(operation).then(async (result) => {
     await fs.access(file).catch((error: unknown) => {
       if (hasErrnoCode(error, "ENOENT")) {
+        if (result && "error" in result) {
+          throw result.error;
+        }
         throw new Error(message);
       }
       throw error;
@@ -231,18 +237,21 @@ it.each([
   30_000,
 );
 
+function isMetadataInventoryCommand(argv: readonly string[]): boolean {
+  return argv.some(
+    (arg) => path.basename(arg) === runtimeProcessScriptEntrypoints.updateStateSizes.fileName,
+  );
+}
+
 function inspectionResult(
   value: unknown,
   error?: string,
 ): Awaited<ReturnType<typeof runUtf8CommandWithTimeout>> {
-  return {
+  return createCommandResult({
     stdout: error ? "" : JSON.stringify(value),
     stderr: error ?? "",
     code: error ? 1 : 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  };
+  });
 }
 
 it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ legacy, expires }))))(
@@ -277,7 +286,7 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
     const release = createDeferredCore();
     const run = commands.runUtf8CommandWithTimeout;
     vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (argv, options) => {
-      if (argv.includes("--eval")) {
+      if (isMetadataInventoryCommand(argv)) {
         return run(argv, options);
       }
       if (typeof options === "number") {
@@ -307,6 +316,8 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
     const now = Date.now.bind(Date);
     let elapsed = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+    vi.spyOn(performance, "now").mockImplementation(() => now() + elapsed);
+    const expireDeadline = captureUpdateCandidateDeadline();
     const operation = readUpdateStateSchemaVersions({ stateDir, config: {} });
     const outcome = capture(operation);
     try {
@@ -324,6 +335,7 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
           signal.addEventListener("abort", () => resolve(), { once: true });
         });
         elapsed += 400_000;
+        expireDeadline();
         await aborted;
         expect(signal.aborted).toBe(true);
       }
@@ -331,7 +343,7 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
       expect(fsSync.existsSync(stagingRoot)).toBe(true);
       release.resolve();
       if (expires) {
-        const message = `made no progress for ${legacy ? 4_841 : 4_540} seconds`;
+        const message = `exceeded its ${legacy ? 4_841 : 4_540} second allowance`;
         expect(await outcome).toMatchObject({
           error: { message: expect.stringContaining(message) },
         });
@@ -359,7 +371,7 @@ it.each(["versions array", "output limit", "non-exit"] as const)(
     const worker = vi
       .spyOn(commands, "runUtf8CommandWithTimeout")
       .mockImplementation((argv, options) => {
-        if (argv.includes("--eval")) {
+        if (isMetadataInventoryCommand(argv)) {
           return run(argv, options);
         }
         const result = inspectionResult(
@@ -379,7 +391,7 @@ it.each(["versions array", "output limit", "non-exit"] as const)(
         config: {},
       }),
     ).rejects.toThrow();
-    expect(worker.mock.calls.filter(([argv]) => !argv.includes("--eval"))).toHaveLength(1);
+    expect(worker.mock.calls.filter(([argv]) => !isMetadataInventoryCommand(argv))).toHaveLength(1);
   },
 );
 
@@ -425,7 +437,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 ${fixtureReceiptClientSource(receipts.endpoint)}
 // Metadata probes use the real core program; only the schema worker should hang.
-if (process.argv.includes("--eval")) {
+if (process.argv.some((arg) => path.basename(arg) === ${JSON.stringify(runtimeProcessScriptEntrypoints.updateStateSizes.fileName)})) {
   process.exit(spawnSync(process.execPath, process.argv.slice(2), { stdio: "inherit" }).status ?? 1);
 }
 let input = "";
@@ -516,6 +528,8 @@ it.for(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
     const now = Date.now.bind(Date);
     let elapsed = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+    vi.spyOn(performance, "now").mockImplementation(() => now() + elapsed);
+    const expireDeadline = captureUpdateCandidateDeadline();
     const controller = new AbortController();
     const operation = prepareUpdateCandidateStateSnapshot({
       config: {},
@@ -546,6 +560,7 @@ it.for(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
         controller.abort(new Error("cancel rehearsal proof"));
       } else if (failure === "deadline") {
         elapsed = 600_000;
+        expireDeadline();
       }
       const result = await outcome;
       expect(result).toMatchObject({ error: expect.any(Error) });
@@ -554,7 +569,7 @@ it.for(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
           failure === "cancel" || failure === "cooperative-cancel"
             ? "cancel rehearsal proof"
             : failure === "deadline"
-              ? "made no progress"
+              ? "exceeded its"
               : "synthetic destination full",
         );
       }

@@ -1,6 +1,182 @@
 {
   "base": "codex-dynamic-tools.telegram-direct.json",
   "replace": {
+    "message": {
+      "description": "Send/manage channel messages. Supports actions: broadcast, react, send. When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions.",
+      "inputSchema": {
+        "properties": {
+          "accountId": {
+            "type": "string"
+          },
+          "action": {
+            "description": "Select one action. For action=\"send\", provide message or another send payload; fields for other actions do not count as send content.",
+            "enum": ["broadcast", "react", "send"],
+            "type": "string"
+          },
+          "asDocument": {
+            "description": "Alias for forceDocument.",
+            "type": "boolean"
+          },
+          "asVoice": {
+            "description": "Send audio as a voice note; combines with voiceText.",
+            "type": "boolean"
+          },
+          "attachments": {
+            "description": "Attachments; each uses media.",
+            "items": {
+              "properties": {
+                "media": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": ["image", "audio", "video", "file"],
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "buffer": {
+            "description": "Base64/data-URL attachment.",
+            "type": "string"
+          },
+          "caption": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "effect": {
+            "description": "Alias for effectId.",
+            "type": "string"
+          },
+          "effectId": {
+            "description": "sendWithEffect id/name.",
+            "type": "string"
+          },
+          "emoji": {
+            "description": "One Unicode emoji for the current WebChat prompt; explicit external channels validate their own emoji.",
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "final": {
+            "description": "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true when adding a reaction to the current source message is your complete response; omit or set false when more work follows. A confirmed final source reply ends the turn.",
+            "type": "boolean"
+          },
+          "forceDocument": {
+            "description": "Send media as document; no compression.",
+            "type": "boolean"
+          },
+          "gatewayToken": {
+            "type": "string"
+          },
+          "gatewayUrl": {
+            "type": "string"
+          },
+          "gifPlayback": {
+            "type": "boolean"
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "media": {
+            "description": "Media URL/path. data: use buffer.",
+            "type": "string"
+          },
+          "message": {
+            "description": "Text for action=\"send\". A send needs message or another send payload such as media, attachments, or presentation.",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "snake_case alias of messageId; same defaults.",
+            "type": "string"
+          },
+          "messageId": {
+            "description": "Target read/react/edit/delete/pin/unpin id; reactions default current inbound.",
+            "type": "string"
+          },
+          "mimeType": {
+            "type": "string"
+          },
+          "quoteText": {
+            "description": "Telegram reply quote text.",
+            "type": "string"
+          },
+          "remove": {
+            "type": "boolean"
+          },
+          "replyTo": {
+            "type": "string"
+          },
+          "silent": {
+            "type": "boolean"
+          },
+          "target": {
+            "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
+            "type": "string"
+          },
+          "targetAuthor": {
+            "type": "string"
+          },
+          "targetAuthorUuid": {
+            "type": "string"
+          },
+          "targets": {
+            "items": {
+              "description": "Recipient/channel targets (same format as --target); accepts ids or names when the directory is available.",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "track_tool_calls": {
+            "description": "snake_case alias of trackToolCalls.",
+            "type": "boolean"
+          },
+          "trackToolCalls": {
+            "description": "Use the reacted message for this turn's status reaction lifecycle.",
+            "type": "boolean"
+          },
+          "voiceId": {
+            "description": "Per-send speech voice override.",
+            "type": "string"
+          },
+          "voiceProvider": {
+            "description": "Per-send speech provider override.",
+            "type": "string"
+          },
+          "voiceText": {
+            "description": "Text to synthesize; message remains visible.",
+            "type": "string"
+          }
+        },
+        "required": ["action"],
+        "type": "object"
+      },
+      "name": "message",
+      "type": "function"
+    },
     "sessions_spawn": {
       "description": "Spawn child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot; `mode=\"session\"` persistent/thread-bound only on supporting requester channel. `agentId` targets a configured agent (see agents_list); `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require. Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner. Once delegation is appropriate, use a hidden subagent unless the user needs to revisit or steer deliberately supervised child work. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. For hidden subagents, omit `visible` or set it false, and report results through the parent. Native hidden or visible children support `worktree=true` with optional `projectId`, `worktreeName`, and `worktreeBaseRef`. Hidden `projectId` requires `worktree=true`; name/base always require it. Preparation is asynchronous; the first turn waits for the managed checkout. Hidden `cleanup=delete` uses session snapshot/removal; `keep` retains it. ACP does not support managed-worktree parameters. `group`, `projectGitUrl`, and cloud profiles require `visible=true`. `visible=true`: durable visible supervised child session. Use when the user needs to revisit or steer delegated child work; an explicit request for a new independent session is not child delegation. Shows in web UI sidebar; works without UI: announcing runs report back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode=\"run\"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling except for configured deny-only `delegateToolsTo` grants (not tool arguments); select a registered project with `projectId` or a managed GitHub clone with `projectGitUrl` (mutually exclusive with each other and `cwd`); may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line. Omit `placement` or use `{kind:\"local\"}` for local execution. `{kind:\"profile\",profileId,os?,machineClass?}` selects a configured cloud profile and requires `visible=true` and `worktree=true`. Cloud placement creates first, dispatches, then starts the task; failures retain the child for inspection, never fall back locally. Session listing/addressing obeys `tools.sessions.visibility` (all: all sessions, cross-agent per tools.agentToAgent).  Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message. Native: explicit context=\"isolated\" starts clean; context=\"fork\" copies requester transcript and requires the same agent. Omitted context follows configured threadBindings.defaultSpawnContext policy (fork by default) with thread=true; without a thread it is isolated. A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn, do non-overlap work; follow the receipt's completion mode. When diagnosing a missing result from an announcing child, use `subagents` to inspect execution and delivery status. Recover existing results or follow up within the still-authorized task; respect intentional cancellation and never loop-poll.",
       "inputSchema": {
@@ -41,6 +217,10 @@
             "maxItems": 50,
             "type": "array"
           },
+          "blind": {
+            "description": "Blind trial: child prompt omits its model, session ids and workspace path. Hidden subagent, context=\"isolated\".",
+            "type": "boolean"
+          },
           "cleanup": {
             "description": "Hidden session cleanup; delete snapshots and removes its managed worktree through session cleanup. visible=true always keeps the session.",
             "enum": ["delete", "keep"],
@@ -57,7 +237,12 @@
             "type": "string"
           },
           "cwd": {
-            "description": "Child working directory. Visible paths outside configured agent workspaces require operator.admin. Mutually exclusive with projectId/projectGitUrl. With no source selector and worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
+            "description": "Child working directory. Workspace-contained file tools (apply_patch/file writes) resolve and contain paths against cwd; set cwd for edits outside the agent workspace. Visible paths outside configured agent workspaces require operator.admin. Mutually exclusive with projectId/projectGitUrl. With no source selector and worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
+            "type": "string"
+          },
+          "cyberAccessProgram": {
+            "description": "Child OpenAI cyber Access (Blue=daybreak_blue, Red=daybreak_red). Omit: same-agent, same-model child keeps requester Access. Child run fails if its account/model lacks the program. Subagent only.",
+            "enum": ["standard", "daybreak_blue", "daybreak_red"],
             "type": "string"
           },
           "expectsCompletionMessage": {
@@ -183,7 +368,7 @@
             "type": "boolean"
           },
           "user": {
-            "description": "The person's requester_profile.id, required when several people have steered this turn.",
+            "description": "An admitted participant's requester_profile.id. Omit to use the turn's original requester; selection does not establish human intent or approval.",
             "type": "string"
           },
           "visible": {
@@ -199,7 +384,8 @@
             "type": "string"
           },
           "worktreeName": {
-            "description": "Managed worktree name; requires worktree=true.",
+            "description": "Managed worktree lowercase slug, 1–64 letters/digits/hyphens, starting with a letter or digit. Do not include a branch prefix such as codex/; OpenClaw supplies openclaw/. Requires worktree=true.",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
             "type": "string"
           }
         },

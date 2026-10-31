@@ -2,7 +2,7 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import packageManifest from "../../package.json" with { type: "json" };
 import { getAiTransportHost } from "../host.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
-import type { Context, Model } from "../types.js";
+import type { Context, Model, ModelRequestHeaders } from "../types.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import {
@@ -11,35 +11,26 @@ import {
   type GoogleProviderOptions,
 } from "./google-shared.js";
 
-const DEFAULT_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com";
-
 let packageVersionMemo: string | undefined;
 
-function resolvePackageVersion(): string {
-  if (!packageVersionMemo) {
-    packageVersionMemo =
-      (typeof process !== "undefined" && process.env?.OPENCLAW_VERSION) || packageManifest.version;
-  }
-  return packageVersionMemo;
-}
-
-export function resolveGoogleApiClientHeaders(params?: {
-  api?: string;
-  baseUrl?: string;
-  model?: Model;
-}): Record<string, string> {
+export function resolveGoogleApiClientHeaders(params: {
+  baseUrl: string;
+  model: Model;
+}): ModelRequestHeaders {
   const hostHeaders = getAiTransportHost().resolveProviderRequestHeaders({
     provider: "google",
-    api: params?.api ?? params?.model?.api ?? "google-generative-ai",
-    baseUrl: params?.baseUrl ?? DEFAULT_GOOGLE_API_BASE_URL,
-    model: params?.model,
+    api: "google-generative-ai",
+    baseUrl: params.baseUrl,
+    model: params.model,
   });
   if (hostHeaders?.["x-goog-api-client"]) {
     return hostHeaders;
   }
   return {
     ...hostHeaders,
-    "x-goog-api-client": `openclaw/${resolvePackageVersion()}`,
+    "x-goog-api-client": `openclaw/${(packageVersionMemo ||=
+      (typeof process !== "undefined" && process.env?.OPENCLAW_VERSION) ||
+      packageManifest.version)}`,
   };
 }
 

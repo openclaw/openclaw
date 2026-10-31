@@ -4,6 +4,8 @@ export type IsolatedCompletionPurpose =
   | "session-activity-summary"
   | "session-observer"
   | "conversation-label"
+  | "composer-prediction"
   | "progress-narration"
   | "transcript-summary"
+  | "skill-diet"
   | "plugin-completion";

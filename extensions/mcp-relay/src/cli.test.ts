@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn(),
@@ -31,74 +31,74 @@ async function runCli(args: string[]) {
   await program.parseAsync(["mcp-relay", ...args], { from: "user" });
 }
 
-describe("MCP relay CLI", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.callGatewayFromCli.mockReset().mockResolvedValue({ connected: true });
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.callGatewayFromCli.mockReset().mockResolvedValue({ connected: true });
+});
 
-  it.each([
-    { args: ["status"], method: "status", params: {}, scope: "operator.read" },
-    { args: ["pair"], method: "pair", params: {}, scope: "operator.admin" },
-    { args: ["grants"], method: "grants", params: {}, scope: "operator.admin" },
-    {
-      args: ["revoke", "gr_fixture"],
-      method: "revoke",
-      params: { grantId: "gr_fixture" },
-      scope: "operator.admin",
-    },
-  ])(
-    "routes $method through the running Gateway with its required scope",
-    async ({ args, method, params, scope }) => {
-      await runCli([...args, "--json", "--url", "ws://localhost:19000"]);
+it.each([
+  ["status", {}, "operator.read"],
+  ["pair", {}, "operator.admin"],
+  ["grants", {}, "operator.admin"],
+  ["revoke", { grantId: "gr_fixture" }, "operator.admin"],
+] as const)("routes %s with its required scope", async (method, params, scope) => {
+  const args = method === "revoke" ? [method, "gr_fixture"] : [method];
+  await runCli([...args, "--json", "--url", "ws://localhost:19000"]);
 
-      expect(mocks.callGatewayFromCli).toHaveBeenCalledWith(
-        `mcp-relay.${method}`,
-        expect.objectContaining({ json: true, url: "ws://localhost:19000" }),
-        params,
-        { progress: false, scopes: [scope] },
-      );
-      expect(mocks.writeJson).toHaveBeenCalledWith({ connected: true });
-    },
+  expect(mocks.callGatewayFromCli).toHaveBeenCalledWith(
+    `mcp-relay.${method}`,
+    expect.objectContaining({ json: true, url: "ws://localhost:19000" }),
+    params,
+    { progress: false, scopes: [scope] },
   );
+  expect(mocks.writeJson).toHaveBeenCalledWith({ connected: true });
+});
 
-  it("prints the offered code, endpoint, expiry, and connection instructions", async () => {
-    mocks.callGatewayFromCli.mockResolvedValue({
-      code: "ABCDE-FGHJK",
-      mcpUrl: "https://mcp.openclaw.ai/mcp",
-      expiresAt: 600_000,
-    });
-    await runCli(["pair"]);
-
-    const output = mocks.log.mock.calls.flat().join("\n");
-    expect(output).toContain("ABCDE-FGHJK");
-    expect(output).toContain("https://mcp.openclaw.ai/mcp");
-    expect(output).toContain("1970-01-01T00:10:00.000Z");
-    expect(output).toContain("consent page");
+it("prints pairing details and instructions", async () => {
+  mocks.callGatewayFromCli.mockResolvedValue({
+    code: "ABCDE-FGHJK",
+    mcpUrl: "https://mcp.openclaw.ai/mcp",
+    expiresAt: 600_000,
   });
+  await runCli(["pair"]);
 
-  it.each([
-    { ui: { available: true, basePath: "/control" }, line: "Control UI: available (/control)" },
-    {
-      ui: { available: false, reason: "Update the relay." },
-      line: "Control UI: unavailable — Update the relay.",
-    },
-  ])("prints UI availability in human status: $line", async ({ ui, line }) => {
-    mocks.callGatewayFromCli.mockResolvedValue({ connected: true, ui });
-    await runCli(["status"]);
-    expect(mocks.log).toHaveBeenCalledWith(line);
-    mocks.log.mockClear();
-    await runCli(["status", "--json"]);
-    expect(mocks.log).not.toHaveBeenCalled();
-  });
+  const output = mocks.log.mock.calls.flat().join("\n");
+  expect(output).toContain("ABCDE-FGHJK");
+  expect(output).toContain("https://mcp.openclaw.ai/mcp");
+  expect(output).toContain("1970-01-01T00:10:00.000Z");
+  expect(output).toContain("consent page");
+});
 
-  it("reports Gateway failures with recovery instructions and a failing exit", async () => {
-    mocks.callGatewayFromCli.mockRejectedValue(new Error("Gateway offline."));
-    await runCli(["pair", "--json"]);
+it.each([
+  [{ available: true, basePath: "/control" }, "Control UI: available (/control)"],
+  [
+    { available: false, reason: "Update the relay." },
+    "Control UI: unavailable — Update the relay.",
+  ],
+] as const)("prints UI availability: %j", async (ui, line) => {
+  mocks.callGatewayFromCli.mockResolvedValue({ connected: true, ui });
+  await runCli(["status"]);
+  expect(mocks.log).toHaveBeenCalledWith(line);
+  mocks.log.mockClear();
+  await runCli(["status", "--json"]);
+  expect(mocks.log).not.toHaveBeenCalled();
+});
 
-    expect(mocks.writeJson).toHaveBeenCalledWith({
-      error: expect.stringContaining("openclaw plugins enable mcp-relay"),
-    });
-    expect(mocks.exit).toHaveBeenCalledWith(1);
-  });
+it.each([false, true])("reports Gateway recovery instructions (json=%s)", async (json) => {
+  mocks.callGatewayFromCli.mockRejectedValue(
+    new Error("Gateway offline.", { cause: new Error("Private transport diagnostics.") }),
+  );
+  const result = runCli(["pair", ...(json ? ["--json"] : [])]);
+  const message =
+    "Gateway offline.\nCheck that the Gateway is running and mcp-relay is enabled with openclaw plugins enable mcp-relay, then retry.";
+
+  if (json) {
+    await expect(result).rejects.toThrow(message);
+    await expect(result).rejects.not.toHaveProperty("cause");
+  } else {
+    await result;
+    expect(mocks.error).toHaveBeenCalledExactlyOnceWith(message);
+    expect(mocks.exit).toHaveBeenCalledExactlyOnceWith(1);
+  }
+  expect(mocks.writeJson).not.toHaveBeenCalled();
 });

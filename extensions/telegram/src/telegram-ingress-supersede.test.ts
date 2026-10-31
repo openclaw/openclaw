@@ -1,4 +1,3 @@
-// Telegram supersede policy for durable ingress (authorization-gated).
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -28,9 +27,7 @@ import type { TelegramSpooledUpdatePayload } from "./telegram-ingress-spool.payl
 import { isTelegramSpooledUpdateSenderAuthorized } from "./telegram-ingress-supersede-auth.js";
 import { createShouldSupersedeTelegramSpooledPending as createSupersedePredicate } from "./telegram-ingress-supersede.js";
 
-function createShouldSupersedeTelegramSpooledPending(
-  auth: Parameters<typeof isTelegramSpooledUpdateSenderAuthorized>[1],
-) {
+function supersedeFor(auth: Parameters<typeof isTelegramSpooledUpdateSenderAuthorized>[1]) {
   const predicate = createSupersedePredicate({ ...auth, getConfig: () => auth.cfg });
   return async (...events: Parameters<typeof predicate>) => {
     const decision = await predicate(...events);
@@ -124,7 +121,7 @@ const topic = { ...group, messageThreadId: 10, isTopicMessage: true, isForum: tr
 
 describe("telegram ingress supersede policy", () => {
   const auth = authFor({ allowFrom: [OWNER_ID], dmPolicy: "allowlist" });
-  const shouldSupersede = createShouldSupersedeTelegramSpooledPending(auth);
+  const shouldSupersede = supersedeFor(auth);
 
   it("follows account runtime policy and expires prepared decisions", async () => {
     const policy = (allowFrom: string[]): OpenClawConfig => ({
@@ -154,38 +151,36 @@ describe("telegram ingress supersede policy", () => {
   });
 
   it("honors disabled topic group policy for an allowlisted sender", async () => {
-    const groupConfig = {
-      allowFrom: [OWNER_ID],
-      topics: { "10": { groupPolicy: "disabled" as const } },
-    };
-    const account = {
-      groupAllowFrom: [OWNER_ID],
-      groupPolicy: "open" as const,
-      groups: { "-1001": groupConfig },
-    };
-    const topicAuth = authFor({ accounts: { default: account } });
+    const topicAuth = authFor({
+      accounts: {
+        default: {
+          groupAllowFrom: [OWNER_ID],
+          groupPolicy: "open",
+          groups: {
+            "-1001": {
+              allowFrom: [OWNER_ID],
+              topics: { "10": { groupPolicy: "disabled" } },
+            },
+          },
+        },
+      },
+    });
     expect(
       await isTelegramSpooledUpdateSenderAuthorized(
-        messageUpdate({
-          updateId: 1,
-          text: "hello",
-          senderId: OWNER_ID,
-          ...topic,
-        }),
+        messageUpdate({ updateId: 1, text: "hello", ...topic }),
         topicAuth,
       ),
     ).toBe(false);
   });
 
   it("gates command supersede on authorized sender", async () => {
-    // /new is a recognized text alias in OpenClaw command set.
-    const authorized = await shouldSupersede(candidate("/new"), pending());
-    const unauthorized = await shouldSupersede(
-      candidate("/new", STRANGER_ID, { ...group, updateId: 3 }),
-      pending(OWNER_ID, group),
-    );
-    expect(authorized).toBe(true);
-    expect(unauthorized).toBe(false);
+    expect(await shouldSupersede(candidate("/new"), pending())).toBe(true);
+    expect(
+      await shouldSupersede(
+        candidate("/new", STRANGER_ID, { ...group, updateId: 3 }),
+        pending(OWNER_ID, group),
+      ),
+    ).toBe(false);
   });
 
   it.each([
@@ -223,10 +218,7 @@ describe("telegram ingress supersede policy", () => {
     ["/stop", true],
     ["/reset", true],
   ])("only cancellation commands supersede pending input: %s", async (text, expected) => {
-    const predicate = createShouldSupersedeTelegramSpooledPending({
-      ...auth,
-      botUsername: "mybot",
-    });
+    const predicate = supersedeFor({ ...auth, botUsername: "mybot" });
     for (const target of ["", "@mybot", "@otherbot"]) {
       const commandText = `${text}${target}`;
       for (const entities of [
@@ -244,20 +236,15 @@ describe("telegram ingress supersede policy", () => {
   });
 
   it("keeps identityless targeted aborts pessimistic", async () => {
-    const text = "/stop@OtherBot!";
-    const entityText = "/stop@OtherBot";
-    const update = candidate(text, OWNER_ID, {
-      entities: [{ type: "bot_command", offset: 0, length: entityText.length }],
+    const update = candidate("/stop@OtherBot!", OWNER_ID, {
+      entities: [{ type: "bot_command", offset: 0, length: "/stop@OtherBot".length }],
     });
 
     expect(await shouldSupersede(update, pending())).toBe(true);
   });
 
   it("does not supersede when a bot_command entity appears inside ordinary text", async () => {
-    const shouldSupersedeOurBot = createShouldSupersedeTelegramSpooledPending({
-      ...auth,
-      botUsername: "mybot",
-    });
+    const shouldSupersedeOurBot = supersedeFor({ ...auth, botUsername: "mybot" });
     const commandText = "/deploy@mybot";
     const ordinaryText = `Please run ${commandText} after this finishes`;
     const entities = [
@@ -271,10 +258,11 @@ describe("telegram ingress supersede policy", () => {
     const ordinaryCaption = {
       update_id: 3,
       message: {
+        ...ordinaryMessage.message,
+        text: undefined,
+        entities: undefined,
         caption: ordinaryText,
         caption_entities: entities,
-        from: { id: Number(OWNER_ID) },
-        chat: { id: Number(OWNER_ID), type: "private" },
       },
     };
 
@@ -292,7 +280,7 @@ describe("telegram ingress supersede policy", () => {
       groupPolicy: "allowlist",
       groups: { "-1001": { allowFrom: ["*"], topics: { "10": { allowFrom: [OWNER_ID] } } } },
     });
-    const shouldSupersedeTopic = createShouldSupersedeTelegramSpooledPending(topicRestrictedAuth);
+    const shouldSupersedeTopic = supersedeFor(topicRestrictedAuth);
     expect(
       await shouldSupersedeTopic(candidate("stop", STRANGER_ID, topic), pending(OWNER_ID, topic)),
     ).toBe(false);
@@ -315,19 +303,14 @@ describe("telegram ingress supersede policy", () => {
         },
       },
     });
-    const update = messageUpdate({
+    const update = candidate("stop", OWNER_ID, {
       ...group,
       isDirectMessages: true,
       directMessagesTopicId: 77,
       messageThreadId: 999,
     });
 
-    expect(
-      await createShouldSupersedeTelegramSpooledPending(channelDmAuth)(
-        record("2", update),
-        pending(),
-      ),
-    ).toBe(false);
+    expect(await supersedeFor(channelDmAuth)(update, pending())).toBe(false);
   });
 
   it("authorizes paired DM senders via the pairing store under dmPolicy pairing", async () => {
@@ -342,7 +325,7 @@ describe("telegram ingress supersede policy", () => {
       accountId: "default",
     });
     const pairingAuth = authFor({ dmPolicy: "pairing" });
-    const shouldSupersedePaired = createShouldSupersedeTelegramSpooledPending(pairingAuth);
+    const shouldSupersedePaired = supersedeFor(pairingAuth);
 
     expect(await shouldSupersedePaired(candidate("stop", pairedId), pending(pairedId))).toBe(true);
 
@@ -358,7 +341,7 @@ describe("telegram ingress supersede policy", () => {
     const ownerId = "777001";
     const ownerAuth = authFor({ dmPolicy: "pairing" });
     ownerAuth.cfg.commands = { ownerAllowFrom: [ownerId] };
-    const shouldSupersedeOwner = createShouldSupersedeTelegramSpooledPending(ownerAuth);
+    const shouldSupersedeOwner = supersedeFor(ownerAuth);
 
     expect(await shouldSupersedeOwner(candidate("/stop", ownerId), pending(ownerId))).toBe(true);
   });

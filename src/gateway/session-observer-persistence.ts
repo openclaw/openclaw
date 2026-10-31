@@ -6,7 +6,6 @@ const PERSIST_INTERVAL_MS = 60_000;
 type PersistDigest = NonNullable<SessionObserverDeps["persistDigest"]>;
 
 export function createSessionObserverDigestPersister(params: {
-  now: () => number;
   persistDigest: PersistDigest;
   stillCurrent: (runId: string, sessionKey: string, agentId: string) => () => boolean;
   onMissingEntry: (state: SessionObserverState) => void;
@@ -22,7 +21,7 @@ export function createSessionObserverDigestPersister(params: {
     const lastPersistedAt =
       kind === "preamble" ? preamblePersistedAt.get(state) : state.lastPersistedAt;
     const due =
-      lastPersistedAt === undefined || params.now() - lastPersistedAt >= PERSIST_INTERVAL_MS;
+      lastPersistedAt === undefined || Date.now() - lastPersistedAt >= PERSIST_INTERVAL_MS;
     if (!final && !due) {
       return;
     }
@@ -40,9 +39,9 @@ export function createSessionObserverDigestPersister(params: {
         params.onMissingEntry(state);
       } else if (accepted) {
         if (kind === "preamble") {
-          preamblePersistedAt.set(state, params.now());
+          preamblePersistedAt.set(state, Date.now());
         } else {
-          state.lastPersistedAt = params.now();
+          state.lastPersistedAt = Date.now();
         }
       }
     } catch (error) {

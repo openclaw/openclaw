@@ -6,12 +6,8 @@ const BROWSERBASE_RATE_LIMIT_MESSAGE =
   "Browserbase rate limit reached (max concurrent sessions). " +
   "Wait for the current session to complete, or upgrade your plan.";
 
-function isAbsoluteHttp(url: string): boolean {
-  return /^https?:\/\//i.test(url.trim());
-}
-
 function isBrowserbaseUrl(url: string): boolean {
-  if (!isAbsoluteHttp(url)) {
+  if (!/^https?:\/\//i.test(url.trim())) {
     return false;
   }
   const host = URL.parse(url)?.hostname.trim().toLowerCase() ?? "";

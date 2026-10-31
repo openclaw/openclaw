@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { subscribeGitHubIdentityChanges } from "../agents/github-read-identity.js";
+import { githubIdentityChanges } from "../agents/github-read-identity.js";
 import { onManagedGitHubProfileChanged } from "../agents/github-tool-identity.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.types.js";
 import {
@@ -11,7 +11,7 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import type { WorkerGitHubLaunchBinding } from "../worker/launch-descriptor.js";
-import type { PublicationSessionIdentity } from "./github-publication-availability.js";
+import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import type { SelectionRow } from "./session-row-projection-record.js";
 import { prepareGitHubPublicationFact } from "./worker-environments/worker-github-binding.js";
 
@@ -140,7 +140,7 @@ export function startGitHubPublicationDiscovery(params: {
     }
   };
   const stopProfile = onManagedGitHubProfileChanged(() => refreshAll(true));
-  const stopIdentity = subscribeGitHubIdentityChanges(() => refreshAll(true));
+  githubIdentityChanges.onChange = () => refreshAll(true);
   const stopConfig = sessionChanges.subscribe((change) => {
     if ("all" in change && change.scope === "config") {
       refreshAll(true);
@@ -178,9 +178,10 @@ export function startGitHubPublicationDiscovery(params: {
     }
   });
   return {
+    name: "github-publication-discovery",
     stop: async () => {
       scheduler.beginClose();
-      stopIdentity();
+      githubIdentityChanges.onChange = undefined;
       stopProfile();
       stopConfig();
       if (readPublished === read) {

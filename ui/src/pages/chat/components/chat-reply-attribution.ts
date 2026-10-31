@@ -3,7 +3,7 @@ import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import type { MessageGroup, NormalizedMessage } from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel, type SenderIdentity } from "../../../lib/chat/sender-label.ts";
-import { persistedMessageEntryId } from "../chat-thread.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import type { ReplyPreview, ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 
 /**
@@ -15,6 +15,7 @@ import type { ReplyPreview, ReplyPreviewLookup } from "./chat-reply-preview.type
 export type ReplyLine = {
   state: "hidden" | "reserved" | "named" | "unavailable";
   name?: string;
+  text?: string;
   sender?: SenderIdentity;
   agentAvatar?: ReplyPreview["agentAvatar"];
   /** The original the name navigates to, loaded or not. */
@@ -45,6 +46,7 @@ function resolveSource(
     ? {
         state: "named",
         name,
+        text: preview?.text,
         sender: { ...author, name },
         agentAvatar: preview?.agentAvatar,
         openId: id,
@@ -104,6 +106,7 @@ function resolveTarget(
     return {
       state: "named",
       name,
+      text: preview?.text,
       sender: { ...sender, name },
       agentAvatar: preview?.agentAvatar,
       openId: id,

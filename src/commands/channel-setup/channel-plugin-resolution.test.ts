@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { makeCatalogEntry, makeMeta } from "../../flows/channel-setup.test-helpers.js";
 import { createPluginRuntimeStore } from "../../plugin-sdk/runtime-store.js";
+import { mockCall } from "../../test-utils/mock-call-assertions.js";
 
 const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
@@ -48,33 +50,21 @@ function createCatalogEntry(params: {
   pluginId: string;
   origin?: "workspace" | "bundled";
 }): ChannelPluginCatalogEntry {
-  return {
-    id: params.id,
+  return makeCatalogEntry(params.id, "Telegram", {
     pluginId: params.pluginId,
     origin: params.origin,
-    meta: {
-      id: params.id,
-      label: "Telegram",
-      selectionLabel: "Telegram",
+    meta: makeMeta(params.id, "Telegram", {
       docsPath: "/channels/telegram",
       blurb: "Telegram channel",
-    },
+    }),
     install: {
       npmSpec: params.pluginId,
     },
-  };
+  });
 }
 
 function createPlugin(id: string): ChannelPlugin {
   return { id } as ChannelPlugin;
-}
-
-function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("expected mock to have at least one call");
-  }
-  return call[0];
 }
 
 describe("resolveInstallableChannelPlugin", () => {
@@ -187,9 +177,11 @@ describe("resolveInstallableChannelPlugin", () => {
     expect(result.catalogEntry?.pluginId).toBe("telegram");
     expect(result.plugin?.id).toBe("telegram");
     expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
-    const snapshotRequest = firstMockArg(
-      mocks.loadChannelSetupPluginRegistrySnapshotForChannel,
-    ) as { channel?: string; pluginId?: string; workspaceDir?: string };
+    const snapshotRequest = mockCall(mocks.loadChannelSetupPluginRegistrySnapshotForChannel)[0] as {
+      channel?: string;
+      pluginId?: string;
+      workspaceDir?: string;
+    };
     expect(snapshotRequest?.channel).toBe("telegram");
     expect(snapshotRequest?.pluginId).toBe("telegram");
     expect(snapshotRequest?.workspaceDir).toBe("/tmp/workspace");
@@ -227,9 +219,11 @@ describe("resolveInstallableChannelPlugin", () => {
     expect(result.catalogEntry?.pluginId).toBe("evil-telegram-shadow");
     expect(result.plugin?.id).toBe("telegram");
     expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
-    const snapshotRequest = firstMockArg(
-      mocks.loadChannelSetupPluginRegistrySnapshotForChannel,
-    ) as { channel?: string; pluginId?: string; workspaceDir?: string };
+    const snapshotRequest = mockCall(mocks.loadChannelSetupPluginRegistrySnapshotForChannel)[0] as {
+      channel?: string;
+      pluginId?: string;
+      workspaceDir?: string;
+    };
     expect(snapshotRequest?.channel).toBe("telegram");
     expect(snapshotRequest?.pluginId).toBe("evil-telegram-shadow");
     expect(snapshotRequest?.workspaceDir).toBe("/tmp/workspace");
@@ -352,7 +346,7 @@ describe("resolveInstallableChannelPlugin", () => {
     });
 
     expect(mocks.ensureChannelSetupPluginInstalled).toHaveBeenCalledTimes(1);
-    const installRequest = firstMockArg(mocks.ensureChannelSetupPluginInstalled) as {
+    const installRequest = mockCall(mocks.ensureChannelSetupPluginInstalled)[0] as {
       entry?: ChannelPluginCatalogEntry;
     };
     expect(installRequest?.entry).toBe(catalogEntry);

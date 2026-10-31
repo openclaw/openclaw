@@ -17,7 +17,10 @@ import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createTelegramDispatchHttpFixture } from "./bot-message-dispatch.telegram-http.test-support.js";
+import {
+  createTelegramDispatchHttpFixture,
+  telegramReplyId,
+} from "./bot-message-dispatch.telegram-http.test-support.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
 import { createTelegramMessageCache } from "./message-cache.js";
@@ -77,6 +80,102 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     observers.draftStream.mockReset();
     observers.recordOutbound.mockReset().mockResolvedValue(undefined);
   });
+
+  it.each(["off", "first", "all"] as const)(
+    "keeps untagged private-topic finals on the inbound target with replies %s",
+    async (replyToMode) => {
+      for (const ancestor of ["forum-service", "ordinary"] as const) {
+        const context = createContext();
+        context.msg.reply_to_message = {
+          chat: context.msg.chat,
+          message_id: 9001,
+          date: 1_700_000_000,
+          from: { id: 42, is_bot: false, first_name: "Fixture" },
+          reply_to_message: undefined,
+          ...(ancestor === "forum-service"
+            ? { forum_topic_created: { name: "Fixture topic", icon_color: 7322096 } }
+            : { text: "An earlier message." }),
+        };
+        context.msg.message_thread_id = 77;
+        context.threadSpec = { scope: "dm", id: 77 };
+        context.replyThreadId = 77;
+        Object.assign(context.ctxPayload, {
+          To: "telegram:123:topic:77",
+          OriginatingTo: "telegram:123:topic:77",
+          MessageThreadId: 77,
+          ReplyToId: "9001",
+          ReplyChain: [{ messageId: "9001", sender: "Fixture" }],
+        });
+        const text = `Answer with ${ancestor} ancestry.`;
+        await dispatchProgressTurn(async () => undefined, {
+          mode: "off",
+          toolProgress: false,
+          context,
+          replyToMode,
+          finalReply: { text },
+        });
+        const sends = acceptedCalls.filter(
+          (call) => call.method === "sendMessage" && call.fields.text === text,
+        );
+        expect(sends).toHaveLength(1);
+        const fields = sends[0]!.fields;
+        expect(fields.message_thread_id).toBe(77);
+        if (replyToMode === "off") {
+          expect(fields).not.toHaveProperty("reply_parameters");
+          expect(fields).not.toHaveProperty("reply_to_message_id");
+        } else {
+          expect(telegramReplyId(fields)).toBe(context.msg.message_id);
+        }
+      }
+    },
+  );
+
+  it.each([
+    { replyToMode: "first", selection: "quote" },
+    { replyToMode: "all", selection: "quote" },
+    { replyToMode: "off", selection: "current" },
+    { replyToMode: "off", selection: "explicit" },
+  ] as const)(
+    "preserves the $selection reply selection with replies $replyToMode",
+    async ({ replyToMode, selection }) => {
+      const context = createContext();
+      Object.assign(context.ctxPayload, {
+        ReplyToId: "9001",
+        ReplyToBody: "Selected text.",
+        ReplyToQuoteText: "Selected text.",
+        ReplyToIsQuote: true,
+      });
+      const text = "Answer to the selected message.";
+      const directive =
+        selection === "current"
+          ? "[[reply_to_current]] "
+          : selection === "explicit"
+            ? "[[reply_to:9002]] "
+            : "";
+      await dispatchProgressTurn(async () => undefined, {
+        mode: "off",
+        toolProgress: false,
+        context,
+        replyToMode,
+        finalReply: {
+          text: directive + text,
+          ...(selection === "quote" ? { replyToId: String(context.msg.message_id) } : {}),
+        },
+      });
+      const sends = acceptedCalls.filter(
+        (call) => call.method === "sendMessage" && call.fields.text === text,
+      );
+      expect(sends).toHaveLength(1);
+      const fields = sends[0]!.fields;
+      const reply = fields.reply_parameters;
+      expect(telegramReplyId(fields)).toBe(
+        selection === "current" ? context.msg.message_id : selection === "explicit" ? 9002 : 9001,
+      );
+      if (selection === "quote") {
+        expect(reply).toMatchObject({ quote: "Selected text." });
+      }
+    },
+  );
 
   it.each([
     { replyToMode: "first", target: "inbound" },
@@ -160,12 +259,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
       expect(finalAt).toBeGreaterThanOrEqual(0);
       const fields = acceptedCalls[finalAt]!.fields;
       expect(fields.message_thread_id).toBe(15);
-      const reply = fields.reply_parameters;
-      expect(
-        reply && typeof reply === "object" && "message_id" in reply
-          ? reply.message_id
-          : fields.reply_to_message_id,
-      ).toBe(finalTarget);
+      expect(telegramReplyId(fields)).toBe(finalTarget);
       const retiredAt = acceptedCalls.findIndex((call) => call.method === "deleteMessage");
       expect(retiredAt).toBeGreaterThan(finalAt);
       expect([...visibleMessages.values()]).toEqual([finalText]);

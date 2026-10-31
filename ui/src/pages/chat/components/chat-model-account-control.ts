@@ -6,13 +6,13 @@ import type {
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ModelAuthStatusResult } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
-import { registerModelAccountsEnglish } from "../../../i18n/locales/en-model-accounts.ts";
+import { registerModelAccountListEnglish } from "../../../i18n/locales/en-model-account-list.ts";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
-import type { ChatModelAccountSectionViewProps } from "./chat-model-types.ts";
+import { projectChatFields } from "../chat-field-projection.ts";
 
-registerModelAccountsEnglish();
+registerModelAccountListEnglish();
 
 type AccountInventory = {
   model: string;
@@ -27,10 +27,7 @@ type AccountInventory = {
 
 const inventories = new WeakMap<object, AccountInventory>();
 
-export type ChatModelAccountSection = {
-  viewProps: (startIndex: number) => ChatModelAccountSectionViewProps;
-  onClose: () => void;
-};
+export type ChatModelAccountSection = NonNullable<ReturnType<typeof renderChatModelAccountControl>>;
 
 export function renderChatModelAccountControl(params: {
   modelAuthStatusResult?: ModelAuthStatusResult | null;
@@ -43,8 +40,7 @@ export function renderChatModelAccountControl(params: {
   onSelect: (account: UserModelAccount) => Promise<boolean>;
   onAutomatic?: () => void;
   onManage?: () => void;
-  onRequestUpdate: () => void;
-}): ChatModelAccountSection | undefined {
+}) {
   const { owner, selection, client } = params;
   if (!selection) {
     return undefined;
@@ -55,15 +51,19 @@ export function renderChatModelAccountControl(params: {
     inventory.model !== params.model ||
     inventory.selection !== selection
   ) {
-    inventory = {
-      model: params.model,
-      selection,
-      accounts: [],
-      loading: false,
-      open: false,
-      error: null,
-      isCurrent: params.ownsSelection,
-    };
+    inventory = projectChatFields<AccountInventory>(
+      {
+        model: params.model,
+        selection,
+        accounts: [],
+        nextCursor: undefined,
+        loading: false,
+        open: false,
+        error: null,
+        isCurrent: params.ownsSelection,
+      },
+      ["accounts", "nextCursor", "loading", "open", "error"],
+    );
     inventories.set(owner, inventory);
   }
   const currentInventory = inventory;
@@ -75,7 +75,6 @@ export function renderChatModelAccountControl(params: {
     }
     currentInventory.loading = true;
     currentInventory.error = null;
-    params.onRequestUpdate();
     try {
       const result = await client.request<UsersListModelAccountsResult>(
         "users.listModelAccounts",
@@ -97,7 +96,6 @@ export function renderChatModelAccountControl(params: {
     } finally {
       if (ownsInventory()) {
         currentInventory.loading = false;
-        params.onRequestUpdate();
       }
     }
   };
@@ -132,41 +130,45 @@ export function renderChatModelAccountControl(params: {
       ? account.authProfileId
       : undefined);
   const currentValue = "current";
-  const options: Array<{ value: string; label: string; description?: string; disabled?: boolean }> =
-    [
-      {
-        value: currentValue,
-        label: selectedLabel,
-        description:
-          email(currentId) ??
-          description(
-            currentInventory.accounts.find((account) => account.authProfileId === currentId),
-          ),
-      },
-      ...currentInventory.accounts
-        .filter((account) => account.provider === provider && account.authProfileId !== currentId)
-        .map((account) => ({
-          value: `account:${account.authProfileId}`,
-          label: account.label,
-          description: description(account),
-        })),
-      ...(params.onAutomatic
-        ? [{ value: "automatic", label: t("chat.modelAccounts.automatic") }]
-        : []),
-      ...(currentInventory.loading
-        ? [{ value: "loading", label: t("common.loading"), disabled: true }]
-        : []),
-      ...(currentInventory.nextCursor
-        ? [
-            {
-              value: "more",
-              label: t("profilePage.modelAccounts.loadMore"),
-              disabled: currentInventory.loading,
-            },
-          ]
-        : []),
-      ...(params.onManage ? [{ value: "manage", label: t("chat.modelAccounts.manage") }] : []),
-    ];
+  const options: ReadonlyArray<{
+    value: string;
+    label: string;
+    description?: string;
+    disabled?: boolean;
+  }> = [
+    {
+      value: currentValue,
+      label: selectedLabel,
+      description:
+        email(currentId) ??
+        description(
+          currentInventory.accounts.find((account) => account.authProfileId === currentId),
+        ),
+    },
+    ...currentInventory.accounts
+      .filter((account) => account.provider === provider && account.authProfileId !== currentId)
+      .map((account) => ({
+        value: `account:${account.authProfileId}`,
+        label: account.label,
+        description: description(account),
+      })),
+    ...(params.onAutomatic
+      ? [{ value: "automatic", label: t("chat.modelAccounts.automatic") }]
+      : []),
+    ...(currentInventory.loading
+      ? [{ value: "loading", label: t("common.loading"), disabled: true }]
+      : []),
+    ...(currentInventory.nextCursor
+      ? [
+          {
+            value: "more",
+            label: t("profilePage.modelAccounts.loadMore"),
+            disabled: currentInventory.loading,
+          },
+        ]
+      : []),
+    ...(params.onManage ? [{ value: "manage", label: t("chat.modelAccounts.manage") }] : []),
+  ];
   const selectAccount = (value: string, event: MouseEvent) => {
     event.stopPropagation();
     if (!ownsInventory() || params.disabled) {
@@ -191,7 +193,6 @@ export function renderChatModelAccountControl(params: {
   };
   const toggleAccounts = () => {
     currentInventory.open = !currentInventory.open;
-    params.onRequestUpdate();
     // Reopening retries an empty inventory after a failed load; loaded pages are reused.
     if (
       currentInventory.open &&
@@ -201,14 +202,17 @@ export function renderChatModelAccountControl(params: {
       void loadAccounts();
     }
   };
-  const viewProps = (startIndex: number): ChatModelAccountSectionViewProps => ({
+  // The picker observes this section snapshot to resynchronize its search DOM.
+  const open = currentInventory.open;
+  const error = currentInventory.error;
+  const viewProps = (startIndex: number) => ({
     selectionKind: selection.kind,
     disabled: params.disabled,
     selectedIdentity,
     options,
     currentValue,
-    open: currentInventory.open,
-    error: currentInventory.error,
+    open,
+    error,
     startIndex,
     onToggle: toggleAccounts,
     onSelect: selectAccount,
@@ -216,7 +220,6 @@ export function renderChatModelAccountControl(params: {
   return {
     onClose: () => {
       currentInventory.open = false;
-      params.onRequestUpdate();
     },
     viewProps,
   };

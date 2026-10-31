@@ -3,7 +3,6 @@ import type { DatabaseSync, DatabaseSyncOptions } from "node:sqlite";
 import { afterEach, expect, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewaySchedulerClock } from "../test-utils/gateway-scheduler-clock.js";
 import { GatewayScheduler } from "./gateway-scheduler.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
@@ -83,8 +82,8 @@ export function sqliteSchedulerClock(nowMs = 1_000) {
   const clock = createGatewaySchedulerClock(nowMs);
   const scheduler = new GatewayScheduler({ clock: clock.clock });
   const scope = GatewayScheduler.prototype.scope.bind(scheduler);
-  vi.spyOn(GatewayScheduler.prototype, "scope").mockImplementation(() => scope());
-  return clock;
+  const scopeSpy = vi.spyOn(GatewayScheduler.prototype, "scope").mockImplementation(() => scope());
+  return Object.assign(clock, { restore: () => scopeSpy.mockRestore() });
 }
 
 export function sqliteDiagnosticClock() {
@@ -127,17 +126,4 @@ export function readEntryIds(db: DatabaseSync) {
 export function expectSettledEntries(db: DatabaseSync, ids: string[]) {
   expect(db.isTransaction).toBe(false);
   expect(readEntryIds(db)).toEqual(ids);
-}
-
-export function sqliteWriteGate() {
-  const entered = createDeferredCore();
-  const released = createDeferredCore();
-  return {
-    entered: entered.promise,
-    release: released.resolve,
-    wait: async () => {
-      entered.resolve();
-      await released.promise;
-    },
-  };
 }

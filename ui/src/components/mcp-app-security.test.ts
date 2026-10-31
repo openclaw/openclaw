@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, onTestFinished } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { t } from "../i18n/index.ts";
 import {
@@ -9,26 +9,26 @@ import {
 } from "./mcp-app-security.ts";
 import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
+function mountFrame() {
+  const frame = document.body.appendChild(document.createElement("iframe"));
+  frame.checkVisibility = () => true;
+  onTestFinished(() => frame.remove());
+  return frame;
+}
+
 describe("MCP App sandbox security", () => {
   it("negotiates resource hints before initialization and App capabilities afterward", () => {
-    expect(negotiateMcpAppDisplayModes(undefined)).toEqual({
-      available: ["inline", "fullscreen"],
-      initial: "inline",
-    });
-    expect(negotiateMcpAppDisplayModes({ preferredDisplayMode: "fullscreen" })).toEqual({
-      available: ["fullscreen"],
-      initial: "fullscreen",
-    });
+    const both = ["inline", "fullscreen"] as const;
+    const fullscreen = { available: ["fullscreen"], initial: "fullscreen" };
+    expect(negotiateMcpAppDisplayModes(undefined)).toEqual({ available: both, initial: "inline" });
+    expect(negotiateMcpAppDisplayModes({ preferredDisplayMode: "fullscreen" })).toEqual(fullscreen);
     expect(
       negotiateMcpAppDisplayModes({
-        availableDisplayModes: ["inline", "fullscreen"],
+        availableDisplayModes: [...both],
         preferredDisplayMode: "fullscreen",
       }),
-    ).toEqual({ available: ["inline", "fullscreen"], initial: "fullscreen" });
-    expect(negotiateMcpAppDisplayModes(undefined, ["fullscreen"])).toEqual({
-      available: ["fullscreen"],
-      initial: "fullscreen",
-    });
+    ).toEqual({ available: both, initial: "fullscreen" });
+    expect(negotiateMcpAppDisplayModes(undefined, ["fullscreen"])).toEqual(fullscreen);
     expect(() => negotiateMcpAppDisplayModes(undefined, ["pip"])).toThrow(
       "no available host display mode",
     );
@@ -54,117 +54,109 @@ describe("MCP App sandbox security", () => {
   });
 
   it("accepts only the dedicated-origin sandbox endpoint", () => {
+    const gatewayUrl = "wss://gateway.example:8443/openclaw";
+    const hostOrigin = "https://gateway.example:8443";
+    const invalidMessage = t("mcpApp.errors.invalidSandboxUrl");
+    const resolve = (
+      value = "/mcp-app-sandbox",
+      port = 8444,
+      origin?: string,
+      gateway = gatewayUrl,
+      host = hostOrigin,
+    ) => resolveSandboxHostUrl(value, port, origin, gateway, host, invalidMessage);
+    expect(resolve("/mcp-app-sandbox?csp=abc")).toBe(
+      "https://gateway.example:8444/mcp-app-sandbox?csp=abc",
+    );
     expect(
-      resolveSandboxHostUrl(
-        "/mcp-app-sandbox?csp=abc",
-        8444,
-        undefined,
-        "wss://gateway.example:8443/openclaw",
-        "https://gateway.example:8443",
-        t("mcpApp.errors.invalidSandboxUrl"),
-      ),
-    ).toBe("https://gateway.example:8444/mcp-app-sandbox?csp=abc");
-    expect(
-      resolveSandboxHostUrl(
+      resolve(
         "/mcp-app-sandbox",
         18790,
         "https://apps.example.com",
         "wss://gateway.example",
         "https://gateway.example",
-        t("mcpApp.errors.invalidSandboxUrl"),
       ),
     ).toBe("https://apps.example.com/mcp-app-sandbox");
-
-    const invalid = [
-      [
-        "https://attacker.example/mcp-app-sandbox",
-        8444,
-        undefined,
-        "wss://gateway.example:8443/openclaw",
-        "https://gateway.example:8443",
-      ],
-      [
-        "data:text/html;base64,cHJveHk=",
-        8444,
-        undefined,
-        "wss://gateway.example:8443/openclaw",
-        "https://gateway.example:8443",
-      ],
-      [
-        "/mcp-app-sandbox",
-        8443,
-        undefined,
-        "wss://gateway.example:8443/openclaw",
-        "https://gateway.example:8443",
-      ],
-      [
-        "/mcp-app-sandbox",
-        8444,
-        "https://gateway.example:8443",
-        "wss://gateway.example:8443/openclaw",
-        "https://control.example",
-      ],
-    ] as const;
+    const invalid: Parameters<typeof resolve>[] = [
+      ["https://attacker.example/mcp-app-sandbox"],
+      ["data:text/html;base64,cHJveHk="],
+      ["/mcp-app-sandbox", 8443],
+      ["/mcp-app-sandbox", 8444, hostOrigin, gatewayUrl, "https://control.example"],
+    ];
     for (const args of invalid) {
-      expect(() =>
-        resolveSandboxHostUrl(
-          args[0],
-          args[1],
-          args[2],
-          args[3],
-          args[4],
-          t("mcpApp.errors.invalidSandboxUrl"),
-        ),
-      ).toThrow("MCP App sandbox URL is invalid");
+      expect(() => resolve(...args)).toThrow("MCP App sandbox URL is invalid");
     }
   });
 
+  it("admits only the exact issued file-preview shell without changing origin isolation", () => {
+    const path = "/__openclaw__/file-preview/connection/ticket/report/preview.html";
+    const resolve = (value: string, expected = path, port = 8444, origin?: string) =>
+      resolveSandboxHostUrl(
+        value,
+        port,
+        origin,
+        "https://gateway.example:8443",
+        "https://control.example",
+        undefined,
+        expected,
+      );
+    expect(resolve(path)).toBe(`https://gateway.example:8444${path}`);
+    expect(() =>
+      resolveSandboxHostUrl(
+        path,
+        8444,
+        undefined,
+        "https://gateway.example:8443",
+        "https://control.example",
+      ),
+    ).toThrow();
+    for (const value of [
+      path + "?asset=other",
+      path + "#other",
+      path.replace("ticket", "other"),
+      `https://other.example${path}`,
+    ]) {
+      expect(() => resolve(value)).toThrow();
+    }
+    expect(() => resolve("/other", "/other")).toThrow();
+    expect(() => resolve(path, path, 8443)).toThrow();
+    expect(() => resolve(path, path, 8444, "https://control.example")).toThrow();
+    expect(() => resolve(path + "/../other", path + "/../other")).toThrow();
+  });
+
   it("keeps the per-view prompt budget across iframe remounts", async () => {
+    let active: HTMLIFrameElement;
+    vi.spyOn(document, "activeElement", "get").mockImplementation(() => active);
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
     const key = `agent:main:main\0view-${crypto.randomUUID()}`;
-    const first = document.createElement("iframe");
-    document.body.append(first);
-    first.checkVisibility = () => true;
-    Object.defineProperty(document, "activeElement", { get: () => first, configurable: true });
+    const first = (active = mountFrame());
     for (let index = 0; index < 10; index += 1) {
       expect(await dispatchWidgetPrompt(first, `Prompt ${index}`, key)).toBe(true);
     }
 
     first.remove();
-    const replacement = document.createElement("iframe");
-    document.body.append(replacement);
-    replacement.checkVisibility = () => true;
-    Object.defineProperty(document, "activeElement", {
-      get: () => replacement,
-      configurable: true,
-    });
+    const replacement = (active = mountFrame());
     expect(await dispatchWidgetPrompt(replacement, "Prompt after remount", key)).toBe(false);
-    replacement.remove();
-    delete (document as unknown as Record<string, unknown>).activeElement;
   });
 
   it("waits for widget confirmation and rejects a frame retired while it was pending", async () => {
-    const frame = document.createElement("iframe");
-    document.body.append(frame);
-    frame.checkVisibility = () => true;
+    const frame = mountFrame();
     frame.focus();
     const received = vi.fn();
     frame.addEventListener(WIDGET_PROMPT_EVENT, received);
     const decision = createDeferred<boolean>();
-    try {
-      const pending = dispatchWidgetPrompt(
-        frame,
-        "Compare parts",
-        crypto.randomUUID(),
-        () => decision.promise,
-      );
-      expect(received).not.toHaveBeenCalled();
-      frame.remove();
-      decision.resolve(true);
-      expect(await pending).toBe(false);
-      expect(received).not.toHaveBeenCalled();
-    } finally {
-      decision.resolve(false);
-      frame.remove();
-    }
+    onTestFinished(() => decision.resolve(false));
+    const pending = dispatchWidgetPrompt(
+      frame,
+      "Compare parts",
+      crypto.randomUUID(),
+      () => decision.promise,
+    );
+    expect(received).not.toHaveBeenCalled();
+    frame.remove();
+    decision.resolve(true);
+    expect(await pending).toBe(false);
+    expect(received).not.toHaveBeenCalled();
   });
 });

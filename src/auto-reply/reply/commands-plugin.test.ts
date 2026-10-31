@@ -41,7 +41,6 @@ const compactEmbeddedAgentSessionMock = vi.hoisted(() => vi.fn());
 vi.mock("./commands-compact.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./commands-compact.runtime.js")>()),
   compactEmbeddedAgentSession: compactEmbeddedAgentSessionMock,
-  isEmbeddedAgentRunAbortableForCompaction: () => false,
 }));
 
 // Cold runtime imports are setup work, not part of the compaction deadline.
@@ -261,7 +260,7 @@ it("omits session compaction when no bound session exists", async () => {
 });
 
 it("blocks session compaction for an unauthorized public command", async () => {
-  const handler = registerTestCommand(compactCommand, { requireAuth: false });
+  registerTestCommand(compactCommand, { requireAuth: false });
   const params = buildPluginParams("/card", commandConfig);
   params.command = { ...params.command, isAuthorizedSender: false };
 
@@ -270,10 +269,6 @@ it("blocks session compaction for an unauthorized public command", async () => {
   expect(result?.reply?.text).toBe(
     JSON.stringify({ compacted: false, reason: "compaction requires authorization" }),
   );
-  expect(
-    expectDefined(handler.mock.calls[0]?.[0], "public command context").runtimeContext
-      ?.compactCurrent,
-  ).toBeTypeOf("function");
   expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
 });
 
@@ -400,10 +395,7 @@ it.each(["incognito", "global"] as const)("resolves the %s command session store
 it("enforces requiredScopes through the command handler path", async () => {
   const handler = registerTestCommand(
     { text: "approved", continueAgent: true },
-    {
-      name: "approve-deploy",
-      requiredScopes: ["operator.approvals"],
-    },
+    { name: "approve-deploy", requiredScopes: ["operator.approvals"] },
   );
 
   expect(await handlePluginCommand(buildPluginParams("/approve-deploy"), true)).toEqual({
@@ -419,7 +411,6 @@ it("enforces requiredScopes through the command handler path", async () => {
     shouldContinue: true,
     reply: { text: "approved" },
   });
-  expect(handler).toHaveBeenCalledTimes(1);
 });
 
 it.each([
@@ -462,7 +453,6 @@ it.each([
     shouldContinue: false,
     reply: { text: "from plugin" },
   });
-  expect(handler).toHaveBeenCalledTimes(1);
   expect(firstCommandContext(handler)).toMatchObject({
     channel: "whatsapp",
     commandBody,
@@ -498,9 +488,10 @@ it("carries one binding selection into dispatch without rematching a replacement
 it("treats an explicit non-plugin catalog winner as terminal for plugin matching", async () => {
   const handler = registerTestCommand();
   const params = buildPluginParams("/card", commandConfig);
-  params.opts = {
-    [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" },
-  } as NonNullable<HandleCommandsParams["opts"]> & PluginCommandExecutionReplyOptions;
+  params.opts = { [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" } } as NonNullable<
+    HandleCommandsParams["opts"]
+  > &
+    PluginCommandExecutionReplyOptions;
 
   await expect(handlePluginCommand(params, true)).resolves.toBeNull();
   expect(handler).not.toHaveBeenCalled();

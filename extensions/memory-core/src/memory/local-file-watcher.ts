@@ -1,6 +1,9 @@
 import type { Worker } from "node:worker_threads";
-import { resolveWorkspaceWorkerArgv } from "openclaw/plugin-sdk/agent-workspace-runtime";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import {
+  resolveWorkspaceWorkerExecArgv,
+  resolveWorkspaceWorkerUrl,
+} from "openclaw/plugin-sdk/agent-workspace-runtime";
+import { materializeErrorStack, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createSubsystemLogger,
@@ -45,10 +48,9 @@ class MemoryWatchTransport {
   private startWorker(): void {
     let run: WorkerRun;
     try {
-      const argv = resolveWorkspaceWorkerArgv("memory");
       run = {
-        worker: createCpuTrackedWorker(argv.at(-1)!, {
-          execArgv: argv.slice(0, -1),
+        worker: createCpuTrackedWorker(resolveWorkspaceWorkerUrl("memory"), {
+          execArgv: resolveWorkspaceWorkerExecArgv("memory"),
           name: "memory-files",
         }),
         exited: createDeferred<void>(),
@@ -63,6 +65,7 @@ class MemoryWatchTransport {
       if (event.type === "shutdown") {
         if (event.error) {
           run.failure = new Error(event.error);
+          materializeErrorStack(run.failure);
           // Native close failed; joining termination releases any remaining handles.
           void run.worker.terminate().catch((error: unknown) => run.exited.reject(error));
         }
@@ -72,11 +75,13 @@ class MemoryWatchTransport {
     });
     run.worker.on("error", (error) => {
       run.failure = toErrorObject(error, "Memory file worker failed");
+      materializeErrorStack(run.failure);
     });
     run.worker.on("exit", (code) => {
       this.run = undefined;
       if (!this.retiring || code !== 0) {
         run.failure ??= new Error(`Memory file worker exited unexpectedly (${code})`);
+        materializeErrorStack(run.failure);
       }
       run.exited.resolve();
       if (!this.retiring && run.failure) {
@@ -106,6 +111,7 @@ class MemoryWatchTransport {
         : `Memory file worker unavailable; restarting in ${delay} ms: ${error.message}`;
     log.warn(message);
     const failure = new Error(message);
+    materializeErrorStack(failure);
     this.failure = { error: failure, exhausted: delay === undefined };
     for (const { watcher, closing } of this.subscriptions.values()) {
       if (!closing) {
@@ -247,6 +253,7 @@ export class LocalMemoryFileWatcher {
     if (event.type === "closed") {
       if (event.error) {
         const error = new Error(event.error);
+        materializeErrorStack(error);
         this.ready.reject(error);
         this.retired.reject(error);
       } else {

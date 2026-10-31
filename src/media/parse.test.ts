@@ -28,6 +28,7 @@ describe("splitMediaFromOutput", () => {
     } else {
       expect(result.mediaUrls).toBeUndefined();
     }
+    return result;
   }
 
   function expectStableAudioAsVoiceDetectionCase(input: string) {
@@ -37,8 +38,12 @@ describe("splitMediaFromOutput", () => {
   }
 
   function expectAcceptedMediaPathCase(expectedPath: string, input: string) {
-    expectParsedMediaOutputCase(input, { mediaUrls: [expectedPath] });
-    expect(splitMediaFromOutput(input).segments).toEqual([{ type: "media", url: expectedPath }]);
+    expectOrderedMediaOutputCase(input, [expectedPath]);
+  }
+
+  function expectOrderedMediaOutputCase(input: string, mediaUrls: readonly string[]) {
+    const result = expectParsedMediaOutputCase(input, { mediaUrls });
+    expect(result.segments).toEqual(mediaUrls.map((url) => ({ type: "media", url })));
   }
 
   function expectRejectedMediaPathCase(input: string) {
@@ -50,8 +55,8 @@ describe("splitMediaFromOutput", () => {
   }
 
   function expectPolicyRejectedMediaUrlCase(input: string) {
-    expectParsedMediaOutputCase(input, { mediaUrls: undefined, text: "" });
-    expect(splitMediaFromOutput(input).rejectedMediaCount).toBe(1);
+    const result = expectParsedMediaOutputCase(input, { mediaUrls: undefined, text: "" });
+    expect(result.rejectedMediaCount).toBe(1);
   }
 
   it.each([
@@ -203,17 +208,11 @@ describe("splitMediaFromOutput", () => {
     ["MEDIA:C:\\Users\\First Last\\..\\secret.png D:\\safe\\second.png", ["D:\\safe\\second.png"]],
     ["MEDIA:/tmp/project screenshots/../../.env /tmp/safe/second.png", ["/tmp/safe/second.png"]],
   ] as const)("keeps separate media items on one directive line: %s", (input, mediaUrls) => {
-    expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
-    expect(splitMediaFromOutput(input).segments).toEqual(
-      mediaUrls.map((url) => ({ type: "media", url })),
-    );
+    expectOrderedMediaOutputCase(input, mediaUrls);
   });
 
   it.each([
-    // The directive pattern consumes one backtick pair around the payload before the references are read,
-    // exactly as it does on `origin/main`, so the whitespace inside still separates them. Letting the
-    // capture keep the backticks made the payload one quoted value and delivered the single filename
-    // `/tmp/a.png /tmp/b.png`, which exists nowhere.
+    // A backtick wrapper does not turn a whitespace-separated list into one filename.
     ["MEDIA:`/tmp/a.png /tmp/b.png`", ["/tmp/a.png", "/tmp/b.png"]],
     [
       "MEDIA:`/tmp/first image.png /tmp/second image.png`",
@@ -235,22 +234,12 @@ describe("splitMediaFromOutput", () => {
     ['MEDIA:["/tmp/render,final.png","/tmp/b.png"]', ["/tmp/render,final.png", "/tmp/b.png"]],
     ['MEDIA:["/tmp/a.png"]', ["/tmp/a.png"]],
   ] as const)("attaches every reference a serialized JSON array states: %s", (input, mediaUrls) => {
-    // A reply that pastes a serialized array onto the directive states its references with the same quote
-    // pairs as the quoted comma list above, so each member is a reference of its own. Only the compact
-    // spelling was read: the leading `[` made the list scan report "no list", and `cleanCandidate`'s
-    // serialized-JSON salvage then cut the payload at the last extension before a comma-delimited quote, so
-    // `MEDIA:["/tmp/a.png","/tmp/b.png"]` attached one file and dropped the rest with no failure recorded,
-    // while the same array written with a space after each comma attached both.
+    // Compact and spaced JSON arrays must attach every member.
     expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
   });
 
   it("separates every quoted member of a list, bare filenames included", () => {
-    // A bare filename is a reference on its own — `MEDIA:"second.png"` attaches it — so quoting two of them
-    // states two references, not one. Validating a member as if it were unquoted dropped it, and the
-    // fallback then welded the leftover onto its neighbour: `MEDIA:"second.png" "/tmp/first.png"` attached
-    // `/tmp/first.png` and leaked `"second.png"` into the visible reply text, while
-    // `MEDIA:"/tmp/first.png" "second.png"` attached `/tmp/first.png" "second.png`, which exists nowhere. A
-    // list's quote pairs already state where each reference ends, so no member is rebuilt into another.
+    // Quote pairs delimit bare filenames; they must never be welded to adjacent paths.
     for (const [input, mediaUrls] of [
       ['MEDIA:"/tmp/first.png" "second.png"', ["/tmp/first.png", "second.png"]],
       ['MEDIA:"second.png" "/tmp/first.png"', ["second.png", "/tmp/first.png"]],
@@ -272,12 +261,7 @@ describe("splitMediaFromOutput", () => {
   });
 
   it("separates quoted references that a comma divides", () => {
-    // A comma already reads as list punctuation on an unquoted line: `cleanCandidate` trims it from a
-    // reference's tail, so `MEDIA:/tmp/first.png, /tmp/second.png` gives two attachments. Quoting each
-    // reference moves that comma outside the quote pair, where the list scan gave it no meaning, so the
-    // pair fell back to the whole-payload reading and attached one
-    // `/tmp/first image.png", "/tmp/second image.png` — the two attachments that the space-separated list
-    // of the same references produces.
+    // A comma between quoted references separates attachments just as it does for bare paths.
     expectParsedMediaOutputCase("MEDIA:/tmp/first.png, /tmp/second.png", {
       mediaUrls: ["/tmp/first.png", "/tmp/second.png"],
     });
@@ -293,28 +277,22 @@ describe("splitMediaFromOutput", () => {
     ] as const) {
       expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
     }
-    // A member that is not a reference of its own stays visible text rather than joining its neighbour,
-    // which is what the space-separated list already does.
+    // Non-reference members remain visible text.
     expectParsedMediaOutputCase('MEDIA:"/tmp/first.png", "second"', {
       mediaUrls: ["/tmp/first.png"],
       text: '"second"',
     });
     // A comma inside one quoted reference stays part of its value, not a separator.
     expectAcceptedMediaPathCase("/tmp/Hello, World.png", 'MEDIA:"/tmp/Hello, World.png"');
-    // Prose behind the comma is a token no quote pair bounds, so no list forms and `main`'s reading of the
-    // payload stands.
+    // Unquoted prose after a comma does not form a reference list.
     expectParsedMediaOutputCase('MEDIA:"/tmp/first.png", the picture above', {
       mediaUrls: ["/tmp/first.png"],
     });
-    // A comma divides references only when the next reference is quoted behind it. Here the character
-    // before the comma is an apostrophe belonging to the directory name (`Students', 2024`), and `main`
-    // delivers both of these references, so the first one has to run to its real closing quote rather than
-    // end at that apostrophe and leave an unquoted fragment that welds the pair into one path.
+    // An apostrophe before a comma can belong to the directory name, not a closing delimiter.
     expectParsedMediaOutputCase("MEDIA:'/tmp/Students', 2024/album.png' '/tmp/second.png'", {
       mediaUrls: ["/tmp/Students', 2024/album.png", "/tmp/second.png"],
     });
-    // With a quoted reference behind it the same comma is list punctuation, as this form's unquoted and
-    // space-separated siblings already read it.
+    // The comma after the closing delimiter does separate a quoted sibling.
     expectParsedMediaOutputCase("MEDIA:'/tmp/Students', 2024/album.png', '/tmp/second.png'", {
       mediaUrls: ["/tmp/Students', 2024/album.png", "/tmp/second.png"],
     });
@@ -330,18 +308,12 @@ describe("splitMediaFromOutput", () => {
     "MEDIA:'first.png,' 'second.png,'",
     'MEDIA:"first" "second.png,"',
   ] as const)("keeps an all-rejected quoted list as text: %s", (input) => {
-    // A list states its references through its quote pairs, so a list that yields no reference yields
-    // none at all — there is no whole-payload reading left to take. Cleaning the payload anyway welded
-    // the rejects into a file neither member names and dropped the text with it:
-    // `MEDIA:"first.png," "second.png,"` attached `first.png," "second.png`, while the recorded base
-    // rejects the payload and keeps the line as visible text. The weld needed an extension on the last
-    // member, which is what these three shapes carry.
+    // Rejected list members must not be welded into a synthetic filename by whole-payload fallback.
     expectUnrecognizedMediaTextCase(input);
   });
 
   it("keeps a quoted list whose every member is rejected as text", () => {
-    // The lookalikes around the weld: rejected members that leave the payload unable to pass as a
-    // filename at all, so these stayed text even while the weld was reachable.
+    // Also keep lists whose whole payload cannot resemble a filename.
     for (const input of [
       'MEDIA:"first.png," "second"',
       'MEDIA:"first" "second"',
@@ -349,8 +321,7 @@ describe("splitMediaFromOutput", () => {
     ] as const) {
       expectUnrecognizedMediaTextCase(input);
     }
-    // An accepted member beside a rejected one is untouched: it is the only member that ever reaches
-    // the accepted path, and the reject stays text.
+    // Accepted members remain separate from rejected text.
     expectParsedMediaOutputCase('MEDIA:"/tmp/first.png" "second,"', {
       mediaUrls: ["/tmp/first.png"],
       text: '"second,"',
@@ -366,10 +337,7 @@ describe("splitMediaFromOutput", () => {
   });
 
   it("keeps a quoted reference whole when its own value contains that quote", () => {
-    // A quoted reference is one whitespace-delimited token, so a quote inside its value never ends the
-    // token. Tokenizing on the quote itself cuts the signed URL short and leaks the rest into the
-    // visible reply text, which is the same shortening this branch set out to remove — here for a
-    // payload that also lists a second reference.
+    // Inner quotes belong to a signed URL and must not truncate it or leak its suffix into text.
     for (const [input, expected] of [
       [
         "MEDIA:'https://example.com/video.mp4?token=it's' /tmp/second.png",
@@ -383,8 +351,7 @@ describe("splitMediaFromOutput", () => {
         "MEDIA:'https://example.com/video.mp4?token=it'\\''s' /tmp/second.png",
         ["https://example.com/video.mp4?token=it'\\''s", "/tmp/second.png"],
       ],
-      // The list check and the tokenizer must agree on where a reference ends, so a quoted second
-      // reference separates from the first one even when the first value holds that same inner quote.
+      // Quoting the sibling must preserve the same boundary.
       [
         "MEDIA:'https://example.com/video.mp4?token=it's' '/tmp/second.png'",
         ["https://example.com/video.mp4?token=it's", "/tmp/second.png"],
@@ -394,18 +361,12 @@ describe("splitMediaFromOutput", () => {
         ["https://example.com/video.mp4?token=it's", "/tmp/second.png"],
       ],
     ] as const) {
-      expectParsedMediaOutputCase(input, { mediaUrls: [...expected] });
-      expect(splitMediaFromOutput(input).segments).toEqual(
-        expected.map((url) => ({ type: "media", url })),
-      );
+      expectOrderedMediaOutputCase(input, expected);
     }
   });
 
   it("keeps a quoted reference whole when its own value holds that quote and whitespace", () => {
-    // A quoted value can hold an inner quote and real filename whitespace at the same time. The closing
-    // quote is the first one followed by whitespace or the end of the line, so `'/tmp/team's.v1
-    // final/image.png'` is one reference; reading the inner quote as a delimiter split one path into two
-    // attachments, which `main` does not do.
+    // Inner quotes and filename whitespace can coexist within one reference.
     for (const [input, expected] of [
       ["MEDIA:'/tmp/team's.v1 final/image.png'", ["/tmp/team's.v1 final/image.png"]],
       [
@@ -413,24 +374,15 @@ describe("splitMediaFromOutput", () => {
         ["/tmp/team's.v1 final/image.png", "/tmp/second.png"],
       ],
     ] as const) {
-      expectParsedMediaOutputCase(input, { mediaUrls: [...expected] });
-      expect(splitMediaFromOutput(input).segments).toEqual(
-        expected.map((url) => ({ type: "media", url })),
-      );
+      expectOrderedMediaOutputCase(input, expected);
     }
   });
 
   it.each([
-    // An inner quote can be followed by whitespace rather than a character. The quote pair still
-    // encloses one value, so `main` reads one reference: `'/tmp/parents' photos/photo.png'` is a single
-    // path whose name holds an apostrophe, not a quoted reference plus a stray tail. Counting the two
-    // tokens the tokenizer returns for it as a quoted list disabled unwrapping while the quoted-token
-    // guard blocked reconstruction, so one attachment became two.
+    // Whitespace after an inner quote does not necessarily end the enclosing filename.
     ["MEDIA:'/tmp/parents' photos/photo.png'", ["/tmp/parents' photos/photo.png"]],
     ['MEDIA:"/tmp/parents" photos/photo.png"', ['/tmp/parents" photos/photo.png']],
-    // The same value beside a quoted sibling. The tail does not close a chunk, so the payload is not a
-    // list of quoted references; `main` fuses the ambiguous remainder into the first value and this
-    // branch keeps that reading rather than inventing a second reference out of the tail.
+    // Preserve the existing whole-payload interpretation of this ambiguous remainder.
     [
       "MEDIA:'/tmp/parents' photos/photo.png' '/tmp/second.png'",
       ["/tmp/parents' photos/photo.png' '/tmp/second.png"],
@@ -438,36 +390,26 @@ describe("splitMediaFromOutput", () => {
   ] as const)(
     "keeps an inner quote followed by whitespace inside one quoted reference: %s",
     (input, mediaUrls) => {
-      expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
-      expect(splitMediaFromOutput(input).segments).toEqual(
-        mediaUrls.map((url) => ({ type: "media", url })),
-      );
+      expectOrderedMediaOutputCase(input, mediaUrls);
     },
   );
 
   it.each([
-    // A quote pair inside one unquoted path is text in the filename, not a reference: `'/tmp/album
-    // 'best' photos/image.png'` is a single path step to `main`. Treating that pair as a boundary split
-    // the path in two and leaked the fragment into the visible reply text, which loses an attachment
-    // that used to prepare. Only a payload that quotes every one of its references is a list.
+    // Quotes inside an unquoted path are filename text rather than reference delimiters.
     ["MEDIA:/tmp/album 'best' photos/image.png", ["/tmp/album 'best' photos/image.png"]],
     ['MEDIA:/tmp/album "best" photos/image.png', ['/tmp/album "best" photos/image.png']],
     [
       "MEDIA:/tmp/album 'best' photos/image.png /tmp/second.png",
       ["/tmp/album 'best' photos/image.png", "/tmp/second.png"],
     ],
-    // The same fragment split one path again as soon as it validated as media on its own, which a slash
-    // inside it is enough to do (`'best/photos'`). Whether a fragment would be accepted says nothing
-    // about whether the payload lists references, so it must not steer the join either.
+    // A slash inside the quoted fragment must not make it an independent attachment.
     ["MEDIA:/tmp/album 'best/photos' final.png", ["/tmp/album 'best/photos' final.png"]],
     ['MEDIA:/tmp/album "best/photos" final.png', ['/tmp/album "best/photos" final.png']],
     [
       "MEDIA:/tmp/album 'best/photos' final.png /tmp/second.png",
       ["/tmp/album 'best/photos' final.png", "/tmp/second.png"],
     ],
-    // The fragment can also end on the slash, which makes the quote pair run into the sibling instead of
-    // closing on whitespace. The sibling is still an explicitly quoted reference of its own, so it must
-    // stay separate rather than being swallowed into the path before it.
+    // A quoted sibling stays separate even when a filename's inner quote ends beside a slash.
     [
       "MEDIA:/tmp/album 'best'/final.png '/tmp/second.png'",
       ["/tmp/album 'best'/final.png", "/tmp/second.png"],
@@ -477,52 +419,36 @@ describe("splitMediaFromOutput", () => {
       ["/tmp/album 'best' photos/image.png", "/tmp/second.png"],
     ],
   ] as const)("keeps a quoted fragment inside one unquoted reference: %s", (input, mediaUrls) => {
-    expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
-    expect(splitMediaFromOutput(input).segments).toEqual(
-      mediaUrls.map((url) => ({ type: "media", url })),
-    );
+    expectOrderedMediaOutputCase(input, mediaUrls);
   });
 
   it("keeps a quoted relative reference separate from the quoted reference before it", () => {
-    // Explicit quotes already delimit each reference. The unquoted-path reconstruction heuristic exists
-    // for bare paths with real filename spaces, so it must not reach across those quotes and fuse the
-    // second reference into the first one.
-    for (const [input, expected] of [
-      [
-        'MEDIA:"/tmp/first image.png" "media/second image.png"',
-        ["/tmp/first image.png", "media/second image.png"],
-      ],
-    ] as const) {
-      expectParsedMediaOutputCase(input, { mediaUrls: [...expected] });
-      expect(splitMediaFromOutput(input).segments).toEqual(
-        expected.map((url) => ({ type: "media", url })),
-      );
-    }
+    expectOrderedMediaOutputCase('MEDIA:"/tmp/first image.png" "media/second image.png"', [
+      "/tmp/first image.png",
+      "media/second image.png",
+    ]);
   });
 
   it("keeps a trailing quote pair inside one quoted reference", () => {
-    // The two closing quotes pair up with nothing between them, so they are part of the single quoted
-    // value rather than a second, empty reference. Splitting there would cut the signed URL short and
-    // leak the quotes into the visible reply text.
+    // Adjacent trailing quotes are part of the signed URL, not an empty sibling reference.
     expectParsedMediaOutputCase('MEDIA:"https://example.com/video.mp4?token=ends"""', {
       mediaUrls: ['https://example.com/video.mp4?token=ends""'],
     });
   });
 
   it.each([
-    // A quote that never closes cannot delimit a reference, so the payload is not a list and reads exactly
-    // as origin/main reads it: the stray quote is either cleaned off the reference or kept as literal text.
+    // Unclosed quotes do not delimit a list; retain normal cleanup or literal-text behavior.
     ["MEDIA:'/tmp/photo.png", ["/tmp/photo.png"]],
     ['MEDIA:"/tmp/photo.png', ["/tmp/photo.png"]],
     ["MEDIA:`/tmp/photo.png", ["/tmp/photo.png"]],
     ["MEDIA:/tmp/photo.png'", ["/tmp/photo.png"]],
     // An unclosed quote must not fuse two references that whitespace already separated.
     ["MEDIA:/tmp/photo.png '/tmp/second.png", ["/tmp/photo.png", "/tmp/second.png"]],
-    // An unclosed quote is not a boundary either, so this stays the one reference `main` reads.
+    // Ambiguous unmatched delimiters retain the whole-payload interpretation.
     ["MEDIA:'/tmp/first.png' \"/tmp/second.png'", ["/tmp/first.png' \"/tmp/second.png"]],
     // A single quoted value is one reference even when the quote pair wraps leading whitespace.
     ["MEDIA:' /tmp/photo.png'", ["/tmp/photo.png"]],
-    // The slash-bearing quote pair from the previous round keeps its reading with a stray quote added.
+    // A stray trailing quote must not split an inner filename fragment.
     ["MEDIA:/tmp/album 'best/photos' final.png'", ["/tmp/album 'best/photos' final.png"]],
   ] as const)("reads a payload with an unclosed quote as main reads it: %s", (input, mediaUrls) => {
     expectParsedMediaOutputCase(input, { mediaUrls });
@@ -544,9 +470,7 @@ describe("splitMediaFromOutput", () => {
   });
 
   it("preserves quoted punctuation when a reference shares the line with another one", () => {
-    // Quoted punctuation belongs to the reference, exactly as it does when the directive holds a
-    // single reference. A signed URL loses its signature when that suffix is stripped during
-    // splitting, and the delivery then fails even though the reference looked accepted.
+    // Splitting siblings must preserve signed URL punctuation just as single-reference parsing does.
     const base = "https://example.com/video.mp4?token=ends";
     for (const suffix of [",", ")", "]", "\\"]) {
       const signed = `${base}${suffix}`;
@@ -811,15 +735,57 @@ describe("splitMediaFromOutput", () => {
     });
   });
 
-  it("extracts markdown image urls while keeping surrounding caption text when enabled", () => {
-    expectParsedMediaOutputCase(
+  it.each([
+    [
+      "paragraph captions",
       "Caption\n\n![chart](https://example.com/chart.png)",
-      {
-        text: "Caption",
-        mediaUrls: ["https://example.com/chart.png"],
-      },
-      extractMarkdownImages,
-    );
+      "Caption",
+      ["https://example.com/chart.png"],
+    ],
+    [
+      "inline captions",
+      "Look ![chart](https://example.com/chart.png) now",
+      "Look now",
+      ["https://example.com/chart.png"],
+    ],
+    [
+      "blockquote inline semantics",
+      '> <span title="![chart](https://example.com/chart.png)"\n> caption',
+      '> <span title=""\n> caption',
+      ["https://example.com/chart.png"],
+    ],
+    [
+      "an image after an identical code example",
+      "> `![chart](https://example.com/chart.png)` ![chart](https://example.com/chart.png)",
+      "> `![chart](https://example.com/chart.png)`",
+      ["https://example.com/chart.png"],
+    ],
+    [
+      "multiple image order",
+      "Before\n![one](https://example.com/one.png)\nMiddle\n![two](https://example.com/two.png)\nAfter",
+      "Before\nMiddle\nAfter",
+      ["https://example.com/one.png", "https://example.com/two.png"],
+    ],
+    [
+      "title suffixes",
+      'Caption ![chart](https://example.com/chart.png "Quarterly chart")',
+      "Caption",
+      ["https://example.com/chart.png"],
+    ],
+    [
+      "balanced parentheses",
+      "Chart ![img](https://example.com/a_(1).png) now",
+      "Chart now",
+      ["https://example.com/a_(1).png"],
+    ],
+    [
+      "balanced destination punctuation",
+      "![chart](https://example.com/render?label=(chart))",
+      "",
+      ["https://example.com/render?label=(chart)"],
+    ],
+  ] as const)("extracts Markdown images with %s", (_name, input, text, mediaUrls) => {
+    expectParsedMediaOutputCase(input, { text, mediaUrls }, extractMarkdownImages);
   });
 
   it.each([undefined, false, true])(
@@ -852,32 +818,12 @@ describe("splitMediaFromOutput", () => {
     },
   );
 
-  it("keeps inline caption text around markdown images when enabled", () => {
-    expectParsedMediaOutputCase(
-      "Look ![chart](https://example.com/chart.png) now",
-      {
-        text: "Look now",
-        mediaUrls: ["https://example.com/chart.png"],
-      },
-      extractMarkdownImages,
-    );
-  });
-
   it("selects an explicitly allowlisted file URL", () => {
     const url = "file:///tmp/selected.png";
     expectParsedMediaOutputCase(
       `Before ![selected](${url}) after`,
       { text: "Before after", mediaUrls: [url] },
       { markdownImageAllowlist: [url] },
-    );
-  });
-
-  it("preserves blockquote inline semantics when locating an image", () => {
-    const url = "https://example.com/chart.png";
-    expectParsedMediaOutputCase(
-      `> <span title="![chart](${url})"\n> caption`,
-      { text: '> <span title=""\n> caption', mediaUrls: [url] },
-      extractMarkdownImages,
     );
   });
 
@@ -893,32 +839,12 @@ describe("splitMediaFromOutput", () => {
     expect(performance.now() - startedAt).toBeLessThan(2_000);
   });
 
-  it("locates quoted images after an identical code example", () => {
-    const image = "![chart](https://example.com/chart.png)";
-    expectParsedMediaOutputCase(
-      `> \`${image}\` ${image}`,
-      { text: `> \`${image}\``, mediaUrls: ["https://example.com/chart.png"] },
-      extractMarkdownImages,
-    );
-  });
-
   it("keeps nested labels within reference images literal", () => {
     const input =
       "![![nested](https://example.com/nested.png)][outer]\n\n[outer]: https://example.com/outer.png";
     expectParsedMediaOutputCase(
       input,
       { text: input, mediaUrls: undefined },
-      extractMarkdownImages,
-    );
-  });
-
-  it("extracts multiple markdown image urls in order", () => {
-    expectParsedMediaOutputCase(
-      "Before\n![one](https://example.com/one.png)\nMiddle\n![two](https://example.com/two.png)\nAfter",
-      {
-        text: "Before\nMiddle\nAfter",
-        mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
-      },
       extractMarkdownImages,
     );
   });
@@ -970,28 +896,6 @@ describe("splitMediaFromOutput", () => {
     ).toMatchObject({ text: unselected, mediaUrls: [selected] });
   });
 
-  it("strips markdown image title suffixes from extracted urls", () => {
-    expectParsedMediaOutputCase(
-      'Caption ![chart](https://example.com/chart.png "Quarterly chart")',
-      {
-        text: "Caption",
-        mediaUrls: ["https://example.com/chart.png"],
-      },
-      extractMarkdownImages,
-    );
-  });
-
-  it("keeps balanced parentheses inside markdown image urls", () => {
-    expectParsedMediaOutputCase(
-      "Chart ![img](https://example.com/a_(1).png) now",
-      {
-        text: "Chart now",
-        mediaUrls: ["https://example.com/a_(1).png"],
-      },
-      extractMarkdownImages,
-    );
-  });
-
   it.each([
     ["inline code", "Use `![chart](https://example.com/chart.png)` as an example."],
     ["escaped syntax", "\\![chart](https://example.com/chart.png)"],
@@ -1001,15 +905,6 @@ describe("splitMediaFromOutput", () => {
     expectParsedMediaOutputCase(
       input,
       { text: input, mediaUrls: undefined },
-      extractMarkdownImages,
-    );
-  });
-
-  it("preserves balanced punctuation at the end of a Markdown image destination", () => {
-    const url = "https://example.com/render?label=(chart)";
-    expectParsedMediaOutputCase(
-      `![chart](${url})`,
-      { text: "", mediaUrls: [url] },
       extractMarkdownImages,
     );
   });

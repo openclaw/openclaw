@@ -2,10 +2,10 @@ import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   GatewayProtocolRequestTimeoutError,
 } from "@openclaw/gateway-client/browser";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { formatUiError } from "../format-error.ts";
 import { isAgentDatabaseInspectionPendingError } from "../gateway-availability.ts";
-import type { SessionConnectionScope } from "./session-capability.ts";
+import type { SessionConnectionScope } from "./session-types.ts";
 
 /** Keeps one acknowledged broad session observer alive for its connection generation. */
 export function createSessionEventSubscriptionOwner(params: {

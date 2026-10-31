@@ -1,9 +1,10 @@
 import { parseCanonicalIpAddress } from "@openclaw/net-policy/ip";
 import createDOMPurify from "dompurify";
-import { createEffect, createMemo } from "solid-js";
+import { createMemo, For, onSettled } from "solid-js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { i18n, t as translate } from "../i18n/index.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { installMarkdownEmoji } from "./markdown-emoji.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { normalizeMarkdownRenderOptions } from "./markdown-render-options.ts";
@@ -100,140 +101,151 @@ function externalAnchor(url: string, label: string): HTMLAnchorElement {
 
 export type LoadImage = (url: string) => Promise<string>;
 
-function prepareImage(
-  source: HTMLImageElement,
-  base: string,
-  loadImage: LoadImage | undefined,
-  signal: AbortSignal,
-): void {
-  const url = documentUrl(source.getAttribute("src") ?? "", base);
-  const label = source.alt.trim() || translate("linkReader.image");
-  const wrapper = document.createElement("span");
-  wrapper.className = "lr-image";
-  const caption = document.createElement("span");
-  caption.className = "lr-image-caption";
-  const status = document.createElement("span");
-  status.textContent = label;
-  caption.append(status);
-  const linkedImage = source.closest("a");
-  // HTTPS + anonymous CORS prevents credentialed cross-origin image loads.
-  // Same-origin sources are excluded because anonymous CORS still sends those credentials.
-  const hostname = url?.hostname.replace(/\.+$/u, "") ?? "";
-  const localHost =
-    !hostname.includes(".") || /(?:^|\.)(?:localhost|local|internal|localdomain)$/u.test(hostname);
-  // Literal addresses stay external; the browser cannot verify a public image host through DNS.
-  const supported =
-    url?.protocol === "https:" &&
-    url.origin !== window.location.origin &&
-    !localHost &&
-    !parseCanonicalIpAddress(hostname);
-  if (url && ["https:", "http:"].includes(url.protocol)) {
-    caption.append(" · ", externalAnchor(url.href, translate("linkReader.openImage")));
-  }
-  if (supported && url) {
-    const image = document.createElement("img");
-    image.alt = label;
-    image.crossOrigin = "anonymous";
-    image.referrerPolicy = "no-referrer";
-    image.loading = "lazy";
-    image.decoding = "async";
-    const unavailable = () => {
-      if (signal.aborted) {
-        return;
-      }
-      image.hidden = true;
-      status.textContent = translate("linkReader.imageUnavailable", { title: label });
-      status.setAttribute("role", "status");
-    };
-    image.addEventListener("error", unavailable, { once: true, signal });
-    if (linkedImage) {
-      wrapper.append(image);
-    } else {
-      const open = externalAnchor(url.href, "");
-      open.setAttribute("aria-label", translate("linkReader.openImageTitle", { title: label }));
-      open.append(image);
-      wrapper.append(open);
-    }
-    if (loadImage) {
-      void loadImage(url.href).then((imageUrl) => {
-        if (!signal.aborted && image.isConnected) {
-          image.src = imageUrl;
-        }
-      }, unavailable);
-    } else {
-      image.src = url.href;
-    }
-  } else {
-    status.textContent = translate("linkReader.imageUnavailable", { title: label });
-  }
-  source.replaceWith(wrapper);
-  // Preserve an authored image link without nesting the full-size anchor inside it.
-  if (linkedImage) {
-    linkedImage.after(caption);
-  } else {
-    wrapper.append(caption);
-  }
-}
-
 export function LinkReaderMarkdown(props: { body: string; base: string; loadImage?: LoadImage }) {
-  let element!: HTMLDivElement;
   const source = createMemo(
-    () =>
-      [props.body, props.base, props.loadImage, i18n.getLocale(), t("linkReader.image")] as const,
+    () => {
+      const body = props.body;
+      let html: string;
+      // Parsing subscribes to lazy syntax-highlighter readiness.
+      try {
+        html = markdown.render(body, documentOptions);
+      } catch {
+        html = "<pre>" + escapeHtml(body) + "</pre>";
+      }
+      return [
+        body,
+        html,
+        props.base,
+        props.loadImage,
+        i18n.getLocale(),
+        t("linkReader.image"),
+      ] as const;
+    },
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
-  const rendered = createMemo(() => {
-    const [body] = source();
-    try {
-      return markdown.render(body, documentOptions);
-    } catch {
-      return "<pre>" + escapeHtml(body) + "</pre>";
-    }
-  });
-  createEffect(
-    () => [rendered(), source()] as const,
-    ([html, [, base, loadImage]]) => {
-      const lifetime = new AbortController();
-      const fragment = purifier.sanitize(html, {
-        RETURN_DOM_FRAGMENT: true,
-        ALLOWED_TAGS: passiveTags,
-        ALLOWED_ATTR: [
-          "href",
-          "src",
-          "alt",
-          "title",
-          "class",
-          "open",
-          "start",
-          "type",
-          "checked",
-          "disabled",
-        ],
-        ALLOW_DATA_ATTR: false,
-        ALLOW_ARIA_ATTR: false,
-      });
-      for (const anchor of fragment.querySelectorAll<HTMLAnchorElement>("a")) {
-        const url = documentUrl(anchor.getAttribute("href") ?? "", base);
-        if (!url) {
-          anchor.removeAttribute("href");
-        } else {
-          anchor.href = url.href;
-          anchor.target = "_blank";
-          anchor.rel = "noopener noreferrer";
-          anchor.referrerPolicy = "no-referrer";
-        }
-      }
-      for (const input of fragment.querySelectorAll("input")) {
-        input.type = "checkbox";
-        input.disabled = true;
-      }
-      for (const image of fragment.querySelectorAll<HTMLImageElement>("img")) {
-        prepareImage(image, base, loadImage, lifetime.signal);
-      }
-      element.replaceChildren(fragment);
-      return () => lifetime.abort();
-    },
+  // A document replacement retires its DOM and image requests together.
+  return (
+    <For each={[source()]}>
+      {(value) => <MarkdownDocument html={value[1]} base={value[2]} loadImage={value[3]} />}
+    </For>
   );
+}
+
+function MarkdownDocument(props: { html: string; base: string; loadImage?: LoadImage }) {
+  let element!: HTMLDivElement;
+  onSettled(() => {
+    const html = props.html;
+    const base = props.base;
+    const loadImage = props.loadImage;
+    const lifetime = new AbortController();
+    const fragment = purifier.sanitize(html, {
+      RETURN_DOM_FRAGMENT: true,
+      ALLOWED_TAGS: passiveTags,
+      ALLOWED_ATTR: [
+        "href",
+        "src",
+        "alt",
+        "title",
+        "class",
+        "open",
+        "start",
+        "type",
+        "checked",
+        "disabled",
+      ],
+      ALLOW_DATA_ATTR: false,
+      ALLOW_ARIA_ATTR: false,
+    });
+    for (const anchor of fragment.querySelectorAll<HTMLAnchorElement>("a")) {
+      const url = documentUrl(anchor.getAttribute("href") ?? "", base);
+      if (!url) {
+        anchor.removeAttribute("href");
+      } else {
+        anchor.href = url.href;
+        anchor.target = "_blank";
+        anchor.rel = "noopener noreferrer";
+        anchor.referrerPolicy = "no-referrer";
+      }
+    }
+    for (const input of fragment.querySelectorAll("input")) {
+      input.type = "checkbox";
+      input.disabled = true;
+    }
+    for (const sourceImage of fragment.querySelectorAll<HTMLImageElement>("img")) {
+      const source = sourceImage;
+      const signal = lifetime.signal;
+      const url = documentUrl(source.getAttribute("src") ?? "", base);
+      const label = source.alt.trim() || translate("linkReader.image");
+      const wrapper = document.createElement("span");
+      wrapper.className = "lr-image";
+      const caption = document.createElement("span");
+      caption.className = "lr-image-caption";
+      const status = document.createElement("span");
+      status.textContent = label;
+      caption.append(status);
+      const linkedImage = source.closest("a");
+      // HTTPS + anonymous CORS prevents credentialed cross-origin image loads.
+      // Same-origin sources are excluded because anonymous CORS still sends those credentials.
+      const hostname = url?.hostname.replace(/\.+$/u, "") ?? "";
+      const localHost =
+        !hostname.includes(".") ||
+        /(?:^|\.)(?:localhost|local|internal|localdomain)$/u.test(hostname);
+      // Literal addresses stay external; the browser cannot verify a public image host through DNS.
+      const supported =
+        url?.protocol === "https:" &&
+        url.origin !== window.location.origin &&
+        !localHost &&
+        !parseCanonicalIpAddress(hostname);
+      if (url && ["https:", "http:"].includes(url.protocol)) {
+        caption.append(" · ", externalAnchor(url.href, translate("linkReader.openImage")));
+      }
+      if (supported && url) {
+        const image = document.createElement("img");
+        image.alt = label;
+        image.crossOrigin = "anonymous";
+        image.referrerPolicy = "no-referrer";
+        image.loading = "lazy";
+        image.decoding = "async";
+        const unavailable = () => {
+          if (signal.aborted) {
+            return;
+          }
+          image.hidden = true;
+          status.textContent = translate("linkReader.imageUnavailable", { title: label });
+          status.setAttribute("role", "status");
+        };
+        listen(image, "error", unavailable, { once: true, signal });
+        if (linkedImage) {
+          wrapper.append(image);
+        } else {
+          const open = externalAnchor(url.href, "");
+          open.setAttribute("aria-label", translate("linkReader.openImageTitle", { title: label }));
+          open.append(image);
+          wrapper.append(open);
+        }
+        if (loadImage) {
+          void loadImage(url.href).then((imageUrl) => {
+            if (!signal.aborted && image.isConnected) {
+              image.src = imageUrl;
+            }
+          }, unavailable);
+        } else {
+          image.src = url.href;
+        }
+      } else {
+        status.textContent = translate("linkReader.imageUnavailable", { title: label });
+      }
+      source.replaceWith(wrapper);
+      // Preserve an authored image link without nesting the full-size anchor inside it.
+      if (linkedImage) {
+        linkedImage.after(caption);
+      } else {
+        wrapper.append(caption);
+      }
+    }
+    element.replaceChildren(fragment);
+    return () => lifetime.abort();
+  });
   return (
     <div
       class="lr-markdown"

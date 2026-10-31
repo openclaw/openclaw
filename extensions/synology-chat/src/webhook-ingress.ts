@@ -1,7 +1,6 @@
 import { createStandardRawEventIngressMonitor } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createChannelIngressError,
-  type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -119,13 +118,10 @@ function resolveSynologyIngressNonRetryableFailure(error: unknown) {
 
 export function createSynologyIngressMonitor(options: {
   accountId: string;
-  queue?: ChannelIngressQueue<SynologyIngressPayload>;
   dispatch: SynologyIngressDispatch;
   runtime: {
     error?: (message: string) => void;
   };
-  pollIntervalMs?: number;
-  adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
 }) {
   const serializeForIngress = (rawEvent: SynologyWebhookRawEvent): string => {
@@ -138,12 +134,10 @@ export function createSynologyIngressMonitor(options: {
   };
 
   return createStandardRawEventIngressMonitor({
-    queue:
-      options.queue ??
-      (() =>
-        getSynologyRuntime().state.openChannelIngressQueue<SynologyIngressPayload>({
-          accountId: options.accountId,
-        })),
+    queue: () =>
+      getSynologyRuntime().state.openChannelIngressQueue<SynologyIngressPayload>({
+        accountId: options.accountId,
+      }),
     inspect: inspectSynologyIngressEvent,
     payload: {
       serialize: serializeForIngress,
@@ -157,13 +151,9 @@ export function createSynologyIngressMonitor(options: {
         ),
     },
     deliver: options.dispatch,
-    pollIntervalMs: options.pollIntervalMs,
     // Synology has no published retry horizon; keep the conservative 30-day / 20k cap.
     drain: {
       resolveNonRetryableFailure: resolveSynologyIngressNonRetryableFailure,
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
       onLog: (message) => options.runtime.error?.(`synology-chat: ${message}`),
     },
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),

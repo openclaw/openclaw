@@ -136,9 +136,12 @@ suite.define(() => {
         await page.locator(`.settings-sidebar__item[href="${pathForRoute(routeId)}"]`).click();
         await waitForControlUiRoute(page, { routeId });
         await expectSelectedAgent(page, "Research");
+        if (routeId === "memory") {
+          await gateway.waitForRequest("doctor.memory.status", { match: { agentId: "research" } });
+        } else if (routeId === "skill-settings") {
+          await gateway.waitForRequest("skills.status", { match: { agentId: "research" } });
+        }
       }
-      await gateway.waitForRequest("doctor.memory.status", { match: { agentId: "research" } });
-      await gateway.waitForRequest("skills.status", { match: { agentId: "research" } });
       await gateway.waitForRequest("models.list", {
         match: { agentId: "research", view: "configured" },
       });
@@ -168,8 +171,8 @@ suite.define(() => {
       await primaryModel.getByRole("button", { name: "Model: GPT-4.1", exact: true }).waitFor();
       await page.locator(".settings-sidebar__back").click();
       await waitForControlUiRoute(page, { routeId: "chat" });
-      const startup = await gateway.waitForRequest("chat.startup");
-      expect(startup.params).toMatchObject({ sessionKey: "agent:main:main" });
+      const subscription = await gateway.waitForRequest("sessions.messages.subscribe");
+      expect(subscription.params).toMatchObject({ key: "agent:main:main" });
       await expect
         .poll(async () => (await page.locator(".sidebar-agent-card__name").textContent())?.trim())
         .toBe("Clawd");

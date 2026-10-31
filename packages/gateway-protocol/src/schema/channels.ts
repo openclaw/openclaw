@@ -176,6 +176,12 @@ export const TalkClientToolCallResultSchema = closedObject({
   agentSessionKey: NonEmptyString,
 });
 
+export const TalkClientSayParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  voiceSessionId: VoiceIdString,
+  text: Type.String({ minLength: 1, maxLength: 1024 }),
+});
+
 export const TalkClientSteerParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   text: NonEmptyString,
@@ -292,6 +298,20 @@ const TalkCatalogProviderSchema = closedObject({
   activeVoices: Type.Optional(Type.Array(Type.String())),
   activeVoiceSelectionPolicy: Type.Optional(Type.Literal("allowlist-default")),
   voicesByModel: Type.Optional(Type.Record(Type.String(), Type.Array(Type.String()))),
+  modelFamilySettings: Type.Optional(
+    closedObject({
+      // A normalized exact model name or hyphen-delimited family prefix.
+      family: NonEmptyString,
+      unlistedModelVoices: Type.Literal("active"),
+      unsupportedTransports: Type.Array(TalkTransportSchema),
+      gatewayRelayHandlesAgentConsult: Type.Boolean(),
+      hint: closedObject({
+        titleKey: NonEmptyString,
+        descriptionKey: NonEmptyString,
+        readyKey: NonEmptyString,
+      }),
+    }),
+  ),
   defaultModel: Type.Optional(Type.String()),
   modes: Type.Optional(Type.Array(TalkModeSchema)),
   transports: Type.Optional(Type.Array(TalkTransportSchema)),
@@ -630,6 +650,7 @@ export type TalkConfigParams = Static<typeof TalkConfigParamsSchema>;
 export type TalkConfigResult = Static<typeof TalkConfigResultSchema>;
 export type TalkClientCreateParams = Static<typeof TalkClientCreateParamsSchema>;
 export type TalkClientCreateResult = Static<typeof TalkClientCreateResultSchema>;
+export type TalkClientSayParams = Static<typeof TalkClientSayParamsSchema>;
 export type TalkClientSteerParams = Static<typeof TalkClientSteerParamsSchema>;
 export type TalkAgentControlResult = Static<typeof TalkAgentControlResultSchema>;
 export type TalkClientToolCallParams = Static<typeof TalkClientToolCallParamsSchema>;

@@ -1,7 +1,4 @@
-import { Show } from "solid-js";
-import "../../../styles/chat/composer-context-strip.css";
 import type { SessionGoal } from "../../../api/types.ts";
-import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalDraftMode } from "../../../lib/chat/chat-types.ts";
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
@@ -144,36 +141,3 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
 }
 
 export type GoalComposer = ReturnType<typeof createGoalComposer>;
-
-export function GoalComposerMode(props: { composer: GoalComposer }) {
-  return (
-    <Show when={props.composer.mode}>
-      {(mode) => (
-        <div
-          class="agent-chat__goal-mode composer-context-strip"
-          role="group"
-          aria-label={t("chat.goals.composerMode")}
-        >
-          <span class="agent-chat__goal-mode-label composer-context-strip__label">
-            <span class="composer-context-strip__icon">{<Icon name="flag" />}</span>
-            <span class="composer-context-strip__label-text">
-              {t(mode().action === "edit" ? "chat.goals.edit" : "chat.goals.composerMode")}
-            </span>
-          </span>
-          <span class="agent-chat__goal-mode-hint composer-context-strip__text">
-            {t(mode().action === "edit" ? "chat.goals.editHint" : "chat.goals.startHint")}
-          </span>
-          <button
-            type="button"
-            class="composer-context-strip__dismiss"
-            aria-label={t("chat.goals.cancel")}
-            disabled={props.composer.pending}
-            onClick={() => props.composer.cancel()}
-          >
-            {<Icon name="x" />}
-          </button>
-        </div>
-      )}
-    </Show>
-  );
-}

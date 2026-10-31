@@ -1,4 +1,5 @@
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
+import { stripCliNativeAuthEnv } from "../agents/cli-runner/execution-env.js";
 import type { DesktopHostConfig } from "../config/types.desktop.js";
 import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
@@ -6,13 +7,15 @@ import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node
 import type { NodeHostClient, NodeInvokeResponder } from "./client.js";
 import {
   decodeClaudeCliNodeRunParams,
+  CLAUDE_NODE_CLEAR_ENV,
   type ClaudeCliNodeRunParams,
   type ClaudeCliNodeRunResult,
 } from "./invoke-agent-cli-claude-params.js";
 import { runClaudeCliNodeCommand } from "./invoke-agent-cli-claude.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke, resolveEffectiveSystemRunExecPolicy } from "./invoke-system-run.js";
-import type { NodeInvokeRequestPayload, RunResult, SkillBinsProvider } from "./invoke-types.js";
+import type { NodeInvokeRequestPayload, RunResult } from "./invoke-types.js";
+import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 
 export type NodeHostInvokeRuntime = {
   claudePath?: string;
@@ -137,8 +140,16 @@ export async function handleClaudeCliNodeInvoke(params: {
           delete childEnv[key];
         }
       }
+      if (request.nativeAuthOnly) {
+        stripCliNativeAuthEnv(
+          childEnv,
+          { config: getNodeRuntimeConfig(), workspaceDir: cwd ?? process.cwd() },
+          // The node's config directory selects its own native login.
+          [...CLAUDE_NODE_CLEAR_ENV].filter((key) => key !== "CLAUDE_CONFIG_DIR"),
+        );
+      }
       const preparedSecret = prepareClaudeNodeSecretInput({
-        requestEnv: request.env,
+        requestEnv: request.nativeAuthOnly ? undefined : request.env,
         childEnv,
       });
       try {

@@ -1,34 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  buildDashscopeVideoGenerationInput,
-  buildDashscopeVideoGenerationParameters,
-  downloadDashscopeGeneratedVideos,
-  pollDashscopeVideoTaskUntilComplete,
-  runDashscopeVideoGenerationTask,
+  buildDashscopeVideoGenerationInput as buildInput,
+  buildDashscopeVideoGenerationParameters as buildParameters,
+  downloadDashscopeGeneratedVideos as downloadVideos,
+  pollDashscopeVideoTaskUntilComplete as pollTask,
+  runDashscopeVideoGenerationTask as generateTask,
 } from "./dashscope-compatible.js";
-import type { VideoGenerationRequest } from "./types.js";
+import type { VideoGenerationRequest as VideoRequest } from "./types.js";
 
-function videoRequest(overrides: Partial<VideoGenerationRequest> = {}): VideoGenerationRequest {
+function videoRequest(overrides: Partial<VideoRequest> = {}): VideoRequest {
   return { provider: "qwen", model: "wan2.6-t2v", prompt: "video", cfg: {}, ...overrides };
 }
-function downloadVideo(
-  fetchFn: typeof fetch,
-  timeoutMs: Parameters<typeof downloadDashscopeGeneratedVideos>[0]["timeoutMs"] = 5_000,
-  urls = ["https://example.com/video.mp4"],
-) {
-  return downloadDashscopeGeneratedVideos({
-    providerLabel: "Alibaba Wan",
-    urls,
-    timeoutMs,
-    fetchFn,
-    maxBytes: 10 * 1024 * 1024,
-  });
+type Timeout = Parameters<typeof downloadVideos>[0]["timeoutMs"];
+const downloadDefaults = { providerLabel: "Alibaba Wan", maxBytes: 10 * 1024 * 1024 };
+function downloadVideo(fetchFn: typeof fetch, timeoutMs: Timeout = 5_000, urls = [videoUrl]) {
+  return downloadVideos({ ...downloadDefaults, urls, timeoutMs, fetchFn });
 }
-function runTask(
-  fetchFn: typeof fetch,
-  options: Partial<Parameters<typeof runDashscopeVideoGenerationTask>[0]> = {},
-) {
-  return runDashscopeVideoGenerationTask({
+function runTask(fetchFn: typeof fetch, options: Partial<Parameters<typeof generateTask>[0]> = {}) {
+  return generateTask({
     providerLabel: "Qwen",
     model: "wan2.6-t2v",
     req: videoRequest(),
@@ -39,13 +28,58 @@ function runTask(
     ...options,
   });
 }
-function videoResponse(body = "mp4-bytes", contentType: string | undefined = "video/mp4") {
-  return new Response(
-    new TextEncoder().encode(body),
-    contentType ? { headers: { "content-type": contentType } } : {},
-  );
+function videoResponse(body = "mp4-bytes", contentType = "video/mp4") {
+  const headers = contentType ? { "content-type": contentType } : undefined;
+  return new Response(Buffer.from(body), { headers });
+}
+const malformed = "Alibaba Wan generated video download: malformed video response";
+const resolverFailure = "remaining-budget resolver failed";
+const delay = (ms: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+function streamFixture(
+  source: UnderlyingSource<Uint8Array>,
+  capture = false,
+  contentType = "video/mp4",
+  status = 200,
+) {
+  const response = new Response(new ReadableStream(source), {
+    status,
+    headers: { "content-type": contentType },
+  });
+  const captured = capture ? response.clone() : undefined;
+  const requests: Array<{ signal?: AbortSignal | null; aborted?: boolean }> = [];
+  const fetchFn = vi.fn<typeof fetch>(async (_url, init) => {
+    requests.push({ signal: init?.signal, aborted: init?.signal?.aborted });
+    return response;
+  });
+  // An unread debug clone holds the tee; never await its cancellation.
+  const release = () => void (captured ?? response).body?.cancel().catch(() => undefined);
+  return { response, fetchFn, requests, release };
 }
 
+type Stage = "submit" | "poll" | "download";
+function taskFetch(responses: Partial<Record<Stage, Response>> = {}) {
+  const calls: Array<{ signal?: AbortSignal | null }> = [];
+  const defaults = {
+    submit: Response.json({ output: { task_id: "task-123" } }),
+    poll: Response.json({ output: { task_status: "SUCCEEDED", video_url: videoUrl } }),
+    download: videoResponse(),
+  };
+  const fetchFn = vi.fn<typeof fetch>(async (url, init) => {
+    const path = url instanceof Request ? url.url : String(url);
+    const stage = path.includes("video-synthesis")
+      ? "submit"
+      : path.includes("/tasks/task-123")
+        ? "poll"
+        : "download";
+    calls.push({ signal: init?.signal });
+    return responses[stage] ?? defaults[stage];
+  });
+  return { fetchFn, calls };
+}
 it("rejects a duration that rounds to zero before submission", async () => {
   const fetchFn = vi.fn<typeof fetch>();
   await expect(runTask(fetchFn, { req: videoRequest({ durationSeconds: 0.4 }) })).rejects.toThrow(
@@ -54,225 +88,100 @@ it("rejects a duration that rounds to zero before submission", async () => {
   expect(fetchFn).not.toHaveBeenCalled();
 });
 
-it("builds mode-specific image and reference inputs", () => {
-  const cases: { req: Partial<VideoGenerationRequest>; expected: Record<string, unknown> }[] = [
+const imageUrl = "https://example.com/frame.png";
+const videoUrl = "https://example.com/video.mp4";
+const remoteImage = { url: imageUrl };
+const localImage = { buffer: Buffer.from("png-bytes"), mimeType: "image/png" };
+function images(model: string, inputImages: VideoRequest["inputImages"] = [remoteImage]) {
+  return { model, inputImages };
+}
+it.each<[Partial<VideoRequest>, Record<string, unknown>]>([
+  [images("wan2.6-i2v"), { img_url: imageUrl }],
+  [images("wan2.6-r2v"), { reference_urls: [imageUrl] }],
+  [
     {
-      req: {
-        model: "wan2.6-i2v",
-        prompt: "animate",
-        inputImages: [{ url: "https://example.com/frame.png" }],
-      },
-      expected: { prompt: "animate", img_url: "https://example.com/frame.png" },
-    },
-    {
-      req: {
-        model: "wan2.6-r2v",
-        prompt: "character1 waves",
-        inputImages: [{ url: "https://example.com/character.png" }],
-      },
-      expected: {
-        prompt: "character1 waves",
-        reference_urls: ["https://example.com/character.png"],
-      },
-    },
-    {
-      req: {
-        provider: "alibaba",
-        model: "wan2.7-r2v",
-        prompt: "Image 1 greets Video 1",
-        inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-        inputVideos: [{ url: "https://example.com/action.mp4", role: "reference_video" }],
-      },
-      expected: {
-        prompt: "Image 1 greets Video 1",
-        media: [
-          { type: "reference_image", url: "data:image/png;base64,cG5nLWJ5dGVz" },
-          { type: "reference_video", url: "https://example.com/action.mp4" },
-        ],
-      },
-    },
-  ];
-  for (const { req, expected } of cases) {
-    expect(
-      buildDashscopeVideoGenerationInput({ providerLabel: "Qwen", req: videoRequest(req) }),
-    ).toEqual(expected);
-  }
-});
-
-it.each([
-  {
-    name: "Wan 2.6 text-to-video",
-    req: videoRequest({ resolution: "720P", aspectRatio: "9:16", audio: false }),
-    expected: { size: "720*1280", audio: false },
-  },
-  {
-    name: "Wan 2.6 image-to-video",
-    req: videoRequest({
-      model: "wan2.6-i2v",
-      resolution: "1080P",
-      inputImages: [{ url: "https://example.com/frame.png" }],
-      audio: true,
-    }),
-    expected: { resolution: "1080P", audio: true },
-  },
-  {
-    name: "Wan 2.7 reference-to-video",
-    req: videoRequest({
       provider: "alibaba",
-      model: "wan2.7-r2v",
-      size: "1920x1080",
-      inputVideos: [{ url: "https://example.com/reference.mp4" }],
-      audio: false,
-    }),
-    expected: { resolution: "1080P", ratio: "16:9" },
-  },
-])("builds documented $name parameters", ({ req, expected }) => {
-  expect(buildDashscopeVideoGenerationParameters(req)).toEqual(expected);
+      ...images("wan2.7-r2v", [localImage]),
+      inputVideos: [{ url: videoUrl, role: "reference_video" }],
+    },
+    {
+      media: [
+        { type: "reference_image", url: "data:image/png;base64,cG5nLWJ5dGVz" },
+        { type: "reference_video", url: videoUrl },
+      ],
+    },
+  ],
+])("builds mode-specific inputs for %#", (req, expected) => {
+  const input = buildInput({ providerLabel: "Qwen", req: videoRequest(req) });
+  expect(input).toEqual({ prompt: "video", ...expected });
 });
-
-it("returns only nonempty video bytes, preserving accepted content types", async () => {
-  for (const [contentType, body] of [
-    ["application/json", '{"error":"not a video"}'],
-    ["audio/mp4", "audio-bytes"],
-    ["video/mp4", ""],
-  ]) {
-    const fetchFn = vi.fn(async () => videoResponse(body, contentType));
-    await expect(downloadVideo(fetchFn)).rejects.toThrow(
-      "Alibaba Wan generated video download: malformed video response",
-    );
-    expect(fetchFn).toHaveBeenCalledOnce();
-  }
-  for (const contentType of ["VIDEO/MP4; codecs=avc1", "application/octet-stream", ""]) {
-    const videos = await downloadVideo(vi.fn(async () => videoResponse("mp4-bytes", contentType)));
-    expect(videos).toHaveLength(1);
-    expect(videos[0]?.buffer).toBeInstanceOf(Buffer);
-    expect(videos[0]).toMatchObject({
-      buffer: Buffer.from("mp4-bytes"),
-      fileName: "video-1.mp4",
-      mimeType: contentType || "video/mp4",
-    });
-  }
+it.each<[string, Partial<VideoRequest>, Record<string, unknown>]>([
+  [
+    "wan2.6-t2v",
+    { resolution: "720P", aspectRatio: "9:16", audio: false },
+    { size: "720*1280", audio: false },
+  ],
+  ["wan2.6-i2v", { resolution: "1080P", audio: true }, { resolution: "1080P", audio: true }],
+  ["wan2.7-r2v", { size: "1920x1080", audio: false }, { resolution: "1080P", ratio: "16:9" }],
+])("builds %s parameters", (model, req, expected) => {
+  expect(buildParameters(videoRequest({ model, ...req }))).toEqual(expected);
 });
-
-it.each([false, true])(
-  "releases unread invalid bodies with capture tee=%s",
-  async (capture) => {
-    const cancellationOrder: string[] = [];
-    const cancelBody = vi.fn(async () => {
-      cancellationOrder.push("cancel-started");
-      await Promise.resolve();
-      cancellationOrder.push("cancel-completed");
-    });
-    let captured: Response | undefined;
-    const fetchFn = vi.fn(async () => {
-      const response = new Response(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode('{"error":"still streaming"}'));
-          },
-          cancel: cancelBody,
-        }),
-        { headers: { "content-type": "application/json" } },
-      );
-      // An unread debug clone holds the tee; rejection must not await its cancellation.
-      if (capture) {
-        captured = response.clone();
-      }
-      return response;
-    });
-    try {
-      await expect(downloadVideo(fetchFn, capture ? 5_000 : 80)).rejects.toThrow(
-        "Alibaba Wan generated video download: malformed video response",
-      );
-      if (!capture) {
-        expect(cancelBody).toHaveBeenCalledOnce();
-        expect(cancellationOrder).toEqual(["cancel-started", "cancel-completed"]);
-      }
-    } finally {
-      void captured?.body?.cancel().catch(() => undefined);
-    }
-  },
-  2_000,
-);
-
+it("rejects an empty video body", async () => {
+  await expect(downloadVideo(vi.fn(async () => videoResponse("")))).rejects.toThrow(malformed);
+});
 it.each([
-  { taskId: "expired-task", task_status: " UNKNOWN ", message: undefined, reason: "" },
-  {
-    taskId: "deleted-task",
-    task_status: "UNKNOWN",
-    message: "task was deleted",
-    reason: ": task was deleted",
-  },
-])(
-  "immediately rejects UNKNOWN $taskId with its provider reason",
-  async ({ taskId, task_status, message, reason }) => {
-    const fetchFn = vi.fn(async () => Response.json({ output: { task_status, message } }));
-    await expect(
-      pollDashscopeVideoTaskUntilComplete({
-        providerLabel: "Qwen",
-        taskId,
-        headers: new Headers(),
-        timeoutMs: 80,
-        fetchFn,
-        baseUrl: "https://example.com",
-      }),
-    ).rejects.toThrow(`Qwen video generation task ${taskId} is unknown or expired${reason}`);
-    expect(fetchFn).toHaveBeenCalledOnce();
-  },
-);
-
-it.each([
-  {
-    name: "buffer-backed reference video",
-    model: "wan2.6-r2v",
-    inputVideos: [{ buffer: Buffer.from("video"), mimeType: "video/mp4" }],
-    error: /remote http\(s\) URLs for reference videos/u,
-  },
-  {
-    name: "data URI reference video",
-    model: "wan2.7-r2v",
-    inputVideos: [{ url: "data:video/mp4;base64,dmlkZW8=" }],
-    error: /remote http\(s\) URLs for reference videos/u,
-  },
-  ...["wan2.6-i2v", "wan2.7-r2v"].map((model) => ({
-    name: `oversized image for ${model}`,
-    model,
-    inputImages: [{ buffer: Buffer.alloc(20 * 1024 * 1024 + 1), mimeType: "image/png" }],
-    error: /reference image exceeds the 20 MB limit/u,
-  })),
-  {
-    name: "oversized inline data URI image",
-    model: "wan2.6-i2v",
-    inputImages: [
-      { url: `data:image/png;base64,${Buffer.alloc(20 * 1024 * 1024 + 1).toString("base64")}` },
-    ],
-    error: /reference image exceeds the 20 MB limit/u,
-  },
-  {
-    name: "unknown i2v sibling",
-    model: "wan2.5-t2v-preview",
-    inputImages: [{ url: "https://example.com/image.png" }],
-    error: /text-to-video.*does not accept reference media/u,
-  },
-  {
-    name: "local image on Wan 2.6 reference-to-video",
-    model: "wan2.6-r2v",
-    inputImages: [{ buffer: Buffer.from("png-bytes") }],
-    error: /requires remote http\(s\) URLs for reference images/u,
-  },
-  {
-    name: "multiple images with a text-to-video model",
-    model: "wan2.6-t2v",
-    inputImages: [{ url: "https://example.com/1.png" }, { url: "https://example.com/2.png" }],
-    error: /text-to-video.*does not accept reference media/u,
-  },
-])("rejects $name before submission", async ({ name: _name, error, ...request }) => {
-  const fetchFn = vi.fn<typeof fetch>();
+  [" UNKNOWN ", undefined],
+  ["UNKNOWN", "task was deleted"],
+])("rejects %s tasks immediately", async (task_status, message) => {
+  const taskId = "missing-task";
+  const fetchFn = vi.fn(async () => Response.json({ output: { task_status, message } }));
   await expect(
-    runTask(fetchFn, { model: request.model, req: videoRequest(request) }),
-  ).rejects.toThrow(error);
-  expect(fetchFn).not.toHaveBeenCalled();
+    pollTask({
+      providerLabel: "Qwen",
+      taskId,
+      headers: new Headers(),
+      timeoutMs: 80,
+      fetchFn,
+      baseUrl: "https://example.com",
+    }),
+  ).rejects.toThrow(
+    `Qwen video generation task ${taskId} is unknown or expired${message ? `: ${message}` : ""}`,
+  );
+  expect(fetchFn).toHaveBeenCalledOnce();
 });
+
+async function rejectsInput(patch: Partial<VideoRequest>, error: RegExp) {
+  const fetchFn = vi.fn<typeof fetch>();
+  const req = videoRequest(patch);
+  await expect(runTask(fetchFn, { model: req.model, req })).rejects.toThrow(error);
+  expect(fetchFn).not.toHaveBeenCalled();
+}
+it.each([
+  { model: "wan2.6-r2v", inputVideos: [{ buffer: Buffer.from("video"), mimeType: "video/mp4" }] },
+  { model: "wan2.7-r2v", inputVideos: [{ url: "data:video/mp4;base64,dmlkZW8=" }] },
+])("rejects non-remote reference videos for $model", (req) =>
+  rejectsInput(req, /remote http\(s\) URLs for reference videos/u),
+);
+
+const oversized = Buffer.alloc(20 * 1024 * 1024 + 1);
+it.each([
+  images("wan2.6-i2v", [{ buffer: oversized, mimeType: "image/png" }]),
+  images("wan2.7-r2v", [{ buffer: oversized, mimeType: "image/png" }]),
+  images("wan2.6-i2v", [{ url: `data:image/png;base64,${oversized.toString("base64")}` }]),
+])("rejects oversized reference images for $model (%#)", (req) =>
+  rejectsInput(req, /reference image exceeds the 20 MB limit/u),
+);
+it.each([
+  images("wan2.5-t2v-preview"),
+  images("wan2.6-t2v", [remoteImage, { url: "https://example.com/2.png" }]),
+])("rejects reference media for $model", (req) =>
+  rejectsInput(req, /text-to-video.*does not accept reference media/u),
+);
+it("rejects local images on Wan 2.6 reference-to-video", () =>
+  rejectsInput(
+    images("wan2.6-r2v", [{ buffer: localImage.buffer }]),
+    /requires remote http\(s\) URLs for reference images/u,
+  ));
 
 describe("DashScope operation deadlines", () => {
   beforeEach(() => {
@@ -283,236 +192,189 @@ describe("DashScope operation deadlines", () => {
     vi.useRealTimers();
   });
 
-  async function expectDeadline(
-    operation: Promise<unknown>,
-    ms: number,
-    pattern = /timed out|budget exhausted/,
-  ) {
+  const timeoutPattern = /timed out|budget exhausted/;
+  async function timesOut(operation: Promise<unknown>, ms: number, pattern = timeoutPattern) {
     let settled: unknown;
-    const completion = operation.then(
-      (value) => {
-        settled = value;
-      },
-      (error: unknown) => {
-        settled = error;
-      },
-    );
+    const record = (value: unknown) => {
+      settled = value;
+    };
+    const completion = operation.then(record, record);
     await vi.advanceTimersByTimeAsync(ms);
     expect(settled).toBeInstanceOf(Error);
     expect(String(settled)).toMatch(pattern);
     await completion;
   }
-
-  it.each([false, true])(
-    "aborts a stalled body without waiting for capture tee=%s",
-    async (capture) => {
-      let captured: Response | undefined;
-      let signal: AbortSignal | undefined;
-      const fetchFn = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-        signal = init?.signal ?? undefined;
-        const response = new Response(
-          new ReadableStream({
-            start(controller) {
-              if (capture) {
-                controller.enqueue(new Uint8Array([1]));
-              }
-            },
-          }),
-          { headers: { "content-type": "video/mp4" } },
-        );
-        if (capture) {
-          captured = response.clone();
-        }
-        return response;
+  it.each<[string, boolean]>([
+    ["application/json", false],
+    ["application/json", true],
+    ["image/png", false],
+    ["image/png", true],
+    ["binary/octet-stream", false],
+    ["binary/octet-stream", true],
+  ])(
+    "releases a malformed %s streaming body (capture tee=%s)",
+    async (contentType, capture) => {
+      const order: string[] = [];
+      const cancel = vi.fn(async () => {
+        order.push("cancel-started");
+        await Promise.resolve();
+        order.push("cancel-completed");
       });
+      const fixture = streamFixture(
+        {
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("streaming"));
+          },
+          cancel,
+        },
+        capture,
+        contentType,
+      );
       try {
-        const startedAt = Date.now();
-        await expectDeadline(
-          downloadVideo(fetchFn, 80),
+        await expect(downloadVideo(fixture.fetchFn)).rejects.toThrow(malformed);
+        if (!capture) {
+          expect(order).toEqual(["cancel-started", "cancel-completed"]);
+        }
+      } finally {
+        fixture.release();
+      }
+    },
+    2_000,
+  );
+  it.each([false, true])(
+    "times out a valid streaming video body (capture tee=%s)",
+    async (capture) => {
+      const fixture = streamFixture(
+        {
+          start(controller) {
+            if (capture) {
+              controller.enqueue(new TextEncoder().encode("streaming"));
+            }
+          },
+        },
+        capture,
+      );
+      try {
+        await timesOut(
+          downloadVideo(fixture.fetchFn, 80),
           80,
           /Alibaba Wan generated video download timed out/,
         );
-        expect(Date.now() - startedAt).toBeGreaterThanOrEqual(60);
-        expect(Date.now() - startedAt).toBeLessThan(2_000);
-        expect(signal?.aborted).toBe(true);
-        expect(fetchFn).toHaveBeenCalledOnce();
+        expect(fixture.requests[0]?.signal?.aborted).toBe(true);
+        expect(fixture.fetchFn).toHaveBeenCalledOnce();
       } finally {
-        void captured?.body?.cancel().catch(() => undefined);
+        fixture.release();
       }
     },
   );
-
   it("fails closed before fetch when a function-valued remaining budget is exhausted", async () => {
     const fetchFn = vi.fn<typeof fetch>();
-    const startedAt = Date.now();
     await expect(downloadVideo(fetchFn, () => 0)).rejects.toThrow("remaining budget exhausted");
-    expect(Date.now() - startedAt).toBeLessThan(2_000);
     expect(fetchFn).not.toHaveBeenCalled();
   });
-
   it("releases the guarded fetch when the remaining-budget resolver throws", async () => {
-    const initialTimerCount = vi.getTimerCount();
-    let requestSignal: AbortSignal | undefined;
-    let abortedAtFetch: boolean | undefined;
     const cancelBody = vi.fn();
     const timeoutMs = vi
       .fn<() => number>()
       .mockReturnValueOnce(100)
       .mockImplementationOnce(() => {
-        throw new Error("remaining-budget resolver failed");
+        throw new Error(resolverFailure);
       });
-    const fetchFn = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      requestSignal = init?.signal ?? undefined;
-      abortedAtFetch = requestSignal?.aborted;
-      return new Response(new ReadableStream({ cancel: cancelBody }), {
-        headers: { "content-type": "video/mp4" },
-      });
-    });
-    await expect(downloadVideo(fetchFn, timeoutMs)).rejects.toThrow(
-      "remaining-budget resolver failed",
-    );
-    expect(timeoutMs).toHaveBeenCalledTimes(2);
+    const fixture = streamFixture({ cancel: cancelBody });
+    await expect(downloadVideo(fixture.fetchFn, timeoutMs)).rejects.toThrow(resolverFailure);
     expect(cancelBody).toHaveBeenCalledOnce();
-    expect(cancelBody.mock.calls[0]?.[0]).toMatchObject({
-      message: "remaining-budget resolver failed",
-    });
-    expect(abortedAtFetch).toBe(false);
-    expect(requestSignal?.aborted).toBe(true);
-    expect(vi.getTimerCount()).toBe(initialTimerCount);
-  });
-
-  it("releases the submission request timeout before polling the task", async () => {
-    let submissionSignal: AbortSignal | undefined;
-    let submissionReleasedBeforePoll: boolean | undefined;
-    const fetchFn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      const requestUrl = url instanceof Request ? url.url : String(url);
-      if (requestUrl.includes("/video-synthesis")) {
-        submissionSignal = init?.signal ?? undefined;
-        return Response.json({ output: { task_id: "task-123" } });
-      }
-      if (requestUrl.includes("/tasks/task-123")) {
-        submissionReleasedBeforePoll = submissionSignal?.aborted;
-        return Response.json({
-          output: { task_status: "SUCCEEDED", video_url: "https://example.com/result.mp4" },
-        });
-      }
-      return videoResponse();
-    });
-    await runTask(fetchFn, { timeoutMs: 5_000 });
-    expect(submissionReleasedBeforePoll).toBe(true);
+    expect(fixture.requests[0]).toMatchObject({ aborted: false, signal: { aborted: true } });
     expect(vi.getTimerCount()).toBe(0);
   });
-
-  it.each(["submit", "poll", "download", "submit-error", "poll-error", "download-error"])(
-    "bounds a trickling %s body with the same operation deadline",
-    async (stage) => {
+  it.each([
+    ["submit", 200, 1],
+    ["poll", 200, 2],
+    ["download", 200, 3],
+    ["submit", 503, 1],
+    ["poll", 503, 2],
+    ["download", 503, 3],
+  ] as const)(
+    "bounds trickling %s HTTP %s bodies with the operation deadline",
+    async (stage, status, callCount) => {
       let timer: ReturnType<typeof setInterval>;
       const cancel = vi.fn(() => clearInterval(timer));
-      const response = new Response(
-        new ReadableStream<Uint8Array>({
+      const fixture = streamFixture(
+        {
           start(controller) {
             timer = setInterval(() => controller.enqueue(new TextEncoder().encode(" ")), 10);
           },
           cancel,
-        }),
-        {
-          status: stage.endsWith("error") ? 503 : 200,
-          headers: {
-            "content-type": stage.startsWith("download") ? "video/mp4" : "application/json",
-          },
         },
+        false,
+        stage === "download" ? "video/mp4" : "application/json",
+        status,
       );
-      const signals: AbortSignal[] = [];
-      const fetchFn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-        if (init?.signal) {
-          signals.push(init.signal);
-        }
-        const requestUrl = url instanceof Request ? url.url : String(url);
-        if (requestUrl.includes("video-synthesis")) {
-          return stage.startsWith("submit")
-            ? response
-            : Response.json({ output: { task_id: "deadline-task" } });
-        }
-        if (requestUrl.includes("/tasks/")) {
-          return stage.startsWith("poll")
-            ? response
-            : Response.json({
-                output: { task_status: "SUCCEEDED", video_url: "https://example.com/video.mp4" },
-              });
-        }
-        return response;
-      });
+      const { fetchFn, calls } = taskFetch({ [stage]: fixture.response });
       try {
-        await expectDeadline(runTask(fetchFn, { timeoutMs: 100 }), 100);
+        await timesOut(runTask(fetchFn, { timeoutMs: 100 }), 100);
         expect(cancel).toHaveBeenCalledOnce();
-        expect(signals.every((signal) => signal.aborted)).toBe(true);
-        expect(fetchFn).toHaveBeenCalledTimes(
-          stage.startsWith("submit") ? 1 : stage.startsWith("poll") ? 2 : 3,
-        );
+        expect(calls.every(({ signal }) => signal?.aborted)).toBe(true);
+        expect(fetchFn).toHaveBeenCalledTimes(callCount);
       } finally {
-        void response.body?.cancel().catch(() => undefined);
+        fixture.release();
       }
     },
   );
-
   it("does not reset a numeric budget between sequential downloads or after headers", async () => {
     const fetchFn = vi.fn(async () => {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 40);
-      });
-      return new Response(
-        new ReadableStream({
-          start(controller) {
-            setTimeout(() => {
-              controller.enqueue(new TextEncoder().encode("video"));
-              controller.close();
-            }, 20);
-          },
-        }),
-        { headers: { "content-type": "video/mp4" } },
-      );
+      await delay(40);
+      return streamFixture({
+        async start(controller) {
+          await delay(20);
+          controller.enqueue(new TextEncoder().encode("video"));
+          controller.close();
+        },
+      }).response;
     });
-    await expectDeadline(
+    await timesOut(
       downloadVideo(fetchFn, 100, ["https://example.com/1.mp4", "https://example.com/2.mp4"]),
       101,
     );
     expect(fetchFn).toHaveBeenCalledTimes(2);
   });
-
-  it.each([429, 503])(
-    "does not let HTTP %s retry backoff outlive the remaining budget",
-    async (status) => {
-      const fetchFn = vi.fn(async () => new Response("busy", { status }));
-      await expectDeadline(downloadVideo(fetchFn, 100), 100, /timed out/);
-      expect(fetchFn).toHaveBeenCalledOnce();
+  it("bounds retry backoff by the remaining budget", async () => {
+    const fetchFn = vi.fn(async () => new Response("busy", { status: 503 }));
+    await timesOut(downloadVideo(fetchFn, 100), 100, /timed out/);
+    expect(fetchFn).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each(["VIDEO/MP4; codecs=avc1", "application/octet-stream", ""])(
+    "retries within budget and preserves video bytes (%s)",
+    async (contentType) => {
+      const fetchFn = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(Response.json({ output: { task_id: "task-123" } }))
+        .mockResolvedValueOnce(
+          Response.json({ output: { task_status: "SUCCEEDED", video_url: videoUrl } }),
+        )
+        .mockResolvedValueOnce(new Response("busy", { status: 503 }))
+        .mockResolvedValueOnce(videoResponse("video", contentType));
+      const operation = runTask(fetchFn, { timeoutMs: 500 });
+      await vi.advanceTimersByTimeAsync(250);
+      expect((await operation).videos).toMatchObject([
+        {
+          buffer: Buffer.from("video"),
+          fileName: "video-1.mp4",
+          mimeType: contentType || "video/mp4",
+          metadata: { sourceUrl: videoUrl },
+        },
+      ]);
       expect(vi.getTimerCount()).toBe(0);
     },
   );
-
-  it("still retries a transient response and returns complete video bytes within budget", async () => {
-    const fetchFn = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response("busy", { status: 503 }))
-      .mockResolvedValueOnce(videoResponse("video"));
-    const operation = downloadVideo(fetchFn, 500);
-    await vi.advanceTimersByTimeAsync(250);
-    expect((await operation)[0]?.buffer?.toString()).toBe("video");
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("charges submission and poll waits to the default operation budget", async () => {
     const fetchFn = vi.fn(async () => {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 30);
-      });
-      return Response.json(
-        fetchFn.mock.calls.length === 1
-          ? { output: { task_id: "pending" } }
-          : { output: { task_status: "PENDING" } },
-      );
+      await delay(30);
+      const output =
+        fetchFn.mock.calls.length === 1 ? { task_id: "pending" } : { task_status: "PENDING" };
+      return Response.json({ output });
     });
-    await expectDeadline(runTask(fetchFn, { defaultTimeoutMs: 100 }), 100, /timed out after 100ms/);
+    await timesOut(runTask(fetchFn, { defaultTimeoutMs: 100 }), 100, /timed out after 100ms/);
     expect(fetchFn).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
   });

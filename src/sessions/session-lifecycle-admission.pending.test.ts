@@ -1,25 +1,26 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { createEnteredGate as gate } from "../agents/entered-gate.test-support.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
 } from "../agents/run-termination.js";
+import { runWithSessionControllerCleanup } from "./session-controller.cleanup-context.js";
 import {
-  beginSessionWorkAdmission as beginAdmission,
+  beginSessionEffect as beginAdmission,
   captureSessionWorkRunInterruptions as captureRuns,
-  collectActiveSessionWorkAdmissions,
-  consumeSessionWorkAdmissionHandoff as consumeHandoff,
-  getActiveSessionWorkAdmissionCount,
-  getCompetingSessionWorkAdmissionRelease as getCompetingRelease,
-  getSessionWorkAdmissionRelease as getRelease,
-  interruptSessionWorkAdmissions as interrupt,
-  isCompetingSessionWorkAdmissionActive as competingActive,
-  isSessionWorkAdmissionActive as workActive,
-  observeSessionWorkAdmissionReleases,
-  captureGatewaySessionWorkAdmissions as captureGateway,
-  runExclusiveSessionLifecycleMutation as mutate,
-  startSessionWorkAdmissionInterruption as startInterruption,
-} from "./session-lifecycle-admission.js";
+  collectSessionControllerTargets,
+  consumeSessionEffectHandoff as consumeHandoff,
+  getSessionControllerWorkCount,
+  captureSessionControllerSettlement as getRelease,
+  waitForSessionControllerSettlement,
+  isCompetingSessionControllerWorkActive as competingActive,
+  isSessionControllerWorkActive as workActive,
+  observeSessionControllerProtectionReleases,
+  captureGatewaySessionControllerWork as captureGateway,
+  runSessionMutation as mutate,
+  startSessionControllerInterruption as startInterruption,
+} from "./session-controller.lifecycle.js";
 
 const admit = (params: Parameters<typeof beginAdmission>[0]) =>
   beginAdmission({ assertAllowed: () => {}, ...params });
@@ -28,18 +29,6 @@ function makeTarget<T extends string[]>(scope: string, ...identities: T) {
 }
 function ownedTarget(scope: string, ...identities: string[]) {
   return { ...makeTarget(scope, ...identities), owner: Symbol(scope), serializeOwner: true };
-}
-function gate() {
-  const entered = createDeferred();
-  const release = createDeferred();
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
 }
 function admissionOutcome(pending: ReturnType<typeof beginAdmission>) {
   return pending.then(
@@ -53,12 +42,20 @@ function admissionOutcome(pending: ReturnType<typeof beginAdmission>) {
 
 it("notifies only the released scope when acquired identity protection shrinks", async () => {
   const scope = "release-observer.sqlite";
-  const listener = vi.fn();
+  let handoffId = "";
+  const listener = vi.fn(() => {
+    expect(workActive(scope, ["shared"])).toBe(false);
+    expect(consumeHandoff({ handoffId, scope, identities: ["shared"] })).toBeUndefined();
+  });
   const otherListener = vi.fn();
-  const unsubscribe = observeSessionWorkAdmissionReleases(` ${scope} `, listener);
-  const unsubscribeOther = observeSessionWorkAdmissionReleases("other.sqlite", otherListener);
+  const unsubscribe = observeSessionControllerProtectionReleases(` ${scope} `, listener);
+  const unsubscribeOther = observeSessionControllerProtectionReleases(
+    "other.sqlite",
+    otherListener,
+  );
   const first = await beginAdmission({ scope, identities: ["shared"] });
   const second = await beginAdmission({ scope, identities: ["shared"] });
+  handoffId = second.createHandoff();
   const unrelated = await beginAdmission({ scope, identities: ["unrelated"] });
   try {
     first.release();
@@ -230,28 +227,63 @@ it("serializes pending owners in FIFO order without blocking other owners", asyn
   }
 });
 
-it("lets an inherited owner finish ahead of its queued successor", async ({ signal }) => {
+it("keeps nested work reentrant while independent successors retain FIFO and current authority", async ({
+  signal,
+}) => {
   const target = { ...ownedTarget("nested-owner.sqlite", "nested-owner-session"), signal };
   const outer = await admit(target);
-  const validateFollower = vi.fn();
-  const follower = admit({ ...target, assertAllowed: validateFollower });
+  const order: string[] = [];
+  const follower = admit({
+    ...target,
+    assertAllowed: () => {
+      order.push("follower");
+    },
+  });
+  let detached: ReturnType<typeof beginAdmission> | undefined;
+  let allowed = true;
   try {
     await withinTest(
       outer.run(async () => {
-        (await admit(target)).release();
+        detached = runWithSessionControllerCleanup(() =>
+          admit({
+            ...target,
+            assertAllowed: () => {
+              if (!allowed) {
+                throw new Error("successor authority revoked");
+              }
+              order.push("detached");
+            },
+          }),
+        );
+        void detached.catch(() => {});
+        const inner = await admit({
+          ...target,
+          assertAllowed: () => {
+            order.push("nested");
+          },
+        });
+        inner.release();
       }),
       signal,
     );
     expect(outer.isActive()).toBe(true);
-    expect(validateFollower).not.toHaveBeenCalled();
+    expect(order).toEqual(["nested"]);
+    outer.release();
+    const next = await withinTest(follower, signal);
+    expect(order).toEqual(["nested", "follower"]);
+    allowed = false;
+    next.release();
+    await expect(detached).rejects.toThrow("successor authority revoked");
+    expect(order).toEqual(["nested", "follower"]);
   } finally {
     outer.release();
-    await follower.then(
-      (lease) => lease.release(),
-      () => {},
-    );
+    for (const attempt of [follower, detached]) {
+      await attempt?.then(
+        (lease) => lease.release(),
+        () => {},
+      );
+    }
   }
-  expect(validateFollower).toHaveBeenCalled();
 });
 
 it.for(["caller abort", "Stop", "targeted Stop"])(
@@ -311,7 +343,7 @@ it("rejects arrivals during awaited cleanup and its final microtask, then reopen
   const onInterrupt = vi.fn();
   let lateResult: unknown;
   const late = () => admissionOutcome(admit({ scope, identities, onInterrupt }));
-  const stop = mutate("drain", {
+  const stop = mutate({
     scope,
     identities,
     prepare: async (owner) => {
@@ -349,7 +381,7 @@ it("interrupts a preexisting non-chat pending attempt without classifying it as 
   const barrier = gate();
   const interrupted = vi.fn();
   const validate = vi.fn();
-  const blocker = mutate("patch", { ...owner, prepare: barrier.wait, run: async () => {} });
+  const blocker = mutate({ ...owner, prepare: barrier.wait, run: async () => {} });
   await barrier.entered;
   const pending = admissionOutcome(
     admit({
@@ -370,14 +402,13 @@ it("interrupts a preexisting non-chat pending attempt without classifying it as 
     ).toBe(false);
     expect(competingActive(scope, identities)).toBe(false);
     expect(getRelease({ scope, identities })).toBeUndefined();
-    const competingRelease = getCompetingRelease({ scope, identities });
-    expect(competingRelease).toBeDefined();
-    expect(collectActiveSessionWorkAdmissions().get(scope)).toBeUndefined();
-    expect(getActiveSessionWorkAdmissionCount()).toBe(0);
+    expect(collectSessionControllerTargets().get(scope)).toBeUndefined();
+    expect(getSessionControllerWorkCount()).toBe(0);
     const reason = createAgentRunDirectAbortError();
-    expect(await interrupt({ scope, identities, reason, timeoutMs: 1000 })).toBe(true);
+    const { released } = startInterruption({ scope, identities, reason });
+    expect(await waitForSessionControllerSettlement(released, 1000)).toBe(true);
     expect(await pending).toBe(reason);
-    await expect(competingRelease).resolves.toBeUndefined();
+    await expect(released).resolves.toBeUndefined();
     expect(interrupted).toHaveBeenCalledExactlyOnceWith(reason);
     expect(validate).not.toHaveBeenCalled();
   } finally {
@@ -394,7 +425,7 @@ it.each(["compaction", "single-use iterator"] as const)(
     const { scope, identities } = owner;
     const barrier = gate();
     const validate = vi.fn();
-    const mutation = mutate(mode === "compaction" ? "compact" : "patch", {
+    const mutation = mutate({
       ...owner,
       ...(mode === "compaction" ? { kind: "compaction" as const } : {}),
       prepare: async () => {
@@ -433,20 +464,26 @@ it("an initial validator finishing after pending cancellation cannot enter the w
   const barrier = gate();
   const writer = vi.fn();
   const released = vi.fn();
-  const unsubscribe = observeSessionWorkAdmissionReleases(owner.scope, released);
+  const unsubscribe = observeSessionControllerProtectionReleases(owner.scope, released);
   const reason = createAgentRunDirectAbortError();
   const pending = admissionOutcome(
     admit({ ...owner, assertAllowed: barrier.wait, revalidateAllowed: writer }),
   );
   await barrier.entered;
   try {
-    expect(await interrupt({ ...owner, reason, timeoutMs: 1000 })).toBe(true);
-    expect(await pending).toBe(reason);
+    const interruption = startInterruption({ ...owner, reason });
+    const drained = vi.fn();
+    void interruption.released.then(drained);
+    await Promise.resolve();
+    expect(drained).not.toHaveBeenCalled();
     expect(released).not.toHaveBeenCalled();
     barrier.release();
-    // A later mutation must wait for the validator's existing identity lock to finish.
-    await mutate("patch", { ...owner, run: async () => {} });
+    expect(await pending).toBe(reason);
+    await interruption.released;
+    // Cancellation retains validator custody without acquiring identity protection.
+    await mutate({ ...owner, run: async () => {} });
     expect(writer).not.toHaveBeenCalled();
+    expect(released).not.toHaveBeenCalled();
   } finally {
     unsubscribe();
     barrier.release();
