@@ -5,6 +5,8 @@ import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { handlePluginCommand } from "../auto-reply/reply/commands-plugin.js";
+import { buildCommandTestParams } from "../auto-reply/reply/commands.test-harness.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
@@ -29,7 +31,11 @@ import {
   getActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import {
+  getPluginRuntimeLoadContext,
+  setPluginRuntimeLoadContext,
+} from "../plugins/runtime/load-context.js";
+import { tryResolveConfiguredAgentWorkspaceDir } from "./agent-scope-config.js";
 import type { RuntimePluginLoadPurpose } from "./harness/runtime-plugin-load-plan.js";
 import {
   createPreparedInboundRegistryLoader,
@@ -398,3 +404,102 @@ it.each(["inbound", "selected", "inspection"] as const)(
     });
   },
 );
+it("dispatches registerFull commands when a multi-agent Gateway has no defaults.workspace", async () => {
+  useNoBundledPlugins();
+  const mainWorkspace = tempDirs.make("openclaw-unscoped-main-");
+  const opsWorkspace = tempDirs.make("openclaw-unscoped-ops-");
+  const fallbackWorkspace = tempDirs.make("openclaw-unscoped-fallback-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-unscoped-state-"));
+  const plugin = writePlugin({
+    id: "full-only-command",
+    registration: `if (api.registrationMode !== "full") return;
+      api.registerCommand({
+        name: "fullonly",
+        description: "Full registration only",
+        handler: () => ({ text: "full-only-command" }),
+      });`,
+  });
+  const config: OpenClawConfig = {
+    agents: {
+      entries: {
+        main: { workspace: mainWorkspace },
+        ops: { workspace: opsWorkspace },
+      },
+    },
+    commands: { text: true },
+    plugins: {
+      allow: [plugin.id],
+      load: { paths: [plugin.file] },
+      entries: { [plugin.id]: { enabled: true } },
+      slots: { memory: "none" },
+    },
+  };
+  expect(tryResolveConfiguredAgentWorkspaceDir(config)).toBeUndefined();
+  const commandParams = buildCommandTestParams(
+    "/fullonly",
+    config,
+    { Provider: "telegram", Surface: "telegram", CommandSource: "text" },
+    { workspaceDir: opsWorkspace },
+  );
+  commandParams.agentId = "ops";
+  commandParams.sessionKey = "agent:ops:telegram:direct:owner";
+  commandParams.provider = "openai";
+  commandParams.model = "gpt-5.4";
+  commandParams.contextTokens = 1_000;
+  commandParams.resolveDefaultThinkingLevel = async () => "off";
+  const loadInbound = (
+    metadataSnapshot: ReturnType<typeof loadPluginMetadataSnapshot>,
+    gateway: PluginRegistry,
+  ) =>
+    withPluginRuntimeRegistryScope(gateway, () =>
+      loadPreparedInboundPluginRegistry(
+        { config, workspaceDir: opsWorkspace, allowGatewaySubagentBinding: true },
+        metadataSnapshot,
+      ),
+    );
+
+  await using cache = createPluginCache();
+  await withPluginCache(cache, async () => {
+    const metadata = loadPluginMetadataSnapshot({ config, workspaceDir: fallbackWorkspace });
+    const root = await loadAndActivateRootPluginRegistry({
+      config,
+      manifestRegistry: metadata.manifestRegistry,
+      discovery: metadata.discovery,
+      onlyPluginIds: [plugin.id],
+      channelPluginLoadIntent: "full",
+      runtimeOptions: { allowGatewaySubagentBinding: true },
+      cache: false,
+      throwOnLoadError: true,
+    });
+    prepareOwnedPluginLoadContext(
+      { config, workspaceDir: fallbackWorkspace },
+      process.env,
+      root,
+      metadata,
+      true,
+    );
+    const attached = getPluginRuntimeLoadContext(root);
+    if (!attached) {
+      throw new Error("expected the admitting Gateway load context");
+    }
+    setPluginRuntimeLoadContext(root, { ...attached, workspaceDir: undefined });
+    bindPluginRegistryGatewayOwner(root, { current: () => root });
+    let inbound: PluginRegistry | undefined;
+    try {
+      expect(metadata.workspaceDir).toBe(fallbackWorkspace);
+      expect(getPluginRuntimeLoadContext(root)?.workspaceDir).toBeUndefined();
+      expect(root.commands.map((entry) => entry.command.name)).toEqual(["fullonly"]);
+      inbound = loadInbound(metadata, root);
+      const dispatched = await withPluginRuntimeRegistryScope(inbound, () =>
+        handlePluginCommand(commandParams, true),
+      );
+      expect(dispatched?.reply?.text).toBe("full-only-command");
+      expect(dispatched?.shouldContinue).toBe(false);
+    } finally {
+      if (inbound && inbound !== root) {
+        await disposePluginRegistryInstances(inbound);
+      }
+      await disposePluginRegistryInstances(root);
+    }
+  });
+});
