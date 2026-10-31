@@ -358,8 +358,9 @@ Pipe a value through verbs left to right; a non-verb segment is the fallback.
 `fixed:N` accepts only a complete decimal integer from 0 through 100. Invalid
 precision arguments make that interpolation empty.
 
-`num` shares the compact token formatter's unit rollover: a count that rounds up
-to 1000 thousands prints as millions (`999950 -> 1.0m`), never `1000k`.
+`num` shares the compact token formatter's unit rollover: from `999500` up, a
+count that rounds to 1000 thousands prints as millions (`999950 -> 1.0m`), never
+`1000k`.
 
 `meter:W:SCALE` accepts only a complete decimal integer width from 1 through 100. Leave the width blank to use the default 5 (`meter::braille`); invalid
 widths make that interpolation empty.

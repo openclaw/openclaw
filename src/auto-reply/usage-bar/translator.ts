@@ -19,7 +19,8 @@ function coerceFiniteValue(value: unknown): number | undefined {
 }
 
 function num(n: number): string {
-  // `formatTokenCount` owns the unit rollover: 999_950 must not print as "1000k".
+  // `formatTokenCount` owns the unit rollover: from 999_500 up the thousands rounding
+  // lands on 1000k, so defer instead of printing a unit the shared formatter never uses.
   if (Math.abs(n) >= 1_000_000) {
     const compact = formatTokenCount(Math.abs(n));
     return n < 0 ? `-${compact}` : compact;
