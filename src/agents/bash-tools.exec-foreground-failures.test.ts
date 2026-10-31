@@ -190,6 +190,27 @@ describe("exec foreground failures", () => {
     expect(text).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ");
   });
 
+  it("does not report an exit with no captured exit code as a completed run", async () => {
+    mockSpawn({ reason: "exit", exitCode: null, exitSignal: null });
+    const tool = fullExec();
+
+    const result = await tool.execute("call-exit-without-code", {
+      command: "echo never-runs",
+      host: "gateway",
+    });
+
+    const text = requireTextContent(result);
+    expect(text).toContain("Command aborted before exit code was captured");
+    const details = requireFailedDetails(result.details);
+    expect(details).toMatchObject({
+      status: "failed",
+      exitCode: null,
+      failureKind: "aborted",
+      exitReason: "exit",
+      timedOut: false,
+    });
+  });
+
   it.each(["gateway", "sandbox"] as const)(
     "returns a failed result for unavailable explicit %s workdirs before launching",
     async (host) => {
