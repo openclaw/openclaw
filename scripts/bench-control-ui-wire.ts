@@ -457,8 +457,16 @@ async function observeReconnect(page: Page) {
         read: (startMs: number) => ({
           droppedEvents,
           events: entries.map((entry) => ({
-            ...entry,
+            event: entry.event,
             browserAtMs: entry.browserAtMs - startMs,
+            epochMs: entry.epochMs,
+            phase: entry.phase,
+            reconnectAt: entry.reconnectAt,
+            reconnectInMs: entry.reconnectInMs,
+            errorCode: entry.errorCode,
+            online: entry.online,
+            visibility: entry.visibility,
+            isTrusted: entry.isTrusted,
           })),
         }),
         dispose() {
