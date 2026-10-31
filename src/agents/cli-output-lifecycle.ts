@@ -38,6 +38,10 @@ export function parseCliBackendLifecycleLine(params: {
 export function projectCliBackendLifecycleEvent(
   event: CliBackendParsedJsonlLifecycleEvent,
 ): CliCompactionDelta {
+  if (event.phase === "boundary") {
+    const { kind: _kind, ...boundary } = event;
+    return boundary;
+  }
   return event.phase === "start"
     ? { phase: "start" }
     : { phase: "end", completed: event.completed };

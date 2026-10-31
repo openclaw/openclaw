@@ -1,6 +1,7 @@
 import type {
   CliBackendConfig,
   CliBackendJsonlUsage,
+  CliCompactionBoundary,
   CliBackendParseJsonlEvent,
   CliBackendParseJsonlLifecycleEvent,
 } from "../plugins/cli-backend.types.js";
@@ -104,7 +105,10 @@ export type CliThinkingProgress = {
   modelProgress?: true;
 };
 
-export type CliCompactionDelta = { phase: "start" } | { phase: "end"; completed: boolean };
+export type CliCompactionDelta =
+  | { phase: "start" }
+  | { phase: "end"; completed: boolean }
+  | CliCompactionBoundary;
 
 /** Tool-call start event reconstructed from CLI stream output. */
 export type CliToolUseStartDelta = {
