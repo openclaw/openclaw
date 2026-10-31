@@ -87,14 +87,10 @@ export async function resolveSystemPromptRepoRoot(params: {
 }): Promise<string | undefined> {
   const configured = params.config?.agents?.defaults?.repoRoot?.trim();
   if (configured) {
-    try {
-      const resolved = path.resolve(configured);
-      const stat = await safeStat(resolved);
-      if (stat?.isDirectory()) {
-        return resolved;
-      }
-    } catch {
-      // ignore invalid config path
+    const resolved = path.resolve(configured);
+    const stat = await safeStat(resolved);
+    if (stat?.isDirectory()) {
+      return resolved;
     }
   }
   const candidates = normalizeStringEntries([params.workspaceDir ?? "", params.cwd ?? ""]);
