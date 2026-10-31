@@ -45,6 +45,70 @@ export type EncodedEdit = {
   replacement: string;
 };
 
+export function isPlainRedactableObject(value: object): value is Record<string, unknown> {
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/** Serializes native values and records their protection origin in the same pass. */
+export function serializeRedactionRecord(
+  record: Record<string, unknown>,
+  shouldMaskPrimitive: (field: Pick<RedactionField, "key" | "path" | "objectPath">) => boolean,
+) {
+  const ordinary = { structured: true, primitiveMask: false };
+  const origins: RedactionOrigins = { value: ordinary, children: new Map() };
+  const ancestors: {
+    value: object;
+    path: string[];
+    key: string;
+    origins: RedactionOrigins;
+    structured: boolean;
+  }[] = [];
+  const json = JSON.stringify(record, function (this: object, key, value: unknown) {
+    while (ancestors.length > 0 && ancestors.at(-1)?.value !== this) {
+      ancestors.pop();
+    }
+    const parent = ancestors.at(-1);
+    const array = Array.isArray(this);
+    const fieldKey = array && parent ? parent.key : key;
+    const path = array && parent ? parent.path : parent ? [...parent.path, key] : [];
+    const source = value;
+    const structured =
+      (parent?.structured ?? true) &&
+      (source === null ||
+        typeof source !== "object" ||
+        Array.isArray(source) ||
+        isPlainRedactableObject(source));
+    const primitiveMask =
+      structured &&
+      ["number", "boolean", "bigint"].includes(typeof source) &&
+      shouldMaskPrimitive({ key: fieldKey, path, objectPath: !array });
+    const circular =
+      value !== null &&
+      typeof value === "object" &&
+      ancestors.some((frame) => frame.value === value);
+    const emitted = circular ? "[Circular]" : typeof value === "bigint" ? String(value) : value;
+    const container = emitted !== null && typeof emitted === "object";
+    let node = origins;
+    if (parent && parent.structured && (container || !structured || primitiveMask || circular)) {
+      node = {
+        value: { structured: structured && !circular, primitiveMask },
+        children: new Map(),
+      };
+      parent.origins.children.set(key, node);
+    } else if (parent) {
+      node = parent.origins;
+    } else {
+      origins.value = { structured, primitiveMask };
+    }
+    if (container) {
+      ancestors.push({ value: emitted, path, key: fieldKey, origins: node, structured });
+    }
+    return emitted;
+  });
+  return { json, origins };
+}
+
 type FieldContext = Pick<RedactionField, "key" | "path" | "objectPath"> & {
   origins?: RedactionOrigins;
   origin: RedactionScalarOrigin;

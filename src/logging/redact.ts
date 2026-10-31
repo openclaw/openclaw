@@ -6,19 +6,20 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { readLoggingConfig } from "./config.js";
+import type { DiagnosticSupportBundleFile } from "./diagnostic-support-bundle.js";
 import { getFileLogRedactionMessage } from "./logger-file-message.js";
-import { replacePatternBounded } from "./redact-bounded.js";
+import { replacePatternBounded, visitPatternBounded } from "./redact-bounded.js";
 import {
   applyRedactionEdits,
   composeRedactionEdits,
   type RedactionEdit,
 } from "./redact-edit-composition.js";
+import { isPlainRedactableObject, serializeRedactionRecord } from "./redact-json-tokens.js";
 import {
   redactJsonRecord,
   type RedactionMessage,
   type RedactionCapture,
   type RedactionField,
-  type RedactionOrigins,
 } from "./redact-json.js";
 import { LINEAR_MATCHER_SOURCES } from "./redact-linear-matchers.js";
 import {
@@ -32,6 +33,7 @@ import {
   selectSecretCapture,
   parseRedactPatternSource,
   readRedactMatch,
+  visitRedactMatches,
   redactPemBlock,
   replaceRedactPattern,
   rewriteOpenEndedRepeats,
@@ -500,13 +502,13 @@ function isEmptyShellParameterExpansionTail(token: string): boolean {
 }
 
 function prepareRedactionCapture(
-  { match, groups, input, offset, replacement: policyReplacement }: RedactMatch,
+  { match, groups, input, offset, sourceOffset = 0, replacement: policyReplacement }: RedactMatch,
   pattern: ResolvedRedactPattern,
 ): RedactionCapture | undefined {
   if (match.includes("PRIVATE KEY-----")) {
     return {
-      start: offset,
-      end: offset + match.length,
+      start: sourceOffset + offset,
+      end: sourceOffset + offset + match.length,
       value: match,
       redact: (target) => ({
         start: target.start,
@@ -525,7 +527,7 @@ function prepareRedactionCapture(
   if (tokenIndex < 0) {
     return undefined;
   }
-  const start = offset + tokenIndex;
+  const start = sourceOffset + offset + tokenIndex;
   return {
     start,
     end: start + selected.value.length,
@@ -574,6 +576,14 @@ function redactMatch(match: RedactMatch, pattern: ResolvedRedactPattern): string
     : match.match;
 }
 
+function usesBoundedScan(pattern: ResolvedRedactPattern): pattern is RegExp {
+  return (
+    pattern instanceof RegExp &&
+    !builtInResolvedPatterns.has(pattern) &&
+    !chunkUnsafePatterns.has(pattern)
+  );
+}
+
 export function redactText(
   text: string,
   patterns: ResolvedRedactPattern[],
@@ -609,10 +619,7 @@ export function redactText(
         }
       }
       next =
-        pattern instanceof RegExp &&
-        !options?.fullContext &&
-        !builtInResolvedPatterns.has(pattern) &&
-        !chunkUnsafePatterns.has(pattern)
+        !options?.fullContext && usesBoundedScan(pattern)
           ? replacePatternBounded(next, pattern, replaceRegex)
           : replaceRedactPattern(next, pattern, replace, replaceRegex);
     }
@@ -703,6 +710,44 @@ export function redactToolPayloadTextWithConfig(
   return redactSensitiveText(text, resolveToolPayloadRedaction(loggingConfig));
 }
 
+function visitToolPayloadMatches(
+  text: string,
+  pattern: ResolvedRedactPattern,
+  visit: Parameters<typeof visitRedactMatches>[2],
+): void {
+  if (usesBoundedScan(pattern)) {
+    visitPatternBounded(text, pattern, (match) => visit(match, pattern));
+  } else {
+    visitRedactMatches(text, pattern, visit);
+  }
+}
+
+/** Final support-file protection edits JSON scalars without rewriting its delimiters. */
+export function redactDiagnosticSupportBundleFile(
+  file: DiagnosticSupportBundleFile,
+): DiagnosticSupportBundleFile {
+  if (file.mediaType !== "application/json" && file.mediaType !== "application/x-ndjson") {
+    return { ...file, content: redactToolPayloadText(file.content) };
+  }
+  const { patterns } = resolveRedactOptions(resolveToolPayloadRedaction());
+  return {
+    ...file,
+    content: redactJsonRecord(
+      file.content,
+      { value: { structured: false, primitiveMask: false }, children: new Map() },
+      [
+        [],
+        [{ patterns: preparationPatterns }, { patterns, visitMatches: visitToolPayloadMatches }],
+      ],
+      prepareRedactionCapture,
+      () => [],
+      () => [],
+      () => [],
+      () => true,
+    ),
+  };
+}
+
 export function isSensitiveFieldKey(key: string): boolean {
   return STRUCTURED_SECRET_FIELD_RE.test(key) || STRUCTURED_SECRET_ENV_FIELD_RE.test(key);
 }
@@ -769,11 +814,6 @@ function shouldRedactStructuredPrimitiveField(key: string, path: readonly string
     shouldRedactStructuredAuthorizationCode(normalizedKey, path) ||
     isSensitiveFieldKey(key)
   );
-}
-
-function isPlainRedactableObject(value: object): value is Record<string, unknown> {
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
 }
 
 function redactStructuredSecretValue(
@@ -1050,57 +1090,11 @@ export function redactLogRecordForTransport(
   let inputChars: number | undefined;
   try {
     const resolved = tail?.redaction ?? resolveRedactOptions();
-    const ordinary = { structured: true, primitiveMask: false };
-    const origins: RedactionOrigins = { value: ordinary, children: new Map() };
-    const ancestors: {
-      value: object;
-      path: string[];
-      key: string;
-      origins: RedactionOrigins;
-      structured: boolean;
-    }[] = [];
-    const json = JSON.stringify(record, function (this: object, key, value: unknown) {
-      while (ancestors.length > 0 && ancestors.at(-1)?.value !== this) {
-        ancestors.pop();
-      }
-      const parent = ancestors.at(-1);
-      const array = Array.isArray(this);
-      const fieldKey = array && parent ? parent.key : key;
-      const path = array && parent ? parent.path : parent ? [...parent.path, key] : [];
-      const source = value;
-      const structured =
-        (parent?.structured ?? true) &&
-        (source === null ||
-          typeof source !== "object" ||
-          Array.isArray(source) ||
-          isPlainRedactableObject(source));
-      const primitiveMask =
-        structured &&
-        ["number", "boolean", "bigint"].includes(typeof source) &&
-        classifyLogFieldProtection(fieldKey, path, !array, undefined) === "legacy";
-      const circular =
-        value !== null &&
-        typeof value === "object" &&
-        ancestors.some((frame) => frame.value === value);
-      const emitted = circular ? "[Circular]" : typeof value === "bigint" ? String(value) : value;
-      const container = emitted !== null && typeof emitted === "object";
-      let node = origins;
-      if (parent && parent.structured && (container || !structured || primitiveMask || circular)) {
-        node = {
-          value: { structured: structured && !circular, primitiveMask },
-          children: new Map(),
-        };
-        parent.origins.children.set(key, node);
-      } else if (parent) {
-        node = parent.origins;
-      } else {
-        origins.value = { structured, primitiveMask };
-      }
-      if (container) {
-        ancestors.push({ value: emitted, path, key: fieldKey, origins: node, structured });
-      }
-      return emitted;
-    });
+    const { json, origins } = serializeRedactionRecord(
+      record,
+      ({ key, path, objectPath }) =>
+        classifyLogFieldProtection(key, path, objectPath, undefined) === "legacy",
+    );
     inputChars = json.length;
     const couldMatch = createRedactPrefilter(couldMatchDefaultFullContextPatterns);
     const result = JSON.parse(
