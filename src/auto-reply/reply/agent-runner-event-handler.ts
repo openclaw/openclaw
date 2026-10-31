@@ -4,7 +4,6 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
-import { logVerbose } from "../../globals.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../types.js";
@@ -15,6 +14,7 @@ import {
   createCompactionHookNoticePayload,
   createCompactionNoticePayload,
   formatCompactionModelRef,
+  deliverCompactionNoticePayload as deliverNotice,
 } from "./compaction-notice.js";
 
 const agentCompactionLog = createSubsystemLogger("auto-reply/compaction");
@@ -47,15 +47,11 @@ export function createAgentRunEventHandler(params: {
   const currentMessageId =
     params.turn.sessionCtx.MessageSidFull ?? params.turn.sessionCtx.MessageSid;
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
-    const deliver = params.turn.opts?.onBlockReply ?? params.turn.onCompactionNoticePayload;
-    if (!deliver) {
-      return;
-    }
-    try {
-      await deliver(noticePayload);
-    } catch (err) {
-      logVerbose(`compaction ${label} notice delivery failed (non-fatal): ${String(err)}`);
-    }
+    await deliverNotice(
+      noticePayload,
+      params.turn.opts?.onBlockReply ?? params.turn.onCompactionNoticePayload,
+      label,
+    );
   };
 
   return async (evt) => {

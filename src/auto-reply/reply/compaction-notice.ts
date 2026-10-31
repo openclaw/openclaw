@@ -5,6 +5,7 @@ import type { EmbeddedAgentCompactResult } from "../../agents/embedded-agent-run
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { BOUNDED_CONTEXT_NOTICE } from "../../context-engine/transcript-byte-limit.js";
+import { logVerbose } from "../../globals.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import type { ReplyPayload } from "../types.js";
 
@@ -104,4 +105,19 @@ export function createCompactionHookNoticePayload(
     return undefined;
   }
   return createNoticePayload(params.messages.join("\n\n"), params);
+}
+
+export async function deliverCompactionNoticePayload(
+  payload: ReplyPayload,
+  deliver: ((payload: ReplyPayload) => unknown) | undefined,
+  label: string,
+): Promise<void> {
+  if (!deliver) {
+    return;
+  }
+  try {
+    await deliver(payload);
+  } catch (err) {
+    logVerbose(`compaction ${label} notice delivery failed (non-fatal): ${String(err)}`);
+  }
 }
