@@ -175,6 +175,40 @@ describe("subagents command snapshots", () => {
     await configureMockSubagentRegistryPersistence({ persistRegistryRows: () => {} });
   });
 
+  it("identifies active and recent executors when children share a model", async () => {
+    const now = Date.now();
+    for (const [agentId, recent] of [
+      ["main", false],
+      ["research", true],
+    ] as const) {
+      seedRun({
+        runId: `owner-${agentId}`,
+        childSessionKey: `agent:${agentId}:subagent:worker`,
+        task: `${agentId} worker`,
+        model: "openai/shared-model",
+        createdAt: now - 2_000,
+        startedAt: now - 2_000,
+        ...(recent ? { endedAt: now - 1_000, outcome: { status: "ok" } } : {}),
+      });
+    }
+    seedRun({
+      runId: "owner-ops",
+      childSessionKey: "global",
+      childAgentId: "ops",
+      task: "ops worker",
+      model: "openai/shared-model",
+      createdAt: now - 1_000,
+      startedAt: now - 1_000,
+    });
+
+    const text = requireReplyText((await runCommand("/subagents list"))?.reply);
+    expectText(text, [
+      "main worker [agent: main] (shared-model",
+      "ops worker [agent: ops] (shared-model",
+      "research worker [agent: research] (shared-model",
+    ]);
+  });
+
   it("renders the captured controlled run and descendant facts after a concurrent settlement", async () => {
     const parent = commandRun({
       runId: "paired-parent",

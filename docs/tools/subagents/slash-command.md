@@ -17,6 +17,9 @@ read_when:
 /subagents info <id|#>
 ```
 
+`/subagents list` shows the resolved executor as `[agent: <id>]` in active and
+recent rows, including children that run under the requester's own agent.
+
 `/subagents info` shows run metadata (status, timestamps, session id,
 transcript path, cleanup). `/subagents log` prints recent chat turns for a
 run; add the `tools` token to include tool-call/result messages (omitted

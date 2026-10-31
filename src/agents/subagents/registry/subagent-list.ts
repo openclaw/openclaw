@@ -205,7 +205,8 @@ export function buildSubagentList(params: {
     const pausedForMs = resolveYieldedLeafPausedForMs(entry, execution, now);
     const pausedAge =
       pausedForMs === undefined ? undefined : formatDurationCompact(pausedForMs, { spaced: true });
-    const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplayName(modelSelection)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${pausedAge ? `, paused ${pausedAge}` : ""}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
+    const childAgentId = resolveSubagentChildAgentId(entry);
+    const line = `${index}. ${taskNamePrefix}${label}${childAgentId ? ` [agent: ${childAgentId}]` : ""} (${resolveModelDisplayName(modelSelection)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${pausedAge ? `, paused ${pausedAge}` : ""}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
     const view = {
       index,
       line,
