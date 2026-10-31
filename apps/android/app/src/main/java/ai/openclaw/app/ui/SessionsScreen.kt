@@ -1307,7 +1307,7 @@ internal fun buildSessionTreeSections(
             ?: entry.spawnedBy?.trim()?.takeIf(String::isNotEmpty)
         // Ordinary New chats can retain a settings-inheritance parent without being child sessions.
         if (
-          entry.createdVia == "operator" && entry.spawnDepth == 0 &&
+          entry.createdVia == "operator" && entry.spawnDepth == 0 && entry.explicitChild != true &&
           entry.spawnedBy.isNullOrBlank() && entry.worktreeId == null &&
           entry.forkedFromParent != true && entry.classification != "subagent"
         ) {

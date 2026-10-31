@@ -363,6 +363,8 @@ type SessionEntryCore = SessionEntryProvenance &
     repositoryWorkspaceId?: string;
     /** Explicit parent session linkage for dashboard-created child sessions. */
     parentSessionKey?: string;
+    /** Explicit operator child placement, independent of spawn depth or transcript forks. */
+    explicitChild?: boolean;
     /** Exact parent incarnation captured when this child was created. */
     parentSessionId?: string;
     /** Exact parent lifecycle captured for native spawn authority, including same-id resets. */

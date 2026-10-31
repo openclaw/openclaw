@@ -2348,14 +2348,18 @@ class ChatController internal constructor(
   }
 
   /** Starts a fresh chat for the active gateway session key. */
-  fun startNewChat(worktree: Boolean = false) {
-    scope.launch { startNewChatAwait(worktree = worktree) }
+  fun startNewChat(
+    worktree: Boolean = false,
+    creation: ChatSessionCreation = ChatSessionCreation.Default,
+  ) {
+    scope.launch { startNewChatAwait(worktree = worktree, creation = creation) }
   }
 
   /** Starts a fresh chat and returns whether the gateway created the session. */
   suspend fun startNewChatAwait(
     worktree: Boolean = false,
     catalogId: String? = null,
+    creation: ChatSessionCreation = ChatSessionCreation.Default,
   ): Boolean {
     val createContext = currentCoroutineContext()
     createContext.ensureActive()
@@ -2364,6 +2368,10 @@ class ChatController internal constructor(
     val defaultAgentRevision: Long?
     synchronized(gatewayScopeApplyLock) {
       selection = currentSessionActionSnapshot(_sessionKey.value) ?: return false
+      if (creation is ChatSessionCreation.Child && creation.parentKey != selection.sessionKey) {
+        updateLocalizedErrorText(nativeText("The selected session changed. Select the parent session and try again."))
+        return false
+      }
       parentSessionId = _sessionId.value
       defaultAgentRevision = currentDefaultAgentRevision().takeIf { activeSessionTracksDefaultAgent(selection.sessionKey) }
     }
@@ -2386,22 +2394,44 @@ class ChatController internal constructor(
         (parentSessionId == null || parentSessionId == _sessionId.value) &&
         (defaultAgentRevision == null || defaultAgentRevision == currentDefaultAgentRevision())
     val normalizedCatalogId = catalogId?.trim()?.takeIf(String::isNotEmpty)
+    val independent =
+      creation == ChatSessionCreation.Default && !worktree && normalizedCatalogId == null
     return try {
       publishGatewayState(lease, ::ownsSelection) {
         createContext.ensureActive()
         updateErrorText(null)
       } ?: return false
       if (lease == null) throw GatewayRequestNotEnqueued("not connected")
+      if (creation != ChatSessionCreation.Default && (worktree || normalizedCatalogId != null)) {
+        throw GatewayRequestNotEnqueued("Choose either sidebar session creation, a catalog, or a worktree.")
+      }
+      if (creation is ChatSessionCreation.Child && parentSessionId.isNullOrBlank()) {
+        throw GatewayRequestNotEnqueued("Load the parent session before creating a child session.")
+      }
       val inheritParent =
         synchronized(gatewayScopeApplyLock) {
           // Plain New starts independently of a native thread. Explicit worktree
           // requests retain their parent so the creation guard can reject them.
-          !_sessionId.value.isNullOrBlank() &&
-            (worktree || !isSessionModelSelectionLocked(sessionSettingsKey(parentKey, createGatewayScope, ownerAgentId)))
+          !independent &&
+            (
+              creation is ChatSessionCreation.Child ||
+                (
+                  !_sessionId.value.isNullOrBlank() &&
+                    (worktree || !isSessionModelSelectionLocked(sessionSettingsKey(parentKey, createGatewayScope, ownerAgentId)))
+                )
+            )
         }
       val params =
         buildJsonObject {
           put("agentId", JsonPrimitive(ownerAgentId))
+          if (independent) {
+            put("independent", JsonPrimitive(true))
+          }
+          if (creation is ChatSessionCreation.Child) {
+            put("explicitChild", JsonPrimitive(true))
+            // An unspecified key can reset main instead of creating a parallel child.
+            put("key", JsonPrimitive("agent:$ownerAgentId:dashboard:${UUID.randomUUID()}"))
+          }
           if (normalizedCatalogId != null) {
             put("catalogId", JsonPrimitive(normalizedCatalogId))
           } else {
@@ -2413,7 +2443,13 @@ class ChatController internal constructor(
             if (worktree) put("worktree", JsonPrimitive(true))
           }
         }
-      val res = requestSessionCreate(createGatewayScope, params, lease)
+      val res =
+        requestSessionCreate(
+          createGatewayScope,
+          params,
+          lease,
+          allowUnlinkedFallback = creation !is ChatSessionCreation.Child,
+        )
       val createdKey = parseCreatedSessionKey(json, res) ?: parentKey
       val generation =
         publishGatewayState(lease, ::ownsSelection) {
@@ -7709,6 +7745,7 @@ class ChatController internal constructor(
       hasActiveRunMetadata = "hasActiveRun" in obj || "activeRunIds" in obj,
       hasActiveRunIdsMetadata = "activeRunIds" in obj,
       parentSessionKey = obj["parentSessionKey"].asStringOrNull()?.trim(),
+      explicitChild = obj["explicitChild"].asBooleanOrNull(),
       worktreeId = obj["worktree"].asObjectOrNull()?.nonBlankString("id"),
       hasWorktreeMetadata = "worktree" in obj,
       spawnDepth = obj["spawnDepth"].asLongOrNull()?.toInt(),
@@ -8142,6 +8179,7 @@ class ChatController internal constructor(
     gatewayScope: ChatCacheScope?,
     params: JsonObject,
     lease: GatewaySession.RequestLease,
+    allowUnlinkedFallback: Boolean = true,
   ): String {
     val parent =
       params["parentSessionKey"].asStringOrNull()?.let { key ->
@@ -8171,11 +8209,19 @@ class ChatController internal constructor(
       request(params)
     } catch (err: GatewayRequestRejected) {
       val message = err.gatewayError.message
-      val isOlderGateway =
+      val isInvalidCreateParams =
         err.gatewayError.code == "INVALID_REQUEST" &&
-          message.contains("invalid sessions.create params") &&
-          message.contains("succeedsParent")
-      if (!isOlderGateway || "succeedsParent" !in params) throw err
+          message.contains("invalid sessions.create params")
+      if (isInvalidCreateParams && "independent" in params && message.contains("independent")) {
+        throw GatewayRequestNotEnqueued("Update your Gateway to create independent sessions.")
+      }
+      if (isInvalidCreateParams && "explicitChild" in params && message.contains("explicitChild")) {
+        throw GatewayRequestNotEnqueued("Update your Gateway to create child sessions.")
+      }
+      if (!isInvalidCreateParams || !message.contains("succeedsParent") || "succeedsParent" !in params) throw err
+      if (!allowUnlinkedFallback) {
+        throw GatewayRequestNotEnqueued("Update your Gateway to create child sessions.")
+      }
 
       // Older Gateways cannot express a linked parallel child. Keep New Chat parallel by
       // dropping the parent lifecycle fields instead of falling back to legacy rollover.
@@ -9117,6 +9163,7 @@ internal fun mergeChatSessionEntry(
         existing.hasActiveRunIdsMetadata || next.hasActiveRunIdsMetadata
       },
     parentSessionKey = next.parentSessionKey ?: existing.parentSessionKey,
+    explicitChild = next.explicitChild ?: existing.explicitChild,
     worktreeId = if (next.hasWorktreeMetadata) next.worktreeId else existing.worktreeId,
     hasWorktreeMetadata = next.hasWorktreeMetadata || existing.hasWorktreeMetadata,
     spawnDepth = next.spawnDepth ?: existing.spawnDepth,

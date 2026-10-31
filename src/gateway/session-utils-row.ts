@@ -390,6 +390,7 @@ function projectSessionRowProfiles(
   const participants = [...projected].flatMap(([key, participant]) =>
     key === ownerKey ? [] : [participant],
   );
+  const nonEmptyParticipants = participants.length ? participants : undefined;
   return {
     createdActor: projectSessionActor(
       resolveSessionCreatorActor(entry?.createdActor),
@@ -399,12 +400,8 @@ function projectSessionRowProfiles(
     ),
     owner,
     // Keep the released v4 summary stable; expanded identities are additive for newer clients.
-    participants: participants.length
-      ? participants.slice(0, SESSION_PARTICIPANT_LIMIT)
-      : undefined,
-    expandedParticipants: participants.length
-      ? participants.slice(0, MAX_SESSION_PARTICIPANTS)
-      : undefined,
+    participants: nonEmptyParticipants?.slice(0, SESSION_PARTICIPANT_LIMIT),
+    expandedParticipants: nonEmptyParticipants?.slice(0, MAX_SESSION_PARTICIPANTS),
     participantCount: participants.length || undefined,
     archivedBy: projectSessionActor(entry?.archivedBy, userProfileIdentityById, cfg),
   };
@@ -550,6 +547,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     hasAutomation: input.hasAutomation,
     // Navigation lineage is persisted; runtime control is exposed separately above.
     parentSessionKey: entry?.parentSessionKey,
+    explicitChild: entry?.explicitChild,
     parentSessionId: entry?.parentSessionId,
     responseUsage: entry?.responseUsage,
     effectiveResponseUsage: resolveEffectiveResponseUsage(

@@ -199,9 +199,10 @@ class ChatControllerCommandControlsTest {
 
       val create = requests.first { it.first == "sessions.create" }
       assertTrue(create.second.orEmpty().contains("\"agentId\":\"main\""))
-      assertTrue(create.second.orEmpty().contains("\"parentSessionKey\":\"main\""))
-      assertTrue(create.second.orEmpty().contains("\"emitCommandHooks\":true"))
-      assertTrue(create.second.orEmpty().contains("\"succeedsParent\":false"))
+      assertTrue(create.second.orEmpty().contains("\"independent\":true"))
+      assertFalse(create.second.orEmpty().contains("\"parentSessionKey\""))
+      assertFalse(create.second.orEmpty().contains("\"emitCommandHooks\""))
+      assertFalse(create.second.orEmpty().contains("\"succeedsParent\""))
       assertFalse(create.second.orEmpty().contains("\"label\""))
       assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
       assertEquals("fresh-session", controller.sessionId.value)
@@ -312,7 +313,7 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
-  fun startNewChatRetriesWithoutParentLifecycleAgainstOlderGateway() =
+  fun worktreeCreationRetriesWithoutParentLifecycleAgainstOlderGateway() =
     runTest {
       var createCalls = 0
       val (controller, requests) =
@@ -338,7 +339,7 @@ class ChatControllerCommandControlsTest {
       controller.load("main")
       advanceUntilIdle()
 
-      assertTrue(controller.startNewChatAwait())
+      assertTrue(controller.startNewChatAwait(worktree = true))
 
       val creates = requests.filter { it.first == "sessions.create" }
       assertEquals(2, creates.size)
@@ -372,7 +373,8 @@ class ChatControllerCommandControlsTest {
         assertTrue("New session must work with catalog=$catalogId", controller.startNewChatAwait(catalogId = catalogId))
 
         val create = json.parseToJsonElement(requests.single { it.first == "sessions.create" }.second.orEmpty()).jsonObject
-        assertEquals(setOfNotNull("agentId", catalogId?.let { "catalogId" }), create.keys)
+        assertEquals(setOf("agentId", if (catalogId == null) "independent" else "catalogId"), create.keys)
+        assertEquals(if (catalogId == null) JsonPrimitive(true) else null, create["independent"])
         assertEquals(JsonPrimitive("main"), create["agentId"])
         assertEquals(catalogId?.let(::JsonPrimitive), create["catalogId"])
         assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
@@ -991,7 +993,8 @@ class ChatControllerCommandControlsTest {
 
       val create = requests.first { it.first == "sessions.create" }
       assertTrue(create.second.orEmpty().contains("\"agentId\":\"ops\""))
-      assertTrue(create.second.orEmpty().contains("\"parentSessionKey\":\"agent:ops:dashboard:parent\""))
+      assertFalse(create.second.orEmpty().contains("\"parentSessionKey\""))
+      assertTrue(create.second.orEmpty().contains("\"independent\":true"))
       assertEquals("agent:ops:dashboard:fresh", controller.sessionKey.value)
     }
 

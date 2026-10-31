@@ -207,6 +207,7 @@ export const SessionRowSchema = Type.Object(
     activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.String()),
     parentSessionKey: Type.Optional(Type.String()),
+    explicitChild: Type.Optional(Type.Boolean()),
     parentSessionId: Type.Optional(Type.String()),
     controlOwnerSessionKey: Type.Optional(Type.String()),
     /** Retained owners used by spawnedBy filtering at snapshotAt; empty retires child membership. */

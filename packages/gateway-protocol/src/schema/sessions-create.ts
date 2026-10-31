@@ -59,6 +59,18 @@ export const SessionsCreateParamsSchema = closedObject({
   visibility: Type.Optional(SessionVisibilitySchema),
   catalogId: Type.Optional(NonEmptyString),
   parentSessionKey: Type.Optional(NonEmptyString),
+  explicitChild: Type.Optional(
+    Type.Boolean({
+      description:
+        "Create a new child displayed beneath its parent; requires parentSessionKey. Does not fork the transcript or change spawn depth.",
+    }),
+  ),
+  independent: Type.Optional(
+    Type.Boolean({
+      description:
+        "Create a new root without implicit main-session parentage. Cannot be combined with parentSessionKey.",
+    }),
+  ),
   spawnDepth: Type.Optional(
     Type.Integer({
       minimum: 1,

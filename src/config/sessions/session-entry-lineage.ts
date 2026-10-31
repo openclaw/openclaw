@@ -99,6 +99,7 @@ export function preserveSessionLineage(
     | "parentSessionId"
     | "parentSessionLifecycleRevision"
     | "forkSource"
+    | "explicitChild"
     | "forkedFromParent"
     | "spawnDepth"
     | "subagentRole"
@@ -113,6 +114,7 @@ export function preserveSessionLineage(
     spawnedBySenderIsOwner: entry?.spawnedBySenderIsOwner,
     spawnedBySessionId: entry?.spawnedBySessionId,
     parentSessionKey: entry?.parentSessionKey,
+    explicitChild: entry?.explicitChild,
     parentSessionId: entry?.parentSessionId,
     parentSessionLifecycleRevision: entry?.parentSessionLifecycleRevision,
     forkSource: entry?.forkSource,

@@ -140,6 +140,18 @@ const fileReadMetadataSchema = Type.Pick(SessionsFilesGetResultSchema, ["root", 
 const invalidOwner = { key: "s", kind: "direct", owner: { actor: { type: "unknown" } } };
 
 describe("standalone browser protocol validation", () => {
+  it("accepts explicit-child session history without weakening the row schema", () => {
+    for (const explicitChild of [true, false, undefined, "true"]) {
+      const value = {
+        ...history,
+        sessionInfo: { ...history.sessionInfo, explicitChild },
+      };
+      const expected = explicitChild !== "true";
+      expect(Value.Check(historySchema, value)).toBe(expected);
+      expect(checks.isChatHistoryState(value)).toBe(expected);
+    }
+  });
+
   it("keeps bounded display positions and strips unrelated persisted fields", () => {
     const expected = {
       source: "🦞".repeat(128),

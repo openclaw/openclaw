@@ -11,6 +11,7 @@ import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatReactionSummary
+import ai.openclaw.app.chat.ChatSessionCreation
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSessionPatch
 import ai.openclaw.app.chat.ChatSwarmGroup
@@ -1834,7 +1835,12 @@ class MainViewModel internal constructor(
 
   fun abortChat(): Unit = ensureRuntime().chat.abort()
 
-  fun startNewChat(worktree: Boolean = false): Unit = ensureRuntime().startNewChat(worktree = worktree)
+  fun startNewChat(
+    worktree: Boolean = false,
+    creation: ChatSessionCreation = ChatSessionCreation.Default,
+  ) {
+    ensureRuntime().startNewChat(worktree = worktree, creation = creation)
+  }
 
   fun refreshChatCommands(): Unit = ensureRuntime().chat.refreshCommands()
 

@@ -34,7 +34,7 @@ type SessionCreation = NonNullable<CreateGatewaySessionParams["creation"]> &
  * lineage so notices cannot cross the storage boundary.
  */
 export function resolveSessionCreateRoot(
-  params: Pick<CreateGatewaySessionParams, "cfg" | "authorizedPluginId" | "fork">,
+  params: Pick<CreateGatewaySessionParams, "cfg" | "authorizedPluginId" | "fork" | "independent">,
   facts: {
     parentSessionKey: string | undefined;
     incognito: boolean;
@@ -50,6 +50,7 @@ export function resolveSessionCreateRoot(
     facts.targetSessionKey !== facts.mainSessionKey;
   const groupedUnderMain =
     standalone &&
+    params.independent !== true &&
     (params.cfg.session?.dmScope ?? "main") === "main" &&
     params.cfg.session?.scope !== "global";
   return {

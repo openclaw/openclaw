@@ -8,6 +8,19 @@ import org.junit.Test
 
 class SessionsScreenGroupingTest {
   @Test
+  fun explicitChildrenNestWithoutChangingOrdinaryNewPlacement() {
+    val parent = session("parent").copy(createdVia = "operator", spawnDepth = 0)
+    val ordinary = session("ordinary").copy(parentSessionKey = parent.key, createdVia = "operator", spawnDepth = 0)
+    val child = ordinary.copy(key = "child", explicitChild = true)
+    val grandchild = child.copy(key = "grandchild", parentSessionKey = child.key)
+    val rows = buildSessionTreeSections(listOf(parent, ordinary, child, grandchild)).flatMap { it.entries }
+    assertEquals(
+      listOf("parent" to 0, "child" to 1, "grandchild" to 2, "ordinary" to 0),
+      rows.map { it.session.key to it.depth },
+    )
+  }
+
+  @Test
   fun snoozedFilterSeparatesSleepingRowsUntilTheirDeadline() {
     val nowMs = 1_800_000_000_000L
     val entries =

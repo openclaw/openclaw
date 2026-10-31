@@ -138,6 +138,10 @@ export type CreateGatewaySessionParams = {
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
   catalogTarget?: TrustedCatalogSessionTarget;
   parentSessionKey?: string;
+  /** Create a new root without implicit dashboard parentage. */
+  independent?: boolean;
+  /** Explicit child placement, separate from inherited settings and spawn lineage. */
+  explicitChild?: boolean;
   /**
    * Spawn-lineage depth declared by spawn-owned creations (visible subagent
    * sessions). Requires parentSessionKey. Omitted creations persist depth 0 so

@@ -436,6 +436,14 @@ internal data class ChatActiveRunPresentation(
   val outputTokens: Long? = null,
 )
 
+sealed interface ChatSessionCreation {
+  data object Default : ChatSessionCreation
+
+  data class Child(
+    val parentKey: String,
+  ) : ChatSessionCreation
+}
+
 /**
  * Stable session selector row; [key] is the gateway session key used in chat requests.
  */
@@ -510,6 +518,7 @@ data class ChatSessionEntry(
   val hasActiveRunMetadata: Boolean = hasActiveRun != null || activeRunIds != null,
   val hasActiveRunIdsMetadata: Boolean = activeRunIds != null,
   val parentSessionKey: String? = null,
+  val explicitChild: Boolean? = null,
   val worktreeId: String? = null,
   val hasWorktreeMetadata: Boolean = worktreeId != null,
   val spawnDepth: Int? = null,

@@ -30,9 +30,12 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -363,6 +366,8 @@ internal fun SidebarSessionRow(
   onDragCommit: ((Int) -> Unit)? = null,
   onDragActiveChange: (Boolean) -> Unit = {},
   attention: SidebarAttention? = null,
+  onNewChild: (() -> Unit)? = null,
+  childCreationEnabled: Boolean = true,
 ) {
   val activity =
     sidebarSessionActivity(
@@ -409,6 +414,27 @@ internal fun SidebarSessionRow(
       SidebarAttentionIndicator(attention, palette)
     } else {
       activity?.let { SidebarSessionActivityIndicator(activity = it, palette = palette) }
+    }
+    if (onNewChild != null) {
+      var menuOpen by remember(session.key) { mutableStateOf(false) }
+      Box {
+        IconButton(
+          onClick = { menuOpen = true },
+          modifier = Modifier.testTag("session-menu-${session.key}"),
+        ) {
+          Icon(Icons.Default.MoreVert, contentDescription = nativeString("Session settings"), tint = palette.text)
+        }
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+          DropdownMenuItem(
+            text = { Text(nativeString("New child session")) },
+            enabled = childCreationEnabled,
+            onClick = {
+              menuOpen = false
+              onNewChild()
+            },
+          )
+        }
+      }
     }
     if (session.pinned == true) {
       Icon(

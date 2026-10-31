@@ -241,13 +241,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         ? resolveRegisteredCatalogCreateTarget(catalogId, catalogAgentId, cfg)
         : undefined;
     if (catalogTarget && !catalogTarget.ok) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          catalogTarget.unknownCatalog ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
-          catalogTarget.message,
-        ),
+      respondError(
+        respond,
+        catalogTarget.unknownCatalog ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+        catalogTarget.message,
       );
       return;
     }
@@ -521,6 +518,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         clientScopes,
       ).allowed,
       parentSessionKey,
+      independent: p.independent,
+      explicitChild: p.explicitChild,
       spawnDepth: p.spawnDepth,
       ...resolveSessionCreateRootParameters(p, preparedRoot?.value),
       permissionMode: p.permissionMode,

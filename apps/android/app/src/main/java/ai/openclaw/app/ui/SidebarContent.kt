@@ -472,6 +472,7 @@ internal fun OpenClawSidebar(
   onSelectCatalogSession: (SessionCatalogEntry) -> Unit,
   onCreateCatalogSession: (String) -> Unit,
   onSelectDestination: (SidebarDestination) -> Unit,
+  onNewChildSession: ((String) -> Unit)? = null,
 ) {
   val palette = sidebarPalette(ClawTheme.colors)
   var sessionNowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -497,6 +498,7 @@ internal fun OpenClawSidebar(
   }
   val catalogState by viewModel.sessionCatalogState.collectAsState()
   val sessionCreating by viewModel.chatSessionCreating.collectAsState()
+  val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val catalogAvailable by viewModel.sessionCatalogAvailable.collectAsState()
   val operatorScopes by viewModel.operatorScopes.collectAsState()
   val canMutateSessions = operatorScopesAllowWrite(operatorScopes)
@@ -591,6 +593,12 @@ internal fun OpenClawSidebar(
           selected = session.key == activeSessionKey,
           palette = palette,
           onClick = { onSelectSession(session) },
+          onNewChild =
+            onNewChildSession
+              ?.takeIf {
+                session.key == activeSessionKey && session.modelSelectionLocked != true && !session.sessionId.isNullOrBlank()
+              }?.let { createChild -> { createChild(session.key) } },
+          childCreationEnabled = connection.isConnected && canMutateSessions && !sessionCreating && pendingRunCount == 0,
           onDragCommit =
             if (canMutateSessions && dragSource != null) {
               { direction ->
@@ -733,22 +741,20 @@ internal fun OpenClawSidebar(
       }
       IconButton(
         onClick = onNewSession,
-        enabled = !sessionCreating,
+        enabled = connection.isConnected && canMutateSessions && !sessionCreating && pendingRunCount == 0,
         modifier =
-          Modifier.size(48.dp).semantics {
-            contentDescription = nativeString("New session")
-            if (sessionCreating) stateDescription = nativeString("Loading")
-          },
+          Modifier
+            .size(48.dp)
+            .testTag("sidebar-new-session")
+            .semantics {
+              contentDescription = nativeString("New session")
+              if (sessionCreating) stateDescription = nativeString("Loading")
+            },
       ) {
         if (sessionCreating) {
           CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = palette.text)
         } else {
-          Icon(
-            imageVector = Icons.Default.Add,
-            contentDescription = null,
-            tint = palette.text,
-            modifier = Modifier.size(22.dp),
-          )
+          Icon(imageVector = Icons.Default.Add, contentDescription = null, tint = palette.text, modifier = Modifier.size(22.dp))
         }
       }
       if (showCloseButton) {

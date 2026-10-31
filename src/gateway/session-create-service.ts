@@ -175,6 +175,12 @@ async function createGatewaySessionInScope(
   const label = normalizeOptionalString(params.label);
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
+  if (params.independent === true && parentSessionKey) {
+    return invalidSessionRequest("independent creation cannot specify parentSessionKey");
+  }
+  if (params.explicitChild === true && !parentSessionKey) {
+    return invalidSessionRequest("explicit child creation requires parentSessionKey");
+  }
   const projectId = normalizeOptionalString(params.projectId);
   const pendingProjectGitUrl = normalizeOptionalString(params.pendingProjectGitUrl);
   const requestedToolOverrides = params.toolOverrides !== undefined;
@@ -524,6 +530,12 @@ async function createGatewaySessionInScope(
     if (!visibilityAdmission.ok) {
       return visibilityAdmission;
     }
+    if (params.explicitChild === true && currentTargetEntry) {
+      return invalidSessionRequest("explicit child creation requires a new session key");
+    }
+    if (params.independent === true && currentTargetEntry) {
+      return invalidSessionRequest("independent creation requires a new session key");
+    }
     // Delegated isolation survives changes to the creator's current role.
     const creationSandbox =
       creation?.sandbox ?? (creation ? resolveCreatorSandbox(params.cfg, creation) : undefined);
@@ -859,6 +871,9 @@ async function createGatewaySessionInScope(
           // and plugin sessions) persists as a depth-0 root. Reused entries keep
           // their stored depth.
           ...(existingEntry === undefined ? { spawnDepth: params.spawnDepth ?? 0 } : {}),
+          ...(existingEntry === undefined && params.explicitChild === true
+            ? { explicitChild: true as const }
+            : {}),
           ...(existingEntry === undefined ? spawnToolPolicy : {}),
           ...(existingEntry === undefined && incognito ? { incognito: true as const } : {}),
         };

@@ -137,6 +137,7 @@ export function buildGatewaySessionSnapshot(params: {
     lastAssistantMessage: sessionRow.lastAssistantMessage ?? null,
     deliveryContext: sessionRow.deliveryContext,
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
+    explicitChild: sessionRow.explicitChild,
     childSessions: sessionRow.childSessions,
     thinkingLevel: sessionRow.thinkingLevel ?? null,
     cyberAccessProgram: sessionRow.cyberAccessProgram ?? null,

@@ -67,6 +67,198 @@ function createSession(
   );
 }
 
+test("sessions.create publishes independent roots and explicit children without changing the parent", async () => {
+  testState.sessionConfig = { dmScope: "main" };
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("existing-sidebar-parent", {
+        thinkingLevel: "high",
+        fastMode: true,
+      }),
+    },
+  });
+  const parentKey = "agent:main:main";
+  const parentBefore = loadSessionEntry({ sessionKey: parentKey, storePath });
+  expect(parentBefore?.sessionId).toBe("existing-sidebar-parent");
+  const root = await directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+    agentId: "main",
+    key: "agent:main:dashboard:independent-sidebar",
+    independent: true,
+  });
+  expect(root.ok).toBe(true);
+  const rootKey = "agent:main:dashboard:independent-sidebar";
+  expect(root.payload?.key).toBe(rootKey);
+  const storedRoot = loadSessionEntry({ sessionKey: rootKey, storePath });
+  expect(storedRoot?.sessionId).toBe(root.payload?.sessionId);
+  expect(storedRoot?.parentSessionKey).toBeUndefined();
+  expect(storedRoot?.explicitChild).toBeUndefined();
+  expect(storedRoot?.fastMode).not.toBe(true);
+  expect(storedRoot?.thinkingLevel).not.toBe("high");
+
+  const childKey = "agent:main:dashboard:explicit-sidebar-child";
+  const child = await directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+    agentId: "main",
+    key: childKey,
+    parentSessionKey: parentKey,
+    explicitChild: true,
+    emitCommandHooks: true,
+    succeedsParent: false,
+  });
+  expect(child).toMatchObject({ ok: true, payload: { key: childKey } });
+  expect(child.payload?.sessionId).not.toBe(parentBefore?.sessionId);
+  expect(loadSessionEntry({ sessionKey: childKey, storePath })).toMatchObject({
+    sessionId: child.payload?.sessionId,
+    parentSessionKey: parentKey,
+    explicitChild: true,
+    spawnDepth: 0,
+    thinkingLevel: "high",
+    fastMode: true,
+  });
+  expect(loadSessionEntry({ sessionKey: parentKey, storePath })).toEqual(parentBefore);
+  expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+
+  const rootRead = await directSessionReq<{ session: { key: string; parentSessionKey?: string } }>(
+    "sessions.describe",
+    { key: rootKey },
+  );
+  expect(rootRead).toMatchObject({ ok: true, payload: { session: { key: rootKey } } });
+  expect(rootRead.payload?.session.parentSessionKey).toBeUndefined();
+  const childRead = await directSessionReq("sessions.describe", { key: childKey });
+  expect(childRead).toMatchObject({
+    ok: true,
+    payload: {
+      session: { key: childKey, parentSessionKey: parentKey, explicitChild: true, spawnDepth: 0 },
+    },
+  });
+  const grandchildKey = "agent:main:dashboard:explicit-sidebar-grandchild";
+  const grandchild = await createSession({
+    key: grandchildKey,
+    parentSessionKey: childKey,
+    explicitChild: true,
+    emitCommandHooks: true,
+    succeedsParent: false,
+  });
+  expect(grandchild).toMatchObject({ ok: true, payload: { key: grandchildKey } });
+  // Android ordinary New sends no key or parent, even after opening a descendant.
+  const standalone = await directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+    agentId: "main",
+    independent: true,
+  });
+  expect(standalone.ok).toBe(true);
+  const standaloneKey = standalone.payload!.key;
+  expect([parentKey, childKey, grandchildKey]).not.toContain(standaloneKey);
+  expect(loadSessionEntry({ sessionKey: standaloneKey, storePath })).toMatchObject({
+    sessionId: standalone.payload!.sessionId,
+  });
+  expect(
+    loadSessionEntry({ sessionKey: standaloneKey, storePath })?.parentSessionKey,
+  ).toBeUndefined();
+  expect(loadSessionEntry({ sessionKey: standaloneKey, storePath })?.explicitChild).toBeUndefined();
+  const listed = await directSessionReq("sessions.list", {});
+  expect(listed).toMatchObject({
+    ok: true,
+    payload: {
+      sessions: expect.arrayContaining([
+        expect.objectContaining({
+          key: childKey,
+          parentSessionKey: parentKey,
+          explicitChild: true,
+          spawnDepth: 0,
+        }),
+        expect.objectContaining({
+          key: grandchildKey,
+          parentSessionKey: childKey,
+          explicitChild: true,
+          spawnDepth: 0,
+        }),
+      ]),
+    },
+  });
+  const reset = await directSessionReq("sessions.reset", { key: grandchildKey });
+  expect(reset).toMatchObject({ ok: true });
+  expect(loadSessionEntry({ sessionKey: grandchildKey, storePath })).toMatchObject({
+    parentSessionKey: childKey,
+    explicitChild: true,
+    spawnDepth: 0,
+  });
+});
+
+test("sessions.create without a key creates an explicit child instead of resetting main", async () => {
+  testState.sessionConfig = { dmScope: "main" };
+  await writeSessionStore({
+    entries: { main: sessionStoreEntry("parent-must-survive") },
+  });
+  const parentKey = "agent:main:main";
+  const parentBefore = loadSessionEntry({ sessionKey: parentKey, storePath });
+  const child = await createSession({
+    parentSessionKey: parentKey,
+    explicitChild: true,
+    emitCommandHooks: true,
+    succeedsParent: false,
+  });
+  expect(child.ok).toBe(true);
+  expect(child.payload?.key).not.toBe(parentKey);
+  expect(loadSessionEntry({ sessionKey: parentKey, storePath })).toEqual(parentBefore);
+  expect(loadSessionEntry({ sessionKey: child.payload!.key, storePath })).toMatchObject({
+    parentSessionKey: parentKey,
+    explicitChild: true,
+  });
+  expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+});
+
+test("sessions.create rejects conflicting independent intent and existing-key adoption", async () => {
+  const key = "agent:main:dashboard:existing-child";
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("existing-parent"),
+      [key]: sessionStoreEntry("existing-child", { parentSessionKey: "agent:main:main" }),
+    },
+  });
+  const before = loadSessionEntry({ sessionKey: key, storePath });
+  const missingParent = await createSession({ explicitChild: true });
+  expect(missingParent).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "explicit child creation requires parentSessionKey",
+    },
+  });
+  const childAdoption = await createSession({
+    key,
+    parentSessionKey: "agent:main:main",
+    explicitChild: true,
+  });
+  expect(childAdoption).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "explicit child creation requires a new session key",
+    },
+  });
+  const conflict = await directSessionReq("sessions.create", {
+    agentId: "main",
+    independent: true,
+    parentSessionKey: "agent:main:main",
+  });
+  expect(conflict).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "independent creation cannot specify parentSessionKey",
+    },
+  });
+  const adoption = await directSessionReq("sessions.create", {
+    agentId: "main",
+    key,
+    independent: true,
+  });
+  expect(adoption).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: "independent creation requires a new session key" },
+  });
+  expect(loadSessionEntry({ sessionKey: key, storePath })).toEqual(before);
+});
+
 async function resetMain(params: Partial<CreateParams>) {
   const { createGatewaySession } = await import("./session-create-service.js");
   return createGatewaySession({
