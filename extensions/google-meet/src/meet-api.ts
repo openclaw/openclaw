@@ -240,6 +240,8 @@ async function listGoogleMeetCollection<T extends { name?: string }>(params: {
   operation: string;
 }): Promise<T[]> {
   const items: T[] = [];
+  // Reusing an opaque cursor cannot make progress, so fail instead of polling forever.
+  const seenPageTokens = new Set<string>();
   let pageToken: string | undefined;
   do {
     const payload = await fetchGoogleMeetJson<Record<string, unknown>>({
@@ -257,7 +259,17 @@ async function listGoogleMeetCollection<T extends { name?: string }>(params: {
     if (params.maxItems !== undefined && items.length >= params.maxItems) {
       break;
     }
-    pageToken = typeof payload.nextPageToken === "string" ? payload.nextPageToken : undefined;
+    const nextPageToken =
+      typeof payload.nextPageToken === "string" ? payload.nextPageToken : undefined;
+    if (nextPageToken && seenPageTokens.has(nextPageToken)) {
+      throw new Error(
+        `Google Meet ${params.operation} repeated nextPageToken; pagination stopped. Retry later.`,
+      );
+    }
+    if (nextPageToken) {
+      seenPageTokens.add(nextPageToken);
+    }
+    pageToken = nextPageToken;
   } while (pageToken);
   return items;
 }
