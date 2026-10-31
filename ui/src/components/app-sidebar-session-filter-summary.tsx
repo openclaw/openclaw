@@ -138,7 +138,6 @@ export function renderSessionListToolbar(host: SessionListHost & { onToggleSideb
         }}
       >
         <Icon name="listFilter" />
-        <span class="sidebar-session-sort__status">{statusLabel()}</span>
       </button>
       <SidebarCollapseToggle onToggle={() => host.onToggleSidebar?.()} />
     </div>

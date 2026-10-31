@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
 import {
   getConfiguredDecisionProviderIds,
   resolveDecisionModelSetting,
@@ -19,28 +18,24 @@ import {
   decisionResultV1ToV2,
   decisionResultV2ToV1,
 } from "./compatibility.js";
+import { DecisionContractError } from "./contract-error.js";
 import {
   decisionDebugEnabled,
   logDecisionEvaluation,
   type DecisionEvaluationFacts,
 } from "./diagnostics.js";
 import type { DecisionEvaluateOptionsV2 } from "./execution-types.js";
+import type { PreparedDecisionBillingFacts } from "./host-billing.js";
 import type { DecisionOutcome, DecisionOutcomeV2, UnavailableReason } from "./host-outcomes.js";
 import type { ProviderFailureReason } from "./provider-outcomes.js";
 import type { DecisionProviderV2, DecisionProviderV1 } from "./provider-types.js";
 import type { DecisionBatchV2 } from "./types-v2.js";
 import type { DecisionBatch } from "./types.js";
-import { DecisionContractError, validateDecisionResult } from "./validation.js";
+import { validateDecisionResult } from "./validation.js";
 
 type Options = DecisionEvaluateOptionsV2;
 type Batch = DecisionBatch | DecisionBatchV2;
 type Outcome = DecisionOutcome | DecisionOutcomeV2;
-/** Core accounting consumes only these route-bound public billing facts. */
-export type PreparedDecisionBilling = {
-  provider: string;
-  model: string;
-  billing?: ModelDecisionCapabilities["billing"];
-};
 const FAILURE_REASONS = new Set<ProviderFailureReason>([
   "credentials-unavailable",
   "authentication",
@@ -240,7 +235,7 @@ export class DecisionProviderHost {
     version: 1 | 2,
     consumerId?: string,
     isAdmissible?: () => boolean,
-    onPreparedBilling?: (facts: PreparedDecisionBilling) => void,
+    onPreparedBilling?: (facts: PreparedDecisionBillingFacts) => void,
   ): Promise<Outcome> {
     const evaluationStarted = performance.now();
     const facts: DecisionEvaluationFacts = { dispatched: false };

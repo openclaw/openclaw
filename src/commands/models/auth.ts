@@ -1,10 +1,6 @@
 import { cancel } from "@clack/prompts";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
@@ -66,6 +62,7 @@ import {
   normalizeManualAuthProvider,
   readPipedStdin,
   resolveDefaultTokenProfileId,
+  resolveManualTokenExpiryMs,
   validateOpenAICodexApiKeyInput,
 } from "./auth-manual-input.js";
 import {
@@ -79,6 +76,7 @@ import { promotePersistedAuthProfile } from "./auth-profile-promotion.js";
 import {
   refreshProviderAuthAfterLogin,
   refreshRunningGatewayAuthState,
+  refreshSavedAuthAfterSettingsFailure,
   type ModelAuthRefreshOutcome,
 } from "./auth-refresh.js";
 import {
@@ -90,19 +88,6 @@ import {
   resolveModelsTargetAgent,
   updateConfig,
 } from "./shared.js";
-
-function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
-  const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
-  if (!normalizedExpiresIn) {
-    return undefined;
-  }
-  const durationMs = parseDurationMs(normalizedExpiresIn, { defaultUnit: "d" });
-  const expires = resolveExpiresAtMsFromDurationMs(durationMs);
-  if (expires === undefined) {
-    throw new Error("Invalid expiry duration: resulting token expiry is outside Date range.");
-  }
-  return expires;
-}
 
 function requireManualAuthProvider(raw: string | undefined): string {
   const provider = normalizeOptionalString(raw);
@@ -452,6 +437,9 @@ async function runProviderAuthMethod(
       await login.prompter.note(login.result.notes.join("\n"), "Provider notes");
     }
   } catch (error) {
+    if (error instanceof ProviderAuthConfigApplyError) {
+      await refreshSavedAuthAfterSettingsFailure(login);
+    }
     if (persistedProfiles.length > 0 && !(error instanceof ProviderCredentialsSavedError)) {
       throw new ProviderCredentialsSavedError(
         error instanceof Error

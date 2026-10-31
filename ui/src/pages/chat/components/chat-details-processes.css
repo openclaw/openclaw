@@ -88,7 +88,6 @@
 
 .chat-details-processes__spinner {
   display: block;
-  box-sizing: border-box;
   width: 8px;
   height: 8px;
   border: 1.25px solid color-mix(in srgb, var(--accent) 30%, var(--details-surface, var(--card)));

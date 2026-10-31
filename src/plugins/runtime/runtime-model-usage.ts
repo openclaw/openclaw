@@ -1,8 +1,8 @@
-import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasRecordedUsageCost, normalizeUsage, type UsageLike } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PreparedDecisionBillingFacts } from "../../decisions/host-billing.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { markHostPluginUsageDiagnosticEvent } from "../../infra/diagnostic-plugin-usage-provenance.js";
 import {
@@ -31,12 +31,6 @@ function readExplicitCostUsd(raw: unknown): number | undefined {
     (hasRecordedUsageCost(record) ? asNonNegativeFiniteNumber(record.total) : undefined)
   );
 }
-
-export type PreparedDecisionBillingFacts = {
-  provider: string;
-  model: string;
-  billing?: ModelDecisionCapabilities["billing"];
-};
 
 /** One usage/cost owner; typed result domains need not impersonate a chat completion. */
 export function finalizePluginModelUsage(params: {

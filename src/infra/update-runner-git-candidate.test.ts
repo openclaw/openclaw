@@ -195,46 +195,52 @@ describe("Git candidate activation", () => {
   });
   registerGitActivationDoctorOutcomeTests(fixture);
 
-  it("keeps build and exposure source selection in the admitted candidate", async () => {
-    vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", root);
-    const otherTools = path.join(directory, "other-tools");
-    const inheritedPath = `${otherTools}${path.delimiter}${process.env.PATH ?? ""}`;
-    vi.stubEnv("PATH", inheritedPath);
-    const nodeRuntime = await resolveCandidateNodeRuntimeForTest();
-    await advanceRemote();
-    let built = false;
-    let exposed = false;
-    observeCommands(async (argv, options) => {
-      if (argv[0] === "pnpm" && argv[1] === "build") {
-        built = true;
-        expect(options.env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(options.cwd);
-        expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(otherTools);
-        const selectedNode = await runCommandWithTimeout(["node", "-p", "process.execPath"], {
-          cwd: options.cwd,
-          env: options.env,
-          timeoutMs: 5000,
-        });
-        expect(selectedNode.code, selectedNode.stderr).toBe(0);
-        expect(selectedNode.stdout.trim()).toBe(await fs.realpath(nodeRuntime.path));
-      }
-    });
-    const result = await update({
-      prepareGitExposure: async (candidateRoot, _sha, env) => {
-        exposed = true;
-        expect(env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(candidateRoot);
-        const exposedNode = resolveExecutableFromPathEnv("node", env?.PATH ?? "", env, {
-          cwd: candidateRoot,
-          useCache: false,
-        });
-        expect(exposedNode).toBeDefined();
-        expect(await fs.realpath(exposedNode!)).toBe(await fs.realpath(nodeRuntime.path));
-      },
-    });
-    expect(result.status).toBe("ok");
-    expect(built && exposed).toBe(true);
-    expect(process.env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
-    expect(process.env.PATH).toBe(inheritedPath);
-  });
+  it.each([undefined, "0"])(
+    "keeps candidate build policy and source selection (%s)",
+    async (skipDts) => {
+      vi.stubEnv("OPENCLAW_RUN_NODE_SKIP_DTS_BUILD", skipDts);
+      vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", root);
+      const otherTools = path.join(directory, "other-tools");
+      const inheritedPath = `${otherTools}${path.delimiter}${process.env.PATH ?? ""}`;
+      vi.stubEnv("PATH", inheritedPath);
+      const nodeRuntime = await resolveCandidateNodeRuntimeForTest();
+      await advanceRemote();
+      let built = false;
+      let exposed = false;
+      observeCommands(async (argv, options) => {
+        if (argv[0] === "pnpm" && argv[1] === "build") {
+          built = true;
+          expect(options.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skipDts ?? "1");
+          expect(options.env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(options.cwd);
+          expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(otherTools);
+          const selectedNode = await runCommandWithTimeout(["node", "-p", "process.execPath"], {
+            cwd: options.cwd,
+            env: options.env,
+            timeoutMs: 5000,
+          });
+          expect(selectedNode.code, selectedNode.stderr).toBe(0);
+          expect(selectedNode.stdout.trim()).toBe(await fs.realpath(nodeRuntime.path));
+        }
+      });
+      const result = await update({
+        prepareGitExposure: async (candidateRoot, _sha, env) => {
+          exposed = true;
+          expect(env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(candidateRoot);
+          const exposedNode = resolveExecutableFromPathEnv("node", env?.PATH ?? "", env, {
+            cwd: candidateRoot,
+            useCache: false,
+          });
+          expect(exposedNode).toBeDefined();
+          expect(await fs.realpath(exposedNode!)).toBe(await fs.realpath(nodeRuntime.path));
+        },
+      });
+      expect(result.status).toBe("ok");
+      expect(built && exposed).toBe(true);
+      expect(process.env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
+      expect(process.env.PATH).toBe(inheritedPath);
+      expect(process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skipDts);
+    },
+  );
 
   it.each(["exact", "fallback", "latest"] as const)(
     "qualifies attempted Git candidates before preparation (%s)",

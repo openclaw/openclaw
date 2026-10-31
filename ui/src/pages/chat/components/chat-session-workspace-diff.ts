@@ -27,20 +27,24 @@ export function resolveSessionWorkspaceDiff(
   const agentId = workspace.agentId;
   const canLoadFileText =
     isGatewayMethodAdvertised(state, "sessions.files.get") === true && Boolean(state.client);
-  let uncommittedLoad: Promise<SessionsDiffResult> | undefined;
+  let latestUncommittedLoad: Promise<SessionsDiffResult> | undefined;
+  const uncommittedLoads = new Map<boolean, Promise<SessionsDiffResult>>();
   const content: Extract<SidebarContent, { kind: "session-diff" }> = {
     kind: "session-diff",
     // Checkout retirement replaces this identity; ordinary refreshes retain it.
     owner: workspace,
     load: (scope, options) => {
-      // Background readers share a request; explicit refresh revalidates native state.
-      if (scope.scope === "uncommitted" && uncommittedLoad && !options?.refresh) {
-        return uncommittedLoad;
+      // Counts and patch readers share only matching work; refresh revalidates native state.
+      const summaryOnly = options?.summaryOnly === true;
+      const pending = scope.scope === "uncommitted" && uncommittedLoads.get(summaryOnly);
+      if (pending && !options?.refresh) {
+        return pending;
       }
       const request = client.request<SessionsDiffResult>("sessions.diff", {
         sessionKey,
         ...(agentId ? { agentId } : {}),
         ...scope,
+        ...(summaryOnly ? { summaryOnly } : {}),
         poll: !options?.refresh,
       });
       if (scope.scope !== "uncommitted") {
@@ -48,17 +52,21 @@ export function resolveSessionWorkspaceDiff(
       }
       const load: Promise<SessionsDiffResult> = request
         .then((result) => {
-          if (uncommittedLoad === load) {
+          if (latestUncommittedLoad === load) {
             content.onResult?.({ owner: workspace, scope, result });
           }
           return result;
         })
         .finally(() => {
-          if (uncommittedLoad === load) {
-            uncommittedLoad = undefined;
+          if (uncommittedLoads.get(summaryOnly) === load) {
+            uncommittedLoads.delete(summaryOnly);
+          }
+          if (latestUncommittedLoad === load) {
+            latestUncommittedLoad = undefined;
           }
         });
-      uncommittedLoad = load;
+      latestUncommittedLoad = load;
+      uncommittedLoads.set(summaryOnly, load);
       return load;
     },
     requestUncommitted: () => {
@@ -76,7 +84,7 @@ export function resolveSessionWorkspaceDiff(
           return;
         }
         try {
-          const result = await content.load({ scope: "uncommitted" });
+          const result = await content.load({ scope: "uncommitted" }, { summaryOnly: true });
           if (active && result.computing) {
             timer = setTimeout(() => void refresh(), 500);
           }
