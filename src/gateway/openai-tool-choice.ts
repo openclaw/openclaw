@@ -1,11 +1,12 @@
 // Providers cannot all force tool calls, so both compatibility endpoints constrain
 // exposed tools and reject responses that lack the required structured call.
+// Providers that can force a call also receive the constraint as a stream param.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ClientToolDefinition } from "../agents/command/shared-types.js";
+import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { CreateResponseBody } from "./open-responses.schema.js";
 
-export type ToolChoiceConstraint = { type: "required" } | { type: "function"; name: string };
+export type ToolChoiceConstraint = NonNullable<AgentStreamParams["toolChoice"]>;
 
 export function resolveChatToolChoice(
   toolChoice: unknown,

@@ -380,6 +380,34 @@ describe("OpenAI-compatible command admission", () => {
   );
 });
 
+describe("OpenAI-compatible tool choice forwarding", () => {
+  it("adds the required client tool to the run's stream params", async () => {
+    vi.mocked(agentCommandFromGatewayIngress).mockResolvedValueOnce({
+      payloads: [],
+      meta: { durationMs: 0 },
+    } as never);
+    await runOpenAiCompatibleAgentCommand({
+      message: "probe",
+      streamParams: { maxTokens: 300 },
+      toolChoice: { type: "function", name: "reading" },
+      sessionKey: "agent:main:main",
+      runId: "http-run",
+      messageChannel: "webchat",
+      senderIsOwner: true,
+      requestAuth: {
+        authMethod: "token",
+        trustDeclaredOperatorScopes: false,
+        operatorRoleActor: { kind: "system" },
+      },
+      operatorScopes: ["operator.write"],
+    });
+    expect(vi.mocked(agentCommandFromGatewayIngress).mock.calls.at(-1)?.[0].streamParams).toEqual({
+      maxTokens: 300,
+      toolChoice: { type: "function", name: "reading" },
+    });
+  });
+});
+
 describe("OpenAI-compatible agent run terminal metadata", () => {
   it.each([
     { meta: undefined, stopReason: undefined, calls: undefined },

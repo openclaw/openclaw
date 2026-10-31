@@ -8,6 +8,15 @@ describe("resolveRequestStreamTransportOverrides", () => {
   it("keeps an empty request stream parameter record on the implicit runtime route", () => {
     expect(resolveRequestStreamTransportOverrides({})).toBeUndefined();
   });
+
+  it("keeps a best-effort tool choice on the implicit runtime route", () => {
+    expect(
+      resolveRequestStreamTransportOverrides({ toolChoice: { type: "function", name: "read" } }),
+    ).toBeUndefined();
+    expect(
+      resolveRequestStreamTransportOverrides({ toolChoice: { type: "required" }, maxTokens: 300 }),
+    ).toBe("present");
+  });
 });
 
 describe("resolveInitialThinkLevel", () => {

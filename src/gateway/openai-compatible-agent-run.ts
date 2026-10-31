@@ -15,6 +15,7 @@ import { resolveAssistantResultText } from "./agent-event-assistant-text.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { resolveOpenAiCompatError, type OpenAiCompatError } from "./openai-compat-errors.js";
+import type { ToolChoiceConstraint } from "./openai-tool-choice.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
@@ -111,6 +112,7 @@ export async function runOpenAiCompatibleAgentCommand(params: {
   extraSystemPrompt?: string;
   modelOverride?: string;
   streamParams?: AgentStreamParams;
+  toolChoice?: ToolChoiceConstraint;
   sessionKey: string;
   runId: string;
   messageChannel: string;
@@ -170,7 +172,10 @@ export async function runOpenAiCompatibleAgentCommand(params: {
         clientTools: params.clientTools?.length ? params.clientTools : undefined,
         extraSystemPrompt: params.extraSystemPrompt || undefined,
         model: params.modelOverride,
-        streamParams: params.streamParams,
+        // Providers that can force the tool get it upstream; the caller's post-run check stays.
+        streamParams: params.toolChoice
+          ? { ...params.streamParams, toolChoice: params.toolChoice }
+          : params.streamParams,
         sessionKey: params.sessionKey,
         runId: params.runId,
         deliver: false,

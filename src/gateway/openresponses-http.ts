@@ -395,6 +395,7 @@ export async function handleOpenResponsesHttpRequest(
         message: prompt.message,
         images,
         clientTools: toolChoice.tools,
+        toolChoice: toolChoice.constraint,
         extraSystemPrompt,
         modelOverride,
         streamParams,
