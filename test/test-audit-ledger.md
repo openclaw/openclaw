@@ -44,5 +44,30 @@ Keeper runtime proof and final preservation review remain pending; all other dec
 The full CI planning suite and its manifest/workflow/Git-owner support were read.
 Other routing, admission, frozen-target, and gate layers retain distinct contracts.
 
+Completed core source review (runtime proof only where a landing row says so):
+
+| Owner scope                               | Suites read                        | Decision                                                                                                          |
+| ----------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Routing / pairing                         | 19                                 | Retain independent routing, identity, authorization, and compatibility contracts.                                 |
+| Utilities / test utilities / test helpers | 35                                 | Retain active suites; private channel-target support retirement needs SDK consumer qualification.                 |
+| Boards / projects / decisions             | 23                                 | Retain durable ownership, ordering, and public projections.                                                       |
+| Logging                                   | 64                                 | Retain 465 declarations, including content-absence and privacy guards.                                            |
+| Shared                                    | 111                                | Retain 490 declarations; streaming, borrowed identity, work counts, and native process contracts differ.          |
+| Transcripts / snapshot                    | 28                                 | Retain actual storage, archive, retention, native permissions, and constrained-heap proof.                        |
+| Channels root / direct plugin directory   | 103                                | Retain independent dispatch, registry, Doctor, and compatibility proof; nested directories remain open.           |
+| Hooks                                     | 41                                 | Two export-helper replays are absorbed by actual module import and dispatch; fallback selection remains distinct. |
+| Templates                                 | 31                                 | Retain 230 declarations and all live support/golden fixtures.                                                     |
+| Worker                                    | 36 entry files + 7 imported suites | Retain 259 declarations; native bundle execution remains an explicit runtime gap.                                 |
+| Meeting bot                               | 30                                 | Retain 179 direct and four inherited cleanup declarations.                                                        |
+| TTS                                       | 23                                 | Move mocked capability assertions to the existing real-registry SDK fixture; retain public helper exports.        |
+| LLM                                       | 22                                 | Retain 126 declarations; strengthen one SSRF negative control in a later qualified batch.                         |
+| Audit                                     | 16                                 | Retain 118 declarations; repair one discarded privacy result and three stale SQL-count titles later.              |
+| Media understanding                       | 43                                 | Retain 241 declarations; two obsolete outbound mocks have a live canonical message-runtime replacement.           |
+| Context engine / chat / Canvas            | 19                                 | Retain 139 declarations; one unused mock engine class and one overclaimed title remain candidates.                |
+
+Next core batch: remove the two hook replays and obsolete echo mocks; transfer TTS
+capability checks to both existing real-registry delivery rows, then remove their
+unused channel inventory. Baseline, fault controls, checks, review, and landing pending.
+
 Remaining: declaration-level review across core, plugins, packages, UI, native apps,
 root/script suites, and their shared fixtures; validate and land subsequent owner batches.
