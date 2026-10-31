@@ -30,7 +30,12 @@ it.each([
   expect(
     matches(query, object({ auth: object({ token: string() }) }), {
       path: ["gateway"],
-      hints: { "gateway.auth.token": { label: "Access Token", tags: ["security", "überwachung".normalize("NFD"), "café"] } },
+      hints: {
+        "gateway.auth.token": {
+          label: "Access Token",
+          tags: ["security", "überwachung".normalize("NFD"), "café"],
+        },
+      },
     }),
   ).toBe(expected);
 });
