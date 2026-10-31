@@ -13,6 +13,22 @@ const RECENT_TELEGRAM_UPDATE_TTL_MS = 5 * 60_000;
 const RECENT_TELEGRAM_UPDATE_MAX = 2000;
 
 export { MEDIA_GROUP_ARRIVAL_WINDOW_MS };
+
+/** Album flush delays: the first member waits the arrival window, later ones the quiet window. */
+export function resolveMediaGroupFlushDelays(testTimings?: {
+  mediaGroupFlushMs?: number;
+  mediaGroupArrivalMs?: number;
+}): { flushMs: number; arrivalMs: number } {
+  const ms = (value: number | undefined) =>
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.max(10, Math.floor(value))
+      : undefined;
+  const testFlushMs = ms(testTimings?.mediaGroupFlushMs);
+  const flushMs = testFlushMs ?? MEDIA_GROUP_TIMEOUT_MS;
+  const arrivalMs =
+    ms(testTimings?.mediaGroupArrivalMs) ?? testFlushMs ?? MEDIA_GROUP_ARRIVAL_WINDOW_MS;
+  return { flushMs, arrivalMs };
+}
 export type MediaGroupEntry = {
   messages: Array<{
     msg: Message;

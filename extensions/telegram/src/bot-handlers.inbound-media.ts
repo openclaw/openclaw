@@ -45,9 +45,8 @@ import {
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
 import {
-  MEDIA_GROUP_ARRIVAL_WINDOW_MS,
   MEDIA_GROUP_MAX_HOLD_MS,
-  MEDIA_GROUP_TIMEOUT_MS,
+  resolveMediaGroupFlushDelays,
   type MediaGroupEntry,
 } from "./bot-updates.js";
 import type { TelegramMediaKind } from "./bot/body-helpers.js";
@@ -154,20 +153,9 @@ export function createTelegramInboundMedia({
     resolveTelegramSessionState,
     processMessageWithReplyChain,
   } = message;
-  const testFlushMs =
-    typeof opts.testTimings?.mediaGroupFlushMs === "number" &&
-    Number.isFinite(opts.testTimings.mediaGroupFlushMs)
-      ? Math.max(10, Math.floor(opts.testTimings.mediaGroupFlushMs))
-      : undefined;
-  const timeoutMs = testFlushMs ?? MEDIA_GROUP_TIMEOUT_MS;
-  const testArrivalMs =
-    typeof opts.testTimings?.mediaGroupArrivalMs === "number" &&
-    Number.isFinite(opts.testTimings.mediaGroupArrivalMs)
-      ? Math.max(10, Math.floor(opts.testTimings.mediaGroupArrivalMs))
-      : undefined;
-  // The first album member has to wait out Telegram's per-member delivery gap;
-  // after that the ordinary quiet window is enough.
-  const arrivalWindowMs = testArrivalMs ?? testFlushMs ?? MEDIA_GROUP_ARRIVAL_WINDOW_MS;
+  const { flushMs: timeoutMs, arrivalMs: arrivalWindowMs } = resolveMediaGroupFlushDelays(
+    opts.testTimings,
+  );
   const buffer = new Map<string, BufferedMediaGroupEntry>();
   const queue = new Map<string, Promise<void>>();
   const heads = new Map<string, BufferedMediaGroupEntry>();
