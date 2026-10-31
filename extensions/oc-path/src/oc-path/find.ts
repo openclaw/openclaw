@@ -8,7 +8,7 @@
  */
 
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { isMap, isScalar, isSeq, type Node, type Pair } from "yaml";
+import { isMap, isScalar, isSeq, type Document, type Node, type Pair } from "yaml";
 import type { AstBlock, AstItem, MdAst } from "./ast.js";
 import type { JsoncValue } from "./jsonc/ast.js";
 import { resolveJsoncPositionalSegment } from "./jsonc/resolve-value.js";
@@ -38,7 +38,7 @@ import {
 } from "./oc-path.js";
 import type { OcAst, OcMatch } from "./universal.js";
 import { resolveOcPath } from "./universal.js";
-import { resolveYamlPositionalSegment } from "./yaml/resolve.js";
+import { derefYamlNode, resolveYamlPositionalSegment } from "./yaml/resolve.js";
 
 interface OcPathMatch {
   readonly path: OcPath;
@@ -107,6 +107,7 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
       break;
     case "yaml":
       if (ast.doc.contents !== null) {
+        yamlDoc = ast.doc;
         yamlOps.walk(ast.doc.contents, subs, 0, [], context);
       }
       break;
@@ -423,20 +424,24 @@ const jsonlOps: WalkOps<JsonlAst, JsonlLine> = {
   },
 };
 
+/** Document of the YAML AST being walked, so `yamlOps` can follow aliases. */
+let yamlDoc: Document | undefined;
+
 const yamlOps: WalkOps<Node> = {
   *enumerate(node, matches) {
     if (isMap(node)) {
       for (const p of (node as { items: readonly Pair[] }).items) {
         const k = isScalar(p.key) ? p.key.value : p.key;
-        if (p.value !== null && (!matches || matches(p.value as Node))) {
-          yield { keySub: quoteSeg(String(k)), child: p.value as Node };
+        const child = derefYamlNode(yamlDoc, p.value);
+        if (child !== null && (!matches || matches(child))) {
+          yield { keySub: quoteSeg(String(k)), child };
         }
       }
     } else if (isSeq(node)) {
       for (let idx = 0; idx < node.items.length; idx++) {
-        const child = node.items[idx];
-        if (child !== null && (!matches || matches(child as Node))) {
-          yield { keySub: String(idx), child: child as Node };
+        const child = derefYamlNode(yamlDoc, node.items[idx]);
+        if (child !== null && (!matches || matches(child))) {
+          yield { keySub: String(idx), child };
         }
       }
     }
@@ -448,20 +453,21 @@ const yamlOps: WalkOps<Node> = {
         const k = isScalar(p.key) ? p.key.value : p.key;
         return String(k) === lookupKey;
       });
-      return pair?.value === undefined || pair.value === null
+      const child = derefYamlNode(yamlDoc, pair?.value);
+      return child === null
         ? null
-        : { keySub: key === lookupKey ? quoteSeg(lookupKey) : key, child: pair.value as Node };
+        : { keySub: key === lookupKey ? quoteSeg(lookupKey) : key, child };
     }
     if (isSeq(node)) {
       const idx = parseArrayIndexSegment(unquoteSeg(key), node.items.length);
       if (idx === null) {
         return null;
       }
-      const child = node.items[idx];
+      const child = derefYamlNode(yamlDoc, node.items[idx]);
       if (child === null) {
         return null;
       }
-      return { keySub: key, child: child as Node };
+      return { keySub: key, child };
     }
     return null;
   },
@@ -491,10 +497,7 @@ function yamlChildFieldText(node: Node, key: string): string | null {
     const k = isScalar(p.key) ? p.key.value : p.key;
     return String(k) === key;
   });
-  if (pair === undefined || pair.value === null) {
-    return null;
-  }
-  return yamlScalarToText(pair.value);
+  return pair === undefined ? null : yamlScalarToText(derefYamlNode(yamlDoc, pair.value));
 }
 
 function yamlScalarToText(value: unknown): string | null {
