@@ -1,4 +1,5 @@
 import {
+  blankDreamingFencedRanges,
   chunkMarkdown,
   extractCuratedEntryRecallMetadata,
   enforceEmbeddingMaxInputTokens,
@@ -55,7 +56,11 @@ export function prepareMemoryIndexChunks({
   const perEntry =
     source === "memory" &&
     (normalizedEntryPath === "MEMORY.md" || normalizedEntryPath === "USER.md");
-  const indexingContent = source === "memory" ? stripMemoryAnnotationCarriers(content) : content;
+  // Managed dreaming ranges are scratchwork: blank them before chunking so
+  // they never reach the index or earn recall signal. Blanking (not deleting)
+  // keeps surviving lines at their original numbers for citations.
+  const indexingContent =
+    source === "memory" ? blankDreamingFencedRanges(stripMemoryAnnotationCarriers(content)) : content;
   // All chunks share one source snapshot; splitting per chunk makes indexing quadratic.
   const sourceLines = source === "memory" ? content.replace(/\r\n/gu, "\n").split("\n") : [];
   const chunkOptions = { ...chunking, perEntry };

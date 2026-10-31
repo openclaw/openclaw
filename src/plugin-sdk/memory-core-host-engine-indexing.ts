@@ -15,6 +15,12 @@ export {
   extractCuratedEntryRecallMetadata,
   stripMemoryAnnotationCarriers,
 } from "../../packages/memory-host-sdk/src/host/curated-annotations.js";
+export {
+  blankDreamingFencedRanges,
+  findDreamingFenceRanges,
+  isDreamingFenceMarkerLine,
+  lineRangeOverlapsDreamingFence,
+} from "../../packages/memory-host-sdk/src/host/dreaming-fences.js";
 export type {
   MemoryEntryProvenance,
   MemorySource,
