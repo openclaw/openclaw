@@ -153,11 +153,11 @@ export async function updatePluginsAfterCoreUpdate(params: {
       result = await updatePluginsAfterCoreUpdateWithLease(owned, lease, publication);
     } catch (error) {
       await settlePluginInstallTransactions(transactions, "rollback", { error }, assertCurrent);
-      assertCurrent();
       if (
         error instanceof ConfigMutationConflictError &&
         (error.retryable || error instanceof PluginFinalizationConfigConflictError)
       ) {
+        assertCurrent();
         const warning = {
           reason: "plugin-config-conflict",
           message:
