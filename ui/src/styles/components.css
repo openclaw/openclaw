@@ -2224,6 +2224,13 @@ td.data-table-key-col {
   box-shadow: 2px 0 4px rgba(0, 0, 0, 0.08);
 }
 
+.approval-history__warning-text {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warn);
+}
+
 .data-table-bulk-bar {
   display: flex;
   align-items: center;
