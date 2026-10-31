@@ -793,6 +793,14 @@ DOM-mutation-to-rAF are frame-boundary proxies, not paint timestamps.
 Use a separate `--trace` run for script/layout/style attribution. Long Task API
 metrics are present only when supported; WebKit's missing counters are not zero.
 WebKit Inspector durations are elapsed time, not CPU consumed by the action.
+The probe emits `streaming-reply:start:<startedAt>` once per stream run to align
+Inspector records with the snapshot's page-clock `startedAt` and relative delta
+timestamps. `startMarkCompletedAt` bounds the mark call's completion; use the
+interval between it and `startedAt` as clock uncertainty when Inspector records
+the mark's emission time. Delivery-window script/style/layout durations may
+overlap and include other tasks between deltas; they are elapsed work within the
+window, not CPU time or causal attribution to a single delta. Pool deliveries
+with identical timestamps and end the last window at `startedAt + elapsedMs`.
 `--cpu-throttle 4 --engines chromium` measures Chromium's emulated slowdown;
 WebKit has no equivalent supported CPU throttle, so requesting it fails explicitly.
 Use `--compare-bundle-dir` and `--control-bundle-dir` for interleaved candidate and
