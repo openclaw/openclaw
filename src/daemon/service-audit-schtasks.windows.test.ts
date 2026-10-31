@@ -100,6 +100,34 @@ it.each(["omitted by Windows", "omitted in backup"])(
   },
 );
 
+it("ignores the scheduler engine value while still reporting changed launcher arguments", async () => {
+  const f = await fixture("win32");
+  const xml = taskXml(f).replace(
+    "</Settings>",
+    "<UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine></Settings>",
+  );
+  expectOnlyDrift(await auditXml(f, xml));
+  expectOnlyDrift(await auditXml(f, xml.replace("</Arguments>", " --verbose</Arguments>")), {
+    kind: "unknown-edit",
+    key: "Actions.Exec.Command",
+  });
+});
+
+it("rejects a scheduler engine change during task publication", async () => {
+  const f = await fixture("win32");
+  const expectedXml = f.task();
+  await f.capture.hooks.taskPrepared(expectedXml);
+  f.setTask(
+    expectedXml.replace(
+      "</Settings>",
+      "<UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine></Settings>",
+    ),
+  );
+  await expect(f.capture.hooks.taskWritten(expectedXml)).rejects.toThrow(
+    "Settings.UseUnifiedSchedulingEngine",
+  );
+});
+
 it.each([
   { kind: "same SID", account: "WIN-TEST\\operator", sid: "S-1-5-21-1-2-3-1001" },
   { kind: "different SID", account: "WIN-TEST\\other-private", sid: "S-1-5-21-1-2-3-1002" },
