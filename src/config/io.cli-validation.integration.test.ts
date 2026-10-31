@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import nodePath from "node:path";
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
 import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
@@ -120,7 +121,11 @@ it.each(["mcp", "nodeHost"] as const)(
 it("warns for saved mixed config, rejects edits, and lets updates persist their channel", async () => {
   await withOpenClawTestState({ prefix: "mixed-mcp-upgrade-" }, async (state) => {
     await state.writeConfig({
-      mcp: { servers: { docs: { command: "node", url: "https://example.com/mcp" } } },
+      mcp: {
+        servers: {
+          docs: { command: "node", url: "https://example.com/mcp", env: { DATA_DIR: "~/data" } },
+        },
+      },
     });
     const raw = fs.readFileSync(state.configPath, "utf8");
     const logger = { warn: vi.fn(), error: vi.fn() };
@@ -134,8 +139,19 @@ it("warns for saved mixed config, rejects edits, and lets updates persist their 
     expect(io.loadConfig().mcp?.servers?.docs).toEqual({
       command: "node",
       url: "https://example.com/mcp",
+      env: { DATA_DIR: nodePath.join(state.home, "data") },
     });
     expect(logger.warn.mock.calls.flat().join("\n")).toMatch(/mcp.servers.docs.*command.*url/s);
+    const explicit = await io.readConfigFileSnapshotWithPluginMetadata({
+      prepareValidation: "strict",
+      completePluginMetadata: false,
+    });
+    expect(explicit.strictIssues).toEqual([
+      expect.objectContaining({
+        path: "mcp.servers.docs",
+        message: expect.stringMatching(/command.*url/),
+      }),
+    ]);
     await expect(
       io.writeConfigFile({
         mcp: {
@@ -152,14 +168,22 @@ it("warns for saved mixed config, rejects edits, and lets updates persist their 
     });
     expect(JSON.parse(fs.readFileSync(state.configPath, "utf8"))).toMatchObject({
       update: { channel: "beta" },
-      mcp: { servers: { docs: { command: "node", url: "https://example.com/mcp" } } },
+      mcp: {
+        servers: {
+          docs: { command: "node", url: "https://example.com/mcp", env: { DATA_DIR: "~/data" } },
+        },
+      },
     });
   });
 });
 
 it("repairs one mixed server without blocking on another and rejects new or edited ambiguity", async () => {
   await withOpenClawTestState({ prefix: "mixed-mcp-mutation-" }, async (state) => {
-    const mixed = { command: "old-server", url: "https://example.com/mcp" };
+    const mixed = {
+      command: "old-server",
+      url: "https://example.com/mcp",
+      env: { DATA_DIR: "~/data" },
+    };
     await state.writeConfig({ mcp: { servers: { first: mixed, second: mixed } } });
     expect(
       await setConfiguredMcpServer({ name: "first", server: { command: "first-server" } }),

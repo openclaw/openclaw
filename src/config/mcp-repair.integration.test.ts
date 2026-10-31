@@ -36,16 +36,22 @@ it.each(["mcp", "nodeHost"] as const)(
         observe: false,
         pluginValidation: "core-only",
       });
-      const wrap = (server: McpServerConfig): OpenClawConfig => {
-        const mcp = { servers: { docs: server } };
+      const wrap = (server: McpServerConfig, legacy = false): OpenClawConfig => {
+        const mcp = {
+          servers: {
+            docs: server,
+            ...(legacy ? { disabled: { command: "never-run", disabled: true } } : {}),
+          },
+        };
         return {
           plugins: { enabled: false },
           ...(owner === "mcp" ? { mcp } : { nodeHost: { mcp } }),
         };
       };
       async function doctor(server: McpServerConfig) {
-        const raw = wrap(server);
+        const raw = wrap(server, true);
         await state.writeConfig(raw);
+        expect((await io.readConfigFileSnapshot()).valid).toBe(false);
         const repaired = migrateLegacyConfig(raw, {
           sourceConfigBeforeMigrations: raw,
           pluginContracts: false,
@@ -93,6 +99,11 @@ it.each(["mcp", "nodeHost"] as const)(
         clientKey: "/example-key",
       };
       const persisted = await doctor(shared);
+      expect(
+        owner === "mcp"
+          ? persisted.mcp?.servers?.disabled
+          : persisted.nodeHost?.mcp?.servers?.disabled,
+      ).toEqual({ command: "never-run", enabled: false });
       const { type: _type, ...canonical } = shared;
       expect(
         owner === "mcp" ? persisted.mcp?.servers?.docs : persisted.nodeHost?.mcp?.servers?.docs,
@@ -104,7 +115,7 @@ it.each(["mcp", "nodeHost"] as const)(
         }),
       ).toMatchObject({ config: null, changes: [] });
       expect(JSON.parse(await fs.readFile(`${state.configPath}.bak`, "utf8"))).toMatchObject(
-        wrap(shared),
+        wrap(shared, true),
       );
       await expect(fs.readFile(starts)).rejects.toMatchObject({ code: "ENOENT" });
       await io.writeConfigFile(wrap(stdio));

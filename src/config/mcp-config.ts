@@ -252,7 +252,7 @@ async function mutateConfiguredMcpServer(
 
   const validated = validateConfigObjectWithPlugins(next, {
     semanticValidation: "strict",
-    mcpTransportBaseline: loaded.runtimeConfig,
+    mcpTransportBaseline: snapshot.sourceConfig,
   });
   if (!validated.ok) {
     const issue = expectDefined(validated.issues[0], "issues entry at 0");

@@ -267,7 +267,7 @@ export async function writeConfigFileFromContext(
       ...context.pathResolution,
       pluginValidation: options.skipPluginValidation ? "skip" : "full",
       semanticValidation: "strict",
-      mcpTransportBaseline: snapshot.valid ? snapshot.runtimeConfig : undefined,
+      mcpTransportBaseline: snapshot.sourceConfig,
       preservedLegacyRootKeys: options.preservedLegacyRootKeys,
       deferredPluginMigrations: pendingMigrations,
     });

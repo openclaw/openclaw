@@ -27,23 +27,29 @@ export function collectMcpTransportIssues(
       ["nodeHost.mcp.servers", config.nodeHost?.mcp?.servers, baseline?.nodeHost?.mcp?.servers],
     ] as const
   ).flatMap(([path, servers, previous]) =>
-    Object.entries(servers ?? {}).flatMap(([name, server]) =>
-      readNonBlankString(server.command) &&
-      readNonBlankString(server.url) &&
-      (!previous?.[name] ||
-        !isDeepStrictEqual(
+    Object.entries(servers ?? {}).flatMap(([name, server]) => {
+      const existing = previous?.[name];
+      if (!readNonBlankString(server.command) || !readNonBlankString(server.url)) {
+        return [];
+      }
+      // A repair's prior snapshot can be invalid outside this server entry.
+      if (
+        isRecord(existing) &&
+        isDeepStrictEqual(
           canonicalizeConfiguredMcpServer(server),
-          canonicalizeConfiguredMcpServer(previous[name]),
-        ))
-        ? [
-            {
-              path: `${path}.${name}`,
-              message:
-                'MCP server cannot combine "command" and "url"; remove "command" and stdio options for HTTP, or remove "url" and HTTP/auth options for stdio. Doctor will not choose a transport.',
-            },
-          ]
-        : [],
-    ),
+          canonicalizeConfiguredMcpServer(existing),
+        )
+      ) {
+        return [];
+      }
+      return [
+        {
+          path: `${path}.${name}`,
+          message:
+            'MCP server cannot combine "command" and "url"; remove "command" and stdio options for HTTP, or remove "url" and HTTP/auth options for stdio. Doctor will not choose a transport.',
+        },
+      ];
+    }),
   );
 }
 

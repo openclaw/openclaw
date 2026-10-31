@@ -57,7 +57,7 @@ export type ValidateConfigWithPluginsParams = {
   pluginValidation?: "full" | "skip" | "core-only";
   /** Runtime preserves inactive-owner startup; strict mode checks all declared targets for explicit validation and writes. */
   semanticValidation?: "runtime" | "strict";
-  /** Unrelated internal writes may retain unchanged legacy MCP definitions. */
+  /** Captured source, even during legacy repair; the candidate is validated separately. */
   mcpTransportBaseline?: OpenClawConfig;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
   loadPluginMetadataSnapshot?: (
@@ -80,7 +80,7 @@ type RegistryInfo = {
 };
 
 export function validatePreparedConfigWithPlugins(
-  raw: unknown,
+  raw: OpenClawConfig,
   parsedConfig: OpenClawConfig,
   opts: ValidateConfigWithPluginsParams & {
     applyDefaults: boolean;
@@ -106,7 +106,7 @@ export function validatePreparedConfigWithPlugins(
   const ensureSchemaValidations = () =>
     (schemaValidations ??= preparePluginSchemaValidations(ensureLoadedRegistryInfo().registry));
 
-  const warnings = collectMcpTransportIssues(parsedConfig, opts.mcpTransportBaseline);
+  const warnings = collectMcpTransportIssues(raw, opts.mcpTransportBaseline);
   if (opts.semanticValidation === "strict" && warnings.length > 0) {
     return { ok: false, issues: warnings, warnings: [] };
   }
