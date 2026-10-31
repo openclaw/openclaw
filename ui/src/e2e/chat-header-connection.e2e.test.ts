@@ -101,6 +101,13 @@ suite.define(() => {
         await page.clock.fastForward(2_000);
         await status.waitFor({ state: "visible" });
         expect(await geometry()).toEqual(before);
+        expect(
+          await status.evaluate((element) => {
+            const indicator = element.getBoundingClientRect();
+            const header = element.closest(".chat-pane__header")!.getBoundingClientRect();
+            return indicator.top >= header.top && indicator.bottom <= header.bottom;
+          }),
+        ).toBe(true);
         await capture("slow");
         await gateway.resolveDeferred("connect");
         await status.waitFor({ state: "hidden" });

@@ -381,7 +381,6 @@ div.chat-thread:where(.chat-thread--annotations) {
 }
 
 .chat-pane__header {
-  position: relative;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -416,12 +415,11 @@ div.chat-thread:where(.chat-thread--annotations) {
   justify-self: stretch;
 }
 
-.chat-pane__header:not(.chat-pane__header--mobile)
-  > .chat-pane__header-trailing
-  > .chat-pane__actions:only-child {
-  flex-grow: 1;
-  align-self: stretch;
-  justify-content: flex-end;
+.chat-pane__connection-slot {
+  /* The existing flexible header gap holds feedback without moving controls or covering rows. */
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__identity-actions {
@@ -638,15 +636,11 @@ div.chat-thread:where(.chat-thread--annotations) {
   }
 
   & .chat-pane__connection {
-    /* Outage feedback overlays content without displacing the retained header controls. */
-    position: absolute;
-    inset-block-start: calc(100% + 4px);
-    inset-inline-start: 12px;
-    z-index: 2;
     display: inline-flex;
     align-items: center;
     gap: 16px;
     height: 28px;
+    max-width: 100%;
     padding-inline: 8px;
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--warn) 10%, transparent);
@@ -659,6 +653,8 @@ div.chat-thread:where(.chat-thread--annotations) {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
+    overflow: hidden;
   }
 
   & .chat-pane__connection-icon {
@@ -672,6 +668,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   }
 
   & .chat-pane__connection-retry {
+    flex: 0 0 auto;
     border: 0;
     border-radius: 0;
     padding: 0;
