@@ -88,8 +88,8 @@ describe("sanitizeToolUseResultPairing", () => {
     });
 
     expect(result.added).toMatchObject([
-      { toolCallId: "call_1", timestamp: 5_000 },
-      { toolCallId: "call_3", timestamp: 5_000 },
+      { toolCallId: "call_1", timestamp: 5_000, isError: true },
+      { toolCallId: "call_3", timestamp: 5_000, isError: true },
     ]);
     expect(result.messages).toEqual([
       expected[0],
@@ -304,6 +304,21 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     const result = repairToolUseResultPairing(input);
 
     expect(result.messages).toEqual([input[0], input[3]]);
+  });
+
+  it.each([false, true, undefined])("preserves a legacy real result outcome (%s)", (isError) => {
+    const input = castAgentMessages([
+      sparseAssistant([toolCall("call_1")]),
+      makeSyntheticResult("call_1"),
+      textToolResult("call_orphan", "read", "orphan", { isError: false }),
+      { ...textToolResult("", "read", "real output"), isError },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.messages).toEqual([input[0], { ...input[3], toolCallId: "call_1" }]);
+    expect(result.added).toEqual([]);
+    expect(input[1]).toMatchObject({ isError: true });
   });
 
   it("late real result after another assistant turn replaces prior synthetic", () => {

@@ -161,7 +161,7 @@ export function normalizeLegacyToolResultId(
   if (resultName && callName && resultName !== callName) {
     return message;
   }
-  return { ...message, toolCallId: toolCall.id, isError: true };
+  return { ...message, toolCallId: toolCall.id };
 }
 
 /** Collect ownership facts while a source row is decoded; never retain its content or details. */
@@ -206,10 +206,7 @@ export function classifyToolUseResultPairing(
     }
     return {
       source,
-      normalized:
-        id && id !== extractToolResultId(source)
-          ? { ...source, toolCallId: id, isError: true }
-          : source,
+      normalized: id && id !== extractToolResultId(source) ? { ...source, toolCallId: id } : source,
     };
   };
   return frames.map((frame) => {
