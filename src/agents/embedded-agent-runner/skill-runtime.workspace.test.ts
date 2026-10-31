@@ -77,7 +77,7 @@ it("keeps configured skills when bootstrap belongs to a worktree without a snaps
     bootstrapWorkspaceDir: task,
     config: {
       agents: { entries: { main: { workspace: configured } } },
-      plugins: { enabled: false },
+      plugins: { allow: ["skill-workshop"] },
       skills: { load: { watch: false } },
     },
   });
@@ -111,7 +111,7 @@ it("keeps Code Mode file ownership despite an unavailable same-name pin", async 
   // Resolve the fixture pin without a Library database; instruction reads still use real files.
   libraryFixture.entries = loadWorkspaceSkills(library, { workspaceOnly: true });
   const config = {
-    plugins: { enabled: false },
+    plugins: { allow: ["skill-workshop"] },
     skills: { limits: { maxSkillsInPrompt: 1 } },
     agents: { entries: { main: { agentDir: path.join(root, "agent") } } },
   };
@@ -241,7 +241,7 @@ it("keeps learned Workshop skills readable under an allowlist and calls a missin
   );
   const allowed = async (skills: string[]) => {
     const config = {
-      plugins: { enabled: false },
+      plugins: { allow: ["skill-workshop"] },
       agents: { entries: { main: { agentDir, skills } } },
     };
     const snapshot = await buildSkillSnapshot(workspace, { config, agentId: "main" });
