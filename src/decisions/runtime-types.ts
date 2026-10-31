@@ -1,6 +1,7 @@
 import type { DecisionEvaluateOptions, DecisionEvaluateOptionsV2 } from "./execution-types.js";
+import type { DecisionOutcome } from "./host-outcomes.js";
 import type { DecisionBatchV2, DecisionOutcomeV2 } from "./types-v2.js";
-import type { DecisionBatch, DecisionOutcome } from "./types.js";
+import type { DecisionBatch } from "./types.js";
 
 /**
  * Supplied by the host, bound to its consumer's live authority/lifecycle.
