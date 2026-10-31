@@ -35,6 +35,10 @@ import type {
 } from "./bot-handlers.types.js";
 import type { TelegramMediaRef } from "./bot-message-context.types.js";
 import {
+  getTelegramNativeCommandHandoff,
+  shouldDeclineTelegramNativeCommandHandoffOnFailure,
+} from "./bot-native-command-handoff.js";
+import {
   createTelegramSpooledReplayDeferredParticipant,
   getTelegramSpooledReplayLifecycle,
   isTelegramSpooledReplayUpdate,
@@ -150,8 +154,12 @@ export function createTelegramInboundPipeline({
           ? String(msg.from.id)
           : "";
     let dispatchDedupeClaims: ChannelReplayClaimHandle[] = [];
+    // An offered native plugin command already holds this update's dispatch claim.
+    const commandHandoff = isChannelPost
+      ? undefined
+      : getTelegramNativeCommandHandoff(ctx.update, msg);
     try {
-      if (shouldSkipUpdate(ctx)) {
+      if (!commandHandoff && shouldSkipUpdate(ctx)) {
         return { kind: "ignored" };
       }
       const gate = await authorizeInboundMessage({
@@ -161,7 +169,9 @@ export function createTelegramInboundPipeline({
         isForum,
         senderId,
         requireConfiguredGroup: isChannelPost,
-        dmAccess: "challenge",
+        // A refused offered command falls back to its native executor, which answers itself.
+        dmAccess: commandHandoff ? "silent" : "challenge",
+        ...(commandHandoff ? { commandHandoff } : {}),
       });
       if (!gate.allowed) {
         return { kind: "ignored" };
@@ -198,6 +208,9 @@ export function createTelegramInboundPipeline({
 
       const dispatchDedupe = await claimMessageDispatchDedupe(normalizedMsg, botUserId);
       if (!dispatchDedupe.process) {
+        if (commandHandoff) {
+          commandHandoff.outcome = "duplicate";
+        }
         return { kind: "ignored" };
       }
       dispatchDedupeClaims = dispatchDedupe.claims;
@@ -428,6 +441,10 @@ export function createTelegramInboundPipeline({
       releaseDispatchDedupeClaims(dispatchDedupeClaims, err);
       const errorMessage = isChannelPost ? "channel_post handler failed" : "handler failed";
       runtime.error?.(danger(`${errorMessage}: ${String(err)}`));
+      if (commandHandoff && shouldDeclineTelegramNativeCommandHandoffOnFailure(ctx.update, msg)) {
+        // The offered command's native executor answers it, as without the offer.
+        return { kind: "ignored" };
+      }
       const spooledReplay = isTelegramSpooledReplayUpdate(syntheticContext.update);
       if (err instanceof TelegramPairingStoreReadError || spooledReplay) {
         recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });

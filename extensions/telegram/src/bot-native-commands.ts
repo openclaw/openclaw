@@ -14,6 +14,11 @@ import type { TelegramNativeCommandCallbackDispatcher } from "./bot-handlers.typ
 import type { TelegramBuiltinCommandResult } from "./bot-native-command-builtins.js";
 import type { TelegramCommandExecutorParams } from "./bot-native-command-dispatch.js";
 import {
+  beginTelegramNativeCommandHandoff,
+  endTelegramNativeCommandHandoff,
+  shouldRunTelegramNativeCommandAfterHandoff,
+} from "./bot-native-command-handoff.js";
+import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
   syncTelegramMenuCommands,
@@ -228,18 +233,44 @@ export const registerTelegramNativeCommands = async ({
   }
 
   for (const pluginCommand of pluginCatalog.selectedCommands) {
-    bot.command(pluginCommand.command, async (ctx: TelegramNativeCommandContext) => {
+    bot.command(pluginCommand.command, async (ctx: TelegramNativeCommandContext, next) => {
       if (shouldSkipUpdate(ctx) || !ctx.message) {
         return;
+      }
+      const msg = ctx.message;
+      const rawText = ctx.match?.trim() ?? "";
+      const candidate = pluginCommand.spec;
+      // A bot author stays native: the pipeline's bot-loop guard could drop an admitted command.
+      if (
+        candidate.runtimeCapabilities?.length &&
+        (candidate.acceptsArgs || !rawText) &&
+        !msg.from?.is_bot
+      ) {
+        // Only the message pipeline's command turn has runtime capabilities; it decides first.
+        const handoff = beginTelegramNativeCommandHandoff(ctx.update, {
+          commandName: pluginCommand.command,
+          candidate,
+          args: rawText,
+          chatId: msg.chat.id,
+          messageId: msg.message_id,
+        });
+        try {
+          await next();
+        } finally {
+          endTelegramNativeCommandHandoff(ctx.update);
+        }
+        if (!(await shouldRunTelegramNativeCommandAfterHandoff(handoff))) {
+          return;
+        }
       }
       const { executeTelegramPluginCommand } = await loadTelegramPluginCommandExecutor();
       await executeTelegramPluginCommand({
         ...executorParams,
         botUser: ctx.me,
-        msg: ctx.message,
-        rawText: ctx.match?.trim() ?? "",
+        msg,
+        rawText,
         commandName: pluginCommand.command,
-        candidate: pluginCommand.spec,
+        candidate,
       });
     });
   }

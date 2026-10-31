@@ -223,7 +223,11 @@ requester under `auto-reply.plugin-command`. Children inherit that requester’s
 lineage and effective tool ceiling. No new hook is registered, so Goal
 start/resume and ordinary chat admission keep their existing rules.
 
-Gateway chat and channel text commands are both eligible. Messages without explicit
+Gateway chat and channel text commands are both eligible. On Telegram this includes
+a typed command carrying the `bot_command` entity Telegram clients add, when the
+reply pipeline authorizes its sender, the sender is not a bot, and the command neither replies
+to the bot nor is sent in a bound conversation; otherwise the native command executor runs it without runtime
+capabilities. Messages without explicit
 provenance use the ingress's ordinary sender authorization. On Gateway chat, an
 authorized operator who is not an owner can spend child-model budget only under
 that requester's tool ceiling. A channel message carries operator authority only

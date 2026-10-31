@@ -85,6 +85,11 @@ export async function runWithTelegramUpdateProcessingFrame<T>(
   return frame.result ? { value, result: frame.result } : { value };
 }
 
+/** Reads the current update's recorded disposition without changing it. */
+export function peekTelegramMessageProcessingResult(): TelegramMessageProcessingResult | undefined {
+  return telegramUpdateProcessingFrames.getStore()?.result;
+}
+
 /** Records a default only when a handler has not already chosen its terminal disposition. */
 export function ensureTelegramMessageProcessingResult(
   result: TelegramMessageProcessingResult,

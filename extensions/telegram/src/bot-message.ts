@@ -188,6 +188,10 @@ export const createTelegramMessageProcessor = (
     if (!context) {
       return { kind: "skipped" };
     }
+    if (context.nativeCommandHandoff) {
+      // From here this turn owns the offered command; its native executor must not run it.
+      context.nativeCommandHandoff.outcome = "admitted";
+    }
     if (
       isTelegramForumTopicTitleUpdate(context.primaryCtx.message) &&
       !context.isGroup &&

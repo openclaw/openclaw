@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-feedback";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
+import { resolveCommandAuthorizationAsync } from "openclaw/plugin-sdk/command-auth-native";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
@@ -28,6 +29,12 @@ import {
 } from "./bot-message-context.session.js";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 import {
+  getTelegramNativeCommandHandoff,
+  mayAnswerTelegramConversationPrompt,
+  type TelegramNativeCommandHandoff,
+  withTelegramNativeCommandHandoffName,
+} from "./bot-native-command-handoff.js";
+import {
   buildTypingThreadParams,
   extractTelegramForumFlag,
   resolveTelegramForumFlag,
@@ -39,7 +46,7 @@ import {
   applyTelegramTargetSession,
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
-import { enforceTelegramDmAccess } from "./dm-access.js";
+import { enforceTelegramDmAccess, isTelegramDmAccessAllowed } from "./dm-access.js";
 import { isTelegramForumTopicTitleUpdate } from "./forum-service-message.js";
 import { resolveTelegramForumTopicMetadata } from "./forum-topic-metadata.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
@@ -94,6 +101,8 @@ export type TelegramMessageContext = {
   ackReactionPromise: Promise<boolean> | null;
   statusReactionController: TelegramStatusReactionController | null;
   accountId: string;
+  /** Offered native plugin command this turn dispatches with its runtime capabilities. */
+  nativeCommandHandoff?: TelegramNativeCommandHandoff;
 };
 
 export const buildTelegramMessageContext = async ({
@@ -129,6 +138,14 @@ export const buildTelegramMessageContext = async ({
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const senderId = msg.from?.id ? String(msg.from.id) : "";
+  // Batched turns reuse the first message id; an offered command is never batched.
+  const commandHandoff = options?.bufferedMessages
+    ? undefined
+    : getTelegramNativeCommandHandoff(primaryCtx.update, msg);
+  const turnNativeCommandNames = withTelegramNativeCommandHandoffName(
+    nativeCommandNames,
+    commandHandoff,
+  );
   const isDirectMessagesChat = msg.chat.is_direct_messages === true;
   const isForum = isDirectMessagesChat
     ? false
@@ -202,6 +219,13 @@ export const buildTelegramMessageContext = async ({
     });
     return null;
   }
+  if (commandHandoff && bindingMode.kind !== "none") {
+    // Any binding can route the turn away from the command handlers, so native keeps it.
+    logVerbose(
+      `telegram: native plugin command keeps its executor in a ${bindingMode.kind} binding`,
+    );
+    return null;
+  }
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   const dmAllow = await resolveTelegramDmAllow({
     cfg,
@@ -223,7 +247,7 @@ export const buildTelegramMessageContext = async ({
   const senderUsername = msg.from?.username ?? "";
   const commandAuthorizedByConfig = await resolveTelegramNativeCommandAdmission({
     msg,
-    nativeCommandNames,
+    nativeCommandNames: turnNativeCommandNames,
     botUsername: primaryCtx.me?.username,
     cfg,
     accountId: account.accountId,
@@ -283,20 +307,30 @@ export const buildTelegramMessageContext = async ({
     }
   };
 
-  if (
-    !commandAuthorizedByConfig &&
-    !(await enforceTelegramDmAccess({
-      isGroup,
-      dmPolicy: effectiveDmPolicy,
-      msg,
-      chatId,
-      effectiveDmAllow: dmAllow.effectiveAllow,
-      accountId: account.accountId,
-      bot,
-      logger,
-      upsertPairingRequest,
-    }))
-  ) {
+  const dmAccessAllowed =
+    commandAuthorizedByConfig ||
+    (commandHandoff
+      ? // A refused offered command falls back to its native executor, which answers itself.
+        isGroup ||
+        (await isTelegramDmAccessAllowed({
+          dmPolicy: effectiveDmPolicy,
+          msg,
+          chatId,
+          effectiveDmAllow: dmAllow.effectiveAllow,
+          accountId: account.accountId,
+        }))
+      : await enforceTelegramDmAccess({
+          isGroup,
+          dmPolicy: effectiveDmPolicy,
+          msg,
+          chatId,
+          effectiveDmAllow: dmAllow.effectiveAllow,
+          accountId: account.accountId,
+          bot,
+          logger,
+          upsertPairingRequest,
+        }));
+  if (!dmAccessAllowed) {
     return null;
   }
 
@@ -378,7 +412,7 @@ export const buildTelegramMessageContext = async ({
   };
   const bodyResult = await resolveTelegramInboundBody({
     ...inboundContext,
-    nativeCommandNames,
+    nativeCommandNames: turnNativeCommandNames,
     accountId: account.accountId,
     routeAgentId: route.agentId,
     sessionKey,
@@ -433,6 +467,15 @@ export const buildTelegramMessageContext = async ({
     topicName,
     sessionRuntime,
   });
+  if (commandHandoff && !(await isCommandHandoffAuthorized(ctxPayload, cfg))) {
+    logVerbose(`telegram: native plugin command keeps its executor for an unauthorized sender`);
+    return null;
+  }
+  if (commandHandoff && mayAnswerTelegramConversationPrompt(msg)) {
+    // The reply pipeline would record it as a prompt answer instead of running it.
+    logVerbose(`telegram: native plugin command keeps its executor for a reply to the bot`);
+    return null;
+  }
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "telegram",
     accountId: account.accountId,
@@ -561,5 +604,22 @@ export const buildTelegramMessageContext = async ({
     ackReactionPromise,
     statusReactionController,
     accountId: account.accountId,
+    ...(commandHandoff ? { nativeCommandHandoff: commandHandoff } : {}),
   };
 };
+
+/** Core can be stricter than native auth (owner allowlist), so ask it for this exact turn. */
+async function isCommandHandoffAuthorized(
+  ctxPayload: TelegramMessageContextPayload["ctxPayload"],
+  cfg: BuildTelegramMessageContextParams["cfg"],
+): Promise<boolean> {
+  if (ctxPayload.CommandSource !== "native" || !ctxPayload.CommandAuthorized) {
+    return false;
+  }
+  const { isAuthorizedSender } = await resolveCommandAuthorizationAsync({
+    ctx: ctxPayload,
+    cfg,
+    commandAuthorized: true,
+  });
+  return isAuthorizedSender;
+}

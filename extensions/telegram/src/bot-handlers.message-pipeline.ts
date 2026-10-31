@@ -17,6 +17,7 @@ import {
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
+import { shouldDeclineTelegramNativeCommandHandoffOnFailure } from "./bot-native-command-handoff.js";
 import {
   createTelegramSpooledReplayDeferredParticipant,
   createTelegramSpooledReplayParticipant,
@@ -524,6 +525,22 @@ export function createTelegramMessagePipeline({
       }
       return result;
     } catch (err) {
+      if (
+        !params.options?.bufferedMessages &&
+        shouldDeclineTelegramNativeCommandHandoffOnFailure(params.ctx.update, params.msg)
+      ) {
+        // The offered command's native executor answers it, as without the offer.
+        runtime.error?.(
+          danger(`[telegram] native command handoff declined after a failure: ${String(err)}`),
+        );
+        if (spooledReplay) {
+          return await finalizeSpooledReplayResult({ kind: "skipped" });
+        }
+        if (!dispatchDedupeCommitted) {
+          releaseDispatchDedupeClaims(params.dispatchDedupeClaims ?? [], err);
+        }
+        return { kind: "skipped" };
+      }
       if (spooledReplay) {
         return await finalizeSpooledReplayResult({ kind: "failed-retryable", error: err });
       }

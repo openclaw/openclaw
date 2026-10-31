@@ -15,6 +15,7 @@ import {
   projectPluginCommandNativeMetadata,
 } from "./plugin-command-metadata.js";
 import { listRegisteredPluginCommands } from "./plugin-command-registry.js";
+import type { PluginCommandRuntimeCapability } from "./plugin-command.types.js";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
@@ -84,6 +85,8 @@ export type PluginCommandExecutionReplyOptions = Readonly<{
 }>;
 
 export type PluginCommandNativeCandidate = ReturnType<typeof projectPluginCommandNativeMetadata> & {
+  /** Declared runtime capabilities; channel native command executors do not supply them. */
+  readonly runtimeCapabilities?: readonly PluginCommandRuntimeCapability[];
   readonly prepareDispatch: (rawArgs?: string) => PluginCommandCatalogDecision;
 };
 
@@ -250,6 +253,9 @@ export function createPluginCommandRuntime(): PluginCommandRuntime {
             const metadata = projectPluginCommandNativeMetadata(command, channel);
             return Object.freeze({
               ...metadata,
+              ...(command.runtimeCapabilities?.length
+                ? { runtimeCapabilities: Object.freeze([...command.runtimeCapabilities]) }
+                : {}),
               prepareDispatch(rawArgs?: string): PluginCommandCatalogDecision {
                 const args = rawArgs?.trim();
                 if (args && !command.acceptsArgs) {
