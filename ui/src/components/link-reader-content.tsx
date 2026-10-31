@@ -1,8 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { LinkReaderMarkdown, documentUrl, type LoadImage } from "./link-reader-markdown.tsx";
 import type { ReaderReadyView, ReaderSection } from "./link-reader-panel-view.ts";
 import { linkReaderAuthorHref } from "./link-reader-response.ts";
@@ -36,9 +38,14 @@ function DateLabel(props: { value: string | undefined }) {
   );
 }
 
-function Diff(props: { patch: string; filename: string }) {
+function Diff(props: {
+  patch: string;
+  filename: string;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
+}) {
   return (
     <pre
+      ref={[elementRef(props.onScrollPortRef)]}
       class="lr-diff"
       tabindex={0}
       aria-label={t("linkReader.diffLabel", { filename: props.filename })}
@@ -69,7 +76,11 @@ function TruncationNote(props: { truncated: boolean | undefined; label: string }
   );
 }
 
-function FileContent(props: { file: ControlUiLinkReaderFile; expanded: boolean }) {
+function FileContent(props: {
+  file: ControlUiLinkReaderFile;
+  expanded: boolean;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
+}) {
   // Preserve native toggles until the document changes its expansion preference.
   const expanded = createMemo(() => props.expanded);
   return (
@@ -88,65 +99,16 @@ function FileContent(props: { file: ControlUiLinkReaderFile; expanded: boolean }
         when={props.file.patch}
         fallback={<p class="lr-note">{t("linkReader.patchUnavailable")}</p>}
       >
-        {(patch) => <Diff patch={patch()} filename={props.file.path} />}
+        {(patch) => (
+          <Diff
+            patch={patch()}
+            filename={props.file.path}
+            onScrollPortRef={props.onScrollPortRef}
+          />
+        )}
       </Show>
       <TruncationNote truncated={props.file.patchTruncated} label="linkReader.patchTruncated" />
     </details>
-  );
-}
-
-function CommentContent(props: {
-  comment: ControlUiLinkReaderComment;
-  base: string;
-  loadImage?: LoadImage;
-}) {
-  const location = () =>
-    [props.comment.context?.path, props.comment.context?.lineLabel].filter(Boolean).join(":");
-  const permalink = () => documentUrl(props.comment.url, props.base)?.href;
-  const reply = () => {
-    const value = props.comment.context?.replyUrl;
-    return value ? documentUrl(value, props.base)?.href : undefined;
-  };
-  return (
-    <article class="lr-comment" id={props.comment.id}>
-      <header class="lr-meta">
-        <strong>{props.comment.author}</strong>{" "}
-        <ReaderLink href={permalink()} title={t("linkReader.commentPermalink")}>
-          <Show when={props.comment.createdAt} fallback={t("linkReader.commentPermalink")}>
-            {(value) => <DateLabel value={value()} />}
-          </Show>
-        </ReaderLink>{" "}
-        <Show when={props.comment.label}>
-          {(label) => <span class="lr-comment-kind">{label()}</span>}
-        </Show>
-      </header>
-      <Show when={location() || props.comment.context?.label}>
-        <p class="lr-review-location">
-          <ReaderLink href={permalink()}>{location()}</ReaderLink> {props.comment.context?.label}
-        </p>
-      </Show>
-      <Show when={reply()}>
-        {(url) => (
-          <ReaderLink class="lr-meta" href={url()}>
-            {props.comment.context?.replyLabel ?? t("linkReader.replyContext")}
-          </ReaderLink>
-        )}
-      </Show>
-      <Show when={props.comment.context?.diff}>
-        {(diff) => (
-          <details class="lr-file lr-review-diff">
-            <summary>{t("linkReader.reviewContext")}</summary>
-            <Diff patch={diff()} filename={props.comment.context?.path ?? ""} />
-            <TruncationNote
-              truncated={props.comment.context?.diffTruncated}
-              label="linkReader.patchTruncated"
-            />
-          </details>
-        )}
-      </Show>
-      <LinkReaderMarkdown body={props.comment.body} base={props.base} loadImage={props.loadImage} />
-      <TruncationNote truncated={props.comment.bodyTruncated} label="linkReader.bodyTruncated" />
-    </article>
   );
 }
 
@@ -175,6 +137,7 @@ const checksLabels = {
 function ChecksContent(props: {
   checks: ReaderChecks;
   base: string;
+  provider: string;
   refreshState?: "idle" | "loading" | "error";
   sectionRef: (element: HTMLElement) => void;
 }) {
@@ -248,7 +211,22 @@ function ChecksContent(props: {
           }}
         </For>
       </ul>
-      <TruncationNote truncated={props.checks.truncated} label="linkReader.checksTruncated" />
+      <Show when={props.checks.truncated}>
+        <p class="lr-note">
+          {t("linkReader.checksTruncated")}
+          <Show when={source()}>
+            {(url) => (
+              <>
+                {" "}
+                <ReaderLink href={url()} data-link-reader-external="">
+                  {t("linkReader.checksSourceExternal", { provider: props.provider })}
+                  <Icon name="externalLink" />
+                </ReaderLink>
+              </>
+            )}
+          </Show>
+        </p>
+      </Show>
       <footer class="lr-checks-footer">
         <Show when={props.checks.commit}>
           {(commit) => (
@@ -359,23 +337,14 @@ function DeferredSection(props: {
 }) {
   let element: HTMLElement | undefined;
   const label = () => t("linkReader." + props.section);
-  createEffect(
-    () => props.section === "files" && props.state === "idle",
-    (observe) => {
-      if (!observe || !element || typeof IntersectionObserver === "undefined") {
-        return undefined;
+  createIntersectionObserver(
+    () => (props.section === "files" && props.state === "idle" && element ? [element] : []),
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        props.onLoad();
       }
-      const observer = new IntersectionObserver(
-        (entries) => {
-          if (entries.some((entry) => entry.isIntersecting)) {
-            props.onLoad();
-          }
-        },
-        { rootMargin: "120px" },
-      );
-      observer.observe(element);
-      return () => observer.disconnect();
     },
+    { rootMargin: "120px" },
   );
   return (
     <section
@@ -415,6 +384,7 @@ export function LinkReaderContent(props: {
   loadImage?: LoadImage;
   sections?: ReaderReadyView["sections"];
   onLoadSection?: (section: ReaderSection) => void;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
 }) {
   const elements: Partial<Record<"overview" | ReaderSection, HTMLElement>> = {};
   const authorHref = () => linkReaderAuthorHref(props.detail.authorUrl, props.detail.url);
@@ -425,6 +395,71 @@ export function LinkReaderContent(props: {
       authors.map((author) => author.name).join(", ") + (unnamed ? " +" + unnamed : "")
     ).trim();
   };
+  function CommentContent(childProps: { comment: ControlUiLinkReaderComment }) {
+    const location = () =>
+      [childProps.comment.context?.path, childProps.comment.context?.lineLabel]
+        .filter(Boolean)
+        .join(":");
+    const permalink = () => documentUrl(childProps.comment.url, props.detail.url)?.href;
+    const reply = () => {
+      const value = childProps.comment.context?.replyUrl;
+      return value ? documentUrl(value, props.detail.url)?.href : undefined;
+    };
+    return (
+      <article class="lr-comment" id={childProps.comment.id}>
+        <header class="lr-meta">
+          <strong>{childProps.comment.author}</strong>{" "}
+          <ReaderLink href={permalink()} title={t("linkReader.commentPermalink")}>
+            <Show when={childProps.comment.createdAt} fallback={t("linkReader.commentPermalink")}>
+              {(value) => <DateLabel value={value()} />}
+            </Show>
+          </ReaderLink>{" "}
+          <Show when={childProps.comment.label}>
+            {(label) => <span class="lr-comment-kind">{label()}</span>}
+          </Show>
+        </header>
+        <Show when={location() || childProps.comment.context?.label}>
+          <p class="lr-review-location">
+            <ReaderLink href={permalink()}>{location()}</ReaderLink>{" "}
+            {childProps.comment.context?.label}
+          </p>
+        </Show>
+        <Show when={reply()}>
+          {(url) => (
+            <ReaderLink class="lr-meta" href={url()}>
+              {childProps.comment.context?.replyLabel ?? t("linkReader.replyContext")}
+            </ReaderLink>
+          )}
+        </Show>
+        <Show when={childProps.comment.context?.diff}>
+          {(diff) => (
+            <details class="lr-file lr-review-diff">
+              <summary>{t("linkReader.reviewContext")}</summary>
+              <Diff
+                patch={diff()}
+                filename={childProps.comment.context?.path ?? ""}
+                onScrollPortRef={props.onScrollPortRef}
+              />
+              <TruncationNote
+                truncated={childProps.comment.context?.diffTruncated}
+                label="linkReader.patchTruncated"
+              />
+            </details>
+          )}
+        </Show>
+        <LinkReaderMarkdown
+          body={childProps.comment.body}
+          base={props.detail.url}
+          loadImage={props.loadImage}
+        />
+        <TruncationNote
+          truncated={childProps.comment.bodyTruncated}
+          label="linkReader.bodyTruncated"
+        />
+      </article>
+    );
+  }
+
   return (
     <article class="lr-document">
       <header class="lr-document-header">
@@ -511,6 +546,7 @@ export function LinkReaderContent(props: {
                 sectionRef={(element) => (elements.checks = element)}
                 checks={checks()}
                 base={props.detail.url}
+                provider={props.target.reader.label}
                 refreshState={props.sections?.checks}
               />
             )}
@@ -587,7 +623,11 @@ export function LinkReaderContent(props: {
           >
             <For each={files()} keyed={(file) => file.path}>
               {(file) => (
-                <FileContent file={file()} expanded={props.detail.filesExpanded === true} />
+                <FileContent
+                  file={file()}
+                  expanded={props.detail.filesExpanded === true}
+                  onScrollPortRef={props.onScrollPortRef}
+                />
               )}
             </For>
           </ListSection>
@@ -617,13 +657,7 @@ export function LinkReaderContent(props: {
             onLoad={() => props.onLoadSection?.("discussion")}
           >
             <For each={comments()} keyed={(comment) => comment.id}>
-              {(comment) => (
-                <CommentContent
-                  comment={comment()}
-                  base={props.detail.url}
-                  loadImage={props.loadImage}
-                />
-              )}
+              {(comment) => <CommentContent comment={comment()} />}
             </For>
           </ListSection>
         )}

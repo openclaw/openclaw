@@ -15,11 +15,10 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
-import {
-  getAdmittedSqliteSchemaFacts,
-  type SqliteSchemaFacts,
-} from "../../infra/sqlite-schema-facts.js";
+import { getAdmittedSqlSchemaFacts } from "../../infra/sqlite-schema-facts.js";
+import { ensureStatePostgresFragment } from "../../state/openclaw-state-db-engine.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
@@ -63,7 +62,10 @@ export type SkillLibraryDatabase = Pick<
 >;
 export const skillLibraryDb = (db: EngineConnection) =>
   getNodeSqliteKysely<SkillLibraryDatabase>(db);
-const ensured = new WeakMap<EngineConnection, SqliteSchemaFacts>();
+const ensured = new WeakMap<
+  EngineConnection,
+  NonNullable<ReturnType<typeof getAdmittedSqlSchemaFacts>>
+>();
 const ensureSkillLibrarySchemaInDatabase = createSqliteSchemaEnsurer(
   () => getOpenClawStateFeatureSchemaSql("skill_library_entries"),
   {
@@ -81,20 +83,24 @@ export function ensureSkillLibrarySchema(
   admit: (stage: "transaction" | "commit") => void,
 ): void {
   const database = openOpenClawStateDatabase(options);
-  const facts = getAdmittedSqliteSchemaFacts(database.db);
+  const facts = getAdmittedSqlSchemaFacts(database.db);
   if (facts && ensured.get(database.db) === facts) {
     return;
   }
   runOpenClawStateWriteTransaction(
     ({ db: transactionDb }) => {
       admit("transaction");
-      ensureSkillLibrarySchemaInDatabase(transactionDb);
+      if (isPostgresSqlConnection(transactionDb)) {
+        ensureStatePostgresFragment(transactionDb, "skill_library_entries");
+      } else {
+        ensureSkillLibrarySchemaInDatabase(transactionDb);
+      }
       admit("commit");
     },
     { ...options, database },
     { operationLabel: "skills.library.schema" },
   );
-  const initialized = getAdmittedSqliteSchemaFacts(database.db);
+  const initialized = getAdmittedSqlSchemaFacts(database.db);
   if (initialized) {
     ensured.set(database.db, initialized);
   }

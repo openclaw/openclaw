@@ -14,85 +14,53 @@ const nodeCandidates = [
   (node: LabelFixture) => node.remoteIp,
   (node: LabelFixture) => node.nodeId.slice(0, 8),
 ];
+const node = (nodeId: string, modelIdentifier?: string, remoteIp?: string): LabelFixture => ({
+  nodeId,
+  displayName: "Mac Studio",
+  modelIdentifier,
+  remoteIp,
+});
 
 describe("disambiguate", () => {
-  it.each([
-    {
-      name: "leaves unique labels alone",
-      items: [
-        { nodeId: "11111111", displayName: "Mac Studio", modelIdentifier: "Mac14,12" },
-        { nodeId: "22222222", displayName: "MacBook", modelIdentifier: "Mac15,3" },
+  it.each<[string, LabelFixture[], (string | undefined)[]]>([
+    [
+      "leaves unique labels alone",
+      [node("11111111", "Mac14,12"), { ...node("22222222", "Mac15,3"), displayName: "MacBook" }],
+      [undefined, undefined],
+    ],
+    [
+      "uses models when they differ",
+      [node("11111111", "Mac14,12"), node("22222222", "Mac15,14")],
+      ["Mac14,12", "Mac15,14"],
+    ],
+    [
+      "advances past a partly distinct model candidate",
+      [
+        node("11111111", "Model A", "192.168.1.11"),
+        node("22222222", "Model A", "192.168.1.12"),
+        node("33333333", "Model B", "192.168.1.13"),
       ],
-      expected: [undefined, undefined],
-    },
-    {
-      name: "uses models when they differ",
-      items: [
-        { nodeId: "11111111", displayName: "Mac Studio", modelIdentifier: "Mac14,12" },
-        { nodeId: "22222222", displayName: "Mac Studio", modelIdentifier: "Mac15,14" },
+      ["192.168.1.11", "192.168.1.12", "192.168.1.13"],
+    ],
+    [
+      "falls back to short IDs when facts are missing",
+      [node("11111111aaaa"), node("22222222bbbb")],
+      ["11111111", "22222222"],
+    ],
+    [
+      "uses the final fallback for a member missing the selected fact",
+      [node("11111111aaaa", "Mac14,12"), node("22222222bbbb", "Mac15,14"), node("33333333cccc")],
+      ["Mac14,12", "Mac15,14", "33333333"],
+    ],
+    [
+      "uses the last candidate when none is fully distinct",
+      [
+        node("11111111aaaa", "Mac14,12", "192.168.1.11"),
+        node("11111111bbbb", "Mac14,12", "192.168.1.11"),
       ],
-      expected: ["Mac14,12", "Mac15,14"],
-    },
-    {
-      name: "advances past a partly distinct model candidate",
-      items: [
-        {
-          nodeId: "11111111",
-          displayName: "Mac Studio",
-          modelIdentifier: "Model A",
-          remoteIp: "192.168.1.11",
-        },
-        {
-          nodeId: "22222222",
-          displayName: "Mac Studio",
-          modelIdentifier: "Model A",
-          remoteIp: "192.168.1.12",
-        },
-        {
-          nodeId: "33333333",
-          displayName: "Mac Studio",
-          modelIdentifier: "Model B",
-          remoteIp: "192.168.1.13",
-        },
-      ],
-      expected: ["192.168.1.11", "192.168.1.12", "192.168.1.13"],
-    },
-    {
-      name: "falls back to short IDs when facts are missing",
-      items: [
-        { nodeId: "11111111aaaa", displayName: "Mac Studio" },
-        { nodeId: "22222222bbbb", displayName: "Mac Studio" },
-      ],
-      expected: ["11111111", "22222222"],
-    },
-    {
-      name: "uses the final fallback for a member missing the selected fact",
-      items: [
-        { nodeId: "11111111aaaa", displayName: "Mac Studio", modelIdentifier: "Mac14,12" },
-        { nodeId: "22222222bbbb", displayName: "Mac Studio", modelIdentifier: "Mac15,14" },
-        { nodeId: "33333333cccc", displayName: "Mac Studio" },
-      ],
-      expected: ["Mac14,12", "Mac15,14", "33333333"],
-    },
-    {
-      name: "uses the last candidate when none is fully distinct",
-      items: [
-        {
-          nodeId: "11111111aaaa",
-          displayName: "Mac Studio",
-          modelIdentifier: "Mac14,12",
-          remoteIp: "192.168.1.11",
-        },
-        {
-          nodeId: "11111111bbbb",
-          displayName: "Mac Studio",
-          modelIdentifier: "Mac14,12",
-          remoteIp: "192.168.1.11",
-        },
-      ],
-      expected: ["11111111", "11111111"],
-    },
-  ])("$name", ({ items, expected }) => {
+      ["11111111", "11111111"],
+    ],
+  ])("%s", (_name, items, expected) => {
     expect(disambiguate(items, (item) => item.displayName, nodeCandidates)).toEqual(expected);
   });
 

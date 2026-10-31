@@ -715,7 +715,6 @@ export function createSlackProgressRuntime(runtimeParams: {
   return {
     draftStream,
     previewLifecycle,
-    isProgressMode,
     useDraftProgressCard,
     useNativeProgressStreaming,
     progressDraftActive,

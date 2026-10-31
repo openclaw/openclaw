@@ -8,112 +8,82 @@ import {
 } from "openclaw/plugin-sdk/command-status";
 import { createPluginCommandRuntime } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { matchPluginCommand, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { buildPluginTelegramMenuCommands } from "./bot-native-command-menu.js";
 import { inputRichBlocksToPlainText } from "./rich-block-model.js";
 import { planTelegramTextDeliveryPages } from "./telegram-text-delivery.js";
 
-function registerCommand(name: string, nativeNames?: Record<string, string>) {
+function registerCommand(name: string, nativeName?: string) {
   expect(
     registerPluginCommand(name, {
       name,
       description: `Run ${name}`,
       acceptsArgs: true,
-      nativeNames,
+      nativeNames: nativeName ? { telegram: nativeName } : undefined,
       handler: async () => ({ text: name }),
     }),
   ).toEqual({ ok: true });
 }
 
-function commandPages() {
-  const first = buildCommandsMessagePaginated(undefined, undefined, { forcePaginatedList: true });
-  return Array.from({ length: first.totalPages }, (_, index) =>
-    buildCommandsMessagePaginated(undefined, undefined, {
-      forcePaginatedList: true,
-      page: index + 1,
-    }),
-  );
+const commandPage = (page = 1) =>
+  buildCommandsMessagePaginated(undefined, undefined, { forcePaginatedList: true, page });
+const commandPages = () =>
+  Array.from({ length: commandPage().totalPages }, (_, index) => commandPage(index + 1).text);
+
+function menuCommands() {
+  return buildPluginTelegramMenuCommands({
+    specs: createPluginCommandRuntime().listNativeCandidates("telegram"),
+    existingCommands: new Set(),
+  }).commands;
 }
 
-describe("telegram command ui", () => {
-  it.each([false, true])(
-    "preserves command owners when normalized names collide (reverse=%s)",
-    (reverse) => {
-      withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () => {
-        const names = reverse ? ["foo_bar", "foo-bar"] : ["foo-bar", "foo_bar"];
-        for (const name of names) {
-          registerCommand(name);
-        }
-        const plainList = buildCommandsMessage();
-        const paginatedList = commandPages()
-          .map((page) => page.text)
-          .join("\n");
-        for (const text of [plainList, paginatedList]) {
-          expect(text).toContain("`/foo-bar` (foo-bar) - Run foo-bar");
-          expect(text).toContain("/foo_bar (foo_bar) - Run foo_bar");
-        }
-        expect(matchPluginCommand("/foo-bar status")?.command.name).toBe("foo-bar");
-        expect(matchPluginCommand("/foo_bar status")?.command.name).toBe("foo_bar");
-        const catalog = buildPluginTelegramMenuCommands({
-          specs: createPluginCommandRuntime().listNativeCandidates("telegram"),
-          existingCommands: new Set(),
-        });
-        expect(catalog.commands).toEqual([{ command: "foo_bar", description: "Run foo_bar" }]);
-      });
-    },
-  );
-
-  it("preserves explicit native aliases without relabeling canonical text commands", () => {
-    withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () => {
-      registerCommand("foo-bar", { telegram: "other_name" });
-      registerCommand("foo_bar");
-      expect(buildCommandsMessage()).toContain("`/foo-bar` (foo-bar)");
-      expect(matchPluginCommand("/foo-bar status")?.command.name).toBe("foo-bar");
+it.each(["forward", "reverse", "alias"])("preserves command owners (%s)", (mode) => {
+  withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () => {
+    const alias = mode === "alias";
+    const names = mode === "reverse" ? ["foo_bar", "foo-bar"] : ["foo-bar", "foo_bar"];
+    for (const name of names) {
+      registerCommand(name, alias && name === "foo-bar" ? "other_name" : undefined);
+    }
+    for (const text of [buildCommandsMessage(), commandPages().join("\n")]) {
+      expect(text).toContain("`/foo-bar` (foo-bar) - Run foo-bar");
+      expect(text).toContain("/foo_bar (foo_bar) - Run foo_bar");
+    }
+    expect(matchPluginCommand("/foo-bar status")?.command.name).toBe("foo-bar");
+    expect(matchPluginCommand("/foo_bar status")?.command.name).toBe("foo_bar");
+    if (alias) {
       expect(matchPluginCommand("/other_name status", { channel: "telegram" })?.command.name).toBe(
         "foo-bar",
       );
-      const catalog = buildPluginTelegramMenuCommands({
-        specs: createPluginCommandRuntime().listNativeCandidates("telegram"),
-        existingCommands: new Set(),
-      });
-      expect(catalog.commands).toEqual([
-        { command: "foo_bar", description: "Run foo_bar" },
-        { command: "other_name", description: "Run foo-bar" },
-      ]);
-    });
+    }
+    expect(menuCommands()).toEqual([
+      { command: "foo_bar", description: "Run foo_bar" },
+      ...(alias ? [{ command: "other_name", description: "Run foo-bar" }] : []),
+    ]);
   });
+});
 
-  it.each([false, true])(
-    "encodes registered command names as code in initial delivery (rich=%s)",
-    (richMessages) => {
-      withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () => {
-        registerCommand("active-memory");
-        const page = commandPages().find((entry) => entry.text.includes("active-memory"));
-        if (!page) {
-          throw new Error("registered command was not listed");
-        }
-        const deliveries = planTelegramTextDeliveryPages({
-          text: page.text,
-          maxChars: 4096,
-          richMessages,
-        });
-        if (richMessages) {
-          const blocks = deliveries.flatMap((delivery) => delivery.richMessage?.blocks ?? []);
-          expect(inputRichBlocksToPlainText(blocks)).toContain("/active-memory");
-          expect(blocks).toContainEqual(
-            expect.objectContaining({
-              type: "paragraph",
-              text: expect.arrayContaining([
-                expect.objectContaining({ type: "code", text: "/active-memory" }),
-              ]),
-            }),
-          );
-        } else {
-          expect(deliveries.map((delivery) => delivery.htmlText).join("\n")).toContain(
-            "<code>/active-memory</code>",
-          );
-        }
-      });
-    },
-  );
+it.each([false, true])("encodes delivered command names as code (rich=%s)", (richMessages) => {
+  withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () => {
+    registerCommand("active-memory");
+    const text = commandPages().find((entry) => entry.includes("active-memory"));
+    expect(text, "registered command was not listed").toBeDefined();
+    const deliveries = planTelegramTextDeliveryPages({
+      text: text!,
+      maxChars: 4096,
+      richMessages,
+    });
+    if (richMessages) {
+      const blocks = deliveries.flatMap((delivery) => delivery.richMessage?.blocks ?? []);
+      expect(inputRichBlocksToPlainText(blocks)).toContain("/active-memory");
+      expect(
+        blocks.flatMap((block) =>
+          block.type === "paragraph" && Array.isArray(block.text) ? block.text : [],
+        ),
+      ).toContainEqual(expect.objectContaining({ type: "code", text: "/active-memory" }));
+    } else {
+      expect(deliveries.map((delivery) => delivery.htmlText).join("\n")).toContain(
+        "<code>/active-memory</code>",
+      );
+    }
+  });
 });

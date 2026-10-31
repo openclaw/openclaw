@@ -2,7 +2,8 @@ import { createSignal } from "solid-js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { ModelProviderCard } from "./data.ts";
-import { ModelProviders, type ModelProvidersViewProps } from "./view.tsx";
+import type { ModelProvidersViewProps } from "./view-types.ts";
+import { ModelProviders } from "./view.tsx";
 
 const mountedViews = new WeakMap<HTMLElement, (props: ModelProvidersViewProps) => void>();
 
@@ -18,7 +19,7 @@ export function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderC
     profileOrderLocks: {},
     credentialProviderIds: ["openai"],
     logoutTargets: [],
-    hasConfigApiKey: false,
+    configApiKeys: [],
     modelCount: 1,
     availableModelCount: 1,
     apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
@@ -33,8 +34,8 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     refreshing: false,
     error: null,
     providerUsageFailed: false,
-    supplementalLoading: false,
     updatedAt: 1,
+    onOpenUsage: () => undefined,
     credentialAgentLabel: "Writer",
     cards: [card()],
     configuredModels: [{ id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true }],
@@ -69,7 +70,6 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     onCloseKeyEditor: () => undefined,
     onKeyDraftChange: () => undefined,
     onSaveKey: () => undefined,
-    onRemoveKey: () => undefined,
     onProbe: () => undefined,
     onRequestLogout: () => undefined,
     onProfileOrderChange: () => undefined,
@@ -110,4 +110,18 @@ export function mount(viewProps: ModelProvidersViewProps, container?: HTMLElemen
 
 export function text(element: Element | null): string {
   return element?.textContent?.replace(/\s+/gu, " ").trim() ?? "";
+}
+
+export function settingsRow(container: Element, label: string): HTMLElement {
+  const match = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
+    (candidate) =>
+      text(
+        candidate.querySelector(".model-providers__label-with-help > span:first-child") ??
+          candidate.querySelector(".settings-row__title"),
+      ) === label,
+  );
+  if (!match) {
+    throw new Error(`Missing settings row: ${label}`);
+  }
+  return match;
 }

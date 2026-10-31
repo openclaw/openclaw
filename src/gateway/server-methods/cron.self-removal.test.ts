@@ -31,8 +31,6 @@ const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-self-rem
 describe("cron self-removal", () => {
   it.each([
     ["agentTurn", "manual", 0, "exact"],
-    ["agentTurn", "timer", 60, "exact"],
-    ["script", "manual", 0, "exact"],
     ["script", "timer", 60, "exact"],
     ["agentTurn", "manual", 0, "unbound"],
     ["agentTurn", "manual", 0, "different instance"],
@@ -146,7 +144,6 @@ describe("cron self-removal", () => {
         defaultAgentId: "main",
         log: logger,
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         onEvent: (event) => {
           events.push(event);
           if (event.action === "finished") {

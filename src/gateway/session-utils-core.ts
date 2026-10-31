@@ -4,6 +4,8 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import { countRunningBackgroundProcesses } from "../agents/bash-process-observation.js";
+import { getSubagentChildControllerSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
@@ -17,10 +19,29 @@ import {
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
 import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
 import {
   createSessionRowModelCacheKey,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
+
+export function resolveGatewaySessionBackgroundProcessCount(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  agentId: string;
+  sessionId?: string;
+}): number | undefined {
+  const canonicalKey = resolveSessionStoreKey({
+    cfg: params.cfg,
+    sessionKey: params.key,
+    storeAgentId: params.agentId,
+  });
+  const count = countRunningBackgroundProcesses({
+    scopeKeys: [canonicalKey, params.key, ...(params.sessionId ? [params.sessionId] : [])],
+    agentId: params.agentId,
+  });
+  return count > 0 ? count : undefined;
+}
 
 export function matchesSessionArchiveFilter(
   entry: Pick<SessionEntry, "archivedAt">,
@@ -147,22 +168,82 @@ export function isFinitePositiveTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean {
+function storeOnlyChildLinkExpiresAt(entry: SessionEntry): number {
   if (isTerminalSessionStatus(entry.status) || isFinitePositiveTimestamp(entry.endedAt)) {
     const endedAt = isFinitePositiveTimestamp(entry.endedAt) ? entry.endedAt : entry.updatedAt;
-    return (
-      isFinitePositiveTimestamp(endedAt) && now - endedAt <= RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS
-    );
+    return isFinitePositiveTimestamp(endedAt)
+      ? endedAt + RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS
+      : -Infinity;
   }
-  // Store-only child links lack a live registry entry; retain recent unknown-state rows.
-  return (
-    isFinitePositiveTimestamp(entry.startedAt) ||
-    (isFinitePositiveTimestamp(entry.updatedAt) &&
-      now - entry.updatedAt <= STALE_STORE_ONLY_CHILD_LINK_MS)
-  );
+  return isFinitePositiveTimestamp(entry.startedAt)
+    ? Infinity
+    : isFinitePositiveTimestamp(entry.updatedAt)
+      ? entry.updatedAt + STALE_STORE_ONLY_CHILD_LINK_MS
+      : -Infinity;
+}
+
+function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean {
+  return now <= storeOnlyChildLinkExpiresAt(entry);
+}
+
+/** The next clock-only navigation change; execution/reservation changes invalidate separately. */
+export function sessionChildLinkExpiresAt(
+  key: string,
+  entry: SessionEntry,
+  subagentRuns: SessionListRowContext["subagentRuns"],
+  now: number,
+): number {
+  const parsed = parseAgentSessionKey(key);
+  if (
+    (!entry.acp &&
+      !parsed?.rest.startsWith("acp:") &&
+      (parsed?.rest.startsWith("subagent:") ||
+        (Boolean(entry.spawnedBy) && (entry.spawnDepth ?? 0) > 0))) ||
+    (entry.parentSessionKey && parsed?.rest.startsWith("dashboard:")) ||
+    (!entry.parentSessionKey && !entry.spawnedBy)
+  ) {
+    return Infinity;
+  }
+  const run = subagentRuns.getDisplaySubagentRun(key);
+  const expires = run
+    ? typeof run.execution.endedAt === "number" && Number.isFinite(run.execution.endedAt)
+      ? run.execution.endedAt + RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS
+      : Infinity
+    : storeOnlyChildLinkExpiresAt(entry);
+  return expires >= now ? expires : Infinity;
 }
 
 const emptyChildOwners: readonly string[] = Object.freeze([]);
+
+/** Only the current executor/reservation can confer control; display snapshots cannot. */
+export function resolveSessionChildController(
+  key: string,
+  entry: SessionEntry,
+  parentSessionKey?: string,
+): string | undefined {
+  if (
+    parentSessionKey &&
+    parentSessionKey !== entry.parentSessionKey &&
+    parentSessionKey !== entry.spawnedBy
+  ) {
+    return undefined;
+  }
+  return getSubagentChildControllerSessionKey(key, entry);
+}
+
+/** Promotion cuts navigation activity, not a live controller's ownership. */
+export function shouldPropagateChildActivity(
+  key: string,
+  entry: SessionEntry,
+  ownerSessionKey: string,
+): boolean {
+  return (
+    entry.sidebarRoot !== true ||
+    parseAgentSessionKey(key)?.rest.startsWith("subagent:") === true ||
+    resolveSessionChildController(key, entry) === ownerSessionKey
+  );
+}
+
 const sessionChildOwners = new WeakMap<
   SessionEntry,
   {
@@ -183,31 +264,38 @@ export function resolveSessionChildOwners(params: {
   hasActiveRun?: boolean;
 }): readonly string[] {
   const { key, entry, now, subagentRuns } = params;
-  const latest = subagentRuns.getDisplaySubagentRun(key);
-  const keep =
-    params.hasActiveRun ||
-    (latest
-      ? shouldKeepSubagentRunChildLink(latest, {
-          activeDescendants: subagentRuns.countActiveDescendantRuns(key),
-          now,
-        })
-      : shouldKeepStoreOnlyChildLink(entry, now));
-  // Runtime control replaces spawnedBy, but only retained runs own controller links.
-  const controller = keep
-    ? latest
-      ? normalizeOptionalString(latest.controllerSessionKey) ||
-        normalizeOptionalString(latest.requesterSessionKey)
-      : normalizeOptionalString(entry.spawnedBy)
-    : undefined;
-  // Persistent dashboard navigation outlives the individual run, including forks.
-  const parent =
-    keep ||
-    (params.parsedKey === undefined
-      ? parseAgentSessionKey(key)
-      : params.parsedKey
-    )?.rest.startsWith("dashboard:")
-      ? normalizeOptionalString(entry.parentSessionKey)
-      : undefined;
+  const controller = resolveSessionChildController(key, entry);
+  let parent: string | undefined;
+  if (entry.parentSessionKey || entry.spawnedBy) {
+    const parsed = params.parsedKey === undefined ? parseAgentSessionKey(key) : params.parsedKey;
+    const native =
+      !entry.acp &&
+      !parsed?.rest.startsWith("acp:") &&
+      (parsed?.rest.startsWith("subagent:") ||
+        (Boolean(entry.spawnedBy) && (entry.spawnDepth ?? 0) > 0));
+    // Native lineage is a durable relationship, not a retained-run lease. Saved
+    // dashboard navigation keeps its existing lifetime. Other store-only rows
+    // retain the bounded fallback rather than acquiring permanent authority.
+    let keep = native || params.hasActiveRun;
+    if (!keep) {
+      const latest = subagentRuns.getDisplaySubagentRun(key);
+      keep = latest
+        ? shouldKeepSubagentRunChildLink(latest, {
+            activeDescendants: subagentRuns.countActiveDescendantRuns(key),
+            now,
+          })
+        : shouldKeepStoreOnlyChildLink(entry, now);
+    }
+    const explicitParent =
+      keep || parsed?.rest.startsWith("dashboard:")
+        ? normalizeOptionalString(entry.parentSessionKey)
+        : undefined;
+    const spawner = keep ? normalizeOptionalString(entry.spawnedBy) : undefined;
+    // Modern explicit lineage remains readable during foreign control. Legacy
+    // spawnedBy-only facts yield to a verified active controller. Neither grants
+    // permission to take over that execution (delivery checks the current owner).
+    parent = explicitParent ?? (!controller || controller === spawner ? spawner : undefined);
+  }
   const cached = sessionChildOwners.get(entry);
   if (cached?.key === key && cached.controller === controller && cached.parent === parent) {
     return cached.owners;
@@ -229,7 +317,12 @@ export function resolveSessionChildOwners(params: {
   return result;
 }
 
-export type SessionChildLink = { key: string; entry: SessionEntry };
+export type SessionChildLink = {
+  key: string;
+  entry: SessionEntry;
+  agentId?: string;
+  storePath?: string;
+};
 
 /** Select canonical children; retained run results cannot create session links. */
 export function readStoreChildSessionLinks(params: {

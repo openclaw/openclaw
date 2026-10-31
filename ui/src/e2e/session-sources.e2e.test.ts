@@ -1,7 +1,6 @@
-import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionPath,
   defaultControlUiFeatureMethods,
@@ -10,48 +9,35 @@ import {
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectText, expectCount } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Session source settings" });
 const featureMethods = [...defaultControlUiFeatureMethods, "plugins.list"];
-const catalogConfigSchema = (key = "sessionCatalog") => ({
-  type: "object",
-  properties: {
-    config: {
-      type: "object",
-      properties: {
-        [key]: {
-          type: "object",
-          properties: { enabled: { type: "boolean", default: true } },
-        },
-      },
-    },
-  },
-});
+const plugins = ["codex", "acpx"];
+const objectSchema = (properties: Record<string, unknown>) => ({ type: "object", properties });
+const catalogConfigSchema = (key = "sessionCatalog") =>
+  objectSchema({
+    config: objectSchema({ [key]: objectSchema({ enabled: { type: "boolean", default: true } }) }),
+  });
+const entriesSchema = {
+  codex: catalogConfigSchema(),
+  acpx: catalogConfigSchema("piSessionCatalog"),
+};
 const config = {
   plugins: {
     entries: {
-      anthropic: { config: { sessionCatalog: { enabled: false } } },
       codex: { config: { sessionCatalog: { enabled: false }, supervision: { enabled: true } } },
-      opencode: { config: { sessionCatalog: { enabled: false } } },
       acpx: { enabled: false, config: { timeoutSeconds: 42 } },
     },
   },
 };
 const methodResponses = {
   "plugins.list": {
-    plugins: [
-      { id: "anthropic", name: "Anthropic", enabled: true },
-      { id: "codex", name: "Codex", enabled: true },
-      { id: "opencode", name: "OpenCode", enabled: true },
-      { id: "acpx", name: "ACPX", enabled: false },
-    ].map((plugin) =>
-      Object.assign({}, plugin, {
-        installed: true,
-        state: plugin.enabled ? "enabled" : "disabled",
-      }),
-    ),
-    diagnostics: [],
-    mutationAllowed: true,
+    plugins: plugins.map((id) => ({
+      id,
+      enabled: id !== "acpx",
+      installed: true,
+    })),
   },
   "config.get": {
     config,
@@ -60,36 +46,41 @@ const methodResponses = {
     valid: true,
   },
   "config.schema": {
-    schema: {
-      type: "object",
-      properties: {
-        plugins: {
-          type: "object",
-          properties: {
-            entries: {
-              type: "object",
-              properties: {
-                anthropic: catalogConfigSchema(),
-                codex: catalogConfigSchema(),
-                opencode: catalogConfigSchema(),
-                acpx: catalogConfigSchema("piSessionCatalog"),
-              },
-            },
-          },
-        },
-      },
-    },
+    schema: objectSchema({
+      plugins: objectSchema({
+        entries: objectSchema(entriesSchema),
+      }),
+    }),
     uiHints: {},
     version: "session-sources",
   },
 };
 
+async function openSources(page: Page, options: Parameters<typeof installMockGateway>[1] = {}) {
+  const gateway = await installMockGateway(page, {
+    featureMethods,
+    ...options,
+    methodResponses: { ...methodResponses, ...options.methodResponses },
+  });
+  await page.goto(`${suite.server.baseUrl}settings/appearance#settings-session-sources`);
+  await waitForControlUiSettingsTakeover(page);
+  return { gateway, section: page.locator("#settings-session-sources") };
+}
+
+async function expectSwitches(section: ReturnType<Page["locator"]>, values: boolean[]) {
+  await expect
+    .poll(async () =>
+      Promise.all((await section.getByRole("switch").all()).map((toggle) => toggle.isChecked())),
+    )
+    .toEqual(values);
+}
+
 suite.define(() => {
-  it("opens session source settings with the keyboard and preserves modified-click navigation", async () => {
+  it("supports keyboard and modified-click source settings navigation", async () => {
     await suite.withPage({}, async ({ page, context }) => {
       await installMockGateway(page, { featureMethods, methodResponses });
       await page.goto(new URL(controlUiSessionPath("agent:main:main"), suite.server.baseUrl).href);
-      const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
+      const trigger = page.getByRole("button", { name: /^Filter & sort · /, exact: true });
       const item = page.getByRole("link", { name: "Session sources", exact: true });
       await trigger.click();
       const originalUrl = page.url();
@@ -100,8 +91,10 @@ suite.define(() => {
       ]);
       try {
         await popup.waitForLoadState("domcontentloaded");
-        expect(new URL(popup.url()).pathname).toBe("/settings/appearance");
-        expect(new URL(popup.url()).hash).toBe("#settings-session-sources");
+        expect(new URL(popup.url())).toMatchObject({
+          pathname: "/settings/appearance",
+          hash: "#settings-session-sources",
+        });
         expect(page.url()).toBe(originalUrl);
       } finally {
         await popup.close();
@@ -116,7 +109,7 @@ suite.define(() => {
     });
   });
 
-  it("finds source labels before opening Appearance and waits for the installed catalog", async () => {
+  it("indexes source labels before Appearance and waits for the catalog", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods,
@@ -127,57 +120,40 @@ suite.define(() => {
       await waitForControlUiRoute(page, { pathname: "/settings/about", routeId: "about" });
       const sidebar = page.locator(".settings-sidebar");
       const search = sidebar.getByRole("searchbox", { name: "Search settings" });
-      for (const source of ["Claude", "Codex", "OpenCode", "Pi"]) {
-        await search.fill(`${source} sessions`);
-        await sidebar.getByRole("link", { name: /Session sources/ }).waitFor();
-      }
+      await search.fill("Pi sessions");
+      await sidebar.getByRole("link", { name: /Session sources/ }).waitFor();
       await sidebar.getByRole("link", { name: /Session sources/ }).click();
       await gateway.waitForRequest("plugins.list");
       const section = page.locator("#settings-session-sources");
-      await expect.poll(() => section.textContent()).toContain("Loading");
+      await expectText(section, "Loading");
       expect(await section.getByRole("switch").count()).toBe(0);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
       await gateway.resolveDeferred("plugins.list");
-      await expect.poll(() => section.getByRole("switch").count()).toBe(4);
+      await expectCount(section.getByRole("switch"), 2);
     });
   });
 
-  it("finds session sources from the sidebar and independently saves discovery preferences", async () => {
+  it("navigates from the sidebar and independently saves source preferences", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, { featureMethods, methodResponses });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+      await page.getByRole("button", { name: /^Filter & sort · /, exact: true }).click();
       await page.getByRole("link", { name: "Session sources", exact: true }).click();
-      const { search, sidebar } = await waitForControlUiSettingsTakeover(page);
+      await waitForControlUiSettingsTakeover(page);
       await expect.poll(() => new URL(page.url()).hash).toBe("#settings-session-sources");
       const section = page.locator("#settings-session-sources");
-      const claude = section.locator(".settings-row", { hasText: "Show Claude Code sessions" });
-      const codex = section.locator(".settings-row", { hasText: "Show Codex sessions" });
-      const opencode = section.locator(".settings-row", { hasText: "Show OpenCode sessions" });
-      const pi = section.locator(".settings-row", { hasText: "Show Pi sessions" });
-      await expect.poll(() => claude.getByRole("switch").isChecked()).toBe(false);
-      await expect.poll(() => codex.getByRole("switch").isChecked()).toBe(false);
-      await expect.poll(() => opencode.getByRole("switch").isChecked()).toBe(false);
-      await expect.poll(() => pi.getByRole("switch").isChecked()).toBe(true);
-      await expect.poll(() => codex.getByRole("switch").isDisabled()).toBe(false);
-      expect(await section.locator(".settings-row__title").allTextContents()).toEqual([
-        "Show Claude Code sessions",
-        "Show Codex sessions",
-        "Show OpenCode sessions",
-        "Show Pi sessions",
-      ]);
-
-      const artifacts = createControlUiE2eArtifactDir("session-sources");
-      await section.scrollIntoViewIfNeeded();
-      await page.screenshot({ path: path.join(artifacts, "session-sources-initial.png") });
-
-      for (const [row, pluginId, key, enabled] of [
-        [codex, "codex", "sessionCatalog", true],
-        [claude, "anthropic", "sessionCatalog", true],
-        [opencode, "opencode", "sessionCatalog", true],
-        [pi, "acpx", "piSessionCatalog", false],
-        [codex, "codex", "sessionCatalog", false],
+      const sourceRow = (source: string) =>
+        section.locator(".settings-row", {
+          hasText: `Show ${source} sessions`,
+        });
+      await expectSwitches(section, [false, true]);
+      await expect.poll(() => sourceRow("Codex").getByRole("switch").isDisabled()).toBe(false);
+      for (const [source, pluginId, key, enabled] of [
+        ["Codex", "codex", "sessionCatalog", true],
+        ["Pi", "acpx", "piSessionCatalog", false],
+        ["Codex", "codex", "sessionCatalog", false],
       ] as const) {
+        const row = sourceRow(source);
         const count = (await gateway.getRequests("config.set")).length;
         await row.click();
         await expect
@@ -186,10 +162,9 @@ suite.define(() => {
         const request = (await gateway.getRequests("config.set"))[count]!;
         const saved = JSON.parse(String(asNullableRecord(request.params)?.raw));
         expect(saved.plugins.entries[pluginId].config[key].enabled).toBe(enabled);
-        expect(saved.plugins.entries.codex.config.supervision.enabled).toBe(true);
-        expect(saved.plugins.entries.acpx).toMatchObject({
-          enabled: false,
-          config: { timeoutSeconds: 42 },
+        expect(saved.plugins.entries).toMatchObject({
+          codex: { config: { supervision: { enabled: true } } },
+          acpx: { enabled: false, config: { timeoutSeconds: 42 } },
         });
         expect(saved.plugins.entries.acpx.config).not.toHaveProperty("sessionCatalog");
         await expect.poll(() => row.getByRole("switch").isChecked()).toBe(enabled);
@@ -197,103 +172,48 @@ suite.define(() => {
 
       await page.reload();
       await waitForControlUiSettingsTakeover(page);
-      await expect.poll(() => claude.getByRole("switch").isChecked()).toBe(true);
-      await expect.poll(() => codex.getByRole("switch").isChecked()).toBe(false);
-      await expect.poll(() => opencode.getByRole("switch").isChecked()).toBe(true);
-      await expect.poll(() => pi.getByRole("switch").isChecked()).toBe(false);
-      await section.scrollIntoViewIfNeeded();
-      await page.screenshot({ path: path.join(artifacts, "session-sources-saved.png") });
-
-      for (const source of ["Claude", "Codex", "OpenCode", "Pi"]) {
-        await search.fill(`${source} sessions`);
-        await sidebar.getByRole("link", { name: /Session sources/ }).click();
-        await expect.poll(() => new URL(page.url()).hash).toBe("#settings-session-sources");
-      }
+      await expectSwitches(section, [false, false]);
     });
   });
 
-  it("keeps discovery switches read-only for non-admin operators", async () => {
+  it("omits absent plugins with leftover config", async () => {
     await suite.withPage({}, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods,
-        methodResponses,
-        operatorScopes: ["operator.read"],
-      });
-      await page.goto(`${suite.server.baseUrl}settings/appearance#settings-session-sources`);
-      await waitForControlUiSettingsTakeover(page);
-      const switches = page.locator("#settings-session-sources").getByRole("switch");
-      await expect.poll(() => switches.count()).toBe(4);
-      for (const toggle of await switches.all()) {
-        expect(await toggle.isDisabled()).toBe(true);
-      }
-      expect(await gateway.getRequests("config.set")).toHaveLength(0);
-    });
-  });
-
-  it.each([true, false])(
-    "omits absent source plugins even with leftover config (OpenCode installed: %s)",
-    async (installed) => {
-      await suite.withPage({}, async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          featureMethods,
-          methodResponses: {
-            ...methodResponses,
-            "plugins.list": {
-              ...methodResponses["plugins.list"],
-              plugins: methodResponses["plugins.list"].plugins.map((plugin) => ({
-                ...plugin,
-                installed: installed && plugin.id === "opencode",
-                state: installed && plugin.id === "opencode" ? "enabled" : "not-installed",
-              })),
-            },
-          },
-        });
-        await page.goto(`${suite.server.baseUrl}settings/appearance#settings-session-sources`);
-        await waitForControlUiSettingsTakeover(page);
-        await gateway.waitForRequest("plugins.list");
-        const section = page.locator("#settings-session-sources");
-        await expect.poll(() => section.getByRole("switch").count()).toBe(installed ? 1 : 0);
-        if (installed) {
-          expect(await section.locator(".settings-row__title").allTextContents()).toEqual([
-            "Show OpenCode sessions",
-          ]);
-        } else {
-          await expect
-            .poll(() => section.textContent())
-            .toContain("No supported session source plugins are installed");
-          expect(
-            await section.getByRole("link", { name: "Manage plugins" }).getAttribute("href"),
-          ).toBe("/settings/plugins");
-        }
-        expect(await gateway.getRequests("config.set")).toHaveLength(0);
-      });
-    },
-  );
-
-  it("keeps installed sources visible when their settings schema is unavailable", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods,
+      const { gateway, section } = await openSources(page, {
         methodResponses: {
-          ...methodResponses,
-          "config.schema": {
-            schema: { type: "object", properties: {} },
-            uiHints: {},
-            version: "trimmed",
+          "plugins.list": {
+            plugins: methodResponses["plugins.list"].plugins.map((plugin) =>
+              Object.assign({}, plugin, { installed: false }),
+            ),
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}settings/appearance#settings-session-sources`);
-      await waitForControlUiSettingsTakeover(page);
-      const section = page.locator("#settings-session-sources");
-      await expect.poll(() => section.getByRole("switch").count()).toBe(4);
-      await expect
-        .poll(() => section.textContent())
-        .toContain("Session source settings are unavailable");
-      for (const toggle of await section.getByRole("switch").all()) {
-        expect(await toggle.isDisabled()).toBe(true);
-      }
+      await expectCount(section.getByRole("switch"), 0);
+      await expectText(section, "No supported session source plugins are installed");
+      expect(await section.getByRole("link", { name: "Manage plugins" }).getAttribute("href")).toBe(
+        "/settings/plugins",
+      );
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
     });
   });
+
+  it.each([false, true])(
+    "keeps installed sources disabled (missing schema: %s)",
+    async (missingSchema) =>
+      suite.withPage({}, async ({ page }) => {
+        const { gateway, section } = await openSources(
+          page,
+          missingSchema
+            ? { methodResponses: { "config.schema": { schema: objectSchema({}), uiHints: {} } } }
+            : { operatorScopes: ["operator.read"] },
+        );
+        await expectCount(section.getByRole("switch"), 2);
+        if (missingSchema) {
+          await expectText(section, "Session source settings are unavailable");
+        }
+        for (const toggle of await section.getByRole("switch").all()) {
+          expect(await toggle.isDisabled()).toBe(true);
+        }
+        expect(await gateway.getRequests("config.set")).toHaveLength(0);
+      }),
+  );
 });

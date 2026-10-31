@@ -12,25 +12,38 @@ import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import {
   isDerivedWorkspacePath,
   isRuntimeOwnedWorkspacePath,
+  buildCacheInputPaths,
 } from "./workspace-path-exclusions.js";
 
 export function reconciliationEntries(
   entries: readonly WorkerWorkspaceManifestEntry[],
   stagedInputDirectories: ReadonlySet<string> = stagedInputDirectoriesFromEntries(entries),
+  buildCacheInputs?: string[],
 ): WorkerWorkspaceManifestEntry[] {
+  const retained = buildCacheInputPaths(buildCacheInputs);
   return entries.filter(
     (entry) =>
-      !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputDirectories)),
+      !isDerivedWorkspacePath(
+        entry.path,
+        retained.has(entry.path) || isStagedInputPath(entry.path, stagedInputDirectories),
+        buildCacheInputs !== undefined,
+      ),
   );
 }
 
 export function reconciliationDirectories(
   directories: readonly string[] | undefined,
   stagedInputDirectories: ReadonlySet<string>,
+  buildCacheInputs?: string[],
 ): string[] {
+  const retained = buildCacheInputPaths(buildCacheInputs);
   return (directories ?? []).filter(
     (directory) =>
-      !isDerivedWorkspacePath(directory, isStagedInputPath(directory, stagedInputDirectories)),
+      !isDerivedWorkspacePath(
+        directory,
+        retained.has(directory) || isStagedInputPath(directory, stagedInputDirectories),
+        buildCacheInputs !== undefined,
+      ),
   );
 }
 
@@ -38,18 +51,19 @@ async function removeDerivedWorkspaceDescendants(
   root: Root,
   relativeDirectory: string,
   isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
+  excludeBuildCaches: boolean,
 ): Promise<void> {
   for (const entry of await root.list(relativeDirectory, { withFileTypes: true })) {
     const child = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
     if (isRuntimeOwnedWorkspacePath(child)) {
       continue;
     }
-    if (isDerivedWorkspacePath(child, await isRetainedInput(child))) {
+    if (isDerivedWorkspacePath(child, await isRetainedInput(child), excludeBuildCaches)) {
       await removeDerivedWorkspaceEntry(root, child, entry.isDirectory);
       continue;
     }
     if (entry.isDirectory) {
-      await removeDerivedWorkspaceDescendants(root, child, isRetainedInput);
+      await removeDerivedWorkspaceDescendants(root, child, isRetainedInput, excludeBuildCaches);
       if ((await root.list(child)).length === 0) {
         // This traversal only runs beneath a manifest non-directory replacing
         // relativeDirectory. Every empty descendant belongs to that old namespace,
@@ -101,6 +115,7 @@ export async function prepareNonDirectoryTargets(
   entries: readonly WorkerWorkspaceManifestEntry[],
   retainedInput?: ReturnType<typeof createStagedInputPathMatcher>,
   assertCurrent?: () => void,
+  excludeBuildCaches = false,
 ): Promise<void> {
   const workspaceRoot = await openFsSafeRoot(root, { assertBeforeMutation: assertCurrent });
   const isRetainedInput = retainedInput ?? createStagedInputPathMatcher(workspaceRoot);
@@ -121,7 +136,12 @@ export async function prepareNonDirectoryTargets(
       // cannot replace their still-nonempty parent until they are removed.
       // fs-safe binds traversal/removal to root-relative directory handles, so
       // a symlink swap cannot redirect cleanup outside this workspace.
-      await removeDerivedWorkspaceDescendants(workspaceRoot, entry.path, isRetainedInput);
+      await removeDerivedWorkspaceDescendants(
+        workspaceRoot,
+        entry.path,
+        isRetainedInput,
+        excludeBuildCaches,
+      );
       if ((await workspaceRoot.list(entry.path)).length === 0) {
         await workspaceRoot.remove(entry.path);
       }

@@ -110,14 +110,11 @@ export function resolveUpdateCandidatePluginPath(
   const managed = ["npm", "extensions"].some((directory) =>
     isPathInside(path.join(sourceRoot, directory), source),
   );
-  return managed
-    ? resolveUpdateCandidateStatePath(sourceRoot, targetRoot, source)
-    : path.join(
-        targetRoot,
-        "candidate-plugins",
-        sha256Hex(path.parse(source).root),
-        path.relative(path.parse(source).root, source),
-      );
+  if (managed) {
+    return resolveUpdateCandidateStatePath(sourceRoot, targetRoot, source);
+  }
+  const root = path.parse(source).root;
+  return path.join(targetRoot, "candidate-plugins", sha256Hex(root), path.relative(root, source));
 }
 
 /** Decode the ancestry retained by published drivers for external plugin copies. */

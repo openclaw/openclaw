@@ -4,7 +4,7 @@ import {
   coerceOpenAiCompatibleVideoText,
   type OpenAiCompatibleVideoPayload,
 } from "./openai-compatible-video.js";
-import { resolveVideoMaxBase64Bytes } from "./video.js";
+import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
 describe("coerceOpenAiCompatibleVideoText", () => {
   it.each<{ name: string; payload: OpenAiCompatibleVideoPayload; expected: string | null }>([
@@ -49,6 +49,12 @@ describe("coerceOpenAiCompatibleVideoText", () => {
     },
   ])("extracts $name", ({ payload, expected }) => {
     expect(coerceOpenAiCompatibleVideoText(payload)).toBe(expected);
+  });
+});
+
+describe("estimateBase64Size", () => {
+  it("preserves the uncapped encoded size above the shared payload cap", () => {
+    expect(estimateBase64Size(75_000_000)).toBe(100_000_000);
   });
 });
 

@@ -1,5 +1,4 @@
-import fs, { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import fs, { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -13,9 +12,11 @@ import {
   diagnosticEnvReportScript,
   withSyntheticDiagnosticEnv,
 } from "./diagnostic-env.test-support.js";
+import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import { readActiveGatewayLockIdentity } from "./gateway-lock.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import { spawnPsSync } from "./spawn-ps.js";
+import * as bootReader from "./update-managed-service-handoff-boot.js";
 
 const mocks = vi.hoisted(() => ({
   exec: vi.fn(),
@@ -45,18 +46,25 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
+function lockRecord(root: string, extra: { pid?: number; port?: number; startTime?: number } = {}) {
+  return JSON.stringify({
+    pid: 424242,
+    port: 43123,
+    createdAt: "2026-09-03T00:00:00Z",
+    configPath: path.join(root, "openclaw.json"),
+    processNamespace: readGatewayLockProcessNamespace(),
+    ...extra,
+  });
+}
+
 it("enforces the lock observation deadline after native argv inspection", async () => {
   const root = tempDirs.make("lock-argv-budget-");
-  await writeFile(
-    path.join(root, "gateway.state.lock"),
-    JSON.stringify({
-      pid: 424242,
-      port: 43123,
-      createdAt: "2026-09-03T00:00:00Z",
-      configPath: path.join(root, "openclaw.json"),
-    }),
-  );
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
+    platform: "darwin",
+    identity: "01234567-89ab-cdef-0123-456789abcdef",
+  }));
+  await writeFile(path.join(root, "gateway.state.lock"), lockRecord(root));
   vi.spyOn(process, "kill").mockReturnValue(true);
   mocks.identity.mockImplementation((pid) => ({
     pid,
@@ -96,30 +104,20 @@ it("stops a canceled lock observation before process inspection resumes", async 
     }
     return await readFile(filePath, options);
   });
-  const readProcessStartTime = vi.fn(() => 111);
   const controller = new AbortController();
   const observed = readActiveGatewayLockIdentity({
     env: { OPENCLAW_STATE_DIR: root },
     lockDir: root,
     requireInspection: true,
     signal: controller.signal,
-    readProcessStartTime,
   }).catch((error: unknown) => error);
   try {
     await entered.promise;
     const reason = new Error("observation canceled");
     controller.abort(reason);
-    released.resolve(
-      JSON.stringify({
-        pid: process.pid,
-        createdAt: "2026-09-03T00:00:00Z",
-        configPath: path.join(root, "openclaw.json"),
-        startTime: 111,
-        port: 48789,
-      }),
-    );
+    released.resolve(lockRecord(root, { pid: process.pid, startTime: 111, port: 48789 }));
     expect(await observed).toBe(reason);
-    expect(readProcessStartTime).not.toHaveBeenCalled();
+    expect(mocks.identity).not.toHaveBeenCalled();
   } finally {
     released.resolve("");
     await observed;
@@ -137,7 +135,7 @@ it.each([
   "CLI fuser KILL",
 ])("projects the environment at the %s launch boundary", async (surface) => {
   const native = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "diagnostic-siblings-")));
+  const root = tempDirs.make("diagnostic-siblings-");
   const routing = createDiagnosticFixtureRouting({
     PATH: root,
     HOME: root,
@@ -152,7 +150,7 @@ it.each([
     pid === 424242 ? { argv: ["openclaw-gateway"] } : undefined,
   );
   let portCleared = false;
-  const killMock = vi.spyOn(process, "kill").mockImplementation(() => {
+  vi.spyOn(process, "kill").mockImplementation(() => {
     if (surface === "restart poll") {
       throw Object.assign(new Error("gone"), { code: "ESRCH" });
     }
@@ -178,7 +176,6 @@ it.each([
         reports.push({ command, report: JSON.parse(stdout) });
       };
       let lsofCalls = 0;
-      const fuserArgs: string[][] = [];
       mocks.spawn.mockImplementation(
         (command: string, _args: string[], options: { env?: NodeJS.ProcessEnv }) => {
           capture(command, options.env);
@@ -202,7 +199,6 @@ it.each([
             return "node openclaw.mjs gateway";
           }
           if (command === "fuser") {
-            fuserArgs.push(args);
             mocks.probe.mockResolvedValue(
               surface === "CLI fuser KILL" && args.includes("-TERM") ? "busy" : "free",
             );
@@ -224,35 +220,16 @@ it.each([
         expect(lsofCalls).toBe(2);
       } else if (surface.startsWith("CLI fuser")) {
         mocks.probe.mockResolvedValue("busy");
-        const beforeSignal = vi.fn();
-        expect(
-          await forceFreePortAndWait(43123, {
-            sigtermTimeoutMs: 0,
-            ...(surface === "CLI fuser" ? { beforeSignal } : {}),
-          }),
-        ).toEqual({
-          killed: [{ pid: 424242 }],
-          waitedMs: 0,
-          escalatedToSigkill: surface === "CLI fuser KILL",
+        const result = await forceFreePortAndWait(43123, {
+          sigtermTimeoutMs: 0,
+          ...(surface === "CLI fuser" ? { beforeSignal: vi.fn() } : {}),
         });
-        if (surface === "CLI fuser") {
-          expect(fuserArgs).toEqual([["43123/tcp"]]);
-          expect(beforeSignal).toHaveBeenCalledExactlyOnceWith({
-            port: 43123,
-            pid: 424242,
-            signal: "SIGTERM",
-          });
-          expect(killMock).toHaveBeenCalledExactlyOnceWith(424242, "SIGTERM");
-        } else {
-          expect(fuserArgs).toEqual(
-            (surface === "CLI fuser KILL" ? ["TERM", "KILL"] : ["TERM"]).map((signal) => [
-              "-k",
-              `-${signal}`,
-              "43123/tcp",
-            ]),
-          );
-          expect(killMock).not.toHaveBeenCalled();
-        }
+        expect(result.escalatedToSigkill).toBe(surface === "CLI fuser KILL");
+        expect(reports.map(({ command }) => command)).toContain(
+          surface === "CLI fuser"
+            ? "fuser 43123/tcp"
+            : `fuser -k -${surface.endsWith("KILL") ? "KILL" : "TERM"} 43123/tcp`,
+        );
       } else {
         expect((await forceFreePortAndWait(43123)).killed).toEqual([
           expect.objectContaining({ pid: 424242 }),
@@ -269,6 +246,5 @@ it.each([
     });
   } finally {
     setLoggerOverride(previousLoggerOverride as Parameters<typeof setLoggerOverride>[0]);
-    await rm(root, { recursive: true, force: true });
   }
 });

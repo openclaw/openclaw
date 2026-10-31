@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { createServer, type Server } from "node:http";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import { promisify } from "node:util";
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -41,12 +43,6 @@ type ProxyValidationCheck = {
 };
 
 type ProxyValidationOutcome = Omit<ProxyValidationCheck, "kind" | "url">;
-
-export type ProxyValidationResult = {
-  ok: boolean;
-  config: ProxyValidationResolvedConfig;
-  checks: ProxyValidationCheck[];
-};
 
 type ProxyValidationFetchCheckParams = {
   proxyUrl: string;
@@ -168,25 +164,9 @@ type ProxyValidationDeniedTarget = {
   expectedCanaryToken?: string;
 };
 
-type LoopbackValidationCanary = {
-  url: string;
-  token: string;
-  close: () => Promise<void>;
-};
+type LoopbackValidationCanary = Awaited<ReturnType<typeof createLoopbackValidationCanary>>;
 
-function closeServer(server: Server): Promise<void> {
-  return new Promise((resolve, reject) => {
-    server.close((err) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve();
-    });
-  });
-}
-
-async function createLoopbackValidationCanary(): Promise<LoopbackValidationCanary> {
+async function createLoopbackValidationCanary() {
   const token = randomUUID();
   // Only the per-probe token distinguishes our listener from a proxy response.
   const server = createServer((_request, response) => {
@@ -197,24 +177,18 @@ async function createLoopbackValidationCanary(): Promise<LoopbackValidationCanar
     response.end();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  await once(server.listen(0, "127.0.0.1"), "listening");
 
   const address = server.address();
   if (typeof address === "string" || address === null) {
-    await closeServer(server);
+    await promisify(server.close.bind(server))();
     throw new Error("Unable to start loopback proxy validation canary");
   }
 
   return {
     url: `http://127.0.0.1:${address.port}/`,
     token,
-    close: () => closeServer(server),
+    close: () => promisify(server.close.bind(server))(),
   };
 }
 
@@ -253,9 +227,7 @@ async function runValidationCheck(
   }
 }
 
-export async function runProxyValidation(
-  options: RunProxyValidationOptions,
-): Promise<ProxyValidationResult> {
+export async function runProxyValidation(options: RunProxyValidationOptions) {
   const config = resolveProxyValidationConfig(options);
   if (config.errors.length > 0 || !config.proxyUrl) {
     return { ok: false, config, checks: [] };

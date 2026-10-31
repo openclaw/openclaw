@@ -26,6 +26,26 @@ function acceptsPaths(patterns: string[], files: readonly string[]) {
   );
 }
 
+describe("Darwin tooling event scope", () => {
+  it.each([
+    [["scripts/lib/ci-node-test-plan.mts"], false],
+    [["scripts/lib/ci-extension-test-shards.mts"], false],
+    [["scripts/lib/ci-native-generated-scope.mjs"], false],
+    [["test/scripts/pr-ci-sweeper.test.ts"], false],
+    [["scripts/lib/ci-test-timings.mts"], true],
+    [["scripts/lib/ci-test-timings-schema.mts"], true],
+    [["scripts/lib/ci-test-timings-refit.mts"], true],
+    [["scripts/lib/ci-node-test-groups-codec.mts"], true],
+    [["scripts/lib/ci-static-check-evidence.mjs"], true],
+    [["scripts/lib/new-native-input.mts"], true],
+    [["scripts/lib/ci-node-test-plan.mts", "scripts/pr"], true],
+    [[".github/workflows/pr-tooling-darwin.yml"], true],
+  ] as const)("routes %j", (files, expected) => {
+    const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
+    expect(acceptsPaths(workflow.on.pull_request.paths, files)).toBe(expected);
+  });
+});
+
 describe("native locale refresh event scope", () => {
   it.each([
     [["apps/ios/README.md"], false],
@@ -72,6 +92,8 @@ async function scheduledScope(
     paths?: string;
     missingProof?: boolean;
     identical?: boolean;
+    proofJobs?: string;
+    completedJobs?: string[];
   } = {},
 ) {
   const proof = {
@@ -81,14 +103,12 @@ async function scheduledScope(
     run_attempt: 1,
     head_repository: { full_name: "openclaw/openclaw" },
   };
-  const jobs = [
-    {
-      name: "Proof",
-      head_sha: options.identical ? head : before,
-      conclusion: "success",
-      completed_at: new Date(Date.now() - (options.ageHours ?? 1) * 3600_000).toISOString(),
-    },
-  ];
+  const jobs = (options.completedJobs ?? ["Proof"]).map((name) => ({
+    name,
+    head_sha: options.identical ? head : before,
+    conclusion: "success",
+    completed_at: new Date(Date.now() - (options.ageHours ?? 1) * 3600_000).toISOString(),
+  }));
   const list = vi.fn().mockResolvedValue({
     data: {
       workflow_runs: options.skipFirst ? [{ ...proof, id: 99 }, proof] : [proof],
@@ -114,7 +134,7 @@ async function scheduledScope(
     process: {
       env: {
         SCHEDULED_PATHS: options.paths ?? "src/contracts/**\n.github/actions/**",
-        SCHEDULED_PROOF_JOBS: "Proof",
+        SCHEDULED_PROOF_JOBS: options.proofJobs ?? "Proof",
         SCHEDULED_WORKFLOW_REF: "openclaw/openclaw/.github/workflows/example.yml@refs/heads/main",
       },
     },
@@ -207,13 +227,89 @@ describe("bounded scheduled proof reuse", () => {
             },
             vars: {},
             cancelled: () => false,
-            needs: { scope: { outputs: { changed } } },
+            needs: { scope: { outputs: { changed, rust_changed: changed } } },
           });
         expect(evaluate("schedule", "false")).toBe(false);
         expect(evaluate("schedule", "true")).toBe(true);
         expect(evaluate("pull_request", "")).toBe(true);
         expect(evaluate("workflow_dispatch", "")).toBe(true);
       }
+    },
+  );
+});
+
+describe("independent scheduled node runtime proofs", () => {
+  const workflow = readWorkflow(".github/workflows/node-runtime-conformance.yml");
+  const detectors = workflow.jobs.scope.steps.filter(
+    (step: { uses?: string }) => step.uses === "./.github/actions/detect-scheduled-changes",
+  );
+
+  async function admitted(options: Parameters<typeof scheduledScope>[0]) {
+    const steps = Object.fromEntries(
+      await Promise.all(
+        detectors.map(
+          async (step: { id: string; with: { paths: string; "proof-jobs": string } }) => {
+            const { output } = await scheduledScope({
+              completedJobs: ["TypeScript contracts", "Rust workspace"],
+              ...options,
+              paths: step.with.paths,
+              proofJobs: step.with["proof-jobs"],
+            });
+            return [step.id, { outputs: { changed: String(output.mock.calls[0]![1]) } }];
+          },
+        ),
+      ),
+    );
+    const outputs = Object.fromEntries(
+      Object.entries(workflow.jobs.scope.outputs).map(([key, value]) => [
+        key,
+        runInNewContext((value as string).slice(3, -2), { steps }),
+      ]),
+    );
+    return Object.fromEntries(
+      ["typescript", "rust"].map((id) => [
+        id,
+        runInNewContext(workflow.jobs[id].if.slice(3, -2), {
+          github: { event_name: "schedule", repository: "openclaw/openclaw" },
+          cancelled: () => false,
+          needs: { scope: { outputs } },
+        }),
+      ]),
+    );
+  }
+
+  it.each([
+    ["src/agents/run.ts", true, false],
+    ["scripts/run-vitest.mjs", true, false],
+    ["test/scripts/example.test.ts", true, false],
+    ["package.json", true, false],
+    ["pnpm-lock.yaml", true, false],
+    ["crates/openclaw-node-host/src/main.rs", true, true],
+    ["packages/gateway-protocol/src/version.ts", true, true],
+    ["test/fixtures/node-invoke-lifecycle-contract.json", true, true],
+    [".github/workflows/node-runtime-conformance.yml", true, true],
+    [".github/actions/detect-scheduled-changes/action.yml", true, true],
+    [".cargo/config", false, true],
+    [".cargo/config.toml", false, true],
+    ["rust-toolchain.toml", false, true],
+    ["rustfmt.toml", false, true],
+    [".rustfmt.toml", false, true],
+    ["clippy.toml", false, true],
+    [".clippy.toml", false, true],
+    [".gitattributes", false, true],
+    ["docs/intro.md", false, false],
+  ] as const)("admits %s only to its consuming proofs", async (filename, typescript, rust) => {
+    expect(await admitted({ files: [{ filename }] })).toEqual({ typescript, rust });
+  });
+
+  it.each([
+    { completedJobs: ["TypeScript contracts"], typescript: false, rust: true },
+    { completedJobs: ["Rust workspace"], typescript: true, rust: false },
+    { completedJobs: [], typescript: true, rust: true },
+  ])(
+    "requires each proof's own completed job: $completedJobs",
+    async ({ completedJobs, ...expected }) => {
+      expect(await admitted({ completedJobs })).toEqual(expected);
     },
   );
 });

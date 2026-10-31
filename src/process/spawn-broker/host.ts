@@ -155,6 +155,8 @@ export class SpawnBrokerHost {
     return this.fileReads.read(filePath, signal);
   }
 
+  readonly readFilePage = this.fileReads.readPage.bind(this.fileReads);
+
   captureNativeResource(
     input: BrokerNativeResourceInput,
     callbacks: BrokerNativeResourceCallbacks,
@@ -216,6 +218,7 @@ export class SpawnBrokerHost {
     args: string[],
     options: SpawnOptions,
     initiateSpawn?: SpawnInitiation,
+    execCgroup?: string,
   ): BrokerChild {
     const prepared = brokerSpawnOptions(options);
     if (!prepared) {
@@ -227,14 +230,21 @@ export class SpawnBrokerHost {
         id: ++this.sequence,
         argv: [command, ...args],
         options: prepared,
+        execCgroup,
       },
       initiateSpawn,
     ).child;
   }
 
-  spawnExeca(argv: string[], options: BrokerExecaOptions) {
+  spawnExeca(argv: string[], options: BrokerExecaOptions, execCgroup?: string) {
     const id = ++this.sequence;
-    const request = this.admit({ type: "spawn-execa", id, argv, options });
+    const request = this.admit({
+      type: "spawn-execa",
+      id,
+      argv,
+      options,
+      execCgroup,
+    });
     return {
       child: request.child,
       result: request.result!.promise,
@@ -255,9 +265,7 @@ export class SpawnBrokerHost {
     );
     const result =
       message.type === "spawn-execa" ? createDeferredCore<BrokerExecaResult>() : undefined;
-    if (result) {
-      void result.promise.catch(() => {});
-    }
+    void result?.promise.catch(() => {});
     const request: Request = {
       child,
       initiateSpawn,
@@ -357,10 +365,10 @@ export class SpawnBrokerHost {
     });
     this.process = child;
     const exitError = observeBrokerChildDiagnostics(child);
-    let closingAtExit = false;
-    // Classify at native exit; the last stderr bytes can arrive after close() starts.
+    let closingAtFailure = false;
+    // A crash can disconnect IPC before close() joins the later native exit.
     const brokerCompletion = (this.brokerClosed = waitForBrokerChildCompletion(child).then(() => {
-      if (closingAtExit && child.pid && (child.exitCode !== 0 || child.signalCode !== null)) {
+      if (closingAtFailure && child.pid && (child.exitCode !== 0 || child.signalCode !== null)) {
         this.cleanupErrors.push(
           new SpawnBrokerError("Spawn broker shutdown failed", { cause: exitError() }),
         );
@@ -387,6 +395,7 @@ export class SpawnBrokerHost {
       }
       const cause =
         classifyChildRuntimeFailure({ error: nativeCause, started: ready }) ?? nativeCause;
+      closingAtFailure = this.closing;
       ended = true;
       clearTimeout(startupTimer);
       this.markNativeReady = undefined;
@@ -484,7 +493,9 @@ export class SpawnBrokerHost {
     this.markNativeReady = markReady;
     child.once("error", fail);
     child.once("exit", () => {
-      closingAtExit = this.closing;
+      if (!ended) {
+        closingAtFailure = this.closing;
+      }
       brokerExited.resolve();
       if (ready) {
         fail(exitError());

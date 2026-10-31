@@ -1,7 +1,7 @@
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { OpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-async-lifecycle.js";
-import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
+import { registerOpenClawStatePathCacheInvalidation } from "./openclaw-state-db-cache.js";
 import { repositoryWorkspacePublication } from "./session-repository-workspaces.receipts.js";
 import type {
   RepositoryWorkspaceMutationResult,
@@ -57,15 +57,7 @@ repositoryWorkspacePublication.subscribeFacts((change) => {
   }
 });
 
-registerOpenClawStateDatabaseLifecycleListener((event) => {
-  if (event.kind !== "opened") {
-    for (const [key, store] of stores) {
-      if (store.path === (event.identity?.canonicalPath ?? event.path)) {
-        stores.delete(key);
-      }
-    }
-  }
-});
+registerOpenClawStatePathCacheInvalidation(stores);
 
 function owner(admission: OpenClawStateDatabaseReadAdmission): Store {
   admission.assertCurrent();

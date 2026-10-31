@@ -19,7 +19,10 @@ import {
   isGatewayServerTestFile,
 } from "../../test/vitest/vitest.gateway-server-paths.mjs";
 import { startupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
-import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
+import {
+  autoReplyReplySubtreeTestInclude,
+  fullSuiteVitestShards,
+} from "../../test/vitest/vitest.test-shards.mjs";
 import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { uiIsolatedTestFiles } from "../../test/vitest/vitest.ui-isolated-paths.mjs";
 import {
@@ -97,6 +100,7 @@ import {
   readCompleteSplitGenerationSeconds,
   readRuntimePlacementTimings,
   readToolingFileTimings,
+  readUiE2eFileTimings,
   resolveRuntimePlacementSeconds,
 } from "./ci-test-timings.mts";
 import { UI_E2E_OWNER_WATCHES, UI_E2E_SMOKE_TEST_FILES } from "./ci-ui-e2e-owner-inventory.mts";
@@ -184,7 +188,7 @@ function resolvePrExemptChangedTargets(changedPaths: readonly string[], cwd: str
   // transitive imports cover subjects reached through shared integration fixtures.
   const targets = new Set(
     [
-      ...resolvePolicyTestTargets(paths),
+      ...resolvePolicyTestTargets(paths, { cwd }),
       ...resolveChangedTestTargetPlan(paths, {
         broad: false,
         combineSiblingWithImportGraph: true,
@@ -381,7 +385,6 @@ const COMPACT_NODE_TEST_OWNER_RUNNERS = new Map([
       ["agentic-control-plane-http-plugin-ws", DEFAULT_NODE_TEST_RUNNER],
       ["agentic-control-plane-runtime-ui-tools", DEFAULT_NODE_TEST_RUNNER],
       ["auto-reply-reply-agent-runner", DEFAULT_NODE_TEST_RUNNER],
-      ["core-runtime-infra-heartbeat-runner", DEFAULT_NODE_TEST_RUNNER],
       ["core-runtime-infra-storage-state", DEFAULT_NODE_TEST_RUNNER],
       ["core-runtime-infra-system-runtime", DEFAULT_NODE_TEST_RUNNER],
     ]),
@@ -551,7 +554,6 @@ const COMPACT_SECONDS_HINTS: readonly [
   ["core-runtime-infra-gateway-processes", 1, undefined, 1],
   ["core-runtime-infra-gateway-watch", 1, undefined, 1],
   ["core-runtime-infra-heartbeat-core", 7, undefined, 10],
-  ["core-runtime-infra-heartbeat-runner", 59, undefined, 106],
   ["core-runtime-infra-misc", 14, undefined, 33],
   ["core-runtime-infra-misc-dedupe-disk", 1, undefined, 1],
   ["core-runtime-infra-misc-os", 1, undefined, 1],
@@ -650,15 +652,13 @@ const STORAGE_MODULE_WORK_SECONDS = new Map<string, number>([
   ["src/channels/message-access/operator-authority.test.ts", 31.775],
   ["src/agents/subagents/registry/subagent-registry.persistence.test.ts", 23.639],
   ["src/auto-reply/reply/session.acp-reset-routing.test.ts", 8.938],
-  ["src/claws/package-update.test.ts", 4.164],
+  ["src/templates/package-update.test.ts", 4.164],
   ["src/cli/update-cli.git-service.test.ts", 24.578],
   ["src/flows/doctor-health.fleet-preflight.test.ts", 8.648],
   ["src/agents/embedded-agent-runner/compact.delegate.test.ts", 16.151],
   ["src/cli/plugins-cli.update.test.ts", 9.511],
   ["src/state/openclaw-agent-participants-migration.test.ts", 9.279],
   ["src/agents/tools/transcripts-tool.selection.test.ts", 14.535],
-  ["src/agents/main-session-recovery/main-session-restart-recovery-admission.test.ts", 16.187],
-  ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts", 279.963],
   ["test/runtime-agent.codex-initialization.integration.test.ts", 45.303],
   ["src/tasks/task-executor.test.ts", 7.528],
   ["src/agents/agent-harness-native-custody.test.ts", 27.986],
@@ -1490,7 +1490,7 @@ export function resolveUiE2ePrTestSelection(
   });
   const roots = [...new Set(ownerWatches.flatMap(({ ownerRoots }) => ownerRoots))];
   const policyTargets = new Set(
-    resolvePolicyTestTargets(paths).map((file) => resolveUiTypeScriptPath(file, cwd)),
+    resolvePolicyTestTargets(paths, { cwd }).map((file) => resolveUiTypeScriptPath(file, cwd)),
   );
   const importedTargets = new Set(
     resolveAffectedTestsFromImportGraph(paths, cwd, { ...graphOptions, forceFull: true }),
@@ -1571,7 +1571,9 @@ export function createUiTestShardGroups(
     e2eGroups[0]!.includePatterns = [
       ...new Set([
         ...options.uiE2eFiles.filter(includeUiTest),
-        ...(options.includeReleaseOnlyE2eTests ? uiE2eRealGatewayTestFiles : retained),
+        ...(options.includeReleaseOnlyE2eTests
+          ? uiE2eRealGatewayTestFiles.filter(includeUiTest)
+          : retained),
       ]),
     ].toSorted();
   }
@@ -1581,8 +1583,11 @@ export function createUiTestShardGroups(
   };
 }
 
+export const UI_REAL_GATEWAY_TEST_CONFIG = "test/vitest/vitest.ui-e2e-prebuilt.config.ts";
+
 export function createUiRealGatewayTestShards(
   e2eGroups: ReturnType<typeof createUiTestShardGroups>["e2e"],
+  env: Readonly<Record<string, string | undefined>> = process.env,
 ) {
   const selected = new Set(
     e2eGroups.flatMap((group) => group.includePatterns ?? uiE2eRealGatewayTestFiles),
@@ -1590,16 +1595,67 @@ export function createUiRealGatewayTestShards(
   const parallelFiles = new Set(uiE2ePrebuiltParallelTestFiles);
   const desktop = resolveUiTypeScriptPath("ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts");
   const files = uiE2eRealGatewayTestFiles.filter((file) => selected.has(file) && file !== desktop);
-  // Desktop transport proof owns its file separately, alongside the serial phase.
+  const timings = readUiE2eFileTimings();
+  // Disabled proofs still collect. An enabled DeepSeek flag retains full pricing
+  // without requiring preflight to receive the test job's credentials.
+  const optInEnabled = new Map([
+    [
+      resolveUiTypeScriptPath("ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts"),
+      env.OPENCLAW_DEEPSEEK_UI_LIVE === "1",
+    ],
+    [
+      resolveUiTypeScriptPath("ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts"),
+      Boolean(env.OPENCLAW_STEER_CUSTODY_PROOF),
+    ],
+  ]);
+  // Cold Gateway files use the observed roughly 30s file cost until two CI samples exist.
+  const seconds = (file: string) =>
+    (optInEnabled.get(file) === false ? 0 : (timings.fileSeconds[file] ?? 30)) +
+    timings.perFileOverheadSeconds;
+  const serial = files.filter((file) => !parallelFiles.has(file));
+  // The desktop driver runs outside Vitest: scheduled run 39872214487 took 120s.
+  const desktopSeconds = selected.has(desktop) ? (timings.fileSeconds[desktop] ?? 120) : 0;
+  // Each runner keeps unqualified fixtures serial. Split that work before placing
+  // qualified fixtures so one runner does not wait behind every serial file.
+  const buckets: { serialSeconds: number; workerSeconds: [number, number]; files: string[] }[] = [
+    { serialSeconds: 0, workerSeconds: [0, 0], files: [] },
+    { serialSeconds: 0, workerSeconds: [0, 0], files: [] },
+  ];
+  for (const file of serial.toSorted(
+    (left, right) => seconds(right) - seconds(left) || left.localeCompare(right),
+  )) {
+    const bucket =
+      buckets[0]!.serialSeconds <= buckets[1]!.serialSeconds ? buckets[0]! : buckets[1]!;
+    bucket.files.push(file);
+    bucket.serialSeconds += seconds(file);
+  }
+  for (const [index, bucket] of buckets.entries()) {
+    const initialSeconds = Math.max(bucket.serialSeconds, index === 0 ? desktopSeconds : 0);
+    bucket.workerSeconds = [initialSeconds, initialSeconds];
+  }
+  // Qualified fixtures use each job's existing two workers after its serial
+  // phase and, on the first runner, overlapping desktop proof have joined.
+  for (const file of files
+    .filter((candidate) => parallelFiles.has(candidate))
+    .toSorted((left, right) => seconds(right) - seconds(left) || left.localeCompare(right))) {
+    const bucket = buckets.reduce((earliest, candidate) =>
+      Math.min(...candidate.workerSeconds) < Math.min(...earliest.workerSeconds)
+        ? candidate
+        : earliest,
+    );
+    const worker = bucket.workerSeconds[0] <= bucket.workerSeconds[1] ? 0 : 1;
+    bucket.files.push(file);
+    bucket.workerSeconds[worker] += seconds(file);
+  }
   return ([1, 2] as const).map((shard) => ({
     shard,
     shard_count: 2 as const,
     run_desktop: shard === 1 && selected.has(desktop),
     groups: [
       {
-        configs: ["test/vitest/vitest.ui-e2e-prebuilt.config.ts"],
+        configs: [UI_REAL_GATEWAY_TEST_CONFIG],
         shard_name: `ui-e2e-real-gateway-${shard === 1 ? "desktop" : "parallel"}`,
-        includePatterns: files.filter((file) => parallelFiles.has(file) === (shard === 2)),
+        includePatterns: buckets[shard - 1]!.files.toSorted(),
       },
     ],
   }));
@@ -1651,7 +1707,11 @@ const AUTO_REPLY_REPLY_SHARD_RULES = [
 ] as const;
 
 function createAutoReplyReplySplitShards(): NodeTestSplitShard[] {
-  const files = listTrackedTestFiles("src/auto-reply/reply");
+  const files = listScopedOwnerTestFiles({
+    root: "src/auto-reply/reply",
+    include: autoReplyReplySubtreeTestInclude,
+    exclude: databaseWorkerCoreTestFiles,
+  });
   const groups = {
     "auto-reply-reply-agent-runner": [] as string[],
     "auto-reply-reply-commands": [] as string[],
@@ -1882,10 +1942,9 @@ function createCronSplitShards(): NodeTestSplitShard[] {
     .filter((shard) => shard.includePatterns.length > 0);
 }
 
-// Keep precedence: specific owners such as heartbeat-runner precede their broad prefixes.
+// Keep precedence: specific owners precede their broad prefixes.
 const INFRA_SHARD_PREFIXES = [
   ["approval-exec", ["approval", "exec"]],
-  ["heartbeat-runner", ["heartbeat-runner"]],
   ["heartbeat-core", ["heartbeat"]],
   ["outbound-actions", ["outbound/message-action"]],
   ["outbound-core", ["outbound/"]],
@@ -2019,7 +2078,6 @@ function createInfraSplitShards(): NodeTestSplitShard[] {
     "core-runtime-infra-gateway-processes",
     "core-runtime-infra-gateway-watch",
     "core-runtime-infra-heartbeat-core",
-    "core-runtime-infra-heartbeat-runner",
     "core-runtime-infra-misc",
     "core-runtime-infra-misc-dedupe-disk",
     "core-runtime-infra-misc-os",
@@ -3291,6 +3349,7 @@ const RELEASE_TIMING_CONTINUITY_SHARDS = new Set([
 
 // Preserve existing whole-job headroom until these owners have complete timings.
 const LONG_UNFITTED_RELEASE_SHARDS = new Set([
+  "agentic-agents-support",
   "agentic-cli-process",
   "agentic-control-plane-agent-chat",
   "core-runtime-config",
@@ -4327,9 +4386,29 @@ export function createSelectedNodeTestShardBundles(
     ...packSelectedNodeTestJobs(projected, options.runnerBackend, canonicalFamilies, groupSeconds),
   ];
   for (const job of selectedJobs) {
+    normalizeSingletonNodeTestJob(job);
     job.runner = resolveSelectedNodeTestRunner(job, options.runnerBackend);
   }
   return applyNativeSoloTimings(selectedJobs, options.runnerBackend);
+}
+
+export function normalizeSingletonNodeTestJob<
+  T extends Pick<NodeTestShard, "planConcurrency" | "groups" | "env">,
+>(job: T): T {
+  if (job.planConcurrency === 2 && job.groups?.length === 1) {
+    // Packing is settled: no sibling can overlap this child. Explicit group
+    // limits survive projection; unpinned groups still need the two-worker ceiling.
+    job.planConcurrency = 1;
+    if (job.groups[0]?.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined) {
+      job.env = {
+        ...job.env,
+        OPENCLAW_VITEST_MAX_WORKERS: String(
+          Math.min(2, Number(job.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 2)),
+        ),
+      };
+    }
+  }
+  return job;
 }
 
 function compactPreparationSeconds(
@@ -5250,8 +5329,8 @@ function createCompactNodeTestShardBundles(
             ),
           0,
         );
-      const admits = (groups: NodeTestShardGroup[]) =>
-        admitsCompactBin(groups, COMPACT_HYBRID_RUNTIME_JOB_SECONDS, cost);
+      const admits = (groups: NodeTestShardGroup[], seconds = cost) =>
+        admitsCompactBin(groups, COMPACT_HYBRID_RUNTIME_JOB_SECONDS, seconds);
       const prepareRecipient = (job: CompactNodeTestShard) => {
         if (job.planConcurrency !== 2) {
           return job.groups;

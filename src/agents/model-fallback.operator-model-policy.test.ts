@@ -1,22 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { FailoverError } from "./failover-error.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import { prepareOperatorModelPolicy } from "./operator-model-policy.js";
+import { createModelFallbackConfig } from "./test-helpers/model-fallback-config-fixture.js";
 
-const cfg: OpenClawConfig = {
-  agents: {
-    defaults: {
-      model: {
-        primary: "fixture/primary",
-        fallbacks: ["fixture/restricted-v1", "fixture/fallback"],
-      },
-      models: { "fixture/restricted-v1": { alias: "special" } },
-    },
-  },
-};
+const cfg = createModelFallbackConfig("fixture/primary", [
+  "fixture/restricted-v1",
+  "fixture/fallback",
+]);
+cfg.agents!.defaults!.models = { "fixture/restricted-v1": { alias: "special" } };
 
 const source = (assertCurrent = () => {}) =>
   createAdmittedRunOperatorAuthority({
@@ -30,80 +24,63 @@ const source = (assertCurrent = () => {}) =>
     }),
   });
 
-describe("operator model execution ceiling", () => {
-  it.each(["rate_limit", "context_overflow"] as const)(
-    "never prepares or executes denied fallbacks after %s",
-    async (reason) => {
-      const prepared = vi.fn();
-      const run = vi.fn(async (_provider: string, model: string) => {
-        if (model === "primary") {
-          throw new FailoverError("fixture primary exhausted", { reason });
-        }
-        return "answer";
-      });
-      const result = await runWithModelFallback({
-        cfg,
-        provider: "fixture",
-        model: "primary",
-        manifestPlugins: [],
-        skipAuthProfileRuntime: true,
-        operatorAuthority: source(),
-        prepareCandidateChain: prepared,
-        run,
-      });
-      expect(result.result).toBe("answer");
-      expect(run.mock.calls.map((call) => call[1])).toEqual(["primary", "fallback"]);
-      expect(
-        prepared.mock.calls[0]?.[0].map((candidate: { model: string }) => candidate.model),
-      ).toEqual(["primary", "fallback"]);
-    },
+const fallbackOptions = { cfg, provider: "fixture", model: "primary", manifestPlugins: [] };
+const run = vi.fn<(provider: string, model: string) => Promise<string>>();
+const prepare =
+  vi.fn<NonNullable<Parameters<typeof runWithModelFallback>[0]["prepareCandidateChain"]>>();
+beforeEach(() => {
+  run.mockReset();
+  prepare.mockReset();
+});
+function fallback(overrides: Partial<Parameters<typeof runWithModelFallback>[0]> = {}) {
+  return runWithModelFallback({
+    ...fallbackOptions,
+    operatorAuthority: source(),
+    prepareCandidateChain: prepare,
+    run,
+    ...overrides,
+  });
+}
+
+it.each(["rate_limit", "context_overflow"] as const)(
+  "never prepares or executes denied fallbacks after %s",
+  async (reason) => {
+    run.mockRejectedValueOnce(new FailoverError("fixture primary exhausted", { reason }));
+    run.mockResolvedValue("answer");
+    const result = await fallback({ skipAuthProfileRuntime: true });
+    expect(result.result).toBe("answer");
+    expect(run.mock.calls.map((call) => call[1])).toEqual(["primary", "fallback"]);
+    expect(prepare.mock.calls[0]?.[0].map(({ model }) => model)).toEqual(["primary", "fallback"]);
+  },
+);
+
+it("rejects a denied alias before provider or harness preparation", async () => {
+  await expect(fallback({ model: "special", fallbacksOverride: [] })).rejects.toThrow(
+    "operator role cannot use this model",
   );
+  expect(prepare).not.toHaveBeenCalled();
+  expect(run).not.toHaveBeenCalled();
+});
 
-  it("rejects a denied alias before provider or harness preparation", async () => {
-    const prepare = vi.fn();
-    const run = vi.fn();
-    await expect(
-      runWithModelFallback({
-        cfg,
-        provider: "fixture",
-        model: "special",
-        fallbacksOverride: [],
-        manifestPlugins: [],
-        operatorAuthority: source(),
-        prepareCandidateChain: prepare,
-        run,
-      }),
-    ).rejects.toThrow("operator role cannot use this model");
-    expect(prepare).not.toHaveBeenCalled();
-    expect(run).not.toHaveBeenCalled();
+it("rechecks retained authority after asynchronous preparation before starting a model", async () => {
+  const entered = createDeferred();
+  const release = createDeferred();
+  let active = true;
+  const pending = fallback({
+    skipAuthProfileRuntime: true,
+    operatorAuthority: source(() => {
+      if (!active) {
+        throw new Error("source retired");
+      }
+    }),
+    prepareCandidateChain: async () => {
+      entered.resolve();
+      await release.promise;
+    },
   });
-
-  it("rechecks retained authority after asynchronous preparation before starting a model", async () => {
-    const entered = createDeferred();
-    const release = createDeferred();
-    let active = true;
-    const run = vi.fn();
-    const pending = runWithModelFallback({
-      cfg,
-      provider: "fixture",
-      model: "primary",
-      manifestPlugins: [],
-      skipAuthProfileRuntime: true,
-      operatorAuthority: source(() => {
-        if (!active) {
-          throw new Error("source retired");
-        }
-      }),
-      prepareCandidateChain: async () => {
-        entered.resolve();
-        await release.promise;
-      },
-      run,
-    });
-    await entered.promise;
-    active = false;
-    release.resolve();
-    await expect(pending).rejects.toThrow("source retired");
-    expect(run).not.toHaveBeenCalled();
-  });
+  await entered.promise;
+  active = false;
+  release.resolve();
+  await expect(pending).rejects.toThrow("source retired");
+  expect(run).not.toHaveBeenCalled();
 });

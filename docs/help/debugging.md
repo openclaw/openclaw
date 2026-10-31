@@ -87,7 +87,8 @@ changes keep their existing recovery and rebuild behavior. Windows retains its
 existing termination and restart behavior because its signal emulation does not
 make the same distinction.
 
-The UI dev wrapper acknowledges a requested stop only after its child returns
+The UI dev wrapper allows up to five seconds for its child tree to settle after
+forwarding a requested stop. It acknowledges the stop only after its child returns
 normally and the captured child tree has stopped. A signaled child or forced
 cleanup retains a signal outcome instead of reporting an acknowledged stop.
 

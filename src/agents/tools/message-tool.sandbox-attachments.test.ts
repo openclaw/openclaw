@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { ChannelOutboundContext } from "../../channels/plugins/outbound.types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -22,6 +22,13 @@ import { createMessageTool } from "./message-tool-execution.js";
 
 const channel = "sandboxchat" as ChannelPlugin["id"];
 const cfg = { channels: { sandboxchat: { enabled: true } } } as OpenClawConfig;
+const runMessageAction = messageActionRunner.runMessageAction;
+
+beforeEach(() => {
+  vi.spyOn(messageActionRunner, "runMessageAction").mockImplementation((input) =>
+    runMessageAction({ ...input, skipQueue: true }),
+  );
+});
 
 function createSandboxContext(workspaceDir: string) {
   return createSandboxTestContext({
@@ -34,30 +41,13 @@ function createSandboxContext(workspaceDir: string) {
   });
 }
 
-async function createRemoteBridge(hostMirrorDir: string, stateDir: string, contents: string) {
-  const remoteWorkspaceDir = path.join(stateDir, "remote-workspace");
-  await fs.mkdir(remoteWorkspaceDir, { recursive: true });
-  await fs.writeFile(path.join(remoteWorkspaceDir, "chart.txt"), contents);
-  return createRemoteShellSandboxFsBridge({
-    sandbox: createSandboxContext(hostMirrorDir),
-    runtime: {
-      remoteWorkspaceDir,
-      remoteAgentWorkspaceDir: remoteWorkspaceDir,
-      runRemoteShellScript: createLocalRemoteShellScriptRunner(),
-    },
-  });
-}
-
-function registerAttachmentPlugin(
-  id: ChannelPlugin["id"],
-  options: {
-    sendMedia?: NonNullable<ChannelPlugin["outbound"]>["sendMedia"];
-    actions?: ChannelPlugin["actions"];
-  },
-) {
+function registerAttachmentPlugin(options: {
+  sendMedia?: NonNullable<ChannelPlugin["outbound"]>["sendMedia"];
+  actions?: ChannelPlugin["actions"];
+}) {
   const plugin: ChannelPlugin = {
     ...createChannelTestPluginBase({
-      id,
+      id: channel,
       capabilities: { chatTypes: ["direct"], media: true },
       config: { isConfigured: () => true, resolveAccount: () => ({ enabled: true }) },
     }),
@@ -68,34 +58,47 @@ function registerAttachmentPlugin(
     outbound: {
       deliveryMode: "direct",
       resolveTarget: ({ to }) => ({ ok: true, to: to ?? "recipient" }),
-      sendText: async () => ({ channel: id, messageId: `${id}-text` }),
-      ...(options.sendMedia ? { sendMedia: options.sendMedia } : {}),
+      sendText: async () => ({ channel, messageId: "text" }),
+      sendMedia: options.sendMedia,
     },
-    ...(options.actions ? { actions: options.actions } : {}),
+    actions: options.actions,
   };
-  setActivePluginRegistry(createTestRegistry([{ pluginId: id, source: "test", plugin }]));
-  return id;
+  setActivePluginRegistry(createTestRegistry([{ pluginId: channel, source: "test", plugin }]));
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
   vi.unstubAllEnvs();
 });
 
-function createMirroredBridge(hostMirrorDir: string) {
-  return createSandboxFsBridge({
-    sandbox: {
-      ...createSandboxContext(hostMirrorDir),
-      backend: {
-        // Only emulate metadata lookup; retain the pinned host-file read.
-        runShellCommand: async ({ script, args }) => {
-          expect(script).toContain('readlink -n -f -- "$cursor"');
-          expect(args).toEqual(["/sandbox/chart.txt", "0", "0"]);
-          return { stdout: Buffer.from("/sandbox/chart.txt\n"), stderr: Buffer.alloc(0), code: 0 };
+async function createBridge(stateDir: string, mirrored: boolean, contents: string) {
+  const workspaceDir = path.join(stateDir, mirrored ? "host-mirror" : "remote-workspace");
+  await fs.mkdir(workspaceDir, { recursive: true });
+  await fs.writeFile(path.join(workspaceDir, "chart.txt"), contents);
+  const sandbox = createSandboxContext(path.join(stateDir, "host-mirror"));
+  return mirrored
+    ? createSandboxFsBridge({
+        sandbox: {
+          ...sandbox,
+          backend: {
+            // Only emulate metadata lookup; retain the pinned host-file read.
+            runShellCommand: async () => ({
+              stdout: Buffer.from("/sandbox/chart.txt\n"),
+              stderr: Buffer.alloc(0),
+              code: 0,
+            }),
+          },
         },
-      },
-    },
-  });
+      })
+    : createRemoteShellSandboxFsBridge({
+        sandbox,
+        runtime: {
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+          runRemoteShellScript: createLocalRemoteShellScriptRunner(),
+        },
+      });
 }
 
 it.each([
@@ -108,12 +111,7 @@ it.each([
     const hostMirrorDir = path.join(stateDir, "host-mirror");
     await fs.mkdir(hostMirrorDir, { recursive: true });
     const expectedBytes = mirrored ? "mirrored chart" : "remote chart";
-    if (mirrored) {
-      await fs.writeFile(path.join(hostMirrorDir, "chart.txt"), expectedBytes);
-    }
-    const bridge = mirrored
-      ? createMirroredBridge(hostMirrorDir)
-      : await createRemoteBridge(hostMirrorDir, stateDir, expectedBytes);
+    const bridge = await createBridge(stateDir, mirrored, expectedBytes);
     const bridgeReadFile = vi.spyOn(bridge, "readFile");
     const deliveredBytes: Buffer[] = [];
     const denied = "sandbox media access was denied";
@@ -124,19 +122,17 @@ it.each([
       deliveredBytes.push(await ctx.mediaAccess.readFile(ctx.mediaUrl));
       return { channel, messageId: "sandbox-media-1" };
     });
-    registerAttachmentPlugin(channel, { sendMedia });
+    registerAttachmentPlugin({ sendMedia });
     const config: OpenClawConfig = allowed
       ? cfg
       : { ...cfg, tools: { allow: ["message"], deny: ["read"] } };
     const tool = createMessageTool({
       config,
-      getRuntimeConfig: () => config,
       conversationReadOrigin: "direct-operator",
       sandboxRoot: hostMirrorDir,
       sandboxContainerWorkdir: "/sandbox",
       sandboxFsBridge: bridge,
       sandboxWorkspaceMediaReadAllowed: allowed,
-      runMessageAction: (input) => runMessageAction({ ...input, skipQueue: true }),
     });
     const pending = tool.execute("sandbox-media-send", {
       action: "send",
@@ -157,7 +153,7 @@ it.each([
 });
 
 function registerAttachmentActions(delivered: Record<string, unknown>[]) {
-  return registerAttachmentPlugin("readinesschat", {
+  registerAttachmentPlugin({
     actions: {
       describeMessageTool: () => ({
         actions: ["send", "sendAttachment"],
@@ -186,10 +182,10 @@ it.each([
     const workspaceDir = await fs.realpath(tempDir);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
     const delivered: Record<string, unknown>[] = [];
-    const messageChannel = registerAttachmentActions(delivered);
+    registerAttachmentActions(delivered);
     const config: OpenClawConfig = {
       agents: { defaults: { workspace: workspaceDir } },
-      channels: { readinesschat: { enabled: true } },
+      ...cfg,
     };
     const waiting = createDeferred();
     const ready = createDeferred();
@@ -205,16 +201,14 @@ it.each([
       async () =>
         createMessageTool({
           config,
-          getRuntimeConfig: () => config,
           agentSessionKey: mediaKey === "asset" ? "agent:main:source-policy" : sessionKey,
           runSessionKey: mediaKey === "asset" ? sessionKey : undefined,
           workspaceDir,
           conversationReadOrigin: "direct-operator",
-          runMessageAction: (input) => runMessageAction({ ...input, skipQueue: true }),
         }),
     );
     const execute = (id: string, params: Record<string, unknown>) =>
-      tool.execute(id, { channel: messageChannel, target: "recipient", ...params });
+      tool.execute(id, { channel, target: "recipient", ...params });
     const media = path.join(workspaceDir, "assets/report.pdf");
     const pending = execute("local-attachment", {
       action: "sendAttachment",

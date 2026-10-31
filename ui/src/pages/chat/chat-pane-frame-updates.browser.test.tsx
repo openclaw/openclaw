@@ -1,11 +1,21 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createTestChatPane, connectPaneTestView } from "./chat-pane.test-support.ts";
-import { publishChatRunState } from "./chat-state-render.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
+import {
+  createTestChatPane,
+  connectPaneTestView,
+  getPaneTestRuntime,
+  type TestChatPane,
+} from "./chat-pane.test-support.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
 // mock-isolation: Exercise runtime commit cadence without initializing the full pane renderer.
-vi.mock("./chat-pane-layout-view.tsx", () => import("./chat-pane-layout.test-support.tsx"));
+vi.mock("./chat-pane-layout-view.tsx", async (importOriginal) => {
+  const { PaneLayout } = await importOriginal<typeof import("./chat-pane-layout-view.tsx")>();
+  const { createPaneLayoutFixture } = await import("./chat-pane-layout.test-support.tsx");
+  return createPaneLayoutFixture(PaneLayout);
+});
 
 function FrameLayout(props: { label?: string; id?: string; stream?: string | null }) {
   return (
@@ -43,17 +53,21 @@ async function task(action: () => void) {
   }
 }
 
-async function mountPane(presented = true) {
+async function mountPane(
+  presented = true,
+  readProps: (pane: TestChatPane) => Parameters<typeof FrameLayout>[0] = (pane) => ({
+    label: pane.history.catalogCursor ?? pane.paneLabel,
+  }),
+) {
   const { pane } = createTestChatPane({
     client: { request: vi.fn() } as unknown as GatewayBrowserClient,
-    sessions: {} as SessionCapability,
+    sessions: createSessionCapabilityFixture(),
   });
-  // Use the existing lifecycle harness, with a small render to isolate cadence.
   Object.assign(pane, {
     render: () => ({
       layout: {
         component: FrameLayout,
-        props: { label: pane.history.catalogCursor ?? pane.paneLabel, id: pane.paneId },
+        props: { id: pane.paneId, ...readProps(pane) },
       },
     }),
     presentedChanged: () => {},
@@ -65,7 +79,14 @@ async function mountPane(presented = true) {
   expect(updates).toHaveBeenCalledTimes(1);
   expect(pane.textContent).toContain(pane.paneId);
   updates.mockClear();
-  return { pane, updates };
+  const expectFrame = async (count: number, ...text: string[]) => {
+    await pane.updateComplete;
+    expect(updates).toHaveBeenCalledTimes(count);
+    for (const value of text) {
+      expect(pane.textContent).toContain(value);
+    }
+  };
+  return { pane, updates, expectFrame };
 }
 
 afterEach(() => {
@@ -73,15 +94,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("batches a projected history change with a legacy invalidation into one frame", async () => {
-  const { pane, updates } = await mountPane();
+it("batches projected history and pane properties into one frame", async () => {
+  const { pane, expectFrame } = await mountPane();
   await task(() => {
     pane.history.catalogCursor = "projected history";
-    pane.invalidate();
+    pane.paneId = "projected-pane";
   });
-  await pane.updateComplete;
-  expect(pane.textContent).toContain("projected history");
-  expect(updates).toHaveBeenCalledOnce();
+  await expectFrame(1, "projected history", "projected-pane");
 });
 
 it.each([false, true])(
@@ -92,13 +111,12 @@ it.each([false, true])(
       vi.fn(() => 1),
     );
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
-    const { pane, updates } = await mountPane(initiallyPresented);
+    const { pane, updates, expectFrame } = await mountPane(initiallyPresented);
     pane.presented = false;
     for (let index = 0; index < 6; index++) {
       await task(() => {
         pane.paneLabel = `hidden revision ${index}`;
         pane.paneId = `parked-pane-${index}`;
-        pane.invalidate();
       });
     }
     let completed = false;
@@ -110,45 +128,101 @@ it.each([false, true])(
     expect(completed).toBe(false);
     pane.presented = true;
     await completion;
-    expect(updates).toHaveBeenCalledTimes(1);
-    expect(pane.textContent).toContain("hidden revision 5");
-    expect(pane.textContent).toContain("parked-pane-5");
+    await expectFrame(1, "hidden revision 5", "parked-pane-5");
   },
 );
 
-it.each(["request", "property", "state"] as const)(
-  "renders a presented inactive split pane immediately for a %s without animation frames",
-  async (trigger) => {
-    vi.stubGlobal(
-      "requestAnimationFrame",
-      vi.fn(() => 1),
-    );
-    vi.stubGlobal("cancelAnimationFrame", vi.fn());
-    const { pane, updates } = await mountPane();
-    expect(pane.active).toBe(false);
-    const lifecycle = pane.chatState.createRenderLifecycle();
-    await task(() => {
-      if (trigger === "property") {
-        pane.paneLabel = "immediate property";
-      } else if (trigger === "state") {
-        lifecycle.invalidate();
-      } else {
-        pane.invalidate();
-      }
-    });
-    await pane.updateComplete;
-    expect(updates).toHaveBeenCalledTimes(1);
-    if (trigger === "property") {
-      expect(pane.textContent).toContain("immediate property");
-    }
-  },
-);
+it("renders a presented inactive split pane property without animation frames", async () => {
+  vi.stubGlobal(
+    "requestAnimationFrame",
+    vi.fn(() => 1),
+  );
+  vi.stubGlobal("cancelAnimationFrame", vi.fn());
+  const { pane, expectFrame } = await mountPane();
+  expect(pane.active).toBe(false);
+  await task(() => {
+    pane.paneLabel = "immediate property";
+  });
+  await expectFrame(1, "immediate property");
+});
+
+it("runs a DOM completion task without causing an unchanged pane to render", async () => {
+  const { pane, updates } = await mountPane();
+  const effect = vi.fn();
+  const lifecycle = pane.chatState.createRenderLifecycle();
+  lifecycle.afterCommit(effect);
+  await pane.updateComplete;
+  expect(effect).toHaveBeenCalledOnce();
+  expect(updates).not.toHaveBeenCalled();
+});
+
+it("projects measured pane width without an explicit redraw request", async () => {
+  const { pane, expectFrame } = await mountPane(true, (current) => ({
+    label: String(getPaneTestRuntime(current).paneWidth),
+  }));
+  await task(() => {
+    getPaneTestRuntime(pane).paneWidth = 640;
+  });
+  await expectFrame(1, "640");
+});
+
+it("updates command intent without rendering ordinary composer keystrokes", async () => {
+  const { pane, expectFrame } = await mountPane();
+  const state = pane.state;
+
+  await task(() => state.handleChatDraftChange("ordinary input"));
+  await expectFrame(0);
+  await task(() => state.handleChatDraftChange("/stop"));
+  await expectFrame(1);
+});
+
+it("publishes comment attachments to the pane independently of ordinary draft changes", async () => {
+  const { pane, expectFrame } = await mountPane(true, (current) => ({
+    label: current.state.chatAttachments
+      .map((attachment) => attachment.selectionAnnotation?.comment)
+      .join(" "),
+  }));
+  const state = pane.state;
+  const { onAttachmentsChange } = getPaneTestRuntime(pane).chatState.attachmentInputProps(state);
+  const attachment = {
+    id: "frame-comment",
+    mimeType: "text/plain",
+    dataUrl: "data:text/plain;base64,Y29tbWVudA==",
+    selectionAnnotation: {
+      sessionKey: state.sessionKey,
+      text: "Selected text",
+      start: 0,
+      end: 13,
+      comment: "First comment",
+    },
+  };
+  await task(() => onAttachmentsChange([attachment]));
+  await expectFrame(1, "First comment");
+
+  await task(() => state.handleChatDraftChange("ordinary draft"));
+  await expectFrame(1);
+
+  await task(() =>
+    onAttachmentsChange([
+      {
+        ...attachment,
+        selectionAnnotation: { ...attachment.selectionAnnotation, comment: "Edited comment" },
+      },
+    ]),
+  );
+  await expectFrame(2, "Edited comment");
+  expect(pane.textContent).not.toContain("First comment");
+
+  await task(() => onAttachmentsChange([]));
+  await expectFrame(3);
+  expect(pane.textContent).not.toContain("Edited comment");
+});
 
 it("keeps an unpresented pane parked when the document becomes visible", async () => {
   let visibility: DocumentVisibilityState = "hidden";
   vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
   const { pane, updates } = await mountPane(false);
-  pane.invalidate();
+  pane.paneLabel = "parked while hidden";
   await task(() => {});
   visibility = "visible";
   document.dispatchEvent(new Event("visibilitychange"));
@@ -160,48 +234,40 @@ it("keeps an unpresented pane parked when the document becomes visible", async (
 });
 
 it("absorbs a queued stream frame into a property commit and accepts the next stream", async () => {
-  let nextFrame = 1;
-  const frames = new Map<number, FrameRequestCallback>();
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    const id = nextFrame++;
-    frames.set(id, callback);
-    return id;
-  });
-  vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
-  const { pane } = await mountPane();
+  const framesClock = createFrameClock();
+  const frames = framesClock.frames;
+  vi.stubGlobal("requestAnimationFrame", framesClock.request);
+  vi.stubGlobal("cancelAnimationFrame", framesClock.cancel);
+  const { pane, expectFrame } = await mountPane(true, (current) => ({
+    label: current.paneLabel,
+    stream: current.state.chatStream,
+  }));
   const state = pane.state;
-  Object.assign(pane, {
-    render: () => ({ layout: { component: FrameLayout, props: { stream: state.chatStream } } }),
-  });
-  const updates = vi.spyOn(pane, "render");
-  state.chatStream = "First stream revision";
-  publishChatRunState(state, "animation-frame");
+  chatRunPresentation(state).batch(() => {
+    state.chatStream = "First stream revision";
+  }, "animation-frame");
   const queuedFrame = frames.get(state.chatStreamRenderFrame!);
   expect(queuedFrame).toBeDefined();
 
   await task(() => {
     pane.paneLabel = "Property revision";
   });
-  await pane.updateComplete;
-  expect(pane.textContent).toContain("First stream revision");
-  expect(updates).toHaveBeenCalledOnce();
+  await expectFrame(1, "First stream revision");
   queuedFrame?.(0);
   await task(() => {});
-  await pane.updateComplete;
-  expect(updates).toHaveBeenCalledOnce();
+  await expectFrame(1);
 
-  state.chatStream = "Next stream revision";
-  publishChatRunState(state, "animation-frame");
+  chatRunPresentation(state).batch(() => {
+    state.chatStream = "Next stream revision";
+  }, "animation-frame");
   frames.get(state.chatStreamRenderFrame!)?.(0);
   await task(() => {});
-  await pane.updateComplete;
-  expect(updates).toHaveBeenCalledTimes(2);
-  expect(pane.textContent).toContain("Next stream revision");
+  await expectFrame(2, "Next stream revision");
 });
 
 it("releases a disconnected pane's parked update and renders after reconnect", async () => {
-  const { pane, updates } = await mountPane(false);
-  pane.invalidate();
+  const { pane, updates, expectFrame } = await mountPane(false);
+  pane.paneLabel = "parked before disconnect";
   await task(() => {});
   Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   pane.disconnectedCallback();
@@ -210,12 +276,9 @@ it("releases a disconnected pane's parked update and renders after reconnect", a
   Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   pane.presented = true;
   connectPaneTestView(pane);
-  pane.invalidate();
   await pane.updateComplete;
   expect(pane.textContent).toContain(pane.paneId);
   updates.mockClear();
   pane.paneLabel = "reconnected revision";
-  await pane.updateComplete;
-  expect(updates).toHaveBeenCalledTimes(1);
-  expect(pane.textContent).toContain("reconnected revision");
+  await expectFrame(1, "reconnected revision");
 });

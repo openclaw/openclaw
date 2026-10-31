@@ -1,6 +1,3 @@
-/**
- * Resolves default exec tool settings from session and config context.
- */
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecToolConfig } from "../config/types.tools.js";
@@ -22,8 +19,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
-import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
-import { isRequestedExecTargetAllowed } from "./bash-tools.exec-target.js";
+import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-target.js";
 import {
   resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,
@@ -90,7 +86,6 @@ export function resolveExecConfigState(
   };
 }
 
-/** Resolves whether node exec is usable and any effective node binding. */
 export function resolveNodeExecEligibility(
   params: Omit<ResolveExecDefaultsParams, "scope" | "elevatedRequested">,
   preparedDefaults?: ResolvedExecDefaults,
@@ -245,7 +240,6 @@ export function prepareExecDefaults(
   };
 }
 
-/** Resolves effective exec host, mode, approval policy, and node availability. */
 export function resolveExecDefaults(
   params: ResolveExecDefaultsParams,
   preparedSandbox?: ReturnType<typeof resolveSandboxRuntimeStatus>,

@@ -90,7 +90,8 @@ test("sessions.list preserves recorded sentinel owners for explicit multi-agent 
       entries: {
         main: { sessionId: "sess-ops", updatedAt: 20 },
         global: { sessionId: "sess-global", updatedAt: 19 },
-        unknown: { sessionId: "sess-unknown", updatedAt: 18 },
+        unknown: { sessionId: "sess-unknown", updatedAt: 18, label: "Unknown sentinel" },
+        "agent:ops:unknown": { sessionId: "sess-named-unknown", updatedAt: 23 },
       },
     });
     await writeSessionStore({
@@ -107,14 +108,47 @@ test("sessions.list preserves recorded sentinel owners for explicit multi-agent 
       includeUnknown: true,
       configuredAgentsOnly: true,
     });
-    expect(all).toMatchObject({ count: 5, totalCount: 5, hasMore: false });
+    expect(all).toMatchObject({ count: 6, totalCount: 6, hasMore: false });
     expect(identities(all.sessions)).toEqual([
+      { key: "agent:ops:unknown", agentId: "ops", sessionId: "sess-named-unknown" },
       linkedIdentity,
       { key: "agent:research:main", agentId: "research", sessionId: "sess-research" },
       { key: "agent:ops:main", agentId: "ops", sessionId: "sess-ops" },
       { key: "global", agentId: "ops", sessionId: "sess-global" },
       { key: "unknown", agentId: "ops", sessionId: "sess-unknown" },
     ]);
+
+    for (const includeUnknown of [false, true]) {
+      const scoped = await list({
+        agentId: "ops",
+        includeGlobal: true,
+        includeUnknown,
+        configuredAgentsOnly: true,
+      });
+      expect(identities(scoped.sessions)).toEqual([
+        { key: "agent:ops:unknown", agentId: "ops", sessionId: "sess-named-unknown" },
+        { key: "agent:ops:main", agentId: "ops", sessionId: "sess-ops" },
+        { key: "global", agentId: "ops", sessionId: "sess-global" },
+        ...(includeUnknown ? [{ key: "unknown", agentId: "ops", sessionId: "sess-unknown" }] : []),
+      ]);
+      expect(scoped).toMatchObject({
+        count: includeUnknown ? 4 : 3,
+        totalCount: includeUnknown ? 4 : 3,
+        hasMore: false,
+      });
+      for (const selector of [{ sessionId: "sess-unknown" }, { label: "Unknown sentinel" }]) {
+        const resolved = await directSessionReq("sessions.resolve", {
+          ...selector,
+          agentId: "ops",
+          includeUnknown,
+          allowMissing: true,
+        });
+        expect(resolved).toMatchObject({
+          ok: true,
+          payload: includeUnknown ? { ok: true, key: "unknown", agentId: "ops" } : { ok: false },
+        });
+      }
+    }
 
     const linkedQuery = {
       search: linkedSessionKey,
@@ -149,6 +183,7 @@ test("sessions.list preserves recorded sentinel owners for explicit multi-agent 
       configuredAgentsOnly: true,
     });
     expect(configuredOnly.sessions.map((session) => session.key)).toEqual([
+      "agent:ops:unknown",
       `agent:research:${linkedSessionKey}`,
       "agent:research:main",
       "agent:ops:main",

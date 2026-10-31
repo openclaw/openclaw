@@ -1,118 +1,55 @@
 /* @vitest-environment jsdom */
 
-import type {
-  ControlUiSettingsContext,
-  ControlUiSettingsSnapshot,
-  ControlUiSettingsView,
-  MemorySearchResponse,
-} from "openclaw/plugin-sdk/control-ui";
+import type { MemorySearchResponse } from "openclaw/plugin-sdk/control-ui";
 import { flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { memoriesView } from "./memories.tsx";
-
-const disposers: (() => void)[] = [];
-afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
-});
-const waitForSolid = (assertion: () => void) =>
-  vi.waitFor(() => {
-    flush();
-    assertion();
-  });
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((yes, no) => {
-    resolve = yes;
-    reject = no;
-  });
-  return { promise, resolve, reject };
-}
+import {
+  contextForTest,
+  deferred,
+  disposers,
+  disposeTestViews,
+  expectText,
+  findButton,
+  mountSettingsView,
+  snapshot,
+  waitForSolid,
+} from "./memory.test-support.ts";
+afterEach(disposeTestViews);
 
 type Request = (method: string, params: Record<string, unknown>) => Promise<unknown>;
-function createElement(
-  request: Request,
-  advertised = true,
-  initialAgentId: string | null = "main",
-) {
-  const container = document.createElement("div");
-  document.body.append(container);
-  let lifetime: AbortController;
-  let view: ReturnType<ControlUiSettingsView["mount"]>;
-  const formatError = vi.fn((error: unknown) =>
-    error instanceof Error ? error.message : String(error),
-  );
-  function mount(agentId: string | null) {
-    lifetime?.abort();
-    view?.dispose();
-    lifetime = new AbortController();
-    const snapshot: ControlUiSettingsSnapshot = {
-      agentId,
-      agentsLoading: false,
-      agentsError: null,
-      engine: { kind: "default", id: "memory-core", availability: "enabled" },
-      connected: true,
-      advertisedMethods: advertised ? ["memory.search", "agents.workspace.get"] : [],
-      connectionEpoch: 1,
-      routeIntent: "memories",
-      locale: "en",
-    };
-    const context: ControlUiSettingsContext = {
-      props: snapshot,
+const request = vi.fn<Request>();
+const formatError = vi.fn((e: unknown) => (e instanceof Error ? e.message : String(e)));
+let element: HTMLElement;
+let update: ReturnType<typeof mountSettingsView>["update"];
+let lifetime: AbortController;
+beforeEach(() => {
+  request.mockReset();
+  formatError.mockClear();
+  lifetime = new AbortController();
+  const context = contextForTest(
+    snapshot({ advertisedMethods: ["memory.search"], routeIntent: "memories" }),
+    {
       signal: lifetime.signal,
-      // This view uses semantic controls; shared visual primitives are exercised in the browser.
-      components: {
-        mountSection: vi.fn(),
-        mountRow: vi.fn(),
-        mountStatus: vi.fn(),
-        mountValue: vi.fn(),
-        mountNavigation: vi.fn(),
-        mountLobster: vi.fn(),
-      },
       request: <T,>(method: string, params?: unknown) =>
         request(method, params as Record<string, unknown>) as Promise<T>,
       formatError,
-      formatRelativeTimestamp: String,
-      navigate: vi.fn(),
-      refreshAgents: vi.fn(),
-    };
-    view = memoriesView.mount(container, context);
-    flush();
-  }
-  mount(initialAgentId);
-  disposers.push(() => {
-    lifetime.abort();
-    view.dispose();
-    container.remove();
-  });
-  return Object.assign(container, {
-    retire: () => lifetime.abort(),
-    formatError,
-  });
-}
-
-function typeQuery(element: HTMLElement, query: string) {
+    },
+  );
+  ({ container: element, update } = mountSettingsView(memoriesView, context));
+  disposers.push(lifetime.abort.bind(lifetime));
+});
+const input = () => element.querySelector<HTMLInputElement>("#memory-search-input")!;
+const submitButton = () => element.querySelector<HTMLButtonElement>('button[type="submit"]');
+function search(query = "Ada", submit = true) {
+  input().value = query;
+  input().dispatchEvent(new InputEvent("input", { bubbles: true }));
   flush();
-  const input = element.querySelector<HTMLInputElement>("#memory-search-input");
-  if (!input) {
-    throw new Error("missing memory search input");
+  if (submit) {
+    element
+      .querySelector("form")
+      ?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
   }
-  input.value = query;
-  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-  flush();
-}
-
-function submit(element: HTMLElement) {
-  element
-    .querySelector("form")
-    ?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
-}
-
-function search(element: HTMLElement, query = "Ada") {
-  typeQuery(element, query);
-  submit(element);
 }
 
 const result = {
@@ -127,257 +64,216 @@ const result = {
 function searchResponse(
   results: MemorySearchResponse["results"],
   overrides: Partial<MemorySearchResponse> = {},
-) {
+): MemorySearchResponse {
   return { agentId: "main", provider: "local", searchMode: "hybrid", results, ...overrides };
 }
-
-function fileReads(request: { mock: { calls: Array<[string, ...unknown[]]> } }) {
-  return request.mock.calls.filter(([method]) => method === "agents.workspace.get");
+const fileReads = () => request.mock.calls.filter(([method]) => method === "agents.workspace.get");
+const matchedContent = "first\nmatched two\nmatched three";
+const memoryFileResponse = (content: string) => ({ file: { encoding: "utf8", content } });
+const rows = () => element.querySelectorAll<HTMLButtonElement>("article > button");
+const match = () => element.querySelector('[data-memory-match="true"]')?.textContent;
+const retry = () => findButton(element, /^Retry$/);
+const waitText = (text: string) => waitForSolid(() => expect(element.textContent).toContain(text));
+function clickRow(index = 0) {
+  rows()[index]?.click();
+  flush();
 }
-
-function memoryFileResponse(content: string) {
-  return { file: { encoding: "utf8", content } };
+async function openResult() {
+  await waitForSolid(() => expect(rows().length).toBeGreaterThan(0));
+  clickRow();
 }
+const waitMatch = (text: string) => waitForSolid(() => expect(match()).toBe(text));
 
-describe("Memory Core indexed-search presentation", () => {
-  it.each(["search", "detail"])(
-    "discards a retired %s failure before using lifetime-bound error formatting",
-    async (stage) => {
-      const pending = deferred<unknown>();
-      const request = vi.fn<Request>((method) =>
-        stage === "detail" && method === "memory.search"
-          ? Promise.resolve(searchResponse([result]))
-          : pending.promise,
-      );
-      const element = createElement(request);
-      search(element);
-      if (stage === "detail") {
-        await waitForSolid(() => expect(element.querySelector("article > button")).not.toBeNull());
-        element.querySelector<HTMLButtonElement>("article > button")?.click();
-      }
-      element.retire();
-      element.formatError.mockImplementation(() => {
-        throw new Error("retired formatter must not run");
-      });
-      pending.reject(new Error("retired failure"));
-      await pending.promise.catch(() => undefined);
-      flush();
-      expect(element.formatError).not.toHaveBeenCalled();
-      expect(element.textContent).not.toContain("retired failure");
-    },
+it("loads changed locales without replacing the search input or its draft", async () => {
+  const originalInput = input();
+  expect(originalInput.placeholder).toBe("Search this agent's memories");
+  search("Ada", false);
+  update({ locale: "fr" });
+  await waitForSolid(() =>
+    expect(originalInput.placeholder).toBe("Rechercher dans les souvenirs de cet agent"),
   );
+  expect(input()).toBe(originalInput);
+  expect(originalInput.value).toBe("Ada");
+  expect(request).not.toHaveBeenCalled();
+});
 
-  it.each([
-    [true, "Search for a person, project, decision"],
-    [false, "Update the gateway to search memories"],
-  ] satisfies [boolean, string][])(
-    "renders the advertised=%s search state",
-    (advertised, message) => {
-      const element = createElement(
-        vi.fn(() => Promise.resolve({})),
-        advertised,
-      );
-      expect(element.textContent).toContain(message);
-      expect(element.querySelector("form") === null).toBe(!advertised);
-    },
-  );
-
-  it("keeps search disabled when no agent is available", async () => {
-    const request = vi.fn(() => Promise.resolve({}));
-    const element = createElement(request, true, null);
-    typeQuery(element, "Ada");
-    expect(element.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
-    submit(element);
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("renders empty and retryable error states", async () => {
-    const request = vi
-      .fn<Request>()
-      .mockRejectedValueOnce(new Error("index unavailable"))
-      .mockResolvedValueOnce(searchResponse([], { provider: "none", searchMode: "fts-only" }));
-    const element = createElement(request);
-    search(element, "missing");
-    await waitForSolid(() => expect(element.textContent).toContain("index unavailable"));
-
-    const retry = [...element.querySelectorAll("button")].find(
-      (button) => button.textContent?.trim() === "Retry",
-    );
-    retry?.click();
-    await waitForSolid(() => expect(element.textContent).toContain("No memories matched"));
-    expect(element.textContent).toContain("keyword search");
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("shares pending and loaded files across matches while keeping each row's highlight", async () => {
-    const second = { ...result, startLine: 1, endLine: 1 };
-    const third = { ...second, path: "memory/projects/Open Claw.md" };
-    const pending = deferred<unknown>();
-    const fileResponse = memoryFileResponse("first\nmatched two\nmatched three\nfourth");
-    const request = vi.fn((method: string, params: Record<string, unknown>) => {
-      if (method === "memory.search") {
-        return Promise.resolve(searchResponse([result, second, third]));
-      }
-      return params.path === result.path
-        ? pending.promise
-        : Promise.resolve(memoryFileResponse("Another memory file"));
-    });
-    const element = createElement(request);
-    search(element);
-    await waitForSolid(() => expect(element.querySelectorAll("article")).toHaveLength(3));
-
-    const rows = element.querySelectorAll<HTMLButtonElement>("article > button");
-    rows[0]?.click();
-    await waitForSolid(() => expect(element.textContent).toContain("Loading the full memory file"));
-    rows[1]?.click();
-    flush();
-    expect(rows[0]?.getAttribute("aria-expanded")).toBe("false");
-    expect(rows[1]?.getAttribute("aria-expanded")).toBe("true");
-    expect(element.querySelectorAll(".memory-memories__detail")).toHaveLength(1);
-    expect(fileReads(request)).toHaveLength(1);
-
-    pending.resolve(fileResponse);
-    await waitForSolid(() =>
-      expect(element.querySelector('[data-memory-match="true"]')?.textContent).toBe("first"),
-    );
-    rows[0]?.click();
-    flush();
-    expect(element.querySelector('[data-memory-match="true"]')?.textContent).toBe(
-      "matched two\nmatched three",
-    );
-
-    rows[0]?.click();
-    rows[0]?.click();
-    flush();
-    expect(fileReads(request)).toHaveLength(1);
-    expect(request).toHaveBeenCalledWith("agents.workspace.get", {
-      agentId: "main",
-      path: result.path,
-    });
-
-    rows[2]?.click();
-    flush();
-    expect(rows[0]?.getAttribute("aria-expanded")).toBe("false");
-    expect(rows[2]?.getAttribute("aria-expanded")).toBe("true");
-    expect(rows[2]?.getAttribute("aria-controls")).toBe("memory-detail-2");
-    expect(element.querySelector("#memory-detail-2")).not.toBeNull();
-    expect(fileReads(request)).toHaveLength(2);
-  });
-
-  it("keeps session, absolute, and escaping paths non-expandable", async () => {
-    const nonExpandable = [
-      { ...result, path: "sessions/main/session-1.jsonl", source: "sessions" as const },
-      { ...result, path: "sessions/main/mislabeled.jsonl" },
-      { ...result, path: "/external/MEMORY.md" },
-      { ...result, path: "C:\\external\\MEMORY.md" },
-      { ...result, path: "memory/../outside.md" },
-    ];
-    const request = vi.fn<Request>(() =>
-      Promise.resolve(searchResponse([{ ...result, path: "MEMORY.md" }, ...nonExpandable])),
-    );
-    const element = createElement(request);
-    search(element, "memory");
-    await waitForSolid(() => expect(element.querySelectorAll("article")).toHaveLength(6));
-
-    expect(element.querySelectorAll("article > button")).toHaveLength(1);
-    expect(element.querySelectorAll("article > div.settings-row")).toHaveLength(5);
-    expect(fileReads(request)).toHaveLength(0);
-  });
-
-  it("keeps workspace read failures on the expanded row", async () => {
-    const request = vi.fn((method: string) =>
-      method === "memory.search"
+it.each(["search", "detail", "resolve", "reject"])(
+  "ignores retired/replaced %s completions",
+  async (kind) => {
+    const previous = deferred<unknown>();
+    const current = deferred<unknown>();
+    const replaced = kind === "resolve" || kind === "reject";
+    let reads = 0;
+    request.mockImplementation((method) =>
+      kind !== "search" && method === "memory.search"
         ? Promise.resolve(searchResponse([result]))
-        : Promise.reject(new Error("workspace file not found")),
+        : (reads++ === 0 ? previous : current).promise,
     );
-    const element = createElement(request);
-    search(element);
-    await waitForSolid(() => expect(element.querySelector("article > button")).not.toBeNull());
-    element.querySelector<HTMLButtonElement>("article > button")?.click();
-
-    await waitForSolid(() =>
-      expect(element.textContent).toContain(
-        "Could not load this memory file: workspace file not found",
-      ),
-    );
-    expect(element.textContent).toContain(result.snippet);
-    expect(element.textContent).not.toContain("Memory search failed");
-  });
-
-  it.each(["resolves", "rejects"] as const)(
-    "keeps the current file read when an earlier search's read %s",
-    async (outcome) => {
-      const previous = deferred<unknown>();
-      const current = deferred<unknown>();
-      let readCount = 0;
-      const request = vi.fn((method: string) => {
-        if (method === "memory.search") {
-          return Promise.resolve(searchResponse([result]));
-        }
-        return readCount++ === 0 ? previous.promise : current.promise;
-      });
-      const element = createElement(request);
-      for (const query of ["Ada", "Ada again"]) {
-        search(element, query);
-        flush();
-        await waitForSolid(() => expect(element.querySelector("article > button")).not.toBeNull());
-        element.querySelector<HTMLButtonElement>("article > button")?.click();
-        await waitForSolid(() =>
-          expect(element.textContent).toContain("Loading the full memory file"),
-        );
-      }
-      expect(readCount).toBe(2);
-
-      if (outcome === "resolves") {
-        previous.resolve(memoryFileResponse("Retired content"));
-      } else {
-        previous.reject(new Error("Retired read failure"));
-      }
-      await previous.promise.catch(() => undefined);
-      flush();
-      expect(element.textContent).toContain("Loading the full memory file");
-      expect(element.textContent).not.toContain("Retired");
-
+    search();
+    if (kind !== "search") {
+      await openResult();
+    }
+    if (replaced) {
+      search("Ada again");
+      await openResult();
+      await waitText("Loading the full memory file");
+    } else {
+      lifetime.abort();
+    }
+    if (kind === "resolve") {
+      previous.resolve(memoryFileResponse("Retired content"));
+    } else {
+      previous.reject(new Error("Retired failure"));
+    }
+    await previous.promise.catch(() => undefined);
+    flush();
+    expect(formatError).not.toHaveBeenCalled();
+    expectText(element, replaced ? ["Loading the full memory file"] : [], ["Retired"]);
+    if (replaced) {
       current.resolve(memoryFileResponse("first\nFresh matched content\nthird"));
-      await waitForSolid(() =>
-        expect(element.querySelector('[data-memory-match="true"]')?.textContent).toBe(
-          "Fresh matched content\nthird",
-        ),
-      );
-    },
-  );
+      await waitMatch("Fresh matched content\nthird");
+    }
+  },
+);
 
-  it("shows stale guidance alongside empty results and clears it after a fresh search", async () => {
-    const warning =
-      "Memory index is stale: index scope changed (owner: configuration, code: scope). Search results may be incomplete.";
-    const action =
-      "Run: openclaw memory status --index --agent main. Rebuilding uses keyword indexing only and does not call an embedding provider.";
-    const fresh = { ...result, snippet: "Freshly indexed Ada prefers careful reviews." };
-    const request = vi
-      .fn<Request>()
-      .mockResolvedValueOnce(
-        searchResponse([], {
-          provider: "none",
-          searchMode: "fts-only",
-          stale: true,
-          warning,
-          action,
-        }),
-      )
-      .mockResolvedValueOnce(searchResponse([fresh], { provider: "none", searchMode: "fts-only" }));
-    const element = createElement(request);
-    const readText = () => (element.textContent ?? "").replace(/\s+/gu, " ").trim();
-    search(element);
-    await waitForSolid(() =>
-      expect(element.querySelector(".memory-memories__results-heading")).not.toBeNull(),
+it("hides search when the method is not advertised", () => {
+  update({ advertisedMethods: [] });
+  expect(element.textContent).toContain("Update the gateway to search memories");
+  expect(element.querySelector("form")).toBeNull();
+});
+
+it("keeps search disabled when no agent is available", () => {
+  update({ agentId: null });
+  search();
+  expect(submitButton()?.disabled).toBe(true);
+  expect(request).not.toHaveBeenCalled();
+});
+
+it("blocks offline retries and retries the search after reconnecting", async () => {
+  const retried = deferred<MemorySearchResponse>();
+  request
+    .mockRejectedValueOnce(new Error("index unavailable"))
+    .mockReturnValueOnce(retried.promise);
+  search("missing");
+  const originalInput = input();
+  const originalSubmit = submitButton();
+  await waitText("index unavailable");
+  update({ connected: false, connectionEpoch: 2 });
+  expect(retry()?.disabled).toBe(true);
+  retry()?.click();
+  expect(request).toHaveBeenCalledTimes(1);
+  update({ connected: true, connectionEpoch: 3 });
+  expect(retry()?.disabled).toBe(false);
+  retry()?.click();
+  await waitText("Searching");
+  expect(element.textContent).not.toContain("index unavailable");
+  expect(input()).toBe(originalInput);
+  expect(submitButton()).toBe(originalSubmit);
+  expect(originalSubmit?.disabled).toBe(true);
+  retried.resolve(searchResponse([], { provider: "none", searchMode: "fts-only" }));
+  await waitText("No memories matched");
+  expect(element.textContent).toContain("keyword search");
+  expect(originalSubmit?.disabled).toBe(false);
+});
+
+it("shares pending and loaded files across matches while keeping each row's highlight", async () => {
+  const second = { ...result, startLine: 1, endLine: 1 };
+  const third = { ...second, path: "memory/projects/Open Claw.md" };
+  const pending = deferred<unknown>();
+  request
+    .mockResolvedValueOnce(searchResponse([result, second, third]))
+    .mockImplementation((_method, params) =>
+      params.path === result.path
+        ? pending.promise
+        : Promise.resolve(memoryFileResponse("Another memory file")),
     );
-    expect(element.querySelectorAll("article")).toHaveLength(0);
-    expect.soft(readText(), "stale result warning").toContain(warning);
-    expect.soft(readText(), "agent-scoped recovery guidance").toContain(action);
+  search();
+  await waitForSolid(() => expect(element.querySelectorAll("article")).toHaveLength(3));
+  const expanded = () => [...rows()].map((button) => button.getAttribute("aria-expanded"));
+  clickRow();
+  await waitText("Loading the full memory file");
+  clickRow(1);
+  expect(expanded()).toEqual(["false", "true", "false"]);
+  expect(fileReads()).toHaveLength(1);
+  pending.resolve(memoryFileResponse(`${matchedContent}\nfourth`));
+  await waitMatch("first");
+  clickRow();
+  expect(match()).toBe("matched two\nmatched three");
+  clickRow();
+  clickRow();
+  expect(fileReads()).toHaveLength(1);
+  const fileParams = { agentId: "main", path: result.path };
+  expect(request).toHaveBeenCalledWith("agents.workspace.get", fileParams);
+  clickRow(2);
+  expect(expanded()).toEqual(["false", "false", "true"]);
+  expect(rows()[2]?.getAttribute("aria-controls")).toBe("memory-detail-2");
+  expect(element.querySelector("#memory-detail-2")).not.toBeNull();
+  expect(fileReads()).toHaveLength(2);
+});
 
-    search(element, "Ada fresh");
-    await waitForSolid(() => expect(readText()).toContain(fresh.snippet));
-    expect(readText()).not.toContain(warning);
-    expect(readText()).not.toContain(action);
-  });
+it("keeps session, absolute, and escaping paths non-expandable", async () => {
+  const nonExpandable = [
+    { ...result, path: "sessions/main/session-1.jsonl", source: "sessions" as const },
+    { ...result, path: "sessions/main/mislabeled.jsonl" },
+    { ...result, path: "/external/MEMORY.md" },
+    { ...result, path: "C:\\external\\MEMORY.md" },
+    { ...result, path: "memory/../outside.md" },
+  ];
+  request.mockResolvedValue(searchResponse([{ ...result, path: "MEMORY.md" }, ...nonExpandable]));
+  search("memory");
+  await waitForSolid(() => expect(element.querySelectorAll("article")).toHaveLength(6));
+  expect(element.querySelectorAll("article > button")).toHaveLength(1);
+  expect(element.querySelectorAll("article > div.settings-row")).toHaveLength(5);
+  expect(fileReads()).toHaveLength(0);
+});
+
+it("keeps results and the query through a same-identity reconnect and retries interrupted reads", async () => {
+  request
+    .mockResolvedValueOnce(searchResponse([result]))
+    .mockRejectedValueOnce(new Error("gateway closed"))
+    .mockResolvedValueOnce(memoryFileResponse(matchedContent));
+  search();
+  await openResult();
+  await waitText("Could not load this memory file: gateway closed");
+  expectText(element, [result.snippet], ["Memory search failed"]);
+  update({ connected: false, connectionEpoch: 2 });
+  expect(submitButton()?.disabled).toBe(true);
+  update({ connected: true, connectionEpoch: 3 });
+  expect(input().value).toBe("Ada");
+  expect(element.textContent).toContain(result.snippet);
+  expect(request.mock.calls.filter(([method]) => method === "memory.search")).toHaveLength(1);
+
+  clickRow();
+  clickRow();
+  await waitMatch("matched two\nmatched three");
+  expect(fileReads()).toHaveLength(2);
+});
+
+it("shows stale guidance alongside empty results and clears it after a fresh search", async () => {
+  const warning =
+    "Memory index is stale: index scope changed (owner: configuration, code: scope). Search results may be incomplete.";
+  const action =
+    "Run: openclaw memory status --index --agent main. Rebuilding uses keyword indexing only and does not call an embedding provider.";
+  const fresh = { ...result, snippet: "Freshly indexed Ada prefers careful reviews." };
+  request
+    .mockResolvedValueOnce(
+      searchResponse([], {
+        provider: "none",
+        searchMode: "fts-only",
+        stale: true,
+        warning,
+        action,
+      }),
+    )
+    .mockResolvedValueOnce(searchResponse([fresh], { provider: "none", searchMode: "fts-only" }));
+  search();
+  await waitText("No memories matched");
+  const readText = () => (element.textContent ?? "").replace(/\s+/gu, " ").trim();
+  expect(element.querySelectorAll("article")).toHaveLength(0);
+  expect.soft(readText(), "stale result warning").toContain(warning);
+  expect.soft(readText(), "agent-scoped recovery guidance").toContain(action);
+  search("Ada fresh");
+  await waitForSolid(() => expect(readText()).toContain(fresh.snippet));
+  expect(readText()).not.toContain(warning);
+  expect(readText()).not.toContain(action);
 });

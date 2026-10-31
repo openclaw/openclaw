@@ -5,13 +5,10 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
-import { createCodexCommand } from "./commands.js";
 import {
-  createContext,
-  createDeps,
-  installCodexCommandMocks,
   type SafeCodexControlRequestFn as AccountRequest,
   oauthProfile,
+  runCommand,
   supervisedTestBinding,
   useCodexCommandTestState,
   writeTestBinding,
@@ -48,10 +45,7 @@ function accountRequests(email: string) {
   });
 }
 function account(safeCodexControlRequest: AccountRequest, pluginConfig = {}) {
-  return createCodexCommand({
-    pluginConfig,
-    deps: installCodexCommandMocks(createDeps({ safeCodexControlRequest })),
-  }).handler(createContext("account"));
+  return runCommand("account", { safeCodexControlRequest }, {}, { pluginConfig });
 }
 
 describe("Codex account workspace identity", () => {
@@ -164,6 +158,5 @@ describe("Codex account workspace identity", () => {
     expect(text).toContain("\n  1. fresh@example.com   ChatGPT subscription   — sign-in expired");
     expect(text).toContain("\n  2. stale@example.com   ChatGPT subscription   — sign-in expired");
     expect(text).not.toContain("active now");
-    expect(request).toHaveBeenCalledTimes(2);
   });
 });

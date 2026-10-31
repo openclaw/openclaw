@@ -138,7 +138,7 @@ export async function repairDoctorAgentDeletionJournal(params: {
       }
       if (isReservedSystemAgentId(target.agentId)) {
         return sanitizeForLog(
-          `${target.path}: ${target.agentId} is a reserved system agent and cannot be added or deleted. Its store remains untouched; review its deletion recovery receipt, then run ${formatCliCommand("openclaw doctor --fix", params.env)}.`,
+          `${target.path}: ${target.agentId} is a reserved system agent and cannot be added or deleted. Run ${formatCliCommand("openclaw doctor --fix", params.env)} to restore its canonical store after ownership, integrity, and backup verification; unverified stores remain untouched.`,
         );
       }
       const workspace = resolveAgentWorkspaceDir(snapshot.sourceConfig, target.agentId, params.env);
@@ -155,7 +155,7 @@ export async function repairDoctorAgentDeletionJournal(params: {
     }),
     ...(missing && !params.shouldRepair
       ? [
-          `Run ${formatCliCommand("openclaw doctor --fix", params.env)} to reconstruct the journal and restore qualifying stores from affected published builds automatically after verified backups. Other stores remain held.`,
+          `Run ${formatCliCommand("openclaw doctor --fix", params.env)} to reconstruct the journal and restore verified configured stores automatically after verified backups. Other stores remain held.`,
         ]
       : []),
   ];

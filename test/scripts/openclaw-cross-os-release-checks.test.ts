@@ -41,7 +41,7 @@ import {
   isImmutableReleaseRef,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
-  managedGatewayRestartCommandTimeoutMs,
+  managedGatewayStartupCommandTimeoutMs,
   normalizeRequestedRef,
   parsePackagedUpgradeUpdateTimings,
   parsePositiveIntegerEnv,
@@ -415,7 +415,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("requires dashboard root markers and same-origin asset URLs", () => {
     const html = [
       "<title>OpenClaw Control</title>",
-      "<openclaw-app></openclaw-app>",
+      '<openclaw-app><main id="openclaw-boot-shell"></main></openclaw-app>',
       '<link rel="stylesheet" href="/assets/index.css">',
       '<script type="module" src="assets/index.js"></script>',
       '<script type="module" src="https://example.com/assets/ignored.js"></script>',
@@ -453,10 +453,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
     expect(CROSS_OS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(180_000);
     expect(CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(300_000);
-    expect(managedGatewayRestartCommandTimeoutMs("win32")).toBeGreaterThan(
+    expect(managedGatewayStartupCommandTimeoutMs("win32")).toBeGreaterThan(
       CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
     );
-    expect(managedGatewayRestartCommandTimeoutMs("linux")).toBeGreaterThan(
+    expect(managedGatewayStartupCommandTimeoutMs("linux")).toBeGreaterThan(
       CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
     );
   });

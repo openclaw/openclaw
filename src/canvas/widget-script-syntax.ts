@@ -1,15 +1,6 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getLineInfo, parse } from "acorn";
 import { decodeHTMLAttribute } from "entities";
-
-type WidgetScriptSyntaxError = {
-  message: string;
-  /** Location in the supplied widget_code: 1-based line, 0-based UTF-16 column. */
-  line: number;
-  column: number;
-  snippet: string;
-  /** 1-based index among all scanned script elements, including skipped scripts. */
-  scriptIndex: number;
-};
 
 /** JavaScript MIME type essences per https://mimesniff.spec.whatwg.org/#javascript-mime-type. */
 const JAVASCRIPT_MIME_ESSENCES = new Set([
@@ -115,9 +106,7 @@ function findRawTextEnd(html: string, start: number, name: string, foreign: bool
  * are intentionally not modeled; such input yields an explicit tool error, never a hosted widget
  * with a script that cannot run.
  */
-export function findWidgetScriptSyntaxError(
-  widgetCode: string,
-): WidgetScriptSyntaxError | undefined {
+export function findWidgetScriptSyntaxError(widgetCode: string) {
   const tagPattern = /<\/?([a-z][^\t\n\f\r />]*)/iy;
   let position = 0;
   let scriptIndex = 0;
@@ -204,14 +193,17 @@ export function findWidgetScriptSyntaxError(
       }
       const offset = bodyStart + error.pos;
       const { line, column } = getLineInfo(widgetCode, offset);
-      const snippet = (widgetCode.slice(offset - column).split(/[\r\n\u2028\u2029]/u, 1)[0] ?? "")
-        .trim()
-        .slice(0, 160);
+      const snippet = truncateUtf16Safe(
+        (widgetCode.slice(offset - column).split(/[\r\n\u2028\u2029]/u, 1)[0] ?? "").trim(),
+        160,
+      );
       return {
-        message: error.message.replace(/ \(\d+:\d+\)$/u, "").slice(0, 200),
+        message: truncateUtf16Safe(error.message.replace(/ \(\d+:\d+\)$/u, ""), 200),
+        /** Location in the supplied widget_code: 1-based line, 0-based UTF-16 column. */
         line,
         column,
         snippet,
+        /** 1-based index among all scanned script elements, including skipped scripts. */
         scriptIndex,
       };
     }

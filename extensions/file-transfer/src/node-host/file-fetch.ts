@@ -1,11 +1,13 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
 import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { FsSafeError, root } from "openclaw/plugin-sdk/security-runtime";
 import {
+  FILE_FETCH_CHUNK_BYTES,
   FILE_FETCH_DEFAULT_MAX_BYTES,
   FILE_FETCH_HARD_MAX_BYTES,
   readFileFetchBinaryMaxBytes,
@@ -16,7 +18,6 @@ import {
   readPathBinding,
   type PathBinding,
 } from "../shared/path-binding.js";
-import { streamFetchedFile } from "./file-fetch-stream.js";
 import {
   createReadErrorClassifier,
   readAbsolutePath,
@@ -73,17 +74,6 @@ function isLikelyPlainText(buffer: Buffer): boolean {
     }
   }
   return controlBytes / sample.byteLength < 0.01;
-}
-
-async function detectFetchedFileMime(params: {
-  buffer: Buffer;
-  filePath: string;
-}): Promise<string> {
-  const detected = await detectMime(params);
-  if (detected) {
-    return detected;
-  }
-  return isLikelyPlainText(params.buffer) ? "text/plain" : "application/octet-stream";
 }
 
 export async function handleFileFetch(
@@ -200,23 +190,81 @@ export async function handleFileFetch(
           message: "binary file.fetch requires duplex IO and an authorized filesystem binding",
         };
       }
-      const receipt = await streamFetchedFile(opened.handle, maxBytes, io);
-      return {
-        ok: true as const,
-        path: opened.realPath,
-        ...receipt,
-        transport: "binary" as const,
-        mimeType: "",
-        base64: "",
-        binding: { kind: "existing", ...identity } satisfies PathBinding,
-      };
+      const frames = io.frames;
+      if (!frames) {
+        throw new Error("binary file.fetch requires framed duplex IO");
+      }
+      io.signal.throwIfAborted();
+      let expected: "start" | "ack" | undefined = "start";
+      let receipt = createDeferred<void>();
+      void receipt.promise.catch(() => {});
+      const onAbort = () => receipt.reject(io.signal.reason);
+      io.signal.addEventListener("abort", onAbort, { once: true });
+      let unsubscribe: (() => void) | undefined;
+      try {
+        unsubscribe = frames.onMessage((message) => {
+          if (!expected || Buffer.from(message).toString("utf8") !== expected) {
+            const error = new Error("Unexpected file.fetch stream control");
+            receipt.reject(error);
+            throw error;
+          }
+          expected = undefined;
+          receipt.resolve();
+        });
+        // Readiness is sent by onMessage. Do not send bytes until the caller subscribes.
+        io.signal.throwIfAborted();
+        await receipt.promise;
+        const chunk = Buffer.allocUnsafe(FILE_FETCH_CHUNK_BYTES);
+        const hash = crypto.createHash("sha256");
+        let size = 0;
+        while (true) {
+          io.signal.throwIfAborted();
+          const { bytesRead } = await opened.handle.read(
+            chunk,
+            0,
+            Math.min(chunk.length, maxBytes - size + 1),
+          );
+          io.signal.throwIfAborted();
+          if (!bytesRead) {
+            return {
+              ok: true as const,
+              path: opened.realPath,
+              size,
+              sha256: hash.digest("hex"),
+              transport: "binary" as const,
+              mimeType: "",
+              base64: "",
+              binding: { kind: "existing", ...identity } satisfies PathBinding,
+            };
+          }
+          size += bytesRead;
+          if (size > maxBytes) {
+            throw Object.assign(new Error("file grew beyond the authorized byte limit"), {
+              code: "FILE_TOO_LARGE",
+            });
+          }
+          const bytes = chunk.subarray(0, bytesRead);
+          hash.update(bytes);
+          receipt = createDeferred<void>();
+          // Observe rejection if abort happens while send is still pending.
+          void receipt.promise.catch(() => {});
+          expected = "ack";
+          await frames.send(bytes);
+          await receipt.promise;
+        }
+      } finally {
+        unsubscribe?.();
+        io.signal.removeEventListener("abort", onAbort);
+      }
     }
 
     const buffer = await readFileHandleBounded(opened.handle, maxBytes);
 
     const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
     const base64 = buffer.toString("base64");
-    const mimeType = await detectFetchedFileMime({ buffer, filePath: opened.realPath });
+    const detectedMime = await detectMime({ buffer, filePath: opened.realPath });
+    const mimeType =
+      detectedMime || (isLikelyPlainText(buffer) ? "text/plain" : "application/octet-stream");
 
     return {
       ok: true as const,

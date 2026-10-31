@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { resolveNpmJsonEntries } from "../scripts/lib/npm-json-output.mts";
 import {
   generatePluginNpmPackageLockWithRetry,
   resolveAugmentedPluginNpmPackageJson as resolvePackageJson,
@@ -26,6 +27,11 @@ import {
 import { resolveNpmRunner } from "../scripts/npm-runner.mts";
 import { hasChannelPackageState } from "../src/channels/plugins/package-state-probes.js";
 import type { PluginManifest } from "../src/plugins/manifest-types.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { writeJsonFile } from "./helpers/temp-repo.js";
 
@@ -74,7 +80,7 @@ function runChecked(
   options: Omit<SpawnSyncOptions, "encoding"> = {},
 ) {
   const result = spawnSync(command, args, { ...options, encoding: "utf8" });
-  expect(result.status, result.stderr).toBe(0);
+  expect(result.status, result.error?.message ?? result.stderr).toBe(0);
   return result.stdout;
 }
 
@@ -136,36 +142,21 @@ const npmPackResultSchema = z.object({
 });
 
 function parseNpmPackResult(stdout: string): NpmPackResult {
-  const parsed = JSON.parse(stdout) as unknown;
-  const candidates = Array.isArray(parsed)
-    ? parsed
-    : parsed && typeof parsed === "object" && "files" in parsed
-      ? [parsed]
-      : parsed && typeof parsed === "object"
-        ? Object.values(parsed)
-        : [];
-  return npmPackResultSchema.parse(candidates[0]);
+  return npmPackResultSchema.parse(resolveNpmJsonEntries(JSON.parse(stdout))[0]);
 }
 
 function runNpm(packageDir: string, npmArgs: string[]) {
   const invocation = resolveNpmRunner({ npmArgs });
-  return spawnSync(invocation.command, invocation.args, {
+  return runChecked(invocation.command, invocation.args, {
     ...invocation,
     cwd: packageDir,
-    encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
 
 function listNpmPackDryRunFiles(packageDir: string): string[] {
   const result = runNpm(packageDir, ["pack", "--dry-run", "--json", "--ignore-scripts"]);
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    throw new Error(result.stderr.trim() || `npm pack failed with exit ${result.status}`);
-  }
-  return parseNpmPackResult(result.stdout).files.map((entry) => entry.path);
+  return parseNpmPackResult(result).files.map((entry) => entry.path);
 }
 
 function makePublishableFixture(label: string, runtime = true) {
@@ -267,27 +258,34 @@ function writeQaGatewayFixture(id: "qa-lab" | "qa-channel") {
   };
 }
 
-function packRegistryPackage(dependencyDir: string, destination: string) {
-  const manifest = JSON.parse(readText(dependencyDir, "package.json"));
-  const inputKey = JSON.stringify(
-    ["package.json", "index.js"].map((file) => readText(dependencyDir, file)),
-  );
-  let artifact = registryDependencyArtifacts.get(inputKey);
-  if (!artifact) {
-    const pack = runNpm(dependencyDir, packArgs(destination));
-    expect(pack.status, pack.stderr).toBe(0);
-    const tarball = readFileSync(join(destination, parseNpmPackResult(pack.stdout).filename));
-    artifact = {
-      tarball,
-      integrity: `sha512-${createHash("sha512").update(tarball).digest("base64")}`,
-    };
-    registryDependencyArtifacts.set(inputKey, artifact);
+function packRegistryPackages(dependencyDirs: string[], destination: string) {
+  const inputs = dependencyDirs.map((dependencyDir) => {
+    const sources = ["package.json", "index.js"].map((file) => readText(dependencyDir, file));
+    return { dependencyDir, manifest: JSON.parse(sources[0]!), inputKey: JSON.stringify(sources) };
+  });
+  const missing = inputs.filter(({ inputKey }) => !registryDependencyArtifacts.has(inputKey));
+  if (missing.length > 0) {
+    const pack = runNpm(destination, [
+      ...packArgs(destination),
+      ...missing.map(({ dependencyDir }) => dependencyDir),
+    ]);
+    const packed = z
+      .array(npmPackResultSchema.extend({ name: z.string(), version: z.string() }))
+      .parse(resolveNpmJsonEntries(JSON.parse(pack)));
+    expect(packed).toHaveLength(missing.length);
+    for (const [index, { inputKey, manifest }] of missing.entries()) {
+      expect(packed[index]).toMatchObject({ name: manifest.name, version: manifest.version });
+      const tarball = readFileSync(join(destination, packed[index]!.filename));
+      registryDependencyArtifacts.set(inputKey, {
+        tarball,
+        integrity: `sha512-${createHash("sha512").update(tarball).digest("base64")}`,
+      });
+    }
   }
-  return {
-    manifest,
-    tarball: Buffer.from(artifact.tarball),
-    integrity: artifact.integrity,
-  };
+  return inputs.map(({ manifest, inputKey }) => {
+    const artifact = registryDependencyArtifacts.get(inputKey)!;
+    return { manifest, tarball: Buffer.from(artifact.tarball), integrity: artifact.integrity };
+  });
 }
 
 function writePatchedRuntimeFixture(bundling = "default") {
@@ -298,7 +296,7 @@ function writePatchedRuntimeFixture(bundling = "default") {
   const depsDir = join(packageDir, "deps");
   writeDependency(depsDir, "local-runtime-dep", "1.0.0", 1);
   const packRegistryDependency = (name: string) =>
-    packRegistryPackage(join(packageDir, "deps", name), repoDir);
+    packRegistryPackages([join(packageDir, "deps", name)], repoDir)[0]!;
   const artifacts = [packRegistryDependency("local-runtime-dep")];
   if (bundling === "nested-other") {
     writeDependency(depsDir, "local-runtime-dep", "2.0.0", 20);
@@ -469,35 +467,33 @@ function writePatchedRuntimeFixture(bundling = "default") {
   };
 }
 
-function createRegistryServer(
+async function withRegistry<T>(
+  repoDir: string,
   artifacts: ReturnType<typeof writePatchedRuntimeFixture>["artifacts"],
+  run: (env: NodeJS.ProcessEnv) => Promise<T>,
 ) {
   const server = createServer((request, response) => {
-    const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
     const versions = artifacts.filter(({ manifest }) => request.url === `/${manifest.name}`);
     const tarball = artifacts.find(
       ({ manifest }) => request.url === `/${manifest.name}-${manifest.version}.tgz`,
     );
     if (versions.length > 0) {
-      response.setHeader("content-type", "application/json");
-      response.end(
-        JSON.stringify({
-          name: versions[0]?.manifest.name,
-          "dist-tags": { latest: versions.at(-1)?.manifest.version },
-          versions: Object.fromEntries(
-            versions.map(({ manifest, integrity }) => [
-              manifest.version,
-              {
-                ...manifest,
-                dist: {
-                  tarball: `${endpoint}/${manifest.name}-${manifest.version}.tgz`,
-                  integrity,
-                },
+      respondJson(response, {
+        name: versions[0]?.manifest.name,
+        "dist-tags": { latest: versions.at(-1)?.manifest.version },
+        versions: Object.fromEntries(
+          versions.map(({ manifest, integrity }) => [
+            manifest.version,
+            {
+              ...manifest,
+              dist: {
+                tarball: `${endpoint}/${manifest.name}-${manifest.version}.tgz`,
+                integrity,
               },
-            ]),
-          ),
-        }),
-      );
+            },
+          ]),
+        ),
+      });
     } else if (tarball) {
       response.end(tarball.tarball);
     } else {
@@ -505,28 +501,15 @@ function createRegistryServer(
       response.end();
     }
   });
-  return server;
-}
-
-async function withRegistry<T>(
-  repoDir: string,
-  versions: ReturnType<typeof writePatchedRuntimeFixture>["artifacts"],
-  run: (env: NodeJS.ProcessEnv) => Promise<T>,
-) {
-  const server = createRegistryServer(versions);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const endpoint = await listenLoopback(server);
   try {
     return await run({
       ...process.env,
-      npm_config_registry: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+      npm_config_registry: endpoint,
       npm_config_cache: join(repoDir, "npm-cache"),
     });
   } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await closeHttpServer(server);
   }
 }
 
@@ -652,6 +635,11 @@ it.each(["providerCatalogEntry", "capabilityCatalogEntry"] as const)(
       id: "twitch",
       [catalogField]: "./catalog.ts",
       channels: ["twitch"],
+      controlUi: {
+        entry: "dist/control-ui/fixture/index.js",
+        activation: "settings-only",
+        settingsViews: [{ section: "channels", panel: "detail", channelId: "twitch" }],
+      },
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     };
     writeJsonFile(join(packageDir, "openclaw.plugin.json"), sourceManifest);
@@ -933,8 +921,7 @@ it.for([
       writeJsonFile(join(consumerDir, "package.json"), { private: true, type: "module" });
 
       const pack = runNpm(packageDir, packArgs(consumerDir));
-      expect(pack.status, pack.stderr).toBe(0);
-      const packedPackage = parseNpmPackResult(pack.stdout);
+      const packedPackage = parseNpmPackResult(pack);
       const packedFiles = packedPackage.files.map((file) => file.path);
       expectPackageFiles(
         packedFiles,
@@ -1314,14 +1301,21 @@ it("installs bundled dependencies whose shared node npm reloads under another ov
   };
   const tarballDir = join(repoDir, "tarballs");
   mkdirSync(tarballDir, { recursive: true });
-  const artifacts = Object.entries(manifests).map(([key, dependencies]) => {
+  const sourceDirs = Object.entries(manifests).map(([key, dependencies]) => {
     const [name = "", version = ""] = key.split("@");
     const manifest = { name, version, main: "index.js", dependencies };
     const sourceDir = join(repoDir, "registry-src", key);
     writeJsonFile(join(sourceDir, "package.json"), manifest);
     writeFileText(join(sourceDir, "index.js"), "module.exports = true;\n");
-    return packRegistryPackage(sourceDir, tarballDir);
+    return sourceDir;
   });
+  // npm 12 keys pack JSON by name, so pack the fixture's versions separately.
+  const artifacts = ["1.0.0", "1.1.0"].flatMap((version) =>
+    packRegistryPackages(
+      sourceDirs.filter((dir) => dir.endsWith(`@${version}`)),
+      tarballDir,
+    ),
+  );
   writeJsonFile(join(packageDir, "package.json"), {
     ...readPackageJson(packageDir),
     dependencies: { parent: "1.0.0", modern: "1.0.0" },

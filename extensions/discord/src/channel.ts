@@ -41,9 +41,6 @@ import { getDiscordApprovalCapability } from "./approval-native.js";
 import { resolveRequiredDiscordChannelPermissions } from "./audit-core.js";
 import { discordMessageActions } from "./channel-actions.js";
 import {
-  buildDiscordCrossContextPresentation,
-  matchDiscordAcpConversation,
-  normalizeDiscordAcpConversationId,
   resolveDiscordAttachedOutboundTarget,
   resolveDiscordCommandConversation,
   resolveDiscordInboundConversation,
@@ -74,7 +71,7 @@ import {
   matchesDiscordToolContextTarget,
   normalizeDiscordMessagingTarget,
 } from "./normalize.js";
-import { discordOutbound } from "./outbound-adapter.js";
+import { discordOutbound } from "./outbound-payload.js";
 import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
 import type { DiscordProbe } from "./probe.js";
 import { getDiscordRuntime } from "./runtime.js";
@@ -195,7 +192,21 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
         normalizeExplicitSessionKey: ({ sessionKey, ctx }) =>
           normalizeExplicitDiscordSessionKey(sessionKey, ctx),
         resolveSessionTarget: ({ id }) => normalizeDiscordMessagingTarget(`channel:${id}`),
-        buildCrossContextPresentation: buildDiscordCrossContextPresentation,
+        buildCrossContextPresentation: ({ originLabel, message }) => {
+          const trimmed = message.trim();
+          return {
+            tone: "neutral" as const,
+            blocks: [
+              ...(trimmed
+                ? ([
+                    { type: "text" as const, text: message },
+                    { type: "divider" as const },
+                  ] as const)
+                : []),
+              { type: "context" as const, text: `From ${originLabel}` },
+            ],
+          };
+        },
         resolveOutboundSessionRoute: resolveDiscordOutboundSessionRoute,
         targetResolver: {
           looksLikeId: looksLikeDiscordTargetId,
@@ -292,14 +303,27 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
       },
       actions: discordMessageActions,
       bindings: {
-        compileConfiguredBinding: ({ conversationId }) =>
-          normalizeDiscordAcpConversationId(conversationId),
-        matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
-          matchDiscordAcpConversation({
-            bindingConversationId: compiledBinding.conversationId,
-            conversationId,
-            parentConversationId,
-          }),
+        compileConfiguredBinding: ({ conversationId }) => {
+          const normalized = conversationId.trim();
+          return normalized ? { conversationId: normalized } : null;
+        },
+        matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) => {
+          const bindingConversationId = compiledBinding.conversationId;
+          if (bindingConversationId === conversationId) {
+            return { conversationId, matchPriority: 2 };
+          }
+          if (
+            parentConversationId &&
+            parentConversationId !== conversationId &&
+            bindingConversationId === parentConversationId
+          ) {
+            return {
+              conversationId: parentConversationId,
+              matchPriority: 1,
+            };
+          }
+          return null;
+        },
         resolveCommandConversation: resolveDiscordCommandConversation,
       },
       conversationBindings: discordConversationBindings,
@@ -321,7 +345,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
         probeAccount: async ({ account, timeoutMs }) =>
           await probeDiscordStatusAccount({ token: account.token, timeoutMs }),
         formatCapabilitiesProbe: ({ probe }) => {
-          const discordProbe = probe as DiscordProbe | undefined;
+          const discordProbe = probe;
           const lines = [];
           if (discordProbe?.bot?.username) {
             const botId = discordProbe.bot.id ? ` (${discordProbe.bot.id})` : "";
@@ -342,7 +366,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
           if (!target?.trim()) {
             return undefined;
           }
-          const parsedTarget = parseDiscordTarget(target.trim(), { defaultKind: "channel" });
+          const parsedTarget = parseDiscordTarget(target, { defaultKind: "channel" });
           const details: Record<string, unknown> = {
             target: {
               raw: target,
@@ -564,7 +588,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
               `[${account.accountId}] Discord command deploy cache unavailable; continuing without persistence: ${formatErrorMessage(error)}`,
             );
           }
-          return (await loadDiscordProviderRuntime()).monitorDiscordProvider({
+          await (
+            await loadDiscordProviderRuntime()
+          ).monitorDiscordProvider({
             scheduler: ctx.scheduler,
             token,
             accountId: account.accountId,

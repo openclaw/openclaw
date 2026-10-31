@@ -28,11 +28,7 @@ export function recordChannelBotPairLoopAndCheckSuppression(
     senderId: params.senderId,
     receiverId: params.receiverId,
     eventId: params.eventId,
-    settings: resolvePairLoopGuardSettings({
-      config: params.config,
-      defaultsConfig: params.defaultsConfig,
-      defaultEnabled: params.defaultEnabled,
-    }),
+    settings: resolvePairLoopGuardSettings(params),
     nowMs: params.nowMs,
   });
 }

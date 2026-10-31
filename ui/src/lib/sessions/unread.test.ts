@@ -41,6 +41,18 @@ describe("SessionUnreadPatchGuard", () => {
     },
   );
 
+  it("reconsiders newer unread activity after a successful pending read", () => {
+    const guard = new SessionUnreadPatchGuard();
+    expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
+    const settle = guard.settlePatch();
+    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
+    expect(guard.shouldPatch("agent:main:a", true)).toBe(false);
+
+    settle(true);
+
+    expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
+  });
+
   it("keeps an acknowledgement latched across an optimistic local read", () => {
     const guard = new SessionUnreadPatchGuard();
     expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);

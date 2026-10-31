@@ -58,7 +58,11 @@ export function presentSessionRowTranscriptFields(
 }
 
 /** Optional transcript facts are published by the resident row owner. */
-export async function backfillSessionRowTranscriptFields(params: BackfillParams) {
+export async function backfillSessionRowTranscriptFields(
+  params: BackfillParams,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
   const { model: _model, sessionEntry: _sessionEntry, ...input } = params;
   const options = toDatabaseOptions(
     resolveSqliteTranscriptReadScope({
@@ -67,7 +71,10 @@ export async function backfillSessionRowTranscriptFields(params: BackfillParams)
     }),
   );
   const execution = captureOpenClawAgentDatabaseExecution(options);
-  const source = createSessionWorkerExecutionSource(() => {}, "Session row backfill retired");
+  const source = createSessionWorkerExecutionSource(
+    () => signal?.throwIfAborted(),
+    "Session row backfill retired",
+  );
   try {
     const fields = await runOpenClawAgentWorkerWrite(
       options,
@@ -76,7 +83,7 @@ export async function backfillSessionRowTranscriptFields(params: BackfillParams)
           worker.execute({ type: "session.rowTranscript.backfill", input }),
         ),
       undefined,
-      undefined,
+      signal,
       "background",
     );
     return fields ? presentSessionRowTranscriptFields(params, fields) : undefined;

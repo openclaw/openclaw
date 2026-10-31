@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { captureEnv } from "../../test-utils/env.js";
 import {
   createAccountScopedConversationBindingManager,
   createAccountScopedConversationBindingManagerV2,
@@ -55,11 +56,11 @@ function bindConversation(
 }
 
 describe("account-scoped conversation binding expiry", () => {
-  let previousStateDir: string | undefined;
+  let environment: ReturnType<typeof captureEnv>;
   let testStateDir = "";
 
   beforeEach(async () => {
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    environment = captureEnv(["OPENCLAW_STATE_DIR"]);
     testStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-account-bindings-"));
     process.env.OPENCLAW_STATE_DIR = testStateDir;
     resetAccountScopedConversationBindingsForTests({ stateKey });
@@ -70,11 +71,7 @@ describe("account-scoped conversation binding expiry", () => {
     resetAccountScopedConversationBindingsForTests({ stateKey });
     currentConversationBindingTesting.clearPersistedCurrentConversationBindingsForTests();
     await closeStateDatabaseForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
+    environment.restore();
     await fs.rm(testStateDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });

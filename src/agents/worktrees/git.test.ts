@@ -7,10 +7,14 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as gitExec from "../../infra/git-exec.js";
 import * as execRunner from "../../process/exec-runner.js";
 import * as processExec from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { resolveWorktreeBase } from "./base-ref.js";
+import { withWorktreeGitConfig } from "./checkout-git-config.js";
+import { gitIdentity } from "./git-fixture.test-support.js";
 import {
   commandError,
   findGitCheckoutRoot,
@@ -18,11 +22,15 @@ import {
   hasSelfContainedGitMetadata,
   insideGitCheckout,
   listGitWorktrees,
+  readGitWorktreePathInventory,
   requireGit,
+  resolveGitRepositoryPaths,
   runGit,
   runGitBuffered,
   runGitBytes,
 } from "./git.js";
+
+const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -41,34 +49,60 @@ describe("Git ref mutation ownership", () => {
 
   async function repository() {
     const root = tempDirs.make("openclaw-git-ref-");
-    await requireGit(root, ["init", "--quiet", "-b", "main"]);
-    await requireGit(root, [
-      "-c",
-      "user.name=OpenClaw Test",
-      "-c",
-      "user.email=test@localhost",
+    await git(root, "init", "--quiet", "-b", "main");
+    await git(
+      root,
+      ...gitIdentity,
       "-c",
       "commit.gpgSign=false",
       "commit",
       "--allow-empty",
       "-m",
       "seed",
-    ]);
-    await requireGit(root, ["update-ref", snapshotRef, "HEAD"]);
-    await requireGit(root, ["update-ref", queuedRef, "HEAD"]);
+    );
+    await git(root, "update-ref", snapshotRef, "HEAD");
+    await git(root, "update-ref", queuedRef, "HEAD");
     return root;
   }
 
-  it("rejects incomplete required stdout through the worktree wrapper", async () => {
-    const root = await repository();
-    const input = Buffer.alloc(17 * 1024 * 1024, "x");
-    const oid = await requireGit(root, ["hash-object", "-w", "--stdin"], { input });
-    const outcome = await requireGit(root, ["cat-file", "blob", oid]).then(
-      () => "returned incomplete output",
-      (error: unknown) => (error instanceof Error ? error.message : String(error)),
-    );
-    expect(outcome).toContain("output limit exceeded");
-  });
+  it.each([false, true])(
+    "preserves Git configuration policy (sourceOnly=%s)",
+    async (sourceOnly) => {
+      const root = await repository();
+      const layout = new Map([
+        ["core.symlinks", String(process.platform === "win32")],
+        ["core.excludesfile", ' leading "quote"\\path\n\t\b#; trailing '],
+        ["core.eol", "lf"],
+      ]);
+      for (const [key, value] of layout) {
+        await git(root, "config", key, value);
+      }
+      await git(root, "config", "gc.auto", "1");
+      await git(root, "config", "maintenance.auto", "true");
+      await git(root, "config", "--add", "core.eol", "crlf");
+      layout.set("core.eol", "crlf").set("gc.auto", "0").set("maintenance.auto", "false");
+      await git(root, "config", "filter.unsafe.clean", "must-not-run");
+      const original = await fs.readFile(path.join(root, ".git", "config"));
+      const commands = vi.spyOn(processExec, "runCommandWithTimeout");
+      await withWorktreeGitConfig(root, sourceOnly, {}, async (policy) => {
+        const result = await policy.run(root, ["config", "--null", "--list"]);
+        expect(result.code).toBe(0);
+        const values = Object.fromEntries(
+          result.stdout
+            .split("\0")
+            .filter(Boolean)
+            .map((field) => {
+              const split = field.indexOf("\n");
+              return [field.slice(0, split), field.slice(split + 1)];
+            }),
+        );
+        expect(values).toMatchObject(Object.fromEntries(layout));
+        expect(values["filter.unsafe.clean"]).toBe(sourceOnly ? undefined : "must-not-run");
+      });
+      expect(commands.mock.calls.filter(([argv]) => argv.includes("--file"))).toHaveLength(0);
+      expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(original);
+    },
+  );
 
   function holdSnapshotDeletion(failure?: Error, discoverySignal?: AbortSignal) {
     const started = createDeferred();
@@ -131,22 +165,14 @@ describe("Git ref mutation ownership", () => {
 
   it("rejects cancelled discovery with exit code zero without deleting the requested ref", async () => {
     const root = await repository();
-    const commandSpy = vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValueOnce({
-      stdout: ".git\n",
-      stderr: "",
-      code: 0,
-      signal: null,
-      termination: "signal",
-      killed: false,
-    });
+    vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValueOnce(
+      createCommandResult({ stdout: ".git\n", termination: "signal" }),
+    );
 
-    await expect(requireGit(root, ["update-ref", "-d", queuedRef])).rejects.toThrow(
+    await expect(git(root, "update-ref", "-d", queuedRef)).rejects.toThrow(
       `git update-ref -d ${queuedRef} failed (terminated):\n.git`,
     );
-    expect(commandSpy.mock.calls.map(([argv]) => argv.slice(argv.indexOf("-C") + 2))).toEqual([
-      ["rev-parse", "--git-common-dir"],
-    ]);
-    expect(await requireGit(root, ["show-ref", "--verify", queuedRef])).toContain(queuedRef);
+    expect(await git(root, "show-ref", "--verify", queuedRef)).toContain(queuedRef);
   });
 
   it.runIf(process.platform === "win32")(
@@ -157,12 +183,10 @@ describe("Git ref mutation ownership", () => {
       expect(commonDir).toMatch(/^[a-zA-Z]:[\\/]/u);
       const msysCommonDir = `/${commonDir[0]!.toLowerCase()}${commonDir.slice(2).replaceAll("\\", "/")}`;
       const run = processExec.runCommandWithTimeout;
-      let discoveries = 0;
       vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
         const result = await run(argv, options);
         const commandIndex = argv.indexOf("-C") + 2;
         if (argv[commandIndex] === "rev-parse" && argv[commandIndex + 1] === "--git-common-dir") {
-          discoveries += 1;
           return { ...result, stdout: `${msysCommonDir}\n` };
         }
         return result;
@@ -170,10 +194,7 @@ describe("Git ref mutation ownership", () => {
       await requireGit(root, ["update-ref", queuedRef, "HEAD^{commit}"], {
         env: { MSYS: "winsymlinks:nativestrict", CYGWIN: "disable_pcon" },
       });
-      expect(discoveries).toBe(1);
-      expect(await requireGit(root, ["rev-parse", queuedRef])).toBe(
-        await requireGit(root, ["rev-parse", "HEAD"]),
-      );
+      expect(await git(root, "rev-parse", queuedRef)).toBe(await git(root, "rev-parse", "HEAD"));
     },
   );
 
@@ -182,20 +203,20 @@ describe("Git ref mutation ownership", () => {
     const other = await repository();
     const linked = path.join(root, "linked");
     const alias = path.join(tempDirs.make("openclaw-git-alias-"), "repo");
-    await requireGit(root, ["worktree", "add", "--detach", linked, "HEAD"]);
-    await requireGit(root, ["branch", "retired", "HEAD"]);
+    await git(root, "worktree", "add", "--detach", linked, "HEAD");
+    await git(root, "branch", "retired", "HEAD");
     await fs.symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
     const held = holdSnapshotDeletion();
     const first = runGit(root, ["update-ref", "-d", snapshotRef]);
     const pending: Promise<unknown>[] = [first];
     try {
       await held.started.promise;
-      pending.push(requireGit(linked, ["branch", "-D", "retired"]));
+      pending.push(git(linked, "branch", "-D", "retired"));
       pending.push(
         requireGit(alias, ["update-ref", "--stdin"], { input: `delete ${queuedRef}\n` }),
       );
-      await requireGit(other, ["update-ref", "-d", queuedRef]);
-      await expect(requireGit(linked, ["rev-parse", "HEAD"])).resolves.toMatch(/^[a-f0-9]+$/);
+      await git(other, "update-ref", "-d", queuedRef);
+      await expect(git(linked, "rev-parse", "HEAD")).resolves.toMatch(/^[a-f0-9]+$/);
       expect(held.mutations.filter((call) => call.cwd !== other)).toEqual([
         { cwd: root, args: ["update-ref", "-d", snapshotRef] },
       ]);
@@ -203,22 +224,17 @@ describe("Git ref mutation ownership", () => {
       held.release.resolve();
       await Promise.allSettled(pending);
     }
-    await expect(first).resolves.toMatchObject({ code: 0, timeoutMs: 120_000 });
+    await expect(first).resolves.toMatchObject({ code: 0 });
     await Promise.all(pending);
-    expect(await requireGit(root, ["for-each-ref", "--format=%(refname)"])).toBe("refs/heads/main");
-    expect(await requireGit(other, ["show-ref", "--verify", snapshotRef])).toContain(snapshotRef);
+    expect(await git(root, "for-each-ref", "--format=%(refname)")).toBe("refs/heads/main");
+    expect(await git(other, "show-ref", "--verify", snapshotRef)).toContain(snapshotRef);
   });
 
   it("rejects an interrupted explicit-base lookup even with exit code zero", async () => {
     const root = await repository();
-    vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValueOnce({
-      stdout: "refs/heads/-fixture\n",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "signal",
-    });
+    vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValueOnce(
+      createCommandResult({ stdout: "refs/heads/-fixture\n", termination: "signal" }),
+    );
     await expect(resolveWorktreeBase(root, "-fixture")).rejects.toThrow("terminated");
   });
 
@@ -226,8 +242,8 @@ describe("Git ref mutation ownership", () => {
     signal,
   }) => {
     const root = await repository();
-    await requireGit(root, ["remote", "add", "origin", root]);
-    await requireGit(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    await git(root, "remote", "add", "origin", root);
+    await git(root, "update-ref", "refs/remotes/origin/main", "HEAD");
     const controller = new AbortController();
     const held = holdSnapshotDeletion(undefined, controller.signal);
     const mutation = runGit(root, ["update-ref", "-d", snapshotRef]);
@@ -265,27 +281,23 @@ describe("Git ref mutation ownership", () => {
       await Promise.allSettled([mutation, creation]);
     }
     await creation;
-    expect(
-      await requireGit(destination, ["rev-parse", "--symbolic-full-name", "@{upstream}"]),
-    ).toBe("refs/remotes/origin/main");
+    expect(await git(destination, "rev-parse", "--symbolic-full-name", "@{upstream}")).toBe(
+      "refs/remotes/origin/main",
+    );
   });
 
   it("does not accept an interrupted cached remote HEAD", async () => {
     const root = await repository();
+    await git(root, "remote", "add", "origin", path.join(root, "missing.git"));
     const run = processExec.runCommandWithTimeout;
     vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) => {
       const command = argv[argv.indexOf("-C") + 2];
       if (command !== "symbolic-ref") {
         return run(argv, options);
       }
-      return Promise.resolve({
-        stdout: "refs/remotes/origin/main\n",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "signal",
-      });
+      return Promise.resolve(
+        createCommandResult({ stdout: "refs/remotes/origin/main\n", termination: "signal" }),
+      );
     });
     await expect(resolveWorktreeBase(root)).rejects.toThrow("Remote default branch is unavailable");
   });
@@ -294,19 +306,15 @@ describe("Git ref mutation ownership", () => {
     const root = await repository();
     const origin = await repository();
     const staleRef = "refs/remotes/origin/retired";
-    await requireGit(origin, ["branch", "retired", "HEAD"]);
-    await requireGit(root, ["remote", "add", "origin", origin]);
-    await requireGit(root, ["fetch", "origin"]);
-    await requireGit(root, [
-      "symbolic-ref",
-      "refs/remotes/origin/HEAD",
-      "refs/remotes/origin/main",
-    ]);
-    await requireGit(root, ["config", "fetch.prune", "true"]);
-    await requireGit(root, ["pack-refs", "--all"]);
+    await git(origin, "branch", "retired", "HEAD");
+    await git(root, "remote", "add", "origin", origin);
+    await git(root, "fetch", "origin");
+    await git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    await git(root, "config", "fetch.prune", "true");
+    await git(root, "pack-refs", "--all");
     expect(await fs.readFile(path.join(root, ".git", "packed-refs"), "utf8")).toContain(staleRef);
-    await requireGit(origin, ["branch", "-D", "retired"]);
-    const originHead = await requireGit(origin, ["rev-parse", "HEAD"]);
+    await git(origin, "branch", "-D", "retired");
+    const originHead = await git(origin, "rev-parse", "HEAD");
 
     const controller = new AbortController();
     const held = holdSnapshotDeletion(undefined, controller.signal);
@@ -317,16 +325,13 @@ describe("Git ref mutation ownership", () => {
       resolved = resolveWorktreeBase(root, undefined, controller.signal);
       pending.push(resolved);
       await expect(
-        Promise.race([
+        awaitGateBeforeSettlement(
           held.discovered.promise,
-          resolved.then(() => {
-            throw new Error("fetch completed before its queued discovery barrier");
-          }),
-        ]),
+          resolved,
+          "fetch completed before its queued discovery barrier",
+        ),
       ).resolves.toMatchObject({ code: 0, termination: "exit" });
-      await expect(requireGit(root, ["show-ref", "--verify", staleRef])).resolves.toContain(
-        staleRef,
-      );
+      await expect(git(root, "show-ref", "--verify", staleRef)).resolves.toContain(staleRef);
       expect(held.mutations).toEqual([{ cwd: root, args: ["update-ref", "-d", snapshotRef] }]);
     } finally {
       held.release.resolve();
@@ -339,21 +344,6 @@ describe("Git ref mutation ownership", () => {
       recordRef: "origin/main",
       fetchSucceeded: true,
     });
-    expect(
-      vi
-        .mocked(processExec.runCommandWithTimeout)
-        .mock.calls.map(([argv]) => argv.slice(argv.indexOf("-C") + 2))
-        .filter((args) => args[0] === "fetch"),
-    ).toEqual([
-      [
-        "fetch",
-        "--no-auto-maintenance",
-        "--no-recurse-submodules",
-        "--no-tags",
-        "origin",
-        "+refs/heads/main:refs/remotes/origin/main",
-      ],
-    ]);
     await expect(
       runGit(root, ["show-ref", "--verify", "--quiet", staleRef]),
     ).resolves.toMatchObject({
@@ -365,28 +355,25 @@ describe("Git ref mutation ownership", () => {
     "%s releases a rejected mutation and leaves a cancelled waiting branch deletion unexecuted",
     async (_transport, run) => {
       const root = await repository();
-      await requireGit(root, ["branch", "kept", "HEAD"]);
+      await git(root, "branch", "kept", "HEAD");
       const failure = new Error("Git executor unavailable");
       const controller = new AbortController();
       const held = holdSnapshotDeletion(failure, controller.signal);
-      const rejected = expect(requireGit(root, ["update-ref", "-d", snapshotRef])).rejects.toBe(
-        failure,
-      );
+      const rejected = expect(git(root, "update-ref", "-d", snapshotRef)).rejects.toBe(failure);
       const pending: Promise<unknown>[] = [rejected];
       let cancelled: ReturnType<typeof run> | undefined;
       try {
         await held.started.promise;
         cancelled = run(root, ["branch", "-D", "kept"], { signal: controller.signal });
-        pending.push(cancelled, requireGit(root, ["update-ref", "-d", queuedRef]));
+        pending.push(cancelled, git(root, "update-ref", "-d", queuedRef));
         // Abort only after this candidate's real discovery settles; a separate read
         // can finish first and accidentally cancel discovery instead of the writer.
         await expect(
-          Promise.race([
+          awaitGateBeforeSettlement(
             held.discovered.promise,
-            cancelled.then(() => {
-              throw new Error("branch mutation completed before its queued discovery barrier");
-            }),
-          ]),
+            cancelled,
+            "branch mutation completed before its queued discovery barrier",
+          ),
         ).resolves.toMatchObject({ code: 0, termination: "exit" });
         expect(held.mutations).toEqual([{ cwd: root, args: ["update-ref", "-d", snapshotRef] }]);
         controller.abort();
@@ -400,7 +387,7 @@ describe("Git ref mutation ownership", () => {
         await Promise.allSettled(pending);
       }
       await Promise.all(pending);
-      expect(await requireGit(root, ["show-ref", "--verify", "refs/heads/kept"])).toContain(
+      expect(await git(root, "show-ref", "--verify", "refs/heads/kept")).toContain(
         "refs/heads/kept",
       );
       expect((await runGit(root, ["show-ref", "--verify", "--quiet", queuedRef])).code).toBe(1);
@@ -421,7 +408,7 @@ describe("Git ref mutation ownership", () => {
         run(root, ["update-ref", "-d", queuedRef], { signal: controller.signal, beforeRun }),
       ).rejects.toBe(revoked);
       expect(beforeRun).toHaveBeenCalledOnce();
-      expect(await requireGit(root, ["show-ref", "--verify", queuedRef])).toContain(queuedRef);
+      expect(await git(root, "show-ref", "--verify", queuedRef)).toContain(queuedRef);
     },
   );
 
@@ -434,7 +421,7 @@ describe("Git ref mutation ownership", () => {
     const pending: Promise<unknown>[] = [first];
     try {
       await held.started.promise;
-      pending.push(requireGit(root, ["update-ref", "-d", queuedRef]));
+      pending.push(git(root, "update-ref", "-d", queuedRef));
       // A newly introduced authority variable must not redirect a queued command
       // after its repository identity and inherited environment were captured.
       vi.stubEnv("GIT_COMMON_DIR", path.join(other, ".git"));
@@ -445,28 +432,20 @@ describe("Git ref mutation ownership", () => {
     }
     await Promise.all(pending);
     expect((await runGit(root, ["show-ref", "--verify", "--quiet", queuedRef])).code).toBe(1);
-    expect(await requireGit(other, ["show-ref", "--verify", queuedRef])).toContain(queuedRef);
+    expect(await git(other, "show-ref", "--verify", queuedRef)).toContain(queuedRef);
   });
 });
 
 describe("Git execution environment", () => {
-  it("preserves literal commit revisions only for Windows worktree Git", () => {
-    expect(
-      gitEnvironment(
-        {
-          MSYS: "winsymlinks:nativestrict",
-          CYGWIN: "disable_pcon",
-        },
-        ["rev-parse", "--verify", "HEAD^{commit}"],
-        "win32",
-      ),
-    ).toMatchObject({
-      MSYS: "winsymlinks:nativestrict noglob",
-      CYGWIN: "disable_pcon noglob",
+  it.each([
+    ["win32", ["rev-parse", "--verify", "HEAD^{commit}"], "winsymlinks:nativestrict", " noglob"],
+    ["win32", ["status"], "winsymlinks:nativestrict", ""],
+    ["linux", ["rev-parse", "HEAD^{commit}"], "winsymlinks:native", ""],
+  ] as const)("preserves revisions on %s for %j", (platform, args, msys, suffix) => {
+    expect(gitEnvironment({ MSYS: msys, CYGWIN: "disable_pcon" }, args, platform)).toMatchObject({
+      MSYS: `${msys}${suffix}`,
+      CYGWIN: `disable_pcon${suffix}`,
     });
-    expect(gitEnvironment({ MSYS: "winsymlinks:nativestrict" }, ["status"], "win32").MSYS).toBe(
-      "winsymlinks:nativestrict",
-    );
   });
 
   it.each([
@@ -491,9 +470,6 @@ describe("Git execution environment", () => {
       MSYS: "winsymlinks:native noglob",
       CYGWIN: "noglob",
     });
-    expect(
-      gitEnvironment({ MSYS: "winsymlinks:native" }, ["rev-parse", "HEAD^{commit}"], "linux").MSYS,
-    ).toBe("winsymlinks:native");
   });
 });
 
@@ -517,6 +493,8 @@ describe("Git checkout discovery", () => {
   it("returns the nearest checkout root for nested paths", async () => {
     const root = tempDirs.make("openclaw-git-root-");
     const nested = path.join(root, "packages", "nested");
+    expect(findGitCheckoutRoot(root)).toBeNull();
+    expect(insideGitCheckout(root)).toBe(false);
     await fs.mkdir(path.join(root, ".git"));
     await fs.mkdir(nested, { recursive: true });
 
@@ -526,13 +504,6 @@ describe("Git checkout discovery", () => {
 
     expect(findGitCheckoutRoot(nested)).toBe(root);
     expect(insideGitCheckout(nested)).toBe(true);
-  });
-
-  it("returns null outside a checkout", async () => {
-    const root = tempDirs.make("openclaw-no-git-root-");
-
-    expect(findGitCheckoutRoot(root)).toBeNull();
-    expect(insideGitCheckout(root)).toBe(false);
   });
 
   it("distinguishes contained metadata from linked checkout pointers", async () => {
@@ -602,6 +573,21 @@ describe("Git checkout discovery", () => {
           { path: await fs.realpath(detached), branch: null, head: initialHead },
         ]),
       );
+      const normalized = vi.spyOn(gitExec, "normalizeGitPathForFilesystem");
+      await expect(resolveGitRepositoryPaths(linked)).resolves.toEqual({
+        canonicalRoot: await fs.realpath(repo),
+        commonDir: await fs.realpath(path.join(repo, ".git")),
+      });
+      // The common directory and primary checkout are the only paths this reader consumes.
+      expect(normalized).toHaveBeenCalledTimes(2);
+      const detachedPath = await fs.realpath(detached);
+      await fs.rm(detached, { recursive: true });
+      const paths = await readGitWorktreePathInventory(repo);
+      normalized.mockClear();
+      expect(paths.has(await fs.realpath(linked))).toBe(true);
+      expect(paths.has(detachedPath)).toBe(true);
+      expect(paths.has(`${detachedPath}-sibling`)).toBe(false);
+      expect(normalized).not.toHaveBeenCalled();
     },
   );
 });

@@ -11,9 +11,8 @@ import { subagentRuns } from "../agents/subagents/registry/subagent-registry-mem
 import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { registerSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import type { AssistantMessage } from "../llm/types.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { tryBeginGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -25,42 +24,29 @@ import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 /** Real registered runs share a child session but retain independent completion sources. */
 export async function createRegisteredCompletionPair(context: GatewayRequestContext) {
   const id = randomUUID();
-  const requesterSessionKey = `agent:main:completion-pair:${id}`;
-  const childSessionKey = `agent:main:dashboard:completion-pair:${id}`;
-  const requesterSessionId = `requester-${id}`;
-  const requesterLifecycleRevision = `requester-revision-${id}`;
-  const childSessionId = `child-${id}`;
-  const childLifecycleRevision = `child-revision-${id}`;
-  await sessionAccessor.upsertSessionEntryCore(
-    { agentId: "main", sessionKey: requesterSessionKey },
-    {
-      sessionId: requesterSessionId,
-      lifecycleRevision: requesterLifecycleRevision,
+  async function createSession(kind: "requester" | "child", spawnedBy?: string) {
+    const sessionKey = `agent:main:${kind === "child" ? "dashboard:" : ""}completion-pair:${id}`;
+    const target = { agentId: "main", sessionKey };
+    const entry = { sessionId: `${kind}-${id}`, lifecycleRevision: `${kind}-revision-${id}` };
+    await sessionAccessor.upsertSessionEntryCore(target, {
+      ...entry,
       updatedAt: Date.now(),
-    },
-  );
-  await sessionAccessor.upsertSessionEntryCore(
-    { agentId: "main", sessionKey: childSessionKey },
-    {
-      sessionId: childSessionId,
-      lifecycleRevision: childLifecycleRevision,
-      spawnedBy: requesterSessionKey,
-      spawnDepth: 1,
-      updatedAt: Date.now(),
-    },
-  );
-  const requesterScope = {
-    agentId: "main",
-    sessionKey: requesterSessionKey,
-    sessionId: requesterSessionId,
-    storePath: (await loadSessionEntryAsync(requesterSessionKey, { agentId: "main" })).storePath,
-  };
-  const childScope = {
-    agentId: "main",
-    sessionKey: childSessionKey,
-    sessionId: childSessionId,
-    storePath: (await loadSessionEntryAsync(childSessionKey, { agentId: "main" })).storePath,
-  };
+      ...(spawnedBy ? { spawnedBy, spawnDepth: 1 } : {}),
+    });
+    return {
+      entry,
+      scope: {
+        ...target,
+        sessionId: entry.sessionId,
+        storePath: (await loadSessionEntryAsync(sessionKey, target)).storePath,
+      },
+    };
+  }
+  const requester = await createSession("requester");
+  const child = await createSession("child", requester.scope.sessionKey);
+  const requesterScope = requester.scope;
+  const childScope = child.scope;
+  const childSessionKey = childScope.sessionKey;
   const createRun = async (index: 0 | 1) => {
     const runId = `completion-pair-${id}-${index}`;
     const revoked = new AbortController();
@@ -111,9 +97,12 @@ export async function createRegisteredCompletionPair(context: GatewayRequestCont
       if (entry?.execution.status === "terminal") {
         run.terminal.resolve();
       }
+      // A durable retry settles this attempt while retaining the delivery obligation.
       if (
         typeof entry?.cleanupCompletedAt === "number" ||
-        (entry?.cleanupHandled === false && entry.delivery?.nextAttemptAt !== undefined)
+        (entry?.cleanupHandled === false && entry.delivery?.nextAttemptAt !== undefined) ||
+        entry?.delivery?.status === "suspended" ||
+        entry?.delivery?.status === "failed"
       ) {
         run.settled.resolve();
       }
@@ -178,47 +167,45 @@ export async function createRegisteredCompletionPair(context: GatewayRequestCont
     await Promise.all(dispatches.values());
     await Promise.all([...dispatches.keys()].map((index) => runs[index].settled.promise));
   };
-  let disposal: Promise<void> | undefined;
-  const dispose = () =>
-    (disposal ??= (async () => {
+  const dispose = async () => {
+    for (const run of runs) {
+      run.releaseModel.resolve();
+      run.revoked.abort(new Error("Registered completion fixture disposed"));
+    }
+    try {
+      await Promise.allSettled(dispatches.values());
+      await Promise.all(
+        [...dispatches.keys()].flatMap((index) =>
+          subagentRuns.get(runs[index].runId)?.execution.status === "terminal"
+            ? [runs[index].settled.promise]
+            : [],
+        ),
+      );
+    } finally {
+      await resetSubagentRegistryForTests({ persist: false });
+      unsubscribe();
       for (const run of runs) {
-        run.releaseModel.resolve();
-        run.revoked.abort(new Error("Registered completion fixture disposed"));
+        run.source.release();
       }
-      try {
-        await Promise.allSettled(dispatches.values());
-        await Promise.all(
-          [...dispatches.keys()].flatMap((index) =>
-            subagentRuns.get(runs[index].runId)?.execution.status === "terminal"
-              ? [runs[index].settled.promise]
-              : [],
-          ),
-        );
-      } finally {
-        await resetSubagentRegistryForTests({ persist: false });
-        unsubscribe();
-        for (const run of runs) {
-          run.source.release();
-        }
-      }
-    })());
+    }
+  };
   try {
     await runScoped(0, () =>
       registerSubagentRun({
         runId: first.runId,
         childSessionKey,
         childAgentId: "main",
-        sessionEntry: { sessionId: childSessionId, lifecycleRevision: childLifecycleRevision },
-        requesterSessionKey,
+        sessionEntry: child.entry,
+        requesterSessionKey: requesterScope.sessionKey,
         requesterAgentId: "main",
-        requesterDisplayKey: requesterSessionKey,
+        requesterDisplayKey: requesterScope.sessionKey,
         task: "First task",
         cleanup: "keep",
         spawnMode: "session",
         expectsCompletionMessage: true,
         completionTarget: "parent",
-        completionRequesterSessionId: requesterSessionId,
-        completionRequesterLifecycleRevision: requesterLifecycleRevision,
+        completionRequesterSessionId: requesterScope.sessionId,
+        completionRequesterLifecycleRevision: requester.entry.lifecycleRevision,
         gatewayContextResolver: context.resolveGatewayContext,
       }),
     );
@@ -243,15 +230,12 @@ export async function createRegisteredCompletionPair(context: GatewayRequestCont
           run.commandEntered.resolve();
           await run.releaseModel.promise;
           command.abortSignal?.throwIfAborted();
-          const message: AssistantMessage & { __openclaw: { runId: string } } = {
-            role: "assistant",
-            content: [{ type: "text", text: run.result }],
-            api: "openai-responses",
-            provider: "openai",
-            model: "synthetic-completion",
-            usage: createZeroUsageFixture(),
-            stopReason: "stop",
-            timestamp: Date.now(),
+          const message = {
+            ...makeAgentAssistantMessage({
+              content: [{ type: "text", text: run.result }],
+              model: "synthetic-completion",
+              timestamp: Date.now(),
+            }),
             __openclaw: { runId: run.runId },
           };
           SessionManager.open(childScope).appendMessage(message);

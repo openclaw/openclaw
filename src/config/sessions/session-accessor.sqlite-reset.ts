@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
@@ -19,6 +19,7 @@ import {
   deleteAllSessionTranscriptArchivesInTransaction,
   readSessionTranscriptArchiveResetInventory,
 } from "./session-accessor.sqlite-archive-store-kernel.js";
+import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import {
@@ -35,13 +36,25 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { readSessionColdChunks } from "./session-cold-storage-chunks.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
+import { sessionColdArchiveMetadataColumns } from "./session-cold-storage-state.js";
 import { collectAdmissionProtectedSessionIds } from "./session-history-eviction.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type { SessionStoreTarget as SessionStoreResetScope } from "./targets-collision.js";
 
 function readResetInventory(database: OpenClawAgentReadOnlyDatabase) {
   const db = getSessionKysely(database.db);
+  const cold = [];
+  for (const archive of executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("session_transcript_cold_archives")
+      .select(sessionColdArchiveMetadataColumns)
+      .orderBy("session_id"),
+  ).rows) {
+    cold.push(Object.assign(archive, { chunks: readSessionColdChunks(database.db, archive) }));
+  }
   return {
     nodes: executeSqliteQuerySync(
       database.db,
@@ -54,13 +67,7 @@ function readResetInventory(database: OpenClawAgentReadOnlyDatabase) {
       sessionId: session_id,
       snapshot: readSessionStateDeleteSnapshot(database.db, session_id),
     })),
-    cold: executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("session_transcript_cold_archives")
-        .select(["session_id", "generation", "archive_name", "archive_sha256", "storage"])
-        .orderBy("session_id"),
-    ).rows,
+    cold,
     archives: readSessionTranscriptArchiveResetInventory(database),
   };
 }
@@ -83,6 +90,9 @@ function listResetArtifacts(
     }),
     ...(inventory?.cold ?? [])
       .filter(({ storage }) => storage === "file")
+      .flatMap<Pick<SessionColdArchive, "archive_name" | "archive_sha256">>((archive) =>
+        archive.chunks.length > 0 ? archive.chunks : [archive],
+      )
       .map(({ archive_name, archive_sha256 }) => ({
         path: resolveSessionColdArchivePath(databasePath, archive_name),
         sha256: archive_sha256,
@@ -126,7 +136,7 @@ function listResetArtifacts(
 export function previewSessionStoreReset(scope: SessionStoreResetScope) {
   const resolved = captureLifecycleDatabaseScope(resolveSqliteReadScope(scope));
   const opened = withOpenClawAgentDatabaseReadOnly(
-    (database) => runSqliteDeferredTransactionSync(database.db, () => readResetInventory(database)),
+    (database) => runSqliteReadSnapshotSync(database.db, () => readResetInventory(database)),
     toDatabaseOptions(resolved),
   );
   const inventory = opened.found ? opened.value : undefined;
@@ -148,7 +158,7 @@ export async function resetSessionStore(scope: SessionStoreResetScope): Promise<
     return;
   }
   try {
-    const inventory = runSqliteDeferredTransactionSync(retained.database.db, () =>
+    const inventory = runSqliteReadSnapshotSync(retained.database.db, () =>
       readResetInventory(retained.database),
     );
     const artifacts = listResetArtifacts(resolved.path, inventory);

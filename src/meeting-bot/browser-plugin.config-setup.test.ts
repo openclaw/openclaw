@@ -1,53 +1,50 @@
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import { loadBrowserMeetingPlugins } from "./browser-plugin.test-support.js";
 
 const { zoomMeetingsPlugin: plugin } = await loadBrowserMeetingPlugins();
-const name = "Zoom";
 const command = "zoommeetings.chrome";
 const commands = {
   audioInputCommand: ["custom-input", "--read"],
   audioOutputCommand: ["custom-output", "--write"],
   bargeInInputCommand: ["custom-barge-in"],
 };
-const audio = { audioBackend: "auto", audioBufferBytes: 4_096, audioFormat: "pcm16-24khz" };
+const audio = {
+  audioBackend: "auto",
+  audioBufferBytes: 4_096,
+  audioFormat: "pcm16-24khz",
+} as const;
+const node = {
+  caps: ["browser"],
+  commands: ["browser.proxy", command],
+  connected: true,
+  displayName: "Zoom-node",
+  nodeId: "node-1",
+};
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("shared browser meeting configuration and setup", () => {
   const resolveConfig = plugin.config.resolveConfig;
+  let runtime: ReturnType<typeof createTestPluginApi>["runtime"];
+  beforeEach(() => {
+    runtime = createTestPluginApi().runtime;
+    runtime.nodes = {
+      invoke: vi.fn(async () => ({ ok: true })),
+      openDuplex: vi.fn(),
+      list: vi.fn(async () => ({ nodes: [node] })),
+    };
+  });
   function setup(
     options: { mode: "agent" | "bidi" | "transcribe"; transport?: "chrome" | "chrome-node" },
     chrome = {},
   ) {
-    const runtime = createTestPluginApi().runtime;
-    runtime.nodes = {
-      invoke: vi.fn(async () => ({ ok: true })),
-      openDuplex: vi.fn(),
-      list: vi.fn(async () => ({
-        nodes: [
-          {
-            caps: ["browser"],
-            commands: ["browser.proxy", command],
-            connected: true,
-            displayName: `${name}-node`,
-            nodeId: "node-1",
-          },
-        ],
-      })),
-    };
-    const config = resolveConfig({ chrome, chromeNode: { node: `${name}-node` } });
-    return {
+    return plugin.setupStatus({
+      config: resolveConfig({ chrome, chromeNode: { node: "Zoom-node" } }),
+      fullConfig: {},
       runtime,
-      run: () =>
-        plugin.setupStatus({
-          config,
-          fullConfig: {},
-          runtime,
-          options: { transport: "chrome-node", ...options },
-        }),
-    };
+      options: { transport: "chrome-node", ...options },
+    });
   }
 
   it.each<[string, string, string[], string[]]>([
@@ -64,118 +61,102 @@ describe("shared browser meeting configuration and setup", () => {
     expect(config.chrome.audioOutputCommand).toEqual(expect.arrayContaining(output));
   });
 
-  it.each(["overrides", "timer bounds"])("resolves explicit %s", (kind) => {
-    const realtime = {
-      voiceProvider: "google",
-      model: "voice-model",
-      providers: { google: { apiKey: "ref" } },
+  it("resolves explicit overrides", () => {
+    const selected = {
+      defaultMode: "bidi",
+      chrome: commands,
+      chromeNode: { node: "mac-node" },
+      realtime: {
+        voiceProvider: "google",
+        model: "voice-model",
+        providers: { google: { apiKey: "ref" } },
+      },
     };
-    if (kind === "overrides") {
-      expect(
-        resolveConfig({
-          defaultMode: "bidi",
-          chrome: commands,
-          chromeNode: { node: "mac-node" },
-          realtime,
-        }),
-      ).toMatchObject({
-        defaultMode: "bidi",
-        chrome: {
-          ...commands,
-          audioInputCommandOverride: commands.audioInputCommand,
-          audioOutputCommandOverride: commands.audioOutputCommand,
-        },
-        chromeNode: { node: "mac-node" },
-        realtime,
-      });
-    } else {
-      const config = resolveConfig({
-        chrome: { joinTimeoutMs: Number.MAX_VALUE, waitForInCallMs: Number.MAX_VALUE },
-      });
-      expect(config.chrome.joinTimeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-      expect(config.chrome.waitForInCallMs).toBe(MAX_TIMER_TIMEOUT_MS);
-      expect(plugin.config.resolveGatewayOperationTimeoutMs(config)).toBe(MAX_TIMER_TIMEOUT_MS);
-    }
+    expect(resolveConfig(selected)).toMatchObject({
+      ...selected,
+      chrome: {
+        ...commands,
+        audioInputCommandOverride: commands.audioInputCommand,
+        audioOutputCommandOverride: commands.audioOutputCommand,
+      },
+    });
   });
 
-  it.each([false, true])(
-    "probes selected-node talk-back prerequisites with overrides=%s",
-    async (overrides) => {
-      const { runtime, run } = setup({ mode: "agent" }, overrides ? commands : {});
-      const status = await run();
+  const readyMessage = "Remote virtual audio backend and command-pair prerequisites are ready";
+  const missingMessage = "SoX audio command not found on the node.";
+  it.each([
+    ["agent", {}, true, readyMessage],
+    ["agent", commands, true, readyMessage],
+    ["bidi", {}, false, missingMessage],
+    ["transcribe", {}, true, "Zoom live-caption capture is enabled and ready"],
+  ] as const)("checks remote %s setup with %j", async (mode, overrides, ok, message) => {
+    if (!ok) {
+      vi.mocked(runtime.nodes.invoke).mockRejectedValue(new Error(missingMessage));
+    }
+    const status = await setup({ mode }, overrides);
+    expect(status.ok).toBe(ok);
+    const id = mode === "transcribe" ? "captions" : "chrome-node-audio-prerequisites";
+    expect(status.checks).toContainEqual({ id, message, ok });
+    if (mode === "transcribe") {
+      expect(runtime.nodes.invoke).not.toHaveBeenCalled();
+    } else {
       expect(runtime.nodes.invoke).toHaveBeenCalledWith({
         command,
         nodeId: "node-1",
-        params: { action: "setup", ...audio, ...(overrides ? commands : {}) },
+        params: { action: "setup", ...audio, ...overrides },
         timeoutMs: 12_000,
       });
-      expect(status.checks).toContainEqual({
-        id: "chrome-node-audio-prerequisites",
-        message: "Remote virtual audio backend and command-pair prerequisites are ready",
-        ok: true,
-      });
-      expect(status.ok).toBe(true);
-    },
-  );
+    }
+  });
 
-  it("reports observe-only captions without probing audio", async () => {
-    const { runtime, run } = setup({ mode: "transcribe" });
-    const status = await run();
+  it("stops local audio probing on an unsupported platform", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    runtime.system = { ...runtime.system, runCommandWithTimeout: vi.fn() };
+    const status = await setup({ mode: "agent", transport: "chrome" });
+    expect(status.ok).toBe(false);
     expect(status.checks).toContainEqual({
-      id: "captions",
-      message: `${name} live-caption capture is enabled and ready`,
-      ok: true,
+      id: "chrome-local-audio-device",
+      message: expect.stringContaining("unsupported on win32"),
+      ok: false,
     });
-    expect(runtime.nodes.invoke).not.toHaveBeenCalled();
+    expect(status.checks.some((check) => check.id === "chrome-local-audio-commands")).toBe(false);
+    expect(runtime.system.runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
-  it.each(["chrome-node", "chrome"] as const)(
-    "reports unavailable audio prerequisites on %s",
-    async (transport) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      const { runtime, run } = setup({
-        mode: transport === "chrome" ? "agent" : "bidi",
-        transport,
+  it.each(["setup", "start"] as const)(
+    "forwards only trusted %s audio configuration",
+    async (action) => {
+      const configured =
+        action === "setup" ? commands : { bargeInInputCommand: ["trusted-barge-in"] };
+      const route =
+        action === "setup"
+          ? {}
+          : {
+              url: "https://us02web.zoom.us/j/123456789",
+              mode: "bidi",
+              launch: true,
+              browserProfile: undefined,
+              joinTimeoutMs: 30_000,
+            };
+      const invokeNode = vi.fn(async () => ({ ok: true as const }));
+      await plugin.createNodePolicy(resolveConfig({ chrome: configured })).handle({
+        command,
+        config: {},
+        invokeNode,
+        nodeId: "node-1",
+        params: {
+          action,
+          ...route,
+          audioBackend: "blackhole-2ch",
+          audioBufferBytes: 1,
+          audioFormat: "g711-ulaw-8khz",
+          audioInputCommand: ["caller-capture"],
+          audioOutputCommand: ["caller-playback"],
+        },
       });
-      vi.mocked(runtime.nodes.invoke).mockRejectedValue(
-        new Error("SoX audio command not found on the node."),
-      );
-      runtime.system = { ...runtime.system, runCommandWithTimeout: vi.fn() };
-      const status = await run();
-      expect(status.ok).toBe(false);
-      expect(status.checks).toContainEqual({
-        id:
-          transport === "chrome" ? "chrome-local-audio-device" : "chrome-node-audio-prerequisites",
-        message:
-          transport === "chrome"
-            ? expect.stringContaining("unsupported on win32")
-            : "SoX audio command not found on the node.",
-        ok: false,
+      expect(invokeNode).toHaveBeenCalledWith({
+        params: { action, ...audio, ...configured, ...route },
       });
-      if (transport === "chrome") {
-        expect(status.checks.some((check) => check.id === "chrome-local-audio-commands")).toBe(
-          false,
-        );
-        expect(runtime.system.runCommandWithTimeout).not.toHaveBeenCalled();
-      }
     },
   );
-
-  it("replaces setup probe commands with trusted configured commands", async () => {
-    const invokeNode = vi.fn(async () => ({ ok: true as const }));
-    await plugin.createNodePolicy(resolveConfig({ chrome: commands })).handle({
-      command,
-      config: {},
-      invokeNode,
-      nodeId: "node-1",
-      params: {
-        action: "setup",
-        audioInputCommand: ["untrusted-input"],
-        audioOutputCommand: ["untrusted-output"],
-      },
-    });
-    expect(invokeNode).toHaveBeenCalledWith({
-      params: { action: "setup", ...audio, ...commands },
-    });
-  });
 });

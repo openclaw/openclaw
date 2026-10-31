@@ -76,9 +76,8 @@ describe("Control UI relay tunnel", () => {
         ["accept-encoding", "br, gzip"],
         ["cookie", "asset=ok"],
       ]);
-      expect(Buffer.from(await new Response(input.body).arrayBuffer())).toEqual(
-        Buffer.concat([upload, Buffer.from("end")]),
-      );
+      const sent = Buffer.from(await new Response(input.body).arrayBuffer());
+      expect(sent.equals(Buffer.concat([upload, Buffer.from("end")])), "HTTP upload").toBe(true);
       return {
         response: new Response(download, {
           headers: {
@@ -110,23 +109,13 @@ describe("Control UI relay tunnel", () => {
         ["Cookie", "__Host-oc_ui=secret; asset=ok"],
         ["Connection", "x-hop"],
         ["x-hop", "drop"],
-        ...[
-          "Host",
-          "Upgrade",
-          "Keep-Alive",
-          "TE",
-          "Trailer",
-          "Transfer-Encoding",
-          "Proxy-Authorization",
-          "Content-Length",
-          "Forwarded",
-          "X-Forwarded-For",
-          "X-Real-IP",
-          "True-Client-IP",
-          "Cdn-Loop",
-          "CF-Connecting-IP",
-          "X-Relay-Secret",
-        ].map((name) => [name, "drop"]),
+        ...(
+          "Host Upgrade Keep-Alive TE Trailer Transfer-Encoding Proxy-Authorization " +
+          "Content-Length Forwarded X-Forwarded-For X-Real-IP True-Client-IP Cdn-Loop " +
+          "CF-Connecting-IP X-Relay-Secret"
+        )
+          .split(" ")
+          .map((name) => [name, "drop"]),
       ],
     });
     await f.receive({
@@ -136,7 +125,7 @@ describe("Control UI relay tunnel", () => {
       more: false,
     });
     const result = await response(f);
-    expect(result.body).toEqual(download);
+    expect(result.body.equals(download), "HTTP download bytes").toBe(true);
     expect(result.head).toEqual({
       type: "ui.http.head",
       sid: HTTP.sid,
@@ -254,10 +243,7 @@ describe("Control UI relay tunnel", () => {
       concatSpy.mockRestore();
       copySpy.mockRestore();
     }
-    expect(await socket.sent.next()).toEqual({
-      kind: "binary",
-      bytes: Buffer.alloc(64 * 1024, 7),
-    });
+    expect(await socket.sent.next()).toEqual({ kind: "binary", bytes: Buffer.alloc(64 * 1024, 7) });
     expect(copiedBytes).toBeLessThanOrEqual(3 * 64 * 1024);
   });
 

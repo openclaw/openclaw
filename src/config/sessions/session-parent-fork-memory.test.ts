@@ -1,7 +1,8 @@
+import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
+import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
-import { rewindSessionToMessage } from "./session-accessor.sqlite-message-cut.js";
 import {
   forkSessionEntryFromParentTargetWithPatch,
   forkSessionTranscriptFromParent,
@@ -13,7 +14,8 @@ import {
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
-import type { InternalSessionEntry } from "./types.js";
+import type { SessionActorStorageWrites } from "./session-actor-storage-contract.js";
+import { transcriptTurnCommand } from "./session-actor-transcript.test-support.js";
 
 // The real adapters must never open native storage or allocate database workers.
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -32,6 +34,8 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 const parentKey = "agent:main:dashboard:incognito-parent-fork";
 const env = { OPENCLAW_STATE_DIR: "/synthetic/memory-parent-fork" };
 const authority = { assertCurrent() {}, authorize() {} };
+const answer = (content = "First answer") => ({ role: "assistant", content, stopReason: "stop" });
+const history = (events: unknown) => ({ kind: "full", snapshot: { events } });
 const actors: SessionActor[] = [];
 afterEach(async () => {
   await Promise.all(actors.splice(0).map((actor) => actor.release()));
@@ -45,104 +49,122 @@ async function acquire(agentId: string, sessionKey: string) {
   });
   const actor = await owner.acquire(
     { sessionKey, database: owner.identity },
-    {
-      assertCurrent() {},
-      assertReadable() {},
-    },
+    { assertCurrent() {}, assertReadable() {} },
   );
   actors.push(actor);
   const binding: SessionActorStorageBinding = { actor, authority, agentId, path: owner.path };
-  return { actor, owner, binding };
+  return {
+    actor,
+    owner,
+    binding,
+    scope: { agentId, sessionKey, storePath: owner.path },
+    readEntry: () => actor.storage!.read({ type: "session.entry.read", input: {} }, authority),
+    readHistory: (sessionId?: string) =>
+      actor.storage!.read({ type: "session.history.hydrate", input: { sessionId } }, authority),
+    create: (input: SessionActorStorageWrites["session.entry.create"]["input"]) =>
+      actor.storage!.mutate({ type: "session.entry.create", input }, authority),
+    run: <T>(fn: () => T) => runWithSessionActorStorage(binding, fn),
+  };
 }
 
-async function fixture(childAgent = "main", parentPatch: Partial<InternalSessionEntry> = {}) {
+async function fixture(childAgent = "main") {
   const parent = await acquire("main", parentKey);
   const entry = {
     sessionId: "parent-session",
     lifecycleRevision: "parent-lifecycle",
     updatedAt: 1,
-    incognito: true,
-    ...parentPatch,
-  } satisfies InternalSessionEntry;
+    incognito: true as const,
+  };
   const events = [
-    {
-      type: "session",
-      id: entry.sessionId,
-      version: 3,
-      cwd: "/synthetic",
-      timestamp: "2026-01-01T00:00:00.000Z",
-    },
+    { type: "session", id: entry.sessionId, version: 3, cwd: "/synthetic" },
     { type: "message", id: "u1", parentId: null, message: { role: "user", content: "Question" } },
-    {
-      type: "message",
-      id: "a1",
-      parentId: "u1",
-      message: { role: "assistant", content: "First answer", stopReason: "stop" },
-    },
+    { type: "message", id: "a1", parentId: "u1", message: answer() },
   ];
-  expect(
-    await parent.actor.storage!.mutate(
-      {
-        type: "session.entry.create",
-        input: { entry, transcriptEvents: events },
-      },
-      authority,
-    ),
-  ).toMatchObject({ kind: "committed" });
+  await parent.create({ entry, transcriptEvents: events });
   const childKey = `agent:${childAgent}:dashboard:incognito-child-fork`;
   const child = await acquire(childAgent, childKey);
-  return { parent, child, childKey, entry };
+  const forkInput = {
+    ...parent.scope,
+    parentEntry: entry,
+    parentSessionKey: parentKey,
+    sessionKey: childKey,
+    targetStorePath: child.owner.path,
+  };
+  return { parent, child, childKey, entry, forkInput };
 }
 
-it.each([
-  { childAgent: "main", explicit: true },
-  { childAgent: "research", explicit: false },
-])(
-  "prepares a current $childAgent child fork through the selected memory owner",
-  async ({ childAgent, explicit }) => {
-    const { parent, child, childKey, entry } = await fixture(childAgent);
-    const append = parent.actor.appendTranscriptEvent(
+it("publishes memory replacements after projection without exposing private facts", async () => {
+  const f = await acquire("main", "agent:main:dashboard:incognito-row-change");
+  const entry = {
+    sessionId: "private-row-change",
+    createdAt: 1,
+    updatedAt: 1,
+    label: "Private label must not enter lifetime facts",
+    incognito: true as const,
+  };
+  expect(await f.create({ entry })).toMatchObject({ kind: "committed" });
+  const original = await f.readEntry();
+  const events: Array<["projection" | "observer", SessionRowChange]> = [];
+  const stopProjection = sessionChanges.subscribeProjection((change) => {
+    events.push(["projection", change]);
+    expect(f.owner.readSession(f.scope.sessionKey, authority)?.entry?.updatedAt).toBe(2);
+  });
+  const stopObserver = sessionChanges.subscribe((change) => events.push(["observer", change]));
+  const write = (rollback: boolean) =>
+    f.actor.storage!.mutate(
       {
-        commandId: "latest-answer",
-        phaseId: "preparation",
-        append: {
-          kind: "metadata",
-          input: {
-            scope: {
-              agentId: "main",
-              storePath: parent.owner.path,
-              sessionKey: parentKey,
-              sessionId: entry.sessionId,
-              expectedLifecycleRevision: entry.lifecycleRevision,
-            },
-            event: {
-              type: "message",
-              id: "a2",
-              parentId: "a1",
-              timestamp: "2026-01-01T00:00:01.000Z",
-            },
-            message: {
-              messageJson: JSON.stringify({
-                role: "assistant",
-                content: "Latest answer",
-                stopReason: "stop",
-              }),
-              cwd: "/synthetic",
-              validateTurn: false,
-            },
-            options: {},
-          },
+        type: "session.entry.replace",
+        input: { expected: original, entry: { ...original!, updatedAt: 2 } },
+      },
+      authority,
+      {
+        beforeCommit() {
+          expect(events).toEqual([]);
+          if (rollback) {
+            throw new Error("rollback");
+          }
         },
       },
+    );
+  try {
+    await expect(write(true)).resolves.toMatchObject({
+      kind: "rolled-back",
+      error: { message: "rollback" },
+    });
+    expect(f.owner.readSession(f.scope.sessionKey, authority)?.entry?.updatedAt).toBe(1);
+    expect(events).toEqual([]);
+    await expect(write(false)).resolves.toMatchObject({ kind: "committed" });
+    const scope = f.scope;
+    expect(events.map(([phase]) => phase)).toEqual(["projection", "observer"]);
+    expect(events[0]![1]).toEqual({
+      ...scope,
+      facts: {
+        kind: "replacement",
+        communicationBinding: JSON.stringify([entry.sessionId, ...Array(12).fill(null)]),
+        membership: [scope.sessionKey, null, [], {}, entry.sessionId],
+        lifecycleChanged: false,
+      },
+    });
+    expect(events[1]![1]).toEqual(scope);
+  } finally {
+    stopObserver();
+    stopProjection();
+  }
+});
+
+it.each(["main", "research"])(
+  "prepares current %s forks through the selected memory owner",
+  async (childAgent) => {
+    const explicit = childAgent === "main";
+    const { parent, child, entry, forkInput } = await fixture(childAgent);
+    const append = parent.actor.appendToolResult(
+      transcriptTurnCommand({ ...parent.scope, sessionId: entry.sessionId }, "latest-answer", [
+        { eventId: "a2", message: answer("Latest answer") },
+      ]),
       authority,
     );
     const input = {
-      parentEntry: entry,
-      parentSessionKey: parentKey,
-      sessionKey: childKey,
-      agentId: "main",
-      storePath: parent.owner.path,
-      targetStorePath: child.owner.path,
+      ...forkInput,
       targetSessionId: "child-session",
       enforceTokenLimit: true,
       maxTokens: 10_000,
@@ -150,73 +172,29 @@ it.each([
     };
     const prepared = explicit
       ? await prepareSessionForkTranscript(input)
-      : await runWithSessionActorStorage(child.binding, () => prepareSessionForkTranscript(input));
+      : await child.run(() => prepareSessionForkTranscript(input));
     expect((await append).kind).toBe("committed");
-    expect(prepared.status).toBe("prepared");
-    if (prepared.status !== "prepared") {
-      throw new Error("Expected prepared fork");
-    }
-    expect(prepared.events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "a2",
-          message: expect.objectContaining({ content: "Latest answer" }),
-        }),
-      ]),
+    assert(prepared.status === "prepared");
+    expect(prepared.events).toContainEqual(
+      expect.objectContaining({
+        id: "a2",
+        message: expect.objectContaining({ content: "Latest answer" }),
+      }),
     );
+    expect(await child.readEntry()).toBeUndefined();
     expect(
-      await child.actor.storage!.read({ type: "session.entry.read", input: {} }, authority),
-    ).toBeUndefined();
-    expect(
-      await child.actor.storage!.mutate(
-        {
-          type: "session.entry.create",
-          input: {
-            entry: { sessionId: prepared.transcript.sessionId, updatedAt: 2 },
-            transcriptEvents: prepared.events,
-          },
-        },
-        authority,
-      ),
+      await child.create({
+        entry: { sessionId: prepared.transcript.sessionId, updatedAt: 2 },
+        transcriptEvents: prepared.events,
+      }),
     ).toMatchObject({ kind: "committed" });
-    expect(
-      await child.actor.storage!.read({ type: "session.history.hydrate", input: {} }, authority),
-    ).toMatchObject({
-      kind: "full",
-      snapshot: { events: prepared.events },
-    });
+    expect(await child.readHistory()).toMatchObject(history(prepared.events));
   },
 );
 
-it("rewinds current memory state while preserving explicit conflicts", async () => {
-  const { parent, entry } = await fixture();
-  const params = {
-    agentId: "main",
-    sessionKey: parentKey,
-    storePath: parent.owner.path,
-    entryId: "u1",
-  };
-  expect(
-    await runWithSessionActorStorage(parent.binding, () =>
-      rewindSessionToMessage(params, {
-        sessionId: "replaced-session",
-        lifecycleRevision: entry.lifecycleRevision,
-      }),
-    ),
-  ).toEqual({ status: "conflict" });
-  const result = await runWithSessionActorStorage(parent.binding, () =>
-    rewindSessionToMessage(params),
-  );
-  expect(result).toMatchObject({
-    status: "created",
-    editorText: "Question",
-    entry: { incognito: true },
-  });
-});
-
 it("does not create a missing cross-agent source while preparing a child", async () => {
   const child = await acquire("research", "agent:research:dashboard:incognito-orphan-fork");
-  const prepared = await runWithSessionActorStorage(child.binding, () =>
+  const prepared = await child.run(() =>
     prepareSessionForkTranscript({
       agentId: "main",
       storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
@@ -229,41 +207,26 @@ it("does not create a missing cross-agent source while preparing a child", async
   expect(memorySessionActorOwners.list().map((owner) => owner.agentId)).toEqual(["research"]);
 });
 
-it.each(["main", "research"])(
-  "adopts a transcript-only fork in the %s memory owner",
-  async (childAgent) => {
-    const { parent, child, childKey, entry } = await fixture(childAgent);
-    const fork = await forkSessionTranscriptFromParent({
-      parentEntry: entry,
-      parentSessionKey: parentKey,
-      sessionKey: childKey,
-      agentId: "main",
-      storePath: parent.owner.path,
-      targetStorePath: child.owner.path,
-      targetSessionId: "pending-child-transcript",
-    });
-    expect(fork.status).toBe("created");
-    expect(child.owner.readSession(childKey, authority)?.entry).toBeUndefined();
-    const pending = await child.actor.storage!.read(
-      { type: "session.history.hydrate", input: { sessionId: "pending-child-transcript" } },
-      authority,
-    );
-    expect(pending).toMatchObject({
-      kind: "full",
-      snapshot: { events: expect.arrayContaining([expect.objectContaining({ id: "a1" })]) },
-    });
-    await upsertSessionEntryCore(
-      { agentId: childAgent, sessionKey: childKey, storePath: child.owner.path },
-      { sessionId: "pending-child-transcript", updatedAt: 2 },
-    );
-    expect(
-      await child.actor.storage!.read({ type: "session.history.hydrate", input: {} }, authority),
-    ).toMatchObject({
-      kind: "full",
-      snapshot: { events: pending.kind === "full" ? pending.snapshot.events : [] },
-    });
-  },
-);
+it.each(["main", "research"])("adopts transcript-only forks in %s memory", async (childAgent) => {
+  const { child, childKey, forkInput } = await fixture(childAgent);
+  const fork = await forkSessionTranscriptFromParent({
+    ...forkInput,
+    targetSessionId: "pending-child-transcript",
+  });
+  expect(fork.status).toBe("created");
+  expect(child.owner.readSession(childKey, authority)?.entry).toBeUndefined();
+  const pending = await child.readHistory("pending-child-transcript");
+  expect(pending).toMatchObject(
+    history(expect.arrayContaining([expect.objectContaining({ id: "a1" })])),
+  );
+  await upsertSessionEntryCore(child.scope, {
+    sessionId: "pending-child-transcript",
+    updatedAt: 2,
+  });
+  expect(await child.readHistory()).toMatchObject(
+    history(pending.kind === "full" ? pending.snapshot.events : []),
+  );
+});
 
 it("forks current memory state with a data-only entry patch", async () => {
   const { parent, childKey } = await fixture();
@@ -277,10 +240,7 @@ it("forks current memory state with a data-only entry patch", async () => {
     },
     { forked: { label: "Copied child" } },
   );
-  expect(result.status).toBe("forked");
-  if (result.status !== "forked") {
-    throw new Error("Expected child fork");
-  }
+  assert(result.status === "forked");
   expect(result.sessionEntry.label).toBe("Copied child");
   expect(parent.owner.readSession(childKey, authority)?.entry?.sessionId).toBe(
     result.fork.sessionId,

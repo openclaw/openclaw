@@ -1,3 +1,4 @@
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { AsyncWorkScope, isAsyncWorkScopeActiveHere } from "../shared/async-work-scope.js";
 
@@ -120,12 +121,6 @@ export class CliPluginInvocationResources {
     await this.work.drain();
     this.phase = "closed";
     this.resources.clear();
-    const failures = results.filter((result) => result.status === "rejected");
-    if (failures.length > 0) {
-      throw new AggregateError(
-        failures.map((failure) => failure.reason),
-        "Plugin CLI registration resources could not all be disposed",
-      );
-    }
+    throwSettledAggregate(results, "Plugin CLI registration resources could not all be disposed");
   }
 }

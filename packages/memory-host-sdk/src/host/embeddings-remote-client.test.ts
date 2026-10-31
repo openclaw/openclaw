@@ -41,9 +41,7 @@ function resolveClient(
   });
 }
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.unstubAllEnvs());
 
 describe("remote embedding private-network policy", () => {
   const requests: string[] = [];
@@ -164,51 +162,55 @@ it.each([
 );
 
 describe("resolveRemoteEmbeddingBearerClient", () => {
-  it.each<{
-    name: string;
-    remote: NonNullable<EmbeddingProviderOptions["remote"]>;
-    authorization: string;
-  }>([
-    {
-      name: "uses only destination-owned remote credentials",
-      remote: {
-        baseUrl: "https://remote.example.test/v1",
-        apiKey: "remote-key",
-        headers: { "X-Remote-Tenant": "remote-b" },
-      },
-      authorization: "Bearer remote-key",
-    },
-    {
-      name: "accepts a destination-owned Authorization header without an API key",
-      remote: {
-        baseUrl: "https://remote.example.test/v1",
-        headers: { Authorization: "Bearer remote-header-key", "X-Remote-Tenant": "remote-b" },
-      },
-      authorization: "Bearer remote-header-key",
-    },
-  ])("$name", async ({ remote, authorization }) => {
+  it.each(["apiKey", "Authorization"])("uses destination-owned %s credentials", async (kind) => {
     vi.stubEnv("OPENAI_API_KEY", "");
+    const authorization = "Bearer remote-key";
+    const remote = {
+      baseUrl: "https://remote.example.test/v1",
+      ...(kind === "apiKey" ? { apiKey: "remote-key" } : {}),
+      headers: {
+        "X-Remote-Tenant": "remote-b",
+        ...(kind === "Authorization" ? { Authorization: authorization } : {}),
+      },
+    };
     const client = await resolveClient(configuredProvider, remote);
 
-    expect(client.baseUrl).toBe(remote.baseUrl);
-    expect(client.headers.Authorization).toBe(authorization);
-    expect(client.headers["X-Remote-Tenant"]).toBe("remote-b");
+    expect(client).toMatchObject({
+      baseUrl: remote.baseUrl,
+      headers: { Authorization: authorization, "X-Remote-Tenant": "remote-b" },
+    });
     expect(client.headers).not.toHaveProperty("X-Provider-Tenant");
   });
 
-  it("fails before egress when a remote destination has no destination-owned auth", async () => {
-    await expect(
-      resolveRemoteEmbeddingBearerClient({
-        provider: "openai",
-        defaultBaseUrl: "https://api.openai.com/v1",
-        options: {
-          config: { models: { providers: { openai: configuredProvider } } } as never,
-          model: "text-embedding-3-small",
-          remote: { baseUrl: "https://remote.example.test/v1" },
-        },
-      }),
-    ).rejects.toThrow(/memory\.search\.remote\.apiKey|Authorization header/);
-  });
+  it.each([
+    ["ordinary provider", configuredProvider, "https://remote.example.test/v1"],
+    [
+      "custom subscription-mode provider",
+      {
+        ...configuredProvider,
+        api: "openai-chatgpt-responses",
+        headers: { Authorization: "Bearer custom-proxy-key", "X-Provider-Tenant": "provider-a" },
+      },
+      "https://api.openai.com/v1",
+    ],
+    [
+      "native subscription provider",
+      {
+        ...configuredProvider,
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+      "https://remote.example.test/v1",
+    ],
+  ] as const)(
+    "rejects foreign destinations without their own auth: %s",
+    async (_, provider, baseUrl) => {
+      vi.stubEnv("OPENAI_API_KEY", "");
+      await expect(resolveClient(provider, { baseUrl })).rejects.toThrow(
+        /memory\.search\.remote\.apiKey|Authorization header/,
+      );
+    },
+  );
 
   it("lets the last source replace mixed-case auth, tenant, and default headers", async () => {
     const client = await resolveClient(
@@ -288,51 +290,10 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
       api: "openai-chatgpt-responses",
     });
 
-    expect(client.baseUrl).toBe("https://provider.example.test/v1");
-    expect(client.headers.Authorization).toBe("Bearer provider-key");
-    expect(client.headers["X-Provider-Tenant"]).toBe("provider-a");
+    expect(client).toMatchObject({
+      baseUrl: "https://provider.example.test/v1",
+      headers: { Authorization: "Bearer provider-key", "X-Provider-Tenant": "provider-a" },
+    });
     expect(client.headers).not.toHaveProperty("originator");
-  });
-
-  it("keeps the destination-owned credential guard when a subscription-mode provider uses a custom URL", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "");
-    await expect(
-      resolveClient(
-        {
-          ...configuredProvider,
-          api: "openai-chatgpt-responses",
-          headers: {
-            Authorization: "Bearer custom-proxy-key",
-            "X-Provider-Tenant": "provider-a",
-          },
-        },
-        { baseUrl: "https://api.openai.com/v1" },
-      ),
-    ).rejects.toThrow(/memory\.search\.remote\.apiKey|Authorization header/);
-  });
-
-  it("keeps the destination-owned credential guard on an explicit remote destination", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "");
-    await expect(
-      resolveRemoteEmbeddingBearerClient({
-        provider: "openai",
-        defaultBaseUrl: "https://api.openai.com/v1",
-        options: {
-          config: {
-            models: {
-              providers: {
-                openai: {
-                  ...configuredProvider,
-                  api: "openai-chatgpt-responses",
-                  baseUrl: "https://chatgpt.com/backend-api/codex",
-                },
-              },
-            },
-          } as never,
-          model: "text-embedding-3-small",
-          remote: { baseUrl: "https://remote.example.test/v1" },
-        },
-      }),
-    ).rejects.toThrow(/memory\.search\.remote\.apiKey|Authorization header/);
   });
 });

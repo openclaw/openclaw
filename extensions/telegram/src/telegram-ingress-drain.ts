@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   fitsTelegramCallbackData,
   hasTelegramApprovalCallbackPrefix,
@@ -35,7 +36,10 @@ import {
 import { hasTelegramQuestionCallbackPrefix } from "./question-callback-data.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
-import { resolveTelegramIngressNonRetryableFailure } from "./telegram-ingress-non-retryable.js";
+import {
+  resolveTelegramIngressNonRetryableFailure,
+  TelegramCallbackProcessingError,
+} from "./telegram-ingress-non-retryable.js";
 import { resolveTelegramUpdateId, telegramQueueEventId } from "./telegram-ingress-spool.js";
 import {
   TelegramIngressPayloadError,
@@ -368,9 +372,16 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         ),
     },
     deliver: async (update, lifecycle) => {
+      const isCallback = isRecord(update) && isRecord(update.callback_query);
+      const wrapFailure = (error: unknown) =>
+        isCallback ? new TelegramCallbackProcessingError(error) : error;
       // The monitor supplies both callbacks; optional public fields preserve
       // structural compatibility for channel lifecycles that do not need them.
-      const telegramLifecycle = lifecycle as TelegramIngressDrainLifecycle;
+      const ingressLifecycle = lifecycle as TelegramIngressDrainLifecycle;
+      const telegramLifecycle: TelegramIngressDrainLifecycle = {
+        ...ingressLifecycle,
+        onFailed: (error) => ingressLifecycle.onFailed(wrapFailure(error)),
+      };
       try {
         const result = await runWithTelegramSpooledReplayUpdate(
           update as object,
@@ -442,7 +453,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         }
         const outcome = result.value;
         if (outcome?.kind === "failed-retryable") {
-          return { kind: "failed-retryable", error: outcome.error };
+          return { kind: "failed-retryable", error: wrapFailure(outcome.error) };
         }
         // A dispatched update that records no outcome and defers no participant
         // was consumed silently; completing here tombstones the spool row with
@@ -455,7 +466,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         await lifecycle.onAdopted();
         return { kind: "completed" };
       } catch (error) {
-        return { kind: "failed-retryable", error };
+        return { kind: "failed-retryable", error: wrapFailure(error) };
       }
     },
     pollIntervalMs: params.pollIntervalMs ?? TELEGRAM_SPOOLED_DRAIN_POLL_INTERVAL_MS,

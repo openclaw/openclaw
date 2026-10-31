@@ -1,9 +1,17 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import {
+  getPreparedModelRuntimeMocks,
+  usePreparedModelRuntimeHarness,
+} from "./prepared-model-runtime.test-harness.js";
 import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createChannelIngressDrainOwner } from "../channels/message/ingress-drain.js";
+import {
+  createTestIngressQueue,
+  withTempState,
+} from "../channels/message/ingress-drain.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
@@ -19,19 +27,91 @@ import {
 } from "./prepared-model-runtime.js";
 import { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch-runtime.js";
 
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
+  return {
+    ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+    createSubsystemLogger: (subsystem: string) =>
+      createMockSubsystemLogger(subsystem, {
+        warn: (...args) => getPreparedModelRuntimeMocks().warn(...args),
+      }),
+  };
+});
+
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
-type Dispatch = ReturnType<typeof loadDispatch>;
+const agentDir = (agentId: string) => fixture.state.agentDir(agentId);
+const dispatch = (agentId = "default") => loadDispatch({ agentId });
+const staticOptions = { gatewayLifecycle: true, catalogMode: "static" as const };
 type Refresh = ReturnType<typeof refreshRuntime>;
-const buildResult = (agentId = "default") => ({
-  agentDir: fixture.state.agentDir(agentId),
-  wrote: false as const,
-});
-const build = () => createDeferred<ReturnType<typeof buildResult>>();
+const build = () => createDeferred<Record<string, never>>();
 const refresh = (config: OpenClawConfig = {}) => refreshRuntime(config, { gatewayLifecycle: true });
+async function start(agentIds = ["default"], config: OpenClawConfig = {}) {
+  mocks.configuredAgentIds = agentIds;
+  await refresh(config);
+}
+async function staticSnapshot(config: OpenClawConfig = {}) {
+  mocks.configuredAgentIds = ["default"];
+  await refreshRuntime(config, staticOptions);
+  return prepareModelRuntimeSnapshot(fixture.agentInput("default", config));
+}
+const waitForBuilds = (count: number) =>
+  vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(count));
+function holdBuilds(...builds: ReturnType<typeof build>[]) {
+  for (const pending of builds) {
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => await pending.promise);
+  }
+}
+function routeBuilds(builds: Record<string, ReturnType<typeof build>>) {
+  mocks.ensureOpenClawModelsJson.mockImplementation(async (_config, directory) => {
+    const pending = Object.entries(builds).find(([id]) => agentDir(id) === directory)?.[1];
+    return pending ? await pending.promise : {};
+  });
+}
+function pendingWork() {
+  const releases: (() => void)[] = [];
+  const operations: Promise<unknown>[] = [];
+  const cleanups: (() => void)[] = [];
+  return {
+    defer: (cleanup: () => void) => {
+      cleanups.push(cleanup);
+    },
+    gate<T>(fallback: T) {
+      const started = createDeferred();
+      const pending = createDeferred<T>();
+      releases.push(() => pending.resolve(fallback));
+      return {
+        ...pending,
+        started: started.promise,
+        run: () => {
+          started.resolve();
+          return pending.promise;
+        },
+      };
+    },
+    build() {
+      return this.gate<Record<string, never>>({});
+    },
+    track<T>(operation: Promise<T>): Promise<T> {
+      operations.push(operation);
+      void operation.catch(() => undefined);
+      return operation;
+    },
+    async [Symbol.asyncDispose]() {
+      // Release gates before joining producers; listeners observe their final publication.
+      for (const release of releases) {
+        release();
+      }
+      await Promise.allSettled(operations);
+      for (const cleanup of cleanups) {
+        cleanup();
+      }
+    },
+  };
+}
 const mutate = (agentId = "default") =>
   mocks.mutationListener?.({
-    agentDir: fixture.state.agentDir(agentId),
+    agentDir: agentDir(agentId),
     affectsInheritedStores: false,
   });
 const expectPending = (promise: Promise<unknown>) =>
@@ -47,18 +127,96 @@ function observePhases() {
 }
 
 describe("prepared model runtime reload auth adoption", () => {
+  it("republishes a failed auth owner on the next inbound dispatch", async () => {
+    await start();
+    const failure = new Error("configured model publication timed out");
+    mocks.resolveAmbientCredentials.mockRejectedValueOnce(failure);
+    mutate("default");
+    await expect(dispatch()).rejects.toBe(failure);
+
+    const [first, concurrent] = await Promise.all([dispatch(), dispatch()]);
+    expect(first?.agentId).toBe("default");
+    expect(concurrent?.pluginGeneration).toBe(first?.pluginGeneration);
+    expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["recovers", "fails"] as const)(
+    "%s after the next eligible real recovery without charging backoff replays",
+    async (outcome) => {
+      let now = 10_000;
+      using _ = vi.spyOn(Date, "now").mockImplementation(() => now);
+
+      await start();
+      const failure = new Error("configured model publication timed out");
+      mocks.resolveAmbientCredentials.mockRejectedValue(failure);
+      mutate();
+      await expect(dispatch()).rejects.toBe(failure);
+      mocks.resolveAmbientCredentials.mockClear();
+
+      await withTempState(async (stateDir) => {
+        const queue = createTestIngressQueue(stateDir, { now: () => now });
+        await queue.enqueue("unavailable", { text: "retained request" });
+        const log = vi.fn();
+        const createDrain = () =>
+          createChannelIngressDrainOwner({
+            queue,
+            now: () => now,
+            onLog: log,
+            dispatchClaimedEvent: async () => {
+              await dispatch();
+            },
+          });
+        let drain = createDrain();
+        try {
+          expect(await drain.drainOnce()).toEqual({ started: 1 });
+          await drain.waitForIdle();
+          expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
+          expect(await queue.listPending()).toMatchObject([{ id: "unavailable", attempts: 1 }]);
+          now += 1_000;
+          expect(await drain.drainOnce()).toEqual({ started: 0 });
+          // An already-claimed replay must also preserve the real-attempt budget.
+          const replay = await queue.claim("unavailable");
+          expect(replay).not.toBeNull();
+          drain.dispatchClaimed(replay!, Promise.resolve());
+          await drain.waitForIdle();
+          expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
+          expect(await queue.listPending()).toMatchObject([{ id: "unavailable", attempts: 1 }]);
+          drain.dispose();
+          drain = createDrain();
+          expect(await drain.drainOnce()).toEqual({ started: 0 });
+          now = 15_000;
+          if (outcome === "recovers") {
+            mocks.resolveAmbientCredentials.mockReturnValue({});
+          }
+          expect(await drain.drainOnce()).toEqual({ started: 1 });
+          await drain.waitForIdle();
+          expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
+          expect(await queue.listPending()).toEqual([]);
+          if (outcome === "recovers") {
+            expect(await queue.listFailed?.()).toEqual([]);
+            expect(await queue.enqueue("unavailable", { text: "duplicate" })).toMatchObject({
+              kind: "completed",
+            });
+          } else {
+            expect(await queue.listFailed?.()).toMatchObject([
+              {
+                id: "unavailable",
+                payload: { text: "retained request" },
+                reason: "runtime-recovery-failed",
+              },
+            ]);
+            expect(log).toHaveBeenCalledWith(expect.stringContaining("runtime-recovery-failed"));
+          }
+        } finally {
+          drain.dispose();
+        }
+      });
+    },
+  );
+
   it("does not record an obsolete catalog attempt after its owner is superseded", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const config = {};
-    await refreshRuntime(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
-    const snapshot = await prepareModelRuntimeSnapshot(fixture.agentInput("default", config));
-    const { resolvePreparedModelRuntimeOwnerBySnapshot } =
-      await import("./prepared-model-runtime.owner.js");
-    const owner = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot);
-    if (!owner || !snapshot.loadFullModelCatalog) {
+    const snapshot = await staticSnapshot();
+    if (!snapshot.loadFullModelCatalog) {
       throw new Error("expected the published catalog owner");
     }
     const started = createDeferred();
@@ -78,10 +236,7 @@ describe("prepared model runtime reload auth adoption", () => {
     try {
       await started.promise;
       await vi.advanceTimersByTimeAsync(5_000);
-      replacement = refreshRuntime(
-        { logging: { level: "debug" } },
-        { gatewayLifecycle: true, catalogMode: "static" },
-      );
+      replacement = refreshRuntime({ logging: { level: "debug" } }, staticOptions);
       await Promise.resolve();
       expect(snapshot.isCurrent()).toBe(false);
       result.reject(failure);
@@ -97,13 +252,7 @@ describe("prepared model runtime reload auth adoption", () => {
   });
 
   it("does not refresh a catalog snapshot that is not owned by the runtime", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const input = fixture.agentInput("default", {});
-    await refreshRuntime(input.config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
-    const published = await prepareModelRuntimeSnapshot(input);
+    const published = await staticSnapshot();
     const unowned = { ...published };
     mocks.runPreparedModelCatalogWorker.mockClear();
 
@@ -112,278 +261,171 @@ describe("prepared model runtime reload auth adoption", () => {
   });
 
   it("commits auth invalidation inside the active lifecycle publication", async () => {
-    mocks.configuredAgentIds = ["default", "worker"];
-    const initialConfig = {};
+    await using work = pendingWork();
     const replacementConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
-    await refresh(initialConfig);
-    const configBuild = build();
-    const authBuild = build();
-    const order: string[] = [];
-    const events: string[] = [];
-    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
-      events.push(event.phase);
-      if (event.phase === "published") {
-        order.push("config-published");
-      }
-    });
+    await start(["default", "worker"]);
+    const configBuild = work.build();
+    const authBuild = work.build();
+    const { events, unregister } = observePhases();
+    work.defer(unregister);
     let defaultBuildCount = 0;
-    mocks.ensureOpenClawModelsJson.mockImplementation(async (_config, agentDir) => {
-      if (agentDir !== fixture.state.agentDir("default")) {
-        return { agentDir: String(agentDir), wrote: false };
+    mocks.ensureOpenClawModelsJson.mockImplementation(async (_config, directory) => {
+      if (directory !== agentDir("default")) {
+        return {};
       }
-      defaultBuildCount += 1;
-      if (defaultBuildCount === 1) {
-        order.push("config-build-start");
-        return await configBuild.promise;
-      }
-      order.push("auth-drain-start");
-      return await authBuild.promise;
+      return await (defaultBuildCount++ === 0 ? configBuild : authBuild).run();
     });
 
-    let publication: Refresh | undefined;
-    let affectedRead: Dispatch | undefined;
-    let siblingRead: Dispatch | undefined;
-    try {
-      publication = refresh(replacementConfig);
-      void publication.catch(() => undefined);
-      await vi.waitFor(() => expect(order).toContain("config-build-start"));
-      order.push("auth-mutation");
-      mutate("default");
-      affectedRead = loadDispatch({ agentId: "default" }).then((runtime) => {
-        order.push("affected-dispatch-resolved");
+    const publication = work.track(refresh(replacementConfig));
+    await configBuild.started;
+    mutate("default");
+    const affectedRead = work.track(
+      dispatch().then((runtime) => {
+        expect(events).toContain("published");
         return runtime;
-      });
-      siblingRead = loadDispatch({ agentId: "worker" });
-      void affectedRead.catch(() => undefined);
-      void siblingRead.catch(() => undefined);
-      order.push("config-build-finish");
-      configBuild.resolve(buildResult());
-      await vi.waitFor(() => expect(order).toContain("auth-drain-start"));
-      await expectPending(publication);
-      await expectPending(affectedRead);
+      }),
+    );
+    const siblingRead = work.track(dispatch("worker"));
+    configBuild.resolve({});
+    await authBuild.started;
+    await expectPending(publication);
+    await expectPending(affectedRead);
+    expect(events).not.toContain("published");
 
-      order.push("auth-drain-finish");
-      authBuild.resolve(buildResult());
-      await expect(publication).resolves.toBeUndefined();
-      const [affectedRuntime, siblingRuntime] = await Promise.all([affectedRead, siblingRead]);
-      unregister();
+    authBuild.resolve({});
+    await expect(publication).resolves.toBeUndefined();
+    const [affectedRuntime, siblingRuntime] = await Promise.all([affectedRead, siblingRead]);
+    unregister();
 
-      expect(events.filter((phase) => phase === "published")).toHaveLength(1);
-      expect(events).not.toContain("failed");
-      expect(mocks.warn).not.toHaveBeenCalled();
-      expect(affectedRuntime?.config).toBe(replacementConfig);
-      expect(siblingRuntime?.config).toBe(replacementConfig);
-      expect(order).toEqual([
-        "config-build-start",
-        "auth-mutation",
-        "config-build-finish",
-        "auth-drain-start",
-        "auth-drain-finish",
-        "config-published",
-        "affected-dispatch-resolved",
-      ]);
-      const buildCountAfterPublication = mocks.ensureOpenClawModelsJson.mock.calls.length;
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(buildCountAfterPublication);
-      const lease = await acquireAgentRunPreparedModelRuntime({
-        agentId: "default",
-        agentDir: fixture.state.agentDir("default"),
-        config: replacementConfig,
-        workspaceDir: "/tmp/unused-workspace",
-      });
-      expect(lease.snapshot.config).toBe(replacementConfig);
-      await lease[Symbol.asyncDispose]();
-    } finally {
-      configBuild.resolve(buildResult());
-      authBuild.resolve(buildResult());
-      await Promise.allSettled([publication, affectedRead, siblingRead]);
-      unregister();
-    }
+    expect(events.filter((phase) => phase === "published")).toHaveLength(1);
+    expect(events).not.toContain("failed");
+    expect(mocks.warn).not.toHaveBeenCalled();
+    expect(affectedRuntime?.config).toBe(replacementConfig);
+    expect(siblingRuntime?.config).toBe(replacementConfig);
+    const lease = await acquireAgentRunPreparedModelRuntime({
+      agentId: "default",
+      agentDir: agentDir("default"),
+      config: replacementConfig,
+      workspaceDir: "/tmp/unused-workspace",
+    });
+    expect(lease.snapshot.config).toBe(replacementConfig);
+    await lease[Symbol.asyncDispose]();
   });
 
-  it("rejects an adopted auth gate when config reload fails and permits recovery", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const initialConfig = {};
-    const replacementConfig = { plugins: {} };
-    await refresh(initialConfig);
-    const authBuild = build();
-    const reloadError = new Error("replacement config failed");
-    mocks.ensureOpenClawModelsJson
-      .mockImplementationOnce(async () => await authBuild.promise)
-      .mockRejectedValueOnce(reloadError);
-
-    let authWaiter: Dispatch | undefined;
-    let reload: Refresh | undefined;
-    try {
-      mutate("default");
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
-      authWaiter = loadDispatch({ agentId: "default" });
-      void authWaiter.catch(() => undefined);
-      reload = refresh(replacementConfig);
-      void reload.catch(() => undefined);
-      authBuild.resolve(buildResult());
-
-      await expect(reload).rejects.toBe(reloadError);
-      await expect(authWaiter).rejects.toBe(reloadError);
-      await expect(loadDispatch({ agentId: "default" })).rejects.toThrow(
-        "prepared reply dispatch runtime owner was not published for default",
-      );
-
-      await refresh(replacementConfig);
-      await expect(loadDispatch({ agentId: "default" })).resolves.toMatchObject({
-        config: replacementConfig,
-      });
-    } finally {
-      authBuild.resolve(buildResult());
-      await Promise.allSettled([authWaiter, reload]);
-    }
-  });
+  it.each(["replacement", "obsolete auth"] as const)(
+    "settles an adopted auth gate when %s fails, and permits recovery",
+    async (failedBuild) => {
+      await using work = pendingWork();
+      const replacementConfig = { plugins: {} };
+      await start();
+      const authBuild = work.build();
+      const configBuild = work.build();
+      const failure = new Error(`${failedBuild} build failed`);
+      holdBuilds(authBuild, configBuild);
+      mutate();
+      await waitForBuilds(2);
+      const authWaiter = work.track(dispatch());
+      const reload = work.track(refresh(replacementConfig));
+      if (failedBuild === "replacement") {
+        authBuild.resolve({});
+        await waitForBuilds(3);
+        configBuild.reject(failure);
+        await expect(reload).rejects.toBe(failure);
+        await expect(authWaiter).rejects.toBe(failure);
+        await expect(dispatch()).resolves.toMatchObject({ config: replacementConfig });
+      } else {
+        authBuild.reject(failure);
+        await waitForBuilds(3);
+        await expectPending(authWaiter);
+        configBuild.resolve({});
+        await expect(reload).resolves.toBeUndefined();
+        await expect(authWaiter).resolves.toMatchObject({ config: replacementConfig });
+        expect(mocks.warn).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("continues with a corrective auth mutation after the earlier build fails", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const config = {};
-    const agentDir = fixture.state.agentDir("default");
-    await refresh(config);
-    const firstBuild = build();
-    const secondBuild = build();
+    await using work = pendingWork();
+    const directory = agentDir("default");
+    await start();
+    const firstBuild = work.build();
+    const secondBuild = work.build();
     const firstError = new Error("superseded auth build failed");
-    mocks.ensureOpenClawModelsJson
-      .mockImplementationOnce(async () => await firstBuild.promise)
-      .mockImplementationOnce(async () => await secondBuild.promise);
+    holdBuilds(firstBuild, secondBuild);
 
-    let dispatch: Dispatch | undefined;
-    try {
-      mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
-      dispatch = loadDispatch({ agentId: "default" });
-      void dispatch.catch(() => undefined);
-      mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
-      firstBuild.reject(firstError);
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3));
-      await expectPending(dispatch);
+    mutate();
+    await waitForBuilds(2);
+    const read = work.track(dispatch());
+    mutate();
+    firstBuild.reject(firstError);
+    await waitForBuilds(3);
+    await expectPending(read);
 
-      secondBuild.resolve({ agentDir, wrote: false });
-      await expect(dispatch).resolves.toMatchObject({ agentId: "default", agentDir });
-      expect(mocks.warn).not.toHaveBeenCalled();
-    } finally {
-      firstBuild.resolve(buildResult());
-      secondBuild.resolve(buildResult());
-      await Promise.allSettled([dispatch]);
-    }
+    secondBuild.resolve({});
+    await expect(read).resolves.toMatchObject({ agentId: "default", agentDir: directory });
+    expect(mocks.warn).not.toHaveBeenCalled();
   });
 
   it("keeps transitively overlapping inherited auth mutations atomic", async () => {
-    mocks.configuredAgentIds = ["default", "worker", "research"];
-    await refresh({});
-    const agentDirs = {
-      default: fixture.state.agentDir("default"),
-      research: fixture.state.agentDir("research"),
-      worker: fixture.state.agentDir("worker"),
-    } as const;
+    await using work = pendingWork();
+    await start(["default", "worker", "research"]);
     const builds = {
-      default: build(),
-      research: build(),
-      worker: build(),
+      default: work.build(),
+      research: work.build(),
+      worker: work.build(),
     };
     const refreshError = new Error("inherited research auth build failed");
-    mocks.ensureOpenClawModelsJson.mockImplementation(async (_config, agentDir) => {
-      const entry = Object.entries(agentDirs).find(
-        ([, configuredDir]) => configuredDir === agentDir,
-      );
-      return entry
-        ? await builds[entry[0] as keyof typeof builds].promise
-        : { agentDir: String(agentDir), wrote: false };
-    });
+    routeBuilds(builds);
 
-    let dispatches: Record<keyof typeof builds, Dispatch> | undefined;
-    try {
-      mocks.mutationListener?.({ agentDir: agentDirs.worker, affectsInheritedStores: false });
-      mocks.mutationListener?.({ agentDir: agentDirs.research, affectsInheritedStores: false });
-      mocks.mutationListener?.({ affectsInheritedStores: true });
-      dispatches = Object.fromEntries(
-        Object.keys(agentDirs).map((agentId) => [agentId, loadDispatch({ agentId })]),
-      ) as Record<keyof typeof agentDirs, Dispatch>;
-      for (const dispatch of Object.values(dispatches)) {
-        void dispatch.catch(() => undefined);
-      }
-      builds.default.resolve({ agentDir: agentDirs.default, wrote: false });
-      builds.worker.resolve({ agentDir: agentDirs.worker, wrote: false });
-      await vi.waitFor(() =>
-        expect(mocks.ensureOpenClawModelsJson.mock.calls.length).toBeGreaterThanOrEqual(6),
-      );
+    mutate("worker");
+    mutate("research");
+    mocks.mutationListener?.({ affectsInheritedStores: true });
+    const dispatches = Object.keys(builds).map((agentId) => work.track(dispatch(agentId)));
+    builds.default.resolve({});
+    builds.worker.resolve({});
+    await vi.waitFor(() =>
+      expect(mocks.ensureOpenClawModelsJson.mock.calls.length).toBeGreaterThanOrEqual(6),
+    );
 
-      builds.research.reject(refreshError);
+    builds.research.reject(refreshError);
 
-      await expect(dispatches.default).rejects.toBe(refreshError);
-      await expect(dispatches.worker).rejects.toBe(refreshError);
-      await expect(dispatches.research).rejects.toBe(refreshError);
-      expect(mocks.warn).toHaveBeenCalledOnce();
-    } finally {
-      for (const agentId of Object.keys(builds) as Array<keyof typeof builds>) {
-        builds[agentId].resolve({ agentDir: agentDirs[agentId], wrote: false });
-      }
-      await Promise.allSettled(Object.values(dispatches ?? {}));
+    for (const read of dispatches) {
+      await expect(read).rejects.toBe(refreshError);
     }
+    expect(mocks.warn).toHaveBeenCalledOnce();
   });
 
   it("commits a successful owner when the final independent owner fails", async () => {
-    mocks.configuredAgentIds = ["default", "worker", "research"];
-    const config = {};
-    await refresh(config);
-    const workerBuild = build();
-    const researchBuild = build();
+    await using work = pendingWork();
+    await start(["default", "worker", "research"]);
+    const workerBuild = work.build();
+    const researchBuild = work.build();
     const researchError = new Error("final research auth build failed");
     const { events, unregister } = observePhases();
-    mocks.ensureOpenClawModelsJson.mockImplementation(async (_config, agentDir) => {
-      if (agentDir === fixture.state.agentDir("worker")) {
-        return await workerBuild.promise;
-      }
-      if (agentDir === fixture.state.agentDir("research")) {
-        return await researchBuild.promise;
-      }
-      return { agentDir: String(agentDir), wrote: false };
-    });
+    work.defer(unregister);
+    routeBuilds({ worker: workerBuild, research: researchBuild });
 
-    let workerDispatch: Dispatch | undefined;
-    let researchDispatch: Dispatch | undefined;
-    try {
-      mutate("worker");
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4));
-      workerDispatch = loadDispatch({ agentId: "worker" });
-      void workerDispatch.catch(() => undefined);
-      const workerSettled = vi.fn();
-      void workerDispatch.then(workerSettled, () => undefined);
-      mutate("research");
-      researchDispatch = loadDispatch({ agentId: "research" });
-      void researchDispatch.catch(() => undefined);
-      workerBuild.resolve(buildResult("worker"));
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(5));
-      await vi.waitFor(() => expect(workerSettled).toHaveBeenCalledOnce());
-      await expectPending(researchDispatch);
-      expect(events).not.toContain("published");
-      researchBuild.reject(researchError);
+    mutate("worker");
+    await waitForBuilds(4);
+    const workerDispatch = work.track(dispatch("worker"));
+    mutate("research");
+    const researchDispatch = work.track(dispatch("research"));
+    workerBuild.resolve({});
+    await waitForBuilds(5);
+    await expect(workerDispatch).resolves.toMatchObject({ agentId: "worker" });
+    await expectPending(researchDispatch);
+    expect(events).not.toContain("published");
+    researchBuild.reject(researchError);
 
-      await expect(workerDispatch).resolves.toMatchObject({ agentId: "worker" });
-      await expect(researchDispatch).rejects.toBe(researchError);
-      await expect(loadDispatch({ agentId: "research" })).rejects.toThrow(
-        "prepared reply dispatch runtime owner was not published for research",
-      );
-      expect(events).not.toContain("published");
-      expect(events.filter((phase) => phase === "failed")).toHaveLength(1);
-      unregister();
-    } finally {
-      workerBuild.resolve(buildResult("worker"));
-      researchBuild.resolve(buildResult("research"));
-      await Promise.allSettled([workerDispatch, researchDispatch]);
-      unregister();
-    }
+    await expect(researchDispatch).rejects.toBe(researchError);
+    expect(events).not.toContain("published");
+    expect(events.filter((phase) => phase === "failed")).toHaveLength(1);
+    unregister();
   });
 
   it("isolates reply projection replacement failure to its component", async () => {
-    mocks.configuredAgentIds = ["default", "worker", "research"];
-    const config = {};
-    await refresh(config);
+    await start(["default", "worker", "research"]);
     const projectionError = new Error("reply projection replacement failed");
     const { events, unregister } = observePhases();
     const replaceSpy = vi
@@ -394,69 +436,28 @@ describe("prepared model runtime reload auth adoption", () => {
 
     mutate("worker");
     mutate("research");
-    const workerDispatch = loadDispatch({ agentId: "worker" });
-    const researchDispatch = loadDispatch({ agentId: "research" });
+    const workerDispatch = dispatch("worker");
+    const researchDispatch = dispatch("research");
     void workerDispatch.catch(() => undefined);
     void researchDispatch.catch(() => undefined);
 
     await expect(workerDispatch).rejects.toBe(projectionError);
     await expect(researchDispatch).resolves.toMatchObject({
       agentId: "research",
-      agentDir: fixture.state.agentDir("research"),
+      agentDir: agentDir("research"),
     });
-    await expect(loadDispatch({ agentId: "worker" })).rejects.toThrow(
-      "prepared reply dispatch runtime owner was not published for worker",
-    );
     expect(events.filter((phase) => phase === "failed")).toHaveLength(1);
+    await expect(dispatch("worker")).resolves.toMatchObject({ agentId: "worker" });
     replaceSpy.mockRestore();
     unregister();
-  });
-
-  it("lets an adopting reload settle the gate after the obsolete auth build fails", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const initialConfig = {};
-    const replacementConfig = { plugins: {} };
-    await refresh(initialConfig);
-    const authBuild = build();
-    const configBuild = build();
-    const obsoleteAuthError = new Error("obsolete auth build failed");
-    mocks.ensureOpenClawModelsJson
-      .mockImplementationOnce(async () => await authBuild.promise)
-      .mockImplementationOnce(async () => await configBuild.promise);
-
-    let authWaiter: Dispatch | undefined;
-    let reload: Refresh | undefined;
-    try {
-      mutate("default");
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
-      authWaiter = loadDispatch({ agentId: "default" });
-      void authWaiter.catch(() => undefined);
-      reload = refresh(replacementConfig);
-      void reload.catch(() => undefined);
-      authBuild.reject(obsoleteAuthError);
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3));
-      await expectPending(authWaiter);
-
-      configBuild.resolve(buildResult());
-      await expect(reload).resolves.toBeUndefined();
-      await expect(authWaiter).resolves.toMatchObject({ config: replacementConfig });
-      expect(mocks.warn).not.toHaveBeenCalled();
-    } finally {
-      authBuild.resolve(buildResult());
-      configBuild.resolve(buildResult());
-      await Promise.allSettled([authWaiter, reload]);
-    }
   });
 
   it.each(["rollback", "replacement"] as const)(
     "revokes changed auth immediately and publishes it after plugin drain %s",
     async (outcome) => {
-      mocks.configuredAgentIds = ["default"];
       const initialConfig = {};
-      const options = { gatewayLifecycle: true, catalogMode: "static" as const };
-      await refreshRuntime(initialConfig, options);
       const input = fixture.agentInput("default", initialConfig);
-      const original = await prepareModelRuntimeSnapshot(input);
+      const original = await staticSnapshot(initialConfig);
       const drain = beginPreparedModelRuntimePluginDrain();
       let draining = true;
       mocks.prepareStaticCatalog.mockClear();
@@ -479,7 +480,7 @@ describe("prepared model runtime reload auth adoption", () => {
         draining = false;
         drain.release();
         if (outcome === "replacement") {
-          publication = refreshRuntime({ plugins: {} }, options);
+          publication = refreshRuntime({ plugins: {} }, staticOptions);
           await publication;
         }
         const refreshed = await read;
@@ -496,7 +497,7 @@ describe("prepared model runtime reload auth adoption", () => {
   );
 
   it("releases a rejected replacement's cached registry after the old catalog finishes", async () => {
-    mocks.configuredAgentIds = ["default"];
+    await using work = pendingWork();
     const cache = getPluginLoaderCacheState();
     const cacheKey = "static-auth-replacement-fixture";
     mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
@@ -509,137 +510,94 @@ describe("prepared model runtime reload auth adoption", () => {
       cache.set(cacheKey, registry);
       return registry;
     });
-    const initialConfig = {};
     const replacementConfig = {
       auth: { profiles: { "fixture:manual": { provider: "fixture", mode: "api_key" as const } } },
     };
-    const options = { gatewayLifecycle: true, catalogMode: "static" as const };
-    await refreshRuntime(initialConfig, options);
+    const initialConfig = {};
+    mocks.configuredAgentIds = ["default"];
+    await refreshRuntime(initialConfig, staticOptions);
     const original = await prepareModelRuntimeSnapshot({
       agentId: "default",
-      agentDir: fixture.state.agentDir("default"),
+      agentDir: agentDir("default"),
       config: initialConfig,
     });
     if (!original.loadFullModelCatalog) {
       throw new Error("expected a configured catalog owner");
     }
     await original.loadFullModelCatalog();
-    const catalogStarted = createDeferred();
-    const catalogFinished = createDeferred<{ entries: []; routeVariants: [] }>();
-    mocks.runPreparedModelCatalogWorker.mockImplementationOnce(() => {
-      catalogStarted.resolve();
-      return catalogFinished.promise;
-    });
-    const credentialsStarted = createDeferred();
-    const credentialsFinished = createDeferred();
-    mocks.resolveAmbientCredentials.mockImplementationOnce(async () => {
-      credentialsStarted.resolve();
-      await credentialsFinished.promise;
-      return {};
-    });
-    const catalog = original.loadFullModelCatalog({ refresh: true });
-    const obsoleteCatalog = expect(catalog).rejects.toThrow("superseded");
-    void obsoleteCatalog.catch(() => undefined);
-    let reload: Refresh | undefined;
-    try {
-      await catalogStarted.promise;
-      reload = refreshRuntime(replacementConfig, options);
-      void reload.catch(() => undefined);
-      await credentialsStarted.promise;
-      expect(original.isCurrent()).toBe(false);
-      catalogFinished.resolve({ entries: [], routeVariants: [] });
-      await obsoleteCatalog;
-      expect(cache.get(cacheKey)).toBe(original.pluginRegistry);
-      const failure = new Error("fixture credential preparation failed");
-      credentialsFinished.reject(failure);
-      await expect(reload).rejects.toBe(failure);
-      expect(cache.get(cacheKey)).toBeUndefined();
-      await refreshRuntime(replacementConfig, options);
-      await expect(loadDispatch({ agentId: "default" })).resolves.toMatchObject({
-        config: replacementConfig,
-      });
-      expect(original.isCurrent()).toBe(false);
-    } finally {
-      catalogFinished.resolve({ entries: [], routeVariants: [] });
-      credentialsFinished.resolve();
-      await Promise.allSettled([catalog, obsoleteCatalog, reload]);
-    }
+    const emptyCatalog: { entries: []; routeVariants: [] } = { entries: [], routeVariants: [] };
+    const catalogFinished = work.gate(emptyCatalog);
+    mocks.runPreparedModelCatalogWorker.mockImplementationOnce(catalogFinished.run);
+    const credentialsFinished = work.build();
+    mocks.resolveAmbientCredentials.mockImplementationOnce(credentialsFinished.run);
+    const catalog = work.track(original.loadFullModelCatalog({ refresh: true }));
+    const obsoleteCatalog = work.track(expect(catalog).rejects.toThrow("superseded"));
+    await catalogFinished.started;
+    const reload = work.track(refreshRuntime(replacementConfig, staticOptions));
+    await credentialsFinished.started;
+    expect(original.isCurrent()).toBe(false);
+    catalogFinished.resolve(emptyCatalog);
+    await obsoleteCatalog;
+    expect(cache.get(cacheKey)).toBe(original.pluginRegistry);
+    const failure = new Error("fixture credential preparation failed");
+    credentialsFinished.reject(failure);
+    await expect(reload).rejects.toBe(failure);
+    expect(cache.get(cacheKey)).toBeUndefined();
+    await refreshRuntime(replacementConfig, staticOptions);
+    await expect(dispatch()).resolves.toMatchObject({ config: replacementConfig });
+    expect(original.isCurrent()).toBe(false);
   });
 
   it("adopts remaining auth work after another owner already published", async () => {
-    mocks.configuredAgentIds = ["default", "worker", "research"];
+    await using work = pendingWork();
     const initialConfig = {};
     const replacementConfig = { plugins: {} };
-    await refresh(initialConfig);
-    const workerAuthBuild = build();
-    const researchAuthBuild = build();
-    const replacementWorkerBuild = build();
-    const workerAuthStarted = createDeferred();
-    const researchAuthStarted = createDeferred();
-    const replacementWorkerStarted = createDeferred();
+    await start(["default", "worker", "research"], initialConfig);
+    const workerAuthBuild = work.build();
+    const researchAuthBuild = work.build();
+    const replacementWorkerBuild = work.build();
     const { events, unregister } = observePhases();
-    mocks.ensureOpenClawModelsJson.mockImplementation(async (config, agentDir) => {
-      if (
-        isDeepStrictEqual(config, initialConfig) &&
-        agentDir === fixture.state.agentDir("worker")
-      ) {
-        workerAuthStarted.resolve();
-        return await workerAuthBuild.promise;
-      }
-      if (
-        isDeepStrictEqual(config, initialConfig) &&
-        agentDir === fixture.state.agentDir("research")
-      ) {
-        researchAuthStarted.resolve();
-        return await researchAuthBuild.promise;
-      }
-      if (
-        isDeepStrictEqual(config, replacementConfig) &&
-        agentDir === fixture.state.agentDir("worker")
-      ) {
-        replacementWorkerStarted.resolve();
-        return await replacementWorkerBuild.promise;
-      }
-      return { agentDir: String(agentDir), wrote: false };
+    work.defer(unregister);
+    mocks.ensureOpenClawModelsJson.mockImplementation(async (config, directory) => {
+      const route = [
+        [initialConfig, "worker", workerAuthBuild],
+        [initialConfig, "research", researchAuthBuild],
+        [replacementConfig, "worker", replacementWorkerBuild],
+      ] as const;
+      return (
+        route
+          .find(
+            ([expected, agent]) =>
+              isDeepStrictEqual(config, expected) && directory === agentDir(agent),
+          )?.[2]
+          .run() ?? {}
+      );
     });
 
-    let firstWorkerRead: Dispatch | undefined;
-    let adoptedWorkerRead: Dispatch | undefined;
-    let reload: Refresh | undefined;
-    try {
-      mutate("worker");
-      await workerAuthStarted.promise;
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4);
-      firstWorkerRead = loadDispatch({ agentId: "worker" });
-      mutate("research");
-      workerAuthBuild.resolve(buildResult("worker"));
-      await researchAuthStarted.promise;
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(5);
-      await expect(firstWorkerRead).resolves.toMatchObject({ config: initialConfig });
+    mutate("worker");
+    await workerAuthBuild.started;
+    const firstWorkerRead = work.track(dispatch("worker"));
+    mutate("research");
+    workerAuthBuild.resolve({});
+    await researchAuthBuild.started;
+    await expect(firstWorkerRead).resolves.toMatchObject({ config: initialConfig });
 
-      reload = refresh(replacementConfig);
-      adoptedWorkerRead = loadDispatch({ agentId: "worker" });
-      const adoptedWorkerSettled = vi.fn();
-      void adoptedWorkerRead.then(adoptedWorkerSettled, () => undefined);
-      await Promise.resolve();
-      expect(adoptedWorkerSettled).not.toHaveBeenCalled();
+    const reload = work.track(refresh(replacementConfig));
+    const adoptedWorkerRead = work.track(dispatch("worker"));
+    const adoptedWorkerSettled = vi.fn();
+    void adoptedWorkerRead.then(adoptedWorkerSettled, () => undefined);
+    await Promise.resolve();
+    expect(adoptedWorkerSettled).not.toHaveBeenCalled();
 
-      researchAuthBuild.resolve(buildResult("research"));
-      await replacementWorkerStarted.promise;
-      expect(adoptedWorkerSettled).not.toHaveBeenCalled();
-      replacementWorkerBuild.resolve(buildResult("worker"));
-      await expect(reload).resolves.toBeUndefined();
-      await expect(adoptedWorkerRead).resolves.toMatchObject({ config: replacementConfig });
-      unregister();
+    researchAuthBuild.resolve({});
+    await replacementWorkerBuild.started;
+    expect(adoptedWorkerSettled).not.toHaveBeenCalled();
+    replacementWorkerBuild.resolve({});
+    await expect(reload).resolves.toBeUndefined();
+    await expect(adoptedWorkerRead).resolves.toMatchObject({ config: replacementConfig });
+    unregister();
 
-      expect(events.filter((phase) => phase === "published")).toHaveLength(1);
-      expect(events).not.toContain("failed");
-    } finally {
-      workerAuthBuild.resolve(buildResult("worker"));
-      researchAuthBuild.resolve(buildResult("research"));
-      replacementWorkerBuild.resolve(buildResult("worker"));
-      await Promise.allSettled([firstWorkerRead, adoptedWorkerRead, reload]);
-      unregister();
-    }
+    expect(events.filter((phase) => phase === "published")).toHaveLength(1);
+    expect(events).not.toContain("failed");
   });
 });

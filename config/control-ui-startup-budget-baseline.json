@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 338803,
-  "reason": "Integrated main after schema and syntax-highlighting deferrals measures 338803 B at startup; cap at 338900 B with the existing 64 B build-variance allowance.",
-  "updatedAt": "2026-10-17"
+  "startupJsGzipBytes": 88830,
+  "reason": "Integrated long-tail candidate measures 88,830 B startup gzip, 46 B above its exact base, with unchanged 277,773 B raw JS, three JS requests and one CSS request. Twenty interleaved pairs reduce Skills desktop visit and filter CPU by about 70%; record the measured candidate after main integration.",
+  "updatedAt": "2026-10-31"
 }

@@ -9,6 +9,9 @@ import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execu
 import type { AgentDatabaseExecutionScope } from "./openclaw-agent-execution-contract.js";
 import { openOpenClawAgentSqliteWorkerStore } from "./openclaw-agent-worker-store.js";
 
+const allow = () => {};
+const workerModule = { moduleUrl: new URL("file:///synthetic/worker.js"), input: undefined };
+
 const boundary = vi.hoisted(() => ({
   ready: Promise.resolve(),
   current: vi.fn(),
@@ -62,9 +65,11 @@ vi.mock("./openclaw-agent-db-identity.js", () => ({
   }),
   isOpenClawAgentDatabasePathCurrent: () => true,
 }));
+// mock-isolation: Synthetic admission owns the handle; this fixture observes borrow release only.
+vi.mock("./openclaw-agent-db-borrower.js", () => ({ retainAgentDatabase: () => () => {} }));
+// mock-isolation: Synthetic worker resources must not register with the real database lifecycle.
 vi.mock("./openclaw-agent-db-lifecycle.js", () => ({
   registerOpenClawAgentDatabaseAsyncResource: () => () => {},
-  retainAgentDatabase: () => () => {},
 }));
 vi.mock("./openclaw-agent-db.js", () => ({ getOpenClawAgentDatabaseIfOpen: boundary.current }));
 // mock-isolation: Capture worker admission timing without entering real writer queues.
@@ -90,101 +95,78 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-async function openPublication() {
+type Worker = Awaited<ReturnType<typeof openOpenClawAgentSqliteWorkerStore>>;
+async function withPublication(
+  run: (worker: Worker) => Promise<void>,
+  options: OpenClawAgentDatabaseOptions = {
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: "/synthetic/captured" },
+  },
+) {
   const db = new DatabaseSync(":memory:");
   boundary.current.mockReturnValue({ db });
-  return openOpenClawAgentSqliteWorkerStore(
-    { agentId: "main", env: { OPENCLAW_STATE_DIR: "/synthetic/captured" } },
-    db,
-    { moduleUrl: new URL("file:///synthetic/worker.js"), input: undefined },
-  );
+  const worker = await openOpenClawAgentSqliteWorkerStore(options, db, workerModule);
+  try {
+    await run(worker);
+  } finally {
+    await worker.close();
+  }
 }
-
-it.each(["domain close", "retired executor", "executor release", "both cleanup steps"] as const)(
-  "preserves completed publication when %s fails",
-  async (failurePoint) => {
-    const cleanupError = new Error("Publication cleanup unavailable after completed command");
-    const releaseError = new Error("Executor release failed after completed publication");
-    const committed = { revision: 42 };
-    boundary.execute.mockImplementation(async (command) => {
-      if (command.type === "database.domain.execute" && failurePoint === "retired executor") {
+it.each([
+  ["domain close", true, false],
+  ["retired executor", false, false],
+  ["executor release", false, true],
+  ["both cleanup steps", true, true],
+  ["callback", true, true],
+  ["command", true, true],
+] as const)("preserves publication outcome when %s fails", async (failure, close, release) => {
+  const original = new Error("Publication failed");
+  const cleanupError = new Error("Domain cleanup failed");
+  const releaseError = new Error("Executor release failed");
+  const committed = { revision: 42 };
+  const fails = failure === "callback" || failure === "command";
+  boundary.execute.mockImplementation(async ({ type }) => {
+    if (type === "database.domain.execute") {
+      if (failure === "command") {
+        throw original;
+      }
+      if (failure === "retired executor") {
         boundary.available.mockImplementation(() => {
           throw cleanupError;
         });
       }
-      if (
-        command.type === "database.domain.close" &&
-        (failurePoint === "domain close" || failurePoint === "both cleanup steps")
-      ) {
-        throw cleanupError;
-      }
-    });
-    if (failurePoint === "executor release" || failurePoint === "both cleanup steps") {
-      boundary.release.mockRejectedValue(releaseError);
     }
-    const worker = await openPublication();
-    try {
-      await expect(
-        worker.run(
-          async (scope) => {
-            await scope.execute({ type: "append", input: { value: "committed" } });
-            return committed;
-          },
-          () => undefined,
-        ),
-      ).resolves.toBe(committed);
-      expect(boundary.release).toHaveBeenCalledOnce();
-    } finally {
-      await worker.close();
+    if (type === "database.domain.close" && close) {
+      throw cleanupError;
     }
-  },
-);
-
-it.each(["callback", "command"] as const)(
-  "preserves the failed %s and both cleanup errors",
-  async (failurePoint) => {
-    const original = new Error("Publication failed before producing a completed result");
-    const cleanupError = new Error("Domain cleanup also failed");
-    const releaseError = new Error("Executor release also failed");
-    boundary.execute.mockImplementation(async (command) => {
-      if (command.type === "database.domain.execute" && failurePoint === "command") {
+  });
+  if (release) {
+    boundary.release.mockRejectedValue(releaseError);
+  }
+  await withPublication(async (worker) => {
+    const work = worker.run(async (scope) => {
+      if (failure === "callback") {
         throw original;
       }
-      if (command.type === "database.domain.close") {
-        throw cleanupError;
+      const command = scope.execute({ type: "append", input: { value: "committed" } });
+      // A handled command failure must still fail its enclosing publication.
+      if (failure === "command") {
+        await command.catch(allow);
+      } else {
+        await command;
       }
-    });
-    boundary.release.mockRejectedValue(releaseError);
-    const worker = await openPublication();
-    try {
-      const work = worker.run(
-        async (scope) => {
-          if (failurePoint === "callback") {
-            throw original;
-          }
-          // A caller can handle its command promise, but the adapter still owns its failure.
-          await scope.execute({ type: "append", input: { value: "failed" } }).catch(() => {});
-          return "must not report success";
-        },
-        () => undefined,
-      );
+      return committed;
+    }, allow);
+    if (fails) {
       const errors = (error: unknown): unknown[] =>
         error instanceof AggregateError ? error.errors.flatMap(errors) : [error];
-      const outcome = await work.then(
-        (value) => ({ ok: true, value }),
-        (error: unknown) => ({ ok: false, error }),
-      );
-      expect(outcome.ok).toBe(false);
-      if (!("error" in outcome)) {
-        throw new Error("Failed publication unexpectedly succeeded");
-      }
-      expect(errors(outcome.error)).toEqual([original, cleanupError, releaseError]);
-      expect(boundary.release).toHaveBeenCalledOnce();
-    } finally {
-      await worker.close();
+      await expect(work.catch(errors)).resolves.toEqual([original, cleanupError, releaseError]);
+    } else {
+      await expect(work).resolves.toBe(committed);
     }
-  },
-);
+    expect(boundary.release).toHaveBeenCalledOnce();
+  });
+});
 
 it.each([
   { platform: "win32", key: "OpenClaw_State_Dir", input: "plain" },
@@ -198,46 +180,34 @@ it.each([
       const rawEnv = { [fixture.key]: root };
       const env = fixture.input === "precloned" ? cloneEnvWithPlatformSemantics(rawEnv) : rawEnv;
       const options = { agentId: "main", env };
-      const db = new DatabaseSync(":memory:");
-      boundary.current.mockReturnValue({ db });
       const ready = createDeferredCore();
       boundary.ready = ready.promise;
-      const worker = await openOpenClawAgentSqliteWorkerStore(options, db, {
-        moduleUrl: new URL("file:///synthetic/worker.js"),
-        input: undefined,
-      });
-      let work: Promise<string> | undefined;
-      try {
-        expect(boundary.captureState).toHaveBeenCalledWith(`${root}/state.sqlite`);
-        work = worker.run(
-          async (scope) => {
+      await withPublication(async (worker) => {
+        let work: Promise<string> | undefined;
+        try {
+          expect(boundary.captureState).toHaveBeenCalledWith(`${root}/state.sqlite`);
+          work = worker.run(async (scope) => {
             await scope.execute({ type: "append", input: { value: "published" } });
             return "published";
-          },
-          () => undefined,
-        );
-        expect(boundary.capture.mock.calls[0]?.[0].env?.OPENCLAW_STATE_DIR).toBe(root);
-        expect(boundary.execute).not.toHaveBeenCalled();
-        env[fixture.key] = "/synthetic/changed";
-        options.env = { OPENCLAW_STATE_DIR: "/synthetic/replaced" };
-        ready.resolve();
-        await expect(work).resolves.toBe("published");
-        const captured = boundary.capture.mock.calls[0]?.[0];
-        expect(captured?.path).toBe(`${root}/main.sqlite`);
-        expect(captured?.env?.OPENCLAW_STATE_DIR).toBe(root);
-        expect(boundary.current.mock.calls.length).toBeGreaterThan(1);
-        for (const [admitted] of boundary.current.mock.calls) {
-          expect(admitted.path).toBe(`${root}/main.sqlite`);
-          expect(admitted.env.OPENCLAW_STATE_DIR).toBe(root);
+          }, allow);
+          expect(boundary.execute).not.toHaveBeenCalled();
+          env[fixture.key] = "/synthetic/changed";
+          options.env = { OPENCLAW_STATE_DIR: "/synthetic/replaced" };
+          ready.resolve();
+          await expect(work).resolves.toBe("published");
+          const captured = boundary.capture.mock.calls[0]?.[0];
+          const expected = { path: `${root}/main.sqlite`, env: { OPENCLAW_STATE_DIR: root } };
+          expect(captured).toMatchObject(expected);
+          expect(boundary.current.mock.calls.length).toBeGreaterThan(1);
+          for (const [admitted] of boundary.current.mock.calls) {
+            expect(admitted).toMatchObject(expected);
+          }
+          expect(boundary.release).toHaveBeenCalledExactlyOnceWith(captured);
+        } finally {
+          ready.resolve();
+          await work?.catch(allow);
         }
-        expect(boundary.release).toHaveBeenCalledExactlyOnceWith(captured);
-        expect(boundary.release.mock.calls[0]?.[0].env?.OPENCLAW_STATE_DIR).toBe(root);
-        await worker.close();
-      } finally {
-        ready.resolve();
-        await work?.catch(() => undefined);
-        await worker.close();
-      }
+      }, options);
     });
   },
 );

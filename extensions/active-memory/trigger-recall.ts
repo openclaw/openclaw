@@ -419,8 +419,4 @@ export function forgetTriggerRecallRun(runId: string | undefined): void {
   }
 }
 
-export function resetTriggerRecallRunsForTests(): void {
-  triggerRecallRuns.clear();
-}
-
 export { MAX_TRIGGER_CONTEXT_CHARS };

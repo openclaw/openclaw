@@ -10,7 +10,15 @@ import { createCodexDesktopGenerationOwner } from "./desktop-generation-owner.js
 import * as desktopGenerationRuntime from "./desktop-generation.js";
 import * as managedBinary from "./managed-binary.js";
 import {
+  appInfo,
+  appSummary,
+  pluginDetail,
+  pluginInstalled,
+  pluginSummary,
+} from "./plugin-inventory.test-helpers.js";
+import {
   isJsonObject,
+  type CodexAppServerRequestParams,
   type CodexThread,
   type CodexTurn,
   type JsonObject,
@@ -169,6 +177,29 @@ export async function createCanonicalForkNativeFixture(
           return { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}`, codexHome: home };
         case "initialized":
           return {};
+        case "plugin/installed":
+          return pluginInstalled([pluginSummary("synthetic", { installed: true, enabled: true })]);
+        case "plugin/read":
+          return pluginDetail("synthetic", [appSummary("synthetic-app")]);
+        case "mcpServerStatus/list":
+          return {
+            data: [
+              {
+                name: "codex_apps",
+                tools: {
+                  "synthetic.lookup": {
+                    title: "lookup",
+                    annotations: { readOnlyHint: true },
+                    _meta: {
+                      connector_id: "synthetic-app",
+                      _codex_apps: { resource_uri: "/synthetic-app/link/lookup" },
+                    },
+                  },
+                },
+              },
+            ],
+            nextCursor: null,
+          };
         case "skills/list":
           return { data: [] };
         case "configRequirements/read":
@@ -184,23 +215,26 @@ export async function createCanonicalForkNativeFixture(
         }
         const apps = threads.get(String(params.threadId))?.config?.apps;
         const app = isJsonObject(apps) ? apps["synthetic-app"] : undefined;
-        return codexAppInventoryResponse(method, [
-          {
-            id: "synthetic-app",
-            name: "Synthetic App",
-            description: null,
-            logoUrl: null,
-            logoUrlDark: null,
-            distributionChannel: null,
-            branding: null,
-            appMetadata: null,
-            labels: null,
-            installUrl: null,
-            isAccessible: true,
-            isEnabled: isJsonObject(app) && app.enabled === true,
-            pluginDisplayNames: [],
-          },
-        ]);
+        return codexAppInventoryResponse(
+          method,
+          [
+            {
+              ...appInfo("synthetic-app", true, isJsonObject(app) && app.enabled === true),
+              name: "Synthetic App",
+              toolSummaries: [
+                {
+                  name: "lookup",
+                  title: null,
+                  description: "",
+                  isReadOnly: true,
+                  isEnabled: true,
+                  disabledReason: null,
+                },
+              ],
+            },
+          ],
+          params as CodexAppServerRequestParams<typeof method>,
+        );
       }
       if (method === "thread/list") {
         return {
@@ -385,7 +419,7 @@ export async function createCanonicalForkNativeFixture(
       }
       process.emit("exit", 0, null);
     });
-    const client = CodexAppServerClient.fromTransportForTests(transport);
+    const client = CodexAppServerClient.fromTransport(transport);
     clients.push(client);
     return Promise.resolve(client);
   });

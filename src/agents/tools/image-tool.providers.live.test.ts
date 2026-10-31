@@ -3,12 +3,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { coerceErrorMessage as formatLiveError, expectDefined } from "@openclaw/normalization-core";
+import { coerceErrorMessage as formatLiveError } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ModelApi } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resizeToJpeg } from "../../media/media-services.js";
-import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import {
   describeImageWithModel,
   type ImageDescriptionRequest,
@@ -22,7 +21,11 @@ import {
 import { isLiveTestEnabled } from "../live-test-helpers.js";
 import { isLiveAuthDrift } from "../live-test-provider-drift.test-support.js";
 import { createImageTool } from "./image-tool.js";
-import { testing } from "./image-tool.test-support.js";
+import {
+  createLargeColorBlockPng as createLargeCenterRedPng,
+  readJpegDimensions,
+  testing,
+} from "./image-tool.test-support.js";
 
 const describeLiveImageWithModel = describeImageWithModel;
 
@@ -72,45 +75,6 @@ const ANTHROPIC_LIVE_CASE: LiveProviderCase = {
   reasoning: true,
   live: LIVE_IMAGE_TOOL_ENABLED && ANTHROPIC_API_KEY.length > 0,
 };
-
-function createLargeCenterRedPng(size: number): Buffer {
-  const buf = Buffer.alloc(size * size * 4, 255);
-  const centerStart = Math.floor(size * 0.25);
-  const centerEnd = Math.floor(size * 0.75);
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const inCenter = x >= centerStart && x < centerEnd && y >= centerStart && y < centerEnd;
-      fillPixel(buf, x, y, size, inCenter ? 230 : 30, inCenter ? 40 : 110, inCenter ? 35 : 220);
-    }
-  }
-  return encodePngRgba(buf, size, size);
-}
-
-function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
-  // The provider hook receives JPEG bytes after optimization; parsing SOF
-  // markers keeps the downscale proof independent from image libraries.
-  let offset = 2;
-  while (offset + 9 < buffer.length) {
-    if (buffer[offset] !== 0xff) {
-      offset += 1;
-      continue;
-    }
-    const marker = expectDefined(buffer[offset + 1], "buffer[offset + 1] test invariant");
-    offset += 2;
-    if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
-      continue;
-    }
-    const segmentLength = buffer.readUInt16BE(offset);
-    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
-      return {
-        height: buffer.readUInt16BE(offset + 3),
-        width: buffer.readUInt16BE(offset + 5),
-      };
-    }
-    offset += segmentLength;
-  }
-  throw new Error("JPEG dimensions not found");
-}
 
 function isSkippableLiveError(error: unknown): boolean {
   const message = formatLiveError(error);

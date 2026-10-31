@@ -1,5 +1,6 @@
 import childProcess, { type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -10,7 +11,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
-import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
+import { withinTest } from "../helpers/promise.js";
 
 const runtimeSmokePath = path.resolve(
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
@@ -167,8 +168,10 @@ async function observeRuntimeCommandTimeout(params: {
   descendantPidPath?: string;
   signal: AbortSignal;
   onTestFinished: TestContext["onTestFinished"];
+  onCleanupRegistered: () => void;
 }): Promise<Error> {
   const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+  params.signal.throwIfAborted();
   const spawnSpy = vi.spyOn(childProcess, "spawn");
   let child: ChildProcess | undefined;
   let commandResult: Promise<unknown> | undefined;
@@ -205,6 +208,7 @@ async function observeRuntimeCommandTimeout(params: {
       }
     }
   });
+  params.onCleanupRegistered();
   // Freeze the parent's policy clock, not subprocess startup, I/O, readiness or cleanup.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
@@ -250,103 +254,82 @@ async function observeRuntimeCommandTimeout(params: {
   }
 }
 
-export function registerRuntimeCommandTimeoutTests(createPackageRoot: () => string): void {
-  (process.platform !== "win32" ? it : it.skip).for([
-    { name: "kills timed-out runtime command groups", detached: true, timeoutMs: 250 },
-    {
-      name: "falls back to direct kills for non-detached command timeouts",
-      detached: false,
-      timeoutMs: 500,
-    },
-  ])("$name", async ({ detached, timeoutMs }, { signal, onTestFinished }) => {
-    const root = createPackageRoot();
-    const commandPath = path.join(root, "timeout-command.mjs");
-    const descendantPidPath = path.join(root, "timed-out-descendant.pid");
-    const readyPath = path.join(root, "timed-out-descendant.ready");
-    const descendantSource = `import fs from 'node:fs';
+function registerTimeoutCase(
+  detached: boolean,
+  createPackageRoot = () => fs.mkdtempSync(path.join(os.tmpdir(), "runtime-command-")),
+): void {
+  const timeoutMs = detached ? 250 : 200;
+  (detached && process.platform === "win32" ? it.skip : it)(
+    detached
+      ? "kills timed-out runtime command groups"
+      : "bounds non-detached runtime commands and preserves captured output",
+    async ({ signal, onTestFinished }) => {
+      const startedAt = Date.now();
+      const root = createPackageRoot();
+      let cleanupRegistered = false;
+      onTestFinished(() => {
+        if (!cleanupRegistered) {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      });
+      const commandPath = path.join(root, "timeout-command.mjs");
+      const descendantPidPath = path.join(root, "timed-out-descendant.pid");
+      const readyPath = path.join(root, "timed-out-descendant.ready");
+      const descendantSource = `import fs from 'node:fs';
 process.on('SIGTERM', () => {});
 setInterval(() => {}, 1000);
 fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");
 ${fixtureReadySource(readyPath)}`;
-    const spawnDescendant = `import childProcess from 'node:child_process';
+      const spawnDescendant = `import childProcess from 'node:child_process';
 const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(descendantSource)}], { stdio: "ignore" });`;
-    fs.writeFileSync(
-      commandPath,
-      `import fs from 'node:fs';
+      fs.writeFileSync(
+        commandPath,
+        `import fs from 'node:fs';
 ${detached ? spawnDescendant : ""}
 setInterval(() => {}, 1000);
+process.stdout.write('partial\\n');
+process.stderr.write('problem\\n');
 fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(${detached ? "child" : "process"}.pid) + "\\n");
 ${fixtureReadySource(descendantPidPath)}
 `,
-      "utf8",
-    );
-    const error = await observeRuntimeCommandTimeout({
-      args: [commandPath],
-      ready: async (child, operation) => {
-        const pid = await waitForPidFile(descendantPidPath, operation, signal);
-        if (detached) {
-          await fixtureReadyBeforeSettlement(readyPath, operation, signal);
-          return [pid];
-        }
-        expect(pid).toBe(child.pid);
-        return [];
-      },
-      timeoutMs,
-      detached,
-      runDetached: detached ? undefined : false,
-      root,
-      descendantPidPath: detached ? descendantPidPath : undefined,
-      signal,
-      onTestFinished,
-    });
-    expect(error.message).toMatch(new RegExp(`timed out after ${timeoutMs}ms`, "u"));
-  });
+        "utf8",
+      );
+      const error = await observeRuntimeCommandTimeout({
+        args: [commandPath],
+        ready: async (child, operation) => {
+          const pid = await waitForPidFile(descendantPidPath, operation, signal);
+          if (detached) {
+            await fixtureReadyBeforeSettlement(readyPath, operation, signal);
+            return [pid];
+          }
+          expect(pid).toBe(child.pid);
+          return [];
+        },
+        timeoutMs,
+        detached,
+        runDetached: detached ? undefined : false,
+        root,
+        descendantPidPath: detached ? descendantPidPath : undefined,
+        signal,
+        onTestFinished,
+        onCleanupRegistered: () => {
+          cleanupRegistered = true;
+        },
+      });
+      if (detached) {
+        expect(error.message).toMatch(/timed out after 250ms/u);
+      } else {
+        expect(error.message).toMatch(/timed out after 200ms[\s\S]*partial[\s\S]*problem/u);
+        expect(Date.now() - startedAt).toBeLessThan(2_500);
+      }
+    },
+  );
+}
+
+export function registerRuntimeCommandTimeoutTests(createPackageRoot: () => string): void {
+  registerTimeoutCase(true, createPackageRoot);
 }
 
 export function registerRuntimeCommandOutputTimeoutTest(): void {
-  it("bounds runtime smoke child commands and preserves captured output", async ({
-    signal,
-    onTestFinished,
-  }) => {
-    const startedAt = Date.now();
-    const error = await observeRuntimeCommandTimeout({
-      args: [
-        "-e",
-        "setInterval(() => {}, 1000); process.stdout.write('partial\\n'); process.stderr.write('problem\\n');",
-      ],
-      ready: async (child, operation) => {
-        const outputReady = createDeferred();
-        const output = { stdout: "", stderr: "" };
-        const listeners = (["stdout", "stderr"] as const).map((stream) => {
-          const listener = (chunk: string | Buffer) => {
-            output[stream] += chunk.toString();
-            if (output.stdout.includes("partial") && output.stderr.includes("problem")) {
-              outputReady.resolve();
-            }
-          };
-          child[stream]!.on("data", listener);
-          return () => child[stream]!.off("data", listener);
-        });
-        try {
-          await withinTest(
-            awaitGateBeforeSettlement(
-              outputReady.promise,
-              operation,
-              "runtime command settled before output",
-            ),
-            signal,
-          );
-          return [];
-        } finally {
-          listeners.forEach((remove) => remove());
-        }
-      },
-      timeoutMs: 200,
-      detached: process.platform !== "win32",
-      signal,
-      onTestFinished,
-    });
-    expect(error.message).toMatch(/timed out after 200ms[\s\S]*partial[\s\S]*problem/u);
-    expect(Date.now() - startedAt).toBeLessThan(2_500);
-  });
+  registerTimeoutCase(false);
 }

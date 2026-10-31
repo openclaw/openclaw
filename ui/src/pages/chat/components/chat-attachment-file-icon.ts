@@ -202,17 +202,7 @@ type AttachmentFileIconFamily = (typeof FILE_ICON_FAMILIES)[number]["family"];
 
 const UNKNOWN_FILE_ICON = FILE_ICON_FAMILIES[0];
 
-export type ResolvedAttachmentFileIcon = {
-  family: AttachmentFileIconFamily;
-  accent: string;
-  extensionLabel: string;
-  compact?: CompactFileIcon;
-};
-
-export function resolveAttachmentFileIcon(
-  filename: string,
-  mimeType?: string,
-): ResolvedAttachmentFileIcon {
+export function resolveAttachmentFileIcon(filename: string, mimeType?: string) {
   const extension = getMediaFileExtension(filename);
   const normalizedMimeType = mimeType?.split(";", 1)[0]?.trim().toLowerCase();
   const definition: FileIconFamilyDefinition =

@@ -17,9 +17,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { z } from "zod";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
+import { jsonObjectSchema, jsonValueSchema } from "./json-schema.js";
+import { listCodexMcpServerStatuses } from "./mcp-server-status.js";
 import {
   projectCodexMcpServerMetadata,
   projectCodexMcpToolMetadata,
@@ -36,7 +37,6 @@ import {
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 const CODEX_APPS_MCP_SERVER = "codex_apps";
-const toolCallMetadataSchema = z.record(z.string(), z.json());
 
 function readMcpToolResult(item: CodexThreadItem): ToolCallResult | undefined {
   const result = asOptionalRecord(item.result);
@@ -92,32 +92,26 @@ export function createNativeMcpRuntime(params: {
     if (statuses) {
       return statuses;
     }
-    const loaded: CodexMcpServerStatus[] = [];
-    const cursors = new Set<string>();
-    let cursor: string | undefined;
-    for (let page = 0; page < 100; page += 1) {
-      const response = await params.client.request(
-        "mcpServerStatus/list",
-        {
-          threadId: params.threadId,
-          detail: "full",
-          ...(cursor ? { cursor } : {}),
-        },
-        { assertCurrent: params.assertCurrent },
-      );
-      params.assertCurrent?.();
-      loaded.push(...response.data);
-      if (!response.nextCursor) {
-        statuses = loaded;
-        return statuses;
-      }
-      if (cursors.has(response.nextCursor)) {
-        throw new Error("Native MCP status cursor repeated");
-      }
-      cursor = response.nextCursor;
-      cursors.add(cursor);
-    }
-    throw new Error("Native MCP status exceeded the page limit");
+    statuses = await listCodexMcpServerStatuses(
+      async (cursor) => {
+        const response = await params.client.request(
+          "mcpServerStatus/list",
+          {
+            threadId: params.threadId,
+            detail: "full",
+            ...(cursor ? { cursor } : {}),
+          },
+          { assertCurrent: params.assertCurrent },
+        );
+        params.assertCurrent?.();
+        return response;
+      },
+      {
+        repeatedCursor: "Native MCP status cursor repeated",
+        pageLimit: "Native MCP status exceeded the page limit",
+      },
+    );
+    return statuses;
   };
   const getCatalog = async (): Promise<McpToolCatalog> => {
     if (catalog) {
@@ -218,7 +212,7 @@ export function createNativeMcpRuntime(params: {
             server: serverName,
             tool: toolName,
             arguments: (asOptionalRecord(input) ?? {}) as JsonObject,
-            ...(options?._meta ? { _meta: toolCallMetadataSchema.parse(options._meta) } : {}),
+            ...(options?._meta ? { _meta: jsonObjectSchema.parse(options._meta) } : {}),
           },
           // The client also checks authority after overload backoff, before
           // each retry write; cancellation alone cannot detect policy changes.
@@ -247,7 +241,7 @@ export function createNativeMcpRuntime(params: {
               signal,
             });
             assertCurrent();
-            return z.json().parse(result);
+            return jsonValueSchema.parse(result);
           },
         },
         call,

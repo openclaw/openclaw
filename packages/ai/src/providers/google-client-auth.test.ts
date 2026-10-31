@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 
 const googleMockState = vi.hoisted(() => ({ configs: [] as unknown[], requests: [] as unknown[] }));
 
@@ -34,30 +35,15 @@ const context = {
   messages: [{ role: "user", content: "hello", timestamp: 0 }],
 } satisfies Context;
 const sentinel = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
+const budget2048 = { includeThoughts: true, thinkingBudget: 2048 };
 
-function googleModel(): Model<"google-generative-ai"> {
-  return {
-    id: "gemini-3-flash-preview",
-    name: "Gemini 3 Flash Preview",
-    api: "google-generative-ai",
-    provider: "google",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 1_000_000,
-    maxTokens: 8192,
-  };
-}
-
-function vertexModel(): Model<"google-vertex"> {
-  return {
-    ...googleModel(),
-    api: "google-vertex",
-    provider: "google-vertex",
-    baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",
-  };
-}
+const googleModel = makeProviderModel("google-generative-ai", "google", "gemini-3-flash-preview");
+const vertexModel = {
+  ...googleModel,
+  api: "google-vertex",
+  provider: "google-vertex",
+  baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",
+} satisfies Model<"google-vertex">;
 
 describe("Google SDK construction auth", () => {
   beforeEach(() => {
@@ -71,70 +57,32 @@ describe("Google SDK construction auth", () => {
   });
 
   it.each([
-    {
-      id: "gemini-2.5-pro",
-      reasoning: "low",
-      maxTokens: 64,
-      expected: {
-        maxOutputTokens: 2112,
-        thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 },
-      },
-    },
-    {
-      id: "gemini-2.5-pro",
-      reasoning: "off",
-      maxTokens: 64,
-      expected: { maxOutputTokens: 192, thinkingConfig: { thinkingBudget: 128 } },
-    },
-    {
-      id: "gemini-2.5-flash",
-      reasoning: "off",
-      maxTokens: 64,
-      expected: { maxOutputTokens: 64, thinkingConfig: { thinkingBudget: 0 } },
-    },
-    {
-      id: "gemini-2.5-pro",
-      reasoning: "low",
-      maxTokens: undefined,
-      expected: { thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 } },
-    },
-    {
-      id: "gemini-2.5-pro",
-      reasoning: "low",
-      maxTokens: 8000,
-      expected: {
-        maxOutputTokens: 8192,
-        thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 },
-      },
-    },
+    ["gemini-2.5-pro", "low", 64, 2112, budget2048],
+    ["gemini-2.5-pro", "off", 64, 192, { thinkingBudget: 128 }],
+    ["gemini-2.5-flash", "off", 64, 64, { thinkingBudget: 0 }],
+    ["gemini-2.5-pro", "low", undefined, undefined, budget2048],
+    ["gemini-2.5-pro", "low", 8000, 8192, budget2048],
   ] as const)(
-    "preserves the output budget at the Google SDK boundary: $id $reasoning $maxTokens",
-    async ({ id, reasoning, maxTokens, expected }) => {
+    "preserves the output budget at the Google SDK boundary: %s %s %s",
+    async (id, reasoning, maxTokens, maxOutputTokens, thinkingConfig) => {
       configureAiTransportHost({ resolveSecretSentinel: (value) => value });
-      await streamSimpleGoogle({ ...googleModel(), id }, context, {
-        apiKey: "test-key",
-        reasoning,
-        maxTokens,
-      }).result();
-      await streamSimpleGoogleVertex({ ...vertexModel(), id }, context, {
-        apiKey: "test-key",
-        reasoning,
-        maxTokens,
-      }).result();
+      const options = { apiKey: "test-key", reasoning, maxTokens };
+      await streamSimpleGoogle({ ...googleModel, id }, context, options).result();
+      await streamSimpleGoogleVertex({ ...vertexModel, id }, context, options).result();
       expect(googleMockState.requests).toHaveLength(2);
       for (const request of googleMockState.requests) {
         const serialized = JSON.stringify(request);
         expect(JSON.parse(serialized)).toEqual({
           model: id,
           contents: [{ role: "user", parts: [{ text: "hello" }] }],
-          config: expected,
+          config: { ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }), thinkingConfig },
         });
       }
     },
   );
 
   it("identifies OpenCode conversations without cache retention", async () => {
-    await streamGoogle({ ...googleModel(), baseUrl: "https://opencode.ai/zen/v1" }, context, {
+    await streamGoogle({ ...googleModel, baseUrl: "https://opencode.ai/zen/v1" }, context, {
       apiKey: "test",
       sessionId: "conversation-123",
       cacheRetention: "none",
@@ -144,83 +92,44 @@ describe("Google SDK construction auth", () => {
     });
   });
 
-  it("unwraps Google API-key sentinels immediately before client construction", async () => {
-    const buildModelFetch = vi.fn();
-    configureAiTransportHost({
-      buildModelFetch,
-      resolveSecretSentinel: (value) => value.replaceAll(sentinel, "google-construction-secret"),
-    });
-
-    const result = await streamGoogle(
-      {
-        ...googleModel(),
-        headers: { Authorization: `Bearer ${sentinel}` },
-      },
-      context,
-      { apiKey: sentinel },
-    ).result();
-
-    expect(result.stopReason).toBe("error");
-    expect(googleMockState.configs[0]).toMatchObject({
-      apiKey: "google-construction-secret",
-      httpOptions: { headers: { Authorization: "Bearer google-construction-secret" } },
-    });
-    expect(JSON.stringify(googleMockState.configs[0])).not.toContain(sentinel);
-    expect(buildModelFetch).not.toHaveBeenCalled();
-  });
-
-  it("unwraps Vertex API-key sentinels immediately before client construction", async () => {
-    const buildModelFetch = vi.fn();
-    configureAiTransportHost({
-      buildModelFetch,
-      resolveSecretSentinel: (value) => value.replaceAll(sentinel, "vertex-construction-secret"),
-    });
-
-    const result = await streamGoogleVertex(
-      {
-        ...vertexModel(),
-        headers: { "X-Provider-Token": sentinel },
-      },
-      context,
-      {
-        apiKey: sentinel,
-        project: "demo-project",
-        location: "us-central1",
-      },
-    ).result();
-
-    expect(result.stopReason).toBe("error");
-    expect(googleMockState.configs[0]).toMatchObject({
-      apiKey: "vertex-construction-secret",
-      vertexai: true,
-      httpOptions: { headers: { "X-Provider-Token": "vertex-construction-secret" } },
-    });
-    expect(JSON.stringify(googleMockState.configs[0])).not.toContain(sentinel);
-    expect(buildModelFetch).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["Google", "Authorization", "Bearer "],
+    ["Vertex", "X-Provider-Token", ""],
+  ] as const)(
+    "unwraps %s API-key sentinels immediately before client construction",
+    async (provider, header, prefix) => {
+      const buildModelFetch = vi.fn();
+      const secret = `${provider.toLowerCase()}-construction-secret`;
+      configureAiTransportHost({
+        buildModelFetch,
+        resolveSecretSentinel: (value) => value.replaceAll(sentinel, secret),
+      });
+      const headers = { [header]: `${prefix}${sentinel}` };
+      await (
+        provider === "Google"
+          ? streamGoogle({ ...googleModel, headers }, context, { apiKey: sentinel })
+          : streamGoogleVertex({ ...vertexModel, headers }, context, { apiKey: sentinel })
+      ).result();
+      expect(googleMockState.configs[0]).toMatchObject({
+        apiKey: secret,
+        ...(provider === "Vertex" ? { vertexai: true } : {}),
+        httpOptions: { headers: { [header]: `${prefix}${secret}` } },
+      });
+      expect(JSON.stringify(googleMockState.configs[0])).not.toContain(sentinel);
+      expect(buildModelFetch).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
-    {
-      modelId: "gemma-4-26b-a4b-it",
-      reasoning: "low",
-      expectedThinking: { includeThoughts: true, thinkingLevel: "MINIMAL" },
-    },
-    {
-      modelId: "gemma-4-26b-a4b-it",
-      reasoning: "adaptive",
-      expectedThinking: { includeThoughts: true, thinkingLevel: "HIGH" },
-    },
-    {
-      modelId: "gemini-2.5-flash-lite",
-      reasoning: "minimal",
-      expectedThinking: { includeThoughts: true, thinkingBudget: 512 },
-    },
+    ["gemma-4-26b-a4b-it", "low", { includeThoughts: true, thinkingLevel: "MINIMAL" }],
+    ["gemma-4-26b-a4b-it", "adaptive", { includeThoughts: true, thinkingLevel: "HIGH" }],
+    ["gemini-2.5-flash-lite", "minimal", { includeThoughts: true, thinkingBudget: 512 }],
   ] as const)(
-    "keeps the supported Vertex thinking policy for $modelId",
-    async ({ modelId, reasoning, expectedThinking }) => {
+    "keeps the supported Vertex thinking policy for %s",
+    async (modelId, reasoning, expectedThinking) => {
       configureAiTransportHost({ resolveSecretSentinel: (value) => value });
 
-      await streamSimpleGoogleVertex({ ...vertexModel(), id: modelId }, context, {
+      await streamSimpleGoogleVertex({ ...vertexModel, id: modelId }, context, {
         apiKey: "test-vertex-key",
         reasoning: reasoning as never,
       }).result();
@@ -231,36 +140,25 @@ describe("Google SDK construction auth", () => {
     },
   );
 
-  it("ignores blank Vertex project and location env fallbacks", async () => {
-    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "   ");
+  it.each([
+    ["   ", "   ", "project ID"],
+    [" vertex-project ", "   ", "location"],
+    [" vertex-project ", " us-central1 ", undefined],
+  ])("trims Vertex env configuration (%s, %s)", async (project, location, missing) => {
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", project);
     vi.stubEnv("GCLOUD_PROJECT", "   ");
-    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "   ");
-
-    const missingProject = await streamGoogleVertex(vertexModel(), context).result();
-
-    expect(missingProject.stopReason).toBe("error");
-    expect(JSON.stringify(missingProject)).toContain("Vertex AI requires a project ID");
-    expect(googleMockState.configs).toHaveLength(0);
-
-    vi.stubEnv("GOOGLE_CLOUD_PROJECT", " vertex-project ");
-    vi.stubEnv("GCLOUD_PROJECT", "");
-    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "   ");
-
-    const missingLocation = await streamGoogleVertex(vertexModel(), context).result();
-
-    expect(missingLocation.stopReason).toBe("error");
-    expect(JSON.stringify(missingLocation)).toContain("Vertex AI requires a location");
-    expect(googleMockState.configs).toHaveLength(0);
-
-    vi.stubEnv("GOOGLE_CLOUD_LOCATION", " us-central1 ");
-
-    const configured = await streamGoogleVertex(vertexModel(), context).result();
-
-    expect(configured.stopReason).toBe("error");
-    expect(googleMockState.configs[0]).toMatchObject({
-      vertexai: true,
-      project: "vertex-project",
-      location: "us-central1",
-    });
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", location);
+    const result = await streamGoogleVertex(vertexModel, context).result();
+    expect(result.stopReason).toBe("error");
+    if (missing) {
+      expect(JSON.stringify(result)).toContain(`Vertex AI requires a ${missing}`);
+      expect(googleMockState.configs).toHaveLength(0);
+    } else {
+      expect(googleMockState.configs[0]).toMatchObject({
+        vertexai: true,
+        project: "vertex-project",
+        location: "us-central1",
+      });
+    }
   });
 });

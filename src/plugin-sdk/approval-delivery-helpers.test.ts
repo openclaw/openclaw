@@ -4,9 +4,11 @@ import {
   createApproverRestrictedNativeApprovalCapability,
   createApproverRestrictedNativeApprovalCapabilityAsync,
   createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes,
+  createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsync,
   createChannelApprovalCapability,
   splitChannelApprovalCapability,
 } from "./approval-delivery-helpers.js";
+import { createNativeApprovalRuntimeStub as makeNativeRuntime } from "./test-helpers/native-approval.js";
 
 const execRequest = {
   id: "approval-1",
@@ -22,17 +24,6 @@ const deliveryDefaults = {
   isNativeDeliveryEnabled: () => true,
   resolveNativeDeliveryMode: () => "dm" as const,
 };
-function makeNativeRuntime() {
-  return {
-    availability: { isConfigured: vi.fn(), shouldHandle: vi.fn() },
-    presentation: {
-      buildPendingPayload: vi.fn(),
-      buildResolvedResult: vi.fn(),
-      buildExpiredResult: vi.fn(),
-    },
-    transport: { prepareTarget: vi.fn(), deliverPending: vi.fn() },
-  };
-}
 
 describe("createApproverRestrictedNativeApprovalAdapter", () => {
   it("uses approver-restricted authorization for exec and plugin commands", () => {
@@ -231,11 +222,20 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
     expect(split.nativeRuntime).toBe(nativeRuntime);
   });
 
-  it("assembles forwarding-routed capabilities without replacing channel auth results", () => {
+  it.each([
+    {
+      variant: "synchronous",
+      create: createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes,
+    },
+    {
+      variant: "asynchronous",
+      create: createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsync,
+    },
+  ])("assembles $variant forwarding routes with channel auth intact", async ({ create }) => {
     const authResult = { authorized: true } as const;
     const authorizeActorAction = vi.fn(() => authResult);
     const render = { exec: { buildPendingPayload: vi.fn() } };
-    const routed = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes({
+    const routed = create({
       channel: "example",
       channelLabel: "Example",
       authorizeActorAction,
@@ -273,21 +273,41 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
     );
     expect(routed.capability.render).toBe(render);
     expect(routed.capability.getActionAvailabilityState?.(input)).toEqual({ kind: "enabled" });
-    expect(routed.capability.native?.describeDeliveryCapabilities({ ...input, request })).toEqual({
+    expect(routed.capability.getExecInitiatingSurfaceState?.(input)).toEqual({ kind: "enabled" });
+    expect(
+      routed.capability.getActionAvailabilityState?.({ ...input, approvalKind: "plugin" }),
+    ).toEqual({ kind: "disabled" });
+    expect(routed.capability.delivery?.hasConfiguredDmRoute?.({ cfg })).toBe(true);
+    const native = routed.capability.nativeAsync ?? routed.capability.native;
+    expect(await native?.describeDeliveryCapabilities({ ...input, request })).toEqual({
       enabled: true,
       preferredSurface: "origin",
       supportsOriginSurface: true,
       supportsApproverDmSurface: true,
       notifyOriginWhenDmOnly: true,
     });
+    expect(await native?.resolveApproverDmTargets?.({ ...input, request })).toEqual([
+      { to: "owner", accountId: "default" },
+    ]);
+    const suppress =
+      routed.capability.delivery?.shouldSuppressForwardingFallbackAsync ??
+      routed.capability.delivery?.shouldSuppressForwardingFallback;
     expect(
-      routed.capability.delivery?.shouldSuppressForwardingFallback?.({
+      await suppress?.({
         cfg,
         approvalKind: "exec",
         target: { channel: "example", to: "ORIGIN", source: "target" },
         request,
       }),
     ).toBe(true);
+    expect(
+      await suppress?.({
+        cfg,
+        approvalKind: "exec",
+        target: { channel: "example", to: "unmatched", source: "target" },
+        request,
+      }),
+    ).toBe(false);
     expect(routed.routing.isNativeApprovalHandlerConfigured({ cfg })).toBe(true);
   });
 });

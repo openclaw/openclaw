@@ -1,6 +1,7 @@
-/** Tests provider discovery normalization, grouping, and manifest contribution handling. */
 import { describe, expect, it } from "vitest";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
+import type { ModelProviderConfig } from "../config/types.js";
+import { buildCatalogModel as makeModel } from "../plugin-sdk/provider-catalog.test-support.js";
+import type { ProviderCatalogOutcome } from "./provider-catalog.types.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -9,24 +10,24 @@ import {
 } from "./provider-discovery.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
-function makeProvider(params: {
+function makeProvider({
+  id,
+  label = id,
+  order,
+  ...aliases
+}: {
   id: string;
   label?: string;
   order?: ProviderCatalogOrder;
   aliases?: string[];
   hookAliases?: string[];
 }): ProviderPlugin {
-  const hook = {
-    ...(params.order ? { order: params.order } : {}),
-    run: async () => null,
-  };
   return {
-    id: params.id,
-    label: params.label ?? params.id,
+    id,
+    label,
     auth: [],
-    ...(params.aliases ? { aliases: params.aliases } : {}),
-    ...(params.hookAliases ? { hookAliases: params.hookAliases } : {}),
-    catalog: hook,
+    ...aliases,
+    catalog: { order, run: async () => null },
   };
 }
 
@@ -38,244 +39,117 @@ function makeModelProviderConfig(overrides?: Partial<ModelProviderConfig>): Mode
   };
 }
 
-function makeModel(id: string): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
-    contextWindow: 128_000,
-    maxTokens: 8_192,
-  };
+function catalogProvider(run: NonNullable<ProviderPlugin["catalog"]>["run"], id = "openai") {
+  return { ...makeProvider({ id }), catalog: { run } };
 }
 
-function expectGroupedProviderIds(
-  providers: readonly ProviderPlugin[],
-  expected: Record<ProviderCatalogOrder | "late", readonly string[]>,
+function runCatalog(
+  provider: ProviderPlugin,
+  options: Partial<Omit<Parameters<typeof runProviderCatalog>[0], "provider">> = {},
 ) {
-  const grouped = groupPluginDiscoveryProvidersByOrder([...providers]);
-  const actual = {
-    simple: grouped.simple.map((provider) => provider.id),
-    profile: grouped.profile.map((provider) => provider.id),
-    paired: grouped.paired.map((provider) => provider.id),
-    late: grouped.late.map((provider) => provider.id),
-  };
-  expect(actual).toEqual(expected);
-}
-
-function expectNormalizedDiscoveryResult(params: {
-  provider: ProviderPlugin;
-  result: Parameters<typeof normalizePluginDiscoveryResult>[0]["result"];
-  expected: Record<string, unknown>;
-}) {
-  const normalized = normalizePluginDiscoveryResult({
-    provider: params.provider,
-    result: params.result,
+  return runProviderCatalog({
+    provider,
+    config: {},
+    env: {},
+    resolveProviderApiKey: () => ({ apiKey: undefined }),
+    resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    ...options,
   });
-  expect(Object.getPrototypeOf(normalized)).toBe(null);
-  expect(Object.fromEntries(Object.entries(normalized))).toEqual(params.expected);
 }
 
-type NormalizePluginDiscoveryResultCase = {
-  name: string;
-  provider: ProviderPlugin;
-  result: Parameters<typeof normalizePluginDiscoveryResult>[0]["result"];
-  expected: Record<string, unknown>;
-};
-
-describe("groupPluginDiscoveryProvidersByOrder", () => {
-  it.each([
-    {
-      name: "groups providers by declared order and sorts labels within each group",
-      providers: [
-        makeProvider({ id: "late-b", label: "Zulu" }),
-        makeProvider({ id: "late-a", label: "Alpha" }),
-        makeProvider({ id: "paired", label: "Paired", order: "paired" }),
-        makeProvider({ id: "profile", label: "Profile", order: "profile" }),
-        makeProvider({ id: "simple", label: "Simple", order: "simple" }),
-      ],
-      expected: {
-        simple: ["simple"],
-        profile: ["profile"],
-        paired: ["paired"],
-        late: ["late-a", "late-b"],
-      },
-    },
-  ] as const)("$name", ({ providers, expected }) => {
-    expectGroupedProviderIds(providers, expected);
+it("groups providers by declared order and sorts labels within each group", () => {
+  const grouped = groupPluginDiscoveryProvidersByOrder([
+    makeProvider({ id: "late-b", label: "Zulu" }),
+    makeProvider({ id: "late-a", label: "Alpha" }),
+    makeProvider({ id: "paired", label: "Paired", order: "paired" }),
+    makeProvider({ id: "profile", label: "Profile", order: "profile" }),
+    makeProvider({ id: "simple", label: "Simple", order: "simple" }),
+  ]);
+  expect(
+    Object.fromEntries(
+      Object.entries(grouped).map(([key, providers]) => [key, providers.map(({ id }) => id)]),
+    ),
+  ).toEqual({
+    simple: ["simple"],
+    profile: ["profile"],
+    paired: ["paired"],
+    late: ["late-a", "late-b"],
   });
 });
 
 describe("runProviderCatalog", () => {
-  it("passes the selected provider identities into the catalog hook", async () => {
-    let providerIds: readonly string[] | undefined;
-    const provider: ProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      auth: [],
-      catalog: {
-        run: async (ctx) => {
-          providerIds = ctx.providerIds;
-          return null;
+  const outcomeCases: Array<{
+    name: string;
+    input: Array<ProviderCatalogOutcome & { apiKey?: string }>;
+    expected: ProviderCatalogOutcome[];
+    probeAuth?: boolean;
+  }> = [
+    {
+      name: "redacts provider-owned diagnostics across an async hook",
+      input: [
+        {
+          provider: "openai",
+          profileId: "openai:chatgpt",
+          rejectionScope: "catalog",
+          status: "auth-rejected",
+          apiKey: "synthetic-not-for-diagnostics",
         },
-      },
-    };
-
-    await runProviderCatalog({
-      provider,
-      providerIds: ["azure-openai"],
-      config: {},
-      env: {},
-      resolveProviderApiKey: () => ({ apiKey: undefined }),
-      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
-    });
-
-    expect(providerIds).toEqual(["azure-openai"]);
-  });
-
-  it("carries explicit provider-owned catalog outcomes across an async hook", async () => {
-    const outcomes: Array<{
-      provider: string;
-      profileId?: string;
-      rejectionScope?: "catalog";
-      status: "ready" | "auth-rejected" | "unavailable";
-    }> = [];
-    const provider: ProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      auth: [],
-      catalog: {
-        run: async () => {
-          await Promise.resolve();
-          return {
-            providers: {},
-            outcomes: [
-              {
-                provider: "openai",
-                profileId: "openai:chatgpt",
-                rejectionScope: "catalog",
-                status: "auth-rejected",
-                apiKey: "synthetic-not-for-diagnostics",
-              },
-            ],
-          };
+      ],
+      expected: [
+        {
+          provider: "openai",
+          profileId: "openai:chatgpt",
+          rejectionScope: "catalog",
+          status: "auth-rejected",
         },
-      },
-    };
-
-    await runProviderCatalog({
-      provider,
-      config: {},
-      agentDir: "/tmp/openclaw-agent",
-      workspaceDir: "/tmp/openclaw-workspace",
-      env: {},
-      resolveProviderApiKey: () => ({ apiKey: undefined }),
-      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
-      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
-    });
-
-    expect(outcomes).toEqual([
-      {
-        provider: "openai",
-        profileId: "openai:chatgpt",
-        rejectionScope: "catalog",
-        status: "auth-rejected",
-      },
-    ]);
-  });
-
-  it("copies only valid ready model order through the catalog boundary", async () => {
-    const outcomes: Array<{ status: string; modelOrder?: readonly string[] }> = [];
-    const provider: ProviderPlugin = {
-      id: "demo",
-      label: "Demo",
-      auth: [],
-      catalog: {
-        run: async () => ({
-          providers: {},
-          outcomes: [
-            {
-              provider: "demo",
-              status: "ready",
-              modelOrder: [" second ", "", "second", "first"],
-            },
-            {
-              provider: "demo",
-              profileId: "demo:stale",
-              status: "unavailable",
-              modelOrder: ["stale"],
-            },
-          ],
-        }),
-      },
-    };
-
-    await runProviderCatalog({
-      provider,
-      config: {},
-      env: {},
-      resolveProviderApiKey: () => ({ apiKey: undefined }),
-      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
-      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
-    });
-
-    expect(outcomes).toEqual([
-      { provider: "demo", status: "ready", modelOrder: ["second", "first"] },
-      { provider: "demo", profileId: "demo:stale", status: "unavailable" },
-    ]);
-  });
-
-  it("preserves provider-owned profile outcomes after multiple auth probes", async () => {
-    const outcomes: Array<{ profileId?: string; status: string }> = [];
-    const provider: ProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      auth: [],
-      catalog: {
-        run: async (ctx) => {
-          ctx.resolveProviderAuth("openai");
-          ctx.resolveProviderAuth("openai");
-          return {
-            providers: {},
-            outcomes: [
-              {
-                provider: "openai",
-                profileId: "openai:profile-b",
-                status: "ready",
-              },
-            ],
-          };
+      ],
+    },
+    {
+      name: "copies only valid ready model order",
+      input: [
+        { provider: "openai", status: "ready", modelOrder: [" second ", "", "second", "first"] },
+        {
+          provider: "openai",
+          profileId: "openai:stale",
+          status: "unavailable",
+          modelOrder: ["stale"],
         },
-      },
-    };
+      ],
+      expected: [
+        { provider: "openai", status: "ready", modelOrder: ["second", "first"] },
+        { provider: "openai", profileId: "openai:stale", status: "unavailable" },
+      ],
+    },
+    {
+      name: "preserves provider-owned profiles after multiple auth probes",
+      probeAuth: true,
+      input: [{ provider: "openai", profileId: "openai:profile-b", status: "ready" }],
+      expected: [{ provider: "openai", profileId: "openai:profile-b", status: "ready" }],
+    },
+  ];
+  it.each(outcomeCases)("$name", async ({ input, expected, probeAuth }) => {
+    const outcomes: ProviderCatalogOutcome[] = [];
     let authCall = 0;
-
-    await runProviderCatalog({
-      provider,
-      config: {},
-      env: {},
-      resolveProviderApiKey: () => ({ apiKey: undefined }),
-      resolveProviderAuth: () => {
-        authCall += 1;
-        return {
-          apiKey: `selected-key-${authCall}`,
+    await runCatalog(
+      catalogProvider(async (ctx) => {
+        await Promise.resolve();
+        if (probeAuth) {
+          ctx.resolveProviderAuth("openai");
+          ctx.resolveProviderAuth("openai");
+        }
+        return { providers: {}, outcomes: input };
+      }),
+      {
+        resolveProviderAuth: () => ({
+          apiKey: `selected-key-${++authCall}`,
           mode: "api_key",
           profileId: `openai:profile-${authCall === 1 ? "a" : "b"}`,
           source: "profile",
-        };
+        }),
+        reportCatalogOutcome: (outcome) => outcomes.push(outcome),
       },
-      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
-    });
-
-    expect(outcomes).toEqual([
-      { provider: "openai", profileId: "openai:profile-b", status: "ready" },
-    ]);
+    );
+    expect(outcomes).toEqual(expected);
   });
 
   it.each([
@@ -286,29 +160,16 @@ describe("runProviderCatalog", () => {
     "emits outcomes only for selected provider identities: $providerIds",
     async ({ providerIds, expected }) => {
       const outcomes: string[] = [];
-      const provider: ProviderPlugin = {
-        id: "openai",
-        label: "OpenAI",
-        auth: [],
-        catalog: {
-          run: async () => ({
-            providers: {},
-            outcomes: [
-              { provider: "openai", profileId: "openai:private", status: "auth-rejected" },
-              { provider: "azure-openai", profileId: "azure-openai:selected", status: "ready" },
-              { provider: "unrelated", status: "unavailable" },
-            ],
-          }),
-        },
-      };
-
-      await runProviderCatalog({
-        provider,
+      const provider = catalogProvider(async () => ({
+        providers: {},
+        outcomes: [
+          { provider: "openai", profileId: "openai:private", status: "auth-rejected" },
+          { provider: "azure-openai", profileId: "azure-openai:selected", status: "ready" },
+          { provider: "unrelated", status: "unavailable" },
+        ],
+      }));
+      await runCatalog(provider, {
         providerIds,
-        config: {},
-        env: {},
-        resolveProviderApiKey: () => ({ apiKey: undefined }),
-        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
         reportCatalogOutcome: (outcome) => outcomes.push(outcome.provider),
       });
 
@@ -318,37 +179,15 @@ describe("runProviderCatalog", () => {
 });
 
 describe("normalizePluginDiscoveryResult", () => {
-  it("retains provider and model facts by reference", () => {
-    const model = makeModel("kept-model");
-    const config = makeModelProviderConfig({ models: [model] });
-    const normalized = normalizePluginDiscoveryResult({
-      provider: makeProvider({ id: "Demo", aliases: ["demo-alias"] }),
-      result: { provider: config },
-    });
-
-    expect(normalized.demo).toBe(config);
-    expect(normalized["demo-alias"]).toBe(config);
-    expect(normalized.demo?.models[0]).toBe(model);
-  });
-
-  const cases: NormalizePluginDiscoveryResultCase[] = [
-    {
-      name: "maps a single provider result to the plugin id",
-      provider: makeProvider({ id: "Ollama" }),
-      result: {
-        provider: makeModelProviderConfig({
-          baseUrl: "http://127.0.0.1:11434",
-          api: "ollama",
-        }),
-      },
-      expected: {
-        ollama: {
-          baseUrl: "http://127.0.0.1:11434",
-          api: "ollama",
-          models: [],
-        },
-      },
-    },
+  const model = makeModel("kept-model");
+  const config = makeModelProviderConfig({ models: [model], api: "openai-completions" });
+  const ignored = makeModelProviderConfig({ baseUrl: "http://ignored" });
+  it.each<{
+    name: string;
+    provider: ProviderPlugin;
+    result: Parameters<typeof normalizePluginDiscoveryResult>[0]["result"];
+    keys: string[];
+  }>([
     {
       name: "maps a single provider result to aliases and hook aliases",
       provider: makeProvider({
@@ -356,96 +195,67 @@ describe("normalizePluginDiscoveryResult", () => {
         aliases: ["anthropic-api"],
         hookAliases: ["claude-cli"],
       }),
-      result: {
-        provider: makeModelProviderConfig({
-          baseUrl: "https://api.anthropic.com",
-          api: "anthropic-messages",
-        }),
-      },
-      expected: {
-        anthropic: {
-          baseUrl: "https://api.anthropic.com",
-          api: "anthropic-messages",
-          models: [],
-        },
-        "anthropic-api": {
-          baseUrl: "https://api.anthropic.com",
-          api: "anthropic-messages",
-          models: [],
-        },
-        "claude-cli": {
-          baseUrl: "https://api.anthropic.com",
-          api: "anthropic-messages",
-          models: [],
-        },
-      },
+      result: { provider: config },
+      keys: ["anthropic", "anthropic-api", "claude-cli"],
     },
     {
       name: "normalizes keys for multi-provider discovery results",
       provider: makeProvider({ id: "ignored" }),
-      result: {
-        providers: {
-          " VLLM ": makeModelProviderConfig(),
-          "": makeModelProviderConfig({ baseUrl: "http://ignored" }),
-        },
-      },
-      expected: {
-        vllm: {
-          baseUrl: "http://127.0.0.1:8000/v1",
-          models: [],
-        },
-      },
+      result: { providers: { " VLLM ": config, "": ignored } },
+      keys: ["vllm"],
     },
     {
       name: "drops dangerous normalized provider keys",
       provider: makeProvider({ id: "__proto__", aliases: ["constructor"], hookAliases: ["safe"] }),
-      result: {
-        provider: makeModelProviderConfig({
-          baseUrl: "http://safe.example/v1",
-        }),
-      },
-      expected: {
-        safe: {
-          baseUrl: "http://safe.example/v1",
-          models: [],
-        },
-      },
+      result: { provider: config },
+      keys: ["safe"],
     },
     {
       name: "drops dangerous multi-provider discovery keys",
       provider: makeProvider({ id: "ignored" }),
       result: {
         providers: {
-          ["__proto__"]: makeModelProviderConfig({ baseUrl: "http://polluted.example/v1" }),
-          constructor: makeModelProviderConfig({ baseUrl: "http://constructor.example/v1" }),
-          prototype: makeModelProviderConfig({ baseUrl: "http://prototype.example/v1" }),
-          safe: makeModelProviderConfig({ baseUrl: "http://safe.example/v1" }),
+          ["__proto__"]: ignored,
+          constructor: ignored,
+          prototype: ignored,
+          safe: config,
         },
       },
-      expected: {
-        safe: {
-          baseUrl: "http://safe.example/v1",
-          models: [],
-        },
-      },
+      keys: ["safe"],
     },
-  ];
-
-  it.each(cases)("$name", ({ provider, result, expected }) => {
-    expectNormalizedDiscoveryResult({ provider, result, expected });
+  ])("$name without copying admitted provider/model facts", ({ provider, result, keys }) => {
+    const normalized = normalizePluginDiscoveryResult({ provider, result });
+    expect(Object.getPrototypeOf(normalized)).toBe(null);
+    expect(Object.keys(normalized)).toEqual(keys);
+    for (const key of keys) {
+      expect(normalized[key]).toBe(config);
+      expect(normalized[key]?.models[0]).toBe(model);
+    }
   });
 });
 
 describe("runProviderStaticCatalog", () => {
   it("runs static catalogs with a sterile context", async () => {
-    const seenContexts: unknown[] = [];
     const provider: ProviderPlugin = {
       id: "demo",
       label: "Demo",
       auth: [],
       staticCatalog: {
         run: async (ctx) => {
-          seenContexts.push(ctx);
+          expect(ctx).toEqual({
+            config: {},
+            env: {},
+            resolveProviderApiKey: expect.any(Function),
+            resolveProviderAuth: expect.any(Function),
+          });
+          expect(ctx.resolveProviderApiKey("demo")).toEqual({ apiKey: undefined });
+          expect(ctx.resolveProviderAuth("demo")).toEqual({
+            apiKey: undefined,
+            mode: "none",
+            source: "none",
+          });
+          expect(ctx).not.toHaveProperty("agentDir");
+          expect(ctx).not.toHaveProperty("workspaceDir");
           return {
             provider: makeModelProviderConfig({ baseUrl: "https://static.example/v1" }),
           };
@@ -459,31 +269,5 @@ describe("runProviderStaticCatalog", () => {
         models: [],
       },
     });
-
-    expect(seenContexts).toHaveLength(1);
-    const sterileContext = seenContexts[0] as {
-      config: Record<string, never>;
-      env: Record<string, never>;
-      resolveProviderApiKey: () => { apiKey: string | undefined };
-      resolveProviderAuth: () => {
-        apiKey: string | undefined;
-        mode: "none";
-        source: "none";
-      };
-    };
-    expect(sterileContext).toEqual({
-      config: {},
-      env: {},
-      resolveProviderApiKey: sterileContext.resolveProviderApiKey,
-      resolveProviderAuth: sterileContext.resolveProviderAuth,
-    });
-    expect(sterileContext.resolveProviderApiKey()).toEqual({ apiKey: undefined });
-    expect(sterileContext.resolveProviderAuth()).toEqual({
-      apiKey: undefined,
-      mode: "none",
-      source: "none",
-    });
-    expect(seenContexts[0]).not.toHaveProperty("agentDir");
-    expect(seenContexts[0]).not.toHaveProperty("workspaceDir");
   });
 });

@@ -38,7 +38,7 @@ export async function verifyDurableComposerFences(page: Page) {
       ) => {
         const persistence = new newSession.NewSessionDraftPersistence(
           () => state,
-          (message, attachments) => Object.assign(state, { message, attachments }),
+          (draft) => Object.assign(state, draft),
           () => undefined,
         );
         persistence.setOwner(scope.gatewayOwner, scope.recoveryScope);

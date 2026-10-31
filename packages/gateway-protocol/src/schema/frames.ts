@@ -48,6 +48,8 @@ export const ConnectParamsSchema = closedObject({
     instanceId: Type.Optional(NonEmptyString),
   }),
   caps: Type.Optional(Type.Array(NonEmptyString, { default: [] })),
+  /** Initial roster-body preference; exact subscriptions always receive complete messages. */
+  includeSessionMessageBodies: Type.Optional(Type.Boolean()),
   commands: Type.Optional(Type.Array(NonEmptyString)),
   /** Additive Computer Use declaration; the owning core contract validates its bounded shape. */
   computerUse: Type.Optional(Type.Unknown()),
@@ -112,6 +114,8 @@ export const HelloOkSchema = closedObject({
   snapshot: SnapshotSchema,
   // Public Control UI origin and mount path, independent of local SSH tunnels.
   controlUiUrl: Type.Optional(NonEmptyString),
+  // Additive: Control UI mount path on this listener, for clients that reach it by host and port.
+  controlUiBasePath: Type.Optional(NonEmptyString),
   // Additive: plugin-declared Control UI tabs (surface "tab" descriptors).
   controlUiTabs: Type.Optional(Type.Array(ControlUiPluginTabSchema)),
   // Additive: active plugin widget kinds whose renderers ship in the trusted UI bundle.
@@ -135,7 +139,9 @@ export const HelloOkSchema = closedObject({
     recoveryScope: Type.Optional(NonEmptyString),
     role: NonEmptyString,
     scopes: Type.Array(NonEmptyString),
-    sessionCap: Type.Optional(stringLiteralUnion(["write", "suggest", "view", "none"])),
+    // Presentation only: device approval cannot exceed this authenticated role ceiling.
+    roleAllowsAdmin: Type.Optional(Type.Boolean()),
+    sessionCap: Type.Optional(stringLiteralUnion(["write", "suggest", "view", "invited", "none"])),
     issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     deviceTokens: Type.Optional(
       Type.Array(

@@ -1,7 +1,23 @@
 import type { Plugin } from "vite";
 
+type StandaloneMockIsolationOptions = {
+  sandboxUrl?: string;
+  allowDesktopPopup?: boolean;
+};
+
 /** Runs before preview and app modules; the preview owns Gateway selection. */
-function installStandaloneNetworkBoundary(): void {
+function installStandaloneNetworkBoundary(options: StandaloneMockIsolationOptions): void {
+  const nativeOpen = window.open.bind(window);
+  const isDesktopPath = (pathname: string) =>
+    /^\/focus\/desktop(?:\/control)?(?:\/(?:source|session)\/[^/]+)?$/.test(pathname);
+  const isDesktopPopup = (url: URL) =>
+    options.allowDesktopPopup &&
+    url.origin === window.location.origin &&
+    !url.username &&
+    !url.password &&
+    !url.search &&
+    !url.hash &&
+    isDesktopPath(url.pathname);
   const nativeFetch = window.fetch.bind(window);
   const localOrigin = window.location.origin;
   const isLocalResource = (url: URL) =>
@@ -26,7 +42,7 @@ function installStandaloneNetworkBoundary(): void {
   // Reject URL writes before navigation starts; CSP still guards frame contents.
   const checkFrameUrl = (value: string) => {
     const url = new URL(value, window.location.href);
-    if (!isLocalResource(url) && url.href !== "about:blank") {
+    if (!isLocalResource(url) && url.href !== "about:blank" && url.href !== options.sandboxUrl) {
       throw blocked(`iframe to ${url.origin}`);
     }
   };
@@ -63,7 +79,13 @@ function installStandaloneNetworkBoundary(): void {
     }
     Object.defineProperty(window, capability, { value: blockedTransport });
   }
-  window.open = () => {
+  window.open = (url, target) => {
+    if (url && (!target || target === "_blank")) {
+      const destination = new URL(String(url), window.location.href);
+      if (isDesktopPopup(destination)) {
+        return nativeOpen(destination.href, "_blank", "noopener,noreferrer");
+      }
+    }
     console.warn(blocked("popup").message);
     return null;
   };
@@ -74,27 +96,61 @@ function installStandaloneNetworkBoundary(): void {
     }
   });
   for (const eventName of ["click", "auxclick"]) {
-    window.addEventListener(
-      eventName,
-      (event) => {
-        const anchor = event.composedPath().find((node) => node instanceof HTMLAnchorElement);
-        const url = anchor ? new URL(anchor.href) : null;
-        const localDownload =
-          anchor?.download && (url?.protocol === "blob:" || url?.protocol === "data:");
-        if (url && url.origin !== localOrigin && !localDownload) {
-          event.preventDefault();
-          console.warn(blocked("external link").message);
-        }
-      },
-      true,
-    );
+    // Document handlers get first refusal for in-app destinations such as Link
+    // Reader. Block the remaining external navigation before its default action.
+    window.addEventListener(eventName, (event) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+      const anchor = event.composedPath().find((node) => node instanceof HTMLAnchorElement);
+      const url = anchor ? new URL(anchor.href) : null;
+      const localDownload =
+        anchor?.download && (url?.protocol === "blob:" || url?.protocol === "data:");
+      const newContext =
+        anchor &&
+        ((anchor.target && !["_self", "_top", "_parent"].includes(anchor.target)) ||
+          event.type === "auxclick" ||
+          (event instanceof MouseEvent && (event.ctrlKey || event.metaKey || event.shiftKey)));
+      if (
+        url &&
+        !localDownload &&
+        (url.origin !== localOrigin || (newContext && !isDesktopPopup(url)))
+      ) {
+        event.preventDefault();
+        console.warn(blocked("external link").message);
+      }
+    });
   }
 }
 
-export function createStandaloneMockIsolationPlugins(): Plugin[] {
+export function createStandaloneMockIsolationPlugins(
+  options: StandaloneMockIsolationOptions = {},
+): Plugin[] {
+  const sandbox = options.sandboxUrl ? new URL(options.sandboxUrl) : undefined;
+  const contentSecurityPolicy = (host: string | undefined, guardedUi: boolean) => {
+    const origin = new URL(`http://${host}`).origin;
+    const frameSource = guardedUi && sandbox ? ` ${sandbox.origin}${sandbox.pathname}` : "";
+    const popupPermission = guardedUi && options.allowDesktopPopup ? " allow-popups" : "";
+    return [
+      "default-src 'self'",
+      `connect-src 'self' ${origin.replace(/^http:/, "ws:")} blob: data:`,
+      // The bundled terminal compiles local Wasm; JavaScript eval stays disabled.
+      "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' blob: data:",
+      "media-src 'self' blob: data:",
+      "font-src 'self' data:",
+      `frame-src 'self' blob: data:${frameSource}`,
+      "worker-src 'self'",
+      "object-src 'none'",
+      "base-uri 'none'",
+      "form-action 'none'",
+      `sandbox allow-scripts allow-same-origin allow-downloads allow-forms${popupPermission}`,
+    ].join("; ");
+  };
   // tsx can emit __name calls in serialized functions; keep that helper local
   // to the injected script, just like the shared Gateway mock initializer.
-  const script = `(() => { const __name = (target) => target; (${installStandaloneNetworkBoundary.toString()})(); })();`;
+  const script = `(() => { const __name = (target) => target; (${installStandaloneNetworkBoundary.toString()})(${JSON.stringify(options)}); })();`;
   return [
     {
       name: "openclaw-control-ui-mock-isolation",
@@ -103,29 +159,25 @@ export function createStandaloneMockIsolationPlugins(): Plugin[] {
         // Install before *all* custom fixture handlers, not only Vite's HTML
         // handler: frame/attachment documents need the same native boundary.
         server.middlewares.use((req, res, next) => {
-          const origin = new URL(`http://${req.headers.host}`).origin;
-          res.setHeader(
-            "Content-Security-Policy",
-            [
-              "default-src 'self'",
-              `connect-src 'self' ${origin.replace(/^http:/, "ws:")} blob: data:`,
-              // The bundled terminal compiles local Wasm; JavaScript eval stays disabled.
-              "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
-              "style-src 'self' 'unsafe-inline'",
-              "img-src 'self' blob: data:",
-              "media-src 'self' blob: data:",
-              "font-src 'self' data:",
-              "frame-src 'self' blob: data:",
-              "worker-src 'self'",
-              "object-src 'none'",
-              "base-uri 'none'",
-              "form-action 'none'",
-              "sandbox allow-scripts allow-same-origin allow-downloads allow-forms",
-            ].join("; "),
-          );
+          res.setHeader("Content-Security-Policy", contentSecurityPolicy(req.headers.host, false));
           res.setHeader("X-DNS-Prefetch-Control", "off");
           next();
         });
+        // Vite runs this after base-path stripping and HTML fallback, immediately
+        // before indexHtmlMiddleware. Only the actual app entry gets exceptions;
+        // fixture/static handlers have already responded with the baseline policy.
+        return () => {
+          server.middlewares.use((req, res, next) => {
+            const pathname = req.url?.split(/[?#]/, 1)[0];
+            if (pathname === "/index.html" && req.headers["sec-fetch-dest"] !== "script") {
+              res.setHeader(
+                "Content-Security-Policy",
+                contentSecurityPolicy(req.headers.host, true),
+              );
+            }
+            next();
+          });
+        };
       },
       transformIndexHtml: {
         order: "pre",

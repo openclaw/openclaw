@@ -13,14 +13,17 @@ import {
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as updateLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import { runUtf8CommandWithTimeout } from "../../process/exec.js";
+import { runUtf8CommandBuffersWithTimeout } from "../../process/exec-runner.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { createUpdateCliBaseSnapshot } from "./update-cli-config.test-support.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
+import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
+import { withMigratedTerminalResult } from "./update-command-migrated-package.test-support.js";
 import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
 import { readMigratedUpdateRunRow } from "./update-command-migrated.test-support.js";
@@ -29,7 +32,6 @@ import {
   UpdateCommandPendingRecoveryFailure,
 } from "./update-command-result.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
-import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
@@ -39,10 +41,10 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service.js")>()),
   resolveGatewayService: mocks.service,
 }));
-vi.mock("../../daemon/schtasks.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/schtasks.js")>()),
+vi.mock("../../daemon/schtasks-control.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/schtasks-control.js")>()),
   suspendScheduledTaskAutoStartForUpdate: vi.fn<
-    typeof import("../../daemon/schtasks.js").suspendScheduledTaskAutoStartForUpdate
+    typeof import("../../daemon/schtasks-control.js").suspendScheduledTaskAutoStartForUpdate
   >(async (_env, options) => {
     const enabled = mocks.enabled;
     if (enabled) {
@@ -52,16 +54,16 @@ vi.mock("../../daemon/schtasks.js", async (importOriginal) => ({
     return enabled;
   }),
   resumeScheduledTaskAutoStartAfterUpdate: vi.fn<
-    typeof import("../../daemon/schtasks.js").resumeScheduledTaskAutoStartAfterUpdate
+    typeof import("../../daemon/schtasks-control.js").resumeScheduledTaskAutoStartAfterUpdate
   >(async (_env, options) => {
     await options?.beforeMutation?.();
     mocks.enabled = true;
     return true;
   }),
 }));
-vi.mock("../../process/exec.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../process/exec.js")>()),
-  runUtf8CommandWithTimeout: vi.fn(),
+vi.mock("../../process/exec-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec-runner.js")>()),
+  runUtf8CommandBuffersWithTimeout: vi.fn(),
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -69,7 +71,7 @@ const nativePlatform = process.platform;
 beforeEach(() => {
   mockSystemAccountHome();
   mocks.enabled = true;
-  const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  const platform = vi.spyOn(process, "platform", "get").mockReturnValue(nativePlatform);
   // The service is Windows-shaped; SQLite still opens files on the real host.
   for (const name of ["resolveExistingSqliteFileUri", "resolveImmutableSqliteFileUri"] as const) {
     const resolveUri = nodeSqlite[name];
@@ -128,6 +130,7 @@ it.each([
       });
       const root = process.cwd();
       const runId = createUpdateRun({ trigger: "cli" }).runId;
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const activationTimeoutMs = 3_600_000;
       const run = { runId, env: { ...process.env }, activationTimeoutMs };
       const { recordPhase } = createUpdateCommandExecutionGuards({ run }, root);
@@ -178,7 +181,7 @@ it.each([
       let databaseCountAtTerminal = 0;
       const inspectTerminal = () =>
         readMigratedUpdateRunRow(resolveOpenClawStateSqlitePath(), runId);
-      vi.mocked(runUtf8CommandWithTimeout).mockImplementationOnce(async (_argv, options) => {
+      vi.mocked(runUtf8CommandBuffersWithTimeout).mockImplementationOnce(async (_argv, options) => {
         assert(typeof options === "object");
         expect(options.timeoutMs).toBe(activationTimeoutMs);
         const input = JSON.parse(String(options.input)) as MigratedUpdateFinalizationInput; // SAFETY: The real typed parent serializes this private worker input.
@@ -199,19 +202,16 @@ it.each([
         expect(input.params.preManagedServiceStop).not.toHaveProperty(
           "windowsTaskAutoStartRecovery",
         );
-        await fs.writeFile(
-          input.resultPath,
-          JSON.stringify({
-            result: {
-              ...input.params.result,
-              ...(succeeded
-                ? { postUpdate: { plugins: { status: "warning" } } }
-                : { status: "error", reason: "plugin-convergence-failed" }),
-            },
-            terminalRunId: runId,
-            exitCode: succeeded ? 0 : 1,
-          }),
-        );
+        await writeFixtureJson(input.resultPath, {
+          result: {
+            ...input.params.result,
+            ...(succeeded
+              ? { postUpdate: { plugins: { status: "warning" } } }
+              : { status: "error", reason: "plugin-convergence-failed" }),
+          },
+          terminalRunId: runId,
+          exitCode: succeeded ? 0 : 1,
+        });
         if (succeeded) {
           mocks.enabled = true;
           running = true;
@@ -238,54 +238,36 @@ it.each([
           terminalFromCandidate = inspectTerminal();
           databaseCountAtTerminal = databases.length;
         }
-        return createCommandResult({
-          cleanup: "normal",
-          stdout: compensationRefusal ? "candidate terminal result\n" : "",
-        });
+        return {
+          ...createCommandResult({ cleanup: "normal" }),
+          stdout: Buffer.from(compensationRefusal ? "candidate terminal result\n" : ""),
+          stderr: Buffer.alloc(0),
+          windowsEncoding: null,
+        };
       });
       const continueUpdate = () =>
         continueMigratedUpdateInFreshProcess(
-          {
-            mutationStarted: true,
+          finishParams({
             root,
-            result: { status: "ok", mode: "npm", root, runId, steps: [], durationMs: 0 },
-            installKindChanged: false,
+            result: updateResult({ root, runId, durationMs: 0 }),
             configSnapshot: {
               ...createUpdateCliBaseSnapshot({}),
               path: path.join(home, "openclaw.json"),
               exists: false,
               raw: null,
             },
-            requestedChannel: null,
-            storedChannel: "stable",
-            channel: "stable",
-            downgradeRisk: false,
-            shouldRestart: true,
             opts: { json: true, run },
             preManagedServiceStop: stopped,
-            controlPlaneUpdateSentinelMeta: null,
-            preUpdatePluginInstallRecords: {},
-            startedAt: Date.now(),
             packageUpdateNodeRunner: process.execPath,
             updateStepTimeoutMs: 1_000,
             rollbackBlockedReason: "state-migrated-no-rollback",
-          },
+          }),
           [],
         );
       const refusesBeforeReceipt = outcome === "launch failure" || replaced;
       const operation = refusesBeforeReceipt
         ? continueUpdate()
-        : withUpdateCommandTerminalResult(
-            async (registerRun) => {
-              registerRun(run);
-              const continued = await continueUpdate();
-              if (continued.preparedFailure) {
-                throw continued.preparedFailure;
-              }
-              return continued;
-            },
-            { json: true, onResult },
-          );
+        : withMigratedTerminalResult(run, continueUpdate, onResult);
       try {
         if (compensationRefusal) {
           const failure = await operation.catch((error: unknown) => error);

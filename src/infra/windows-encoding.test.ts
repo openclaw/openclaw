@@ -1,280 +1,194 @@
-// Covers Windows command-output code page parsing and decoding.
-
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const queryWindowsRegistryValueMock = vi.hoisted(() => vi.fn((): string | null => null));
 
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return {
-    ...actual,
-    spawnSync: spawnSyncMock,
-  };
-});
-
-vi.mock("./windows-install-roots.js", async () => {
-  const actual = await vi.importActual<typeof import("./windows-install-roots.js")>(
-    "./windows-install-roots.js",
-  );
-  return {
-    ...actual,
-    queryWindowsRegistryValue: queryWindowsRegistryValueMock,
-  };
-});
+vi.mock("node:child_process", async (original) => ({
+  ...(await original<typeof import("node:child_process")>()),
+  spawnSync: spawnSyncMock,
+}));
+vi.mock("./windows-install-roots.js", async (original) => ({
+  ...(await original<typeof import("./windows-install-roots.js")>()),
+  queryWindowsRegistryValue: queryWindowsRegistryValueMock,
+}));
 
 import {
   createWindowsOutputDecoder,
+  createWindowsTextFileDecoder,
   decodeWindowsOutputBuffer,
   decodeWindowsTextFileBuffer,
 } from "./windows-encoding.js";
 
+it("keeps a Windows file's prefix-selected encoding across later invalid bytes", () => {
+  const prefix = Buffer.concat([
+    Buffer.from("café\n"),
+    Buffer.alloc(1024 * 1024 - 8, 0x20),
+    Buffer.from([0xe2, 0x82]),
+  ]);
+  const decoder = createWindowsTextFileDecoder({
+    prefix,
+    complete: false,
+    platform: "win32",
+    windowsEncoding: "windows-1252",
+  });
+  expect(decoder.encoding).toBe("utf-8");
+  expect(decoder.decode(prefix, { stream: true })).toMatch(/^café\n/);
+  expect(decoder.decode(Buffer.from([0xac, 0xe9]))).toBe("€�");
+  const legacy = createWindowsTextFileDecoder({
+    prefix: Buffer.from([0xe9, 0x0a]),
+    complete: false,
+    platform: "win32",
+    windowsEncoding: "windows-1252",
+  });
+  expect(legacy.decode(Buffer.from([0xe9, 0x0a, 0xe9]))).toBe("é\né");
+});
+
 const UTF16_OUTPUT_CASES = [
-  ["UTF-16LE", Buffer.from([0xff, 0xfe, 0x68, 0x00, 0x69, 0x00, 0x0a, 0x00])],
-  ["UTF-16BE", Buffer.from([0xfe, 0xff, 0x00, 0x68, 0x00, 0x69, 0x00, 0x0a])],
+  Buffer.from([0xff, 0xfe, 0x68, 0x00, 0x69, 0x00, 0x0a, 0x00]),
+  Buffer.from([0xfe, 0xff, 0x00, 0x68, 0x00, 0x69, 0x00, 0x0a]),
 ] as const;
 
-describe("windows output encoding", () => {
-  afterAll(() => {
-    vi.resetModules();
+async function freshEncoding(platform: NodeJS.Platform, codePage: string | null = null) {
+  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  queryWindowsRegistryValueMock.mockReturnValue(codePage);
+  vi.resetModules();
+  return await import("./windows-encoding.js");
+}
+
+const windowsDecoder = (options: Parameters<typeof createWindowsOutputDecoder>[0] = {}) =>
+  createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "gbk", ...options });
+const bytes = (...values: number[]) => Buffer.from(values);
+function decodeChunks(decoder: ReturnType<typeof windowsDecoder>, chunks: Buffer[]) {
+  return [...chunks.map((chunk) => decoder.decode(chunk)), decoder.flush()];
+}
+
+afterAll(() => {
+  vi.resetModules();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  spawnSyncMock.mockReset();
+  queryWindowsRegistryValueMock.mockReset();
+});
+
+it.each([
+  ["win32", "857", "cp857", 857],
+  ["win32", "864", null, 864],
+  ["linux", null, null, null],
+] as const)("caches OEM encoding on %s with code page %s", async (platform, raw, label, page) => {
+  const e = await freshEncoding(platform, raw);
+  expect([
+    e.resolveWindowsOemEncoding(),
+    e.resolveWindowsOemCodePage(),
+    e.resolveWindowsOemEncoding(),
+  ]).toEqual([label, page, label]);
+  expect(queryWindowsRegistryValueMock).toHaveBeenCalledTimes(platform === "win32" ? 1 : 0);
+  if (label) {
+    expect([
+      e.resolveWindowsOemCodePageForEncoding(label),
+      e.resolveWindowsOemCodePageForEncoding("bogus"),
+    ]).toEqual([857, null]);
+  }
+});
+
+it("bounds and caches failed encoding probes", async () => {
+  spawnSyncMock.mockReturnValue({
+    error: Object.assign(new Error("spawnSync ETIMEDOUT"), { code: "ETIMEDOUT" }),
+    stderr: "",
+    stdout: "",
   });
+  const fresh = await freshEncoding("win32");
+  const undecodableByte = Buffer.from([0x80]);
+  for (const decode of [fresh.decodeWindowsOutputBuffer, fresh.decodeWindowsTextFileBuffer]) {
+    for (let call = 0; call < 2; call++) {
+      expect(decode({ buffer: undecodableByte, platform: "win32" })).toBe(
+        undecodableByte.toString("utf8"),
+      );
+    }
+  }
+  expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+  for (const call of spawnSyncMock.mock.calls) {
+    expect(call[2]).toMatchObject({ timeout: 5_000, killSignal: "SIGKILL" });
+  }
+});
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    spawnSyncMock.mockReset();
-    queryWindowsRegistryValueMock.mockReset();
-  });
+it.each([
+  ["UTF-8 output", decodeWindowsOutputBuffer, Buffer.from("测试"), "测试"],
+  ["legacy text files", decodeWindowsTextFileBuffer, Buffer.from([0xc4, 0xe3, 0xba, 0xc3]), "你好"],
+] as const)("decodes %s with a legacy Windows code page", (_name, decode, buffer, expected) => {
+  expect(decode({ buffer, platform: "win32", windowsEncoding: "gbk" })).toBe(expected);
+});
 
-  it("reads and caches the boot-time OEM code page from HKLM", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    queryWindowsRegistryValueMock.mockReturnValue("857");
-    vi.resetModules();
-    const {
-      resolveWindowsOemCodePage,
-      resolveWindowsOemCodePageForEncoding,
-      resolveWindowsOemEncoding,
-    } = await import("./windows-encoding.js");
+it("replays split GBK bytes on UTF-8 fallback", () => {
+  const decoder = windowsDecoder();
+  expect(decodeChunks(decoder, [bytes(0xc4), bytes(0xe3)])).toEqual(["", "你", ""]);
+});
 
-    expect(resolveWindowsOemEncoding()).toBe("cp857");
-    expect(resolveWindowsOemCodePage()).toBe(857);
-    expect(resolveWindowsOemEncoding()).toBe("cp857");
-    expect(resolveWindowsOemCodePageForEncoding("cp857")).toBe(857);
-    expect(resolveWindowsOemCodePageForEncoding("bogus")).toBeNull();
-    expect(queryWindowsRegistryValueMock).toHaveBeenCalledOnce();
-    expect(queryWindowsRegistryValueMock).toHaveBeenCalledWith(
-      "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage",
-      "OEMCP",
-    );
-  });
+it.each([
+  ["win32", decodeWindowsOutputBuffer],
+  ["win32", decodeWindowsTextFileBuffer],
+  ["linux", decodeWindowsTextFileBuffer],
+] as const)("honors UTF-16 BOMs in %s %s", (platform, decode) => {
+  for (const raw of UTF16_OUTPUT_CASES) {
+    expect(decode({ buffer: raw, platform, windowsEncoding: "utf-8" })).toBe("hi\n");
+  }
+});
 
-  it("caches unsupported OEM code pages as unavailable", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    queryWindowsRegistryValueMock.mockReturnValue("864");
-    vi.resetModules();
-    const { resolveWindowsOemCodePage, resolveWindowsOemEncoding } =
-      await import("./windows-encoding.js");
-
-    expect(resolveWindowsOemEncoding()).toBeNull();
-    expect(resolveWindowsOemCodePage()).toBe(864);
-    expect(resolveWindowsOemEncoding()).toBeNull();
-    expect(queryWindowsRegistryValueMock).toHaveBeenCalledOnce();
-  });
-
-  it("does not query the Windows registry on other platforms", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.resetModules();
-    const { resolveWindowsOemCodePage, resolveWindowsOemEncoding } =
-      await import("./windows-encoding.js");
-
-    expect(resolveWindowsOemEncoding()).toBeNull();
-    expect(resolveWindowsOemCodePage()).toBeNull();
-    expect(queryWindowsRegistryValueMock).not.toHaveBeenCalled();
-  });
-
-  it("bounds and caches failed Windows encoding probes", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    spawnSyncMock.mockReturnValue({
-      error: Object.assign(new Error("spawnSync ETIMEDOUT"), { code: "ETIMEDOUT" }),
-      output: [null, "", ""],
-      pid: 1,
-      signal: "SIGKILL",
-      status: null,
-      stderr: "",
-      stdout: "",
-    });
-    vi.resetModules();
-    const {
-      decodeWindowsOutputBuffer: decodeOutputWithFreshCache,
-      decodeWindowsTextFileBuffer: decodeTextWithFreshCache,
-    } = await import("./windows-encoding.js");
-    const undecodableByte = Buffer.from([0x80]);
-
-    expect(decodeOutputWithFreshCache({ buffer: undecodableByte, platform: "win32" })).toBe(
-      undecodableByte.toString("utf8"),
-    );
-    expect(decodeOutputWithFreshCache({ buffer: undecodableByte, platform: "win32" })).toBe(
-      undecodableByte.toString("utf8"),
-    );
-    expect(decodeTextWithFreshCache({ buffer: undecodableByte, platform: "win32" })).toBe(
-      undecodableByte.toString("utf8"),
-    );
-    expect(decodeTextWithFreshCache({ buffer: undecodableByte, platform: "win32" })).toBe(
-      undecodableByte.toString("utf8"),
-    );
-
-    expect(spawnSyncMock).toHaveBeenCalledTimes(2);
-    expect(spawnSyncMock).toHaveBeenNthCalledWith(
-      1,
-      expect.any(String),
-      ["/d", "/s", "/c", "chcp"],
-      {
-        env: expect.any(Object),
-        encoding: "utf8",
-        killSignal: "SIGKILL",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 5_000,
-        windowsHide: true,
-      },
-    );
-    expect(spawnSyncMock).toHaveBeenNthCalledWith(
-      2,
-      "powershell.exe",
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::Default.CodePage"],
-      {
-        env: expect.any(Object),
-        encoding: "utf8",
-        killSignal: "SIGKILL",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 5_000,
-        windowsHide: true,
-      },
-    );
-  });
-
-  it("prefers valid UTF-8 output on Windows even when the console code page is legacy", () => {
-    const raw = Buffer.from("测试", "utf8");
-
+it("decodes UTF-16BE output across every chunk boundary", () => {
+  const raw = UTF16_OUTPUT_CASES[1];
+  for (let split = 1; split < raw.length; split += 1) {
+    const decoder = windowsDecoder();
     expect(
-      decodeWindowsOutputBuffer({
-        buffer: raw,
-        platform: "win32",
-        windowsEncoding: "gbk",
-      }),
-    ).toBe("测试");
-  });
+      decodeChunks(decoder, [raw.subarray(0, split), raw.subarray(split)]).join(""),
+      `split ${split}`,
+    ).toBe("hi\n");
+  }
+});
 
-  it("decodes legacy text files with the Windows system encoding", () => {
-    const raw = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
+it("isolates empty-prefix and stream state", () => {
+  const stdout = windowsDecoder();
+  const stderr = windowsDecoder();
+  const [stdoutRaw, stderrRaw] = UTF16_OUTPUT_CASES;
+  expect([
+    stdout.decode(Buffer.alloc(0)),
+    stderr.decode(Buffer.alloc(0)),
+    stdout.decode(stdoutRaw.subarray(0, 1)),
+    stderr.decode(stderrRaw.subarray(0, 1)),
+    stdout.decode(Buffer.alloc(0)),
+    stderr.decode(Buffer.alloc(0)),
+    stdout.decode(stdoutRaw.subarray(1)) + stdout.flush(),
+    stderr.decode(stderrRaw.subarray(1)) + stderr.flush(),
+  ]).toEqual(["", "", "", "", "", "", "hi\n", "hi\n"]);
+});
 
-    expect(
-      decodeWindowsTextFileBuffer({
-        buffer: raw,
-        platform: "win32",
-        windowsEncoding: "gbk",
-      }),
-    ).toBe("你好");
-  });
-
-  it("replays buffered UTF-8 lead bytes when split GBK output falls back to the console code page", () => {
-    const decoder = createWindowsOutputDecoder({
-      platform: "win32",
-      windowsEncoding: "gbk",
-    });
-
-    expect(decoder.decode(Buffer.from([0xc4]))).toBe("");
-    expect(decoder.decode(Buffer.from([0xe3]))).toBe("你");
-    expect(decoder.flush()).toBe("");
-  });
-
-  it("decodes complete UTF-16 BOM output and file buffers with a utf-8 fallback encoding", () => {
-    for (const [, raw] of UTF16_OUTPUT_CASES) {
-      for (const decode of [decodeWindowsOutputBuffer, decodeWindowsTextFileBuffer]) {
-        expect(decode({ buffer: raw, platform: "win32", windowsEncoding: "utf-8" })).toBe("hi\n");
-      }
+it.each(["utf-8", "gbk"] as const)(
+  "replays unmatched and lone BOM prefixes: %s",
+  (windowsEncoding) => {
+    for (const raw of [bytes(0xff, 0x41), bytes(0xfe, 0x42), bytes(0xff)]) {
+      const decoder = windowsDecoder({ windowsEncoding });
+      expect(decoder.decode(raw.subarray(0, 1))).toBe("");
+      const rest = raw.length > 1 ? decoder.decode(raw.subarray(1)) : "";
+      expect(rest + decoder.flush()).toBe(new TextDecoder(windowsEncoding).decode(raw));
     }
+  },
+);
+
+it.each([
+  ["linux", "hello", [1, 2], ["", "", "\uFEFFhello", ""]],
+  ["win32", "测试", [1, 2, 4], ["", "", "\uFEFF", "测试", ""]],
+] as const)("preserves a split UTF-8 BOM on %s", (platform, text, splits, expected) => {
+  const decoder = createWindowsOutputDecoder({
+    platform,
+    preserveUtf8Bom: true,
+    windowsEncoding: "gbk",
   });
-
-  it("decodes UTF-16 BOM file buffers on linux", () => {
-    for (const [, raw] of UTF16_OUTPUT_CASES) {
-      expect(decodeWindowsTextFileBuffer({ buffer: raw, platform: "linux" })).toBe("hi\n");
-    }
+  const raw = Buffer.from(`\uFEFF${text}`);
+  let start = 0;
+  const decoded = [...splits, raw.length].map((end) => {
+    const chunk = decoder.decode(raw.subarray(start, end));
+    start = end;
+    return chunk;
   });
-
-  it("decodes UTF-16BE output across every chunk boundary", () => {
-    const raw = UTF16_OUTPUT_CASES[1][1];
-    for (let split = 1; split < raw.length; split += 1) {
-      const decoder = createWindowsOutputDecoder({
-        platform: "win32",
-        windowsEncoding: "gbk",
-      });
-      expect(
-        decoder.decode(raw.subarray(0, split)) +
-          decoder.decode(raw.subarray(split)) +
-          decoder.flush(),
-        `split ${split}`,
-      ).toBe("hi\n");
-    }
-  });
-
-  it("keeps empty-prefix and stdout/stderr decoder state isolated", () => {
-    const stdout = createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "gbk" });
-    const stderr = createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "gbk" });
-    const stdoutRaw = UTF16_OUTPUT_CASES[0][1];
-    const stderrRaw = UTF16_OUTPUT_CASES[1][1];
-
-    expect(stdout.decode(Buffer.alloc(0))).toBe("");
-    expect(stderr.decode(Buffer.alloc(0))).toBe("");
-    expect(stdout.decode(stdoutRaw.subarray(0, 1))).toBe("");
-    expect(stderr.decode(stderrRaw.subarray(0, 1))).toBe("");
-    expect(stdout.decode(Buffer.alloc(0))).toBe("");
-    expect(stderr.decode(Buffer.alloc(0))).toBe("");
-    expect(stdout.decode(stdoutRaw.subarray(1)) + stdout.flush()).toBe("hi\n");
-    expect(stderr.decode(stderrRaw.subarray(1)) + stderr.flush()).toBe("hi\n");
-  });
-
-  it.each(["utf-8", "gbk"] as const)(
-    "replays unmatched and lone UTF-16 BOM prefixes through the %s path",
-    (windowsEncoding) => {
-      for (const raw of [Buffer.from([0xff, 0x41]), Buffer.from([0xfe, 0x42])]) {
-        const decoder = createWindowsOutputDecoder({ platform: "win32", windowsEncoding });
-        expect(decoder.decode(raw.subarray(0, 1))).toBe("");
-        expect(decoder.decode(raw.subarray(1)) + decoder.flush()).toBe(
-          new TextDecoder(windowsEncoding).decode(raw),
-        );
-      }
-
-      const lonePrefix = Buffer.from([0xff]);
-      const decoder = createWindowsOutputDecoder({ platform: "win32", windowsEncoding });
-      expect(decoder.decode(lonePrefix)).toBe("");
-      expect(decoder.flush()).toBe(new TextDecoder(windowsEncoding).decode(lonePrefix));
-    },
-  );
-
-  it("preserves a split UTF-8 BOM when requested on POSIX", () => {
-    const decoder = createWindowsOutputDecoder({
-      platform: "linux",
-      preserveUtf8Bom: true,
-    });
-    const raw = Buffer.from("\uFEFFhello", "utf8");
-
-    expect(decoder.decode(raw.subarray(0, 1))).toBe("");
-    expect(decoder.decode(raw.subarray(1, 2))).toBe("");
-    expect(decoder.decode(raw.subarray(2))).toBe("\uFEFFhello");
-    expect(decoder.flush()).toBe("");
-  });
-
-  it("preserves a split UTF-8 BOM before the Windows codepage fallback", () => {
-    const decoder = createWindowsOutputDecoder({
-      platform: "win32",
-      preserveUtf8Bom: true,
-      windowsEncoding: "gbk",
-    });
-    const raw = Buffer.from("\uFEFF测试", "utf8");
-
-    expect(decoder.decode(raw.subarray(0, 1))).toBe("");
-    expect(decoder.decode(raw.subarray(1, 2))).toBe("");
-    expect(decoder.decode(raw.subarray(2, 4))).toBe("\uFEFF");
-    expect(decoder.decode(raw.subarray(4))).toBe("测试");
-    expect(decoder.flush()).toBe("");
-  });
+  expect([...decoded, decoder.flush()]).toEqual(expected);
 });

@@ -3,7 +3,10 @@ import type { ExecutionDecisionWork } from "../../audit/execution-decision-work.
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
-export async function captureSessionDecisionWork<T>(run: () => Promise<T>): Promise<{
+export async function captureSessionDecisionWork<T>(
+  run: () => Promise<T>,
+  prefix = "sessions-spawn",
+): Promise<{
   result: T;
   work: ExecutionDecisionWork[];
   token: ReturnType<typeof createExecutionIdentityAdmissionToken>;
@@ -14,9 +17,9 @@ export async function captureSessionDecisionWork<T>(run: () => Promise<T>): Prom
     return true;
   });
   try {
-    const token = createExecutionIdentityAdmissionToken("sessions-spawn-action", {
-      contextId: "sessions-spawn-context",
-      executionId: "sessions-spawn-execution",
+    const token = createExecutionIdentityAdmissionToken(`${prefix}-action`, {
+      contextId: `${prefix}-context`,
+      executionId: `${prefix}-execution`,
     });
     const result = await withGatewayToolCallerIdentity(
       {

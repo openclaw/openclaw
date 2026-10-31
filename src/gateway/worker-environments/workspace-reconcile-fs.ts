@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError, type Root } from "../../infra/fs-safe.js";
-import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import { lstatIfExists } from "../../infra/path-existence.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import type { WorkspaceNode } from "./workspace-manifest-comparison.js";
@@ -52,12 +52,7 @@ export async function removeEmptyWorkspaceDirectory(root: Root, entryPath: strin
 
 export async function localWorkspaceNode(root: string, entryPath: string): Promise<WorkspaceNode> {
   const absolute = localPath(root, entryPath);
-  const stats = await fs.lstat(absolute).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const stats = await lstatIfExists(absolute);
   if (!stats) {
     return undefined;
   }
@@ -81,12 +76,10 @@ export async function localWorkspaceNode(root: string, entryPath: string): Promi
 async function fileEntryMatches(
   absolute: string,
   entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>,
-  root?: string,
 ): Promise<boolean> {
   const snapshot = await computeWorkspaceFileSnapshot(
     absolute,
     MAX_RECONCILIATION_FILE_BYTES,
-    root,
   ).catch((error: unknown) => {
     if (error instanceof WorkerTaskError) {
       throw error;
@@ -116,16 +109,6 @@ export async function absoluteEntryMatches(
     return false;
   }
   return await fileEntryMatches(absolute, entry);
-}
-
-export async function entryMatches(
-  root: string,
-  entry: WorkerWorkspaceManifestEntry,
-): Promise<boolean> {
-  if (entry.type === "symlink") {
-    return await absoluteEntryMatches(localPath(root, entry.path), entry);
-  }
-  return await fileEntryMatches(localPath(root, entry.path), entry, root);
 }
 
 export async function readWorkspaceTreeFile(params: {
@@ -173,6 +156,7 @@ export async function directoryContainsOnlyWorkspaceEntries(
   directory: string,
   isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
   journal?: { paths: ReadonlySet<string>; directories: ReadonlySet<string> },
+  excludeBuildCaches = false,
 ): Promise<boolean> {
   let foundEntry = false;
   for (const name of await fs.readdir(localPath(root, directory))) {
@@ -180,7 +164,7 @@ export async function directoryContainsOnlyWorkspaceEntries(
     if (isRuntimeOwnedWorkspacePath(child)) {
       return false;
     }
-    if (!isDerivedWorkspacePath(child, await isRetainedInput(child))) {
+    if (!isDerivedWorkspacePath(child, await isRetainedInput(child), excludeBuildCaches)) {
       const stats = await fs.lstat(localPath(root, child));
       if (stats.isDirectory() && !stats.isSymbolicLink()) {
         if (
@@ -189,6 +173,7 @@ export async function directoryContainsOnlyWorkspaceEntries(
             child,
             isRetainedInput,
             journal?.directories.has(child) ? journal : undefined,
+            excludeBuildCaches,
           ))
         ) {
           return false;

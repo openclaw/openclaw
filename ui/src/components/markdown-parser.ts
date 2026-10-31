@@ -16,6 +16,7 @@ import {
   isHostLocalMarkdownFileHref,
   MARKDOWN_FILE_LINK_SCAN_RE,
   parseMarkdownFileLinkTarget,
+  parseMarkdownDocumentFileLinkTarget,
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
 import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
@@ -28,6 +29,11 @@ import {
   markdownInlineChildren,
   replaceMarkdownTextMatches,
 } from "./markdown-text-replacements.ts";
+
+// formatAudioTranscriptForAgent stores this model-facing label in conversation history.
+const AUDIO_TRANSCRIPT_PREFIX = '[Audio transcript (machine-generated, untrusted)]: "';
+
+const HEX_COLOR_RE = /#(?:[\da-f]{8}|[\da-f]{6}|[\da-f]{4}|[\da-f]{3})(?![\da-f])/gi;
 
 const DISALLOWED_LINK_SCHEME_RE = /^(?!(?:https?|mailto):)[a-z][a-z0-9+.-]*:/i;
 // Raw CJK suffixes delimit autolinks; percent-encoded URL content stays intact.
@@ -134,12 +140,54 @@ export function createMarkdownParser(): MarkdownItParser {
   });
   markdownParser.use(markdownItCjkFriendly);
   markdownParser.enable("strikethrough");
+  markdownParser.block.ruler.before(
+    "reference",
+    "audio_transcript",
+    (state, startLine, _endLine, silent) => {
+      if ((state.sCount[startLine] ?? 0) - state.blkIndent >= 4) {
+        return false;
+      }
+      const start = (state.bMarks[startLine] ?? 0) + (state.tShift[startLine] ?? 0);
+      const end = state.eMarks[startLine] ?? state.src.length;
+      const line = state.src.slice(start, end);
+      if (!line.startsWith(AUDIO_TRANSCRIPT_PREFIX)) {
+        return false;
+      }
+      if (silent) {
+        return true;
+      }
+      // Without this presentation adapter, a transcript without spaces is a hidden
+      // Markdown link definition. Keep the persisted and model-facing bytes intact.
+      state.push("paragraph_open", "p", 1).map = [startLine, startLine + 1];
+      const inline = state.push("inline", "", 0);
+      inline.content = `\\${line}`;
+      inline.map = [startLine, startLine + 1];
+      inline.children = [];
+      state.push("paragraph_close", "p", -1);
+      state.line = startLine + 1;
+      return true;
+    },
+    { alt: ["reference"] },
+  );
   installAssistantTranscriptRoleMarkdown(markdownParser);
   installMarkdownDetails(markdownParser);
   installMarkdownTables(markdownParser);
 
   // Bare filenames such as README.md are not web destinations.
   markdownParser.linkify.set({ fuzzyLink: false });
+
+  // A raw quote ends an HTTP URL in prose/JSON; encoded quotes remain URL data.
+  // Bound the input before matching so native path and punctuation rules still apply.
+  for (const schema of ["http:", "https:"]) {
+    markdownParser.linkify.add(schema, {
+      validate(text, pos, self) {
+        const pattern = self.re.get_http_validator();
+        const quote = text.indexOf('"', pos);
+        pattern.lastIndex = pos;
+        return pattern.exec(quote < 0 ? text : text.slice(0, quote))?.[0].length ?? 0;
+      },
+    });
+  }
 
   // Keep GFM's www. autolinks without fuzzy filename detection.
   markdownParser.linkify.add("www", {
@@ -295,7 +343,7 @@ export function createMarkdownParser(): MarkdownItParser {
 
   markdownParser.core.ruler.after("linkify-cjk-trim", "file-links", (state) => {
     const env = state.env as Partial<MarkdownRenderEnv> | undefined;
-    if (env?.fileLinks !== true) {
+    if (env?.fileLinks !== true && !env?.documentFileLinks) {
       return;
     }
     const decorations: MarkdownFileLinkDecoration[] = [];
@@ -337,15 +385,28 @@ export function createMarkdownParser(): MarkdownItParser {
             } catch {
               // Keep the raw href when malformed percent escapes cannot be decoded.
             }
-            if (!decodedHref.includes("://")) {
+            // Query values may contain URLs; selection parsing owns the destination's scheme check.
+            if (env.documentFileLinks === "select" || !decodedHref.includes("://")) {
+              const documentTarget = env.documentFileLinks
+                ? parseMarkdownDocumentFileLinkTarget(
+                    href,
+                    env.documentFileLinks === "select" ? "select" : "read",
+                  )
+                : null;
               const target =
-                parseMarkdownFileLinkTarget(decodedHref, { authored: true }) ??
-                (isHostLocalMarkdownFileHref(decodedHref)
-                  ? splitMarkdownFileLineSuffix(decodedHref.trim())
+                documentTarget ??
+                (env.fileLinks
+                  ? (parseMarkdownFileLinkTarget(decodedHref, { authored: true }) ??
+                    (isHostLocalMarkdownFileHref(decodedHref)
+                      ? splitMarkdownFileLineSuffix(decodedHref.trim())
+                      : null))
                   : null);
               if (target) {
                 token.attrs = token.attrs?.filter(([name]) => name !== "href") ?? null;
                 decorateFileLink(token, target);
+                if (documentTarget) {
+                  token.attrSet("data-file-document-relative", "true");
+                }
                 // Keep authored labels; expose their reference only when different.
                 const reference = decodedHref.trim();
                 if (linkLabelText(children, index) !== reference) {
@@ -361,7 +422,7 @@ export function createMarkdownParser(): MarkdownItParser {
           linkDepth = Math.max(0, linkDepth - 1);
           continue;
         }
-        if (linkDepth > 0) {
+        if (linkDepth > 0 || !env.fileLinks) {
           continue;
         }
         if (token.type === "code_inline") {
@@ -554,7 +615,7 @@ export function createMarkdownParser(): MarkdownItParser {
   markdownParser.renderer.rules.link_favicon = (tokens, index) => {
     const hostname: unknown = tokens[index]?.meta?.hostname;
     return typeof hostname === "string"
-      ? `<img class="markdown-link-favicon" data-link-favicon-host="${escapeHtml(hostname)}" alt="" role="presentation">`
+      ? `<img class="markdown-link-favicon" data-link-favicon-host="${escapeHtml(hostname)}" width="16" height="16" loading="lazy" decoding="async" alt="" role="presentation">`
       : "";
   };
   // Fenced and indented blocks share one interaction and overflow surface.
@@ -587,5 +648,48 @@ export function createMarkdownParser(): MarkdownItParser {
       : code;
   };
   installMarkdownHumanMentions(markdownParser);
+  // Link owners run first; preserve reference metadata before text tokens are joined.
+  markdownParser.core.ruler.before("text_join", "hex-colors", (state) => {
+    if (state.env.mode !== "message") {
+      return;
+    }
+    for (const children of markdownInlineChildren(state.tokens)) {
+      let linkDepth = 0;
+      for (let index = 0; index < children.length; index += 1) {
+        const token = children[index]!;
+        if (token.type === "link_open" || token.type === "link_close") {
+          linkDepth += token.nesting;
+        }
+        if (
+          token.type !== "text" ||
+          token.meta?.githubItemReference ||
+          linkDepth !== 0 ||
+          !token.content.includes("#")
+        ) {
+          continue;
+        }
+        index = replaceMarkdownTextMatches(state, children, index, HEX_COLOR_RE, (match) => {
+          const end = match.index + match[0].length;
+          if (
+            !hasMarkdownLinkBoundaries(token.content, match.index, end) ||
+            /^[.-]\w/u.test(token.content.slice(end))
+          ) {
+            return null;
+          }
+          const color = new state.Token("hex_color", "", 0);
+          color.content = match[0];
+          return [color];
+        });
+      }
+    }
+  });
+  markdownParser.renderer.rules.hex_color = (tokens, index) => {
+    const color = tokens[index]!.content;
+    // Only the validated hex token enters this image; no style or HTML allowlist expansion.
+    const image = encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><path fill="${color}" d="M0 0h16v16H0z"/></svg>`,
+    );
+    return `<span class="markdown-hex-color"><img class="markdown-hex-color__swatch" src="data:image/svg+xml,${image}" alt="" aria-hidden="true">${color}</span>`;
+  };
   return markdownParser;
 }

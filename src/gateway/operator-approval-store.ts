@@ -14,12 +14,14 @@ import {
   type SqliteWorkerAdmissionFactory,
   type SqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../infra/sqlite-worker-operation-settlement.js";
 // Runtime approval operations retain the shared-state owner through worker settlement.
 import {
   createSqliteWorkerWriteAdmission,
   reserveSqliteWorkerInputPreparation,
 } from "../infra/sqlite-worker-store.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { createKeyedFifoLeaseRegistry } from "../shared/keyed-fifo-lease.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
@@ -33,6 +35,7 @@ import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-
 import type { OpenClawStateWorkerOperationOptions } from "../state/openclaw-state-worker-contract.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { batchStateDomainPublications } from "../state/state-domain-publication.js";
+import { prepareOperatorApprovalPendingView } from "./operator-approval-pending-view.js";
 import type {
   CronStandingGrantLookupInput,
   ConsumeCronStandingGrantResult,
@@ -87,6 +90,21 @@ type Options = {
 type Input<Key extends Operation> = OperatorApprovalWorkerOperations[Key]["input"] & Options;
 
 const leases = createKeyedFifoLeaseRegistry(Symbol.for("openclaw.operatorApprovalStoreLeases"));
+const queuedWrites = resolveGlobalMap<string, { count: number }>(
+  Symbol.for("openclaw.operatorApprovalQueuedWrites"),
+  "close-and-restart",
+);
+
+function retainQueuedWrite(path: string) {
+  const writes = queuedWrites.get(path) ?? { count: 0 };
+  writes.count++;
+  queuedWrites.set(path, writes);
+  return () => {
+    if (--writes.count === 0 && queuedWrites.get(path) === writes) {
+      queuedWrites.delete(path);
+    }
+  };
+}
 
 async function runApprovalStoreOperation<T>(
   context: OpenClawStateWorkerContext,
@@ -128,9 +146,11 @@ function execute<Key extends Operation>(
   { databaseOptions, assertCurrent, guard, ...input }: Input<Key>,
   options?: {
     onCommitted?: (resolutionKey: string) => void;
+    changesExecPolicy?: boolean;
     context?: OpenClawStateWorkerContext;
     read?: {
       command: Extract<OpenClawStateReadCommand, { type: `operatorApprovals.${string}` }>;
+      onCurrent?: (isCurrent: () => boolean) => void;
       project: (
         result: OpenClawStateReadResult,
       ) => OperatorApprovalWorkerOperations[Key]["output"] | undefined;
@@ -176,7 +196,11 @@ function execute<Key extends Operation>(
     };
     const approvals = operatorApprovalPublication.begin(owner);
     const grants = operatorStandingGrantPublication.begin(owner);
-    const exec = execApprovalsPublication.begin(owner);
+    const exec = execApprovalsPublication.begin({
+      ...owner,
+      // Approval bookkeeping cannot revoke exec authority; durable MCP grants can.
+      publishPending: options?.changesExecPolicy === true,
+    });
     observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
       batchStateDomainPublications(() => {
         approvals.committed(isRecord(facts) ? facts.approvalFacts : undefined);
@@ -184,30 +208,20 @@ function execute<Key extends Operation>(
         exec.committed(isRecord(facts) ? facts.execFacts : undefined);
       });
     });
-    const finish = admission.finish.bind(admission);
-    admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        const confirmed = admission?.settlement?.kind === "completed";
-        const rolledBack = confirmed && !admission?.committed && !commitAdmitted;
-        approvals.finish(confirmed, rolledBack);
-        grants.finish(confirmed, rolledBack);
-        exec.finish(confirmed, rolledBack);
-      }
-    };
+    observeSqliteWorkerAdmissionFinish(admission, () => {
+      const confirmed = admission?.settlement?.kind === "completed";
+      const rolledBack = confirmed && !admission?.committed && !commitAdmitted;
+      approvals.finish(confirmed, rolledBack);
+      grants.finish(confirmed, rolledBack);
+      exec.finish(confirmed, rolledBack);
+    });
     return retained;
   };
-  const publishCommitted = (facts: unknown) => {
-    if (
-      options?.onCommitted &&
-      isRecord(facts) &&
-      facts.type === "operatorApprovals.resolve" &&
-      typeof facts.resolutionKey === "string"
-    ) {
-      options.onCommitted(facts.resolutionKey);
-    }
-  };
+  // Completed replay reuse must wait behind writers from their FIFO admission,
+  // including writes whose worker has not yet published a pending receipt.
+  let releaseWrite = options?.read
+    ? undefined
+    : retainQueuedWrite(context.admission.identity.canonicalPath);
   return runApprovalStoreOperation(
     context,
     captured,
@@ -215,7 +229,11 @@ function execute<Key extends Operation>(
       try {
         if (options?.read) {
           assertCallerCurrent();
-          const result = await readApprovalStoreCommand(context, options.read.command);
+          const result = await readApprovalStoreCommand(
+            context,
+            options.read.command,
+            options.read.onCurrent,
+          );
           context.admission.assertCurrent();
           assertCallerCurrent();
           const value = options.read.project(result);
@@ -223,16 +241,25 @@ function execute<Key extends Operation>(
             return value;
           }
         }
+        releaseWrite ??= retainQueuedWrite(context.admission.identity.canonicalPath);
         return await preparation.handoff(() => scope.execute({ type, input: captured }));
       } finally {
         // Broker settlement retains the native receipt even when the command reply is lost.
-        publishCommitted(admission?.committed?.facts);
+        const facts = admission?.committed?.facts;
+        if (
+          options?.onCommitted &&
+          isRecord(facts) &&
+          facts.type === "operatorApprovals.resolve" &&
+          typeof facts.resolutionKey === "string"
+        ) {
+          options.onCommitted(facts.resolutionKey);
+        }
       }
     },
     {
       createAdmission,
     },
-  );
+  ).finally(() => releaseWrite?.());
 }
 
 export function recoverOperatorApprovalsOnStartup(
@@ -264,7 +291,7 @@ export function listPendingOperatorApprovals(params: Input<"operatorApprovals.pe
     },
   });
 }
-export function prepareOperatorApprovalReplay(
+export async function prepareOperatorApprovalReplay(
   params: Input<"operatorApprovals.prepareReplay"> = {},
 ) {
   const {
@@ -274,22 +301,27 @@ export function prepareOperatorApprovalReplay(
     nowMs = Date.now(),
     ...selection
   } = params;
-  return execute(
+  let isCurrent: (() => boolean) | undefined;
+  const result = await execute(
     "operatorApprovals.prepareReplay",
     { ...params, nowMs },
     {
       read: {
         command: { type: "operatorApprovals.prepareReplay", input: { ...selection, nowMs } },
+        onCurrent: (current) => {
+          isCurrent = current;
+        },
         // Due expirations and corrupt rows retain this admission through writer settlement.
-        project: (result) =>
-          result.type === "operatorApprovals.prepareReplay" &&
-          result.replay.outcome === "pending" &&
-          !result.replay.corrupt.length
-            ? { outcome: "pending", records: result.replay.records }
+        project: (read) =>
+          read.type === "operatorApprovals.prepareReplay" &&
+          read.replay.outcome === "pending" &&
+          !read.replay.corrupt.length
+            ? { outcome: "pending", records: read.replay.records }
             : undefined,
       },
     },
   );
+  return { ...result, isCurrent };
 }
 export function resolveOperatorApproval(
   params: Input<"operatorApprovals.resolve"> & {
@@ -298,7 +330,10 @@ export function resolveOperatorApproval(
   },
 ) {
   const { onCommitted, ...input } = params;
-  return execute("operatorApprovals.resolve", input, { onCommitted });
+  return execute("operatorApprovals.resolve", input, {
+    onCommitted,
+    changesExecPolicy: input.decision === "allow-always" && input.mcpToolGrant !== undefined,
+  });
 }
 export function forceDenyOperatorApproval(params: Input<"operatorApprovals.deny">) {
   return execute("operatorApprovals.deny", params);
@@ -310,7 +345,37 @@ export function consumeOperatorApprovalAllowOnce(params: Input<"operatorApproval
 async function readApprovalStoreCommand(
   context: OpenClawStateWorkerContext,
   command: Extract<OpenClawStateReadCommand, { type: `operatorApprovals.${string}` }>,
+  onCurrent?: (isCurrent: () => boolean) => void,
 ): Promise<OpenClawStateReadResult> {
+  if (
+    command.type === "operatorApprovals.pending" ||
+    command.type === "operatorApprovals.prepareReplay"
+  ) {
+    const view = await prepareOperatorApprovalPendingView(context, async (cursor) => {
+      const result = await readApprovalStoreCommand(context, {
+        type: "operatorApprovals.pendingSnapshot",
+        input: { cursor },
+      });
+      if (result.type !== "operatorApprovals.pendingSnapshot") {
+        throw new Error("Operator approval pending snapshot became unavailable");
+      }
+      return result.page;
+    });
+    const pending = view?.select(
+      { ...command.input, nowMs: command.input.nowMs ?? Date.now() },
+      command.type === "operatorApprovals.prepareReplay",
+    );
+    if (pending) {
+      const path = context.admission.identity.canonicalPath;
+      onCurrent?.(() => !queuedWrites.has(path) && pending.isCurrent());
+      return command.type === "operatorApprovals.pending"
+        ? { type: command.type, pending: { records: pending.records, corrupt: [] } }
+        : {
+            type: command.type,
+            replay: { outcome: "pending", records: pending.records, corrupt: [] },
+          };
+    }
+  }
   const result = await executeExistingOpenClawStateRead(
     { env: context.environment, path: context.admission.databasePath },
     command,
@@ -336,25 +401,26 @@ async function readApprovalStore<T>(
     guard?.assertCurrent();
     assertCurrent?.();
   };
-  // Preserve creating/writable admission, then use the existing read-only owner.
-  return runApprovalStoreOperation(
+  // Wait for earlier mutations and preserve writable/open admission. Historical
+  // snapshots do not hold the mutation FIFO while the read worker scans rows.
+  await runApprovalStoreOperation(
     context,
     captured,
     async (_scope, preparation) => {
       preparation.assertCurrent();
       assertOperationCurrent();
-      preparation.release();
-      const result = await readApprovalStoreCommand(context, captured);
-      assertOperationCurrent();
-      const value = project(result);
-      if (value !== undefined) {
-        return value;
-      }
-      throw new Error("Operator approval database became unavailable");
     },
     undefined,
     assertOperationCurrent,
   );
+  assertOperationCurrent();
+  const result = await readApprovalStoreCommand(context, captured);
+  assertOperationCurrent();
+  const value = project(result);
+  if (value !== undefined) {
+    return value;
+  }
+  throw new Error("Operator approval database became unavailable");
 }
 
 export async function listTerminalOperatorApprovals(

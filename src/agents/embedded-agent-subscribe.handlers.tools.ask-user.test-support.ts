@@ -1,6 +1,8 @@
 import { expect, vi } from "vitest";
+import { QuestionManager } from "../gateway/question-manager.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import * as questionDispatch from "./harness/gateway-question-dispatch.js";
 import { createAskUserTool } from "./tools/ask-user-tool.js";
-import { resetPendingAskUserQuestionsForTest } from "./tools/ask-user-tool.test-support.js";
 
 const pendingAskUserFinishes = new Set<() => Promise<void>>();
 
@@ -19,25 +21,29 @@ export function createBasicAskUserArgs() {
 
 export async function activateAskUserPrompt(toolCallId: string, args: unknown) {
   let questionId: string | undefined;
-  let resolveAnswer: ((value: { status: "cancelled" }) => void) | undefined;
-  const tool = createAskUserTool({
-    sessionKey: "agent:unit-session",
-    runId: "run-test",
-    gatewayCall: async (method, _opts, params) => {
+  const scheduler = createTestGatewayScheduler();
+  const questions = new QuestionManager(scheduler);
+  const dispatch = questionDispatch.resolveAgentQuestionGatewayCall(
+    async (method, _opts, params) => {
       if (method === "question.request") {
-        if (!params || typeof params !== "object" || !("id" in params)) {
-          throw new Error("question.request params missing id");
-        }
-        questionId = String(params.id);
+        questionId = questions.request(params as Parameters<QuestionManager["request"]>[0]).id;
         return { id: questionId };
       }
       if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          resolveAnswer = resolve;
-        });
+        return await questions.waitAnswer((params as { id: string }).id);
+      }
+      if (method === "question.list") {
+        return { questions: questions.list() };
       }
       throw new Error(`unexpected method ${method}`);
     },
+  );
+  const gatewaySpy = vi
+    .spyOn(questionDispatch, "resolveAgentQuestionGatewayCall")
+    .mockReturnValue(dispatch);
+  const tool = createAskUserTool({
+    sessionKey: "agent:unit-session",
+    runId: "run-test",
   });
   const pending = tool.execute(toolCallId, args);
   let finished = false;
@@ -46,10 +52,21 @@ export async function activateAskUserPrompt(toolCallId: string, args: unknown) {
       return;
     }
     finished = true;
-    await vi.waitFor(() => expect(resolveAnswer).toBeTypeOf("function"));
-    resolveAnswer?.({ status: "cancelled" });
-    await pending;
-    pendingAskUserFinishes.delete(finish);
+    try {
+      if (questionId && questions.get(questionId)?.status === "pending") {
+        questions.cancel(questionId);
+      }
+      await pending;
+    } finally {
+      questions.close();
+      try {
+        await questions.drain();
+        await scheduler.stop();
+      } finally {
+        gatewaySpy.mockRestore();
+        pendingAskUserFinishes.delete(finish);
+      }
+    }
   };
   pendingAskUserFinishes.add(finish);
   await vi.waitFor(() => expect(questionId).toBeTypeOf("string"));
@@ -58,5 +75,4 @@ export async function activateAskUserPrompt(toolCallId: string, args: unknown) {
 
 export async function finishPendingAskUserPrompts() {
   await Promise.all([...pendingAskUserFinishes].map((finish) => finish()));
-  resetPendingAskUserQuestionsForTest();
 }

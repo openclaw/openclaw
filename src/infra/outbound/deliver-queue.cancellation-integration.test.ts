@@ -153,12 +153,8 @@ describe("queued cancellation during adapter preparation", () => {
     async ({ reconciliation, bestEffort }) => {
       const adapter = adapterFixture(reconciliation);
       const onPayloadDeliveryOutcome = vi.fn();
-      let callerIsActive = true;
-      const assertCurrent = () => {
-        if (!callerIsActive) {
-          throw new Error("message caller retired");
-        }
-      };
+      const caller = createCaller();
+      const assertCurrent = () => caller.signal.throwIfAborted();
       const delivery = dispatch({
         payloads: [{ text: "caller-bound message" }],
         bestEffort,
@@ -170,18 +166,16 @@ describe("queued cancellation during adapter preparation", () => {
 
       await adapter.prepared;
       expect(await pendingDeliveries()).toHaveLength(1);
-      callerIsActive = false;
+      caller.abort(new Error("message caller retired"));
       adapter.releasePreparation();
       adapter.releaseProvider();
       const settled = await outcome;
       const rejection = { message: expect.stringContaining("message caller retired") };
       expect(settled).toMatchObject(bestEffort ? [] : rejection);
-      expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "failed",
-          error: expect.objectContaining(rejection),
-        }),
-      );
+      expect(onPayloadDeliveryOutcome.mock.calls[0]?.[0]).toMatchObject({
+        status: "failed",
+        error: rejection,
+      });
       expect(adapter.send).not.toHaveBeenCalled();
       await recover();
       expect(adapter.send).not.toHaveBeenCalled();

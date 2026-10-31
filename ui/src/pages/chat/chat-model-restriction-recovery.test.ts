@@ -3,7 +3,7 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { SessionsPatchResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -11,7 +11,7 @@ import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.
 import { waitForConfirmDialogActions } from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
+import { makeChatHost, requestCalls, expectRequestCounts } from "./chat-host.test-support.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { retireChatModelSelectionOwnership, switchChatModel } from "./chat-session.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
@@ -30,6 +30,22 @@ const recovery = {
   expectedSandboxMode: null,
   expectedNativeRuntimeConsent: null,
 } satisfies NonNullable<AgentRuntimeRestrictionErrorDetails["recovery"]>;
+
+function restrictionError(details: AgentRuntimeRestrictionErrorDetails) {
+  return new GatewayRequestError({
+    code: "INVALID_REQUEST",
+    message: "Native runtime restricted",
+    details,
+  });
+}
+
+const restrictionDetails: AgentRuntimeRestrictionErrorDetails = {
+  code: "AGENT_RUNTIME_RESTRICTED",
+  runtimeId: "opencode",
+  runtimeLabel: "OpenCode",
+  reason: "sandbox",
+  recovery,
+};
 
 function fixture(
   options: {
@@ -59,9 +75,8 @@ function fixture(
     ...(options.unbound ? { defaultsModel: "original", defaultsProvider: "fixture" } : {}),
   });
   result.sessions[0] = {
-    ...result.sessions[0],
+    ...result.sessions[0]!,
     key: sessionKey,
-    kind: "direct",
     updatedAt: 1,
     sessionId: options.materializedSessionId ?? recovery.sessionId,
     permissionMode: "guarded",
@@ -70,11 +85,7 @@ function fixture(
   const initialResult = options.unbound ? { ...result, count: 0, sessions: [] } : result;
   let materialized = !options.unbound;
   const details: AgentRuntimeRestrictionErrorDetails = {
-    code: "AGENT_RUNTIME_RESTRICTED",
-    runtimeId: "opencode",
-    runtimeLabel: "OpenCode",
-    reason: "sandbox",
-    recovery,
+    ...restrictionDetails,
     ...options.details,
   };
   let patches = 0;
@@ -111,11 +122,7 @@ function fixture(
       "sessions.patch": () => {
         patches += 1;
         if (patches === 1 && !options.send) {
-          throw new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: "Native runtime restricted",
-            details,
-          });
+          throw restrictionError(details);
         }
         if (options.rejectRecovery) {
           throw new GatewayRequestError({
@@ -154,8 +161,43 @@ function fixture(
       host.sessions.dispose();
     }
   });
-  return { host, receipt };
+  return {
+    host,
+    receipt,
+    select: () => switchChatModel(host, "fixture/selected", sessionKey, "opencode"),
+  };
 }
+
+type RecoveryHost = ReturnType<typeof fixture>["host"];
+async function selecting(options: Parameters<typeof fixture>[0] = {}) {
+  const f = fixture(options);
+  const selection = f.select();
+  return { ...f, selection, modal: await dialog() };
+}
+
+const selectionChanges = {
+  cancel: () => {},
+  connection(host) {
+    host.client = createTestGatewayClient(host.request);
+  },
+  epoch(host) {
+    host.connectionEpoch = (host.connectionEpoch ?? 0) + 1;
+  },
+  session(host) {
+    host.sessionKey = "agent:main:other";
+  },
+  agent(host) {
+    host.assistantAgentId = "other-agent";
+  },
+  reset(host) {
+    host.sessionsResult!.sessions[0]!.sessionId = "replacement";
+  },
+  authority(host) {
+    host.hello = sessionMutationGatewayHello(["operator.write"]);
+  },
+  retired: retireChatModelSelectionOwnership,
+  "newer-selection": (host) => switchChatModel(host, "fixture/newer", "global", "openclaw"),
+} satisfies Record<string, (host: RecoveryHost) => void | Promise<unknown>>;
 
 async function dialog() {
   await waitForConfirmDialogActions();
@@ -176,15 +218,21 @@ function click(modal: Element, label: string) {
   button.click();
 }
 
+function expectNoPatchFields(host: ReturnType<typeof fixture>["host"], ...fields: string[]) {
+  for (const [, params] of requestCalls(host.request, "sessions.patch")) {
+    for (const field of fields) {
+      expect(params).not.toHaveProperty(field);
+    }
+  }
+}
+
 it.each([false, true])(
   "requires explicit consent and handles a rejected recovery=%s without replay",
   async (rejectRecovery) => {
-    const { host } = fixture({ rejectRecovery });
-    const selection = switchChatModel(host, "fixture/selected", "global", "opencode");
-    const modal = await dialog();
-    expect(modal.textContent).toContain("own permissions");
-    expect(modal.textContent).toContain("Gateway host");
-    expect(modal.textContent).toContain("Only this chat");
+    const { host, selection, modal } = await selecting({ rejectRecovery });
+    for (const phrase of ["own permissions", "Gateway host", "Only this chat"]) {
+      expect(modal.textContent).toContain(phrase);
+    }
     expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
     click(modal, "Continue for this chat");
     await expect(selection).resolves.toBe(!rejectRecovery);
@@ -204,11 +252,7 @@ it.each([false, true])(
       expectedSandboxMode: null,
       expectedNativeRuntimeConsent: null,
     });
-    expect(
-      host.request.mock.calls.some(
-        ([method]) => method === "chat.send" || method === "config.patch",
-      ),
-    ).toBe(false);
+    expectRequestCounts(host.request, { "chat.send": 0, "config.patch": 0 });
     expect(host.chatMessage).toBe("Keep this draft; never replay it");
     expect(host.chatError ?? null).toEqual(
       rejectRecovery ? expect.stringContaining("Session changed") : null,
@@ -223,10 +267,8 @@ it.each([
 ])(
   "uses the owning agent's remembered permissions for $sessionKey without prompting",
   async ({ sessionKey, rememberedAgentId }) => {
-    const { host } = fixture({ remembered: true, sessionKey, rememberedAgentId });
-    await expect(switchChatModel(host, "fixture/selected", sessionKey, "opencode")).resolves.toBe(
-      true,
-    );
+    const { host, select } = fixture({ remembered: true, sessionKey, rememberedAgentId });
+    await expect(select()).resolves.toBe(true);
     expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
     const patches = requestCalls(host.request, "sessions.patch");
     expect(patches[1]?.[1]).toMatchObject({
@@ -242,13 +284,11 @@ it.each([
 
 it("requires confirmation when only the UI-selected agent remembers consent", async () => {
   const sessionKey = "agent:other-agent:chat";
-  const { host } = fixture({
+  const { host, selection, modal } = await selecting({
     remembered: true,
     sessionKey,
     rememberedAgentId: "selected-agent",
   });
-  const selection = switchChatModel(host, "fixture/selected", sessionKey, "opencode");
-  const modal = await dialog();
   expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
   click(modal, "Cancel");
   await expect(selection).resolves.toBe(false);
@@ -267,10 +307,8 @@ it.each([
     details: { recovery: { ...recovery, sessionId: "replacement" } },
   },
 ])("does not offer a bypass for $name", async (options) => {
-  const { host } = fixture(options);
-  await expect(switchChatModel(host, "fixture/selected", "global", "opencode")).resolves.toBe(
-    false,
-  );
+  const { host, select } = fixture(options);
+  await expect(select()).resolves.toBe(false);
   expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   expect(host.chatError).toContain("Choose another model");
   expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
@@ -287,37 +325,8 @@ it.each([
   "retired",
   "newer-selection",
 ] as const)("does not apply confirmation after %s", async (change) => {
-  const { host } = fixture();
-  const selection = switchChatModel(host, "fixture/selected", "global", "opencode");
-  const modal = await dialog();
-  switch (change) {
-    case "cancel":
-      break;
-    case "connection":
-      host.client = createTestGatewayClient(host.request);
-      break;
-    case "epoch":
-      host.connectionEpoch = (host.connectionEpoch ?? 0) + 1;
-      break;
-    case "session":
-      host.sessionKey = "agent:main:other";
-      break;
-    case "agent":
-      host.assistantAgentId = "other-agent";
-      break;
-    case "reset":
-      host.sessionsResult!.sessions[0]!.sessionId = "replacement";
-      break;
-    case "authority":
-      host.hello = sessionMutationGatewayHello(["operator.write"]);
-      break;
-    case "retired":
-      retireChatModelSelectionOwnership(host);
-      break;
-    case "newer-selection":
-      await switchChatModel(host, "fixture/newer", "global", "openclaw");
-      break;
-  }
+  const { host, selection, modal } = await selecting();
+  await selectionChanges[change](host);
   if (change === "newer-selection" || change === "retired") {
     expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   } else {
@@ -325,17 +334,13 @@ it.each([
   }
   await expect(selection).resolves.toBe(false);
   const patches = requestCalls(host.request, "sessions.patch");
-  expect(
-    patches.some(([, params]) => params && typeof params === "object" && "sandboxMode" in params),
-  ).toBe(false);
+  expectNoPatchFields(host, "sandboxMode");
   expect(patches).toHaveLength(change === "newer-selection" ? 2 : 1);
   expect(host.chatMessage).toBe("Keep this draft; never replay it");
 });
 
 it("rechecks a confirmed recovery after the shared settings tail, before dispatch", async () => {
-  const { host, receipt } = fixture();
-  const selection = switchChatModel(host, "fixture/selected", "global", "opencode");
-  const modal = await dialog();
+  const { host, receipt, selection, modal } = await selecting();
   const held = createDeferred<SessionsPatchResult>();
   onTestFinished(() => held.resolve(receipt));
   host.request.mockImplementationOnce(async () => held.promise);
@@ -365,19 +370,7 @@ it("does not open a late refusal on a replacement connection", async () => {
   host.request.mockImplementationOnce(() => response.promise);
   const selection = switchChatModel(host, "fixture/selected", "global", "opencode");
   host.connectionEpoch = (host.connectionEpoch ?? 0) + 1;
-  response.reject(
-    new GatewayRequestError({
-      code: "INVALID_REQUEST",
-      message: "Native runtime restricted",
-      details: {
-        code: "AGENT_RUNTIME_RESTRICTED",
-        runtimeId: "opencode",
-        runtimeLabel: "OpenCode",
-        reason: "sandbox",
-        recovery,
-      },
-    }),
-  );
+  response.reject(restrictionError(restrictionDetails));
   await expect(selection).resolves.toBe(false);
   expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   expect(host.chatError ?? null).toBeNull();
@@ -391,9 +384,7 @@ it("retries a first turn using remembered consent without repinning its model", 
   const patches = requestCalls(host.request, "sessions.patch");
   expect(patches).toHaveLength(1);
   expect(patches[0]?.[1]).toMatchObject({ permissionMode: "full", sandboxMode: "off" });
-  expect(patches[0]?.[1]).not.toHaveProperty("agentRuntime");
-  expect(patches[0]?.[1]).not.toHaveProperty("model");
-  expect(patches[0]?.[1]).not.toHaveProperty("nativeRuntimeConsent");
+  expectNoPatchFields(host, "agentRuntime", "model", "nativeRuntimeConsent");
 });
 
 it.each(["repeated refusal", "newer draft", "unbound session"] as const)(
@@ -428,8 +419,7 @@ it.each(["repeated refusal", "newer draft", "unbound session"] as const)(
           expectedSessionId: recovery.sessionId,
           nativeRuntimeConsent: "opencode",
         });
-        expect(patches[0]?.[1]).not.toHaveProperty("model");
-        expect(patches[0]?.[1]).not.toHaveProperty("agentRuntime");
+        expectNoPatchFields(host, "model", "agentRuntime");
         expect(host.request.mock.calls.some(([method]) => method === "sessions.create")).toBe(
           false,
         );
@@ -444,30 +434,16 @@ it.each(["newer-selection", "server-selection", "session"] as const)(
     const { host } = fixture({ send: true, details: { reason: "workspace-only" } });
     const sending = handleSendChat(host);
     const modal = await dialog();
-    switch (change) {
-      case "newer-selection":
-        await switchChatModel(host, "fixture/newer", "global", "openclaw");
-        break;
-      case "server-selection":
-        host.sessionsResult!.sessions[0]!.model = "newer";
-        break;
-      case "session":
-        host.sessionKey = "agent:main:other";
-        break;
+    if (change === "server-selection") {
+      host.sessionsResult!.sessions[0]!.model = "newer";
+    } else {
+      await selectionChanges[change](host);
     }
     if (change !== "newer-selection") {
       click(modal, "Continue for this chat");
     }
     await sending;
-    expect(
-      host.request.mock.calls.some(
-        ([method, params]) =>
-          method === "sessions.patch" &&
-          params != null &&
-          typeof params === "object" &&
-          "nativeRuntimeConsent" in params,
-      ),
-    ).toBe(false);
+    expectNoPatchFields(host, "nativeRuntimeConsent");
     expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
   },
 );
@@ -480,6 +456,5 @@ it("does not adopt an unrelated incarnation after a first-send refusal", async (
   });
   await handleSendChat(host);
   expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-  expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
-  expect(requestCalls(host.request, "sessions.patch")).toEqual([]);
+  expectRequestCounts(host.request, { "chat.send": 1, "sessions.patch": 0 });
 });

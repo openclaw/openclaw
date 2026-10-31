@@ -1,19 +1,17 @@
-import type { JSX } from "@solidjs/web";
 import { createComponent, createSignal, flush, getOwner } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
+import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 import {
   createNewSessionComposerTextarea,
   type NewSessionComposerTextarea,
 } from "./composer-textarea.ts";
 import { NewSessionComposer, type NewSessionComposerOptions } from "./composer.tsx";
-import type { NewSessionVisibility } from "./create-params.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 const attachmentDrafts: NewSessionAttachmentDraft[] = [];
@@ -41,29 +39,12 @@ export function composerContext(
 }
 
 export function renderComposer(
-  overrides: {
-    canSubmit?: boolean;
-    requiresModifier?: boolean;
-    submitDisabledReason?: string;
-    blockedSubmitNotice?: string;
-    dictationActive?: boolean;
-    dictationPreview?: string;
-    dictationStatus?: JSX.Element;
-    nativeTerminal?: boolean;
-    onUnsupportedAttachment?: () => void;
-    submitting?: boolean;
-    messageLocked?: boolean;
-    visibility?: NewSessionVisibility;
-    draftAvailable?: boolean;
-    toolOverrides?: SessionToolOverrides | null;
-    onVisibilityChange?: (visibility: NewSessionVisibility) => void;
-    message?: string;
-    draftOwnerKey?: string;
-    agentId?: string;
-    context?: ApplicationContext;
-    onInput?: (message: string) => void;
-    onSubmit?: () => void;
-    onBackgroundSubmit?: () => void;
+  overrides: Partial<
+    Omit<
+      NewSessionComposerOptions,
+      "attachmentDraft" | "modelControl" | "onChange" | "isCatalogTarget"
+    >
+  > & {
     composerTextarea?: NewSessionComposerTextarea;
   } = {},
 ) {
@@ -82,6 +63,7 @@ export function renderComposer(
   let agentId = overrides.agentId ?? "main";
   let draftOwnerKey = overrides.draftOwnerKey ?? "draft:one";
   const currentOptions = (): NewSessionComposerOptions => ({
+    ...overrides,
     agentId,
     attachmentDraft,
     canSubmit: overrides.canSubmit ?? true,
@@ -89,33 +71,19 @@ export function renderComposer(
     draftOwnerKey,
     isCatalogTarget: true,
     message,
-    visibility: overrides.visibility,
-    draftAvailable: overrides.draftAvailable,
-    toolOverrides: overrides.toolOverrides,
     modelControl: new NewSessionModelControl(() => undefined),
     requiresModifier: overrides.requiresModifier ?? false,
     onChange: renderCurrent,
-    submitDisabledReason: overrides.submitDisabledReason,
-    blockedSubmitNotice: overrides.blockedSubmitNotice,
-    dictationActive: overrides.dictationActive,
-    dictationPreview: overrides.dictationPreview,
-    dictationStatus: overrides.dictationStatus,
-    nativeTerminal: overrides.nativeTerminal,
-    onUnsupportedAttachment: overrides.onUnsupportedAttachment,
     submitting: overrides.submitting ?? false,
-    composerTextarea,
-    messageLocked: overrides.messageLocked,
     onInput: (next) => {
       message = next;
       overrides.onInput?.(next);
       renderCurrent();
     },
-    onVisibilityChange: overrides.onVisibilityChange,
     onSubmit: overrides.onSubmit ?? (() => undefined),
-    onBackgroundSubmit: overrides.onBackgroundSubmit,
   });
   const renderCurrent = () => mounted.rerender();
-  const mounted = mountNewSessionComposer(currentOptions, container);
+  const mounted = mountNewSessionComposer(currentOptions, composerTextarea, container);
   const composer = container.querySelector<HTMLElement>(".new-session-page__composer");
   if (!composer) {
     throw new Error("Expected new-session composer");
@@ -156,6 +124,7 @@ export function resetComposerTestFixtures() {
 
 export function mountNewSessionComposer(
   read: () => NewSessionComposerOptions,
+  textarea: NewSessionComposerTextarea,
   container: HTMLElement,
 ) {
   let update: (options: NewSessionComposerOptions) => void;
@@ -169,7 +138,16 @@ export function mountNewSessionComposer(
         },
       });
     },
-    { container },
+    {
+      container,
+      wrapper: (props) =>
+        createComponent(NewSessionComposerTextareaContext, {
+          value: textarea,
+          get children() {
+            return props.children;
+          },
+        }),
+    },
   );
   return {
     ...mounted,

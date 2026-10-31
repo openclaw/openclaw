@@ -1,31 +1,21 @@
 import fs from "node:fs";
-import path from "node:path";
 import * as fsSafeAdvanced from "@openclaw/fs-safe/advanced";
-import { expect, vi } from "vitest";
+import { expect, vi, type MockInstance } from "vitest";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 
 export type Artifact = ReturnType<typeof capturePluginGenerationArtifact>;
 export type Cache = ReturnType<typeof createPluginCache>;
 
-export function writeTree(root: string, files: Record<string, string | Record<string, unknown>>) {
-  for (const [name, value] of Object.entries(files)) {
-    const filename = path.join(root, name);
-    fs.mkdirSync(path.dirname(filename), { recursive: true });
-    fs.writeFileSync(filename, typeof value === "string" ? value : JSON.stringify(value));
-  }
-}
-
-export function expectBytes(filename: string, bytes: Buffer) {
+export const expectBytes = (filename: string, bytes: Buffer) => {
   expect(fs.readFileSync(filename)).toEqual(bytes);
-}
+};
 
-export function readText(filename: string) {
-  return fs.readFileSync(filename, "utf8");
-}
+export const readText = (filename: string) => fs.readFileSync(filename, "utf8");
 
 export function createSdkHost(root: string, identity: string) {
-  writeTree(root, {
+  writeArtifacts(root, {
     "package.json": { name: "openclaw", exports: { "./plugin-sdk/identity": "./identity.cjs" } },
     "identity.cjs": `module.exports = ${JSON.stringify(identity)};`,
   });
@@ -66,35 +56,30 @@ export function captureResources() {
 
 export function observeFileIo(filename: string, trackCopies = true) {
   const original = fs.statSync(filename);
-  const readSync = fs.readSync;
-  const readFileSync = fs.readFileSync;
-  const copyRootFileSync = fsSafeAdvanced.copyRootFileSync;
-  const createBatch = fsSafeAdvanced.createRootFileCopyBatchSync;
-  const writeSync = fs.writeSync;
+  const { readSync, readFileSync, writeSync } = fs;
+  const { copyRootFileSync, createRootFileCopyBatchSync: createBatch } = fsSafeAdvanced;
   const empty = () => ({ originalBytes: 0, capturedBytes: 0, wholeFileReads: 0, largestBuffer: 0 });
   let current: ReturnType<typeof empty> | undefined;
   let copies = new Set<string>();
-  const recordCopy = (stat: fs.Stats) => {
-    if (current && stat.size === original.size) {
-      copies.add(`${stat.dev}:${stat.ino}`);
-    }
-  };
-  const recordCopiedFile = (copied: ReturnType<typeof fsSafeAdvanced.copyRootFileSync>) => {
+  const recordCopiedFile = <T extends { fd: number }>(copied: T): T => {
     if (current) {
-      recordCopy(fs.fstatSync(copied.fd));
+      const stat = fs.fstatSync(copied.fd);
+      if (stat.size === original.size) {
+        copies.add(`${stat.dev}:${stat.ino}`);
+      }
     }
     return copied;
   };
-  const spies = [
+  const spies: Pick<MockInstance, "mockRestore">[] = [
     vi.spyOn(fs, "readSync").mockImplementation((...args) => {
       const length = Reflect.apply(readSync, fs, args);
       const stat = fs.fstatSync(args[0]);
       if (current && stat.size === original.size) {
-        if (stat.dev === original.dev && stat.ino === original.ino) {
-          current.originalBytes += length;
-        } else {
-          current.capturedBytes += length;
-        }
+        const key =
+          stat.dev === original.dev && stat.ino === original.ino
+            ? "originalBytes"
+            : "capturedBytes";
+        current[key] += length;
         if (Buffer.isBuffer(args[1])) {
           current.largestBuffer = Math.max(
             current.largestBuffer,
@@ -111,48 +96,43 @@ export function observeFileIo(filename: string, trackCopies = true) {
       }
       return result;
     }),
-    ...(trackCopies
-      ? [
-          vi
-            .spyOn(fsSafeAdvanced, "copyRootFileSync")
-            .mockImplementation((options) => recordCopiedFile(copyRootFileSync(options))),
-          vi.spyOn(fsSafeAdvanced, "createRootFileCopyBatchSync").mockImplementation(() => {
-            const batch = createBatch();
-            return {
-              ...batch,
-              copyFile: (options) => recordCopiedFile(batch.copyFile(options)),
-            };
-          }),
-          vi.spyOn(fs, "writeSync").mockImplementation((...args) => {
-            const length = Reflect.apply(writeSync, fs, args);
-            if (current) {
-              recordCopy(fs.fstatSync(args[0]));
-            }
-            return length;
-          }),
-        ]
-      : []),
   ];
+  if (trackCopies) {
+    spies.push(
+      vi
+        .spyOn(fsSafeAdvanced, "copyRootFileSync")
+        .mockImplementation((options) => recordCopiedFile(copyRootFileSync(options))),
+      vi.spyOn(fsSafeAdvanced, "createRootFileCopyBatchSync").mockImplementation(() => {
+        const batch = createBatch();
+        return { ...batch, copyFile: (options) => recordCopiedFile(batch.copyFile(options)) };
+      }),
+      vi.spyOn(fs, "writeSync").mockImplementation((...args) => {
+        const length = Reflect.apply(writeSync, fs, args);
+        recordCopiedFile({ fd: args[0] });
+        return length;
+      }),
+    );
+  }
+  const begin = () => {
+    const counts = (current = empty());
+    copies = new Set();
+    return {
+      result<T>(value: T) {
+        return { value, io: { ...counts, copies: copies.size } };
+      },
+      [Symbol.dispose]() {
+        current = undefined;
+      },
+    };
+  };
   return {
     measure<T>(run: () => T) {
-      const counts = empty();
-      current = counts;
-      copies = new Set();
-      try {
-        return { value: run(), io: { ...counts, copies: copies.size } };
-      } finally {
-        current = undefined;
-      }
+      using measurement = begin();
+      return measurement.result(run());
     },
     async measureAsync<T>(run: () => Promise<T>) {
-      const counts = empty();
-      current = counts;
-      copies = new Set();
-      try {
-        return { value: await run(), io: { ...counts, copies: copies.size } };
-      } finally {
-        current = undefined;
-      }
+      using measurement = begin();
+      return measurement.result(await run());
     },
     restore: () => spies.forEach((spy) => spy.mockRestore()),
   };

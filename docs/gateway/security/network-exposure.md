@@ -11,12 +11,22 @@ title: "Network exposure"
 
 ### Bind, port, firewall
 
-The Gateway multiplexes WebSocket + HTTP on one port (default `18789`; config/flags/env: `gateway.port`, `--port`, `OPENCLAW_GATEWAY_PORT`). That HTTP surface includes the Control UI (SPA assets, default base path `/`), hosted widget documents (`/__openclaw__/canvas`), and A2UI renderer assets (`/__openclaw__/a2ui`). Widget documents contain agent-authored HTML/JS; treat them as untrusted content when loaded in a normal browser, do not expose them to untrusted networks or users, and do not share their origin with privileged web surfaces.
+The Gateway multiplexes WebSocket + HTTP on one port (default `18789`; config/flags/env: `gateway.port`, `--port`, `OPENCLAW_GATEWAY_PORT`). That HTTP surface includes the Control UI (SPA assets, default base path `/`), and hosted widget documents (`/__openclaw__/canvas`). Widget documents contain agent-authored HTML/JS; treat them as untrusted content when loaded in a normal browser, do not expose them to untrusted networks or users, and do not share their origin with privileged web surfaces.
 
 `gateway.bind` controls where the Gateway listens:
 
-- `"loopback"` (default): only local clients can connect.
+- `"loopback"` (default on regular hosts): only local clients can connect.
+- `"auto"` (default when the setting is omitted in a detected container):
+  resolves to `0.0.0.0` so port forwarding and container-network ingress work.
+  Tailscale Serve/Funnel instead forces loopback.
 - `"lan"`, `"tailnet"`, `"custom"`: make the Gateway reachable by more clients. Only use with gateway auth (shared token/password, or a correctly configured trusted proxy) and a real firewall.
+
+Non-loopback startup requires configured auth and fails closed without it. The
+standalone image defines no host port publication; actual reachability depends
+on the runtime and network topology. Peers on the same container network and
+hosts with a route to the container address can reach a wildcard listener. Set
+`gateway.bind: "loopback"` explicitly for a loopback-only listener; host
+networking changes what that interface represents.
 
 Rules of thumb: prefer Tailscale Serve over LAN binds (Serve keeps the Gateway on loopback and Tailscale handles access); if you must bind to LAN, firewall the port to a tight source-IP allowlist rather than port-forwarding broadly; never expose the Gateway unauthenticated on `0.0.0.0`.
 
@@ -95,7 +105,9 @@ Gateway auth is required by default - with no valid auth path configured, the Ga
 
 Pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`. Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and Tailnet `*.ts.net` gateway URLs; for other trusted private-DNS names, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass (process environment only, not an `openclaw.json` key). Mobile pairing and Android manual/scanned gateway routes are stricter: cleartext only for loopback, while private-LAN, link-local, `.local`, and dotless hostnames must use TLS unless you explicitly opt into the trusted private-network cleartext path.
 
-Device pairing is auto-approved for direct local loopback connects (plus a narrow backend/container-local self-connect path for trusted shared-secret helper flows); Tailnet and LAN connects, including same-host connections to a tailnet address, are treated as remote and still need approval. A resolved `tailnet` address or `custom` address other than `127.0.0.1` or `0.0.0.0` adds a separate `127.0.0.1` listener; only connections to that local listener receive loopback semantics. Forwarded-header evidence on a loopback request disqualifies loopback locality; metadata-upgrade auto-approval is scoped narrowly. See [Gateway pairing](/gateway/pairing).
+Device pairing is auto-approved for eligible local connections after Gateway authentication and device-identity checks. Besides direct loopback and narrow shared-secret backend helper flows, a Control UI browser in WebChat mode can qualify through a private or loopback TCP peer (including CGNAT) when both `Host` and `Origin` name loopback hosts, no forwarded/proxy headers are present, and shared token/password authentication succeeds. This includes Docker-published ports reached through `localhost`; a private peer address alone does not qualify. Eligible local scope upgrades also require local-grade authentication (`none`, the shared token, or the shared password), rather than a stored device token. Set `gateway.nodes.pairing.autoApproveLocal: false` to require explicit local pairing and access-upgrade approval. See [Control UI pairing](/web/control-ui/connect-and-pair#device-pairing-first-connection).
+
+Other Tailnet and LAN connects, including same-host connections to a tailnet address, are treated as remote and still need approval. A resolved `tailnet` address or `custom` address other than `127.0.0.1` or `0.0.0.0` adds a separate `127.0.0.1` listener; connections to that local listener receive loopback semantics. Forwarded-header evidence on a loopback request disqualifies loopback locality; metadata-upgrade auto-approval is scoped narrowly. See [Gateway pairing](/gateway/pairing).
 
 Auth modes:
 

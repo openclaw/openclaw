@@ -264,7 +264,6 @@ async function publishPreparedModelRuntimeCatalogReplacement(
       acquisitionSignal: signal,
       isPublicationCurrent: () => committed || !signal.aborted,
       isOwnerRegistered: (key, owner) => (committed ? host.owners : staged).get(key) === owner,
-      isOwnerPublished: (key, owner) => committed && host.owners.get(key) === owner,
     });
     // Pricing preparation takes no signal; cancellation, shutdown and a stalled read must not
     // leave adoption pending, so it shares the owner build deadline.

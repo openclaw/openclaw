@@ -1,10 +1,7 @@
 import type { WebClient } from "@slack/web-api";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getOrCreateWeakOwnerMap } from "../lru-map-cache.js";
 
 const SUBTEAM_MENTION_RE = /<!subteam\^([A-Z0-9]+)(?:\|[^>]*)?>/gi;
 const SUBTEAM_MEMBER_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -32,70 +29,11 @@ export function collectSlackMentionIds(text: string | null | undefined, regex: R
   return [...ids];
 }
 
-async function readSlackSubteamUsers(params: {
-  client: WebClient;
-  subteamId: string;
-  teamId?: string;
-  now: number;
-  log?: (message: string) => void;
-}): Promise<ReadonlySet<string>> {
-  let bySubteam = subteamMemberCache.get(params.client);
-  if (!bySubteam) {
-    bySubteam = new Map<string, CacheEntry>();
-    subteamMemberCache.set(params.client, bySubteam);
-  }
-  const cacheKey = `${normalizeSlackId(params.teamId) ?? ""}:${params.subteamId}`;
-  const cached = bySubteam.get(cacheKey);
-  const now = asDateTimestampMs(params.now);
-  if (cached) {
-    if (
-      now !== undefined &&
-      asDateTimestampMs(cached.expiresAt) !== undefined &&
-      cached.expiresAt > now
-    ) {
-      return cached.users;
-    }
-    bySubteam.delete(cacheKey);
-  }
-
-  try {
-    const response = await params.client.usergroups.users.list({
-      usergroup: params.subteamId,
-      ...(params.teamId ? { team_id: params.teamId } : {}),
-    });
-    if (!response.ok) {
-      params.log?.(
-        `slack: failed to resolve user-group mention ${params.subteamId}: ${response.error ?? "unknown_error"}`,
-      );
-      return new Set();
-    }
-    const users = new Set(
-      (response.users ?? []).map(normalizeSlackId).filter((userId) => userId !== undefined),
-    );
-    const expiresAt = resolveExpiresAtMsFromDurationMs(SUBTEAM_MEMBER_CACHE_TTL_MS, {
-      nowMs: params.now,
-    });
-    if (expiresAt !== undefined) {
-      bySubteam.set(cacheKey, {
-        expiresAt,
-        users,
-      });
-    }
-    return users;
-  } catch (err) {
-    params.log?.(
-      `slack: failed to resolve user-group mention ${params.subteamId}: ${formatErrorMessage(err)}`,
-    );
-    return new Set();
-  }
-}
-
 export async function isSlackSubteamMentionForBot(params: {
   client: WebClient;
   text?: string | null;
   botUserId?: string | null;
   teamId?: string;
-  now?: number;
   log?: (message: string) => void;
 }): Promise<boolean> {
   const botUserId = normalizeSlackId(params.botUserId);
@@ -106,15 +44,46 @@ export async function isSlackSubteamMentionForBot(params: {
   if (subteamIds.length === 0) {
     return false;
   }
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   for (const subteamId of subteamIds) {
-    const users = await readSlackSubteamUsers({
-      client: params.client,
-      subteamId,
-      teamId: normalizeOptionalString(params.teamId),
-      now,
-      log: params.log,
-    });
+    const { client, log } = params;
+    const teamId = normalizeOptionalString(params.teamId);
+    const bySubteam = getOrCreateWeakOwnerMap(subteamMemberCache, client);
+    const cacheKey = `${normalizeSlackId(teamId) ?? ""}:${subteamId}`;
+    const cached = bySubteam.get(cacheKey);
+    if (cached) {
+      if (cached.expiresAt > now) {
+        if (cached.users.has(botUserId)) {
+          return true;
+        }
+        continue;
+      }
+      bySubteam.delete(cacheKey);
+    }
+
+    let users: ReadonlySet<string>;
+    try {
+      const response = await client.usergroups.users.list({
+        usergroup: subteamId,
+        ...(teamId ? { team_id: teamId } : {}),
+      });
+      if (!response.ok) {
+        log?.(
+          `slack: failed to resolve user-group mention ${subteamId}: ${response.error ?? "unknown_error"}`,
+        );
+        continue;
+      }
+      users = new Set(
+        (response.users ?? []).map(normalizeSlackId).filter((userId) => userId !== undefined),
+      );
+      bySubteam.set(cacheKey, {
+        expiresAt: now + SUBTEAM_MEMBER_CACHE_TTL_MS,
+        users,
+      });
+    } catch (err) {
+      log?.(`slack: failed to resolve user-group mention ${subteamId}: ${formatErrorMessage(err)}`);
+      continue;
+    }
     if (users.has(botUserId)) {
       return true;
     }

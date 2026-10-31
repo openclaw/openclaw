@@ -1,6 +1,7 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildChannelWizardMocks } from "../../../scripts/control-ui-mock-channels.ts";
+import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
 import {
   installMockGateway,
   type MockGatewayControls,
@@ -18,12 +19,7 @@ const suite = createControlUiE2eSuite({
 
 const QR_DATA_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=";
-const pairing = {
-  accounts: [],
-  requests: [],
-  commandOwnerConfigured: true,
-  limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-};
+const pairing = emptyPairingSnapshot();
 const linked = { configured: true, linked: true, running: true, connected: true };
 function channelStatus(
   labels: Record<string, string>,
@@ -50,21 +46,41 @@ const objectSchema = (properties: Record<string, unknown>) => ({ type: "object",
 const contextOptions = { locale: "en-US", serviceWorkers: "block" } as const;
 function withChannels(
   responses: Record<string, unknown>,
-  run: (page: Page, gateway: MockGatewayControls) => Promise<void>,
+  run: (
+    page: Page,
+    gateway: MockGatewayControls,
+    assets: Array<{ url: string; status: number }>,
+  ) => Promise<void>,
   options: NonNullable<Parameters<typeof suite.withPage>[0]> = contextOptions,
   featureMethods?: string[],
 ) {
   return suite.withPage(options, async ({ page }) => {
+    const assets: Array<{ url: string; status: number }> = [];
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("response", (response) => {
+      if (response.url().includes("/assets/plugins/whatsapp/")) {
+        assets.push({ url: new URL(response.url()).pathname, status: response.status() });
+      }
+    });
     const gateway = await installMockGateway(page, {
       featureMethods,
       methodResponses: {
+        "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
+        "plugins.controlUi.list": { plugins: [], diagnostics: [], revision: "empty" },
         "channels.status": whatsappStatus(),
         "channels.pairing.list": pairing,
         ...responses,
       },
     });
     expect((await page.goto(`${suite.server.baseUrl}settings/channels`))?.status()).toBe(200);
-    await run(page, gateway);
+    await run(page, gateway, assets);
+    if (assets.length) {
+      expect(assets.some((asset) => asset.url.endsWith(".js") && asset.status === 200)).toBe(true);
+      expect(assets.every((asset) => asset.status === 200)).toBe(true);
+      expect(await gateway.getRequests("plugins.controlUi.report")).toHaveLength(0);
+    }
+    expect(errors).toEqual([]);
   });
 }
 async function openChannel(page: Page, name = "WhatsApp") {
@@ -78,6 +94,12 @@ async function openChannel(page: Page, name = "WhatsApp") {
 }
 const requestCount = async (gateway: MockGatewayControls, method: string) =>
   (await gateway.getRequests(method)).length;
+const expectRequests = (gateway: MockGatewayControls, method: string, count: number) =>
+  expect.poll(() => requestCount(gateway, method)).toBe(count);
+const field = (detail: Locator, name: string) =>
+  detail.locator("dt", { hasText: name }).locator("xpath=following-sibling::dd[1]");
+const button = (surface: Page | Locator, name: string) =>
+  surface.getByRole("button", { name, exact: true });
 
 suite.define(() => {
   it("completes direct setup as the selected channel", async () => {
@@ -96,7 +118,7 @@ suite.define(() => {
         const slackRow = page.locator(".channels-item", { hasText: "Slack" }).first();
         await slackRow.getByRole("button", { name: "Set up", exact: true }).click();
         const wizard = page.locator(".channels-wizard");
-        await wizard.getByRole("button", { name: "Continue" }).click();
+        await button(wizard, "Continue").click();
 
         expect((await gateway.getRequests("wizard.next")).map(({ params }) => params)).toEqual([
           {
@@ -141,7 +163,7 @@ suite.define(() => {
         const alert = detail.getByRole("alert");
         await expect.poll(() => alert.textContent()).toContain("automatic channel save rejected");
 
-        const save = detail.getByRole("button", { name: "Save", exact: true });
+        const save = button(detail, "Save");
         await expect.poll(() => save.isEnabled()).toBe(true);
         const writesBefore = await requestCount(gateway, "config.set");
         const readsBefore = await requestCount(gateway, "config.get");
@@ -214,9 +236,13 @@ suite.define(() => {
           loggedOut: false,
         },
       },
-      async (page, gateway) => {
+      async (page, gateway, assets) => {
         const detail = await openChannel(page);
         const logout = detail.getByRole("button", { name: "Logout" });
+        await logout.waitFor();
+        expect(assets.some((asset) => asset.url.endsWith(".js") && asset.status === 200)).toBe(
+          true,
+        );
 
         await detail.getByRole("button", { name: "Relink" }).click();
         const qr = detail.getByRole("img", { name: "WhatsApp QR" });
@@ -224,31 +250,27 @@ suite.define(() => {
         await expect(qr.getAttribute("src")).resolves.toBe(QR_DATA_URL);
 
         await logout.click();
-        await expect.poll(async () => gateway.getRequests("channels.logout")).toHaveLength(0);
-        const firstConfirm = await waitForConfirmModal(page);
+        await expectRequests(gateway, "channels.logout", 0);
+        const logoutConfirmation = page.locator("openclaw-modal-dialog").filter({
+          has: page.getByText("Log out of WhatsApp account default?", { exact: true }),
+        });
+        const firstConfirm = await waitForConfirmModal(page, logoutConfirmation);
         const confirmation = await firstConfirm.textContent();
         expect(confirmation).toContain("Log out of WhatsApp account default?");
         expect(confirmation).toContain(
           "Logging out of account default stops its listener and deletes its saved credentials.",
         );
-        await firstConfirm.getByRole("button", { name: "Cancel" }).focus();
+        await button(firstConfirm, "Cancel").focus();
         await page.keyboard.press("Escape");
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/channels");
         await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(1);
-        await expect.poll(async () => gateway.getRequests("channels.logout")).toHaveLength(0);
+        await expectRequests(gateway, "channels.logout", 0);
         await expect(qr.getAttribute("src")).resolves.toBe(QR_DATA_URL);
-        await expect
-          .poll(() =>
-            detail
-              .locator("dt", { hasText: "Linked" })
-              .locator("xpath=following-sibling::dd[1]")
-              .textContent(),
-          )
-          .toContain("Yes");
+        await expect.poll(() => field(detail, "Linked").textContent()).toContain("Yes");
 
         await logout.click();
-        const secondConfirm = await waitForConfirmModal(page);
-        await secondConfirm.getByRole("button", { name: "Logout" }).click();
+        const secondConfirm = await waitForConfirmModal(page, logoutConfirmation);
+        await button(secondConfirm, "Logout").click();
         await expect
           .poll(async () => detail.locator(".settings-row__desc").allTextContents())
           .toContain(
@@ -256,15 +278,48 @@ suite.define(() => {
           );
         await expect(qr.getAttribute("src")).resolves.toBe(QR_DATA_URL);
         await expect(detail.getByText("Logged out.", { exact: true }).count()).resolves.toBe(0);
-        await expect.poll(async () => gateway.getRequests("channels.logout")).toHaveLength(1);
+        await expectRequests(gateway, "channels.logout", 1);
         expect((await gateway.getRequests("channels.logout"))[0]?.params).toEqual({
           channel: "whatsapp",
           accountId: "default",
         });
-        await expect.poll(async () => gateway.getRequests("channels.status")).toHaveLength(3);
+        await expectRequests(gateway, "channels.status", 3);
       },
       { ...contextOptions, viewport: { height: 1000, width: 1280 } },
     );
+  });
+
+  it("renders the packaged phone identity with raw fallback and no JID fallback", async () => {
+    await withChannels({}, async (page, gateway) => {
+      const detail = await openChannel(page);
+      await detail.getByRole("button", { name: "Relink" }).waitFor();
+      const phone = field(detail, "Phone number");
+      for (const [self, expected] of [
+        [{ e164: "+4930123456", jid: "4930123456@s.whatsapp.net" }, "Germany · +49 30 123456"],
+        [{ e164: "not-a-phone", jid: "account@s.whatsapp.net" }, "not-a-phone"],
+        [{ jid: "account@s.whatsapp.net" }, null],
+      ] as const) {
+        await gateway.setMethodResponse(
+          "channels.status",
+          channelStatus(
+            { whatsapp: "WhatsApp" },
+            { whatsapp: { ...linked, self, authAgeMs: 60000 } },
+          ),
+        );
+        const before = await gateway.getRequests("channels.status", { probe: true });
+        await button(detail, "Refresh").click();
+        await gateway.waitForRequest("channels.status", {
+          after: before.length,
+          match: { probe: true },
+        });
+        if (expected === null) {
+          await expect.poll(() => phone.count()).toBe(0);
+        } else {
+          await expect.poll(() => phone.textContent()).toBe(expected);
+        }
+        await expect.poll(() => field(detail, "Auth age").textContent()).toBe("1m");
+      }
+    });
   });
 
   it("rejects a captured custom-account logout after the Gateway reconnects", async () => {
@@ -286,14 +341,19 @@ suite.define(() => {
       async (page, gateway) => {
         const detail = await openChannel(page);
         await detail.getByRole("button", { name: "Logout" }).click();
-        const confirm = await waitForConfirmModal(page);
-        await expect(confirm.textContent()).resolves.toContain("work");
+        const confirm = await waitForConfirmModal(
+          page,
+          page.locator("openclaw-modal-dialog").filter({
+            has: page.getByText("Log out of WhatsApp account work?", { exact: true }),
+          }),
+        );
+        await expect.poll(() => confirm.count()).toBe(1);
         const socketCount = await gateway.getSocketCount();
         await gateway.closeLatest(1012, "Reconnect during logout confirmation");
         await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
-        await confirm.getByRole("button", { name: "Logout" }).click();
+        await expect.poll(() => confirm.count()).toBe(0);
         await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(1);
-        await expect.poll(async () => gateway.getRequests("channels.logout")).toHaveLength(0);
+        await expectRequests(gateway, "channels.logout", 0);
       },
     );
   });
@@ -391,7 +451,7 @@ suite.define(() => {
         await gateway.deferNext("wizard.next");
         const account = wizard.locator("openclaw-select-picker");
         await selectPickerValue(account, "1");
-        await expect.poll(async () => gateway.getRequests("wizard.next")).toHaveLength(1);
+        await expectRequests(gateway, "wizard.next", 1);
         await expect
           .poll(() => account.locator(".picker-select__trigger").getAttribute("disabled"))
           .not.toBeNull();
@@ -407,14 +467,14 @@ suite.define(() => {
         const token = wizard.getByLabel("Telegram bot token");
         await expect.poll(() => token.getAttribute("type")).toBe("password");
         await token.fill("123456:proof-secret");
-        await wizard.getByRole("button", { name: "Continue" }).click();
+        await button(wizard, "Continue").click();
         const beta = wizard.getByRole("button", { name: /Beta/u });
         await expect.poll(() => beta.getAttribute("aria-pressed")).toBe("false");
         await beta.click();
         await expect.poll(() => beta.getAttribute("aria-pressed")).toBe("true");
-        await wizard.getByRole("button", { name: "Continue" }).click();
-        await wizard.getByRole("button", { name: "Yes" }).click();
-        await wizard.getByRole("button", { name: "Finish" }).waitFor();
+        await button(wizard, "Continue").click();
+        await button(wizard, "Yes").click();
+        await button(wizard, "Finish").waitFor();
 
         const userAnswers = [
           ["account", "work"],

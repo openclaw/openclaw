@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import * as stableJson from "@openclaw/normalization-core/stable-stringify";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertOperatorModelAllowed,
   readAdmittedRunOperatorAuthority,
@@ -45,10 +46,12 @@ import {
   disconnectStaleSharedGatewayAuthClients,
   SharedGatewaySessionGenerationState,
 } from "../../server-shared-auth-generation.js";
+import { dispatchProfile } from "../client-fixtures.test-support.js";
 import { createRequestGate } from "./authenticated-request-dispatch.fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
+  requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 
 type Capture = NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>;
@@ -65,7 +68,6 @@ function createCaptureFixture(params: {
   connection?: AbortController;
   sourceAuthority?: CaptureOptions["sourceAuthority"];
   requireGuard?: boolean;
-  captureGuard?: boolean;
 }) {
   const client = createOperatorWsClient(
     params.connection ? { socket: { close: () => params.connection?.abort() } } : {},
@@ -84,7 +86,6 @@ function createCaptureFixture(params: {
   });
   context.resolveGatewayContext = () => context;
   const captures: Capture[] = [];
-  let guard: ReturnType<typeof readGatewayRequestMutationAuthority> | undefined;
   const handler = vi.fn(async (options: GatewayRequestHandlerOptions) => {
     const current = params.requireGuard
       ? expectDefined(options.hasCurrentClientAuthority, "WS caller guard")
@@ -96,9 +97,6 @@ function createCaptureFixture(params: {
       sourceAuthority: params.sourceAuthority,
     });
     captures.push(expectDefined(captured, "captured operator source"));
-    if (params.captureGuard) {
-      guard = readGatewayRequestMutationAuthority(options);
-    }
     options.respond(true, { accepted: true });
   });
   const harness = createDispatchTestHarness({
@@ -107,8 +105,8 @@ function createCaptureFixture(params: {
     extraHandlers: { [params.method]: handler },
   });
   const dispatch = (id: string) =>
-    harness.dispatcher.dispatch({ type: "req", id, method: params.method, params: {} }, client);
-  return { client, context, captures, handler, harness, dispatch, guard: () => guard };
+    harness.dispatcher.dispatch(requestFrame(id, params.method), client);
+  return { client, context, captures, handler, harness, dispatch };
 }
 
 vi.mock("../../../state/user-channel-identity-operations.js", async (importOriginal) => ({
@@ -131,6 +129,44 @@ beforeEach(() => {
 afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("authenticated request mutation custody", () => {
+  it("retains the equivalent committed grant across checks and rejects the next revocation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const email = "retained-policy@example.test";
+      let committedConfig: OpenClawConfig = {
+        gateway: { auth: { identityScopes: { [email]: ["operator.admin"] } } },
+      };
+      setRuntimeConfigSnapshot(committedConfig);
+      const { captures, dispatch } = createCaptureFixture({
+        config: () => committedConfig,
+        profileId: ensureProfileForEmail(email).id,
+        method: "test.retained-policy",
+        policy: { role: "operator", authMethod: "token", verifiedIdentity: email },
+        requireGuard: true,
+      });
+      await dispatch("accepted-policy");
+      const retained = expectDefined(captures.at(-1), "accepted operator source");
+      using _ = { [Symbol.dispose]: retained.release };
+      const stringify = vi.spyOn(stableJson, "stableStringify");
+      try {
+        committedConfig = structuredClone(committedConfig);
+        retained.authority.assertCurrent();
+        stringify.mockClear();
+        retained.authority.assertCurrent();
+        expect(stringify).not.toHaveBeenCalled();
+
+        const acceptedConfig = committedConfig;
+        committedConfig = {
+          gateway: { auth: { identityScopes: { [email]: ["operator.read"] } } },
+        };
+        expect(retained.authority.assertCurrent).toThrow();
+        committedConfig = acceptedConfig;
+        expect(retained.authority.assertCurrent).toThrow();
+      } finally {
+        stringify.mockRestore();
+      }
+    });
+  });
+
   it("retains the remote grant assertion after accepted work leaves its request", async () => {
     setRuntimeConfigSnapshot({});
     const ingress = new AbortController();
@@ -155,7 +191,7 @@ describe("authenticated request mutation custody", () => {
     });
     try {
       await harness.dispatcher.dispatch(
-        { type: "req", id: "accepted-remote", method: "test.accepted-remote", params: {} },
+        requestFrame("accepted-remote", "test.accepted-remote"),
         client,
       );
       expect(source?.()).toBe(true);
@@ -279,74 +315,6 @@ describe("authenticated request mutation custody", () => {
     });
   });
 
-  it("fences stale requests without revoking retained work until its committed grant changes", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const identity = "retained@example.test";
-      const profile = ensureProfileForEmail(identity);
-      const identityScopes = {
-        [identity]: ["operator.admin" as const],
-        "other@example.test": ["operator.read" as const],
-      };
-      let committedConfig: OpenClawConfig = {
-        gateway: { auth: { identityScopes } },
-      };
-      setRuntimeConfigSnapshot(committedConfig);
-      const fixture = createCaptureFixture({
-        config: () => committedConfig,
-        profileId: profile.id,
-        method: "test.identity-scopes",
-        generation: createGeneration(),
-        captureGuard: true,
-        policy: { role: "operator", verifiedIdentity: identity },
-      });
-      const { client, context, harness, dispatch, captures } = fixture;
-      client.authenticatedUserId = identity;
-      try {
-        await dispatch("identity-scopes");
-        expect(harness.send).toHaveBeenLastCalledWith(
-          expect.objectContaining({ ok: true, payload: { accepted: true } }),
-        );
-        const { authority } = expectDefined(captures.at(-1), "captured operator source");
-        const mutationGuard = expectDefined(fixture.guard(), "request mutation guard");
-        assert(mutationGuard.family === "worker");
-
-        committedConfig = structuredClone(committedConfig);
-        committedConfig.gateway!.auth!.identityScopes!["other@example.test"] = ["operator.admin"];
-        setRuntimeConfigSnapshot(committedConfig);
-        publishOperatorRoleConfigChange(context);
-        expect(authority.signal?.aborted).toBe(false);
-        expect(() => authority.assertCurrent()).not.toThrow();
-        expect(() => mutationGuard.assertWorkerCurrent()).not.toThrow();
-        expect(harness.close).not.toHaveBeenCalled();
-
-        committedConfig = structuredClone(committedConfig);
-        committedConfig.gateway!.trustedProxies = ["192.0.2.10"];
-        setRuntimeConfigSnapshot(committedConfig);
-        await dispatch("transport-fenced");
-        expect(harness.close).toHaveBeenCalledWith(
-          4001,
-          "client invalidated: gateway-policy-changed",
-        );
-        expect(client).toMatchObject({ sourceInvalidated: false });
-        expect(authority.signal?.aborted).toBe(false);
-        expect(authority.assertCurrent).not.toThrow();
-
-        committedConfig = structuredClone(committedConfig);
-        delete committedConfig.gateway!.auth!.identityScopes![identity];
-        setRuntimeConfigSnapshot(committedConfig);
-        await dispatch("grant-revoked");
-        expect(client).toMatchObject({ sourceInvalidated: true });
-        expect(authority.signal?.aborted).toBe(true);
-        expect(() => authority.assertCurrent()).toThrow(/authority is no longer active/);
-        expect(() => mutationGuard.assertWorkerCurrent()).toThrow(
-          /Gateway requester authority changed/,
-        );
-      } finally {
-        captures.at(-1)?.release();
-      }
-    });
-  });
-
   it.each(["commit", "rollback", "revoke all", "policy commit", "policy rollback"] as const)(
     "retains the accepted source through tentative transport fencing until %s",
     async (outcome) => {
@@ -454,13 +422,7 @@ describe("authenticated request mutation custody", () => {
     setRuntimeConfigSnapshot({});
     client.authPolicy = captureGatewayAuthPolicy({}, null);
     client.connectionSignal = connection.signal;
-    client.authenticatedUserProfile = {
-      profileId: "profile-owner",
-      displayName: null,
-      avatarRevision: "1",
-      hasAvatar: false,
-      updatedAt: 1,
-    };
+    client.authenticatedUserProfile = dispatchProfile("profile-owner");
     const gate = createRequestGate();
     const persisted = vi.fn();
     const grantProfileReads = vi.fn();
@@ -547,11 +509,8 @@ describe("authenticated request mutation custody", () => {
     });
     const dispatch = harness.dispatcher.dispatch(
       {
-        type: "req",
-        id: "mutation-custody",
-        method: "test.mutation-custody",
+        ...requestFrame("mutation-custody", "test.mutation-custody"),
         expectedProfileId: "profile-owner",
-        params: {},
       },
       client,
     );

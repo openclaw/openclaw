@@ -13,6 +13,7 @@ import {
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   cronJobMatchesCallerScope,
+  cronTrustedJobOwnedByCaller,
   readCronCallerScope,
   type CronCallerScope,
 } from "./cron-caller-scope.js";
@@ -65,6 +66,48 @@ export function resolveCronScopedToolEditRefusal(params: {
     !isLegacyCreatorPromptUpdate(job, patch)
     ? "Include payload.toolsAllow listing the tools this automation needs (use [] for none)."
     : undefined;
+}
+
+// Only these fields keep a trusted job's operator authority when a scoped conversation edits it.
+// `name` is excluded: the run prompt includes it.
+const TRUSTED_LIFECYCLE_PATCH_KEYS: ReadonlySet<string> = new Set([
+  "enabled",
+  "schedule",
+  "displayName",
+  "description",
+  "deleteAfterRun",
+  "wakeMode",
+  "pacing",
+  "activeHours",
+  "idleOnly",
+]);
+
+/** Any other edit (prompt, tools, routes, failure alerts, future fields) narrows the job to the caller. */
+export function cronUpdateNarrowsTrustedJob(
+  job: CronJob,
+  patch: CronJobPatch,
+  callerScope: CronCallerScope | undefined,
+): boolean {
+  return (
+    job.scheduledToolPolicy?.mode === "trusted" &&
+    callerScope !== undefined &&
+    !callerScope.manageAll &&
+    Object.keys(patch).some((key) => !TRUSTED_LIFECYCLE_PATCH_KEYS.has(key))
+  );
+}
+
+/** Narrowing needs the owner's proven account; legacy owner records keep lifecycle edits only. */
+export function assertTrustedJobNarrowingOwner(
+  job: CronJob,
+  callerScope: CronCallerScope | undefined,
+): void {
+  if (!callerScope || !cronTrustedJobOwnedByCaller(job, callerScope, { requireAccount: true })) {
+    throw new TypeError(
+      "This automation runs with operator access and its owner record has no account, so from " +
+        "here you can only pause, resume, reschedule or remove it. To change what it runs or its name, " +
+        "where it reports or where failures alert, create a new automation here or use the Automations page.",
+    );
+  }
 }
 
 export function respondRefusedCronAgent(agentId: string | undefined, respond: RespondFn): boolean {

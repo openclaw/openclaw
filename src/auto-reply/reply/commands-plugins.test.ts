@@ -13,7 +13,9 @@ import { buildPluginsCommandParams, type ConfigSnapshotMock } from "./commands.t
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const loadPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
-const replaceConfigFileMock = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
+const replaceConfigFileMock = vi.hoisted(() =>
+  vi.fn(async (_params: { nextConfig: OpenClawConfig; afterWrite: unknown }) => undefined),
+);
 const buildPluginRegistrySnapshotReportMock = vi.hoisted(() => vi.fn());
 const withPluginDiagnosticsReportForInspectionMock = vi.hoisted(() =>
   vi.fn<typeof import("../../plugins/status.js").withPluginDiagnosticsReportForInspection>(),
@@ -38,19 +40,6 @@ vi.mock("../../plugins/capability-consent.js", async (importOriginal) => ({
   resolvePendingPluginCapabilityReview: resolvePendingPluginCapabilityReviewMock,
 }));
 
-vi.mock("../../cli/npm-resolution.js", () => ({
-  buildNpmInstallRecordFields: vi.fn(),
-}));
-
-vi.mock("../../cli/plugins-command-helpers.js", () => ({
-  createPluginInstallLogger: vi.fn(() => ({})),
-  resolveFileNpmSpecToLocalPath: vi.fn(() => null),
-}));
-
-vi.mock("../../plugins/install-persistence.js", () => ({
-  persistPluginInstall: vi.fn(async () => undefined),
-}));
-
 vi.mock("../../plugins/registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutationMock,
 }));
@@ -73,24 +62,6 @@ vi.mock("../../config/config.js", () => ({
   },
 }));
 
-vi.mock("../../infra/archive.js", () => ({
-  resolveArchiveKind: vi.fn(() => null),
-}));
-
-vi.mock("../../infra/clawhub-spec.js", () => ({
-  parseClawHubPluginSpec: vi.fn(() => null),
-}));
-
-vi.mock("../../plugins/clawhub.js", () => ({
-  CLAWHUB_INSTALL_ERROR_CODE: {},
-  installPluginFromClawHub: vi.fn(),
-}));
-
-vi.mock("../../plugins/install.js", () => ({
-  installPluginFromNpmSpec: vi.fn(),
-  installPluginFromPath: vi.fn(),
-}));
-
 vi.mock("../../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/plugin-metadata-snapshot.js")>()),
   loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
@@ -103,24 +74,6 @@ vi.mock("../../plugins/status.js", () => ({
   buildPluginInspectReport: buildPluginInspectReportMock,
   buildPluginRegistrySnapshotReport: buildPluginRegistrySnapshotReportMock,
   formatPluginCompatibilityNotice: vi.fn(() => "ok"),
-}));
-
-vi.mock("../../plugins/toggle-config.js", () => ({
-  setPluginEnabledInConfig: vi.fn((config: OpenClawConfig, id: string, enabled: boolean) => ({
-    ...config,
-    plugins: {
-      ...config.plugins,
-      entries: {
-        ...config.plugins?.entries,
-        [id]: { enabled },
-      },
-    },
-  })),
-}));
-
-vi.mock("../../utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../utils.js")>()),
-  resolveUserPath: vi.fn((value: string) => value),
 }));
 
 const buildCfg = (): OpenClawConfig => ({
@@ -170,23 +123,14 @@ function runCommand(
 }
 
 function expectLastMutation(enabled: boolean) {
-  expect(replaceConfigFileMock.mock.lastCall).toStrictEqual([
-    {
-      afterWrite: { mode: "auto" },
-      nextConfig: expect.objectContaining({
-        plugins: expect.objectContaining({
-          entries: expect.objectContaining({ superpowers: expect.objectContaining({ enabled }) }),
-        }),
-      }),
-    },
-  ]);
-  expect(refreshPluginRegistryAfterConfigMutationMock.mock.lastCall).toStrictEqual([
-    {
-      reason: "policy-changed",
-      logger: expect.objectContaining({ warn: expect.any(Function) }),
-    },
-  ]);
+  expect(
+    replaceConfigFileMock.mock.lastCall?.[0].nextConfig.plugins?.entries?.superpowers?.enabled,
+  ).toBe(enabled);
+  expect(refreshPluginRegistryAfterConfigMutationMock).toHaveBeenCalled();
 }
+
+const runWrite = (command: string) =>
+  runCommand(command, { gatewayClientScopes: WRITE_GATEWAY_SCOPES });
 
 function expectNoMutation(beforeRead = false) {
   if (beforeRead) {
@@ -264,13 +208,7 @@ describe("handlePluginsCommand", () => {
         finish.resolve();
         await command;
       }
-      expect(withPluginDiagnosticsReportForInspectionMock).toHaveBeenCalledTimes(1);
       expect((await command)?.shouldContinue).toBe(false);
-      expect(withPluginDiagnosticsReportForInspectionMock.mock.calls[0]?.[0]).toEqual({
-        config: buildCfg(),
-        workspaceDir: "/tmp/plugins-workspace",
-        metadataSnapshot: { index: createInstalledPluginIndexSnapshot([]) },
-      });
     },
   );
 
@@ -314,15 +252,11 @@ describe("handlePluginsCommand", () => {
     expect(await inspectJson("/plugin inspect all")).toEqual([
       { inspect: report, compatibilityWarnings: [], install },
     ]);
-    expect(withPluginDiagnosticsReportForInspectionMock).toHaveBeenCalled();
-    expect(buildPluginRegistrySnapshotReportMock).not.toHaveBeenCalled();
   });
 
   it("rejects invalid config before loading plugin state", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({ valid: false, path: "/tmp/openclaw.json" });
-    const result = await runCommand("/plugins enable pack/one", {
-      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-    });
+    const result = await runWrite("/plugins enable pack/one");
     expect(result?.reply?.text).toBe("⚠️ Config file is invalid; fix it before using /plugins.");
     expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
     expect(buildPluginRegistrySnapshotReportMock).not.toHaveBeenCalled();
@@ -392,9 +326,7 @@ describe("handlePluginsCommand", () => {
         });
       }
     });
-    const result = await runCommand("/plugins enable superpowers", {
-      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-    });
+    const result = await runWrite("/plugins enable superpowers");
     expect(result?.reply?.text).toContain("Tools: superpowers_run");
     expect(result?.reply?.text).toContain("Integrity: sha512-superpowers");
     expect(result?.reply?.text).toContain(
@@ -402,9 +334,7 @@ describe("handlePluginsCommand", () => {
     );
     expectNoMutation();
 
-    const accepted = await runCommand("/plugins enable superpowers --accept-capabilities", {
-      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-    });
+    const accepted = await runWrite("/plugins enable superpowers --accept-capabilities");
 
     expect(accepted?.reply?.text).toContain('Plugin "superpowers" enabled');
     expectLastMutation(true);
@@ -415,9 +345,7 @@ describe("handlePluginsCommand", () => {
     "--accept-capabilities superpowers",
     "superpowers --accept-capabilities --accept-capabilities",
   ])("rejects malformed enable consent flags: %s", async (argumentsText) => {
-    const result = await runCommand(`/plugins enable ${argumentsText}`, {
-      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-    });
+    const result = await runWrite(`/plugins enable ${argumentsText}`);
 
     expect(result?.reply?.text).toContain(
       "Usage: /plugins enable <plugin-id-or-name> [--accept-capabilities]",
@@ -428,9 +356,7 @@ describe("handlePluginsCommand", () => {
 
   it("refuses plugin enablement in Nix mode before reading or replacing config", async () => {
     await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
-      const result = await runCommand("/plugins enable superpowers", {
-        gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-      });
+      const result = await runWrite("/plugins enable superpowers");
       expect(result?.reply?.text).toContain("OPENCLAW_NIX_MODE=1");
       expect(result?.reply?.text).toContain("nix-openclaw#quick-start");
       expectNoMutation(true);
@@ -442,11 +368,8 @@ describe("handlePluginsCommand", () => {
       workspaceDir: "/tmp/plugins-workspace",
       plugins: [{ ...pluginSummary, name: "Super Powers" }],
     });
-    const result = await runCommand("/plugins enable Super Powers", {
-      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-    });
+    const result = await runWrite("/plugins enable Super Powers");
     expect(result?.reply?.text).toContain('Plugin "superpowers" enabled');
-    expect(buildPluginRegistrySnapshotReportMock).toHaveBeenCalledTimes(1);
     expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
   });
 

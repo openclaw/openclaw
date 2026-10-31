@@ -23,14 +23,16 @@ import {
   waitForHandoffResponse,
 } from "./update-managed-service-handoff-command.test-support.js";
 import {
-  createManagedServiceCancellationPreload,
-  createManagedServiceLaunchdClockPreload,
   createManagedServiceUpdaterFixtureScript,
   createManagedServiceManagerFixtureScript,
   isManagedServiceInspectionCommand,
   type ManagedServiceCommandTiming,
   type ManagedServiceManagerBoundaryResult,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
+import {
+  prepareManagedServiceNativePreloads,
+  rejectManagedServiceInspectionWithStaleLease,
+} from "./update-managed-service-handoff-native-preloads.test-support.js";
 import { prepareManagedServiceParentPreloads } from "./update-managed-service-handoff-parent.test-support.js";
 import {
   createManagedServiceBoundaryCleanup,
@@ -248,12 +250,17 @@ export function createManagedServiceManagerBoundary({
           `const inputFs=require("node:fs");if(inputFs.readFileSync("update-input.txt","utf8")!=="selected target")process.exit(42);inputFs.rmSync(process.cwd(),{recursive:true});` +
           updaterScript;
       }
-      if (options?.controlDisconnect === "transferred") {
-        const receiptClientPath = path.join(root, "fixture-receipts.mjs");
+      const receiptClientPath = path.join(root, "fixture-receipts.mjs");
+      if (
+        options?.controlDisconnect === "transferred" ||
+        options?.replaceLaunchdLeaseAfterInspection
+      ) {
         await fs.writeFile(
           receiptClientPath,
-          `${fixtureReceiptClientSource(receipts.endpoint)}\nexport { sendReceipt };\n`,
+          `${fixtureReceiptClientSource(receipts.endpoint)}\nexport { sendReceipt, awaitRelease };\n`,
         );
+      }
+      if (options?.controlDisconnect === "transferred") {
         const continuation =
           options.validationResult === "child-result"
             ? updaterScript
@@ -338,52 +345,22 @@ export function createManagedServiceManagerBoundary({
         triageCommandArgv: commandFixture.triageCommandArgv,
         triageInputPath: String(generated.triageInputPath),
       });
-      let helperEnv = spawnFixture.env;
-      if (options?.launchdTeardown?.clockEachCommandMs || options?.recoveryClockAdvanceMs) {
-        const preloadPath = path.join(root, "launchd-clock-preload.cjs");
-        await fs.writeFile(
-          preloadPath,
-          createManagedServiceLaunchdClockPreload({
-            commandTimingsPath,
-            clockEachCommandMs: options.launchdTeardown?.clockEachCommandMs ?? 0,
-            recoveryClockAdvanceMs: options.recoveryClockAdvanceMs,
-            recoveryCommandArgv: commandFixture.recoveryCommandArgv,
-          }),
-        );
-        helperEnv = { ...childEnv, NODE_OPTIONS: `--require ${preloadPath}` };
-      }
-      if (options?.runnerFallback) {
-        const preloadPath = path.join(root, "spawn-fallback-preload.cjs");
-        await fs.writeFile(preloadPath, "process.execve = undefined;\n");
-        helperEnv = { ...helperEnv, NODE_OPTIONS: `--require ${preloadPath}` };
-      }
-      if (options?.validationClockAdvanceMs) {
-        const preloadPath = path.join(root, "validation-clock-preload.cjs");
-        await fs.writeFile(
-          preloadPath,
-          `const fs = require("node:fs"); const now = Date.now;
-          Date.now = () => now() + (fs.existsSync(${JSON.stringify(validationStartedPath)}) ? ${options.validationClockAdvanceMs} : 0);`,
-        );
-        helperEnv = {
-          ...helperEnv,
-          NODE_OPTIONS: `${helperEnv.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim(),
-        };
-      }
-      if (options?.cancelAtActivation) {
-        const preloadPath = path.join(root, "cancel-activation-preload.cjs");
-        await fs.writeFile(
-          preloadPath,
-          createManagedServiceCancellationPreload({
-            scriptPath,
-            updaterPidPath,
-            activationGatePath,
-            activationReleasePath,
-            mutationPath,
-            gateInspection: options.cancelAtActivation === "inspection",
-          }),
-        );
-        helperEnv = { ...helperEnv, NODE_OPTIONS: `--require ${preloadPath}` };
-      }
+      let helperEnv = await prepareManagedServiceNativePreloads({
+        root,
+        scriptPath,
+        parentPid,
+        receiptClientPath,
+        childEnv,
+        env: spawnFixture.env,
+        options,
+        commandTimingsPath,
+        recoveryCommandArgv: commandFixture.recoveryCommandArgv,
+        validationStartedPath,
+        updaterPidPath,
+        activationGatePath,
+        activationReleasePath,
+        mutationPath,
+      });
       helperEnv = await prepareManagedServiceParentPreloads({
         root,
         scriptPath,
@@ -604,7 +581,26 @@ export function createManagedServiceManagerBoundary({
         await expect(pathExists(commandsPath)).resolves.toBe(false);
         expect(stdout).not.toContain("committed\n");
         await expect(pathExists(updaterPath)).resolves.toBe(false);
-      } else if (options?.launchdFault === "wrong-parent" || options?.overdueCommit) {
+      } else if (options?.replaceLaunchdLeaseAfterInspection) {
+        await rejectManagedServiceInspectionWithStaleLease({
+          databasePath,
+          generated,
+          env,
+          root,
+          runningHelper,
+          parent,
+          completion,
+          stderr: () => stderr,
+          receipts,
+          signal,
+          updaterPath,
+        });
+      } else if (
+        ["wrong-parent", "nested-parent", "foreign-job", "duplicate-pid"].includes(
+          options?.launchdFault ?? "",
+        ) ||
+        options?.overdueCommit
+      ) {
         const cancelled = waitForHandoffResponse(runningHelper.stdout, "cancelled");
         runningHelper.stdin?.write("park\n");
         await cancelled;
@@ -662,6 +658,8 @@ export function createManagedServiceManagerBoundary({
           .filter(Boolean),
         parentSignal: parent.signalCode,
         parkAdmitted: stdout.includes("park-admitted\n"),
+        stdout,
+        stderr,
         state: JSON.parse(await fs.readFile(statePath, "utf8").catch(() => "{}")),
         sentinel: options?.readSentinel
           ? await options.readSentinel(env)

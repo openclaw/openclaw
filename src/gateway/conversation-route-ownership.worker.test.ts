@@ -32,6 +32,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
+  prepareConversationDeliveryRouteAuthorization,
   resolveConversationRouteEligibilitiesForAgent,
   withAuthorizedConversationDelivery,
   withAuthorizedQueuedConversationDelivery,
@@ -59,6 +60,36 @@ function installReefPlugin(plugin: ChannelPlugin) {
   setActivePluginRegistry(createTestRegistry([{ pluginId: "reef", source: "test", plugin }]));
 }
 
+function seedConversation(peerId: string) {
+  const scope = { agentId: "main", databaseAgentId: "main", storePath };
+  const sessionKey = `agent:main:reef:channel:${peerId}`;
+  replaceSessionEntrySync(
+    { ...scope, sessionKey },
+    {
+      sessionId: `session-${peerId}`,
+      updatedAt: 100,
+      chatType: "channel",
+      delivery: {
+        kind: "external",
+        route: {
+          channel: "reef",
+          accountId: "default",
+          target: { to: `reef:${peerId}`, chatType: "channel" },
+        },
+        context: { channel: "reef", accountId: "default", to: `reef:${peerId}` },
+        origin: { provider: "reef", accountId: "default", nativeChannelId: "native-original" },
+      },
+    },
+  );
+  const conversationRef = buildConversationRef({
+    channel: "reef",
+    accountId: "default",
+    kind: "channel",
+    peerId,
+  });
+  return { scope, sessionKey, conversationRef };
+}
+
 it("expires plugin binding inspection when async route preparation settles", async () => {
   const conversation = {
     channel: "reef",
@@ -81,13 +112,7 @@ it("expires plugin binding inspection when async route preparation settles", asy
       );
       const inspections = inspect();
       expect(inspections).toMatchObject([{ status: "available", binding: { targetSessionKey } }]);
-      return inspections.map(
-        (inspection) => () =>
-          inspection.status === "available" &&
-          inspection.binding?.targetSessionKey === targetSessionKey
-            ? { kind: "agent", agentId: "main" }
-            : { kind: "unavailable" },
-      );
+      return inspections.map(() => () => ({ kind: "agent", agentId: "main" }));
     },
   };
   installReefPlugin({
@@ -122,32 +147,7 @@ it("expires plugin binding inspection when async route preparation settles", asy
 it.each(["final", "queued"] as const)(
   "%s authority initiates current platform effects under its worker grant and joins accepted sends",
   async (phase) => {
-    const scope = { agentId: "main", databaseAgentId: "main", storePath };
-    const sessionKey = `agent:main:reef:channel:${phase}`;
-    replaceSessionEntrySync(
-      { ...scope, sessionKey },
-      {
-        sessionId: `session-${phase}`,
-        updatedAt: 100,
-        chatType: "channel",
-        delivery: {
-          kind: "external",
-          route: {
-            channel: "reef",
-            accountId: "default",
-            target: { to: `reef:${phase}`, chatType: "channel" },
-          },
-          context: { channel: "reef", accountId: "default", to: `reef:${phase}` },
-          origin: { provider: "reef", accountId: "default", nativeChannelId: "native-original" },
-        },
-      },
-    );
-    const conversationRef = buildConversationRef({
-      channel: "reef",
-      accountId: "default",
-      kind: "channel",
-      peerId: phase,
-    });
+    const { scope, sessionKey, conversationRef } = seedConversation(phase);
     const conversation = await readConversation(scope, conversationRef);
     expect(conversation).toMatchObject({ sessionKey, nativeChannelId: "native-original" });
     const routeFingerprint = resolveConversationRouteFingerprint(conversation!);
@@ -356,3 +356,69 @@ it.each(["final", "queued"] as const)(
     }
   },
 );
+
+it("allows no-op binding delivery and fences a retained grant after reassignment", async () => {
+  const cfg: OpenClawConfig = {
+    ...config,
+    agents: { entries: { main: {}, other: {} } },
+  };
+  const peerId = "retained-binding-authority";
+  const { scope, sessionKey, conversationRef } = seedConversation(peerId);
+  const bindingRef = { channel: "reef", accountId: "default", conversationId: peerId };
+  const sendText = vi.fn().mockResolvedValue({ channel: "reef", messageId: "allowed" });
+  installReefPlugin({
+    ...createOutboundTestPlugin({ id: "reef", outbound: { deliveryMode: "direct", sendText } }),
+    conversationBindings: { supportsCurrentConversationBinding: true },
+  });
+  const conversation = await readConversation(scope, conversationRef);
+  expect(conversation).toMatchObject({ sessionKey, nativeChannelId: "native-original" });
+  const authority = {
+    config: cfg,
+    readCurrentConfig: () => cfg,
+    agentId: "main",
+    conversationRef,
+    expectedRouteFingerprint: resolveConversationRouteFingerprint(conversation!),
+  };
+  const bindings = getSessionBindingService();
+  await bindings.bind({
+    conversation: bindingRef,
+    targetSessionKey: sessionKey,
+    targetKind: "session",
+  });
+  const routeAuthority = await prepareConversationDeliveryRouteAuthorization({
+    ...authority,
+    conversation: conversation!,
+  });
+  try {
+    const handler = await createChannelHandler({
+      cfg,
+      channel: "reef",
+      to: `reef:${peerId}`,
+      withDirectAdapterHandoff: (initiate) =>
+        withAuthorizedConversationDelivery({ ...authority, scope, routeAuthority }, initiate),
+    });
+    const missingRef = { ...bindingRef, conversationId: "missing-retained-binding-authority" };
+    expect(await bindings.resolveByConversationAsync(missingRef)).toBeNull();
+    await expect(handler.sendText("allowed after no-op settlement")).resolves.toMatchObject({
+      messageId: "allowed",
+    });
+    expect(sendText).toHaveBeenCalledOnce();
+
+    // Only the runtime binding changes; the retained config, plugin, and conversation stay current.
+    const replacement = await bindings.bind({
+      conversation: bindingRef,
+      targetSessionKey: "agent:other:reef:channel:replacement",
+      targetKind: "session",
+    });
+    expect(replacement).toMatchObject({
+      targetSessionKey: "agent:other:reef:channel:replacement",
+    });
+    expect(await readConversation(scope, conversationRef)).toEqual(conversation);
+    await expect(handler.sendText("rejected after runtime reassignment")).rejects.toThrow(
+      "Conversation binding ownership changed",
+    );
+    expect(sendText).toHaveBeenCalledOnce();
+  } finally {
+    routeAuthority.dispose();
+  }
+});

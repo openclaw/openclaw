@@ -1,70 +1,30 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import type { inspectOtherOpenClawProcesses } from "../infra/openclaw-process-census.js";
+import { writeArtifact as write } from "../plugins/public-surface.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   createDoctorHealthFlowContext,
   resolveDoctorHealthContributions,
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
 
-const { note, readCommand, census, processMembers, ps, nativeCensus, readProcessCommand } =
-  vi.hoisted(() => ({
-    note: vi.fn(),
-    readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(),
-    census: vi.fn<typeof inspectOtherOpenClawProcesses>(),
-    processMembers: vi.fn(),
-    ps: vi.fn(),
-    nativeCensus: vi.fn(),
-    readProcessCommand: vi.fn(),
-  }));
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawnSync: ps,
+const { note, readCommand, census } = vi.hoisted(() => ({
+  note: vi.fn(),
+  readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(),
+  census: vi.fn<typeof inspectOtherOpenClawProcesses>(),
 }));
-// mock-isolation: Native Darwin census must use the same synthetic PIDs as ps.
-vi.mock("../process/supervisor/darwin-bun-process-census.js", () => ({
-  readDarwinBunProcessCensus: nativeCensus,
-}));
-vi.mock("@openclaw/proc-safe/inspect", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@openclaw/proc-safe/inspect")>()),
-  readProcessCommand,
-}));
-vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@openclaw/proc-safe/identity")>();
-  return {
-    ...actual,
-    readProcessIdentity: (pid: number) =>
-      pid === 2_000_000_000
-        ? {
-            pid,
-            parentPid: process.pid,
-            startTimeMicros: 1,
-            startTimeResolutionMicros: 1,
-            exited: false,
-          }
-        : actual.readProcessIdentity(pid),
-  };
-});
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand }),
 }));
 vi.mock("../infra/openclaw-process-census.js", () => ({
   inspectOtherOpenClawProcesses: census,
-}));
-vi.mock("../process/supervisor/service-child-group-ownership.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../process/supervisor/service-child-group-ownership.js")
-  >()),
-  readProcessGroupMembers: processMembers,
 }));
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
@@ -103,13 +63,7 @@ afterEach(() => {
     Reflect.deleteProperty(process, "getuid");
   }
   vi.unstubAllEnvs();
-  note.mockClear();
-  readCommand.mockReset();
-  census.mockReset();
-  processMembers.mockReset();
-  ps.mockReset();
-  nativeCensus.mockReset();
-  readProcessCommand.mockReset();
+  vi.resetAllMocks();
 });
 
 async function runCaptureReport(repair = false, update = false) {
@@ -152,98 +106,31 @@ async function duringMaintenance(run: () => Promise<string>) {
   }
 }
 
-function write(root: string, filename: string, contents: string) {
-  const file = path.join(root, filename);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, contents);
-  return file;
-}
-
 function inspectAsLaterProcess() {
   // The fixtures model captures left by an earlier process, without sleeps or backdated files.
   vi.spyOn(performance, "timeOrigin", "get").mockReturnValue(Date.now() + 1_000);
 }
 
-it.each([
-  { sameUid: false, foreignCapture: false, removed: true },
-  { sameUid: true, foreignCapture: false, removed: false },
-  { sameUid: false, foreignCapture: true, removed: false },
-])(
-  "repairs legacy captures through Darwin's unreadable-argv census (same UID=$sameUid, foreign capture=$foreignCapture)",
-  async ({ sameUid, foreignCapture, removed }) => {
-    mockProcessPlatform("darwin");
-    const uid = fs.statSync(parent).uid;
-    Object.defineProperty(process, "getuid", { configurable: true, value: () => uid });
-    const peer = 2_000_000_000;
-    const file = write(systemTmp, "openclaw-plugin-build-legacy/source.cjs", "capture");
-    if (foreignCapture) {
-      const lstat = fsPromises.lstat.bind(fsPromises);
-      vi.spyOn(fsPromises, "lstat").mockImplementation(async (target, options) => {
-        const stat = await lstat(target, options);
-        if (target === path.dirname(file)) {
-          Object.assign(stat, { uid: uid + 1 });
-        }
-        return stat;
-      });
-    }
-    inspectAsLaterProcess();
-    const rows = [
-      { pid: process.pid, pgid: process.pid, state: "S", ppid: 0, uid },
-      { pid: peer, pgid: peer, state: "S", ppid: 0, uid: sameUid ? uid : uid + 1 },
-    ];
-    // Node uses ps; Bun uses libproc. Both must observe the same synthetic census.
-    nativeCensus.mockReturnValue(rows);
-    ps.mockReturnValue({
-      status: 0,
-      stdout: rows
-        .map(
-          ({ pid, pgid, state, ppid, uid: memberUid }) =>
-            `${pid} ${pgid} ${state} ${ppid} ${memberUid}\n`,
-        )
-        .join(""),
-    });
-    readProcessCommand.mockImplementation((pid: number) => {
-      if (pid === peer) {
-        throw new ProcSafeError("access-denied", "Process arguments denied");
-      }
-      return { executable: "/node", argv: ["/node", "openclaw-doctor"], environment: {} };
-    });
-    const group = await vi.importActual<
-      typeof import("../process/supervisor/service-child-group-ownership.js")
-    >("../process/supervisor/service-child-group-ownership.js");
-    processMembers.mockImplementation(group.readProcessGroupMembers);
-    const actual = await vi.importActual<typeof import("../infra/openclaw-process-census.js")>(
-      "../infra/openclaw-process-census.js",
-    );
-    census.mockImplementation(actual.inspectOtherOpenClawProcesses);
-    // Match the native identity fixture: neither liveness path may bypass argv handling.
-    const kill = process.kill.bind(process);
-    vi.spyOn(process, "kill").mockImplementation((pid, signal) =>
-      pid === peer && signal === 0 ? true : kill(pid, signal),
-    );
-    const output = await duringMaintenance(() => runCaptureReport(true));
-    expect(fs.existsSync(file)).toBe(!removed);
-    expect(output).toContain(
-      sameUid
-        ? `Could not classify PID ${peer}`
-        : foreignCapture
-          ? "owned by another UID"
-          : "Removed 1 legacy plugin capture root(s)",
-    );
-    if (!removed) {
-      expect(output).not.toContain("Removed ");
-      expect(fs.readFileSync(file, "utf8")).toBe("capture");
-    }
-  },
-);
+function mockStats(rewrite: (target: fs.PathLike) => object) {
+  const lstat = fsPromises.lstat.bind(fsPromises);
+  vi.spyOn(fsPromises, "lstat").mockImplementation(async (target, options) =>
+    Object.assign(await lstat(target, options), rewrite(target)),
+  );
+}
 
+function capture(filename: string, contents = "capture", root = systemTmp) {
+  return write(path.join(root, `openclaw-plugin-build-${filename}`), contents);
+}
+
+// Native argv/UID classification is covered by darwin-process-command.test.ts
+// and openclaw-process-census.test.ts; this layer verifies refusal reaches cleanup.
 it("reports distinct temporary directories during update and deduplicates aliases", async () => {
   const serviceTmp = path.join(parent, "service-tmp");
-  write(environmentTmp, "openclaw-plugin-build-env/source.cjs", "abc");
-  const systemFile = write(systemTmp, "openclaw-plugin-build-system/source.cjs", "12345");
-  write(serviceTmp, "openclaw-plugin-build-service/source.cjs", "1234567");
+  capture("env/source.cjs", "abc", environmentTmp);
+  const systemFile = capture("system/source.cjs", "12345");
+  capture("service/source.cjs", "1234567", serviceTmp);
   const homeTmp = path.join(parent, ".openclaw", "tmp");
-  write(homeTmp, "openclaw-plugin-build-home/source.cjs", "ab");
+  capture("home/source.cjs", "ab", homeTmp);
   fs.mkdirSync(stateDir);
   fs.symlinkSync(systemTmp, path.join(stateDir, "tmp"), "junction");
   readCommand.mockResolvedValue({ programArguments: [], environment: { TMPDIR: serviceTmp } });
@@ -260,38 +147,41 @@ it("reports distinct temporary directories during update and deduplicates aliase
 
 it.each([
   { mode: "outside maintenance", reason: "does not hold Gateway maintenance" },
+  { mode: "unreadable census", reason: "Could not classify PID 4242" },
+  { mode: "foreign UID", reason: "owned by another UID" },
   { mode: "live sibling", reason: "PIDs: 4242" },
   { mode: "sibling appeared after inspection", reason: "PIDs: 4343" },
   { mode: "nested file changed", reason: "created or changed during the current process" },
   { mode: "removal failed", reason: "Could not remove" },
 ])("preserves legacy captures without a removal receipt when $mode", async ({ mode, reason }) => {
-  const capture = path.join(systemTmp, "openclaw-plugin-build-legacy");
-  const file = write(capture, "nested/source.cjs", "captured source");
+  const captureRoot = path.join(systemTmp, "openclaw-plugin-build-legacy");
+  const file = write(path.join(captureRoot, "nested/source.cjs"), "captured source");
   if (mode === "nested file changed") {
-    const lstat = fsPromises.lstat.bind(fsPromises);
     let fileReads = 0;
-    vi.spyOn(fsPromises, "lstat").mockImplementation(async (target, options) => {
-      const stat = await lstat(target, options);
-      if (
-        target === capture ||
-        target === path.dirname(file) ||
-        (target === file && fileReads++ === 0)
-      ) {
-        Object.assign(stat, { birthtimeMs: 1, ctimeMs: 1 });
-      }
-      return stat;
-    });
+    mockStats((target) =>
+      target === captureRoot ||
+      target === path.dirname(file) ||
+      (target === file && fileReads++ === 0)
+        ? { birthtimeMs: 1, ctimeMs: 1 }
+        : {},
+    );
   } else {
     inspectAsLaterProcess();
   }
-  if (mode === "live sibling") {
+  if (mode === "foreign UID") {
+    const uid = fs.statSync(parent).uid;
+    Object.defineProperty(process, "getuid", { configurable: true, value: () => uid });
+    mockStats((target) => (target === captureRoot ? { uid: uid + 1 } : {}));
+  } else if (mode === "unreadable census") {
+    census.mockReturnValue({ error: "Could not classify PID 4242" });
+  } else if (mode === "live sibling") {
     census.mockReturnValue({ pids: [4242] });
   } else if (mode === "sibling appeared after inspection") {
     census.mockReturnValueOnce({ pids: [] }).mockReturnValue({ pids: [4343] });
   } else if (mode === "removal failed") {
     const remove = fsPromises.rm.bind(fsPromises);
     vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
-      if (target === capture) {
+      if (target === captureRoot) {
         throw Object.assign(new Error("fixture permission denied"), { code: "EACCES" });
       }
       await remove(target, options);
@@ -308,16 +198,19 @@ it.each([
 
 it("reclaims only tokenless capture roots and prints a receipt after successful removal", async () => {
   const tmp = path.join(stateDir, "tmp");
-  const plugin = write(tmp, "openclaw-plugin-build-old/source.cjs", "abc");
-  write(tmp, "openclaw-plugin-build-old/nested/module.cjs", "defg");
+  const plugin = capture("old/source.cjs", "abc", tmp);
+  capture("old/nested/module.cjs", "defg", tmp);
   const catalogRoot = path.join(systemTmp, "openclaw-model-catalog-old");
-  const catalog = write(catalogRoot, "openclaw-plugin-build-one/package-0/source.cjs", "12345");
-  const second = write(catalogRoot, "openclaw-plugin-build-two/package-0/source.cjs", "678");
-  const managed = write(tmp, "plugin-captures/owner/captures/source.cjs", "managed");
-  const token = write(systemTmp, "openclaw-plugin-build-modern/owner.sqlite", "custody");
-  const nested = write(tmp, "unrelated/openclaw-plugin-build-nested/source.cjs", "nested");
-  const ordinaryFile = write(tmp, "openclaw-plugin-build-file", "ordinary");
-  const outside = write(parent, "outside/sentinel", "x".repeat(1024));
+  const catalog = capture("one/package-0/source.cjs", "12345", catalogRoot);
+  const second = capture("two/package-0/source.cjs", "678", catalogRoot);
+  const managed = write(path.join(tmp, "plugin-captures/owner/captures/source.cjs"), "managed");
+  const token = capture("modern/owner.sqlite", "custody");
+  const nested = write(
+    path.join(tmp, "unrelated/openclaw-plugin-build-nested/source.cjs"),
+    "nested",
+  );
+  const ordinaryFile = capture("file", "ordinary", tmp);
+  const outside = write(path.join(parent, "outside/sentinel"), "x".repeat(1024));
   fs.symlinkSync(path.dirname(outside), path.join(tmp, "openclaw-plugin-build-link"), "junction");
   fs.symlinkSync(path.dirname(outside), path.join(path.dirname(plugin), "external"), "junction");
   fs.symlinkSync(path.dirname(plugin), path.join(path.dirname(plugin), "cycle"), "junction");

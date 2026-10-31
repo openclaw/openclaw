@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { throwIfSettledRejected } from "./error-graph-internal.js";
 
 export type AgentDatabaseReadCandidate = { path: string; scope?: "sibling-family" };
 
@@ -97,13 +98,7 @@ export async function applyAgentDatabaseReaderRequest(
   const results = await Promise.allSettled(
     [...readers.closers].map(async (closer) => closer(request.candidates, retainedPaths)),
   );
-  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "Agent database reader cleanup failed");
-  }
+  throwIfSettledRejected(results, "Agent database reader cleanup failed");
 }
 
 function normalizeCandidates(candidates: unknown): AgentDatabaseReadCandidate[] | undefined {

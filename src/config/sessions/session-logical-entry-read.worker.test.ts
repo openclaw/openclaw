@@ -7,7 +7,6 @@ import {
   observeParentSqlite,
   sqliteMethods,
 } from "../../../test/helpers/sqlite-parent-observer.js";
-import { resolveHeartbeatSession } from "../../infra/heartbeat-runner-session.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -120,63 +119,47 @@ async function readFirstSession(
   }
 }
 
-it("shares cold database admission with an immediate heartbeat", async () => {
-  const agentId = "heartbeat-admission";
+it("shares cold database admission across logical session reads", async () => {
+  const agentId = "session-admission";
   const scope = storedScope(state.sessionsDir(agentId) + "/sessions.json", {
     agentId,
     sessionKey: `agent:${agentId}:hook`,
   });
   const gate = holdExecution("before-open", (execution) => execution.agentId === agentId, true);
   const first = readSessionEntryInWorker(scope);
-  let heartbeat: Promise<Awaited<ReturnType<typeof resolveHeartbeatSession>>> | undefined;
+  let second: ReturnType<typeof readSessionEntryInWorker> | undefined;
   try {
     await awaitGateBeforeSettlement(gate.entered.promise, first, "Hook admission was not held");
-    heartbeat = Promise.resolve(
-      resolveHeartbeatSession(
-        { session: { store: scope.storePath } },
-        agentId,
-        undefined,
-        undefined,
-        state.env,
-      ),
-    );
-    void heartbeat.catch(() => {});
+    second = readSessionEntryInWorker({ ...scope, sessionKey: `agent:${agentId}:main` });
+    void second.catch(() => {});
     gate.release.resolve();
     await expect(first).resolves.toBeUndefined();
-    await expect(heartbeat).resolves.toMatchObject({ entry: undefined });
+    await expect(second).resolves.toBeUndefined();
   } finally {
     gate.release.resolve();
-    await Promise.allSettled([first, heartbeat]);
+    await Promise.allSettled([first, second]);
     gate.restore();
   }
 });
 
-it("preserves heartbeat entries and SQLite creation without materializing the JSON locator", async () => {
+it("preserves legacy entry metadata and SQLite creation without materializing the JSON locator", async () => {
   for (const reader of ["native", "worker"] as const) {
-    const agentId = `heartbeat-${reader}`;
+    const agentId = `session-${reader}`;
     const scope = storedScope(state.sessionsDir(agentId) + "/sessions.json", {
       agentId,
       sessionKey: `agent:${agentId}:main`,
     });
     const databasePath = resolveOpenClawAgentSqlitePath(scope);
-    const cfg = { session: { store: scope.storePath } };
-    const expected = {
-      sessionKey: scope.sessionKey,
-      storePath: scope.storePath,
-      suppressOriginatingContext: false,
-    };
     expect(fs.existsSync(databasePath)).toBe(false);
     if (reader === "native") {
       expect(loadSessionEntry(scope)).toBeUndefined();
     } else {
-      await expect(
-        resolveHeartbeatSession(cfg, agentId, undefined, undefined, state.env),
-      ).resolves.toEqual({ ...expected, entry: undefined });
+      await expect(readSessionEntryInWorker(scope)).resolves.toBeUndefined();
     }
     expect(fs.existsSync(databasePath)).toBe(true);
     expect(fs.existsSync(scope.storePath)).toBe(false);
     const entry = {
-      sessionId: `heartbeat-${reader}-session`,
+      sessionId: `session-${reader}-session`,
       updatedAt: 123,
       lastChannel: "telegram",
       lastTo: "group:operations",
@@ -186,9 +169,7 @@ it("preserves heartbeat entries and SQLite creation without materializing the JS
     replaceSessionEntrySync(scope, entry);
     const native = loadSessionEntry(scope);
     expect(native).toMatchObject(entry);
-    await expect(
-      resolveHeartbeatSession(cfg, agentId, undefined, undefined, state.env),
-    ).resolves.toEqual({ ...expected, entry: native });
+    await expect(readSessionEntryInWorker(scope)).resolves.toEqual(native);
     expect(fs.existsSync(scope.storePath)).toBe(false);
   }
 });

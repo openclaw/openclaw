@@ -66,7 +66,7 @@ export function isDefaultStateDir(
 ): boolean {
   const override = env.OPENCLAW_STATE_DIR?.trim();
   if (!override) {
-    return true;
+    return !normalizeProfileName(env.OPENCLAW_PROFILE);
   }
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
   return (
@@ -106,14 +106,12 @@ export function isDefaultInstallIdentity(
   homedir: () => string = resolveSystemAccountHomeDir,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  const accountHome = resolveRequiredHomeDir({}, homedir);
+  const accountHome = normalizePathForComparison(resolveRequiredHomeDir({}, homedir));
   // Native service paths use the process home independently of OPENCLAW_HOME.
   // A canonical runtime override must not hide a relocated service home.
   if (
-    normalizePathForComparison(resolveRequiredOsHomeDir(env, homedir)) !==
-      normalizePathForComparison(accountHome) ||
-    normalizePathForComparison(resolveRequiredHomeDir(env, homedir)) !==
-      normalizePathForComparison(accountHome)
+    normalizePathForComparison(resolveRequiredOsHomeDir(env, homedir)) !== accountHome ||
+    normalizePathForComparison(resolveRequiredHomeDir(env, homedir)) !== accountHome
   ) {
     return false;
   }

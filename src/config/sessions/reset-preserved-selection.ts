@@ -14,6 +14,7 @@ type ResetPreservedSelectionState = Pick<
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
   | "communication"
+  | "cyberAccessProgram"
 >;
 
 /**
@@ -36,6 +37,9 @@ export function resolveResetPreservedSelection(params: {
   }
 
   const preserved: Partial<ResetPreservedSelectionState> = {};
+  if (entry.cyberAccessProgram !== undefined) {
+    preserved.cyberAccessProgram = entry.cyberAccessProgram;
+  }
   if (entry.communication) {
     preserved.communication = { ...entry.communication };
   }
@@ -55,7 +59,7 @@ export function resolveResetPreservedSelection(params: {
   }
 
   const authProfileOverrideSource = resolveSessionAuthProfileOverrideSource(entry);
-  if (authProfileOverrideSource === "user" && entry.authProfileOverride) {
+  if (authProfileOverrideSource === "user" || authProfileOverrideSource === "user-link") {
     preserved.authProfileOverride = entry.authProfileOverride;
     preserved.authProfileOverrideSource = authProfileOverrideSource;
     if (entry.authProfileOverrideCompactionCount !== undefined) {

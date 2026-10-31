@@ -162,10 +162,10 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand(
       "learn",
-      "Draft a reusable skill from recent work or named sources.",
+      "Learn from recent work or named sources into skills or memory.",
       "tools",
       "standard",
-      freeformArgs("request", "Sources and requirements for the skill draft"),
+      freeformArgs("request", "Sources and what to learn from them"),
     ),
     defineBuiltinCommand(
       "loop",
@@ -410,6 +410,13 @@ export function buildBuiltinChatCommands(
         textAliases: ["/steer", "/tell"],
         ...freeformArgs("message", "Steering message"),
       },
+    ),
+    defineBuiltinCommand(
+      "followup",
+      "Run this message as a new turn without changing queue mode.",
+      "management",
+      "standard",
+      { modelIndependent: "no-args", ...freeformArgs("message", "Followup message") },
     ),
     definePathCommand(
       "config",

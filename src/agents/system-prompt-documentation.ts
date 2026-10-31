@@ -7,15 +7,27 @@ export function buildDocumentationSection(params: {
 }): string[] {
   const docsPath = params.docsPath?.trim();
   const sourcePath = params.sourcePath?.trim();
-  const docsUnavailable =
-    params.sandboxed &&
-    !docsPath &&
-    !["web_fetch", "web_search", "browser"].some((name) => params.availableTools.has(name));
+  const webRetrieval = ["web_fetch", "web_search", "browser"].some((name) =>
+    params.availableTools.has(name),
+  );
+  const docsUnavailable = params.sandboxed && !docsPath && !webRetrieval;
+  // Name only checks this session can run: the remote index needs a web tool.
+  const capabilityChecks = [
+    params.availableTools.has("session_status")
+      ? "`session_status` with `capabilities=true`"
+      : undefined,
+    webRetrieval
+      ? "the docs index https://docs.openclaw.ai/llms.txt"
+      : docsPath
+        ? "the local docs"
+        : undefined,
+  ].filter((check): check is string => check !== undefined);
   return [
     "## Documentation",
     docsPath ? `Docs: ${docsPath}` : "Docs: https://docs.openclaw.ai",
     docsPath ? "Mirror: https://docs.openclaw.ai" : undefined,
     sourcePath ? `Source: ${sourcePath}` : "Source: https://github.com/openclaw/openclaw",
+    "For official OpenClaw support, visit https://community.openclaw.ai/. Keep self-service docs, Discord social chat, reproducible GitHub bug reports, and private security reporting separate.",
     docsPath
       ? `OpenClaw behavior questions: docs first${params.readToolName ? ` via \`${params.readToolName}\`/local search` : " using available tools"}. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.`
       : docsUnavailable
@@ -29,6 +41,7 @@ export function buildDocumentationSection(params: {
       : docsUnavailable
         ? undefined
         : "If docs are silent/stale, say so and inspect GitHub source.",
+    `Can't-do claims: a missing tool or failed call shows this session's limits, not OpenClaw's; ${capabilityChecks.length ? `check ${capabilityChecks.join(", then ")} before saying OpenClaw can't.` : "say what you could not check."}`,
     "Diagnosis: run `openclaw status` when possible; ask only if blocked.",
     "",
   ].filter((line): line is string => line !== undefined);

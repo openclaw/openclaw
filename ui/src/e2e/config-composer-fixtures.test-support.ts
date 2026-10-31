@@ -14,12 +14,16 @@ export function createConfigSuite(name: string) {
   });
 }
 
-export const settingsPageOptions = {
-  colorScheme: "dark",
-  locale: "en-US",
-  serviceWorkers: "block",
-  viewport: { height: 1000, width: 1440 },
-} satisfies BrowserContextOptions;
+export function createSettingsPageOptions() {
+  return {
+    colorScheme: "dark",
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport: { height: 1000, width: 1440 },
+  } satisfies BrowserContextOptions;
+}
+
+export const settingsPageOptions = createSettingsPageOptions();
 
 export function configProof(name: string, variant?: string) {
   const enabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -30,7 +34,16 @@ export function configProof(name: string, variant?: string) {
       directory = variant ? path.join(root, variant) : root;
     }
   });
-  return { enabled, directory: () => directory, capture: proofCapture(() => directory, enabled) };
+  const capture = async (surface: Page | Locator, fileName: string, fullPage = false) => {
+    if (enabled) {
+      await surface.screenshot({
+        animations: "disabled",
+        path: path.join(directory, fileName),
+        ...(fullPage ? { fullPage: true } : {}),
+      });
+    }
+  };
+  return { enabled, directory: () => directory, capture };
 }
 
 export function pageRunner(
@@ -75,6 +88,18 @@ export function computedStyles(control: Locator, names: readonly string[]) {
 }
 
 export async function revealControl(control: Locator) {
+  const closedObjects = control
+    .page()
+    .locator("details.cfg-object:not([open])")
+    .filter({ visible: true });
+  while ((await control.count()) === 0) {
+    await expect
+      .poll(async () => (await control.count()) > 0 || (await closedObjects.count()) > 0)
+      .toBe(true);
+    if ((await control.count()) === 0) {
+      await closedObjects.first().locator(":scope > summary").click();
+    }
+  }
   await expect.poll(() => control.count()).toBe(1);
   for (const details of await control.locator("xpath=ancestor::details").all()) {
     if ((await details.getAttribute("open")) === null) {
@@ -88,18 +113,6 @@ export function settingsRow(page: Page, title: string): Locator {
   return page.locator(".settings-row").filter({
     has: page.locator(".settings-row__title").getByText(title, { exact: true }),
   });
-}
-
-function proofCapture(directory: () => string, enabled: boolean) {
-  return async (surface: Page | Locator, name: string, fullPage = false) => {
-    if (enabled) {
-      await surface.screenshot({
-        animations: "disabled",
-        path: path.join(directory(), name),
-        ...(fullPage ? { fullPage: true } : {}),
-      });
-    }
-  };
 }
 
 export async function composerStore(page: Page) {

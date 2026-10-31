@@ -7,6 +7,7 @@ import {
   UPDATE_RUN_STEP_STATUSES,
   UPDATE_RUN_TRIGGERS,
 } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { StateLeaseLossSchema } from "../shared/state-lease-loss.js";
 import {
   UpdateDoctorConfigChangeSchema,
   UpdateDoctorConfigWriteRefusalSchema,
@@ -137,6 +138,7 @@ export const UpdateFailureFactSchema = z.object({
   destination: UpdateDestinationFailureSchema.optional(),
   npmErrorCode: z.enum(UPDATE_NPM_ERROR_CODES).optional(),
   packageSpec: z.string().max(200).optional(),
+  leaseLoss: StateLeaseLossSchema.optional(),
 });
 
 const UpdateRollbackOutcomeSchema = z.object({
@@ -239,6 +241,14 @@ export const UpdateRunRecordSchema = z.object({
     candidateAdmission: candidateAdmission.optional(),
     updateRecoveryCapture: updateRecoveryCaptureStateSchema.optional(),
     driver: driver.optional(),
+    managedHandoff: z.object({ parent: driver, helper: driver }).optional(),
+    packageStage: z
+      .object({
+        prefix: z.string().max(4096),
+        packageRoot: z.string().max(4096),
+        identity: z.object({ dev: z.number(), ino: z.number(), birthtimeMs: z.number() }),
+      })
+      .optional(),
     previousDrivers: z
       .array(driver)
       .max(UPDATE_RUN_DRIVER_LIMIT - 1)
@@ -291,6 +301,7 @@ export const UpdateRunRecordSchema = z.object({
     pluginErrors: z.array(text).max(32).optional(),
     channelsReady: z.boolean().optional(),
     readyz: z.boolean().optional(),
+    coreReady: z.boolean().optional(),
     settled: z.boolean().optional(),
     noticeDelivered: z.boolean().optional(),
     doctorHint: text.optional(),

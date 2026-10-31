@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
+import { isStringArray, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import {
@@ -15,13 +15,7 @@ import {
   loadEnabledBundleConfig,
   readBundleJsonObject,
 } from "./bundle-config-shared.js";
-import {
-  AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
-  CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
-  CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
-  CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
-  resolveBundleComponentPaths,
-} from "./bundle-manifest.js";
+import { BUNDLE_MANIFEST_PATHS, resolveBundleComponentPaths } from "./bundle-manifest.js";
 import type {
   BundleMcpConfig,
   BundleMcpDataDirOwnership,
@@ -30,7 +24,7 @@ import type {
 } from "./bundle-mcp.types.js";
 import { encodePluginInstallDirName } from "./install-paths.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
-import type { PluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 
@@ -45,12 +39,6 @@ type BundleMcpRuntimeSupport = {
   diagnostics: string[];
 };
 
-const MANIFEST_PATH_BY_FORMAT: Record<PluginBundleFormat, string> = {
-  agent: AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
-  claude: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
-  codex: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
-  cursor: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
-};
 const CLAUDE_PLUGIN_ROOT_PLACEHOLDER = "${CLAUDE_PLUGIN_ROOT}";
 const AGENT_PLUGIN_ROOT_PLACEHOLDER = "${PLUGIN_ROOT}";
 const AGENT_PLUGIN_DATA_PLACEHOLDER = "${PLUGIN_DATA}";
@@ -249,11 +237,7 @@ function validateAgentMcpServer(params: {
     if (!isValidAgentCommand(params.raw.command, params.rootDir)) {
       return { ok: false, error: "stdio command must be a bare name or ./-relative path" };
     }
-    if (
-      params.raw.args !== undefined &&
-      (!Array.isArray(params.raw.args) ||
-        !params.raw.args.every((entry) => typeof entry === "string"))
-    ) {
+    if (params.raw.args !== undefined && !isStringArray(params.raw.args)) {
       return { ok: false, error: "stdio args must be an array of strings" };
     }
     if (params.raw.env !== undefined && !isStringRecord(params.raw.env)) {
@@ -433,7 +417,7 @@ function loadBundleMcpConfig(params: {
   rootDir: string;
   bundleFormat: PluginBundleFormat;
 }): { config: BundleMcpRuntimeConfig; diagnostics: string[] } {
-  const manifestRelativePath = MANIFEST_PATH_BY_FORMAT[params.bundleFormat];
+  const manifestRelativePath = BUNDLE_MANIFEST_PATHS[params.bundleFormat];
   const manifestLoaded = readBundleJsonObject({
     rootDir: params.rootDir,
     relativePath: manifestRelativePath,
@@ -559,6 +543,25 @@ export function loadEnabledBundleMcpConfig(params: {
       ),
     ),
   };
+}
+
+/** MCP servers one plugin declares, whether or not it is enabled. */
+export function loadPluginDeclaredMcpServers(
+  record: Pick<PluginManifestRecord, "id" | "format" | "bundleFormat" | "rootDir" | "mcpServers">,
+): Record<string, BundleMcpServerConfig> {
+  if (record.format === "bundle") {
+    return record.bundleFormat
+      ? loadBundleMcpConfig({
+          pluginId: record.id,
+          rootDir: record.rootDir,
+          bundleFormat: record.bundleFormat,
+        }).config.mcpServers
+      : {};
+  }
+  return record.mcpServers
+    ? loadRootRelativeMcpConfig({ rootDir: record.rootDir, mcpServers: record.mcpServers }).config
+        .mcpServers
+    : {};
 }
 
 function withMcpPluginOwnership(

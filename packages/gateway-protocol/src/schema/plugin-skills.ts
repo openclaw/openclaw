@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
-import { lazyCompile } from "../protocol-validator.js";
+import * as Checks from "../compiled/protocol.generated/schema-plugin-skills.js";
+import { createProtocolValidator } from "../protocol-validator.js";
 import { closedObject } from "./closed-object.js";
 import { SKILL_LIBRARY_MAX_FILE_BYTES, SKILL_LIBRARY_MAX_FILES } from "./skill-library.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
@@ -43,4 +44,7 @@ export const PluginsSkillsReadResultSchema = closedObject({
 export type PluginsSkillsReadParams = Static<typeof PluginsSkillsReadParamsSchema>;
 export type PluginsSkillsReadResult = Static<typeof PluginsSkillsReadResultSchema>;
 export type PluginSkillFile = Static<typeof PluginSkillFileSchema>;
-export const validatePluginsSkillsReadParams = lazyCompile(PluginsSkillsReadParamsSchema);
+export const validatePluginsSkillsReadParams = createProtocolValidator(
+  PluginsSkillsReadParamsSchema,
+  Checks.isPluginsSkillsReadParams,
+);

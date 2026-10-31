@@ -639,7 +639,7 @@ async function fetchWithSsrFGuardInternal(
         }
       }
 
-      const init: DispatcherAwareRequestInit & { duplex?: "half" } = {
+      const init: DispatcherAwareRequestInit = {
         ...(currentInit ? { ...currentInit } : {}),
         redirect: "manual",
         ...(dispatcher ? { dispatcher } : {}),
@@ -647,9 +647,10 @@ async function fetchWithSsrFGuardInternal(
           ? AbortSignal.any([signal, requestController.signal])
           : requestController.signal,
       };
-      if (init.body instanceof Blob && !init.keepalive && init.mode !== "no-cors") {
-        // This owner replays redirects. A per-hop stream avoids Fetch's unused body tee.
-        // Fetch forbids stream bodies for keepalive and no-cors requests.
+      let captureBody = currentInit?.body ?? null;
+      if (init.body instanceof Blob) {
+        // Node 24.16–24.19 Blob streams pin the request's async context. Fresh per-hop
+        // bytes also avoid Fetch's unused body tee while preserving immutable replay.
         const body = init.body;
         const headers = new Headers(init.headers);
         if (!headers.has("content-length")) {
@@ -659,8 +660,11 @@ async function fetchWithSsrFGuardInternal(
           headers.set("content-type", body.type);
         }
         init.headers = headers;
-        init.body = body.stream();
-        init.duplex = "half";
+        // This is the caller's immutable Blob, not an unbounded network Response.
+        // nosemgrep: security.opengrep.ghsa-p536-vvpp-9mc8.openclaw.web-fetch-or-media-unbounded-response-read
+        const bytes = new Uint8Array(await body.arrayBuffer());
+        init.body = bytes;
+        captureBody = captureAdmission.capture ? Buffer.from(bytes) : captureBody;
       }
 
       // Explicit caller stubs and test-installed fetch mocks should win.
@@ -673,7 +677,7 @@ async function fetchWithSsrFGuardInternal(
         method: currentInit?.method ?? "GET",
         signal: process.versions.bun ? (init.signal ?? undefined) : undefined,
         requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
-        requestBody: currentInit?.body ?? null,
+        requestBody: captureBody,
         transport: "http" as const,
         flowId: params.capture === false ? undefined : params.capture?.flowId,
         meta: {

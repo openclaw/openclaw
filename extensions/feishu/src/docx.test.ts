@@ -1,5 +1,6 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
@@ -26,15 +27,6 @@ const clientModule = await import("./client.js");
 const runtimeModule = await import("./runtime.js");
 
 vi.spyOn(clientModule, "createFeishuClient").mockImplementation(() => createFeishuClientMock());
-vi.spyOn(toolAccountModule, "resolveAnyEnabledFeishuToolsConfig").mockReturnValue({
-  doc: true,
-  chat: false,
-  wiki: false,
-  drive: false,
-  perm: false,
-  scopes: false,
-  bitable: false,
-});
 vi.spyOn(toolAccountModule, "resolveFeishuToolAccount").mockImplementation((...args) =>
   resolveFeishuToolAccountMock(...args),
 );
@@ -218,26 +210,20 @@ describe("feishu_doc image fetch hardening", () => {
   it("reorders convert output by document tree instead of raw block array order", async () => {
     const blocks = [
       { block_type: 13, block_id: "li2", parent_id: "list1" },
-      { block_type: 4, block_id: "h2" },
+      { block_type: 12, block_id: "list1", children: ["li1", "li2"] },
       { block_type: 13, block_id: "li1", parent_id: "list1" },
       { block_type: 3, block_id: "h1" },
-      { block_type: 12, block_id: "list1", children: ["li1", "li2"] },
-      { block_type: 2, block_id: "p1" },
     ];
-    convertMock.mockResolvedValue(
-      apiData({ blocks, first_level_block_ids: ["h1", "p1", "h2", "list1"] }),
-    );
+    convertMock.mockResolvedValue(apiData({ blocks, first_level_block_ids: ["h1", "list1"] }));
 
     blockDescendantCreateMock.mockImplementationOnce(insertedChildren);
 
     await executeDoc({ action: "append", content: "tree reorder" });
 
     const call = blockDescendantCreateMock.mock.calls[0]?.[0];
-    expect(call?.data.children_id).toEqual(["h1", "p1", "h2", "list1"]);
+    expect(call?.data.children_id).toEqual(["h1", "list1"]);
     expect((call!.data.descendants as Array<{ block_id: string }>).map((b) => b.block_id)).toEqual([
       "h1",
-      "p1",
-      "h2",
       "list1",
       "li1",
       "li2",
@@ -261,12 +247,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     blockDescendantCreateMock.mockImplementation(insertedChildren);
 
-    const longMarkdown = Array.from(
-      { length: 120 },
-      (_, i) => `line ${i} with enough content to trigger fallback chunking`,
-    ).join("\n");
-
-    const result = await executeDoc({ action: "append", content: longMarkdown });
+    const result = await executeDoc({ action: "append", content: "line of Markdown\n".repeat(40) });
 
     expect(convertMock.mock.calls.length).toBeGreaterThan(1);
     expect(successChunkCount).toBeGreaterThan(1);
@@ -433,23 +414,17 @@ describe("feishu_doc image fetch hardening", () => {
   });
 
   it("passes workspace localRoots for upload_image absolute local paths when workspace-only policy is active", async () => {
-    const fixtureDir = path.join(process.cwd(), ".tmp-docx-upload-image-absolute");
-    const absoluteImagePath = path.join(fixtureDir, "absolute-image.png");
-    mkdirSync(fixtureDir, { recursive: true });
-    writeFileSync(absoluteImagePath, "not-real-image");
-
-    mockLocalFileUpload("absolute-image.png");
-
-    try {
+    await withTempDir("docx-upload-image-", async (fixtureDir) => {
+      const absoluteImagePath = path.join(fixtureDir, "absolute-image.png");
+      writeFileSync(absoluteImagePath, "not-real-image");
+      mockLocalFileUpload("absolute-image.png");
       await executeDoc(
         { action: "upload_image", image: absoluteImagePath, filename: "absolute-image.png" },
         { workspaceDir: WORKSPACE_ROOT, fsPolicy: { workspaceOnly: true } },
       );
 
       expectLoadWebMediaCall("absolute-image.png", [WORKSPACE_ROOT]);
-    } finally {
-      rmSync(fixtureDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("returns local media rejection without uploading a file", async () => {

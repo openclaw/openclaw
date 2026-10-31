@@ -1,4 +1,8 @@
-import { isPostgresSqlConnection, type EngineConnection } from "../sql-connection.js";
+import {
+  isPostgresSqlConnection,
+  type EngineConnection,
+  type PostgresSqlConnection,
+} from "../sql-connection.js";
 import {
   invalidateLocalSqliteSchemaAdmissions,
   publishSqliteDatabaseSchemaChange,
@@ -22,6 +26,22 @@ import { admitSqliteMemoryTextSearch } from "./sqlite-search-schema.js";
 
 class SearchExtensionDefinitionChangedError extends Error {
   override name = "SearchExtensionDefinitionChangedError";
+}
+
+/** Definition preflight only; binding still checks the store's search capability admission. */
+export function arePostgresSearchExtensionsAdmitted(
+  db: PostgresSqlConnection,
+  definitions: Readonly<Record<string, SearchSchema>>,
+): boolean {
+  const schema = getAdmittedPostgresSchema(db);
+  return Boolean(
+    schema &&
+    getPostgresPhysicalFacts(db) &&
+    Object.entries(definitions).every(
+      ([name, definition]) =>
+        JSON.stringify(schema.searchExtensions?.[name]) === JSON.stringify(definition),
+    ),
+  );
 }
 
 /** Register only at the owner's admission boundary; SQLite retains its existing derived lifecycle. */
@@ -53,7 +73,7 @@ export function admitStoreSearchExtension(
     );
   }
   db.runTransaction(() => {
-    admitPostgresSearch(db, definition, facts.namespace);
+    admitPostgresSearch(db, definition, facts.namespace, base.postgresVectorSearchVersion);
     const existing = [base.search, ...Object.values(base.searchExtensions ?? {})].filter(
       (item) => item !== undefined,
     );
@@ -69,12 +89,19 @@ export function admitStoreSearchExtension(
       searchExtensions: { ...base.searchExtensions, [name]: definition },
     };
     db.exec(
-      postgresSearchSql(definition, facts.namespace, {
-        text: existing.some((item) => Object.keys(item.text ?? {}).length > 0),
-        vector: existing.some(
-          (item) => item.mode !== "keyword-only" && Object.keys(item.vector ?? {}).length > 0,
-        ),
-      }),
+      postgresSearchSql(
+        definition,
+        facts.namespace,
+        {
+          text: existing.some((item) => Object.keys(item.text ?? {}).length > 0),
+          vector: existing.some(
+            (item) => item.mode !== "keyword-only" && Object.keys(item.vector ?? {}).length > 0,
+          ),
+        },
+        base.postgresVectorDecoderVersion,
+        base.postgresVectorSearchVersion,
+        base.postgresTextSearchVersion,
+      ),
     );
     if (!Object.keys(base.searchExtensions ?? {}).length) {
       // sqlite-allow-raw: Engine-owned metadata is outside the application catalog seal.
@@ -88,16 +115,15 @@ export function admitStoreSearchExtension(
     const after = verifyAndRecordPostgresSchema(db, facts.namespace, next);
     invalidateLocalSqliteSchemaAdmissions(db);
     stageSqliteTransactionState(db, {
-      // Later admissions in the same owner transaction consume this definition.
-      stage: () => retainPostgresSchema(db, next),
-      rollback: () => retainPostgresSchema(db, base),
       commit: () => publishSqliteDatabaseSchemaChange(db),
     });
+    // Publish the new revision before its facts; admission owns rollback too.
+    retainPostgresSchema(db, next);
     publishPostgresSearchExtensionFacts(db, facts, after.catalog);
     for (const item of [next.search, ...Object.values(next.searchExtensions)].filter(
       (candidate) => candidate !== undefined,
     )) {
-      publishPostgresSearch(db, item);
+      publishPostgresSearch(db, item, base.postgresVectorSearchVersion);
     }
   });
   return bindStoreSearch(db, definition);

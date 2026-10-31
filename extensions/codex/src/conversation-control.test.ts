@@ -116,30 +116,12 @@ function replyingHarness() {
 
 const sharedClientMocks = vi.hoisted(() => ({
   getSharedCodexAppServerClient: vi.fn(),
-  releaseLeasedSharedCodexAppServerClient: vi.fn(),
 }));
 
 vi.mock("./app-server/shared-client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./app-server/shared-client.js")>()),
   ...sharedClientMocks,
   getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
-  releaseLeasedSharedCodexAppServerClient:
-    sharedClientMocks.releaseLeasedSharedCodexAppServerClient,
-  releaseCodexAppServerClientLease: vi.fn((lease: { client?: unknown }) => {
-    lease.client = undefined;
-  }),
-  withCodexAppServerClientRequestScope: async (params: {
-    lease: { client?: unknown };
-    options?: { timeoutMs?: number };
-    run: (
-      client: unknown,
-      requestOptions: () => { timeoutMs: number; assertCurrent: () => void },
-    ) => Promise<unknown>;
-  }) =>
-    await params.run(params.lease.client, () => ({
-      timeoutMs: params.options?.timeoutMs ?? 60_000,
-      assertCurrent: () => undefined,
-    })),
 }));
 
 describe("codex conversation controls", () => {
@@ -148,7 +130,6 @@ describe("codex conversation controls", () => {
     tempDir = sessionDirs.make();
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
-    sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
   });
 
   afterEach(() => {

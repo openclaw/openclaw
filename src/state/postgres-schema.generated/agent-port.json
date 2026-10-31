@@ -180,6 +180,10 @@
       "identities": []
     },
     {
+      "name": "session_transcript_cold_archive_chunks",
+      "identities": []
+    },
+    {
       "name": "session_transcript_cold_archives",
       "identities": []
     },
@@ -462,41 +466,41 @@
       "name": "session_transcript_fts_rows_after_delete",
       "table": "session_transcript_fts_rows",
       "range": [
-        31189,
-        31372
+        32221,
+        32404
       ]
     },
     {
       "name": "standing_intents_fts_after_delete",
       "table": "standing_intents",
       "range": [
-        28729,
-        28976
+        29761,
+        30008
       ]
     },
     {
       "name": "standing_intents_fts_after_insert",
       "table": "standing_intents",
       "range": [
-        28512,
-        28727
+        29544,
+        29759
       ]
     },
     {
       "name": "standing_intents_fts_after_update",
       "table": "standing_intents",
       "range": [
-        28978,
-        29354
+        30010,
+        30386
       ]
     }
   ],
   "preData": [
     0,
-    29373
+    30396
   ],
   "postData": [
-    29373,
-    45231
+    30396,
+    46142
   ]
 }

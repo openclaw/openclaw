@@ -7,26 +7,6 @@ import { unwrapDefaultModuleExport } from "./module-export.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi } from "./types.js";
 
-export function mergeSetupRuntimeChannelPlugin(
-  runtimePlugin: ChannelPlugin,
-  setupPlugin: ChannelPlugin,
-): ChannelPlugin {
-  return {
-    ...runtimePlugin,
-    ...setupPlugin,
-    meta: mergeChannelPluginSection(runtimePlugin.meta, setupPlugin.meta),
-    capabilities: mergeChannelPluginSection(runtimePlugin.capabilities, setupPlugin.capabilities),
-    commands: mergeChannelPluginSection(runtimePlugin.commands, setupPlugin.commands),
-    doctor: mergeChannelPluginSection(runtimePlugin.doctor, setupPlugin.doctor),
-    reload: mergeChannelPluginSection(runtimePlugin.reload, setupPlugin.reload),
-    config: mergeChannelPluginSection(runtimePlugin.config, setupPlugin.config),
-    setup: mergeChannelPluginSection(runtimePlugin.setup, setupPlugin.setup),
-    messaging: mergeChannelPluginSection(runtimePlugin.messaging, setupPlugin.messaging),
-    actions: mergeChannelPluginSection(runtimePlugin.actions, setupPlugin.actions),
-    secrets: mergeChannelPluginSection(runtimePlugin.secrets, setupPlugin.secrets),
-  } as ChannelPlugin;
-}
-
 type BundledRuntimeChannelRegistration = {
   id?: string;
   loadChannelPlugin?: () => ChannelPlugin;

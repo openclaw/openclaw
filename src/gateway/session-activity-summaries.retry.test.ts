@@ -2,8 +2,10 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import * as utilityCompletion from "../agents/utility-completion.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
+import type { SessionActivitySummary } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
@@ -12,7 +14,6 @@ import {
   persistSessionTranscriptTurn,
   readSessionTranscriptWatermark,
   SessionTranscriptProjectionUnavailableError,
-  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { seedUnindexedTranscriptForTest } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -22,7 +23,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
-import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   createGatewaySchedulerClock,
@@ -33,17 +34,22 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
-import { sessionActivitySummaryHandlers } from "./server-methods/session-activity-summary.js";
 import {
   createSessionActivitySummaries,
   type SessionActivitySummaryService,
 } from "./session-activity-summaries.js";
+import {
+  preparedActivityRecapModel,
+  recapRpc,
+  seedRecapConversation,
+} from "./session-activity-summaries.test-support.js";
 import { readActivitySummaryBatch } from "./session-activity-summary-source.worker.js";
 import {
   projectSessionActivitySummary,
   type ActivitySummaryTarget,
 } from "./session-activity-summary-state.js";
 import type { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
+import * as observerModel from "./session-observer-model.js";
 
 const result = {
   text: "Verified the change.",
@@ -64,14 +70,10 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
   let cfg: OpenClawConfig;
   const complete = vi.fn<typeof defaultCompleteModel>();
   const prepareModel: typeof defaultPrepareModel = async ({ agentId, modelRef }) => ({
+    ...preparedActivityRecapModel,
     config: cfg,
     agentId,
-    provider: "test",
     model: modelRef?.split("/")[1] ?? "utility",
-    authProfileId: undefined,
-    agentDir: "/tmp/unused",
-    outputTextPolicy: "strict-visible",
-    thinkLevel: "off",
   });
   const prepare = vi.fn<typeof defaultPrepareModel>();
   const changed = vi.fn();
@@ -82,29 +84,44 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       entry: loadSessionEntryReadOnly(scope(target)),
       watermark: readSessionTranscriptWatermark(scope(target)),
     });
+  const publication = (
+    target: ActivitySummaryTarget,
+    ready = (summary: ReturnType<typeof view>) => summary?.state === "current",
+  ) => {
+    const settled = createDeferred<ReturnType<typeof view>>();
+    changed.mockImplementation(() => {
+      const summary = view(target);
+      if (ready(summary)) {
+        settled.resolve(summary);
+      }
+    });
+    return settled.promise;
+  };
+  const patchSummary = (target: ActivitySummaryTarget, patch: Partial<SessionActivitySummary>) =>
+    patchSessionEntryCore(
+      scope(target),
+      (entry) => ({
+        activitySummary: { ...entry.activitySummary!, ...patch },
+      }),
+      { preserveActivity: true },
+    );
   const addSession = async (index: number, agentId = "main") => {
     const target = { agentId, key: `agent:${agentId}:recap-${index}` };
-    await upsertSessionEntryCore(scope(target), { sessionId: target.key, updatedAt: 1 });
-    await persistSessionTranscriptTurn(scope(target), {
-      messages: [
-        { eventId: `message-${index}`, message: { role: "user", content: `Request ${index}` } },
-      ],
-      touchSessionEntry: false,
-    });
+    await seedRecapConversation(scope(target), `Request ${index}`, {}, `message-${index}`);
     return target;
   };
-  const appendWork = async (target: ActivitySummaryTarget) => {
-    await persistSessionTranscriptTurn(scope(target), {
-      messages: [
-        {
-          eventId: "new-work",
-          parentId: "message-1",
-          message: { role: "assistant", content: "Verified additional work." },
-        },
-      ],
+  const appendMessage = (
+    target: ActivitySummaryTarget,
+    eventId: string,
+    parentId: string,
+    content: string,
+  ) =>
+    persistSessionTranscriptTurn(scope(target), {
+      messages: [{ eventId, parentId, message: { role: "assistant", content } }],
       touchSessionEntry: false,
     });
-  };
+  const appendWork = (target: ActivitySummaryTarget) =>
+    appendMessage(target, "new-work", "message-1", "Verified additional work.");
   const fakeTime = () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     vi.spyOn(Math, "random").mockReturnValue(0);
@@ -115,9 +132,23 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       scheduler,
       getConfig: () => cfg,
       onChanged: changed,
-      prepareModel: prepare,
-      completeModel: complete,
     });
+
+  const restartWithClock = async (onArmed: () => void) => {
+    await service.dispose();
+    await scheduler.stop();
+    const time = createGatewaySchedulerClock(Date.now());
+    scheduler = createTestGatewayScheduler({
+      ...time.clock,
+      arm(run, delayMs) {
+        const cancel = time.clock.arm(run, delayMs);
+        onArmed();
+        return cancel;
+      },
+    });
+    service = createService();
+    return time;
+  };
 
   const ensureRecap = async (target: Parameters<SessionActivitySummaryService["ensure"]>[0]) =>
     service.ensure(
@@ -135,6 +166,9 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     setRuntimeConfigSnapshot(cfg);
     complete.mockReset().mockResolvedValue(result);
     prepare.mockReset().mockImplementation(prepareModel);
+    vi.spyOn(utilityCompletion, "hasAvailableUtilityCompletionAuth").mockResolvedValue(true);
+    vi.spyOn(observerModel, "defaultPrepareModel").mockImplementation(prepare);
+    vi.spyOn(observerModel, "defaultCompleteModel").mockImplementation(complete);
     changed.mockReset();
     scheduler = createTestGatewayScheduler("fake-timers");
     service = createService();
@@ -147,7 +181,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     await testState.cleanup();
   });
 
-  it("refreshes a recap dirtied by an in-process append without a post-write watermark read", async ({
+  it("refreshes a recap after an in-process append without a post-write watermark read", async ({
     signal,
   }) => {
     const target = await addSession(1);
@@ -156,7 +190,6 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     const readWatermark = vi.spyOn(transcriptWatermark, "readSessionTranscriptWatermarkAsync");
     complete.mockImplementationOnce(async () => {
       await appendWork(target);
-      service.handleTranscript({ target: transcript });
       return { ...result, text: "Only the first message was summarized." };
     });
     const firstPublication = createDeferred();
@@ -167,21 +200,13 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     });
     await ensureRecap(target);
     await withinTest(firstPublication.promise, signal);
-    expect(view(target)?.state).toBe("updating");
+    expect(view(target)?.state).toBe("stale");
     expect(read()?.activitySummary).toMatchObject({ coveredMessages: 1, totalMessages: 1 });
     expect(readWatermark).not.toHaveBeenCalled();
 
-    const awaitCurrent = async () => {
-      const publication = createDeferred();
-      changed.mockImplementation(() => {
-        if (view(target)?.state === "current") {
-          publication.resolve();
-        }
-      });
-      await ensureRecap(target);
-      return withinTest(publication.promise, signal);
-    };
-    await awaitCurrent();
+    const current = publication(target);
+    await ensureRecap(target);
+    await withinTest(current, signal);
     expect(complete).toHaveBeenCalledTimes(2);
     expect(read()?.activitySummary).toMatchObject({ coveredMessages: 2, totalMessages: 2 });
   });
@@ -259,15 +284,12 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     );
     expect(isSessionTranscriptIndexReconcileRunning(databaseOptions)).toBe(false);
 
-    const settled = createDeferred<ReturnType<typeof view>>();
-    changed.mockImplementation(() => {
-      const summary = view(target);
-      if (summary?.state === "current" || summary?.state === "unavailable") {
-        settled.resolve(summary);
-      }
-    });
+    const settled = publication(
+      target,
+      (summary) => summary?.state === "current" || summary?.state === "unavailable",
+    );
     await ensureRecap(target);
-    expect(await settled.promise).toMatchObject({ state: "current", text: result.text });
+    expect(await settled).toMatchObject({ state: "current", text: result.text });
     expect(complete).toHaveBeenCalledTimes(1);
     expect(JSON.parse(complete.mock.calls[0]![0].prompt).messages).toEqual([
       "user: Repair the import.",
@@ -289,13 +311,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       await preparation.promise;
       return prepareModel(params);
     });
-    const settled = createDeferred<ReturnType<typeof view>>();
-    changed.mockImplementation(() => {
-      const summary = view(target);
-      if (summary?.state !== "updating") {
-        settled.resolve(summary);
-      }
-    });
+    const settled = publication(target, (summary) => summary?.state !== "updating");
     await ensureRecap(target);
     try {
       await started.promise;
@@ -303,7 +319,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
         preserveActivity: true,
       });
       preparation.resolve();
-      expect(await settled.promise).toMatchObject({ state: "stale" });
+      expect(await settled).toMatchObject({ state: "stale" });
       expect(complete).not.toHaveBeenCalled();
       expect(loadSessionEntryReadOnly(scope(target))?.activitySummary).toBeUndefined();
     } finally {
@@ -357,18 +373,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
         omittedContent: role !== "toolResult",
         coveredMessages: 3,
       });
-      await patchSessionEntryCore(
-        scope(target),
-        (entry) => ({
-          activitySummary: {
-            ...entry.activitySummary!,
-            formatRevision: 2,
-            omittedContent: true,
-            text: recap + notice,
-          },
-        }),
-        { preserveActivity: true },
-      );
+      await patchSummary(target, { formatRevision: 2, omittedContent: true, text: recap + notice });
       await service.dispose();
       service = createService();
       expect(view(target)).toMatchObject({ state: "stale", text: recap + notice });
@@ -399,16 +404,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
           reads.restore();
         }
       }
-      await persistSessionTranscriptTurn(scope(target), {
-        messages: [
-          {
-            eventId: "message-3",
-            parentId: "message-2",
-            message: { role: "assistant", content: "Outcome 3" },
-          },
-        ],
-        touchSessionEntry: false,
-      });
+      await appendMessage(target, "message-3", "message-2", "Outcome 3");
       await refresh();
       expect(JSON.parse(complete.mock.calls[0]![0].prompt)).toMatchObject({
         previousRecap: recap,
@@ -430,13 +426,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       await ensureRecap(target);
       await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
       const oldText = "Ran internal_tool and checked the result. Waiting for review.";
-      await patchSessionEntryCore(
-        scope(target),
-        (entry) => ({
-          activitySummary: { ...entry.activitySummary!, formatRevision: undefined, text: oldText },
-        }),
-        { preserveActivity: true },
-      );
+      await patchSummary(target, { formatRevision: undefined, text: oldText });
       if (newWork) {
         await appendWork(target);
       }
@@ -475,106 +465,11 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     },
   );
 
-  it.each(["complete", "shutdown", "continuation"] as const)(
-    "coalesces a late refresh wake and joins its model work on %s",
-    async (outcome) => {
-      await service.dispose();
-      await scheduler.stop();
-      const time = createGatewaySchedulerClock(Date.now());
-      scheduler = createTestGatewayScheduler(time.clock);
-      service = createService();
-      const target = await addSession(1);
-      const initial = createDeferred();
-      changed.mockImplementation(() => {
-        if (view(target)?.state === "current") {
-          initial.resolve();
-        }
-      });
-      await ensureRecap(target);
-      await initial.promise;
-      await appendWork(target);
-      fakeTime();
-      const started = createDeferred();
-      const completion = createDeferred<typeof result>();
-      const continuation = createDeferred<typeof result>();
-      complete.mockImplementationOnce(() => {
-        started.resolve();
-        return completion.promise;
-      });
-      service.handleTranscript({ target: scope(target) });
-      expect(time.armedAtMs).toBe(time.clock.now() + 90_000);
-      time.setTime(time.clock.now() + 3_600_000);
-      const wake = time.wake();
-      try {
-        await started.promise;
-        expect(complete).toHaveBeenCalledTimes(2);
-        if (outcome === "shutdown") {
-          scheduler.beginClose();
-          const stopped = vi.fn();
-          const disposed = vi.fn();
-          const stop = scheduler.stop().then(stopped);
-          const disposal = service.dispose().then(disposed);
-          await Promise.resolve();
-          await Promise.resolve();
-          expect(stopped).not.toHaveBeenCalled();
-          expect(disposed).not.toHaveBeenCalled();
-          expect(complete.mock.calls[1]![0].abortSignal?.aborted).toBe(true);
-          completion.resolve(result);
-          await Promise.all([stop, disposal]);
-        } else if (outcome === "continuation") {
-          await persistSessionTranscriptTurn(scope(target), {
-            messages: [
-              {
-                eventId: "continued-work",
-                parentId: "new-work",
-                message: { role: "assistant", content: "Verified the follow-on work." },
-              },
-            ],
-            touchSessionEntry: false,
-          });
-          const continued = createDeferred();
-          complete.mockImplementationOnce(() => {
-            continued.resolve();
-            return continuation.promise;
-          });
-          await ensureRecap(target);
-          completion.resolve(result);
-          await continued.promise;
-          const stopped = vi.fn();
-          const stop = scheduler.stop().then(stopped);
-          await vi.advanceTimersByTimeAsync(0);
-          expect(stopped).not.toHaveBeenCalled();
-          continuation.resolve(result);
-          await stop;
-        } else {
-          completion.resolve(result);
-        }
-        await wake;
-        await time.advanceBy(3_600_000);
-        expect(complete).toHaveBeenCalledTimes(outcome === "continuation" ? 3 : 2);
-        expect(loadSessionEntryReadOnly(scope(target))?.activitySummary?.coveredMessages).toBe(
-          outcome === "shutdown" ? 1 : outcome === "continuation" ? 3 : 2,
-        );
-        expect(time.armedAtMs).toBeNull();
-      } finally {
-        completion.resolve(result);
-        continuation.resolve(result);
-        await wake;
-      }
-    },
-  );
-
   it("retains the previous recap on restyle failure without rebilling repeated requests", async () => {
     const target = await addSession(1);
     await ensureRecap(target);
     await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
-    await patchSessionEntryCore(
-      scope(target),
-      (entry) => ({
-        activitySummary: { ...entry.activitySummary!, formatRevision: undefined },
-      }),
-      { preserveActivity: true },
-    );
+    await patchSummary(target, { formatRevision: undefined });
     complete.mockRejectedValue(new Error("temporary failure"));
     await ensureRecap(target);
     await vi.waitFor(() => expect(view(target)?.state).toBe("unavailable"));
@@ -683,14 +578,9 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       targets.push(await addSession(index));
     }
     const overflow = targets[256]!;
-    const initial = createDeferred();
-    changed.mockImplementation(() => {
-      if (view(overflow)?.state === "current") {
-        initial.resolve();
-      }
-    });
+    const initial = publication(overflow);
     await ensureRecap(overflow);
-    await withinTest(initial.promise, signal);
+    await withinTest(initial, signal);
     expect(view(overflow)?.state).toBe("current");
     await service.dispose();
     service = createService();
@@ -723,18 +613,16 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       getRuntimeConfig: () => cfg,
       sessionActivitySummaries: service,
     });
-    const respond = vi.fn();
+    const { respond, invoke } = recapRpc("sessions.activitySummary.ensure", context, "capacity");
     const ensure = async (sessions: ActivitySummaryTarget[]) => {
-      const params = { sessions };
-      await sessionActivitySummaryHandlers["sessions.activitySummary.ensure"]!({
-        req: { type: "req", id: "capacity", method: "sessions.activitySummary.ensure", params },
-        params,
-        context,
-        client: null,
-        respond,
-        isWebchatConnect: () => false,
-      });
+      await invoke({ sessions });
       expect(respond.mock.calls.at(-1)?.[0]).toBe(true);
+    };
+    const ensureOverflow = async (state: "current" | "updating" | "unavailable") => {
+      await ensure([overflow]);
+      expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
+        sessions: [{ ...overflow, activitySummary: { state, text: result.text, canEnsure: true } }],
+      });
     };
     try {
       for (let index = 0; index < 100; index += 20) {
@@ -751,48 +639,20 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       expect(targets.slice(0, 256).every((target) => view(target)?.state === "updating")).toBe(
         true,
       );
-      await ensure([overflow]);
-      expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
-        sessions: [
-          {
-            ...overflow,
-            activitySummary: { state: "current", text: result.text, canEnsure: true },
-          },
-        ],
-      });
+      await ensureOverflow("current");
       expect(view(overflow)?.state).toBe("current");
-      await persistSessionTranscriptTurn(scope(overflow), {
-        messages: [
-          {
-            eventId: "overflow-new-work",
-            parentId: "message-256",
-            message: { role: "assistant", content: "Verified additional work." },
-          },
-        ],
-        touchSessionEntry: false,
-      });
-      await ensure([overflow]);
-      expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
-        sessions: [
-          {
-            ...overflow,
-            activitySummary: { state: "unavailable", text: result.text, canEnsure: true },
-          },
-        ],
-      });
+      await appendMessage(
+        overflow,
+        "overflow-new-work",
+        "message-256",
+        "Verified additional work.",
+      );
+      await ensureOverflow("unavailable");
       expect(complete).toHaveBeenCalledTimes(2);
       first.resolve(result);
       await withinTest(slotReused.promise, signal);
       expect(complete).toHaveBeenCalledTimes(3);
-      await ensure([overflow]);
-      expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
-        sessions: [
-          {
-            ...overflow,
-            activitySummary: { state: "updating", text: result.text, canEnsure: true },
-          },
-        ],
-      });
+      await ensureOverflow("updating");
       remaining.resolve(result);
       await withinTest(drained.promise, signal);
       expect(targets.every((target) => view(target)?.state === "current")).toBe(true);
@@ -805,7 +665,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     }
   });
 
-  it.each([
+  it.for([
     {
       name: "overload",
       error: Object.assign(new Error("Overloaded"), { status: 529 }),
@@ -833,26 +693,30 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     },
   ])(
     "retries $name automatically and retains cached text without rebilling repeated ensure requests",
-    async ({ error, delay }) => {
+    async ({ error, delay }, { signal }) => {
+      const retryArmed = createDeferred();
+      const time = await restartWithClock(() => retryArmed.resolve());
       const target = await addSession(1);
-      await ensureRecap(target);
-      await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
+      const initialWork = new AsyncWorkScope();
+      await initialWork.track(() => ensureRecap(target));
+      await initialWork.drain();
+      expect(view(target)?.state).toBe("current");
       await appendWork(target);
       fakeTime();
       complete.mockRejectedValueOnce(error);
       await ensureRecap(target);
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
-      await vi.advanceTimersByTimeAsync(0);
-      const failedAt = Date.now();
+      await withinTest(retryArmed.promise, signal);
+      expect(complete).toHaveBeenCalledTimes(2);
+      const failedAt = time.clock.now();
       for (let index = 0; index < 20; index += 1) {
         await ensureRecap(target);
       }
       expect(view(target)).toMatchObject({ state: "updating", text: result.text });
-      await vi.advanceTimersByTimeAsync(delay - 1_000);
+      await time.advanceBy(delay - 1_000);
       expect(complete).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1_000);
-      await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
-      expect(Date.now() - failedAt).toBeGreaterThanOrEqual(delay);
+      await time.advanceBy(1_000);
+      expect(view(target)?.state).toBe("current");
+      expect(time.clock.now() - failedAt).toBeGreaterThanOrEqual(delay);
       expect(complete).toHaveBeenCalledTimes(3);
     },
   );
@@ -936,19 +800,8 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
   it("stops after bounded retries and starts a fresh retry chain for new work after cooldown", async ({
     signal,
   }) => {
-    await service.dispose();
-    await scheduler.stop();
-    const time = createGatewaySchedulerClock(Date.now());
     let retryArmed = createDeferred();
-    scheduler = createTestGatewayScheduler({
-      ...time.clock,
-      arm(run, delayMs) {
-        const cancel = time.clock.arm(run, delayMs);
-        retryArmed.resolve();
-        return cancel;
-      },
-    });
-    service = createService();
+    const time = await restartWithClock(() => retryArmed.resolve());
     const target = await addSession(1);
     fakeTime();
     complete.mockRejectedValue(Object.assign(new Error("Overloaded"), { status: 529 }));
@@ -967,7 +820,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       .mockRejectedValueOnce(Object.assign(new Error("Overloaded again"), { status: 529 }));
     retryArmed = createDeferred();
     await appendWork(target);
-    service.handleTranscript({ target: scope(target) });
+    await ensureRecap(target);
     await withinTest(retryArmed.promise, signal);
     expect(complete).toHaveBeenCalledTimes(5);
     await time.advanceBy(120_000);

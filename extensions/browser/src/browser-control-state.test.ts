@@ -1,134 +1,86 @@
-// Browser tests cover shared browser-control lifecycle serialization.
 import type { Server } from "node:http";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as control from "./browser-control-state.js";
 import { markBrowserRuntimeStopping } from "./browser/server-context.lifecycle.js";
 
-const runtimeMocks = vi.hoisted(() => ({
-  stopBrowserRuntime: vi.fn(),
-}));
+type RuntimeParams = { server: Server | null; port: number; resolved: unknown };
+const stopRuntime = vi.hoisted(() => vi.fn());
 
+// mock-isolation: control shutdown settlement without starting or stopping real browser resources.
 vi.mock("./browser/runtime-lifecycle.js", () => ({
-  createBrowserRuntimeState: (params: {
-    server: Server | null;
-    port: number;
-    resolved: unknown;
-  }) => ({
-    server: params.server,
-    port: params.port,
-    resolved: params.resolved,
-    profiles: new Map(),
-  }),
-  stopBrowserRuntime: runtimeMocks.stopBrowserRuntime,
+  createBrowserRuntimeState: (params: RuntimeParams) => ({ ...params, profiles: new Map() }),
+  stopBrowserRuntime: stopRuntime,
 }));
-
-const {
-  ensureBrowserControlRuntime,
-  getBrowserControlState,
-  hasBrowserControlWork,
-  stopBrowserControlRuntime,
-  withBrowserControlStart,
-} = await import("./browser-control-state.js");
 
 const resolved = { profiles: {}, controlPort: 18_791 } as never;
-const onWarn = vi.fn();
+const runtimeParams = { server: null, port: 18_791, resolved };
+function expectState(state: unknown, work: boolean) {
+  expect(control.getBrowserControlState()).toBe(state);
+  expect(control.hasBrowserControlWork()).toBe(work);
+}
 
-function start(server: Server | null = null) {
-  return withBrowserControlStart(() =>
-    ensureBrowserControlRuntime({ server, port: 18_791, resolved }),
+const start = (server: Server | null = null) =>
+  control.withBrowserControlStart(() =>
+    control.ensureBrowserControlRuntime({ ...runtimeParams, server }),
   );
-}
 
-function stop(requestedBy: "server" | "service") {
-  return stopBrowserControlRuntime({ requestedBy, onWarn });
-}
+const stop = (requestedBy: "server" | "service") =>
+  control.stopBrowserControlRuntime({ requestedBy, onWarn: vi.fn() });
 
 beforeEach(() => {
-  runtimeMocks.stopBrowserRuntime.mockReset().mockImplementation(async (params) => {
-    params.clearState();
-  });
+  stopRuntime.mockReset().mockImplementation(async (params) => params.clearState());
+});
+afterEach(() => stop("server"));
+
+it("rejects new starts while ordinary shutdown is pending", async () => {
+  await start();
+  const gate = Promise.withResolvers<void>();
+  stopRuntime.mockImplementationOnce(({ clearState }) => gate.promise.then(clearState));
+  const stopping = stop("service");
+  await Promise.all([
+    expect(start()).rejects.toThrow("Browser runtime is stopping.").finally(gate.resolve),
+    stopping,
+  ]);
+  expectState(null, false);
+  await expect(start()).resolves.toBeTruthy();
 });
 
-describe("browser control lifecycle", () => {
-  it("allows a start after a no-state stop settles", async () => {
-    await expect(stop("service")).resolves.toBeNull();
-    await expect(start()).resolves.toBeTruthy();
-    await stop("service");
+it("retains a failed stop owner for an exact retry", async () => {
+  await start();
+  stopRuntime.mockImplementationOnce(async (params) => {
+    markBrowserRuntimeStopping(params.current);
+    throw new Error("cleanup failed");
   });
+  await expect(stop("service")).rejects.toThrow("cleanup failed");
+  expectState(null, true);
+  await expect(stop("service")).resolves.toBeTruthy();
+  expect(control.hasBrowserControlWork()).toBe(false);
+  await expect(start()).resolves.toBeTruthy();
+});
 
-  it("rejects new starts while ordinary shutdown is pending", async () => {
-    await start();
-    const gate = Promise.withResolvers<void>();
-    runtimeMocks.stopBrowserRuntime.mockImplementationOnce(async (params) => {
-      await gate.promise;
-      params.clearState();
-    });
-    const stopping = stop("service");
-    try {
-      await expect(start()).rejects.toThrow("Browser runtime is stopping.");
-    } finally {
-      gate.resolve();
-      await stopping;
-    }
-    expect(getBrowserControlState()).toBeNull();
-    await expect(start()).resolves.toBeTruthy();
-    await stop("service");
+it("lets a foreground server adopt service state without a second runtime", async () => {
+  const serviceState = await start();
+  const server = {} as Server;
+  const serverState = await start(server);
+  expect(serverState).toBe(serviceState);
+  expect(serverState.server).toBe(server);
+  await stop("service");
+  expect(stopRuntime).not.toHaveBeenCalled();
+  await stop("server");
+  expect(stopRuntime).toHaveBeenCalledOnce();
+});
+
+it("orders a queued stop after an in-progress cold start", async () => {
+  await expect(stop("service")).resolves.toBeNull();
+  const startGate = Promise.withResolvers<void>();
+  const starting = control.withBrowserControlStart(async () => {
+    await startGate.promise;
+    return await control.ensureBrowserControlRuntime(runtimeParams);
   });
-
-  it("retains a failed stop owner for an exact retry", async () => {
-    await start();
-    expect(hasBrowserControlWork()).toBe(true);
-    runtimeMocks.stopBrowserRuntime.mockImplementationOnce(async (params) => {
-      markBrowserRuntimeStopping(params.current);
-      throw new Error("cleanup failed");
-    });
-
-    await expect(stop("service")).rejects.toThrow("cleanup failed");
-    expect(getBrowserControlState()).toBeNull();
-    expect(hasBrowserControlWork()).toBe(true);
-
-    await expect(stop("service")).resolves.toBeTruthy();
-    expect(hasBrowserControlWork()).toBe(false);
-    await expect(start()).resolves.toBeTruthy();
-    await stop("service");
-  });
-
-  it("lets a foreground server adopt service state without a second runtime", async () => {
-    const serviceState = await start();
-    const server = {} as Server;
-    const serverState = await start(server);
-
-    expect(serverState).toBe(serviceState);
-    expect(serverState.server).toBe(server);
-    await stop("service");
-    expect(runtimeMocks.stopBrowserRuntime).not.toHaveBeenCalled();
-
-    await stop("server");
-    expect(runtimeMocks.stopBrowserRuntime).toHaveBeenCalledOnce();
-  });
-
-  it("orders a queued stop after an in-progress cold start", async () => {
-    expect(hasBrowserControlWork()).toBe(false);
-    let releaseStart!: () => void;
-    const startGate = new Promise<void>((resolve) => {
-      releaseStart = resolve;
-    });
-    const starting = withBrowserControlStart(async () => {
-      await startGate;
-      return await ensureBrowserControlRuntime({
-        server: null,
-        port: 18_791,
-        resolved,
-      });
-    });
-    expect(getBrowserControlState()).toBeNull();
-    expect(hasBrowserControlWork()).toBe(true);
-    const stopping = stop("service");
-    releaseStart();
-
-    await starting;
-    await stopping;
-    expect(runtimeMocks.stopBrowserRuntime).toHaveBeenCalledOnce();
-    expect(getBrowserControlState()).toBeNull();
-    expect(hasBrowserControlWork()).toBe(false);
-  });
+  expectState(null, true);
+  const stopping = stop("service");
+  startGate.resolve();
+  await Promise.all([starting, stopping]);
+  expect(stopRuntime).toHaveBeenCalledOnce();
+  expectState(null, false);
 });

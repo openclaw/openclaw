@@ -6,9 +6,13 @@ import type {
 } from "openclaw/plugin-sdk/control-ui";
 import { createMemo, For, Show } from "solid-js";
 import { createSettingsComponents } from "./components.tsx";
-import type { MemoryOverviewStatus } from "./controller.ts";
 import { createTranslator } from "./i18n/index.ts";
 import "./overview.css";
+
+export type MemoryOverviewStatus =
+  | { kind: "idle" | "loading" }
+  | { kind: "ready"; payload: DoctorMemoryStatusPayload }
+  | { kind: "error"; message: string };
 
 type MemoryOverviewProps = {
   agentId: string | null;
@@ -47,7 +51,7 @@ export function createMemoryOverview(
 
   function Hero(props: MemoryOverviewProps) {
     const engineId = () => props.engineSelection.id;
-    const off = () => props.engineSelection.kind === "off" || props.engineDisabled;
+    const off = createMemo(() => props.engineSelection.kind === "off" || props.engineDisabled);
     const readyPayload = createMemo(() =>
       props.status.kind === "ready" ? props.status.payload : null,
     );
@@ -115,7 +119,7 @@ export function createMemoryOverview(
                 {t("memoryPage.overview.hero.openSettings")}
               </button>
             ) : (
-              <button class="btn btn--sm" onClick={props.onRefresh}>
+              <button class="btn btn--sm" onClick={() => props.onRefresh()}>
                 {props.status.kind === "error"
                   ? t("memoryPage.overview.hero.retry")
                   : t("memoryPage.overview.hero.refresh")}
@@ -246,7 +250,7 @@ export function createMemoryOverview(
     payload: DoctorMemoryStatusPayload;
     overview: MemoryOverviewProps;
   }) {
-    const notChecked = () => props.payload.embedding.checked === false;
+    const notChecked = createMemo(() => props.payload.embedding.checked === false);
     const embeddingKind = () =>
       props.payload.embedding.ok ? "ok" : notChecked() ? "muted" : "danger";
     const embeddingLabel = () =>
@@ -285,7 +289,7 @@ export function createMemoryOverview(
                       type="button"
                       class="btn btn--sm"
                       disabled={props.overview.probingEmbeddings}
-                      onClick={props.overview.onProbeEmbeddings}
+                      onClick={() => props.overview.onProbeEmbeddings()}
                     >
                       {props.overview.probingEmbeddings
                         ? t("memoryPage.overview.health.testing")

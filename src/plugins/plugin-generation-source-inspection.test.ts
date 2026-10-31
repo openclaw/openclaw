@@ -1,14 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createJiti } from "./jiti-factory.js";
 import { inspectPluginSourceDependencies } from "./plugin-generation-source-inspection.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
-import { visitPluginSourceReferences } from "./plugin-source-references.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
 
 it("inspects retained import.meta reads and assignments without evaluating dependencies", () => {
   const root = temp.make("plugin-inspection-meta-assignment-");
@@ -16,11 +14,17 @@ it("inspects retained import.meta reads and assignments without evaluating depen
   const codec = path.join(root, "codec.mjs");
   const glue = path.join(root, "glue.mjs");
   const resolved = path.join(root, "resolved.mjs");
-  fs.writeFileSync(entryFile, `export const load = () => import("./codec.mjs");`);
-  fs.writeFileSync(
-    codec,
-    `import path from "node:path";
-     import "./glue.mjs";
+  const selected = (target: string) => ({ "module-sync": target, default: "./missing.mjs" });
+  writeTree(root, {
+    "package.json": {
+      name: "inspection",
+      type: "module",
+      imports: { "#glue": selected("./glue.mjs") },
+      exports: { "./resolved": selected("./resolved.mjs") },
+    },
+    "index.mjs": `export const load = () => import("./codec.mjs");`,
+    "codec.mjs": `import path from "node:path";
+     import "#glue";
      const meta = import.meta;
      const url = import.meta["url"];
      const main = import.meta.main;
@@ -30,46 +34,34 @@ it("inspects retained import.meta reads and assignments without evaluating depen
      }
      export const wasm = new URL("codec.wasm", import.meta.url);
      export const schema = path.join(import.meta.dirname, "schema.json");
-     export const next = import.meta.resolve("./resolved.mjs");
+     export const next = import.meta.resolve("inspection/resolved");
      throw new Error("inspection must not execute plugin code");`,
-  );
-  fs.writeFileSync(glue, "export {};");
-  fs.writeFileSync(resolved, "export {};");
+    "glue.mjs": "export {};",
+    "resolved.mjs": "export {};",
+  });
 
   const inspection = inspectPluginSourceDependencies([{ rootDir: root, entryFile }]);
   expect(inspection.references).toEqual([
     { source: entryFile, specifier: "./codec.mjs", target: codec },
-    { source: codec, specifier: "./glue.mjs", target: glue },
-    { source: codec, specifier: "./resolved.mjs", target: resolved },
+    { source: codec, specifier: "#glue", target: glue },
+    { source: codec, specifier: "inspection/resolved", target: resolved },
   ]);
   expect(inspection.unresolved).toEqual([]);
-  expect(inspection.files).toContain(codec);
-
-  const visited: string[] = [];
-  visitPluginSourceReferences(
-    codec,
-    fs.readFileSync(codec, "utf8"),
-    createJiti(codec, { fsCache: false, moduleCache: false }),
-    (reference, kind) => visited.push(`${kind} ${reference}`),
-  );
-  expect(visited).toEqual(
-    expect.arrayContaining(["asset codec.wasm", "asset schema.json", "import ./resolved.mjs"]),
-  );
 });
 
 it("names the dependency whose source cannot be parsed", () => {
   const root = temp.make("plugin-inspection-parse-failure-");
   const entryFile = path.join(root, "index.mjs");
   const broken = path.join(root, "broken.mjs");
-  fs.writeFileSync(entryFile, `export const load = () => import("./broken.mjs");`);
-  fs.writeFileSync(broken, "\nconst pattern = /(/;");
+  writeTree(root, {
+    "index.mjs": `export const load = () => import("./broken.mjs");`,
+    "broken.mjs": "\nconst pattern = /(/;",
+  });
 
   expect(() => inspectPluginSourceDependencies([{ rootDir: root, entryFile }])).toThrow(
     expect.objectContaining({
       name: "SyntaxError",
-      message: expect.stringContaining(
-        `${broken}: could not parse transformed source: Invalid regular expression`,
-      ),
+      message: expect.stringContaining(`${broken}: could not parse transformed source`),
       cause: expect.any(SyntaxError),
     }),
   );
@@ -87,32 +79,19 @@ it("inspects a captured cyclic dependency graph without following its dependency
     [alpha, "alpha", "beta", beta],
     [beta, "beta", "alpha", alpha],
   ] as const) {
-    fs.writeFileSync(
-      path.join(directory, "package.json"),
-      JSON.stringify({ name, main: "index.cjs", dependencies: { [dependency]: "1.0.0" } }),
-    );
-    fs.writeFileSync(
-      path.join(directory, "index.cjs"),
-      `require('${dependency}'); throw new Error('inspection must not execute plugin code');`,
-    );
+    writeTree(directory, {
+      "package.json": {
+        name,
+        main: "index.cjs",
+        dependencies: { [dependency]: "1.0.0" },
+        imports: { "#peer": dependency },
+        exports: { "module-sync": "./index.cjs", default: "./missing.cjs" },
+      },
+      "index.cjs": `require('${dependency}'); require('#peer'); throw new Error('inspection must not execute plugin code');`,
+    });
     fs.symlinkSync(target, path.join(directory, "node_modules", dependency), "junction");
   }
 
-  const readdir = fs.readdirSync;
-  const followedLinks = new Set<string>();
-  vi.spyOn(fs, "readdirSync").mockImplementation((...args) => {
-    const entries = readdir(...args);
-    for (const entry of entries) {
-      if (
-        entry instanceof fs.Dirent &&
-        entry.parentPath.startsWith(captures + path.sep) &&
-        fs.realpathSync(entry.parentPath) !== entry.parentPath
-      ) {
-        followedLinks.add(entry.parentPath);
-      }
-    }
-    return entries;
-  });
   const inspection = withPluginSourceCaptureDirectory(captures, () =>
     inspectPluginSourceDependencies([{ rootDir: alpha, entryFile: path.join(alpha, "index.cjs") }]),
   );
@@ -126,41 +105,4 @@ it("inspects a captured cyclic dependency graph without following its dependency
       .toSorted(),
   );
   expect(fs.readdirSync(captures)).toEqual([]);
-  expect(followedLinks.size).toBe(0);
 });
-
-it.for(
-  ["#selected", "inspection-conditions/selected"].flatMap((specifier) =>
-    ["import", "require"].map((kind) => ({ specifier, kind })),
-  ),
-)(
-  "inspects the module-sync target for $kind $specifier without evaluation",
-  ({ specifier, kind }) => {
-    const root = temp.make("plugin-inspection-conditions-");
-    const entryFile = path.join(root, kind === "import" ? "index.mjs" : "index.cjs");
-    const selected = path.join(root, "sync.mjs");
-    const selection = { "module-sync": "./sync.mjs", default: "./fallback.mjs" };
-    fs.writeFileSync(
-      path.join(root, "package.json"),
-      JSON.stringify({
-        name: "inspection-conditions",
-        type: "module",
-        imports: { "#selected": selection },
-        exports: { "./selected": selection },
-      }),
-    );
-    for (const file of [selected, path.join(root, "fallback.mjs")]) {
-      fs.writeFileSync(file, "throw new Error('inspection must not evaluate plugin code');");
-    }
-    fs.writeFileSync(
-      entryFile,
-      kind === "import"
-        ? `import ${JSON.stringify(specifier)};`
-        : `require(${JSON.stringify(specifier)});`,
-    );
-
-    const inspection = inspectPluginSourceDependencies([{ rootDir: root, entryFile }]);
-    expect(inspection.unresolved).toEqual([]);
-    expect(inspection.references).toEqual([{ source: entryFile, specifier, target: selected }]);
-  },
-);

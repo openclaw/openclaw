@@ -4,6 +4,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
   createTestPluginApi,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
@@ -66,7 +68,10 @@ function createConfig(params: GatewayOptions = {}): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function createGateway(params: GatewayOptions = {}) {
+function createGateway(
+  params: GatewayOptions = {},
+  scheduler = createTestPluginServiceScheduler(),
+) {
   const config = createConfig(params);
   setRuntimeConfigSnapshot(config);
   const onMock = vi.fn<OpenClawPluginApi["on"]>();
@@ -87,6 +92,14 @@ function createGateway(params: GatewayOptions = {}) {
     on: onMock,
     registerService: (service) => services.push(service),
   });
+  const backgroundTasks: Promise<unknown>[] = [];
+  api.lifecycle.runInBackgroundContext = (run) => {
+    const task = run();
+    if (task instanceof Promise) {
+      backgroundTasks.push(task);
+    }
+    return task;
+  };
   Object.assign(api.runtime, { config: { current: () => config } });
   registerShortTermPromotionDreaming(api);
 
@@ -94,7 +107,6 @@ function createGateway(params: GatewayOptions = {}) {
   if (!service) {
     throw new Error("memory-core-dreaming service missing");
   }
-  const scheduler = createTestPluginServiceScheduler();
   const serviceContext = { config, stateDir, logger, getCron: () => cron, scheduler };
   const startService = async () => {
     await service.start(serviceContext);
@@ -108,6 +120,8 @@ function createGateway(params: GatewayOptions = {}) {
       throw new Error("gateway_start hook missing");
     }
     await hook({ port: 0 }, { config, getCron: () => cron });
+    // Storage assertions observe finished maintenance, not just a completed start hook.
+    await Promise.all(backgroundTasks);
   };
   const stop = async () => {
     scheduler.beginClose();
@@ -230,7 +244,11 @@ describe("dreaming gateway restart cleanup", () => {
   it("does not reclaim post-startup runs when the deferred cleanup callback runs late", async () => {
     vi.useFakeTimers({ now: new Date("2026-08-01T12:00:00.000Z") });
     const interruptedAtStartup = await seedRun("deep-interrupted", Date.now() - 1);
-    const gateway = createGateway();
+    const clock = createGatewaySchedulerClock(Date.now());
+    const gateway = createGateway(
+      {},
+      createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock)),
+    );
 
     await gateway.start();
     const postStartupUpdatedAt = Date.now();
@@ -239,12 +257,15 @@ describe("dreaming gateway restart cleanup", () => {
 
     // Wall-clock stalls can outlive agent.wait; that wait never cancels the agent run.
     vi.setSystemTime(Date.now() + ORPHAN_AGE_MS + 1);
-    await vi.advanceTimersByTimeAsync(ORPHAN_AGE_MS);
+    // Join the late scheduler wake before closing admission for service teardown.
+    await clock.advanceTo(Date.now());
     await gateway.stop();
 
     expect(Date.now() - postStartupUpdatedAt).toBeGreaterThan(ORPHAN_AGE_MS);
     expect(hasSession(interruptedAtStartup)).toBe(false);
     expect([activeWithTranscript, activeWithoutTranscript].map(hasSession)).toEqual([true, true]);
+    expect(gateway.logger.warn).not.toHaveBeenCalled();
+    expect(gateway.logger.error).not.toHaveBeenCalled();
   });
 
   it("does not reclaim post-startup runs when cron startup reconciliation stalls", async () => {

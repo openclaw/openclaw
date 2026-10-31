@@ -4,6 +4,7 @@ import type {
   TranscriptMessageAppendResult,
   TranscriptWriteSnapshot,
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
+import type { SessionActorAppendCommitted } from "../../config/sessions/session-actor-contract.js";
 import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json.js";
 import { isIndexedSessionEntry } from "./session-manager-codec.js";
 import type {
@@ -30,6 +31,9 @@ export type PersistWorkerRecordResult = {
   reload?: PreparedSessionTranscriptReload;
   committedVersion: SessionTranscriptContextVersion;
   viewFailure?: Error;
+  modelPromptProjection?: NonNullable<
+    SessionActorAppendCommitted["modelPromptProjection"]
+  >["result"];
 };
 
 export type PersistRecordOptions = AppendPersistenceOptions & {

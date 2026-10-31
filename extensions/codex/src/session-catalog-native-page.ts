@@ -6,7 +6,7 @@ import {
   type CodexNativeCatalogCursor,
   type CodexResidentCatalogCursor,
 } from "./session-catalog-index-cursor.js";
-import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
+import { CODEX_CATALOG_MAX_ROWS, rememberCodexCatalogCursor } from "./session-catalog-limits.js";
 import type { CodexCatalogListRequest } from "./session-catalog-list-request.js";
 import {
   CatalogParamsError,
@@ -55,10 +55,7 @@ export async function* readCodexCatalogHydrationPages<
       throw new Error("Codex catalog repeated a hydration cursor");
     }
     if (cursor) {
-      cursors.add(cursor);
-      if (cursors.size > CODEX_CATALOG_MAX_ROWS) {
-        cursors.delete(cursors.values().next().value!);
-      }
+      rememberCodexCatalogCursor(cursors, cursor);
     }
     yield { ...page, nextCursor: cursor, offset };
     offset += page.rows.length;

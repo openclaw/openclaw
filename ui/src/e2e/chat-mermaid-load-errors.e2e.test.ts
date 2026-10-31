@@ -22,6 +22,9 @@ suite.define(() => {
     "reports a blocked %s script as a renderer failure and recovers after reload",
     async (asset) => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+        if (asset === "frame") {
+          await page.clock.install();
+        }
         // frame.js is a classic-script ?url asset; it has no bundled module sourcemap.
         const blockedScript =
           asset === "frame"
@@ -41,7 +44,12 @@ suite.define(() => {
           ],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
+        if (asset === "frame") {
+          // The renderer arms its deadline before appending the frame that requests this script.
+          await expect.poll(() => blocked).toBeGreaterThan(0);
+          await page.clock.runFor(15_001);
+        }
         const failure = page.getByText(/check proxy or authentication rules/u);
         await failure.waitFor({ timeout: 25_000 });
         expect(blocked).toBeGreaterThan(0);

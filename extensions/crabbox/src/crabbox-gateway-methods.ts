@@ -13,10 +13,12 @@ import {
 } from "./crabbox-worker-profile.js";
 import type { CrabboxSnapshotActions } from "./crabbox-worker-snapshot-actions.js";
 import {
-  type CrabboxState,
-  CrabboxWarmImageRequestError,
   crabboxWarmImageRecoveryHint,
   isCrabboxWarmImageHeld,
+} from "./crabbox-worker-warm-image-records.js";
+import {
+  type CrabboxState,
+  CrabboxWarmImageRequestError,
   listCrabboxLegacyWarmLeases,
   listCrabboxWarmImages,
   recoverCrabboxWarmImageCapture,

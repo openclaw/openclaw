@@ -1,5 +1,6 @@
-import "../../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
+import "../../test-utils/prepare-compiled-subprocesses.js";
+import "./database-suite-workers.test-support.js";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,7 +9,6 @@ import { Client } from "pg";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { backupRestoreCommand } from "../../commands/backup-restore.js";
-import { buildBackupArchivePath } from "../../commands/backup-shared.js";
 import { verifyBackupArchive } from "../../commands/backup-verify.js";
 import { createTestRuntime } from "../../commands/test-runtime-config-helpers.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -27,9 +27,14 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-con
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { buildBackupArchivePath } from "../backup-archive-path-policy.js";
 import { createBackupArchive } from "../backup-create.js";
+import { bindFreshClientCredentialStore } from "../client-credential-migration.js";
+import { runClientCredentialOperation } from "../client-credential-store.js";
+import { generateStoredDeviceIdentity } from "../device-identity-material.js";
 import { acquireGatewayLock } from "../gateway-lock.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
@@ -41,6 +46,10 @@ const connection = typeof configured === "string" ? configured : undefined;
 
 describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
   it.each([
+    {
+      scenario: "credentials",
+      name: "binds archived local credentials to the final restored PostgreSQL anchor",
+    },
     {
       scenario: "all",
       name: "rehydrates every family and retained Matrix root before Gateway startup",
@@ -57,6 +66,8 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
     "$name",
     async ({ scenario }) => {
       const sqliteAgent = scenario === "mixed";
+      const clientIdentity =
+        scenario === "credentials" ? generateStoredDeviceIdentity(23) : undefined;
       assert(connection);
       await withEnvAsync(
         { OPENCLAW_ARCHIVE_TEST_PG: connection, OPENCLAW_INCLUDE_ROOTS: undefined },
@@ -73,6 +84,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
               const admin = new Client({ connectionString: connection });
               const client = new Client({ connectionString: isolated.href });
               const recovery = new Client({ connectionString: recoveryConnection.href });
+              const recoveryRows = async (sql: string) => (await recovery.query(sql)).rows;
               const namespaces = new Set<string>();
               const config: OpenClawConfig = {
                 database: {
@@ -191,7 +203,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   scenario === "all" ||
                   (scenario === "mixed"
                     ? family === "state" || family === "agent"
-                    : family === "state" || family === "workboard"),
+                    : family === "state" || (scenario !== "credentials" && family === "workboard")),
               );
               const descriptors = new Map(
                 await Promise.all(
@@ -288,6 +300,26 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
                     .run(storeId, namespace);
                 }
+                if (clientIdentity) {
+                  using shared = openNodeSqliteDatabase(stores[0]!.file);
+                  runSqliteImmediateTransactionSync(shared, () =>
+                    bindFreshClientCredentialStore(shared, {
+                      path: stores[0]!.file,
+                      env: state.env,
+                    }),
+                  );
+                  runClientCredentialOperation(state.env, {
+                    kind: "identity.create",
+                    identity: {
+                      identity_key: "primary",
+                      device_id: clientIdentity.deviceId,
+                      public_key_pem: clientIdentity.publicKeyPem,
+                      private_key_pem: clientIdentity.privateKeyPem,
+                      created_at_ms: 23,
+                      updated_at_ms: 23,
+                    },
+                  });
+                }
                 resetDatabaseEngineSelectionForTest();
                 clearRuntimeConfigSnapshot();
                 const userExportPath = state.path("workspace", "copied.sqlite");
@@ -361,11 +393,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                           if (anchor.engine === "postgres") {
                             expect(namespaces.has(anchor.namespace)).toBe(false);
                             expect(
-                              (
-                                await recovery.query(
-                                  `SELECT "${store.column}" AS value FROM "${anchor.namespace}"."${store.table}"`,
-                                )
-                              ).rows,
+                              await recoveryRows(
+                                `SELECT "${store.column}" AS value FROM "${anchor.namespace}"."${store.table}"`,
+                              ),
                             ).toEqual([{ value: store.value }]);
                           }
                         }
@@ -391,11 +421,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     ).toEqual(bytes);
                   }
                   expect(
-                    (
-                      await recovery.query(
-                        "SELECT count(*)::int AS count FROM pg_namespace WHERE nspname LIKE 'restore_%'",
-                      )
-                    ).rows,
+                    await recoveryRows(
+                      "SELECT count(*)::int AS count FROM pg_namespace WHERE nspname LIKE 'restore_%'",
+                    ),
                   ).toEqual([
                     {
                       count: stores.filter((store) => !sqliteAgent || store.family !== "agent")
@@ -434,11 +462,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     });
                     namespaces.add(anchor.namespace);
                     expect(
-                      (
-                        await recovery.query(
-                          `SELECT "${store.column}" AS value FROM "${anchor.namespace}"."${store.table}"`,
-                        )
-                      ).rows,
+                      await recoveryRows(
+                        `SELECT "${store.column}" AS value FROM "${anchor.namespace}"."${store.table}"`,
+                      ),
                     ).toEqual([{ value: store.value }]);
                     for (const name of ["manifest.json", "anchor.sqlite", "database.sqlite"]) {
                       await expect(
@@ -461,6 +487,28 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   ).toEqual([]);
 
                   expect(await fs.readFile(restoredConfig)).toEqual(configBytes);
+                  if (clientIdentity) {
+                    const restoredEnv = {
+                      ...state.env,
+                      OPENCLAW_STATE_DIR: path.join(
+                        targetPath,
+                        buildBackupArchivePath(restored.archiveRoot, state.stateDir),
+                      ),
+                    };
+                    expect(
+                      runClientCredentialOperation(restoredEnv, {
+                        kind: "identity.read",
+                        identity_key: "primary",
+                      }),
+                    ).toMatchObject({
+                      kind: "identity",
+                      identity: {
+                        device_id: clientIdentity.deviceId,
+                        private_key_pem: clientIdentity.privateKeyPem,
+                      },
+                    });
+                    return;
+                  }
 
                   // Activate the entire restored state asset, including any retained capsule directories.
                   await fs.cp(
@@ -618,18 +666,14 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   );
                   assert(legacy.engine === "postgres");
                   expect(
-                    (
-                      await recovery.query(
-                        `SELECT display_name FROM "${legacy.namespace}".user_profiles`,
-                      )
-                    ).rows,
+                    await recoveryRows(
+                      `SELECT display_name FROM "${legacy.namespace}".user_profiles`,
+                    ),
                   ).toEqual([{ display_name: global.value }]);
                   expect(
-                    (
-                      await recovery.query(
-                        "SELECT count(*)::int AS count FROM pg_namespace WHERE nspname LIKE 'restore_%'",
-                      )
-                    ).rows,
+                    await recoveryRows(
+                      "SELECT count(*)::int AS count FROM pg_namespace WHERE nspname LIKE 'restore_%'",
+                    ),
                   ).toEqual([{ count: 1 }]);
 
                   // A later unavailable provider must clean namespaces already prepared for earlier stores.
@@ -665,11 +709,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   await tar.c({ file: corruptArchive, cwd: corruptRoot, gzip: true }, [
                     backup.archiveRoot,
                   ]);
-                  const before = (
-                    await recovery.query(
-                      "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
-                    )
-                  ).rows;
+                  const before = await recoveryRows(
+                    "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
+                  );
                   resetDatabaseEngineSelectionForTest();
                   clearRuntimeConfigSnapshot();
                   await expect(
@@ -679,11 +721,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     }),
                   ).rejects.toThrow("incomplete target was cleaned");
                   expect(
-                    (
-                      await recovery.query(
-                        "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
-                      )
-                    ).rows,
+                    await recoveryRows(
+                      "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
+                    ),
                   ).toEqual(before);
 
                   await fs.writeFile(corruptManifest, originalManifest);
@@ -709,11 +749,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     }),
                   ).rejects.toThrow("manifest.json");
                   expect(
-                    (
-                      await recovery.query(
-                        "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
-                      )
-                    ).rows,
+                    await recoveryRows(
+                      "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
+                    ),
                   ).toEqual(before);
                 }
               } finally {
@@ -736,6 +774,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
         },
       );
     },
-    240_000,
+    // Green CI runs 39068774273/39071119824 measured p95 at 151s for seven-store archive recovery.
+    320_000,
   );
 });

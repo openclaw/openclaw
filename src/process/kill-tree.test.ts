@@ -589,24 +589,37 @@ describe("killProcessTree", () => {
     expectSignals([9999], ["SIGTERM", "SIGKILL"]);
   });
 
-  it("rescans a PTY session for job-control groups created after the first snapshot", async () => {
-    killSpy.mockReturnValue(true);
-    spawnSyncMock
-      .mockReturnValueOnce({ status: 0, stdout: "ttys001\n" })
-      .mockReturnValueOnce({ status: 0, stdout: "9000 9000\n9001 9001\n" })
-      .mockReturnValueOnce({ status: 0, stdout: "9002 9002\n" });
-    platform.mockReturnValue("darwin");
-    signalPtySessionTree(9000, "SIGKILL");
-    expect(spawnSyncMock).toHaveBeenCalledTimes(3);
-    expect(spawnSyncMock.mock.calls[1]?.[1]).toEqual(["-t", "ttys001", "-o", "pid=,pgid="]);
-    expect(spawnSyncMock.mock.calls[2]?.[1]).toEqual(spawnSyncMock.mock.calls[1]?.[1]);
-    expect(killSpy).toHaveBeenCalledWith(-9002, "SIGKILL");
-    expect(killSpy).toHaveBeenCalledWith(9002, "SIGKILL");
-    const leaderGroupCall = killSpy.mock.calls.findIndex((call: unknown[]) => call[0] === -9000);
-    expect(spawnSyncMock.mock.invocationCallOrder[2]).toBeLessThan(
-      killSpy.mock.invocationCallOrder[leaderGroupCall]!,
-    );
-  });
+  it.each(["darwin", "linux"] as const)(
+    "on %s rescans only the PTY session for new job-control groups",
+    async (os) => {
+      killSpy.mockReturnValue(true);
+      platform.mockReturnValue(os);
+      if (os === "darwin") {
+        spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: "ttys001\n" });
+      }
+      const sid = os === "linux" ? " 9000" : "";
+      spawnSyncMock
+        .mockReturnValueOnce({ status: 0, stdout: `9000 9000${sid}\n9001 9001${sid}\n` })
+        .mockReturnValueOnce({ status: 0, stdout: `9002 9002${sid}\n` });
+      signalPtySessionTree(9000, "SIGKILL");
+      const firstScan = os === "darwin" ? 1 : 0;
+      expect(spawnSyncMock).toHaveBeenCalledTimes(firstScan + 2);
+      expect(spawnSyncMock.mock.calls[firstScan]?.[1]).toEqual(
+        os === "darwin"
+          ? ["-t", "ttys001", "-o", "pid=,pgid="]
+          : ["-s", "9000", "-o", "pid=,pgid=,sid="],
+      );
+      expect(spawnSyncMock.mock.calls[firstScan + 1]?.[1]).toEqual(
+        spawnSyncMock.mock.calls[firstScan]?.[1],
+      );
+      expect(killSpy).toHaveBeenCalledWith(-9002, "SIGKILL");
+      expect(killSpy).toHaveBeenCalledWith(9002, "SIGKILL");
+      const leaderGroupCall = killSpy.mock.calls.findIndex((call: unknown[]) => call[0] === -9000);
+      expect(spawnSyncMock.mock.invocationCallOrder[firstScan + 1]).toBeLessThan(
+        killSpy.mock.invocationCallOrder[leaderGroupCall]!,
+      );
+    },
+  );
 
   it("on Windows exposes taskkill completion", async () => {
     const child = taskkillChild();

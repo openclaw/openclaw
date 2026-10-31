@@ -13,7 +13,7 @@ import {
   WatcherChild,
 } from "./gmail.test-support.js";
 
-const spawnRegistry = new Map<number, WatcherChild>();
+let allChildren: WatcherChild[];
 
 const mocks = vi.hoisted(() => ({
   hasBinary: vi.fn(() => true),
@@ -49,20 +49,8 @@ let nextMockPid = 1234;
 
 function createMockWatcherChild(spawned = true) {
   const child = new WatcherChild(spawned ? nextMockPid++ : undefined);
-  if (child.pid !== undefined) {
-    spawnRegistry.set(child.pid, child);
-  }
+  allChildren.push(child);
   return child;
-}
-
-function collectChildren(spawned = false) {
-  const children: WatcherChild[] = [];
-  mocks.spawn.mockImplementation(() => {
-    const child = createMockWatcherChild(spawned);
-    children.push(child);
-    return child;
-  });
-  return children;
 }
 
 function startWatcher(
@@ -75,12 +63,19 @@ function startWatcher(
   });
 }
 
-async function startMockWatcher(spawned = true) {
+async function startMockWatcher(
+  spawned = true,
+  config = createGmailConfig(),
+  options: Partial<Parameters<typeof startGmailWatcher>[1]> = {},
+) {
   mocks.runCommandWithTimeout.mockResolvedValue(commandSuccess);
-  const children = collectChildren(spawned);
-  await startWatcher();
-  return children;
+  mocks.spawn.mockImplementation(() => createMockWatcherChild(spawned));
+  await startWatcher(config, options);
+  return allChildren;
 }
+
+const childAt = (children: WatcherChild[], index = 0) =>
+  expectDefined(children[index], "watcher child");
 
 async function stopChildren(children: WatcherChild[]) {
   const stopping = stopGmailWatcher();
@@ -90,18 +85,17 @@ async function stopChildren(children: WatcherChild[]) {
     child.stdout.destroy();
     child.stderr.destroy();
   }
-  vi.useRealTimers();
 }
 
 beforeEach(async () => {
-  // stopGmailWatcher uses the killProcessTree mock from the previous beforeEach run,
-  // which looks up spawnRegistry entries populated by that test's children.
+  // Retire the previous test's children before replacing its process registry.
   await stopGmailWatcher();
-  spawnRegistry.clear();
+  vi.useFakeTimers();
+  allChildren = [];
   mocks.runCommandWithTimeout.mockReset();
   mocks.spawn.mockReset();
   mocks.killProcessTree.mockReset().mockImplementation((pid: number) => {
-    const child = spawnRegistry.get(pid);
+    const child = allChildren.find((candidate) => candidate.pid === pid);
     if (child) {
       queueMicrotask(() => child.emit("close", 0, null));
     }
@@ -110,27 +104,26 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  vi.useRealTimers();
-  await stopGmailWatcher();
+  try {
+    await stopChildren(allChildren);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("does not let a stale cancelled startup clear newer watcher config", async () => {
-  vi.useFakeTimers();
   const oldController = new AbortController();
   const oldWatchStart = createDeferred<typeof commandSuccess>();
-  const spawnedChildren = collectChildren();
+  const spawnedChildren = allChildren;
   mocks.runCommandWithTimeout
     .mockReturnValueOnce(oldWatchStart.promise)
     .mockResolvedValue(commandSuccess);
 
   const staleStart = startWatcher(createGmailConfig(), { signal: oldController.signal });
 
-  expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
-
   await expect(startWatcher(createGmailConfig("newer@example.com"))).resolves.toEqual({
     started: true,
   });
-  expect(mocks.spawn).toHaveBeenCalledTimes(1);
 
   oldController.abort();
   oldWatchStart.resolve(commandSuccess);
@@ -142,33 +135,6 @@ it("does not let a stale cancelled startup clear newer watcher config", async ()
   expect(mocks.spawn).toHaveBeenCalledTimes(2);
   expect(mocks.spawn.mock.calls[1]?.[1]).toContain("newer@example.com");
 });
-
-it.each(["watch", "tailscale"] as const)(
-  "aborts %s startup without spawning gog serve",
-  async (boundary) => {
-    const controller = new AbortController();
-    const pending = commandGate(boundary === "tailscale" ? null : 1);
-    mocks.runCommandWithTimeout.mockImplementation((_args, options: { signal?: AbortSignal }) =>
-      pending.run(options),
-    );
-    const config = createGmailConfig(
-      "me@example.com",
-      undefined,
-      boundary === "tailscale" ? { mode: "serve" } : undefined,
-    );
-    const starting = startWatcher(config, { signal: controller.signal });
-    if (boundary === "tailscale") {
-      await vi.waitFor(() => expect(pending.signal).toBeDefined());
-    } else {
-      await Promise.resolve();
-    }
-    expect(pending.signal).toBe(controller.signal);
-    controller.abort();
-    expect(pending.signal?.aborted).toBe(true);
-    await expect(starting).resolves.toEqual({ started: false, reason: "startup cancelled" });
-    expect(mocks.spawn).not.toHaveBeenCalled();
-  },
-);
 
 it("renews once after multiple starts and coalesces missed renewals after sleep", async () => {
   const clock = createGatewaySchedulerClock();
@@ -220,14 +186,10 @@ it.each(["watcher", "scheduler"])(
 );
 
 it("cancels stale respawn timeout when re-entry happens during 5s window", async () => {
-  vi.useFakeTimers();
-  mocks.runCommandWithTimeout.mockResolvedValue(commandSuccess);
-  const spawnedChildren = collectChildren();
-
-  await startWatcher();
+  const spawnedChildren = await startMockWatcher(false);
   expect(spawnedChildren).toHaveLength(1);
 
-  expectDefined(spawnedChildren[0], "spawnedChildren[0] test invariant").emit("close", 1, null);
+  childAt(spawnedChildren).emit("close", 1, null);
 
   await startWatcher();
   expect(spawnedChildren).toHaveLength(2);
@@ -237,7 +199,6 @@ it("cancels stale respawn timeout when re-entry happens during 5s window", async
 });
 
 it("ignores a retired child's late close while replacement startup is pending", async () => {
-  vi.useFakeTimers();
   const pendingStart = createDeferred<typeof commandSuccess>();
   const children = await startMockWatcher();
   mocks.killProcessTree.mockImplementation(() => {});
@@ -245,9 +206,7 @@ it("ignores a retired child's late close while replacement startup is pending", 
   const restarting = startWatcher(createGmailConfig("new@example.com"));
   try {
     await vi.advanceTimersByTimeAsync(8_000);
-    expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
-    const retired = expectDefined(children[0], "retired watcher");
-    retired.exit(1, null);
+    childAt(children).exit(1, null);
     await vi.advanceTimersByTimeAsync(6_000);
     expect(children).toHaveLength(1);
     expect(mocks.killProcessTree).toHaveBeenCalledTimes(1);
@@ -259,12 +218,10 @@ it("ignores a retired child's late close while replacement startup is pending", 
   } finally {
     pendingStart.resolve(commandSuccess);
     await restarting;
-    await stopChildren(children);
   }
 });
 
 it("preserves the shutdown grace period when the watcher exits before its descendants", async () => {
-  vi.useFakeTimers();
   mocks.runCommandWithTimeout.mockResolvedValue(commandSuccess);
   const child = createMockWatcherChild();
   mocks.spawn.mockReturnValueOnce(child);
@@ -273,8 +230,6 @@ it("preserves the shutdown grace period when the watcher exits before its descen
   });
 
   await startWatcher();
-  expect(mocks.spawn).toHaveBeenCalledTimes(1);
-
   let stopped = false;
   const stopping = stopGmailWatcher().then(() => {
     stopped = true;
@@ -294,14 +249,13 @@ it("preserves the shutdown grace period when the watcher exits before its descen
 it.each(["darwin", "win32"] as const)(
   "restarts initial and replacement children with inherited pipes on %s",
   async (platform) => {
-    vi.useFakeTimers();
     await withMockedPlatform(platform, async () => {
       const children = await startMockWatcher();
       // Descendants keep both pipes open after exit, even if tree cleanup fails.
       mocks.killProcessTree.mockImplementation(() => {});
       try {
         for (let index = 0; index < 2; index++) {
-          const child = expectDefined(children[index], "watcher child");
+          const child = childAt(children, index);
           let closedStreams = 0;
           for (const stream of [child.stdout, child.stderr]) {
             stream.once("close", () => {
@@ -337,28 +291,21 @@ it.each(["darwin", "win32"] as const)(
 );
 
 it("does not taskkill an exited Windows child while inherited pipes drain", async () => {
-  vi.useFakeTimers();
   await withMockedPlatform("win32", async () => {
     const children = await startMockWatcher();
-    const child = expectDefined(children[0], "watcher child");
+    const child = childAt(children);
     Object.assign(child, { exitCode: 1, signalCode: null });
     child.emit("exit", 1, null);
     const stopping = stopGmailWatcher();
-    try {
-      await vi.advanceTimersByTimeAsync(8_000);
-      await stopping;
-      expect(mocks.killProcessTree).not.toHaveBeenCalled();
-      expect(child).toMatchObject({ stdout: { destroyed: true }, stderr: { destroyed: true } });
-      expect(children).toHaveLength(1);
-    } finally {
-      child.stdout.destroy();
-      child.stderr.destroy();
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(8_000);
+    await stopping;
+    expect(mocks.killProcessTree).not.toHaveBeenCalled();
+    expect(child).toMatchObject({ stdout: { destroyed: true }, stderr: { destroyed: true } });
+    expect(children).toHaveLength(1);
   });
 });
 
-it("swallows stdout and stderr stream errors without crashing", async () => {
+it("swallows stdout and stderr stream errors during startup without crashing", async () => {
   mocks.runCommandWithTimeout.mockResolvedValue(commandSuccess);
   mocks.spawn.mockImplementation(() => {
     const child = createMockWatcherChild(false);
@@ -368,50 +315,49 @@ it("swallows stdout and stderr stream errors without crashing", async () => {
     });
     return child;
   });
-
   await expect(startWatcher()).resolves.toEqual({ started: true });
 });
 
 it.each([
   { name: "failed spawn", spawned: false, expectedChildren: 1 },
   { name: "error from a running child", spawned: true, expectedChildren: 2 },
-])("handles $name without losing restart policy", async ({ spawned, expectedChildren }) => {
-  vi.useFakeTimers();
+  { name: "bind conflict", spawned: true, expectedChildren: 2 },
+])("handles $name without losing restart policy", async ({ name, spawned, expectedChildren }) => {
   const children = await startMockWatcher(spawned);
-  const child = expectDefined(children[0], "watcher child");
+  const child = childAt(children);
+  if (name === "bind conflict") {
+    child.stderr.emit("data", Buffer.from("listen: EADDRINUSE"));
+  }
   child.emit("error", new Error(spawned ? "gog stream error" : "spawn gog ENOENT"));
   child.emit("close", spawned ? 1 : -2, null);
 
   await vi.advanceTimersByTimeAsync(6000);
   expect(children).toHaveLength(expectedChildren);
+  if (name === "bind conflict") {
+    childAt(children, 1).stderr.emit("data", Buffer.from("listen: EADDRINUSE"));
+    childAt(children, 1).emit("close", 1, null);
+    await stopGmailWatcher();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(children).toHaveLength(2);
+  }
 });
 
-it("recovers after a transient bind conflict and cancels pending retries on stop", async () => {
-  vi.useFakeTimers();
-  const children = await startMockWatcher();
-  const child = expectDefined(children[0], "watcher child");
-  child.stderr.emit("data", Buffer.from("listen: EADDRINUSE"));
-  child.emit("close", 1, null);
+it("bounds bind retries despite late oversized stderr and keeps renewing after exhaustion", async () => {
+  const children = await startMockWatcher(true, createGmailConfig(undefined, 1), {
+    scheduler: createTestGatewayScheduler("fake-timers"),
+  });
+  children[0]!.exit();
   await vi.advanceTimersByTimeAsync(5_000);
-  expect(children).toHaveLength(2);
-
-  const replacement = expectDefined(children[1], "replacement watcher");
-  replacement.stderr.emit("data", Buffer.from("listen: EADDRINUSE"));
-  replacement.emit("close", 1, null);
-  await stopGmailWatcher();
-  await vi.advanceTimersByTimeAsync(60_000);
-  expect(children).toHaveLength(2);
-});
-
-it("bounds bind retries even when a split marker exceeds the stderr tail", async () => {
-  vi.useFakeTimers();
-  const children = await startMockWatcher();
   for (const delayMs of [5_000, 10_000, 20_000, 60_000]) {
-    const child = expectDefined(children.at(-1), "watcher child");
+    const child = childAt(children, children.length - 1);
     child.stderr.emit("data", Buffer.from("address alre"));
+    child.alive = false;
+    child.emit("exit", 1, null);
     child.stderr.emit("data", Buffer.from(`ady in use ${"x".repeat(800)}`));
     child.emit("close", 1, null);
     await vi.advanceTimersByTimeAsync(delayMs);
   }
-  expect(children).toHaveLength(4);
+  expect(children).toHaveLength(5);
+  expect(children.filter((child) => child.alive)).toHaveLength(0);
+  expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
 });

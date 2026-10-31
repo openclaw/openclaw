@@ -15,7 +15,6 @@ import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "@openclaw/ai/transports";
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeFastMode,
@@ -36,7 +35,7 @@ import {
   resolveProviderRequestPolicyConfig,
 } from "../../../agents/provider-request-config.js";
 import type { StreamFn } from "../../../agents/runtime/index.js";
-import type { SandboxToolPolicy } from "../../../agents/sandbox.js";
+import type { SandboxToolPolicy } from "../../../agents/sandbox/types.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
@@ -54,7 +53,7 @@ import {
   type OpenAIServiceTier,
 } from "../openai-fast-mode.js";
 import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
-import { streamWithPayloadPatch } from "./stream-payload-utils.js";
+import { streamWithPayloadPatch, wrapProviderPayloadHook } from "./stream-payload-utils.js";
 
 const log = createSubsystemLogger("llm/providers/stream-wrappers");
 
@@ -581,37 +580,29 @@ export function createCodexNativeWebSearchWrapper(
         ...options,
         openclawCodeModeToolSurface: true,
         openclawCodeModeAllowedHostedToolTypes: allowedHostedToolTypes,
-        onPayload: (payload) => {
-          if (activation?.state === "native_active") {
-            patchCodexNativeWebSearchPayload({ payload, config: params.config });
-          }
-          filterCodeModePayloadHookResult(
-            payload,
-            undefined,
-            codeModeVisibleToolNames,
-            allowedHostedToolTypes,
-            collectToolSurface,
-          );
-          const nextPayload = originalOnPayload?.(payload, model);
-          if (isPromiseLike(nextPayload)) {
-            return Promise.resolve(nextPayload).then((resolvedPayload) =>
-              filterCodeModePayloadHookResult(
-                payload,
-                resolvedPayload,
-                codeModeVisibleToolNames,
-                allowedHostedToolTypes,
-                observeToolSurface,
-              ),
+        onPayload: wrapProviderPayloadHook(
+          (payload) => originalOnPayload?.(payload, model),
+          (payload, result) =>
+            filterCodeModePayloadHookResult(
+              payload,
+              result,
+              codeModeVisibleToolNames,
+              allowedHostedToolTypes,
+              observeToolSurface,
+            ),
+          (payload) => {
+            if (activation?.state === "native_active") {
+              patchCodexNativeWebSearchPayload({ payload, config: params.config });
+            }
+            filterCodeModePayloadHookResult(
+              payload,
+              undefined,
+              codeModeVisibleToolNames,
+              allowedHostedToolTypes,
+              collectToolSurface,
             );
-          }
-          return filterCodeModePayloadHookResult(
-            payload,
-            nextPayload,
-            codeModeVisibleToolNames,
-            allowedHostedToolTypes,
-            observeToolSurface,
-          );
-        },
+          },
+        ),
       };
       if (observeToolSurface && !existingToolSurfaceObserver) {
         codeModeToolSurfaceObserver.set(codeModeOptions, observeToolSurface, collectToolSurface);

@@ -1,5 +1,3 @@
-/** Leaf helper shared by native and dynamic tool diagnostics. */
-
 const CODEX_ABORT_TERMINAL_REASONS = new Map<string, "failed" | "timed_out">([
   ["codex_startup_timeout", "timed_out"],
   ["turn_completion_idle_timeout", "timed_out"],

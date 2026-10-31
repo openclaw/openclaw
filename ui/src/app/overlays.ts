@@ -4,21 +4,10 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
 import { registerListener } from "../../../src/shared/listeners.js";
+import type { NodeListNode } from "../../../src/shared/node-list-types.js";
 import { t } from "../i18n/index.ts";
-import {
-  closeDevicePairSetup as closeDevicePairSetupState,
-  completeDevicePairSetup,
-  createDevicePairSetupState,
-  markDevicePairSetupDeliveryUncertain,
-  openDevicePairSetup as openDevicePairSetupState,
-  parseDevicePairSetupCompletion,
-  parseDevicePairSetupDeliveryUncertain,
-  readDevicePairSetupSnapshot,
-  refreshDevicePairSetup as refreshDevicePairSetupState,
-  setDevicePairSetupAccess as setPairAccess,
-  syncDevicePairSetupCountdown,
-} from "../lib/device-pair-setup.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { showToast } from "../lib/toast.ts";
 import {
   clearExecApprovalTimers,
   clearResolvedExecApprovalPrompt,
@@ -29,11 +18,11 @@ import {
   resolveApprovalRequest,
   type ExecApprovalPromptState,
 } from "./exec-approval.ts";
+import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "./gateway.ts";
-import { readGatewayOperatorAccess } from "./operator-access.ts";
+import { hasOperatorReadAccess, readGatewayOperatorAccess } from "./operator-access.ts";
 import {
   createOverlayApprovalRefresher,
-  createOverlayPairingPendingCount,
   readOverlayOperatorAccessTransition,
 } from "./overlays-access.ts";
 import type { ApplicationOverlays, ApplicationOverlaySnapshot } from "./overlays-types.ts";
@@ -62,9 +51,20 @@ export function createApplicationOverlays(
   const listeners = new Set<(next: ApplicationOverlaySnapshot) => void>();
   let disposed = false;
   let activeClient = gateway.snapshot.client;
+  let presentationScopeKey = gatewayPresentationScope(gateway).key;
   let connectedSource: NonNullable<typeof activeClient> | null = null; // Retries start a new source epoch.
   let connectedEpoch = 0;
   let operatorAccess = readGatewayOperatorAccess(gateway.snapshot);
+  const approvalNodeNames = new Map<string, string>();
+  const attemptedNodeIds = new Set<string>();
+  let nodeNameRequest: object | null = null;
+  const nodeAccessKey = (state: ApplicationGateway["snapshot"]) =>
+    JSON.stringify([
+      state.hello?.auth?.role,
+      state.hello?.auth?.scopes,
+      state.hello?.auth?.sessionCap,
+    ]);
+  let nodeNamesAccess = nodeAccessKey(gateway.snapshot);
   let approvalAccessGeneration = 0;
   let approvalGrantGeneration = 0;
   let approvalDecision: {
@@ -74,11 +74,8 @@ export function createApplicationOverlays(
     grantGeneration: number;
     id: string;
   } | null = null;
-  const devicePairSetupState = createDevicePairSetupState({
-    client: gateway.snapshot.client,
-    connected: gateway.snapshot.phase === "connected",
-    onChange: () => publish(),
-  });
+  type PairingModule = typeof import("./overlays-pairing.ts");
+  let pairing: ReturnType<PairingModule["createOverlayPairing"]> | null = null;
   const promptState: ExecApprovalPromptState = {
     client: activeClient,
     execApprovalQueue: [],
@@ -88,31 +85,29 @@ export function createApplicationOverlays(
   };
 
   function publish() {
+    refreshApprovalNodeNames();
     snapshot = {
       ...snapshot,
       ...updates.snapshot,
       approvalQueue: promptState.execApprovalQueue,
       approvalBusy: promptState.execApprovalBusy,
-      approvalCanGrant: readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals,
+      approvalCanGrant:
+        gateway.snapshot.phase === "connected" &&
+        readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals,
       approvalErrors: new Map(promptState.execApprovalErrors),
-      ...readDevicePairSetupSnapshot(devicePairSetupState),
+      approvalNodeNames: new Map(approvalNodeNames),
+      ...(pairing ? pairing.runtime.readDevicePairSetupSnapshot(pairing.state) : {}),
     };
     for (const listener of listeners) {
       listener(snapshot);
     }
   }
   promptState.execApprovalChanged = publish;
-  const pairingPendingCount = createOverlayPairingPendingCount({
-    gateway,
-    state: devicePairSetupState,
-    isDisposed: () => disposed,
-    publish,
-  });
   const publishDevicePairSetupOperation = async (operation: Promise<void>) => {
     publish();
     await operation;
-    if (!disposed) {
-      syncDevicePairSetupCountdown(devicePairSetupState, publish);
+    if (!disposed && pairing) {
+      pairing.runtime.syncDevicePairSetupCountdown(pairing.state, publish);
       publish();
     }
   };
@@ -121,6 +116,62 @@ export function createApplicationOverlays(
     activeClient === client &&
     gateway.snapshot.client === client &&
     gateway.snapshot.phase === "connected";
+
+  function refreshApprovalNodeNames() {
+    const nodeIds = new Set(
+      promptState.execApprovalQueue.flatMap(({ request }) =>
+        request.host === "node" && request.nodeId ? [request.nodeId] : [],
+      ),
+    );
+    for (const id of attemptedNodeIds) {
+      if (!nodeIds.has(id)) {
+        attemptedNodeIds.delete(id);
+      }
+    }
+    for (const id of approvalNodeNames.keys()) {
+      if (!nodeIds.has(id)) {
+        approvalNodeNames.delete(id);
+      }
+    }
+    const client = activeClient;
+    if (
+      nodeNameRequest ||
+      !client ||
+      !isCurrentClient(client) ||
+      !operatorAccess.canReviewApprovals ||
+      !hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null) ||
+      !Array.from(nodeIds).some((id) => !attemptedNodeIds.has(id))
+    ) {
+      return;
+    }
+    for (const id of nodeIds) {
+      attemptedNodeIds.add(id);
+    }
+    const operation = {};
+    nodeNameRequest = operation;
+    // One shared lookup per newly encountered set, scoped to this connection's access.
+    // Missing names and failed reads retain the ID fallback without retrying on renders.
+    void client
+      .request<{ nodes: NodeListNode[] }>("node.list", {})
+      .then((result) => {
+        if (nodeNameRequest !== operation || !isCurrentClient(client)) {
+          return;
+        }
+        for (const node of result.nodes) {
+          const name = node.displayName?.trim();
+          if (nodeIds.has(node.nodeId) && name) {
+            approvalNodeNames.set(node.nodeId, name);
+          }
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (nodeNameRequest === operation) {
+          nodeNameRequest = null;
+          publish();
+        }
+      });
+  }
 
   const refreshApprovals = createOverlayApprovalRefresher({
     gateway,
@@ -135,10 +186,24 @@ export function createApplicationOverlays(
 
   const synchronizeGateway = (next: ApplicationGateway["snapshot"]) => {
     const previousClient = activeClient;
+    const nextScopeKey = gatewayPresentationScope(gateway).key;
+    const identityChanged = previousClient !== next.client || presentationScopeKey !== nextScopeKey;
+    presentationScopeKey = nextScopeKey;
     const connected = next.phase === "connected";
     const nextConnectedSource = connected ? next.client : null;
-    const connectedSourceChanged = connectedSource !== nextConnectedSource;
+    const connectedSourceChanged = connectedSource !== nextConnectedSource || identityChanged;
     const accessTransition = readOverlayOperatorAccessTransition(operatorAccess, next);
+    const nextNodeNamesAccess = nodeAccessKey(next);
+    const nodeAccessChanged = nodeNamesAccess !== nextNodeNamesAccess;
+    if (connectedSourceChanged || nodeAccessChanged) {
+      nodeNameRequest = null;
+      approvalNodeNames.clear();
+      attemptedNodeIds.clear();
+    }
+    nodeNamesAccess = nextNodeNamesAccess;
+    if (connectedSourceChanged || accessTransition.reviewChanged) {
+      refreshApprovals.cancel();
+    }
     operatorAccess = accessTransition.access;
     if (accessTransition.reviewChanged) {
       approvalAccessGeneration += 1;
@@ -161,49 +226,52 @@ export function createApplicationOverlays(
     }
     if (accessTransition.adminRevoked) {
       // Losing setup authority retires both the modal and any retained bearer code.
-      closeDevicePairSetupState(devicePairSetupState);
-      pairingPendingCount.invalidate({ clear: true });
+      pairing?.close();
     }
     if (accessTransition.pairingChanged) {
-      pairingPendingCount.invalidate({
+      pairing?.pendingCount.invalidate({
         clear: !operatorAccess.canAdmin,
       });
     }
     activeClient = next.client;
     connectedSource = nextConnectedSource;
     promptState.client = next.client;
-    devicePairSetupState.client = next.client;
-    devicePairSetupState.connected = connected;
-    if (previousClient !== next.client || !connected) {
+    if (pairing) {
+      pairing.state.client = next.client;
+      pairing.state.connected = connected;
+    }
+    if (identityChanged || !connected) {
       approvalDecision = null;
-      pairingPendingCount.invalidate({ clear: true });
-      closeDevicePairSetupState(devicePairSetupState);
+      pairing?.close();
     }
     if (connected && !operatorAccess.canReviewApprovals) {
       approvalDecision = null;
     }
-    if (!connected || !next.client || !operatorAccess.canReviewApprovals) {
+    if (identityChanged || !next.client || !operatorAccess.canReviewApprovals) {
       promptState.execApprovalQueue = [];
-      promptState.execApprovalBusy = false;
       promptState.execApprovalErrors.clear();
       clearExecApprovalTimers(promptState);
+    }
+    if (!connected || identityChanged || !operatorAccess.canReviewApprovals) {
+      promptState.execApprovalBusy = false;
     }
     if (!connected || !next.client) {
       if (next.phase !== "reload-required" && !next.client) {
         connectedEpoch = 0;
       }
       updates.synchronizeGateway(next);
+      publish();
       return;
     }
     const connectedClient = next.client;
     updates.synchronizeGateway(next);
     if (
       accessTransition.pairingChanged &&
-      devicePairSetupState.devicePairSetupOpen &&
+      pairing?.state.devicePairSetupOpen &&
       operatorAccess.canAdmin
     ) {
-      void runConnectionBootstrap("pairing-pending-count", () =>
-        pairingPendingCount.refresh(),
+      void runConnectionBootstrap("pairing-pending-count", async () =>
+        pairing?.pendingCount.refresh(),
       ).catch(() => undefined);
     }
     if (connectedSourceChanged) {
@@ -214,32 +282,21 @@ export function createApplicationOverlays(
       operatorAccess.canReviewApprovals
     ) {
       void runConnectionBootstrap("approvals", () =>
-        refreshApprovals(connectedClient, connectedEpoch, approvalAccessGeneration),
+        refreshApprovals.refresh(connectedClient, connectedEpoch, approvalAccessGeneration),
       ).catch(() => undefined);
     }
+    if (connectedSourceChanged || nodeAccessChanged) {
+      publish();
+    }
   };
+  // Revoke approval and pairing authority during the Gateway receipt, before views run.
   const stopGateway = gateway.subscribe(synchronizeGateway);
 
   const stopEvents = gateway.subscribeEvents((event) => {
     if (disposed) {
       return;
     }
-    if (event.event === "device.pair.setup.completed") {
-      const completion = parseDevicePairSetupCompletion(event.payload);
-      if (completion) {
-        completeDevicePairSetup(devicePairSetupState, completion);
-      }
-      return;
-    }
-    if (event.event === "device.pair.setup.deliveryUncertain") {
-      const outcome = parseDevicePairSetupDeliveryUncertain(event.payload);
-      if (outcome) {
-        markDevicePairSetupDeliveryUncertain(devicePairSetupState, outcome);
-      }
-      return;
-    }
-    if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
-      void pairingPendingCount.refresh();
+    if (pairing?.handleEvent(event)) {
       return;
     }
     if (event.event === GATEWAY_EVENT_UPDATE_AVAILABLE) {
@@ -284,6 +341,21 @@ export function createApplicationOverlays(
     holdUpdate: updates.holdUpdate,
     diagnoseUpdateFailure: updates.diagnoseUpdateFailure,
     reportUpdateFailure: updates.reportUpdateFailure,
+    reconcileApprovalTerminals(client, events) {
+      if (
+        !isCurrentClient(client) ||
+        !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals
+      ) {
+        return;
+      }
+      const previousCount = promptState.execApprovalQueue.length;
+      for (const event of events) {
+        clearResolvedExecApprovalPrompt(promptState, event.approval.id);
+      }
+      if (promptState.execApprovalQueue.length !== previousCount) {
+        publish();
+      }
+    },
     async decideApproval(decision, approvalId, projectedApproval) {
       const active = approvalId
         ? (promptState.execApprovalQueue.find((entry) => entry.id === approvalId) ??
@@ -337,7 +409,7 @@ export function createApplicationOverlays(
           const currentClient = activeClient;
           const epoch = connectedEpoch;
           if (currentClient && isCurrentOperation()) {
-            await refreshApprovals(currentClient, epoch);
+            await refreshApprovals.refresh(currentClient, epoch);
           }
           return;
         }
@@ -359,40 +431,71 @@ export function createApplicationOverlays(
       }
     },
     async openDevicePairSetup() {
-      const access = readGatewayOperatorAccess(gateway.snapshot);
-      if (disposed || gateway.snapshot.phase !== "connected" || !access.canAdmin) {
+      const client = gateway.snapshot.client;
+      const epoch = connectedEpoch;
+      const canOpen = () =>
+        !disposed &&
+        gateway.snapshot.phase === "connected" &&
+        gateway.snapshot.client === client &&
+        connectedEpoch === epoch &&
+        readGatewayOperatorAccess(gateway.snapshot).canAdmin;
+      if (!canOpen()) {
         return false;
       }
-      devicePairSetupState.pendingCount = 0;
-      const setupOperation = openDevicePairSetupState(devicePairSetupState);
+      if (!pairing) {
+        let feature: PairingModule;
+        try {
+          feature = await import("./overlays-pairing.ts");
+        } catch (error) {
+          if (canOpen()) {
+            showToast({ message: formatUiError(error) });
+          }
+          return false;
+        }
+        // Loading the interaction must not revive authority from an earlier connection.
+        if (!canOpen()) {
+          return false;
+        }
+        pairing ??= feature.createOverlayPairing({
+          gateway,
+          isDisposed: () => disposed,
+          publish,
+        });
+      }
+      pairing.state.pendingCount = 0;
+      const setupOperation = pairing.runtime.openDevicePairSetup(pairing.state);
       // Pairing-list latency must not keep a ready setup code behind the loading state.
-      void pairingPendingCount.refresh();
+      void pairing.pendingCount.refresh();
       await publishDevicePairSetupOperation(setupOperation);
-      return devicePairSetupState.devicePairSetupOpen;
+      return pairing.state.devicePairSetupOpen;
     },
     async refreshDevicePairSetup() {
-      if (disposed || !readGatewayOperatorAccess(gateway.snapshot).canAdmin) {
+      if (!pairing || disposed || !readGatewayOperatorAccess(gateway.snapshot).canAdmin) {
         return;
       }
-      await publishDevicePairSetupOperation(refreshDevicePairSetupState(devicePairSetupState));
+      await publishDevicePairSetupOperation(pairing.runtime.refreshDevicePairSetup(pairing.state));
     },
     async setDevicePairSetupAccess(access) {
-      if (disposed || !readGatewayOperatorAccess(gateway.snapshot).canAdmin) {
+      if (!pairing || disposed || !readGatewayOperatorAccess(gateway.snapshot).canAdmin) {
         return;
       }
-      await publishDevicePairSetupOperation(setPairAccess(devicePairSetupState, access));
+      await publishDevicePairSetupOperation(
+        pairing.runtime.setDevicePairSetupAccess(pairing.state, access),
+      );
     },
     closeDevicePairSetup() {
-      pairingPendingCount.invalidate({ clear: true });
-      closeDevicePairSetupState(devicePairSetupState);
+      pairing?.close();
       publish();
     },
     dispose() {
       disposed = true;
+      nodeNameRequest = null;
+      approvalNodeNames.clear();
+      attemptedNodeIds.clear();
       approvalDecision = null;
+      refreshApprovals.cancel();
       updates.dispose();
-      pairingPendingCount.invalidate();
-      closeDevicePairSetupState(devicePairSetupState);
+      pairing?.close(false);
       stopGateway();
       stopEvents();
       clearExecApprovalTimers(promptState);

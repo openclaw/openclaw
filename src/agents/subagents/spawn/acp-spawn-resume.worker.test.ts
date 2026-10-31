@@ -90,19 +90,24 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
       return { sessionKey, meta, entry };
     };
     const owned = await seed("owned");
-    await seed("parent", { owner: "agent:other:main", parent: requester });
-    await seed("foreign", { owner: "agent:other:main" });
-    await seed("backend", { backend: "other" });
-    await seed("agent", { agentId: "other" });
-    await seed("runtime", { runtimeAgent: "cursor" });
-    await seed("stale", { binding: "old-revision" });
-    await seed("legacy", { binding: "session-legacy", startedAt: 90 });
-    await seed("reset", { binding: "session-reset", startedAt: 110 });
-    await seed("missing", { missing: true });
-    await seed("incognito-private");
-    await seed("unqualified", { sessionKey: "agent:coder:main", metadataKey: "main" });
-    await seed("alias", { metadataKey: "agent:CODER:acp:alias" });
-    await seed("internal", { sessionKey: "agent:coder:internal-session-effects:fixture" });
+    const candidates: [string, boolean, Parameters<typeof seed>[1]?][] = [
+      ["parent", true, { owner: "agent:other:main", parent: requester }],
+      ["foreign", false, { owner: "agent:other:main" }],
+      ["backend", false, { backend: "other" }],
+      ["agent", false, { agentId: "other" }],
+      ["runtime", false, { runtimeAgent: "cursor" }],
+      ["stale", false, { binding: "old-revision" }],
+      ["legacy", true, { binding: "session-legacy", startedAt: 90 }],
+      ["reset", false, { binding: "session-reset", startedAt: 110 }],
+      ["missing", false, { missing: true }],
+      ["incognito-private", false],
+      ["unqualified", false, { sessionKey: "agent:coder:main", metadataKey: "main" }],
+      ["alias", false, { metadataKey: "agent:CODER:acp:alias" }],
+      ["internal", false, { sessionKey: "agent:coder:internal-session-effects:fixture" }],
+    ];
+    for (const [name, , options] of candidates) {
+      await seed(name, options);
+    }
     await seed("whitespace", { resume: "\t\u00a0 trimmed \ufeff\n", backend: " FIXTURE " });
     await seed("a-stale", { resume: "duplicate-live", binding: "old" });
     await seed("b-live", { resume: "duplicate-live" });
@@ -141,19 +146,7 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
       for (const [id, allowed] of [
         ["owned", true],
         ["acpx-owned", true],
-        ["parent", true],
-        ["foreign", false],
-        ["backend", false],
-        ["agent", false],
-        ["runtime", false],
-        ["stale", false],
-        ["legacy", true],
-        ["reset", false],
-        ["missing", false],
-        ["incognito-private", false],
-        ["unqualified", false],
-        ["alias", false],
-        ["internal", false],
+        ...candidates,
         ["absent", false],
         ["trimmed", true],
         ["duplicate-live", true],

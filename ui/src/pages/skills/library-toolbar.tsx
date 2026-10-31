@@ -9,6 +9,7 @@ export function SkillLibraryToolbar(props: {
   navigationActions: JSX.Element;
 }) {
   const current = () => props.library.state;
+  const busy = () => props.library.saving() || current().busy;
   const listSnapshot = createMemo(() => current().list);
   const options = createMemo(() => {
     const list = listSnapshot();
@@ -37,7 +38,7 @@ export function SkillLibraryToolbar(props: {
         <button
           type="button"
           class="btn"
-          disabled={!props.library.canCreate() || current().busy}
+          disabled={busy() || !props.library.canCreate()}
           onClick={() => props.library.create()}
         >
           {t("skillLibrary.create")}
@@ -46,7 +47,7 @@ export function SkillLibraryToolbar(props: {
           <button
             type="button"
             class="btn"
-            disabled={!props.library.canCreate() || current().busy}
+            disabled={busy() || !props.library.canCreate()}
             onClick={() => {
               if (props.library.uploadsEnabled()) {
                 props.library.edit((state) => {
@@ -78,7 +79,7 @@ export function SkillLibraryToolbar(props: {
             <button
               type="button"
               class="btn"
-              disabled={current().loading || current().busy}
+              disabled={busy() || current().loading}
               onClick={() => void props.library.load()}
             >
               {t("common.refresh")}

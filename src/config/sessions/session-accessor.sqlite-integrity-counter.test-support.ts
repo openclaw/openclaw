@@ -48,6 +48,7 @@ const integrityCounterPreload = `
     return statement;
   };
 `;
+const integrityCounterImport = `data:text/javascript,${encodeURIComponent(integrityCounterPreload)}`;
 
 /** Count native admission gates once, through the full check or the schema table. */
 export function withWorkerSqliteIntegrityCounter(
@@ -61,11 +62,7 @@ export function withWorkerSqliteIntegrityCounter(
   return counts
     ? {
         ...options,
-        execArgv: [
-          ...(options?.execArgv ?? []),
-          "--import",
-          `data:text/javascript,${encodeURIComponent(integrityCounterPreload)}`,
-        ],
+        execArgv: [...(options?.execArgv ?? []), "--import", integrityCounterImport],
         workerData: {
           ...options?.workerData,
           integrityChecks: counts,

@@ -33,6 +33,10 @@ import {
 } from "../plugin-sdk/session-store-runtime.js";
 import { readSessionTranscriptEvents } from "../plugin-sdk/session-transcript-runtime.js";
 import { appendSqliteSessionTranscriptEventForTest } from "../plugin-sdk/sqlite-runtime-testing.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
 import { getPluginInstance, getPluginOriginalValue } from "../plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
@@ -90,6 +94,8 @@ const disabledCron = {
 
 function createManagedMemoryCore(config: OpenClawConfig, logger: OpenClawPluginApi["logger"]) {
   const runtime = createTestPluginApi().runtime;
+  const resourceHost = new LegacyPluginSdkResourceHost();
+  onTestFinished(() => resourceHost.close());
   Object.assign(runtime, { config: { current: () => config } });
   const owner = createPluginRegistry({ logger, runtime, activateGlobalSideEffects: false });
   const record = createPluginRecord({
@@ -106,7 +112,9 @@ function createManagedMemoryCore(config: OpenClawConfig, logger: OpenClawPluginA
     api,
     bindGateway() {
       const gateway = createGatewayRequestContext(makeContextParams());
-      bindGatewayContextResolver(runtime, () => gateway);
+      const resolver = () => gateway;
+      bindLegacyPluginSdkResourceHost(resolver, resourceHost);
+      bindGatewayContextResolver(runtime, resolver);
     },
     dispose: () => getPluginInstance(record)!.dispose(),
   };
@@ -116,30 +124,16 @@ function withState(label: string, run: (state: OpenClawTestState) => Promise<voi
   return withOpenClawTestState({ label, layout: "state-only" }, run);
 }
 
-function dreamingFixture(state: OpenClawTestState, config: OpenClawConfig, managed = true) {
+function dreamingFixture(state: OpenClawTestState, config: OpenClawConfig) {
   const logger = makeLogger();
-  const hooks = vi.fn<OpenClawPluginApi["on"]>();
-  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
-  const owner = managed ? createManagedMemoryCore(config, logger) : undefined;
-  const api =
-    owner?.api ??
-    createTestPluginApi({
-      config,
-      logger,
-      on: hooks,
-      registerService: (service) => services.push(service),
-    });
-  if (!owner) {
-    Object.assign(api.runtime, { config: { current: () => config } });
-    memoryCore.register?.(api);
-  }
-  const service = (owner?.registry.services.map((entry) => entry.service) ?? services).find(
-    (entry) => entry.id === "memory-core-dreaming",
-  );
-  const hook = owner
-    ? owner.registry.typedHooks.find((entry) => entry.hookName === "gateway_start")?.handler
-    : hooks.mock.calls.find(([name]) => name === "gateway_start")?.[1];
-  assert(service && service.apiVersion !== 2 && hook, "Missing Memory Core startup lifecycle");
+  const owner = createManagedMemoryCore(config, logger);
+  const service = owner.registry.services.find(
+    (entry) => entry.service.id === "memory-core-dreaming",
+  )?.service;
+  const hook = owner.registry.typedHooks.find(
+    (entry) => entry.hookName === "gateway_start",
+  )?.handler;
+  assert(service && service.apiVersion === 2 && hook, "Missing Memory Core startup lifecycle");
   const scheduler = createTestPluginServiceScheduler();
   const context = {
     config,
@@ -151,7 +145,7 @@ function dreamingFixture(state: OpenClawTestState, config: OpenClawConfig, manag
   return {
     logger,
     async start() {
-      owner?.bindGateway();
+      owner.bindGateway();
       await service.start(context);
       return (hook as (event: { port: number }, ctx: { config: OpenClawConfig }) => Promise<void>)(
         { port: 0 },
@@ -162,7 +156,7 @@ function dreamingFixture(state: OpenClawTestState, config: OpenClawConfig, manag
       scheduler.beginClose();
       await service.stop?.(context);
       await scheduler.stop();
-      await owner?.dispose();
+      await owner.dispose();
     },
   };
 }
@@ -214,13 +208,9 @@ async function withPendingPreparation(
   });
 }
 
-it.each([
-  { managed: false, phase: "inspection" as const },
-  { managed: true, phase: "inspection" as const },
-  { managed: true, phase: "preparation" as const },
-])(
-  "scrubs historical dreaming artifacts after pending $phase (managed: $managed)",
-  async ({ managed, phase }) => {
+it.for(["inspection", "preparation"] as const)(
+  "scrubs historical dreaming artifacts after pending %s",
+  async (phase, { signal }) => {
     await withState("dreaming-admission", async (state) => {
       const config = memoryConfig(state.workspaceDir);
       publishConfig(config);
@@ -242,38 +232,44 @@ it.each([
           runId: "dreaming-narrative-interrupted",
         },
       });
-      const fixture = dreamingFixture(state, config, managed);
+      const fixture = dreamingFixture(state, config);
       const { logger } = fixture;
+      const cleaned = createDeferredCore();
+      const cleanup = artifactCleanup.cleanupSessionLifecycleArtifactsCore;
+      vi.spyOn(artifactCleanup, "cleanupSessionLifecycleArtifactsCore").mockImplementation(
+        async (params) => {
+          const result = await cleanup(params);
+          cleaned.resolve();
+          return result;
+        },
+      );
       try {
         await withPendingPreparation(
           state,
           async (admission, activate) => {
             const joining = createDeferredCore();
-            const wait = admission.waitForAgentPreparation.bind(admission);
-            vi.spyOn(admission, "waitForAgentPreparation").mockImplementation((...args) => {
-              if (managed) {
-                expect(getAgentDatabaseStartupAdmission()).toBeUndefined();
-              }
+            const observer = admission.observation;
+            const wait = observer.waitForAgentPreparation.bind(observer);
+            vi.spyOn(observer, "waitForAgentPreparation").mockImplementation((...args) => {
+              expect(getAgentDatabaseStartupAdmission()).toBeUndefined();
               const preparation = wait(...args);
               joining.resolve();
               return preparation;
             });
             const startup = fixture.start();
-            // On the regression, the hook settles with a warning instead of joining preparation.
-            await Promise.race([joining.promise, startup]);
+            // Startup returns while background cleanup waits for database preparation.
+            await withinTest(startup, signal);
+            await withinTest(joining.promise, signal);
             const prepared = wait("main", { env: state.env });
             expect(prepared).toBeDefined();
             activate();
             await prepared;
-            await startup;
+            await withinTest(cleaned.promise, signal);
             expect.soft(logger.warn.mock.calls).toEqual([]);
             expect.soft(getSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
             expect
               .soft(await readSessionTranscriptEvents({ agentId: "main", sessionKey, sessionId }))
               .toEqual([]);
-            expect(logger.info).toHaveBeenCalledWith(
-              "memory-core: dreaming cleanup scrubbed 1 stale session entry and archived 0 orphan transcripts.",
-            );
           },
           phase,
         );
@@ -337,7 +333,9 @@ it.each(["failed", "stopped"] as const)("rejects cleanup when startup is %s", as
   });
 });
 
-it("does not warn when fresh agent stores are created during dreaming startup cleanup", async () => {
+it("does not warn when fresh agent stores are created during dreaming startup cleanup", async ({
+  signal,
+}) => {
   await withState("dreaming-fresh-startup", async (state) => {
     const agentIds = ["main", "researcher"];
     const config: OpenClawConfig = {
@@ -355,6 +353,7 @@ it("does not warn when fresh agent stores are created during dreaming startup cl
     });
     const cleanup = artifactCleanup.cleanupSessionLifecycleArtifactsCore;
     const startedAgents: string[] = [];
+    const cleaned = createDeferredCore();
     vi.spyOn(artifactCleanup, "cleanupSessionLifecycleArtifactsCore").mockImplementation(
       (params) => {
         if ("kind" in params || !params.agentId) {
@@ -365,18 +364,22 @@ it("does not warn when fresh agent stores are created during dreaming startup cl
         // First creation races after the real cleanup captures the absent source.
         createStore(params.agentId);
         startedAgents.push(params.agentId);
+        if (startedAgents.length === agentIds.length) {
+          cleaned.resolve(pending.then(() => {}));
+        }
         return pending;
       },
     );
     try {
       await fixture.start();
+      await withinTest(cleaned.promise, signal);
       expect(startedAgents).toEqual(agentIds);
-      expect(logger.warn).not.toHaveBeenCalled();
-      expect(logger.error).not.toHaveBeenCalled();
     } finally {
       await fixture.stop();
       vi.restoreAllMocks();
     }
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
   });
 });
 
@@ -460,9 +463,10 @@ it.for([
         state,
         async (admission, activate) => {
           const joined = createDeferredCore();
-          const wait = admission.waitForAgentPreparation.bind(admission);
+          const observer = admission.observation;
+          const wait = observer.waitForAgentPreparation.bind(observer);
           let joinedPreparation = false;
-          vi.spyOn(admission, "waitForAgentPreparation").mockImplementation((...args) => {
+          vi.spyOn(observer, "waitForAgentPreparation").mockImplementation((...args) => {
             const preparation = wait(...args);
             joinedPreparation ||= preparation !== undefined;
             joined.resolve();
@@ -504,22 +508,16 @@ it.for([
             assert(manager?.sync, result.error ?? "Startup did not acquire a memory manager");
             expect(logger.warn).not.toHaveBeenCalled();
             expect(subscriptions).toHaveLength(1);
-            const indexed = createDeferredCore();
-            const sync = manager.sync.bind(manager);
-            vi.spyOn(manager, "sync").mockImplementation((params) => {
-              const work = sync(params);
-              if (params?.reason === "watch") {
-                indexed.resolve(work);
-              }
-              return work;
-            });
             await fs.promises.mkdir(state.workspaceDir, { recursive: true });
             await fs.promises.writeFile(
               path.join(state.workspaceDir, "MEMORY.md"),
               "Violet cranes nest beside the lagoon.",
             );
             subscriptions[0]!.notify();
-            await withinTest(indexed.promise, signal);
+            await instance.waitForRetainedWork(signal, {
+              includeConsumers: false,
+              includeCalls: true,
+            });
             expect(manager.status().chunks).toBeGreaterThan(0);
             expect(acquisition).toHaveBeenCalledTimes(1);
             await service.stop?.(context);

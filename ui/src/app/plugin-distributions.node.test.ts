@@ -3,11 +3,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
-import { build, createServer, loadConfigFromFile, type Plugin } from "vite";
+import { build, createServer, type Plugin } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { controlUiPluginDistributionsPlugin } from "../../config/control-ui-plugin-distributions.ts";
+import controlUiViteConfig from "../../vite.config.ts";
 
 let root: string;
 beforeEach(async () => {
@@ -18,11 +18,43 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
+const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
+const at = (...parts: string[]) => path.join(root, ...parts);
+const revision = "03ddfbeb5328d7bb5e6f1563118bf420ace8d09d7a33e241bbb59e95233ccc36";
+const viteOptions = {
+  configFile: false as const,
+  publicDir: false as const,
+  logLevel: "silent" as const,
+};
+
+async function writeFiles(directory: string, files: Record<string, string | object>) {
+  for (const [name, value] of Object.entries(files)) {
+    const target = path.join(directory, name);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, typeof value === "string" ? value : JSON.stringify(value));
+  }
+}
+
+async function sourcePlugin(id: string, manifest: object, browser?: string) {
+  await writeFiles(at("extensions", id), {
+    "package.json": {
+      name: `@openclaw/${id}`,
+      ...(browser ? { version: "1.0.0", type: "module" } : {}),
+      openclaw: { extensions: ["./index.ts"], controlUi: "./browser.ts" },
+    },
+    "openclaw.plugin.json": manifest,
+    "index.ts": "export default {};",
+    ...(browser ? { "browser.ts": browser } : {}),
+  });
+}
+
 async function fixture() {
   const files = [
     ["chunk-1.js", "export const message = 'Deferred Workboard';"],
     ["index.css", ".workboard { color: green; }"],
     ["index.js", "export default { id: 'workboard', load: () => import('./chunk-1.js') };"],
+    ["large.js", `export const message = "${"Large workboard asset ".repeat(200)}";`],
+    ["small.css", ".workboard { color: green; }\n".repeat(8)],
   ] as const;
   const hash = createHash("sha256");
   for (const [name, body] of files) {
@@ -30,53 +62,32 @@ async function fixture() {
   }
   const generation = `dist/control-ui/${hash.digest("hex")}`;
   const pluginRoot = path.join(root, "dist/extensions/workboard");
-  await fs.mkdir(path.join(pluginRoot, generation), { recursive: true });
-  for (const [name, body] of files) {
-    await fs.writeFile(path.join(pluginRoot, generation, name), body);
-  }
-  await fs.writeFile(
-    path.join(pluginRoot, "package.json"),
-    JSON.stringify({ name: "@openclaw/workboard", version: "1.0.0" }),
-  );
-  await fs.writeFile(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify({
+  await writeFiles(pluginRoot, {
+    ...Object.fromEntries(files.map(([name, body]) => [`${generation}/${name}`, body])),
+    "package.json": { name: "@openclaw/workboard", version: "1.0.0" },
+    "openclaw.plugin.json": {
       id: "  workboard  ",
       configSchema: { type: "object" },
       uiCapabilities: ["page", "page"],
       controlUi: { entry: `${generation}/index.js`, styles: [`${generation}/index.css`] },
-    }),
-  );
-  const inventory = path.join(root, "ui/src/plugins/control-ui-distribution.ts");
-  await fs.mkdir(path.dirname(inventory), { recursive: true });
-  await fs.writeFile(inventory, "export const controlUiPluginDistributions = [];");
-  await fs.writeFile(
-    path.join(root, "index.html"),
-    '<script type="module" src="./main.js"></script>',
-  );
-  await fs.writeFile(
-    path.join(root, "main.js"),
-    'import { controlUiPluginDistributions } from "./ui/src/plugins/control-ui-distribution.ts"; globalThis.distributions = controlUiPluginDistributions;',
-  );
+    },
+  });
+  await writeFiles(root, {
+    "ui/src/plugins/control-ui-distribution.ts": "export const controlUiPluginDistributions = [];",
+    "index.html": '<script type="module" src="./main.js"></script>',
+    "main.js":
+      'import { controlUiPluginDistributions } from "./ui/src/plugins/control-ui-distribution.ts"; globalThis.distributions = controlUiPluginDistributions;',
+  });
   return { files, generation, pluginRoot };
 }
 
-async function compile(inputs: Set<string>) {
-  const loaded = await loadConfigFromFile(
-    { command: "build", mode: "production" },
-    fileURLToPath(new URL("../../vite.config.ts", import.meta.url)),
-  );
-  if (!loaded) {
-    throw new Error("Control UI Vite configuration was not loaded");
-  }
-  const config = loaded.config;
+async function compile(inputs = new Set<string>()) {
+  const config = controlUiViteConfig({ command: "build" });
   return build({
     ...config,
     root,
-    build: { ...config.build, outDir: path.join(root, "ui-output") },
-    configFile: false,
-    publicDir: false,
-    logLevel: "silent",
+    ...viteOptions,
+    build: { ...config.build, outDir: at("ui-output") },
     plugins: (config.plugins as Plugin[]).map((plugin) =>
       plugin.name === "control-ui-plugin-distributions"
         ? controlUiPluginDistributionsPlugin(root, inputs)
@@ -85,35 +96,46 @@ async function compile(inputs: Set<string>) {
   });
 }
 
-it("publishes the complete immutable generation, its local inventory and matching compressed bytes", async () => {
+it("publishes the complete immutable generation with only useful eligible sidecars", async () => {
   const { files, pluginRoot, generation } = await fixture();
   const inputs = new Set<string>();
   await compile(inputs);
-  const output = path.join(root, "ui-output/assets/plugins/workboard");
+  const output = at("ui-output/assets/plugins/workboard");
   const revisions = await fs.readdir(output);
   // The inventory must retain the existing catalog's declaration/capability/byte hash.
-  expect(revisions).toEqual(["c81749b6c5f6b8233fad01698a3bfa483e5b27dbc540f8d1a4d3117bf05e1b75"]);
+  expect(revisions).toEqual([revision]);
   for (const [name, body] of files) {
     const target = path.join(output, revisions[0]!, name);
-    expect(await fs.readFile(target, "utf8")).toBe(body);
-    expect(brotliDecompressSync(await fs.readFile(`${target}.br`)).toString()).toBe(body);
-    expect(gunzipSync(await fs.readFile(`${target}.gz`)).toString()).toBe(body);
+    expect(await readText(target)).toBe(body);
+    const compressed = name === "large.js" || name === "small.css";
+    for (const extension of ["br", "gz"]) {
+      const sidecar = `${target}.${extension}`;
+      if (!compressed) {
+        await expect(fs.stat(sidecar)).rejects.toMatchObject({ code: "ENOENT" });
+        continue;
+      }
+      const encoded = await fs.readFile(sidecar);
+      expect(encoded.byteLength).toBeLessThan(Buffer.byteLength(body));
+      expect(
+        (extension === "br" ? brotliDecompressSync(encoded) : gunzipSync(encoded)).toString(),
+      ).toBe(body);
+    }
     expect(inputs.has(path.join(pluginRoot, generation, name))).toBe(true);
   }
   expect(inputs.has(path.join(pluginRoot, "package.json"))).toBe(true);
   expect(inputs.has(path.join(pluginRoot, "openclaw.plugin.json"))).toBe(true);
-  const bundles = await fs.readdir(path.join(root, "ui-output/assets"));
+  const assets = at("ui-output/assets");
   const source = (
     await Promise.all(
-      bundles
+      (await fs.readdir(assets))
         .filter((name) => name.endsWith(".js"))
-        .map((name) => fs.readFile(path.join(root, "ui-output/assets", name), "utf8")),
+        .map((name) => readText(assets, name)),
     )
   ).join("\n");
   expect(source).toContain("@openclaw/workboard");
   expect(source).toContain(revisions[0]);
-  expect(source).not.toContain("ROLLUP_FILE_URL");
   expect(source).toContain("import.meta.url");
+  expect(source).not.toContain("ROLLUP_FILE_URL");
 });
 
 it.each(["missing", "changed"])("rejects a generation with a %s deferred chunk", async (kind) => {
@@ -124,49 +146,30 @@ it.each(["missing", "changed"])("rejects a generation with a %s deferred chunk",
   } else {
     await fs.writeFile(chunk, "export const message = 'Changed Workboard';");
   }
-  await expect(compile(new Set()).then(() => undefined)).rejects.toThrow(
-    /generation|assets|incomplete/iu,
-  );
+  await expect(compile()).rejects.toThrow(/generation|assets|incomplete/iu);
 });
 
 it("keeps standalone UI builds without packaged plugins available", async () => {
   await fixture();
-  await fs.rm(path.join(root, "dist"), { recursive: true });
-  await expect(compile(new Set())).resolves.toBeDefined();
-  await expect(fs.stat(path.join(root, "ui-output/assets/plugins"))).rejects.toThrow();
+  await fs.rm(at("dist"), { recursive: true });
+  await expect(compile()).resolves.toBeDefined();
+  await expect(fs.stat(at("ui-output/assets/plugins"))).rejects.toThrow();
 });
 
 it("rejects a full build whose promised packaged plugin is absent", async () => {
   await fixture();
-  const source = path.join(root, "extensions/workboard");
-  await fs.mkdir(source, { recursive: true });
-  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-  await fs.writeFile(
-    path.join(source, "package.json"),
-    JSON.stringify({
-      name: "@openclaw/workboard",
-      openclaw: { extensions: ["./index.ts"], controlUi: "./browser.ts" },
-    }),
-  );
-  await fs.writeFile(
-    path.join(source, "openclaw.plugin.json"),
-    JSON.stringify({ id: "workboard" }),
-  );
-  await fs.writeFile(path.join(source, "index.ts"), "export default {};");
-  await fs.rm(path.join(root, "dist"), { recursive: true });
+  await writeFiles(root, { "package.json": { name: "openclaw" } });
+  await sourcePlugin("workboard", { id: "workboard" });
+  await fs.rm(at("dist"), { recursive: true });
   vi.stubEnv("OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS", "1");
-  await expect(compile(new Set()).then(() => undefined)).rejects.toThrow(
-    "Missing packaged native UI assets for workboard",
-  );
+  await expect(compile()).rejects.toThrow("Missing packaged native UI assets for workboard");
 });
 
 it("serves the same validated generation and inventory from the development server", async () => {
   const { files } = await fixture();
   const server = await createServer({
     root,
-    configFile: false,
-    publicDir: false,
-    logLevel: "silent",
+    ...viteOptions,
     server: { host: "127.0.0.1", port: 0 },
     plugins: [controlUiPluginDistributionsPlugin(root, new Set())],
   });
@@ -177,9 +180,7 @@ it("serves the same validated generation and inventory from the development serv
       await fetch(new URL("ui/src/plugins/control-ui-distribution.ts", url))
     ).text();
     const prefix = inventory.match(/\/assets\/plugins\/workboard\/[a-f0-9]{64}\//u)?.[0];
-    expect(prefix).toBe(
-      "/assets/plugins/workboard/c81749b6c5f6b8233fad01698a3bfa483e5b27dbc540f8d1a4d3117bf05e1b75/",
-    );
+    expect(prefix).toBe(`/assets/plugins/workboard/${revision}/`);
     for (const [name, body] of files) {
       const response = await fetch(new URL(`${prefix}${name}`, url));
       expect(response.status).toBe(200);
@@ -193,58 +194,53 @@ it("serves the same validated generation and inventory from the development serv
   }
 });
 
-it("prepares source Settings assets for a UI-only build and preserves sibling distributions", async () => {
+it("builds bundled and root-excluded source Settings assets while preserving sibling distributions", async () => {
+  vi.stubEnv("OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS", "1");
   const { pluginRoot, files, generation } = await fixture();
-  const settingsRoot = path.join(root, "extensions/settings-fixture");
-  await fs.mkdir(settingsRoot, { recursive: true });
-  const manifestOnly = path.join(root, "extensions/manifest-only");
-  await fs.mkdir(manifestOnly);
-  await fs.writeFile(path.join(manifestOnly, "openclaw.plugin.json"), '{"id":"manifest-only"}');
-  await fs.symlink(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
-  await fs.writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", type: "module" }),
-  );
-  await fs.writeFile(
-    path.join(settingsRoot, "package.json"),
-    JSON.stringify({
-      name: "@openclaw/settings-fixture",
-      version: "1.0.0",
+  await writeFiles(at("extensions/manifest-only"), {
+    "openclaw.plugin.json": { id: "manifest-only" },
+  });
+  await fs.symlink(path.resolve("node_modules"), at("node_modules"), "junction");
+  await writeFiles(root, {
+    "package.json": {
+      name: "openclaw",
       type: "module",
-      openclaw: { extensions: ["./index.ts"], controlUi: "./browser.ts" },
-    }),
-  );
-  const placement = { section: "memory", panel: "overview" };
-  const manifest = JSON.stringify({
-    id: "settings-fixture",
-    controlUi: {
-      activation: "settings-only",
-      entry: "dist/control-ui/source/index.js",
-      settingsViews: [placement],
+      files: ["!dist/extensions/channel-settings-fixture/**"],
     },
   });
-  await fs.writeFile(path.join(settingsRoot, "openclaw.plugin.json"), manifest);
-  await fs.writeFile(path.join(settingsRoot, "index.ts"), "export default {};\n");
-  await fs.writeFile(
-    path.join(settingsRoot, "browser.ts"),
-    'export default { pluginId: "settings-fixture", settingsViews: [] };\n',
-  );
-  await compile(new Set());
-  const packaged = JSON.parse(
-    await fs.readFile(
-      path.join(root, "dist/extensions/settings-fixture/openclaw.plugin.json"),
-      "utf8",
-    ),
-  );
-  expect(packaged.controlUi.settingsViews).toEqual([placement]);
-  expect(packaged.controlUi.activation).toBe("settings-only");
-  const revisions = await fs.readdir(path.join(root, "ui-output/assets/plugins/settings-fixture"));
-  expect(revisions).toHaveLength(1);
-  expect(await fs.readFile(path.join(settingsRoot, "openclaw.plugin.json"), "utf8")).toBe(manifest);
-  for (const [name, body] of files) {
-    expect(await fs.readFile(path.join(pluginRoot, generation, name), "utf8")).toBe(body);
+  const settings = [
+    { id: "memory-settings-fixture", placement: { section: "memory", panel: "overview" } },
+    {
+      id: "channel-settings-fixture",
+      placement: { section: "channels", panel: "detail", channelId: "custom" },
+    },
+  ].map(({ id, placement }) => ({
+    id,
+    manifest: {
+      id,
+      ...(placement.section === "channels" ? { channels: [placement.channelId] } : {}),
+      controlUi: {
+        activation: "settings-only",
+        entry: "dist/control-ui/source/index.js",
+        settingsViews: [placement],
+      },
+    },
+  }));
+  for (const { id, manifest } of settings) {
+    await sourcePlugin(id, manifest, `export default { pluginId: "${id}", settingsViews: [] };\n`);
   }
-  expect(JSON.parse(await fs.readFile(path.join(pluginRoot, "package.json"), "utf8")).name).toBe(
-    "@openclaw/workboard",
-  );
+  await compile();
+  for (const { id, manifest } of settings) {
+    const packaged = JSON.parse(await readText(at("dist/extensions", id, "openclaw.plugin.json")));
+    expect(packaged.controlUi.settingsViews).toEqual(manifest.controlUi.settingsViews);
+    expect(packaged.controlUi.activation).toBe("settings-only");
+    expect(await fs.readdir(at("ui-output/assets/plugins", id))).toHaveLength(1);
+    expect(await readText(at("extensions", id, "openclaw.plugin.json"))).toBe(
+      JSON.stringify(manifest),
+    );
+  }
+  for (const [name, body] of files) {
+    expect(await readText(pluginRoot, generation, name)).toBe(body);
+  }
+  expect(JSON.parse(await readText(pluginRoot, "package.json")).name).toBe("@openclaw/workboard");
 });

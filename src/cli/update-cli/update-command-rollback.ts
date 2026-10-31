@@ -23,7 +23,7 @@ import { withGatewayServiceOperationLock } from "../../daemon/service-operation-
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
-import { readExistingStateRootMode } from "../../infra/private-dir-mode.js";
+import { stateRootDirectoryMode } from "../../infra/private-dir-mode.js";
 import {
   readUpdateStateSchemaVersions,
   type UpdateStateSchemaVersion,
@@ -459,7 +459,7 @@ export async function rollbackFailedUpdate(params: {
               endedAtMs: Date.now(),
               detail: restored.advisory?.message ?? restored.stderrTail ?? restored.reason,
             },
-            { env: opts.run.env },
+            opts.run,
           );
         }
         if (restored.exitCode !== 0) {
@@ -480,7 +480,7 @@ export async function rollbackFailedUpdate(params: {
               filePath: targetPath,
               content: file.raw,
               mode: 0o600,
-              dirMode: readExistingStateRootMode(path.dirname(targetPath), resolveStateDir(env)),
+              dirMode: stateRootDirectoryMode(path.dirname(targetPath), resolveStateDir(env)),
               preserveExistingMode: false,
               beforeRename: async () => {
                 await assertConfigUnchanged();
@@ -633,7 +633,7 @@ export async function rollbackFailedUpdate(params: {
           status: "completed",
           endedAtMs: Date.now(),
         },
-        { env: opts.run.env },
+        opts.run,
       );
     }
     failureReason = "restart-unhealthy";
@@ -730,7 +730,7 @@ export async function rollbackFailedUpdate(params: {
     if (run) {
       const endedAtMs = Date.now();
       for (const row of updateRunStepsFromResultStep(step)) {
-        recordUpdateRunStep(run.runId, { ...row, detail, endedAtMs }, { env: run.env });
+        recordUpdateRunStep(run.runId, { ...row, detail, endedAtMs }, run);
       }
     }
     return failed(failureReason, dataAtRisk);

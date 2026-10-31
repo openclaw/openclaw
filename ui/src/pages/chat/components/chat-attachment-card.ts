@@ -1,4 +1,6 @@
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import {
@@ -6,6 +8,10 @@ import {
   type AttachmentFileVisualMode,
 } from "./chat-attachment-file-icon.ts";
 import type { AttachmentItem } from "./chat-message-media.ts";
+
+registerChatComposerEnglish();
+
+registerChatMediaEnglish();
 
 registerChatMessageMetadataEnglish();
 

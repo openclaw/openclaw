@@ -1,7 +1,6 @@
 import {
   embeddedAgentLog,
   formatErrorMessage,
-  runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
@@ -12,7 +11,7 @@ import {
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { emitCodexAppServerEvent, runCodexAgentEndHook } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import {
   isCodexActiveCompactTurnError,
   clearCodexBindingAfterInvalidImagePayload,
@@ -31,7 +30,7 @@ import {
 import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
 
 export async function startCodexAttemptTurn(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   notifications: CodexAttemptNotificationController,
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
@@ -52,15 +51,13 @@ export async function startCodexAttemptTurn(
   } = connection;
   const { state, turnIdRef } = turnRuntime;
   const { waitForActiveNativeTurnCompletion } = notifications;
-  const { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent, buildLlmOutputEvent } =
-    requestRuntime;
+  const { codexModelCallDiagnostics, startCodexTurn, buildLlmOutputEvent } = requestRuntime;
   let started: CodexStartedTurn | undefined;
   // From this point, failure may include an accepted native write. Never return
   // the warm claim idle merely because active-turn setup did not complete.
   resourceState.turnStartAttempted = true;
   try {
     codexModelCallDiagnostics.emitStarted();
-    runAgentHarnessLlmInputHook({ event: buildLlmInputEvent(), ctx: hookContext, hookRunner });
     started = await startCodexTurn();
   } catch (error) {
     let turnStartError = error;

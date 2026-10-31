@@ -12,19 +12,19 @@ import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { requireNativeSqliteDatabase } from "../../../test-utils/native-sqlite.js";
 import { holdStateDatabaseWriteTransaction } from "../../../test-utils/state-database-contention.js";
+import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { prepareSubagentRegistrationRows } from "./subagent-registry-state.js";
-import { registerSubagentRun } from "./subagent-registry.js";
+import { registerSubagentRun as register } from "./subagent-registry.js";
 
 const fixture = useSubagentPersistenceFixture();
 
 it("keeps ordinary subagent registration responsive while a SQLite writer is held", async () => {
   await fixture.allocateStateDir();
   vi.mocked(callGateway).mockResolvedValue({ status: "pending" });
-  const database = openOpenClawStateDatabase();
-  const db = requireNativeSqliteDatabase(database.db);
+  const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
   const context = captureOpenClawStateWorkerContext();
   expect(context.admission.databasePath.startsWith(fixture.stateDir)).toBe(true);
   const runId = "contended-registration";
@@ -68,8 +68,8 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
   let holder: ReturnType<typeof holdStateDatabaseWriteTransaction> | undefined;
   let registration: Promise<void> | undefined;
   let hostSql: ReturnType<typeof observeHostDataSql> | undefined;
-  let registrationSettled = false;
-  const failures: unknown[] = [];
+  let settled: PromiseSettledResult<unknown>[];
+  const registrationSettled = vi.fn();
   try {
     // Warm the real workers before the independent holder starts its existing release deadline.
     await mutateSubagentRuns(
@@ -82,22 +82,15 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
     await holder.ready;
     Atomics.store(nativeBegin, 0, 1);
     hostSql = observeHostDataSql();
-    registration = Promise.resolve(
-      registerSubagentRun({
+    registration = register(
+      createSubagentRunParams({
         runId,
         childSessionKey,
-        childAgentId: "main",
         sessionEntry: { sessionId: "contended-registration-session" },
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        task: "Register while a foreign SQLite writer holds its transaction",
-        cleanup: "keep",
         expectsCompletionMessage: false,
       }),
     );
-    const settlement = registration.finally(() => {
-      registrationSettled = true;
-    });
+    const settlement = registration.finally(registrationSettled);
     await Promise.race([Atomics.waitAsync(nativeBegin, 1, 0).value, settlement, holder.joined]);
     await setImmediate();
     await setImmediate();
@@ -107,40 +100,28 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
     ).toBe(0);
     expect(Atomics.load(nativeBegin, 1)).toBeGreaterThan(0);
     expect(Atomics.load(nativeBegin, 2)).toBe(0);
-    expect(registrationSettled).toBe(false);
+    expect(registrationSettled).not.toHaveBeenCalled();
     expect(subagentRuns.has(runId)).toBe(false);
     expect(
-      database.db.prepare("SELECT run_id FROM subagent_runs WHERE run_id = ?").get(runId),
+      db.prepare("SELECT run_id FROM subagent_runs WHERE run_id = ?").get(runId),
     ).toBeUndefined();
-  } catch (error) {
-    failures.push(error);
   } finally {
     Atomics.store(nativeBegin, 0, 0);
     Atomics.notify(nativeBegin, 1);
     holder?.release();
-    for (const result of await Promise.allSettled([registration, holder?.joined])) {
-      if (result.status === "rejected" && !failures.includes(result.reason)) {
-        failures.push(result.reason);
-      }
-    }
-    try {
-      // Cover the whole registration through its ACK, including any later host-side fallback.
-      if (hostSql) {
-        expect(
-          hostSql.queries.filter((sql) =>
-            /^\s*(?:BEGIN|INSERT|UPDATE|DELETE|REPLACE)\b/iu.test(sql),
-          ),
-        ).toEqual([]);
-      }
-    } catch (error) {
-      failures.push(error);
-    } finally {
-      hostSql?.restore();
-      observeWorker.mockRestore();
+    settled = await Promise.allSettled([registration, holder?.joined]);
+    hostSql?.restore();
+    observeWorker.mockRestore();
+    // Include the ACK and any later host-side fallback, not just the lock wait.
+    if (hostSql) {
+      expect(
+        hostSql.queries.filter((sql) => /^\s*(?:BEGIN|INSERT|UPDATE|DELETE|REPLACE)\b/iu.test(sql)),
+      ).toEqual([]);
     }
   }
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "Registration responsiveness or worker settlement failed");
+  const failed = settled.find((result) => result.status === "rejected");
+  if (failed?.status === "rejected") {
+    throw failed.reason;
   }
   const durable = loadSubagentRegistryFromSqlite().get(runId);
   expect(durable).toMatchObject({ runId, childSessionKey, execution: { status: "running" } });

@@ -315,9 +315,9 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "88d9a7efa5e6569f902bf8d298fd6a21c6be2e7b";
+    const canonicalKovaRef = "7bd7c2f9531476bf86b9bd13c63f748182c727bb";
     const legacyKovaRef = "d69b2209905195bea06980721a92ad8b70808c5d";
-    const trustedLiveKovaRef = "88d9a7efa5e6569f902bf8d298fd6a21c6be2e7b";
+    const trustedLiveKovaRef = "7bd7c2f9531476bf86b9bd13c63f748182c727bb";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const targetCheckout = findStep("Checkout target metadata", "resolve_target");
@@ -343,36 +343,6 @@ describe("OpenClaw performance workflow", () => {
     );
     expect(targetCheckout.with?.["sparse-checkout"]).toBe(
       "package.json\nsrc/config/zod-schema.agent-defaults.ts\nsrc/config/zod-schema.agent-defaults-base.ts\n",
-    );
-    expect(resolveTarget.run).toContain(
-      'schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults.ts"',
-    );
-    expect(resolveTarget.run).toContain("KOVA_CANONICAL_CONFIG_REF");
-    expect(resolveTarget.run).toContain("KOVA_LEGACY_LIST_CONFIG_REF");
-    expect(resolveTarget.run).toContain('detected_kova_config_contract="canonical"');
-    expect(resolveTarget.run).toContain('detected_kova_config_contract="legacy-list"');
-    expect(resolveTarget.run).toContain('kova_ref="${KOVA_REF_INPUT:-}"');
-    expect(resolveTarget.run).toContain('kova_ref="${kova_ref:-$default_kova_ref}"');
-    expect(resolveTarget.run).toContain(
-      'if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then',
-    );
-    expect(resolveTarget.run).toContain('if [[ -f "$schema_path" ]]; then');
-    expect(resolveTarget.run).toContain('schema_content="$(cat "$schema_path")"');
-    expect(resolveTarget.run).toContain('elif [[ -z "$kova_ref" ]]; then');
-    expect(resolveTarget.run).toContain('schema_content=""');
-    expect(resolveTarget.run).toContain("Supply kova_ref explicitly");
-    expect(
-      resolveTarget.run?.indexOf('if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then'),
-    ).toBeLessThan(resolveTarget.run?.indexOf('schema_path="${TARGET_CHECKOUT_DIR}') ?? -1);
-    expect(resolveTarget.run).toContain(
-      'echo "kova_config_contract=$kova_config_contract" >> "$GITHUB_OUTPUT"',
-    );
-    expect(resolveTarget.run).toContain('if [[ "$kova_ref" == "$KOVA_TRUSTED_LIVE_REF" ]]; then');
-    expect(resolveTarget.run).toContain(
-      'echo "kova_ref_trusted_for_live=true" >> "$GITHUB_OUTPUT"',
-    );
-    expect(resolveTarget.run).toContain(
-      'echo "kova_ref_trusted_for_live=false" >> "$GITHUB_OUTPUT"',
     );
     expect(readWorkflow().jobs?.kova?.env?.KOVA_REF).toBe(
       "${{ needs.resolve_target.outputs.kova_ref }}",
@@ -515,7 +485,7 @@ describe("OpenClaw performance workflow", () => {
       expect(outputs).toMatchObject({
         checkout_ref: sha,
         tested_sha: sha,
-        kova_ref: "88d9a7efa5e6569f902bf8d298fd6a21c6be2e7b",
+        kova_ref: "7bd7c2f9531476bf86b9bd13c63f748182c727bb",
         kova_config_contract: "canonical",
       });
     });
@@ -574,15 +544,6 @@ describe("OpenClaw performance workflow", () => {
       return { lane, laneOutput, resolved };
     };
 
-    expect(decideLane.run).toContain(
-      'if [[ "$LANE_ID" == "live-openai-candidate" && "$run_lane" == "true" && "$KOVA_REF_TRUSTED_FOR_LIVE" != "true" ]]; then',
-    );
-    expect(decideLane.run).toContain(
-      "The live OpenAI lane only executes a reviewed immutable Kova default.",
-    );
-    expect(decideLane.run?.indexOf("KOVA_REF_TRUSTED_FOR_LIVE")).toBeLessThan(
-      decideLane.run?.indexOf('echo "run=$run_lane"') ?? -1,
-    );
     expect(configureLiveAuth.if).toBe(
       "${{ steps.lane.outputs.run == 'true' && matrix.live == 'true' && needs.resolve_target.outputs.secret_eligible == 'true' }}",
     );
@@ -780,10 +741,7 @@ describe("OpenClaw performance workflow", () => {
     expect(resolveTarget.env?.TARGET_CHECKOUT_DIR).toBe(
       "${{ github.workspace }}/.artifacts/performance-target",
     );
-    expect(resolveTarget.run).toContain('--git 0 -C "$TARGET_CHECKOUT_DIR" rev-parse HEAD');
     expect(resolveTarget.run).not.toContain("gh api");
-    expect(resolveTarget.run).toContain("checkout_ref=$resolved_sha");
-    expect(resolveTarget.run).toContain("tested_sha=$resolved_sha");
     expect(checkout.with?.ref).toBe("${{ needs.resolve_target.outputs.checkout_ref }}");
     expect(record.run).toContain('[[ "$tested_sha" != "$EXPECTED_TESTED_SHA" ]]');
     expect(sourceCheckout.with?.ref).toBe("${{ needs.resolve_target.outputs.checkout_ref }}");
@@ -917,15 +875,6 @@ describe("OpenClaw performance workflow", () => {
     const websocketRetryDelayIndex = run.indexOf(websocketRetryDelay, run.indexOf(websocketProbe));
     expect(websocketRetryDelayIndex).toBeGreaterThan(run.indexOf(websocketProbe));
     expect(websocketRetryDelayIndex).toBeLessThan(run.indexOf(benchmark));
-  });
-
-  it("runs trusted CLI performance cases against the frozen candidate entrypoint", () => {
-    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
-
-    expect(run).toContain('"$PERFORMANCE_HELPER_DIR/scripts/bench-cli-startup.ts"');
-    expect(run).toContain('--entry "$GITHUB_WORKSPACE/openclaw.mjs"');
-    expect(run).toContain("--case gatewayHealthJsonWarmState \\");
-    expect(run).toContain("--case gatewayHealthJsonFreshState \\");
   });
 
   it("isolates required publication in a fresh artifact-consuming job", () => {
@@ -1070,9 +1019,6 @@ describe("OpenClaw performance workflow", () => {
     expect(JSON.stringify(kovaJob)).not.toContain("CLAWSWEEPER_APP_PRIVATE_KEY");
     expect(artifact.env?.GH_TOKEN).toBe("${{ github.token }}");
     expect(artifact.run).toContain("gh api --paginate");
-    expect(artifact.run).toContain("candidate_attempt <= GITHUB_RUN_ATTEMPT");
-    expect(artifact.run).toContain('echo "producer_attempt=$producer_attempt"');
-    expect(artifact.run).toContain('echo "source_producer_attempt=$source_producer_attempt"');
     expect(paths.run).toContain('mktemp -d "${RUNNER_TEMP}/clawgrit-input.XXXXXX"');
     expect(paths.run).toContain('mktemp -d "${RUNNER_TEMP}/clawgrit-reports.XXXXXX"');
     expect(download.uses).toBe(

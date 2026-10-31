@@ -1,107 +1,77 @@
 import fs from "node:fs";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
+import { readChatHistoryMessageId } from "./session-history-tail.js";
 import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+  transcriptMessage as event,
+  useTranscriptFixture,
+} from "./session-transcript-fixtures.test-support.js";
 import { visitSessionMessagesAsync } from "./session-transcript-native.test-support.js";
 import {
-  readRecentSessionMessagesWithStatsAsync,
-  readSessionMessageByIdAsync,
-  readSessionMessageCountAsync,
-  readSessionTranscriptAccountingAsync,
-  readSessionMessagesAsync,
-  readSessionMessagesAroundIdWithStatsAsync,
-  readSessionMessagesPageWithStatsAsync,
-  readSessionMessagesWithSourceAsync,
+  readRecentSessionMessagesWithStatsAsync as readRecent,
+  readSessionMessageByIdAsync as readById,
+  readSessionMessageCountAsync as readCount,
+  readSessionTranscriptAccountingAsync as readAccounting,
+  readSessionMessagesAsync as readMessages,
+  readSessionMessagesAroundIdWithStatsAsync as readAround,
+  readSessionMessagesPageWithStatsAsync as readPage,
+  readSessionMessagesWithSourceAsync as readSource,
 } from "./session-transcript-readers.js";
-import { readLatestSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
+import * as readers from "./session-transcript-readers.js";
+import { readLatestSessionUsageFromTranscriptAsync as readUsage } from "./session-transcript-usage.js";
 
 describe("session transcript reader facade", () => {
-  let tempDir: string;
-  let storePath: string;
-  let state: OpenClawTestState;
+  const fixture = useTranscriptFixture("transcript-readers-");
+  const { scopeFor, database, writeTranscript } = fixture;
 
-  beforeEach(async () => {
-    state = await createOpenClawTestState({
-      prefix: "openclaw-transcript-readers-",
-      layout: "state-only",
-    });
-    setRuntimeConfigSnapshot({});
-    tempDir = state.stateDir;
-    storePath = path.join(tempDir, "sessions.json");
-  });
-
-  afterEach(async () => {
-    await state.cleanup();
-    clearRuntimeConfigSnapshot();
-  });
-
-  async function writeTranscript(sessionId: string, events: unknown[]) {
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath,
-    };
-    await replaceTranscriptEvents(scope, events);
-    return scope;
+  function chain(count: number, prefix: string, content: (index: number) => string) {
+    return Array.from({ length: count }, (_, index) =>
+      event(`${prefix}-${index}`, index ? `${prefix}-${index - 1}` : null, {
+        role: "user",
+        content: content(index),
+      }),
+    );
   }
-
-  function markProjectionNeedsRebuild(sessionId: string): void {
-    openOpenClawAgentDatabase({
-      agentId: "main",
-      path: path.join(tempDir, "openclaw-agent.sqlite"),
-    })
-      .db.prepare(
-        "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-      )
-      .run(sessionId);
+  function writeArtifact(sessionId: string, message: Record<string, unknown>, suffix = "") {
+    const file = fixture.path(`${sessionId}.jsonl${suffix}`);
+    const header = JSON.stringify({ type: "session", version: 1, id: sessionId });
+    fs.writeFileSync(file, `${header}\n${JSON.stringify({ message })}\n`, "utf8");
+    return file;
   }
+  const usageMessage = (input: number, output: number) => ({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-sonnet-4-6",
+    usage: { input, output, cost: { total: 0.001 } },
+  });
+  const expectHistoryOverflow = (read: Promise<unknown>) =>
+    expect(read).rejects.toThrow("Transcript history message exceeds the 8388608-byte page limit");
 
   test("prepares byte, usage and taint facts without host transcript SQL", async () => {
     const events = [
-      { type: "session", id: "accounting", version: 3 },
-      {
-        type: "message",
-        id: "user",
-        parentId: null,
-        message: { role: "user", content: "question" },
-      },
-      {
-        type: "message",
-        id: "answer",
-        parentId: "user",
-        message: {
-          role: "assistant",
-          content: "answer",
-          usage: { input: 200, output: 7 },
-          __openclaw: { turnTainted: true },
-        },
-      },
+      event("user", null, { role: "user", content: "question" }),
+      event("answer", "user", {
+        role: "assistant",
+        content: "answer",
+        usage: { input: 200, output: 7 },
+        __openclaw: { turnTainted: true },
+      }),
     ];
     const scope = await writeTranscript("accounting", events);
     const options = { includeByteSize: true, includeUsage: true, includeTurnTaint: true };
-    await readSessionTranscriptAccountingAsync(scope, options);
+    await readAccounting(scope, options);
     const hostSql = observeHostDataSql();
-    const result = await readSessionTranscriptAccountingAsync(scope, options).finally(() =>
-      hostSql.restore(),
-    );
+    const result = await readAccounting(scope, options).finally(() => hostSql.restore());
     expect(hostSql.queries).toEqual([]);
     expect(result).toEqual({
-      byteSize: events
-        .slice(1)
-        .reduce((bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1, 0),
+      byteSize: events.reduce(
+        (bytes, row) => bytes + Buffer.byteLength(JSON.stringify(row)) + 1,
+        0,
+      ),
       eventCount: 2,
       turnTainted: true,
       usage: { promptTokens: 200, outputTokens: 7, trailingMessages: [] },
@@ -110,31 +80,22 @@ describe("session transcript reader facade", () => {
 
   test("sizes CLI output from the context marker when counters cover the whole turn", async () => {
     const scope = await writeTranscript("cli-turn-usage", [
-      { type: "session", id: "cli-turn-usage", version: 3 },
-      {
-        type: "message",
-        id: "answer",
-        parentId: null,
-        message: {
-          role: "assistant",
-          api: "cli",
-          content: "multi-call turn",
-          // Counters sum every model call in the turn; contextUsage is the latest call.
-          usage: {
-            input: 135_864,
-            output: 30_000,
-            cacheRead: 37_888,
-            totalTokens: 203_752,
-            contextUsage: { state: "available", promptTokens: 86_876, totalTokens: 88_876 },
-          },
+      event("answer", null, {
+        role: "assistant",
+        api: "cli",
+        content: "multi-call turn",
+        // Counters sum every model call in the turn; contextUsage is the latest call.
+        usage: {
+          input: 135_864,
+          output: 30_000,
+          cacheRead: 37_888,
+          totalTokens: 203_752,
+          contextUsage: { state: "available", promptTokens: 86_876, totalTokens: 88_876 },
         },
-      },
+      }),
     ]);
 
-    const result = await readSessionTranscriptAccountingAsync(scope, {
-      includeByteSize: false,
-      includeUsage: true,
-    });
+    const result = await readAccounting(scope, { includeByteSize: false, includeUsage: true });
 
     expect(result.usage).toEqual({
       promptTokens: 86_876,
@@ -144,36 +105,20 @@ describe("session transcript reader facade", () => {
   });
 
   test("reads active-branch messages and message ids through a scope", async () => {
+    const root = { role: "user", content: "root prompt" };
+    const answer = {
+      role: "assistant",
+      content: "active answer",
+      idempotencyKey: "active:assistant",
+    };
     const scope = await writeTranscript("reader-active-branch", [
-      { type: "session", version: 3, id: "reader-active-branch" },
-      {
-        type: "message",
-        id: "root",
-        parentId: null,
-        timestamp: "0",
-        message: { role: "user", content: "root prompt" },
-      },
-      {
-        type: "message",
-        id: "inactive",
-        parentId: "root",
-        message: { role: "assistant", content: "stale answer" },
-      },
-      {
-        type: "message",
-        id: "active",
-        parentId: "root",
-        timestamp: "2026",
-        message: {
-          role: "assistant",
-          content: "active answer",
-          idempotencyKey: "active:assistant",
-        },
-      },
+      event("root", null, { ...root }, { timestamp: "0" }),
+      event("inactive", "root", { role: "assistant", content: "stale answer" }),
+      event("active", "root", { ...answer }, { timestamp: "2026" }),
     ]);
 
     await expect(
-      readSessionMessagesAsync(scope, { mode: "full", reason: "facade active branch test" }),
+      readMessages(scope, { mode: "full", reason: "facade active branch test" }),
     ).resolves.toMatchObject([
       {
         content: "root prompt",
@@ -195,48 +140,33 @@ describe("session transcript reader facade", () => {
       visitSessionMessagesAsync(scope, (message, seq) => visited.push({ message, seq })),
     ).resolves.toBe(2);
     expect(visited).toEqual([
-      { message: { role: "user", content: "root prompt" }, seq: 1 },
-      {
-        message: {
-          role: "assistant",
-          content: "active answer",
-          idempotencyKey: "active:assistant",
-        },
-        seq: 2,
-      },
+      { message: root, seq: 1 },
+      { message: answer, seq: 2 },
     ]);
-    await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
-    await expect(readSessionMessageByIdAsync(scope, "active")).resolves.toMatchObject({
+    await expect(readCount(scope)).resolves.toBe(2);
+    await expect(readById(scope, "active")).resolves.toMatchObject({
       found: true,
       oversized: false,
       seq: 2,
     });
-    await expect(
-      readSessionMessagesAroundIdWithStatsAsync(scope, {
-        messageId: "active",
-        maxMessages: 1,
-      }),
-    ).resolves.toMatchObject({
-      found: true,
-      hasOverreadContext: true,
-      messages: [{ content: "root prompt" }, { content: "active answer" }],
-      offset: 0,
-      totalMessages: 2,
-    });
+    await expect(readAround(scope, { messageId: "active", maxMessages: 1 })).resolves.toMatchObject(
+      {
+        found: true,
+        hasOverreadContext: true,
+        messages: [{ content: "root prompt" }, { content: "active answer" }],
+        offset: 0,
+        totalMessages: 2,
+      },
+    );
   });
 
   test("bounds source pages and freezes their sequence across appends", async () => {
     const sessionId = "reader-source-pages";
-    const scope = await writeTranscript(sessionId, [
-      { type: "session", version: 3, id: sessionId },
-      ...Array.from({ length: 260 }, (_, index) => ({
-        type: "message",
-        id: `message-${index}`,
-        parentId: index === 0 ? null : `message-${index - 1}`,
-        message: { role: "user", content: `prompt ${index}` },
-      })),
-    ]);
-    let page = await readSessionMessagesWithSourceAsync(scope, { mode: "page" });
+    const scope = await writeTranscript(
+      sessionId,
+      chain(260, "message", (index) => `prompt ${index}`),
+    );
+    let page = await readSource(scope, { mode: "page" });
     expect(page.messages).toHaveLength(128);
     expect(page.nextCursor).toBeDefined();
     expect(page.snapshot).toMatchObject({ totalMessages: 260 });
@@ -254,12 +184,9 @@ describe("session transcript reader facade", () => {
       ],
       touchSessionEntry: false,
     });
-    expect(await readSessionMessageCountAsync(scope)).toBe(261);
+    expect(await readCount(scope)).toBe(261);
     while (page.nextCursor) {
-      page = await readSessionMessagesWithSourceAsync(scope, {
-        mode: "page",
-        cursor: page.nextCursor,
-      });
+      page = await readSource(scope, { mode: "page", cursor: page.nextCursor });
       expect(page.messages.length).toBeLessThanOrEqual(128);
       expect(page.snapshot).toEqual(snapshot);
       messages.push(...page.messages);
@@ -270,16 +197,9 @@ describe("session transcript reader facade", () => {
 
     await replaceTranscriptEvents(scope, [
       { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "replacement",
-        parentId: null,
-        message: { role: "user", content: "new transcript" },
-      },
+      event("replacement", null, { role: "user", content: "new transcript" }),
     ]);
-    await expect(
-      readSessionMessagesWithSourceAsync(scope, { mode: "page", cursor: firstCursor }),
-    ).rejects.toMatchObject({
+    await expect(readSource(scope, { mode: "page", cursor: firstCursor })).rejects.toMatchObject({
       name: "SessionTranscriptProjectionUnavailableError",
       reason: "window-changed",
     });
@@ -288,23 +208,15 @@ describe("session transcript reader facade", () => {
   test("bounds source pages by bytes and rejects a message larger than one page", async () => {
     const sessionId = "reader-source-page-bytes";
     const content = "a".repeat(3 * 1024 * 1024);
-    const scope = await writeTranscript(sessionId, [
-      { type: "session", version: 3, id: sessionId },
-      ...Array.from({ length: 3 }, (_, index) => ({
-        type: "message",
-        id: `large-${index}`,
-        parentId: index === 0 ? null : `large-${index - 1}`,
-        message: { role: "user", content },
-      })),
-    ]);
-    expect(await readSessionMessageCountAsync(scope)).toBe(3);
-    const first = await readSessionMessagesWithSourceAsync(scope, { mode: "page" });
+    const scope = await writeTranscript(
+      sessionId,
+      chain(3, "large", () => content),
+    );
+    expect(await readCount(scope)).toBe(3);
+    const first = await readSource(scope, { mode: "page" });
     expect(first.messages).toHaveLength(2);
     expect(first.nextCursor).toBeDefined();
-    const last = await readSessionMessagesWithSourceAsync(scope, {
-      mode: "page",
-      cursor: first.nextCursor,
-    });
+    const last = await readSource(scope, { mode: "page", cursor: first.nextCursor });
     expect(last.messages).toHaveLength(1);
     expect(last.nextCursor).toBeUndefined();
     for (const page of [first, last]) {
@@ -316,151 +228,170 @@ describe("session transcript reader facade", () => {
 
     await replaceTranscriptEvents(scope, [
       { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "oversized",
-        parentId: null,
-        message: { role: "user", content: "b".repeat(8 * 1024 * 1024) },
-      },
+      event("oversized", null, { role: "user", content: "b".repeat(8 * 1024 * 1024) }),
     ]);
-    expect(await readSessionMessageCountAsync(scope)).toBe(1);
-    await expect(readSessionMessagesWithSourceAsync(scope, { mode: "page" })).rejects.toThrow(
+    expect(await readCount(scope)).toBe(1);
+    await expect(readSource(scope, { mode: "page" })).rejects.toThrow(
       "Transcript source message exceeds the 8388608-byte page limit",
     );
-    await expect(
-      readSessionMessagesPageWithStatsAsync(scope, { offset: 0, maxMessages: 1 }),
-    ).rejects.toThrow("Transcript history message exceeds the 8388608-byte page limit");
-    await expect(
-      readRecentSessionMessagesWithStatsAsync(scope, { maxMessages: 1 }),
-    ).rejects.toThrow("Transcript history message exceeds the 8388608-byte page limit");
-    await expect(
-      readSessionMessagesAroundIdWithStatsAsync(scope, { messageId: "oversized", maxMessages: 1 }),
-    ).rejects.toThrow("Transcript history message exceeds the 8388608-byte page limit");
-    openOpenClawAgentDatabase({
-      agentId: "main",
-      path: path.join(tempDir, "openclaw-agent.sqlite"),
-    })
+    await expectHistoryOverflow(readPage(scope, { offset: 0, maxMessages: 1 }));
+    await expectHistoryOverflow(readRecent(scope, { maxMessages: 1 }));
+    await expectHistoryOverflow(readAround(scope, { messageId: "oversized", maxMessages: 1 }));
+    database()
       .db.prepare("DELETE FROM transcript_event_identities WHERE session_id = ?")
       .run(sessionId);
-    await expect(readSessionMessageByIdAsync(scope, "oversized")).resolves.toMatchObject({
-      found: true,
-    });
-    await expect(
-      readSessionMessagesAroundIdWithStatsAsync(scope, { messageId: "oversized", maxMessages: 1 }),
-    ).rejects.toThrow("Transcript history message exceeds the 8388608-byte page limit");
+    await expect(readById(scope, "oversized")).resolves.toMatchObject({ found: true });
+    await expectHistoryOverflow(readAround(scope, { messageId: "oversized", maxMessages: 1 }));
   });
 
-  test("refuses unbounded anchor windows and caps payloads before decoding", async () => {
+  test("bounds unbounded anchor windows and caps payloads before decoding", async () => {
     const sessionId = "reader-anchor-page-bytes";
-    const scope = await writeTranscript(sessionId, [
-      { type: "session", version: 3, id: sessionId },
-      ...Array.from({ length: 3 }, (_, index) => ({
-        type: "message",
-        id: `large-${index}`,
-        parentId: index === 0 ? null : `large-${index - 1}`,
-        message: { role: "user", content: "a".repeat(3 * 1024 * 1024) },
-      })),
-    ]);
-    await expect(
-      readSessionMessagesAroundIdWithStatsAsync(scope, { messageId: "large-1", maxMessages: 3 }),
-    ).rejects.toThrow(
-      "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
+    const scope = await writeTranscript(
+      sessionId,
+      chain(3, "large", () => "a".repeat(3 * 1024 * 1024)),
     );
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    // Earlier-history paging anchors on older windows; an oversized window must still page.
+    const older = await readAround(scope, {
+      messageId: "large-2",
+      maxMessages: 3,
+      direction: "older",
     });
+    expect(older.messages).toMatchObject([
+      { __openclaw: { id: "large-1" } },
+      { __openclaw: { id: "large-2" } },
+    ]);
+    expect(
+      (await readAround(scope, { messageId: "large-1", maxMessages: 3 })).messages,
+    ).toMatchObject([{ __openclaw: { id: "large-0" } }, { __openclaw: { id: "large-1" } }]);
+    const db = database();
     // Preserve recorded sizes while poisoning excluded payloads: a late cap would parse this.
-    database.db
+    db.db
       .prepare(
         "UPDATE transcript_events SET event_json = '{malformed', event_zstd = NULL WHERE session_id = ? AND seq = 1",
       )
       .run(sessionId);
-    const page = await readSessionMessagesAroundIdWithStatsAsync(scope, {
+    const page = await readAround(scope, {
       messageId: "large-1",
       maxMessages: 3,
       maxBytes: 4 * 1024 * 1024,
     });
-    expect(page.messages).toMatchObject([{ __openclaw: { id: "large-2" } }]);
+    expect(page.messages).toMatchObject([{ __openclaw: { id: "large-1" } }]);
     expect(page.hasOverreadContext).toBe(false);
   });
 
-  test.each(["visitor"] as const)(
-    "acquires messages incrementally and releases the cursor after %s failure",
-    async (failure) => {
-      const sessionId = `reader-stream-${failure}`;
-      const scope = await writeTranscript(sessionId, [
-        { type: "session", version: 3, id: sessionId },
-        {
-          type: "message",
-          id: "first",
-          parentId: null,
-          message: { role: "user", content: "first prompt" },
-        },
-        {
-          type: "message",
-          id: "later",
-          parentId: "first",
-          message: { role: "assistant", content: "later answer" },
-        },
-      ]);
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        path: path.join(tempDir, "openclaw-agent.sqlite"),
-      });
-      // Keep the ready projection, but poison a later payload: an early abort must never parse it.
-      database.db
-        .prepare(
-          `UPDATE transcript_events SET event_json = '{malformed'
-           WHERE session_id = ? AND seq = (
-             SELECT MAX(seq) FROM transcript_events WHERE session_id = ?
-           )`,
-        )
-        .run(sessionId, sessionId);
-      const stopped = new Error("visitor stopped");
-      const visited: Array<{ message: unknown; seq: number }> = [];
-      const traversal = visitSessionMessagesAsync(scope, (message, seq) => {
-        expect(database.db.isTransaction).toBe(true);
-        visited.push({ message, seq });
-        if (failure === "visitor") {
-          throw stopped;
-        }
-      });
-      if (failure === "visitor") {
-        await expect(traversal).rejects.toBe(stopped);
-      } else {
-        await expect(traversal).rejects.toBeInstanceOf(SyntaxError);
+  test.each([false, true])(
+    "pages adjacent 5 MiB messages in both directions (historical=%s)",
+    async (historical) => {
+      const ids = ["large-0", "large-1", "large-2"];
+      const events: unknown[] = chain(3, "large", () => "a".repeat(5 * 1024 * 1024));
+      if (historical) {
+        events.push({
+          type: "reset",
+          id: "reset",
+          parentId: "large-2",
+          timestamp: "2026-10-01T00:00:00.000Z",
+        });
+        ids.push("reset");
       }
-      expect(visited).toEqual([{ message: { role: "user", content: "first prompt" }, seq: 1 }]);
-      expect(database.db.isTransaction).toBe(false);
-      // A surviving read cursor prevents checkpointing even after transaction rollback.
-      expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
-        busy: 0,
-      });
+      const scope = await writeTranscript("anchor-walk", events);
+      const params = {
+        entry: undefined,
+        provider: undefined,
+        sessionId: scope.sessionId,
+        storePath: scope.storePath,
+        sessionAgentId: scope.agentId,
+        canonicalKey: scope.sessionKey,
+        max: 3,
+        maxHistoryBytes: 8 * 1024 * 1024,
+        effectiveMaxChars: 100,
+        offset: undefined,
+        messageId: "large-1",
+      };
+      const jump = await readChatHistoryPageKernel(params, { readers });
+      expect(jump.messages.map(readChatHistoryMessageId)).toContain("large-1");
+      for (const direction of ["older", "newer"] as const) {
+        const expected = direction === "older" ? ids.toReversed() : ids;
+        // A closing reset uses the current interval; start older traversal at its preceding message.
+        const traversal = historical && direction === "older" ? expected.slice(1) : expected;
+        let messageId = traversal[0]!;
+        const seen = [messageId];
+        for (let index = 1; index < traversal.length; index++) {
+          const page = await readChatHistoryPageKernel(
+            {
+              ...params,
+              messageId,
+              pageCursor: {
+                sessionId: scope.sessionId,
+                source: jump.anchor!.source,
+                messageId,
+                direction,
+              },
+            },
+            { readers },
+          );
+          expect(page.windowReset).not.toBe(true);
+          const actual = page.messages.map(readChatHistoryMessageId);
+          if (direction === "older") {
+            actual.reverse();
+          }
+          expect(actual.length).toBeGreaterThan(0);
+          seen.push(...actual.filter((id): id is string => id !== undefined));
+          messageId =
+            direction === "older" ? page.anchor!.oldestMessageId! : page.anchor!.newestMessageId!;
+          const hasMore = direction === "older" ? page.anchor!.hasOlder : page.anchor!.hasNewer;
+          expect(hasMore).toBe(seen.length < traversal.length);
+          if (!hasMore) {
+            break;
+          }
+        }
+        expect(seen).toEqual(traversal);
+      }
     },
   );
 
+  test("acquires messages incrementally and releases the cursor after visitor failure", async () => {
+    const sessionId = "reader-stream-visitor";
+    const scope = await writeTranscript(sessionId, [
+      event("first", null, { role: "user", content: "first prompt" }),
+      event("later", "first", { role: "assistant", content: "later answer" }),
+    ]);
+    const db = database();
+    // Keep the ready projection, but poison a later payload: an early abort must never parse it.
+    db.db
+      .prepare(
+        `UPDATE transcript_events SET event_json = '{malformed'
+           WHERE session_id = ? AND seq = (
+             SELECT MAX(seq) FROM transcript_events WHERE session_id = ?
+           )`,
+      )
+      .run(sessionId, sessionId);
+    const stopped = new Error("visitor stopped");
+    const visited: Array<{ message: unknown; seq: number }> = [];
+    const traversal = visitSessionMessagesAsync(scope, (message, seq) => {
+      expect(db.db.isTransaction).toBe(true);
+      visited.push({ message, seq });
+      throw stopped;
+    });
+    await expect(traversal).rejects.toBe(stopped);
+    expect(visited).toEqual([{ message: { role: "user", content: "first prompt" }, seq: 1 }]);
+    expect(db.db.isTransaction).toBe(false);
+    // A surviving read cursor prevents checkpointing even after transaction rollback.
+    expect(db.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({ busy: 0 });
+  });
+
   test("keeps SQLite precedence by ignoring an obsolete active JSONL during archive fallback", async () => {
     const sessionId = "reader-reset-archive-only";
-    const scope = {
-      agentId: "main",
+    const scope = scopeFor(sessionId);
+    writeArtifact(sessionId, { role: "assistant", content: "obsolete live file" });
+    writeArtifact(
       sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath,
-    };
-    const line = (content: string) =>
-      `${JSON.stringify({ type: "session", version: 1, id: sessionId })}\n${JSON.stringify({
-        message: { role: "assistant", content },
-      })}\n`;
-    fs.writeFileSync(path.join(tempDir, `${sessionId}.jsonl`), line("obsolete live file"));
-    fs.writeFileSync(
-      path.join(tempDir, `${sessionId}.jsonl.reset.2026-07-12T18-00-00.000Z`),
-      line("retained archive"),
+      { role: "assistant", content: "retained archive" },
+      ".reset.2026-07-12T18-00-00.000Z",
     );
 
     for (const allowResetArchiveFallback of [false, undefined]) {
       await expect(
-        readSessionMessagesPageWithStatsAsync(scope, {
+        readPage(scope, {
           offset: 0,
           maxMessages: 1,
           allowResetArchiveFallback,
@@ -472,121 +403,78 @@ describe("session transcript reader facade", () => {
     }
 
     await expect(
-      readSessionMessagesAsync(scope, {
+      readMessages(scope, {
         mode: "full",
         reason: "archive-only fallback test",
         allowResetArchiveFallback: true,
       }),
     ).resolves.toMatchObject([{ content: "retained archive" }]);
     await expect(
-      readRecentSessionMessagesWithStatsAsync(scope, {
-        maxMessages: 1,
-        allowResetArchiveFallback: true,
-      }),
+      readRecent(scope, { maxMessages: 1, allowResetArchiveFallback: true }),
     ).resolves.toMatchObject({ messages: [{ content: "retained archive" }] });
     await expect(
-      readSessionMessagesPageWithStatsAsync(scope, {
-        offset: 0,
-        maxMessages: 1,
-        allowResetArchiveFallback: true,
-      }),
+      readPage(scope, { offset: 0, maxMessages: 1, allowResetArchiveFallback: true }),
     ).resolves.toMatchObject({ messages: [{ content: "retained archive" }] });
   });
 
-  test("uses an explicit JSONL artifact when the store path is a placeholder", async () => {
-    const sessionId = "reader-artifact-placeholder-store";
-    const transcriptPath = path.join(tempDir, `${sessionId}.jsonl`);
-    fs.writeFileSync(
-      transcriptPath,
-      `${JSON.stringify({ type: "session", version: 1, id: sessionId })}\n${JSON.stringify({
-        message: {
-          role: "assistant",
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          usage: { input: 12, output: 3, cost: { total: 0.001 } },
-        },
-      })}\n`,
-      "utf-8",
-    );
-
-    await expect(
-      readLatestSessionUsageFromTranscriptAsync({
-        agentId: "main",
-        sessionId,
-        sessionKey: `agent:main:${sessionId}`,
-        sessionFile: transcriptPath,
-        storePath: "(multiple)",
-      }),
-    ).resolves.toMatchObject({
-      inputTokens: 12,
-      outputTokens: 3,
-    });
-  });
-
-  test("keeps a canonical session key on SQLite when the store path is a placeholder", async () => {
-    const sessionId = "reader-placeholder-sqlite-key";
-    const sessionKey = `agent:main:${sessionId}`;
-    const defaultStorePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-    await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey, storePath: defaultStorePath },
-      {
-        messages: [
+  test.each(["artifact", "sqlite"] as const)(
+    "reads usage from %s storage with a placeholder store path",
+    async (storage) => {
+      const sessionId = `reader-placeholder-${storage}`;
+      const sessionKey = `agent:main:${sessionId}`;
+      const message = usageMessage(15, 4);
+      if (storage === "sqlite") {
+        await persistSessionTranscriptTurn(
           {
-            message: {
-              role: "assistant",
-              provider: "anthropic",
-              model: "claude-sonnet-4-6",
-              usage: { input: 15, output: 4, cost: { total: 0.001 } },
-            },
+            agentId: "main",
+            sessionId,
+            sessionKey,
+            storePath: fixture.path("agents", "main", "sessions", "sessions.json"),
           },
-        ],
-        updateMode: "file-only",
-      },
-    );
-
-    await expect(
-      readLatestSessionUsageFromTranscriptAsync({
-        sessionId,
-        sessionKey,
-        sessionFile: sessionKey,
-        storePath: "(multiple)",
-      }),
-    ).resolves.toMatchObject({
-      inputTokens: 15,
-      outputTokens: 4,
-    });
-  });
+          { messages: [{ message }], updateMode: "file-only" },
+        );
+      }
+      const scope =
+        storage === "artifact"
+          ? {
+              agentId: "main",
+              sessionId,
+              sessionKey,
+              sessionFile: writeArtifact(sessionId, message),
+            }
+          : { sessionId, sessionKey, sessionFile: sessionKey };
+      await expect(readUsage({ ...scope, storePath: "(multiple)" })).resolves.toMatchObject({
+        inputTokens: 15,
+        outputTokens: 4,
+      });
+    },
+  );
 
   test("waits for an in-flight SQLite projection before counting messages", async () => {
     const sessionId = "reader-sqlite-rebuilding-count";
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath,
-    };
+    const scope = scopeFor(sessionId);
     await persistSessionTranscriptTurn(scope, {
       messages: [
-        {
-          eventId: "root",
-          parentId: null,
-          message: { role: "user", content: "cross-client prompt" },
-        },
-        {
-          eventId: "reply",
-          parentId: "root",
-          message: { role: "assistant", content: "cross-client reply" },
-        },
-      ],
+        ["root", null, "user", "cross-client prompt"] as const,
+        ["reply", "root", "assistant", "cross-client reply"] as const,
+      ].map(([eventId, parentId, role, content]) => ({
+        eventId,
+        parentId,
+        message: { role, content },
+      })),
       touchSessionEntry: false,
     });
-    markProjectionNeedsRebuild(sessionId);
+    database()
+      .db.prepare(
+        "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+      )
+      .run(sessionId);
 
     const visited: unknown[] = [];
     await expect(
       visitSessionMessagesAsync(scope, (message) => visited.push(message)),
     ).rejects.toBeInstanceOf(SessionTranscriptProjectionUnavailableError);
     expect(visited).toEqual([]);
-    await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
+    await expect(readCount(scope)).resolves.toBe(2);
   });
 });

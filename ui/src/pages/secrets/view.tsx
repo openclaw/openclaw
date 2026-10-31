@@ -1,8 +1,8 @@
-import { For, Show } from "solid-js";
+import { createMemo, For, Loading, Show } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import {
   DocsLink,
   SettingsEmpty,
@@ -12,69 +12,56 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { formatRelativeTimestamp } from "../../lib/reactive/format.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
-import type { SecretsStoreDraft } from "../../lib/secrets-store/index.ts";
+import type { SecretsStoreState } from "../../lib/secrets-store/index.ts";
 import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import "../../styles/secrets-store.css";
-
-export type SecretsDialogMode = "add" | "edit" | null;
+import type { SecretsPageState } from "./state.ts";
 
 type SecretsStoreViewProps = {
-  entries: SecretStoreEntry[];
-  loading: boolean;
+  state: SecretsPageState;
+  scope: SecretsStoreState;
+  read: () => readonly SecretStoreEntry[];
   busy: boolean;
-  error: string | null;
-  notice: string | null;
-  canList: boolean;
-  canSet: boolean;
-  canDelete: boolean;
-  dialogMode: SecretsDialogMode;
-  draft: SecretsStoreDraft;
-  formError: string | null;
-  bulkOpen: boolean;
-  bulkRaw: string;
-  bulkAutoDetect: boolean;
+  onSubmit: (bulk: boolean) => void;
+  onRemove: (entry: SecretStoreEntry) => void;
   bulkSecretCount: number;
   bulkEntryCount: number;
   bulkInvalidNames: readonly string[];
-  onRefresh: () => void;
-  onOpenAdd: () => void;
-  onOpenEdit: (entry: SecretStoreEntry) => void;
-  onCloseDialog: () => void;
-  onDraftChange: (patch: Partial<SecretsStoreDraft>) => void;
-  onSubmitDraft: () => void;
-  onOpenBulk: () => void;
-  onCloseBulk: () => void;
-  onBulkRawChange: (raw: string) => void;
-  onBulkAutoDetectChange: (enabled: boolean) => void;
-  onSubmitBulk: () => void;
-  onDelete: (entry: SecretStoreEntry) => void;
 };
 
 const DOCS_URL = "https://docs.openclaw.ai/gateway/secrets#shared-secret-store";
 const SECRET_MASK = "••••••••";
 
-function TextAreaField(props: { view: SecretsStoreViewProps; field: "value" | "hosts" | "bulk" }) {
+function TextAreaField(props: {
+  view: SecretsStoreViewProps;
+  field: "value" | "hosts" | "bulk";
+  onInputRef?: (element: HTMLTextAreaElement) => void;
+}) {
   const name = () =>
     props.field === "hosts" ? "allowed-hosts" : props.field === "bulk" ? "bulk-values" : "value";
   const value = () =>
     props.field === "hosts"
-      ? props.view.draft.allowedHosts
+      ? props.view.state.draft.allowedHosts
       : props.field === "bulk"
-        ? props.view.bulkRaw
-        : props.view.draft.value;
+        ? props.view.state.bulkRaw
+        : props.view.state.draft.value;
   const input = (next: string) => {
     if (props.field === "hosts") {
-      props.view.onDraftChange({ allowedHosts: next });
+      props.view.state.act((state) => state.patchDraft({ allowedHosts: next }));
     } else if (props.field === "bulk") {
-      props.view.onBulkRawChange(next);
+      props.view.state.act((state) => {
+        state.bulkRaw = next;
+        state.formError = null;
+      });
     } else {
-      props.view.onDraftChange({ value: next });
+      props.view.state.act((state) => state.patchDraft({ value: next }));
     }
   };
   return (
     <label class="secrets-store-field">
       <span>{t(props.field === "hosts" ? "secretsStore.allowedHosts" : "secretsStore.value")}</span>
       <textarea
+        ref={props.onInputRef}
         class={[
           "settings-input",
           `secrets-store-dialog__${props.field}`,
@@ -107,9 +94,15 @@ function updatedLabel(entry: SecretStoreEntry): string {
 
 function EntryMenu(props: { view: SecretsStoreViewProps; entry: SecretStoreEntry }) {
   return (
-    <Show when={props.view.canSet || props.view.canDelete}>
+    <Show
+      when={
+        props.view.state.canCall("secrets.store.set") ||
+        props.view.state.canCall("secrets.store.delete")
+      }
+    >
       <Menu
         id={`secret-actions-${props.entry.name}`}
+        lazy
         class="secrets-store__menu"
         placement="bottom-end"
         label={`${t("secretsStore.actions")}: ${props.entry.name}`}
@@ -118,16 +111,19 @@ function EntryMenu(props: { view: SecretsStoreViewProps; entry: SecretStoreEntry
         trigger={<Icon name="moreHorizontal" />}
         disabled={props.view.busy}
         items={[
-          ...(props.view.canSet ? [{ id: "edit", label: t("secretsStore.edit") }] : []),
-          ...(props.view.canDelete
+          ...(props.view.state.canCall("secrets.store.set")
+            ? [{ id: "edit", label: t("secretsStore.edit") }]
+            : []),
+          ...(props.view.state.canCall("secrets.store.delete")
             ? [{ id: "delete", label: t("common.delete"), variant: "danger" as const }]
             : []),
         ]}
         onSelect={(item) => {
-          if (item.id === "edit" && props.view.canSet) {
-            props.view.onOpenEdit(props.entry);
-          } else if (item.id === "delete" && props.view.canDelete) {
-            props.view.onDelete(props.entry);
+          if (item.id === "edit" && props.view.state.canCall("secrets.store.set")) {
+            const entry = props.entry;
+            props.view.state.act((state) => state.openEntry(entry));
+          } else if (item.id === "delete" && props.view.state.canCall("secrets.store.delete")) {
+            props.view.onRemove(props.entry);
           }
         }}
       />
@@ -136,14 +132,22 @@ function EntryMenu(props: { view: SecretsStoreViewProps; entry: SecretStoreEntry
 }
 
 function SecretsTable(props: SecretsStoreViewProps) {
+  const timestamp = createMemo(
+    () => {
+      // Refresh the system timezone with the inventory.
+      props.read();
+      return new Intl.DateTimeFormat(getLocale(), { dateStyle: "medium", timeStyle: "short" });
+    },
+    { lazy: true },
+  );
   return (
-    <Show when={props.canList} fallback={<SettingsEmpty message={t("secretsStore.unavail")} />}>
-      <Show
-        when={!props.loading || props.entries.length > 0}
-        fallback={<SettingsLoadingSkeleton />}
-      >
+    <Show
+      when={props.state.canCall("secrets.store.list")}
+      fallback={<SettingsEmpty message={t("secretsStore.unavail")} />}
+    >
+      <Loading on={props.scope} fallback={<SettingsLoadingSkeleton />}>
         <Show
-          when={props.entries.length > 0}
+          when={props.read().length > 0}
           fallback={
             <div class="secrets-store__empty">
               <SettingsEmpty message={t("tabs.secrets")} />
@@ -166,7 +170,7 @@ function SecretsTable(props: SecretsStoreViewProps) {
                 </tr>
               </thead>
               <tbody>
-                <For each={props.entries} keyed={(entry) => entry.name}>
+                <For each={props.read()} keyed={(entry) => entry.name}>
                   {(entry) => {
                     const value = () => {
                       const item = entry();
@@ -214,10 +218,7 @@ function SecretsTable(props: SecretsStoreViewProps) {
                           <time
                             class="secrets-store__updated"
                             datetime={new Date(entry().updatedAtMs).toISOString()}
-                            title={new Intl.DateTimeFormat(getLocale(), {
-                              dateStyle: "medium",
-                              timeStyle: "short",
-                            }).format(new Date(entry().updatedAtMs))}
+                            title={timestamp().format(entry().updatedAtMs)}
                           >
                             {updatedLabel(entry())}
                           </time>
@@ -236,7 +237,7 @@ function SecretsTable(props: SecretsStoreViewProps) {
             </table>
           </div>
         </Show>
-      </Show>
+      </Loading>
     </Show>
   );
 }
@@ -244,19 +245,24 @@ function SecretsTable(props: SecretsStoreViewProps) {
 function SecretDialog(props: {
   view: SecretsStoreViewProps;
   bulk?: boolean;
+  initialFocus: () => HTMLElement;
   children: SolidJSX.Element;
 }) {
   const title = () =>
     t(
       props.bulk
         ? "secretsStore.bulk"
-        : props.view.dialogMode === "edit"
+        : props.view.state.dialogMode === "edit"
           ? "secretsStore.edit"
           : "secretsStore.add",
     );
-  const close = () => (props.bulk ? props.view.onCloseBulk() : props.view.onCloseDialog());
+  const close = () => {
+    const bulk = props.bulk;
+    props.view.state.act((state) => state.closeDialog(bulk));
+  };
   return (
     <openclaw-modal-dialog
+      prop:initialFocus={props.initialFocus}
       label={title()}
       description={props.bulk ? undefined : t("secretsStore.hint")}
       onModal-cancel={close}
@@ -266,23 +272,22 @@ function SecretDialog(props: {
         aria-busy={props.view.busy ? "true" : "false"}
         onSubmit={(event) => {
           event.preventDefault();
-          if (props.bulk) {
-            props.view.onSubmitBulk();
-          } else {
-            props.view.onSubmitDraft();
-          }
+          props.view.onSubmit(Boolean(props.bulk));
         }}
       >
         <div class="secrets-store-dialog__header">
           <h2>{title()}</h2>
         </div>
         {props.children}
-        <Show when={props.view.formError}>
+        <Show when={props.view.state.formError}>
           <div class="callout danger" role="alert">
-            {props.view.formError}
+            {props.view.state.formError}
           </div>
         </Show>
         <openclaw-modal-actions class="secrets-store-dialog__actions">
+          <button class="btn" type="button" disabled={props.view.busy} onClick={close}>
+            {t("common.cancel")}
+          </button>
           <button
             class="btn primary"
             type="submit"
@@ -296,9 +301,6 @@ function SecretDialog(props: {
           >
             {props.view.busy ? t("common.saving") : t("common.save")}
           </button>
-          <button class="btn" type="button" disabled={props.view.busy} onClick={close}>
-            {t("common.cancel")}
-          </button>
         </openclaw-modal-actions>
       </form>
     </openclaw-modal-dialog>
@@ -306,21 +308,27 @@ function SecretDialog(props: {
 }
 
 function EntryDialog(props: SecretsStoreViewProps) {
+  let nameInput!: HTMLInputElement;
   return (
-    <Show when={props.dialogMode}>
-      <SecretDialog view={props}>
+    <Show when={props.state.dialogMode}>
+      <SecretDialog view={props} initialFocus={() => nameInput}>
         <label class="secrets-store-field">
           <span>{t("secretsStore.name")}</span>
           <input
+            ref={(element) => {
+              nameInput = element;
+            }}
             class="settings-input mono"
             name="name"
             autocomplete="off"
             spellcheck="false"
             autofocus
-            readonly={props.dialogMode === "edit"}
+            readonly={props.state.dialogMode === "edit"}
             disabled={props.busy}
-            value={props.draft.name}
-            onInput={(event) => props.onDraftChange({ name: event.currentTarget.value })}
+            value={props.state.draft.name}
+            onInput={(event) =>
+              props.state.act((state) => state.patchDraft({ name: event.currentTarget.value }))
+            }
           />
         </label>
         <TextAreaField view={props} field="value" />
@@ -332,8 +340,9 @@ function EntryDialog(props: SecretsStoreViewProps) {
                 class={[
                   "secrets-store-mode",
                   {
-                    "secrets-store-mode--selected": props.draft.kind === kind(),
-                    "secrets-store-mode--risk": props.draft.kind === kind() && kind() === "env",
+                    "secrets-store-mode--selected": props.state.draft.kind === kind(),
+                    "secrets-store-mode--risk":
+                      props.state.draft.kind === kind() && kind() === "env",
                   },
                 ]}
               >
@@ -341,9 +350,12 @@ function EntryDialog(props: SecretsStoreViewProps) {
                   type="radio"
                   name="access-mode"
                   value={kind()}
-                  checked={props.draft.kind === kind()}
+                  checked={props.state.draft.kind === kind()}
                   disabled={props.busy}
-                  onChange={() => props.onDraftChange({ kind: kind() })}
+                  onChange={() => {
+                    const selectedKind = kind();
+                    props.state.act((state) => state.patchDraft({ kind: selectedKind }));
+                  }}
                 />
                 <span>
                   <strong>
@@ -365,7 +377,7 @@ function EntryDialog(props: SecretsStoreViewProps) {
             )}
           </For>
         </fieldset>
-        <Show when={props.draft.kind === "secret"}>
+        <Show when={props.state.draft.kind === "secret"}>
           <TextAreaField view={props} field="hosts" />
         </Show>
       </SecretDialog>
@@ -374,10 +386,17 @@ function EntryDialog(props: SecretsStoreViewProps) {
 }
 
 function BulkDialog(props: SecretsStoreViewProps) {
+  let bulkInput!: HTMLTextAreaElement;
   return (
-    <Show when={props.bulkOpen}>
-      <SecretDialog view={props} bulk>
-        <TextAreaField view={props} field="bulk" />
+    <Show when={props.state.bulkOpen}>
+      <SecretDialog view={props} bulk initialFocus={() => bulkInput}>
+        <TextAreaField
+          view={props}
+          field="bulk"
+          onInputRef={(element) => {
+            bulkInput = element;
+          }}
+        />
         <div class="secrets-store-bulk__summary" aria-live="polite">
           {t(props.bulkSecretCount === 1 ? "secretsStore.detectedOne" : "secretsStore.detected", {
             count: String(props.bulkSecretCount),
@@ -386,9 +405,14 @@ function BulkDialog(props: SecretsStoreViewProps) {
         <label class="secrets-store-checkbox">
           <input
             type="checkbox"
-            checked={props.bulkAutoDetect}
+            checked={props.state.bulkAutoDetect}
             disabled={props.busy}
-            onChange={(event) => props.onBulkAutoDetectChange(event.currentTarget.checked)}
+            onChange={(event) =>
+              props.state.act((state) => {
+                state.bulkAutoDetect = event.currentTarget.checked;
+                state.formError = null;
+              })
+            }
           />
           <span>
             <strong>{t("secretsStore.detect")}</strong>
@@ -408,32 +432,40 @@ export function SecretsStore(props: SecretsStoreViewProps) {
   return (
     <>
       <SettingsPage wide>
-        <Show when={props.error}>
+        <Show when={props.state.store.error}>
           <div class="callout danger secrets-store__message" role="alert">
-            <span>{props.error}</span>
-            <Show when={props.canList}>
-              <button class="btn btn--sm" type="button" onClick={() => props.onRefresh()}>
+            <span>{props.state.store.error}</span>
+            <Show when={props.state.canCall("secrets.store.list")}>
+              <button
+                class="btn btn--sm"
+                type="button"
+                onClick={() => {
+                  if (props.state.canCall("secrets.store.list")) {
+                    props.state.reload();
+                  }
+                }}
+              >
                 {t("common.retry")}
               </button>
             </Show>
           </div>
         </Show>
-        <Show when={props.notice}>
+        <Show when={props.state.notice}>
           <div class="callout success secrets-store__message" role="status" aria-live="polite">
-            {props.notice}
+            {props.state.notice}
           </div>
         </Show>
         <SettingsSection
           title={t("tabs.secrets")}
-          count={props.entries.length}
+          count={props.state.store.entries.length}
           actions={
-            <Show when={props.canSet}>
+            <Show when={props.state.canCall("secrets.store.set")}>
               <>
                 <button
                   class="btn btn--sm"
                   type="button"
                   disabled={props.busy}
-                  onClick={() => props.onOpenBulk()}
+                  onClick={() => props.state.act((state) => state.openBulk())}
                 >
                   {t("secretsStore.bulk")}
                 </button>
@@ -441,7 +473,7 @@ export function SecretsStore(props: SecretsStoreViewProps) {
                   class="btn btn--sm primary"
                   type="button"
                   disabled={props.busy}
-                  onClick={() => props.onOpenAdd()}
+                  onClick={() => props.state.act((state) => state.openEntry())}
                 >
                   <Icon name="plus" /> {t("secretsStore.add")}
                 </button>

@@ -1,6 +1,7 @@
 // Resolves the utility model used for short internal tasks (titles, progress
 // narration). Unset config derives the provider-declared small model from the
 // agent's primary provider; an explicit empty string disables utility routing.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasUtilityModelSeparationMigrationMarker,
@@ -11,9 +12,16 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveNativeModelPrimary } from "./agent-scope.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
+import { getPublishedPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
 import { readUtilityModelSetting } from "./utility-model-setting.js";
+
+/** The router inventory that proves a routed utility model is offered. */
+type OfferedModels = {
+  entries: readonly Pick<ModelCatalogEntry, "provider" | "id" | "inference">[];
+};
 
 /** Legacy utility settings did not remove the ordinary implicit primary route. */
 export function resolveConfiguredPrimaryModelForAgent(params: {
@@ -34,8 +42,8 @@ export function resolveConfiguredPrimaryModelForAgent(params: {
 export function resolveConfiguredSetupModelForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  /** An explicit utility selection is used only to verify that configuration role. */
-  modelTarget?: "utility";
+  /** An explicit selection verifies only that configuration role. */
+  modelTarget?: "primary" | "utility";
 }): { modelRef: string; modelTarget?: "utility"; implicitPrimary?: true } | undefined {
   const primary = resolveConfiguredPrimaryModelForAgent(params);
   if (primary && params.modelTarget !== "utility") {
@@ -45,6 +53,9 @@ export function resolveConfiguredSetupModelForAgent(params: {
         ? { implicitPrimary: true as const }
         : {}),
     };
+  }
+  if (params.modelTarget === "primary") {
+    return undefined;
   }
   const utility = readUtilityModelSetting(params.cfg, params.agentId);
   return utility.kind === "explicit"
@@ -58,11 +69,21 @@ export function resolveConfiguredSetupModelForAgent(params: {
  * provider does not declare one. Reads only the process-current plugin
  * metadata snapshot, so the lookup stays synchronous and cheap; contexts
  * without a snapshot simply get no derived default.
+ *
+ * A multi-vendor router instead declares `defaultUtilityModels` keyed by the
+ * vendor prefix of the primary model id (`<vendor>/<model>`). Grants differ per
+ * router credential, so that model is chosen only when the router's catalog
+ * lists it: the caller's catalog, else the agent's published catalog.
  */
 export function resolveAutomaticUtilityModelRef(params: {
   cfg: OpenClawConfig;
   primaryProvider: string;
   primaryModelRef?: string;
+  /** Resolved primary model id; defaults to the id in a provider-qualified primaryModelRef. */
+  primaryModelId?: string;
+  /** Agent whose published catalog proves a routed model is offered. */
+  agentId?: string;
+  catalog?: OfferedModels;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
 }): string | undefined {
   const provider = params.primaryProvider.trim().toLowerCase();
@@ -78,19 +99,52 @@ export function resolveAutomaticUtilityModelRef(params: {
   if (!snapshot) {
     return undefined;
   }
+  const primary = params.primaryModelRef
+    ? splitTrailingAuthProfile(params.primaryModelRef)
+    : undefined;
+  // Automatic routing stays with the primary model's explicit auth owner.
+  const withProfile = (modelId: string) =>
+    `${provider}/${modelId}${primary?.profile ? `@${primary.profile}` : ""}`;
   for (const plugin of snapshot.plugins) {
-    const defaultUtilityModel = plugin.modelCatalog?.providers?.[provider]?.defaultUtilityModel;
-    const modelId = defaultUtilityModel?.trim();
+    const declared = plugin.modelCatalog?.providers?.[provider];
+    const modelId = declared?.defaultUtilityModel?.trim();
     if (modelId) {
-      const derived = `${provider}/${modelId}`;
-      // Automatic routing stays with the primary model's explicit auth owner.
-      const profile = params.primaryModelRef
-        ? splitTrailingAuthProfile(params.primaryModelRef).profile
+      return withProfile(modelId);
+    }
+    if (declared?.defaultUtilityModels) {
+      const primaryModelId =
+        params.primaryModelId?.trim() ||
+        (primary?.model.toLowerCase().startsWith(`${provider}/`)
+          ? primary.model.slice(provider.length + 1)
+          : undefined);
+      const vendor = primaryModelId?.includes("/")
+        ? primaryModelId.slice(0, primaryModelId.indexOf("/")).trim().toLowerCase()
         : undefined;
-      return profile ? `${derived}@${profile}` : derived;
+      const routedId = vendor ? declared.defaultUtilityModels[vendor]?.trim() : undefined;
+      if (!routedId) {
+        return undefined;
+      }
+      const catalog =
+        params.catalog ??
+        (params.agentId
+          ? readPublishedModelCatalog({ config: params.cfg, agentId: params.agentId })
+          : undefined);
+      // A static decision-only row (chat: false) states protocol support, not a chat grant.
+      const offered = catalog?.entries.some(
+        (entry) =>
+          normalizeProviderId(entry.provider) === provider &&
+          entry.id === routedId &&
+          entry.inference?.chat !== false,
+      );
+      return offered ? withProfile(routedId) : undefined;
     }
   }
   return undefined;
+}
+
+function readPublishedModelCatalog(params: { config: OpenClawConfig; agentId: string }) {
+  const owner = getPublishedPreparedModelCatalogOwnerSnapshot(params);
+  return owner?.readFullModelCatalog?.() ?? owner?.modelCatalog;
 }
 
 /**
@@ -106,6 +160,9 @@ export function resolveUtilityModelRefForAgent(params: {
   primaryProvider?: string;
   /** Pass with primaryProvider to carry a session-specific auth profile. */
   primaryModelRef?: string;
+  /** Resolved model id of primaryProvider when primaryModelRef may be an alias. */
+  primaryModelId?: string;
+  catalog?: OfferedModels;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
 }): string | undefined {
   const setting = readUtilityModelSetting(params.cfg, params.agentId);
@@ -115,15 +172,18 @@ export function resolveUtilityModelRefForAgent(params: {
   if (setting.kind === "disabled") {
     return undefined;
   }
-  const provider =
-    params.primaryProvider?.trim() ||
-    resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId }).provider;
+  const primary = params.primaryProvider?.trim()
+    ? { provider: params.primaryProvider.trim(), model: params.primaryModelId }
+    : resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
   return (
     resolveAutomaticUtilityModelRef({
       cfg: params.cfg,
-      primaryProvider: provider,
+      agentId: params.agentId,
+      primaryProvider: primary.provider,
       primaryModelRef:
         params.primaryModelRef?.trim() || resolveNativeModelPrimary(params.cfg, params.agentId),
+      primaryModelId: primary.model,
+      catalog: params.catalog,
       metadataSnapshot: params.metadataSnapshot,
     }) ?? setting.fallbacks.find((ref) => ref.trim())?.trim()
   );
@@ -151,7 +211,9 @@ export function resolveAutomaticUtilityRuntimeOverride(params: {
   // so other same-provider selections keep their own runtime and billing route.
   const automaticRef = resolveAutomaticUtilityModelRef({
     cfg: params.cfg,
+    agentId: params.agentId,
     primaryProvider: primary.provider,
+    primaryModelId: primary.model,
     metadataSnapshot: params.metadataSnapshot,
   });
   const utilityRef = `${utilityProvider}/${params.utilityModelId.trim().toLowerCase()}`;

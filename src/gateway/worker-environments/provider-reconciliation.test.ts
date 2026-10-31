@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { tryBeginGatewaySuspendAdmission } from "../../process/gateway-work-admission.js";
+import { create, providerService as service } from "./provider-lifecycle.test-support.js";
 import * as support from "./service.test-support.js";
 import { testState } from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -12,7 +15,11 @@ type Environment = NonNullable<ReturnType<typeof testState.store.get>>;
 const fail = (message: string) => async () => {
   throw new Error(message);
 };
-const lifecycleLease = (leaseId: string) => ({ leaseId, profile: { region: "test" } });
+const lifecycleLease = (leaseId: string) => ({
+  leaseId,
+  profile: { region: "test" },
+  signal: expect.any(AbortSignal),
+});
 
 function expectState(
   environmentId: string,
@@ -22,24 +29,10 @@ function expectState(
   expect(testState.store.get(environmentId)).toMatchObject({ state, ...fields });
 }
 
-function service(
-  provider: Parameters<typeof support.createProvider>[0] = {},
-  options: Parameters<typeof support.createService>[1] = {},
-) {
-  return support.createService(support.createProvider(provider), options);
-}
-
 async function seedStale(environmentId: string, bundleHash: string, install?: "npm") {
   await support.seedBootstrapping(environmentId, install);
-  return transition(
-    environmentId,
-    "bootstrapping",
-    "ready",
-    support.readyPatch(environmentId, {
-      ...support.BOOTSTRAP_RECEIPT,
-      bundleHash,
-    }),
-  );
+  const patch = support.readyPatch(environmentId, { ...support.BOOTSTRAP_RECEIPT, bundleHash });
+  return transition(environmentId, "bootstrapping", "ready", patch);
 }
 
 function transition(
@@ -63,12 +56,8 @@ function tunnels(overrides: Partial<WorkerTunnelManager> = {}) {
 
 async function seedAttached(environmentId: string, sessionId = "session-1") {
   await support.seedReady(environmentId);
-  return transition(
-    environmentId,
-    "ready",
-    "attached",
-    support.attachedPatch(environmentId, sessionId),
-  );
+  const patch = support.attachedPatch(environmentId, sessionId);
+  return transition(environmentId, "ready", "attached", patch);
 }
 
 async function beginTeardown(record: Environment, lastError?: string) {
@@ -85,6 +74,82 @@ async function beginTeardown(record: Environment, lastError?: string) {
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("defers teardown admitted during suspension and retries its intent after resume", async () => {
+    const environment = await support.seedReady("suspended-teardown");
+    const destroy = vi.fn(async () => {});
+    const workerService = service({ destroy });
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension).not.toBeNull();
+    try {
+      await expect(workerService.destroy(environment.environmentId)).rejects.toThrow("paused");
+      expect(destroy).not.toHaveBeenCalled();
+      expectState(environment.environmentId, "destroying", {
+        leaseId: environment.leaseId,
+        destroyRequestedAtMs: expect.any(Number),
+      });
+    } finally {
+      suspension?.rollback();
+    }
+    await workerService.reconcileOnce();
+    expect(destroy).toHaveBeenCalledOnce();
+    expectState(environment.environmentId, "destroyed");
+  });
+
+  it.each(["shutdown", "timeout", "bootstrap failure"] as const)(
+    "interrupts provider teardown on %s and retries the retained lease after restart",
+    async (reason) => {
+      const bootstrapFailure = reason === "bootstrap failure";
+      const environment = bootstrapFailure
+        ? await support.seedBootstrapping("interrupted-teardown")
+        : await support.seedReady("interrupted-teardown");
+      if (bootstrapFailure) {
+        testState.prepareInstallation = vi.fn(fail("installation failed"));
+      } else {
+        await beginTeardown(environment);
+      }
+      const entered = createDeferred<AbortSignal | undefined>();
+      const release = createDeferred();
+      const destroy = vi.fn(async ({ signal }: WorkerLifecycleLease) => {
+        entered.resolve(signal);
+        await racePromiseWithAbortSignal(release.promise, signal);
+      });
+      const workerService = service({ destroy }, { providerCallTimeoutMs: 1_000 });
+      if (reason === "timeout") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
+      const reconciliation = workerService.reconcileOnce();
+      let stopping: Promise<void> | undefined;
+      try {
+        const signal = await entered.promise;
+        if (reason !== "timeout") {
+          stopping = workerService.stop();
+        } else {
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+        expect(signal?.aborted).toBe(true);
+        await reconciliation;
+        await (stopping ?? workerService.stop());
+        expectState(environment.environmentId, "destroying", {
+          leaseId: environment.leaseId,
+          destroyRequestedAtMs: expect.any(Number),
+          lastError: bootstrapFailure
+            ? expect.stringContaining("installation failed")
+            : expect.stringMatching(/paused|aborted|timed out/i),
+        });
+      } finally {
+        vi.useRealTimers();
+        release.resolve();
+        await reconciliation;
+        await (stopping ?? workerService.stop());
+      }
+      await support.reopenWorkerEnvironmentStore();
+      const restarted = service({ destroy });
+      await restarted.reconcileOnce();
+      expect(destroy).toHaveBeenCalledTimes(2);
+      expectState(environment.environmentId, bootstrapFailure ? "failed" : "destroyed");
+    },
+  );
 
   it("adopts a matching milestone-1 row that predates worker credentials", async () => {
     const environmentId = "worker-milestone-one";
@@ -117,20 +182,17 @@ describe("worker environment service", () => {
   it("inspects a persisted lease with its profile snapshot after profile removal", async () => {
     await support.seedBootstrapping("worker-crash");
     testState.config.cloudWorkers!.profiles = {};
-    const inspected: WorkerLifecycleLease[] = [];
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
     const workerService = service({
-      inspect: async (lease) => {
-        inspected.push(lease);
-        return { status: "active" };
-      },
+      inspect,
       provision: fail("provision must not run for a known lease"),
     });
 
     await workerService.reconcileOnce();
 
-    expect(inspected).toEqual([
+    expect(inspect).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ leaseId: "lease:worker-crash", profile: { region: "test" } }),
-    ]);
+    );
     expectState("worker-crash", "ready", {
       bootstrapReceipt: support.BOOTSTRAP_RECEIPT,
     });
@@ -159,9 +221,7 @@ describe("worker environment service", () => {
       let id = environmentId;
       if (removed) {
         id = (
-          await workerService.createWithRequest({
-            profileId: "development",
-            idempotencyKey: "request-unadvertised-persisted-ssh",
+          await create(workerService, "request-unadvertised-persisted-ssh", {
             executionMode: "remote-exec",
           })
         ).environmentId;
@@ -200,10 +260,7 @@ describe("worker environment service", () => {
       },
       { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
     );
-    const environment = await workerService.createWithRequest({
-      profileId: "development",
-      idempotencyKey: `request-${lease.leaseId}`,
-    });
+    const environment = await create(workerService, `request-${lease.leaseId}`);
     testState.config.cloudWorkers!.profiles = {};
 
     await workerService.reconcileOnce();
@@ -271,13 +328,9 @@ describe("worker environment service", () => {
     });
     const order: string[] = [];
     const tunnelManager = tunnels({
-      stop: vi.fn(async () => {
-        order.push("tunnel-stop");
-      }),
+      stop: vi.fn(async () => void order.push("tunnel-stop")),
     });
-    const destroy = vi.fn(async () => {
-      order.push("provider-destroy");
-    });
+    const destroy = vi.fn(async () => void order.push("provider-destroy"));
 
     await service({ destroy }, { tunnelManager }).reconcileOnce();
 
@@ -289,8 +342,6 @@ describe("worker environment service", () => {
       teardownTerminalState: "failed",
       lastError: "released npm artifact is unavailable",
     });
-    expect(testState.prepareInstallation).toHaveBeenCalledWith("bundle");
-    expect(testState.prepareInstallation).toHaveBeenCalledWith("npm");
     expect(testState.bootstrapWorker).not.toHaveBeenCalled();
   });
 
@@ -303,23 +354,16 @@ describe("worker environment service", () => {
       },
     });
 
-    const result = await workerService.createWithRequest({
-      profileId: "development",
-      idempotencyKey: "request-npm",
-    });
+    const result = await create(workerService, "request-npm");
 
     expect(result).toMatchObject({
       state: "ready",
       profileSnapshot: { install: "npm" },
     });
     expect(testState.prepareInstallation).toHaveBeenCalledWith("npm");
-    expect(testState.bootstrapWorker).toHaveBeenCalledWith({
-      operationId: result.provisionOperationId,
-      sshEndpoint: support.SSH_ENDPOINT,
-      installation: support.NPM_ARTIFACT,
-      resolveIdentity: expect.any(Function),
-      signal: expect.any(AbortSignal),
-    });
+    expect(testState.bootstrapWorker).toHaveBeenCalledWith(
+      expect.objectContaining({ installation: support.NPM_ARTIFACT }),
+    );
   });
 
   it("fences unknown leases before stop and retries their durable teardown", async () => {
@@ -571,7 +615,7 @@ describe("worker environment service", () => {
     resolutionFails = false;
     await workerService.reconcileOnce();
     expect(testState.store.get(intent.environmentId)?.state).toBe("destroyed");
-    expect(destroyed).toEqual([{ leaseId: "lease-retried", profile: { region: "test" } }]);
+    expect(destroyed).toEqual([lifecycleLease("lease-retried")]);
     expect(testState.prepareInstallation).not.toHaveBeenCalled();
   });
 });

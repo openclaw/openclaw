@@ -174,7 +174,6 @@ export function createNoopThreadBindingManager(accountIdRaw?: string): ThreadBin
     getIdleTimeoutMs: () => DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
     getMaxAgeMs: () => DEFAULT_THREAD_BINDING_MAX_AGE_MS,
     getByThreadId: () => undefined,
-    getBySessionKey: () => undefined,
     listBySessionKey: () => [],
     listBindings: () => [],
     touchThread: async () => null,

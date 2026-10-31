@@ -7,13 +7,12 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchPullChecks } from "./detail-checks.js";
 import {
   ControlUiGitHubError,
-  fetchGitHubApi,
+  fetchGitHubJsonPage,
   GITHUB_API_ORIGIN,
   githubRestApiPath,
   githubApiCredentialCacheScope,
   isRecord,
   optionalNumber,
-  readGitHubJsonResponse,
   readOptionalGitHubString,
   requiredString,
   withOptionalGitHubAuth,
@@ -31,7 +30,13 @@ import {
   rejectSessionGitHubRedirect,
   type SessionGitHubReadIdentity,
 } from "./session-reader.js";
-import { githubTargetUrl, parseGitHubTarget, type GitHubTarget } from "./targets.js";
+import {
+  githubTargetUrl,
+  parseGitHubTarget,
+  type GitHubTarget,
+  type GitHubReadTarget,
+  type GitHubJobTarget,
+} from "./targets.js";
 import { githubPreviewView, githubChangeMetadata } from "./view-model.js";
 type GitHubComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];
 type GitHubFile = NonNullable<ControlUiLinkReaderDocument["files"]>[number];
@@ -84,24 +89,16 @@ function redirectedRepositoryUrl(url: URL, suffix: string): string {
 async function readPublicRepository(
   url: string,
   fetchImpl: typeof fetch,
-  identity: ControlUiGitHubPreviewIdentity,
+  identity: ControlUiGitHubPreviewIdentity | undefined,
   expectedId?: number,
 ): Promise<number> {
-  const repository = await readGitHubJsonResponse(
-    await fetchGitHubApi(
-      url,
-      fetchImpl,
-      identity.token,
-      async (redirect) => {
-        redirectedRepositoryUrl(redirect, "");
-      },
-      identity,
-      undefined,
-      undefined,
-      undefined,
-      GITHUB_API_ORIGIN,
-    ),
-  );
+  const { value: repository } = await fetchGitHubJsonPage(url, fetchImpl, identity?.token, {
+    beforeRedirect: async (redirect) => {
+      redirectedRepositoryUrl(redirect, "");
+    },
+    identity,
+    apiBaseUrl: GITHUB_API_ORIGIN,
+  });
   const id = isRecord(repository) ? optionalNumber(repository, "id") : undefined;
   if (
     !isPublicGitHubRepository(repository) ||
@@ -270,168 +267,6 @@ function parseFiles(value: unknown): GitHubFile[] {
   });
 }
 
-async function fetchDetail(
-  target: GitHubTarget,
-  itemPage: Awaited<ReturnType<ReadDetailPage>>,
-  readPage: ReadDetailPage,
-  apiBaseUrl = GITHUB_API_ORIGIN,
-  host = "github.com",
-  section?: GitHubDetailSection,
-): Promise<ControlUiLinkReaderDocument> {
-  const repoPath = `/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
-  const repositoryUrl = apiBaseUrl + repoPath;
-  const collection =
-    target.kind === "commit" ? "commits" : target.kind === "pull" ? "pulls" : "issues";
-  const id = target.kind === "commit" ? target.sha : target.number;
-  const itemUrl = `${repositoryUrl}/${collection}/${id}`;
-  if (!isRecord(itemPage.value)) {
-    throw new ControlUiGitHubError(502, "GitHub response was not an object");
-  }
-  const value = itemPage.value;
-  const url = githubTargetUrl(target, host);
-  const includeDiscussion = section === undefined || section === "discussion";
-  const includeFiles = section === undefined || section === "files";
-  const includeChecks = section === undefined || section === "checks";
-  const deferredSections: ControlUiLinkReaderDocument["deferredSections"] =
-    target.kind === "pull"
-      ? ["checks", "files", "discussion"]
-      : target.kind === "commit"
-        ? ["files", "discussion"]
-        : ["discussion"];
-  if (target.kind === "commit") {
-    const commit = isRecord(value.commit) ? value.commit : {};
-    const author = isRecord(value.author) ? value.author : {};
-    const commitAuthor = isRecord(commit.author) ? commit.author : {};
-    const stats = isRecord(value.stats) ? value.stats : {};
-    const content = markdownBody(commit.message, BODY_MAX_CHARS);
-    const discussion = includeDiscussion
-      ? await fetchComments(
-          itemUrl + "/comments",
-          "commit",
-          requiredCount(commit, "comment_count"),
-          readPage,
-          host,
-        )
-      : undefined;
-    const files = !includeFiles || value.files === undefined ? [] : parseFiles(value.files);
-    const filesTruncated =
-      value.files === undefined ||
-      itemPage.hasNextPage ||
-      (Array.isArray(value.files) && value.files.length > FILE_LIMIT);
-    return {
-      url,
-      revision: requiredString(value, "sha"),
-      ...(section === "overview" ? { deferredSections } : {}),
-      subtitle:
-        target.owner + "/" + target.repo + " · " + requiredString(value, "sha").slice(0, 12),
-      badge: { label: "Commit", tone: "neutral" },
-      title: content.body.split("\n", 1)[0] ?? "",
-      author:
-        readOptionalGitHubString(author, "login") ??
-        readOptionalGitHubString(commitAuthor, "name") ??
-        "ghost",
-      createdAt: readOptionalGitHubString(commitAuthor, "date"),
-      metadata: githubChangeMetadata(
-        optionalNumber(stats, "additions"),
-        optionalNumber(stats, "deletions"),
-      ),
-      ...content,
-      ...discussion,
-      ...(includeFiles ? { files, filesTruncated } : {}),
-      partial:
-        content.bodyTruncated ||
-        discussion?.commentsTruncated === true ||
-        (includeFiles && filesTruncated) ||
-        discussion?.comments.some((comment) => comment.bodyTruncated) === true ||
-        files.some((file) => file.patchTruncated),
-    };
-  }
-
-  const { preview } = parseControlUiGitHubPreviewResponse(target, value);
-  const content = markdownBody(value.body, BODY_MAX_CHARS);
-  const discussion = includeDiscussion
-    ? await fetchComments(
-        repositoryUrl + "/issues/" + target.number + "/comments",
-        "discussion",
-        requiredCount(value, "comments"),
-        readPage,
-        host,
-      )
-    : undefined;
-  const review =
-    target.kind === "pull" && includeDiscussion
-      ? await fetchComments(
-          itemUrl + "/comments",
-          "review",
-          requiredCount(value, "review_comments"),
-          readPage,
-          host,
-        )
-      : undefined;
-  const comments = (discussion?.comments ?? [])
-    .concat(review?.comments ?? [])
-    .toSorted(
-      (left, right) =>
-        (left.createdAt ?? "").localeCompare(right.createdAt ?? "") ||
-        left.id.localeCompare(right.id, "en", { numeric: true }),
-    );
-  const commentsTotal = (discussion?.commentsTotal ?? 0) + (review?.commentsTotal ?? 0);
-  const commentsTruncated =
-    discussion?.commentsTruncated === true || review?.commentsTruncated === true;
-  let files: GitHubFile[] = [];
-  let filesTruncated = false;
-  const filesTotal = target.kind === "pull" ? requiredCount(value, "changed_files") : 0;
-  if (includeFiles && filesTotal > 0) {
-    try {
-      const page = await readPage(`${itemUrl}/files?per_page=${FILE_LIMIT}`);
-      files = parseFiles(page.value);
-      filesTruncated = page.hasNextPage || filesTotal > files.length;
-    } catch (error) {
-      if (error instanceof GitHubDetailAccessError || error instanceof SessionGitHubAccessError) {
-        throw error;
-      }
-      filesTruncated = true;
-    }
-  }
-  const head = isRecord(value.head) ? value.head : {};
-  const base = isRecord(value.base) ? value.base : {};
-  const checks =
-    target.kind === "pull" && includeChecks
-      ? await fetchPullChecks(repositoryUrl, head.sha, url + "/checks", readPage)
-      : undefined;
-  const view = githubPreviewView(preview, host);
-  const metadata = githubChangeMetadata(
-    preview.additions,
-    preview.deletions,
-    preview.changedFiles,
-    preview.comments,
-  );
-  const headRef = readOptionalGitHubString(head, "ref")?.slice(0, 256);
-  const baseRef = readOptionalGitHubString(base, "ref")?.slice(0, 256);
-  return {
-    ...view,
-    metadata:
-      target.kind === "pull" && headRef && baseRef
-        ? [...metadata, { label: "Branch", value: headRef + " → " + baseRef }]
-        : metadata,
-    url,
-    revision: target.kind === "pull" ? readOptionalGitHubString(head, "sha") : preview.updatedAt,
-    ...(section === "overview" ? { deferredSections } : {}),
-    ...content,
-    ...(checks ? { checks } : {}),
-    ...(includeDiscussion ? { comments, commentsTotal, commentsTruncated } : {}),
-    ...(includeFiles ? { files, filesTotal, filesTruncated } : {}),
-    partial:
-      content.bodyTruncated ||
-      commentsTruncated ||
-      filesTruncated ||
-      checks?.truncated === true ||
-      checks?.state === "unavailable" ||
-      comments.some((comment) => comment.bodyTruncated || comment.context?.diffTruncated) ||
-      files.some((file) => file.patchTruncated),
-  };
-}
-
 async function loadGitHubDetailWithIdentity(
   target: GitHubTarget,
   identity?: ControlUiGitHubPreviewIdentity,
@@ -496,11 +331,8 @@ async function loadGitHubDetailWithIdentity(
     }
     const readPage: ReadDetailPage = async (url) => {
       const suffix = new URL(url).pathname.slice(new URL(repositoryUrl).pathname.length);
-      const response = await fetchGitHubApi(
-        url,
-        fetchImpl,
-        identity?.token,
-        session
+      const page = await fetchGitHubJsonPage(url, fetchImpl, identity?.token, {
+        beforeRedirect: session
           ? rejectSessionGitHubRedirect
           : identity?.token
             ? async (redirect) => {
@@ -510,14 +342,12 @@ async function loadGitHubDetailWithIdentity(
               }
             : undefined,
         identity,
-        undefined,
-        undefined,
-        undefined,
         apiBaseUrl,
-      );
+        maxBytes: DETAIL_JSON_MAX_BYTES,
+      });
       return {
-        hasNextPage: /;\s*rel="next"/u.test(response.headers.get("link") ?? ""),
-        value: await readGitHubJsonResponse(response, DETAIL_JSON_MAX_BYTES),
+        hasNextPage: /;\s*rel="next"/u.test(page.link ?? ""),
+        value: page.value,
       };
     };
     const collection =
@@ -526,14 +356,158 @@ async function loadGitHubDetailWithIdentity(
     const itemPage =
       source?.itemPage ??
       (await readPage(parsed.kind === "commit" ? itemUrl + "?per_page=" + FILE_LIMIT : itemUrl));
-    const document = await fetchDetail(
-      parsed,
-      itemPage,
-      readPage,
-      apiBaseUrl,
-      session?.host,
-      section,
-    );
+    const host = session?.host ?? "github.com";
+    const fetchDetail = async (): Promise<ControlUiLinkReaderDocument> => {
+      if (!isRecord(itemPage.value)) {
+        throw new ControlUiGitHubError(502, "GitHub response was not an object");
+      }
+      const value = itemPage.value;
+      const url = githubTargetUrl(parsed, host);
+      const includeDiscussion = section === undefined || section === "discussion";
+      const includeFiles = section === undefined || section === "files";
+      const includeChecks = section === undefined || section === "checks";
+      const deferredSections: ControlUiLinkReaderDocument["deferredSections"] =
+        parsed.kind === "pull"
+          ? ["checks", "files", "discussion"]
+          : parsed.kind === "commit"
+            ? ["files", "discussion"]
+            : ["discussion"];
+      if (parsed.kind === "commit") {
+        const commit = isRecord(value.commit) ? value.commit : {};
+        const author = isRecord(value.author) ? value.author : {};
+        const commitAuthor = isRecord(commit.author) ? commit.author : {};
+        const stats = isRecord(value.stats) ? value.stats : {};
+        const content = markdownBody(commit.message, BODY_MAX_CHARS);
+        const discussion = includeDiscussion
+          ? await fetchComments(
+              itemUrl + "/comments",
+              "commit",
+              requiredCount(commit, "comment_count"),
+              readPage,
+              host,
+            )
+          : undefined;
+        const files = !includeFiles || value.files === undefined ? [] : parseFiles(value.files);
+        const filesTruncated =
+          value.files === undefined ||
+          itemPage.hasNextPage ||
+          (Array.isArray(value.files) && value.files.length > FILE_LIMIT);
+        return {
+          url,
+          revision: requiredString(value, "sha"),
+          ...(section === "overview" ? { deferredSections } : {}),
+          subtitle:
+            parsed.owner + "/" + parsed.repo + " · " + requiredString(value, "sha").slice(0, 12),
+          badge: { label: "Commit", tone: "neutral" },
+          title: content.body.split("\n", 1)[0] ?? "",
+          author:
+            readOptionalGitHubString(author, "login") ??
+            readOptionalGitHubString(commitAuthor, "name") ??
+            "ghost",
+          createdAt: readOptionalGitHubString(commitAuthor, "date"),
+          metadata: githubChangeMetadata(
+            optionalNumber(stats, "additions"),
+            optionalNumber(stats, "deletions"),
+          ),
+          ...content,
+          ...discussion,
+          ...(includeFiles ? { files, filesTruncated } : {}),
+          partial:
+            content.bodyTruncated ||
+            discussion?.commentsTruncated === true ||
+            (includeFiles && filesTruncated) ||
+            discussion?.comments.some((comment) => comment.bodyTruncated) === true ||
+            files.some((file) => file.patchTruncated),
+        };
+      }
+
+      const { preview } = parseControlUiGitHubPreviewResponse(parsed, value);
+      const content = markdownBody(value.body, BODY_MAX_CHARS);
+      const discussionCount = includeDiscussion ? requiredCount(value, "comments") : 0;
+      const reviewCount =
+        includeDiscussion && parsed.kind === "pull" ? requiredCount(value, "review_comments") : 0;
+      const [discussion, review] = includeDiscussion
+        ? await Promise.all([
+            fetchComments(
+              repositoryUrl + "/issues/" + parsed.number + "/comments",
+              "discussion",
+              discussionCount,
+              readPage,
+              host,
+            ),
+            parsed.kind === "pull"
+              ? fetchComments(itemUrl + "/comments", "review", reviewCount, readPage, host)
+              : undefined,
+          ])
+        : [];
+      const comments = (discussion?.comments ?? [])
+        .concat(review?.comments ?? [])
+        .toSorted(
+          (left, right) =>
+            (left.createdAt ?? "").localeCompare(right.createdAt ?? "") ||
+            left.id.localeCompare(right.id, "en", { numeric: true }),
+        );
+      const commentsTotal = (discussion?.commentsTotal ?? 0) + (review?.commentsTotal ?? 0);
+      const commentsTruncated =
+        discussion?.commentsTruncated === true || review?.commentsTruncated === true;
+      let files: GitHubFile[] = [];
+      let filesTruncated = false;
+      const filesTotal = parsed.kind === "pull" ? requiredCount(value, "changed_files") : 0;
+      if (includeFiles && filesTotal > 0) {
+        try {
+          const page = await readPage(`${itemUrl}/files?per_page=${FILE_LIMIT}`);
+          files = parseFiles(page.value);
+          filesTruncated = page.hasNextPage || filesTotal > files.length;
+        } catch (error) {
+          if (
+            error instanceof GitHubDetailAccessError ||
+            error instanceof SessionGitHubAccessError
+          ) {
+            throw error;
+          }
+          filesTruncated = true;
+        }
+      }
+      const head = isRecord(value.head) ? value.head : {};
+      const base = isRecord(value.base) ? value.base : {};
+      const checks =
+        parsed.kind === "pull" && includeChecks
+          ? await fetchPullChecks(repositoryUrl, head.sha, url + "/checks", readPage)
+          : undefined;
+      const view = githubPreviewView(preview, host);
+      const metadata = githubChangeMetadata(
+        preview.additions,
+        preview.deletions,
+        preview.changedFiles,
+        preview.comments,
+      );
+      const headRef = readOptionalGitHubString(head, "ref")?.slice(0, 256);
+      const baseRef = readOptionalGitHubString(base, "ref")?.slice(0, 256);
+      return {
+        ...view,
+        metadata:
+          parsed.kind === "pull" && headRef && baseRef
+            ? [...metadata, { label: "Branch", value: headRef + " → " + baseRef }]
+            : metadata,
+        url,
+        revision:
+          parsed.kind === "pull" ? readOptionalGitHubString(head, "sha") : preview.updatedAt,
+        ...(section === "overview" ? { deferredSections } : {}),
+        ...content,
+        ...(checks ? { checks } : {}),
+        ...(includeDiscussion ? { comments, commentsTotal, commentsTruncated } : {}),
+        ...(includeFiles ? { files, filesTotal, filesTruncated } : {}),
+        partial:
+          content.bodyTruncated ||
+          commentsTruncated ||
+          filesTruncated ||
+          checks?.truncated === true ||
+          checks?.state === "unavailable" ||
+          comments.some((comment) => comment.bodyTruncated || comment.context?.diffTruncated) ||
+          files.some((file) => file.patchTruncated),
+      };
+    };
+    const document = await fetchDetail();
     if (section === "files" && parsed.kind === "pull") {
       // Files are not addressable by SHA. Refuse a diff if the head moved while
       // it was read; the next overview can then select the new revision.
@@ -592,19 +566,41 @@ export function loadGitHubDetail(
   refresh?: boolean,
 ): Promise<GitHubDocument>;
 export function loadGitHubDetail(
-  target: GitHubTarget,
+  target: GitHubJobTarget,
+  identity?: ControlUiGitHubPreviewIdentity,
+  fetchImpl?: typeof fetch,
+  refresh?: boolean,
+): Promise<ControlUiLinkReaderDocument>;
+export function loadGitHubDetail(
+  target: GitHubReadTarget,
   identity: ControlUiGitHubPreviewIdentity | undefined,
   fetchImpl: typeof fetch | undefined,
   refresh: boolean | undefined,
   section: GitHubDetailSection | undefined,
 ): Promise<ControlUiLinkReaderDocument>;
 export function loadGitHubDetail(
-  target: GitHubTarget,
+  target: GitHubReadTarget,
   identity?: ControlUiGitHubPreviewIdentity,
   fetchImpl: typeof fetch = fetch,
   refresh = false,
   section?: GitHubDetailSection,
 ): Promise<ControlUiLinkReaderDocument> {
+  if (target.kind === "job") {
+    const load = async (selected: ControlUiGitHubPreviewIdentity | undefined) => {
+      const { loadGitHubJobLog } = await import("./job-logs.js");
+      return loadGitHubJobLog(target, selected, fetchImpl, async (expectedId) =>
+        readPublicRepository(
+          `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`,
+          fetchImpl,
+          selected,
+          expectedId,
+        ),
+      );
+    };
+    return identity?.optionalAuth
+      ? withOptionalGitHubAuth(identity.token, (token) => load({ ...identity, token }))
+      : load(identity);
+  }
   return identity?.optionalAuth
     ? withOptionalGitHubAuth(identity.token, (token) =>
         loadGitHubDetailWithIdentity(

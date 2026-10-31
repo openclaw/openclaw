@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { OpenClawPluginApi, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   PluginStateCompareIntent,
   PluginStateKeyedStore,
@@ -12,93 +12,25 @@ import {
   type RecipePreparation,
 } from "./crabbox-worker-warm-image-recipe.js";
 import {
+  crabboxWarmImageCaptureStatus,
+  isCrabboxWarmImageHeld,
   legacyLeaseSelector,
   LEGACY_WARM_LEASE_MAX_ENTRIES,
   projectCrabboxLegacyWarmLeases,
   WARM_IMAGE_MAX_ENTRIES,
+  withoutCrabboxWarmImageOperation,
+  type WarmAllocationRecord,
+  type WarmColdReason,
+  type WarmImageRecord,
+  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-records.js";
 
 export type CrabboxState = Pick<OpenClawPluginApi["runtime"]["state"], "openKeyedStoreV2">;
-
-type WorkerNodeRuntimeIdentity = NonNullable<
-  NonNullable<Parameters<WorkerProvider["provision"]>[2]>["nodeRuntimeIdentity"]
->;
-export type WarmStartStatus = Parameters<
-  NonNullable<NonNullable<Parameters<WorkerProvider["provision"]>[2]>["reportStartStatus"]>
->[0];
-export type WarmColdReason = Extract<WarmStartStatus, { mode: "cold" }>["reason"];
-
-export type WarmImageRecord = {
-  checkpointId: string;
-  kind: string;
-  state: "pending" | "available";
-  createdAtMs: number;
-  preparationKey: string | null;
-  cacheKey: string | null;
-  purpose: "session" | "reserve" | null;
-  lastDemandAtMs: number | null;
-  pinned?: { atMs: number };
-  baseCommit?: string;
-  /** Runtime content attested by successful preparation before this capture. */
-  runtimeIdentity?: WorkerNodeRuntimeIdentity;
-};
-
-export type WarmAllocationRecord = {
-  coldReason?: WarmColdReason;
-  choice: { kind: "cold" } | { kind: "checkpoint"; checkpointId: string };
-  machineClass: string;
-  /** Absent in existing Linux allocations. */
-  os?: CrabboxOperatingSystem;
-  phase: "pending" | "prepared" | "enrolled";
-  /** Failed detected setup must never be published, including during teardown. */
-  captureSkipped?: string;
-  preparationKey: string | null;
-  cacheKey: string | null;
-  purpose: "session" | "reserve" | null;
-  demandAtMs: number | null;
-  imageGeneration: { checkpointId: string; createdAtMs: number } | null;
-  /** A cold preparation admitted against a pin may replace only that publication. */
-  publicationBase?: { checkpointId: string; createdAtMs: number };
-  baseCommit?: string;
-  /** Frozen target; preparation/enrollment must verify it before capture can publish it. */
-  runtimeIdentity?: WorkerNodeRuntimeIdentity;
-};
-
-export type WarmProfileRecord = {
-  version: 3;
-  latestColdReason?: WarmColdReason;
-  /** Configured profile that most recently allocated from this key; display only. */
-  profileId?: string;
-  backend?: string;
-  machineClass?: string;
-  os?: CrabboxOperatingSystem;
-  projectLabel?: string;
-  projectRoot?: string;
-  projectKey?: string;
-  recipePreparation?: RecipePreparation;
-  recipePreparationAtMs?: number;
-  image?: WarmImageRecord;
-  previous?: WarmImageRecord;
-  /** Latest native-capture refusal; retained for display without suppressing later attempts. */
-  captureUnsupported?: { atMs: number; provider: string; message: string };
-  allocations: Record<string, WarmAllocationRecord>;
-  operation?:
-    | {
-        type: "capture";
-        id: string;
-        startedAtMs: number;
-        leaseId?: string;
-        provider?: string;
-        phase: "scrubbing" | "creating" | "uncertain";
-      }
-    | { type: "retire"; checkpointId: string };
-};
 
 export class CrabboxWarmImageRequestError extends Error {}
 // Match the former enrollment registry's capacity without evicting replay obligations;
 // 256 bounded lease records leave ample room under the plugin store's 1 MiB row limit.
 const WARM_IMAGE_MAX_ALLOCATIONS = 256;
-const CAPTURE_WARNING_AGE_MS = 1_200_000;
 
 const openLegacyLeases = (state: CrabboxState, env?: NodeJS.ProcessEnv) =>
   state.openKeyedStoreV2<unknown>({
@@ -241,16 +173,6 @@ export function withCrabboxWarmImageGeneration(
   const next = update(image);
   return next ? { ...record, [field]: next } : undefined;
 }
-
-export const isCrabboxWarmImageHeld = (
-  record: Pick<WarmProfileRecord, "allocations">,
-  checkpointId: string,
-) =>
-  Object.values(record.allocations).some(
-    ({ choice, imageGeneration }) =>
-      (choice.kind === "checkpoint" && choice.checkpointId === checkpointId) ||
-      imageGeneration?.checkpointId === checkpointId,
-  );
 
 export function assertCrabboxWarmImagePreparation(
   preparation:
@@ -618,34 +540,6 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
   };
 }
 
-export function withoutCrabboxWarmImageOperation(record: WarmProfileRecord): WarmProfileRecord {
-  const profile = { ...record };
-  delete profile.operation;
-  return profile;
-}
-
-export function crabboxWarmImageCaptureStatus(record: WarmProfileRecord) {
-  const capture = record.operation?.type === "capture" ? record.operation : undefined;
-  if (!capture) {
-    return undefined;
-  }
-  return {
-    selector: capture.id,
-    startedAtMs: capture.startedAtMs,
-    ...(capture.leaseId ? { leaseId: capture.leaseId } : {}),
-    ...(capture.provider ? { provider: capture.provider } : {}),
-    phase: capture.phase,
-    stale: Date.now() - capture.startedAtMs >= CAPTURE_WARNING_AGE_MS,
-  };
-}
-
-export const CRABBOX_WARM_IMAGE_WAIT_HINT =
-  "The capture may still be preparing its source or waiting for provider readiness. Inspect openclaw crabbox warm-images --json and allow the owning capture to settle.";
-
-export function crabboxWarmImageRecoveryHint(selector: string): string {
-  return `Stop the owning Gateway and capture processes, confirm any worker being recovered is stopped, and resolve any untracked checkpoint in the Crabbox catalog before running: openclaw crabbox warm-images --recover ${selector} --acknowledge-provider-cleanup. Then restart the Gateway; the next eligible worker can capture again.`;
-}
-
 export async function listCrabboxWarmImages(state: CrabboxState, env?: NodeJS.ProcessEnv) {
   return (await openCrabboxWarmImageStore(state, env).entries()).map(({ key, value }) =>
     projectCrabboxWarmImage(key, value),
@@ -695,29 +589,45 @@ export function projectCrabboxWarmImage(key: string, value: WarmProfileRecord) {
   };
 }
 
-/** Recovery closes only the capture generation; allocation decisions remain authoritative. */
+/** Normal capture completion retains allocations; confirmed source cleanup may release its hold. */
 export async function clearCrabboxWarmImageCapture(
   store: ReturnType<typeof openCrabboxWarmImageStore>,
   key: string,
   selector: string,
+  options: { assertCurrent?: () => void; releaseSourceAllocation?: boolean } = {},
 ): Promise<boolean> {
-  const matches = (current: WarmProfileRecord) =>
-    current.operation?.type === "capture" && current.operation.id === selector;
+  const sourceLeaseId = (current: WarmProfileRecord) =>
+    options.releaseSourceAllocation && current.operation?.type === "capture"
+      ? current.operation.leaseId
+      : undefined;
+  const matches = (current: WarmProfileRecord) => {
+    options.assertCurrent?.();
+    return current.operation?.type === "capture" && current.operation.id === selector;
+  };
   if (
     await store.deleteIf(
       key,
       (current) =>
         !current.image &&
         !current.previous &&
-        Object.keys(current.allocations).length === 0 &&
+        Object.keys(current.allocations).every((id) => id === sourceLeaseId(current)) &&
         matches(current),
     )
   ) {
     return true;
   }
-  return store.update(key, (current) =>
-    current && matches(current) ? withoutCrabboxWarmImageOperation(current) : undefined,
-  );
+  return store.update(key, (current) => {
+    if (!current || !matches(current)) {
+      return undefined;
+    }
+    const next = withoutCrabboxWarmImageOperation(current);
+    const leaseId = sourceLeaseId(current);
+    if (leaseId && next.allocations[leaseId]) {
+      next.allocations = { ...next.allocations };
+      delete next.allocations[leaseId];
+    }
+    return next;
+  });
 }
 
 export async function recoverCrabboxWarmImageCapture(
@@ -755,7 +665,12 @@ export async function recoverCrabboxWarmImageCapture(
   const entry = (await store.entries()).find(
     ({ value }) => crabboxWarmImageCaptureStatus(value)?.selector === selector,
   );
-  if (!entry || !(await clearCrabboxWarmImageCapture(store, entry.key, selector))) {
+  if (
+    !entry ||
+    !(await clearCrabboxWarmImageCapture(store, entry.key, selector, {
+      releaseSourceAllocation: true,
+    }))
+  ) {
     throw new Error(
       "Capture selector is absent or changed; rerun openclaw crabbox warm-images --json. No state was changed.",
     );

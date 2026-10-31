@@ -21,11 +21,14 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
+import { resolveMcpLoopbackScopedTools } from "../../../gateway/mcp-http.runtime.js";
 import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
+import { readAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
+import { buildCliMcpGrantContext } from "../../cli-runner/mcp-grant-context.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { spawnAcpDirect } from "./acp-spawn.js";
@@ -51,6 +54,70 @@ function useInProcessSpawns(beforeDispatch?: (params: Record<string, unknown>) =
     },
   });
 }
+
+function inspectChildCredit(profileIds: string[] | undefined, checkActor = false) {
+  const inspect = vi.fn(({ sessionKey }: Record<string, unknown>) => {
+    if (typeof sessionKey !== "string") {
+      throw new Error("Expected a child dispatch key");
+    }
+    const child = loadSessionEntryReadOnly({ agentId: "main", sessionKey });
+    expect(child?.inheritedGitContributorProfileIds).toEqual(profileIds);
+    expect(child?.participants ?? []).toEqual([]);
+    if (checkActor) {
+      expect(child?.createdActor).toEqual({ type: "agent", id: "main" });
+    }
+  });
+  useInProcessSpawns(inspect);
+  return inspect;
+}
+
+it("preserves a nonowner CLI requester's credit through mediated spawn", async () => {
+  const { cfg, admitted, admission, parent } = await fixture.createBoundParent();
+  try {
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: fixture.parentSessionKey },
+      { inheritedGitContributorProfileIds: ["unrelated-a", "unrelated-b"] },
+    );
+    // Only model dispatch is external: grant projection, tool construction, and child writes are real.
+    const inspectChild = inspectChildCredit(["verified-cli-requester"], true);
+    const context = buildCliMcpGrantContext({
+      run: {
+        sessionId: "parent-session",
+        sessionKey: fixture.parentSessionKey,
+        sessionFile: "unused-cli-transcript",
+        workspaceDir: fixture.stateDir,
+        provider: "fixture-cli",
+        prompt: "Delegate this task",
+        timeoutMs: 1_000,
+        runId: fixture.parentRunId,
+        senderIsOwner: false,
+        gitContributorProfileId: "verified-cli-requester",
+      },
+      config: cfg,
+      requireExplicitMessageTarget: false,
+      agentId: "main",
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+    });
+    context.toolsAllow = ["sessions_spawn"];
+    const { tools } = await resolveMcpLoopbackScopedTools({
+      cfg,
+      context,
+      admittedRunContext: admitted,
+    });
+    const spawn = tools.find((tool) => tool.name === "sessions_spawn");
+    if (!spawn) {
+      throw new Error("Expected the mediated spawn tool");
+    }
+    const result = await spawn.execute("cli-spawn-credit", { task: "Implement the CLI request" });
+    expect(result.details).toMatchObject({ status: "accepted" });
+    expect(inspectChild).toHaveBeenCalledOnce();
+    expect(readAdmittedRunOperatorAuthority(admitted)).toBeUndefined();
+  } finally {
+    admission.close();
+    parent.cleanup();
+  }
+});
 
 it.each([false, true])(
   "plans children without host reads and sees committed requester preferences (proxied completion=%s)",
@@ -270,25 +337,13 @@ it("inherits accepted human credit when participant persistence is still queued"
   const agentId = "main";
   const sessionKey = fixture.parentSessionKey;
   // Dispatch sees initial child credit, before acceptance records its agent participant.
-  const inspectChild = vi.fn(({ sessionKey: childKey }: Record<string, unknown>) => {
-    if (typeof childKey !== "string") {
-      throw new Error("Expected a child dispatch key");
-    }
-    const child = loadSessionEntryReadOnly({ agentId, sessionKey: childKey });
-    expect(child?.inheritedGitContributorProfileIds).toEqual(["human-requester"]);
-    expect(child?.participants ?? []).toEqual([]);
-  });
-  useInProcessSpawns(inspectChild);
+  const inspectChild = inspectChildCredit(["human-requester"]);
   const storePath = resolveOpenClawAgentSqlitePath({ agentId });
   const scope = { agentId, sessionKey, storePath };
   await upsertSessionEntryCore(scope, { sessionId: "parent-id", updatedAt: 1 });
-  const releaseWriter = createDeferredCore();
-  const writerStarted = createDeferredCore();
-  const heldWriter = runOpenClawAgentWriteAdmission({ agentId, path: storePath }, async () => {
-    writerStarted.resolve();
-    await releaseWriter.promise;
-  });
-  await writerStarted.promise;
+  const writerGate = createEnteredGate();
+  const heldWriter = runOpenClawAgentWriteAdmission({ agentId, path: storePath }, writerGate.wait);
+  await writerGate.entered;
   const work = new AsyncWorkScope();
   const errors: unknown[] = [];
   try {
@@ -305,9 +360,9 @@ it("inherits accepted human credit when participant persistence is still queued"
     expect(loadSessionEntryReadOnly(scope)?.participants ?? []).toEqual([]);
     const creation = spawnSubagentDirect(
       { task: "inherit accepted credit", context: "isolated" },
-      { agentSessionKey: sessionKey },
+      { agentSessionKey: sessionKey, gitContributorProfileId: "human-requester" },
     );
-    releaseWriter.resolve();
+    writerGate.release();
     await heldWriter;
     const result = await creation;
     expect(result).toMatchObject({ status: "accepted" });
@@ -319,8 +374,35 @@ it("inherits accepted human credit when participant persistence is still queued"
       { identity: { type: "profile", id: "human-requester" } },
     ]);
   } finally {
-    releaseWriter.resolve();
+    writerGate.release();
     await heldWriter;
     await work.drain();
   }
 });
+
+it.each(["requester-c", undefined])(
+  "scopes a shared-main native child's credit to the admitted request (%s)",
+  async (gitContributorProfileId) => {
+    const sessionKey = fixture.parentSessionKey;
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      {
+        sessionId: "parent-id",
+        updatedAt: 1,
+        inheritedGitContributorProfileIds: ["unrelated-a", "unrelated-b"],
+      },
+    );
+    const inspected = inspectChildCredit(gitContributorProfileId ? ["requester-c"] : undefined);
+    const result = await spawnSubagentDirect(
+      { task: "isolated Discord task", context: "isolated" },
+      {
+        agentSessionKey: sessionKey,
+        agentChannel: "discord",
+        agentTo: "channel:synthetic-thread",
+        gitContributorProfileId,
+      },
+    );
+    expect(result).toMatchObject({ status: "accepted" });
+    expect(inspected).toHaveBeenCalledOnce();
+  },
+);

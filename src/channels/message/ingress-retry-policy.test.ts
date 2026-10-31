@@ -1,9 +1,10 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it } from "vitest";
+import { PreparedModelRuntimeRecoveryError } from "../../agents/prepared-model-runtime-admission-errors.js";
 import {
+  createIngressRetryPolicy,
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-  resolveIngressFailureDisposition,
   resolveIngressRetryDelayMs,
   shouldDeadLetterRetryableIngressEvent,
 } from "./ingress-retry-policy.js";
@@ -17,11 +18,11 @@ const wrapError = (cause: Error) =>
 function disposition(
   err: unknown,
   attempts: number,
-  options: Partial<Parameters<typeof resolveIngressFailureDisposition>[0]> = {},
+  options: Partial<Parameters<ReturnType<typeof createIngressRetryPolicy>["failure"]>[0]> = {},
 ) {
-  return resolveIngressFailureDisposition({
+  return createIngressRetryPolicy({}).failure({
     err,
-    event: { receivedAt: 1_000, attempts },
+    event: { id: "input", receivedAt: 1_000, attempts },
     formatError: coerceErrorMessage,
     now: 2_000,
     ...options,
@@ -29,6 +30,64 @@ function disposition(
 }
 
 describe("ingress retry policy", () => {
+  it("counts real recovery failures independently of other dispatch attempts", () => {
+    const policy = createIngressRetryPolicy({});
+    const error = wrapError(new PreparedModelRuntimeRecoveryError("main", "attempt-failed", 7_000));
+    const event = { id: "input", receivedAt: 1_000, attempts: 8 };
+    const fail = (err: unknown) =>
+      policy.failure({ err, event, formatError: coerceErrorMessage, now: 2_000 });
+    expect(fail(error)).toMatchObject({
+      kind: "release",
+      attempt: 9,
+      recordAttempt: true,
+    });
+    expect(fail(new Error("transient dispatch failure"))).toMatchObject({ kind: "release" });
+    expect(fail(error)).toMatchObject({
+      kind: "fail",
+      reason: "runtime-recovery-failed",
+    });
+    policy.clear(event.id);
+    expect(fail(error)).toMatchObject({ kind: "release" });
+  });
+
+  it("preserves backoff across drains of the same live queue without spending an attempt", () => {
+    const queue = {};
+    const policy = createIngressRetryPolicy(queue);
+    const event = { id: "input", receivedAt: 1_000, attempts: 1 };
+    const fail = (reason: "attempt-failed" | "backoff") =>
+      policy.failure({
+        err: new PreparedModelRuntimeRecoveryError("main", reason, 7_000),
+        event,
+        formatError: coerceErrorMessage,
+      });
+    expect(fail("attempt-failed")).toMatchObject({ kind: "release" });
+    expect(fail("backoff")).toMatchObject({ kind: "release", attempt: 1, recordAttempt: false });
+    const nextDrain = createIngressRetryPolicy(queue);
+    expect(nextDrain.delay(event, undefined, 2_000)).toBe(5_000);
+    expect(nextDrain.delay(event, undefined, 7_000)).toBe(0);
+    expect(fail("attempt-failed")).toMatchObject({
+      kind: "fail",
+      reason: "runtime-recovery-failed",
+    });
+  });
+
+  it("isolates queue owners and clears recovery state for completed rows", () => {
+    const policy = createIngressRetryPolicy({});
+    const event = { id: "input", receivedAt: 1_000 };
+    const params = {
+      err: new PreparedModelRuntimeRecoveryError("main", "attempt-failed", 7_000),
+      event,
+      formatError: coerceErrorMessage,
+    };
+    policy.failure(params);
+    expect(createIngressRetryPolicy({}).delay(event, undefined, 2_000)).toBe(0);
+    policy.clear(event.id);
+    expect(policy.delay(event, undefined, 2_000)).toBe(0);
+    expect(policy.failure(params)).toMatchObject({ kind: "release" });
+    policy.clear(event.id);
+    expect(policy.delay(event, undefined, 2_000)).toBe(0);
+  });
+
   it.each([
     {
       name: "default cap",
@@ -145,45 +204,6 @@ describe("ingress retry policy", () => {
     });
   });
 
-  it("dead-letters a restart tombstone by structured code instead of wording", () => {
-    const message = "This generation is terminal.";
-    const tombstone = codedError(message, "SESSION_RESTART_RECOVERY_TOMBSTONE");
-    const wrapped = wrapError(tombstone);
-    expect(
-      disposition(wrapped, 0, {
-        config: { maxAttempts: 8, deadLetterMinAgeMs: 24 * 60 * 60 * 1000 },
-      }),
-    ).toEqual({
-      kind: "fail",
-      reason: "restart-recovery-tombstone",
-      message: wrapped.message,
-      attempt: 1,
-    });
-    expect(disposition(tombstone, 425)).toMatchObject({
-      kind: "fail",
-      reason: "restart-recovery-tombstone",
-      attempt: 426,
-    });
-  });
-
-  it.each([undefined, "SESSION_WORK_START_INVALIDATED"])(
-    "keeps tombstone-like text retryable without its code: %s",
-    (code) => {
-      const err = Object.assign(
-        new Error("Session ended during restart recovery. Use /new or /reset."),
-        { code },
-      );
-      expect(
-        resolveIngressFailureDisposition({
-          err,
-          event: { receivedAt: 1_000, attempts: 0 },
-          formatError: coerceErrorMessage,
-          now: 2_000,
-        }),
-      ).toEqual({ kind: "release", attempt: 1, message: err.message });
-    },
-  );
-
   it.each(["code", "cause", "errors"])(
     "releases a transient failure when its %s getter throws",
     (field) => {
@@ -192,42 +212,13 @@ describe("ingress retry policy", () => {
           throw new Error("unavailable diagnostic field");
         },
       });
-      expect(
-        resolveIngressFailureDisposition({
-          err,
-          event: { receivedAt: 1_000, attempts: 0 },
-          formatError: coerceErrorMessage,
-          now: 2_000,
-        }),
-      ).toEqual({ kind: "release", attempt: 1, message: "temporary failure" });
+      expect(disposition(err, 0)).toEqual({
+        kind: "release",
+        attempt: 1,
+        message: "temporary failure",
+      });
     },
   );
-
-  it("finds the terminal code beside an inaccessible wrapper field", () => {
-    const err = Object.assign(new Error("reply admission refused"), {
-      error: Object.assign(new Error("terminal generation"), {
-        code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
-      }),
-    });
-    Object.defineProperty(err, "cause", {
-      get() {
-        throw new Error("unavailable diagnostic field");
-      },
-    });
-    expect(
-      resolveIngressFailureDisposition({
-        err,
-        event: { receivedAt: 1_000, attempts: 0 },
-        formatError: coerceErrorMessage,
-        now: 2_000,
-      }),
-    ).toEqual({
-      kind: "fail",
-      reason: "restart-recovery-tombstone",
-      attempt: 1,
-      message: "reply admission refused",
-    });
-  });
 
   it("keeps wrapped session-start conflicts under both retry and age gates", () => {
     const maxAttempts = 3;
@@ -255,10 +246,7 @@ describe("ingress retry policy", () => {
       attempt: maxAttempts,
     });
     expect(
-      resolveIngressFailureDisposition({
-        err: wrapped,
-        event: { receivedAt: 1_000, attempts: maxAttempts - 1 },
-        formatError: coerceErrorMessage,
+      disposition(wrapped, maxAttempts - 1, {
         config: { maxAttempts },
         now: 1_000 + DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
       }),

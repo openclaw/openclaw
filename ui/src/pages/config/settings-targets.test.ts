@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import { loadControlUiSourceCatalog } from "../../../../scripts/lib/control-ui-i18n-catalog.ts";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import {
+  ADVANCED_EXCLUDED_SECTIONS,
   configPageForSection,
   configSectionKeysForPage,
-  SCOPED_CONFIG_SECTION_KEYS,
   type ConfigPageId,
 } from "./config-sections.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
@@ -46,7 +46,7 @@ describe("settings config section ownership", () => {
     const sections = pages.flatMap((page) => configSectionKeysForPage(page) ?? []);
 
     expect(new Set(sections).size).toBe(sections.length);
-    expect([...SCOPED_CONFIG_SECTION_KEYS].toSorted()).toEqual([...sections, "plugins"].toSorted());
+    expect(new Set(ADVANCED_EXCLUDED_SECTIONS)).toEqual(new Set([...sections, "plugins"]));
   });
 
   it("keeps uncurated sections on Advanced", () => {

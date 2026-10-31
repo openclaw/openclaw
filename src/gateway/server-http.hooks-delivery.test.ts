@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -90,10 +91,15 @@ async function dispatchPayload(
   handler: ReturnType<typeof createHooksRequestHandler>,
   payload: Record<string, unknown>,
   path = "/hooks/agent",
+  error?: string,
 ) {
   readJsonBodyMock.mockResolvedValueOnce({ ok: true, value: payload });
   const response = createResponse();
   await handler(createHookRequest({ url: path }), response.res);
+  expect(response.res.statusCode).toBe(error ? 400 : 200);
+  if (error) {
+    expect(response.getBody()).toContain(error);
+  }
   return response;
 }
 
@@ -109,13 +115,8 @@ describe("hook request delivery normalization", () => {
 
   test("binds direct delivery only to a concrete channel and recipient", async () => {
     const { handler, dispatchAgentHook } = createDeliveryHandler();
-    const send = async (payload: Record<string, unknown> = {}, error?: string) => {
-      const response = await dispatchPayload(handler, { message: "Direct", ...payload });
-      expect(response.res.statusCode).toBe(error ? 400 : 200);
-      if (error) {
-        expect(response.getBody()).toContain(error);
-      }
-    };
+    const send = (payload: Record<string, unknown> = {}, error?: string) =>
+      dispatchPayload(handler, { message: "Direct", ...payload }, "/hooks/agent", error);
     await send();
     expect(dispatchAgentHook.mock.calls[0]?.[0]).toMatchObject({
       channel: "last",
@@ -147,10 +148,8 @@ describe("hook request delivery normalization", () => {
         deliveryMapping("recipient-only", { to: "123456" }),
       ],
     });
-    const channelOnly = await dispatchPayload(mapped.handler, {}, "/hooks/channel-only");
-    const recipientOnly = await dispatchPayload(mapped.handler, {}, "/hooks/recipient-only");
-    expect(channelOnly.res.statusCode).toBe(200);
-    expect(recipientOnly.res.statusCode).toBe(200);
+    await dispatchPayload(mapped.handler, {}, "/hooks/channel-only");
+    await dispatchPayload(mapped.handler, {}, "/hooks/recipient-only");
     expect(mapped.dispatchAgentHook.mock.calls[0]?.[0]).toMatchObject({
       delivery: { mode: "announce", channel: "delivery-test", to: undefined },
     });
@@ -160,8 +159,7 @@ describe("hook request delivery normalization", () => {
     const optedOut = createDeliveryHandler({
       mappings: [deliveryMapping("channel-only", { deliver: false, channel: "delivery-test" })],
     });
-    const optedOutResponse = await dispatchPayload(optedOut.handler, {}, "/hooks/channel-only");
-    expect(optedOutResponse.res.statusCode).toBe(200);
+    await dispatchPayload(optedOut.handler, {}, "/hooks/channel-only");
     expect(optedOut.dispatchAgentHook).toHaveBeenCalledWith(
       expect.objectContaining({
         deliver: false,
@@ -176,9 +174,7 @@ describe("hook request delivery normalization", () => {
     ["/hooks/wake", { text: "Wake", agentId: "  " }],
   ])("rejects a blank direct agentId on %s without dispatch", async (path, payload) => {
     const { handler, dispatchAgentHook, dispatchWakeHook } = createDeliveryHandler();
-    const response = await dispatchPayload(handler, payload, path);
-    expect(response.res.statusCode).toBe(400);
-    expect(response.getBody()).toContain("agentId must be a non-empty string");
+    await dispatchPayload(handler, payload, path, "agentId must be a non-empty string");
     expect(dispatchAgentHook).not.toHaveBeenCalled();
     expect(dispatchWakeHook).not.toHaveBeenCalled();
   });
@@ -195,8 +191,7 @@ describe("hook request delivery normalization", () => {
         },
       ],
     });
-    const mapping = await dispatchPayload(handler, {}, "/hooks/mapped-unknown-agent");
-    expect(mapping.res.statusCode).toBe(200);
+    await dispatchPayload(handler, {}, "/hooks/mapped-unknown-agent");
     expect(dispatchAgentHook).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "main", effectiveAgentId: "main" }),
     );
@@ -218,9 +213,12 @@ describe("hook request delivery normalization", () => {
         knownAgentIds: new Set(["ops", "research"]),
       },
     });
-    const response = await dispatchPayload(handler, { message: "Direct", agentId: "research" });
-    expect(response.res.statusCode).toBe(400);
-    expect(response.getBody()).toContain(error);
+    const response = await dispatchPayload(
+      handler,
+      { message: "Direct", agentId: "research" },
+      "/hooks/agent",
+      error,
+    );
     expect(response.getBody()).not.toContain("agentId is required");
     expect(dispatchAgentHook).not.toHaveBeenCalled();
   });
@@ -257,15 +255,9 @@ describe("createHooksRequestHandler timeout status mapping", () => {
     const server = createServer((req, res) => {
       tasks.push(handler(req, res));
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing listener");
-    }
+    const origin = await listenLoopback(server);
     try {
-      const response = await fetch(`http://127.0.0.1:${address.port}/hooks/wake`, {
+      const response = await fetch(`${origin}/hooks/wake`, {
         method: "POST",
         headers: { Authorization: "Bearer hook-secret" },
         body: "{}",

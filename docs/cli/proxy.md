@@ -78,7 +78,7 @@ The debug proxy's direct upstream forwarding opens upstream sockets for diagnost
 
 `sessions` lists recent capture sessions (`--limit`, default 20).
 
-`query --preset <name>` runs a built-in query against captured traffic, optionally scoped to `--session <id>`. Presets:
+`query --preset <name>` runs a built-in query against captured traffic, optionally scoped to `--session <id>`. Unknown or empty preset names exit with code 1 and list the accepted choices, including with `--json`. Presets:
 
 - `double-sends`
 - `retry-storms`

@@ -1,15 +1,27 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, getOwner, merge } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
 
 type QueueProps = Parameters<typeof renderChatQueueSolid>[0];
 const queues = new WeakMap<HTMLElement, (props: QueueProps) => void>();
+const keydown = (key: string, extra: KeyboardEventInit = {}) =>
+  new KeyboardEvent("keydown", { key, bubbles: true, ...extra });
+const find = (root: ParentNode | null | undefined, part: string) =>
+  root?.querySelector<HTMLElement>(`.chat-queue__${part}`);
+const text = (root: ParentNode | null | undefined, part: string) =>
+  find(root, part)?.textContent?.trim();
+const all = <T extends Element = HTMLElement>(root: ParentNode, part: string) =>
+  Array.from(root.querySelectorAll<T>(`.chat-queue__${part}`));
+function drag(target: Element, type: string, properties: object) {
+  target.dispatchEvent(
+    Object.assign(new Event(type, { bubbles: true, cancelable: type === "drop" }), properties),
+  );
+}
 
 afterEach(async () => {
   document.body.replaceChildren();
@@ -19,143 +31,85 @@ afterEach(async () => {
 });
 
 describe("chat composer steering queue", () => {
-  it("keeps attempted unconfirmed messages inline while local commands retain retry and discard", () => {
+  it("keeps held messages inline while failed local commands retain retry and discard", () => {
     const onQueueRetry = vi.fn();
     const onQueueRemove = vi.fn();
     const container = renderQueue({
       queue: [
-        {
-          id: "message",
-          text: "Already attempted",
-          createdAt: 1,
-          sendState: "unconfirmed",
-          sendAttempts: 1,
-        },
-        {
-          id: "reset",
+        waiting("message", 1, { sendState: "held", sendAttempts: 1 }),
+        waiting("reset", 2, {
           text: "/reset",
           localCommandName: "reset",
-          createdAt: 2,
-          sendState: "unconfirmed",
-          sendError: "Check the conversation before retrying the command.",
+          sendState: "failed",
+          sendError: "The command was rejected.",
           sendAttempts: 1,
-        },
+        }),
       ],
       onQueueRetry,
       onQueueRemove,
     });
 
-    const rows = container.querySelectorAll(".chat-queue__item");
+    const rows = all(container, "item");
     expect(rows).toHaveLength(1);
-    expect(container.querySelector(".chat-queue__global-state")?.textContent?.trim()).toBe(
-      "Queue paused. Retry or discard the earlier unconfirmed message in the conversation.",
+    expect(text(container, "global-state")).toBe(
+      "Queue paused. Review or discard the earlier held message in the conversation.",
     );
     expect(rows[0]?.getAttribute("data-chat-queue-item")).toBe("reset");
-    expect(rows[0]?.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe(
-      t("chat.queue.states.needsReview"),
-    );
-    rows[0]?.querySelector<HTMLButtonElement>(".chat-queue__retry")?.click();
-    rows[0]?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
+    expect(text(rows[0], "badge")).toBe(t("common.failed"));
+    find(rows[0], "retry")?.click();
+    find(rows[0], "remove")?.click();
     expect(onQueueRetry).toHaveBeenCalledWith("reset");
     expect(onQueueRemove).toHaveBeenCalledWith("reset");
   });
 
   it("renders one actionable steer control without a duplicate state badge", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
     const onQueueSteer = vi.fn();
-    renderQueue(
-      {
-        canAbort: true,
-        queue: [
-          {
-            id: "steer-1",
-            text: "change course",
-            createdAt: 1,
-            queueMode: "steer",
-            sendState: "waiting-idle",
-          },
-        ],
-        onQueueSteer,
-        onQueueRemove: vi.fn(),
-      },
-      container,
-    );
+    const container = renderQueue({
+      canAbort: true,
+      queue: [waiting("steer-1", 1, { queueMode: "steer", sendState: "waiting-idle" })],
+      onQueueSteer,
+    });
 
-    expect(container.querySelector(".chat-queue__badge")).toBeNull();
-    const steerButton = container.querySelector<HTMLButtonElement>(".chat-queue__steer");
+    expect(find(container, "badge")).toBeNull();
+    const steerButton = find(container, "steer");
     expect(steerButton?.textContent?.trim()).toBe(t("chat.queue.steer"));
     steerButton?.click();
     expect(onQueueSteer).toHaveBeenCalledWith("steer-1");
-    expect(container.querySelector(".chat-queue__state")).toBeNull();
-    expect(container.querySelector(".chat-queue__global-state")).toBeNull();
-    const icon = container.querySelector(".chat-queue__icon");
-    expect(icon?.querySelector('path[d="M21 5v12a2 2 0 0 1-2 2h-6"]')).not.toBeNull();
-    expect(icon?.querySelector('path[d="M12 19V5m-7 7 7-7 7 7"]')).toBeNull();
-    expect(icon?.querySelector("circle")).toBeNull();
+    expect(find(container, "state")).toBeNull();
+    expect(find(container, "global-state")).toBeNull();
   });
 
-  it("keeps the queue identifier on failed and unconfirmed rows", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    renderQueue(
-      {
-        queue: [
-          {
-            id: "failed-steer",
-            text: "change course",
-            createdAt: 1,
-            queueMode: "steer",
-            sendState: "failed",
-            sendError: "steer rejected",
-          },
-          {
-            id: "unconfirmed",
-            text: "review this delivery",
-            createdAt: 2,
-            sendState: "unconfirmed",
-          },
-        ],
-        onQueueRemove: vi.fn(),
-      },
-      container,
-    );
+  it("keeps the queue identifier on failed and held rows", () => {
+    const container = renderQueue({
+      queue: [
+        waiting("failed", 1, { queueMode: "steer", sendState: "failed", sendError: "rejected" }),
+        waiting("held", 2, { sendState: "held" }),
+      ],
+    });
 
-    const rows = [...container.querySelectorAll(".chat-queue__item")];
+    const rows = all(container, "item");
     expect(rows).toHaveLength(2);
-    for (const terminalRow of rows) {
-      const terminalIcon = terminalRow.querySelector(".chat-queue__icon");
-      expect(terminalIcon?.querySelector('path[d="M21 5v12a2 2 0 0 1-2 2h-6"]')).not.toBeNull();
-      expect(terminalIcon?.querySelector('path[d^="m21.73 18"]')).toBeNull();
-    }
-    const row = rows[0];
-    expect(row?.classList.contains("chat-queue__item--failed")).toBe(true);
-    expect(row?.querySelector(".chat-queue__error .chat-queue__badge")?.textContent?.trim()).toBe(
-      t("common.failed"),
-    );
+    expect(rows.map((row) => row.getAttribute("data-chat-queue-item"))).toEqual(["failed", "held"]);
+    expect(rows[0]?.classList.contains("chat-queue__item--failed")).toBe(true);
+    expect(text(rows[0], "error .chat-queue__badge")).toBe(t("common.failed"));
   });
 });
 
 function renderQueue(
-  props: QueueProps,
+  options: Omit<QueueProps, "onQueueRemove"> & Partial<Pick<QueueProps, "onQueueRemove">>,
   container = document.body.appendChild(document.createElement("div")),
 ) {
+  const props: QueueProps = { onQueueRemove: vi.fn(), ...options };
   const update = queues.get(container);
   if (update) {
     update(props);
   } else {
-    const [current, setCurrent] = createSignal(props, { ownedWrite: true });
-    const view = mountSolid(() => createComponent(renderChatQueueSolid, merge(current)), {
-      container,
-    });
-    queues.set(container, setCurrent);
+    const view = mountSolid(renderChatQueueSolid, props, container);
+    queues.set(container, (nextProps) => view.update(nextProps));
     onTestFinished(() => {
       queues.delete(container);
-      view.unmount();
+      view.dispose();
     });
-  }
-  if (!getOwner()) {
-    flush();
   }
   return container;
 }
@@ -163,252 +117,179 @@ function renderQueue(
 function queueEdit(overrides: Partial<NonNullable<QueueProps["queuedEdit"]>>) {
   return { editingId: null, onCancel: vi.fn(), ...overrides };
 }
+function editFixture(editingText?: string) {
+  const callbacks = { onEditChange: vi.fn(), onEditSubmit: vi.fn(), onCancel: vi.fn() };
+  const props = {
+    queue: [waiting("a", 1)],
+    queuedEdit: queueEdit({ editingId: "a", editingText, ...callbacks }),
+  };
+  const container = renderQueue(props);
+  return {
+    props,
+    container,
+    editor: container.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")!,
+    change: callbacks.onEditChange,
+    submit: callbacks.onEditSubmit,
+    cancel: callbacks.onCancel,
+  };
+}
 
-const waiting = (id: string, createdAt: number) => ({
-  id,
-  text: id,
-  createdAt,
-  sendState: "waiting-reconnect" as const,
-});
+const waiting = (
+  id: string,
+  createdAt: number,
+  overrides: Partial<QueueProps["queue"][number]> = {},
+) => ({ id, text: id, createdAt, sendState: "waiting-reconnect" as const, ...overrides });
+const items = (
+  ids: string,
+  sendState: QueueProps["queue"][number]["sendState"] = "waiting-reconnect",
+) => ids.split("").map((id, index) => waiting(id, index + 1, { sendState }));
 
 describe("chat composer queue reordering", () => {
   it("caps long queues and records both scroll boundaries", () => {
-    const container = renderQueue({
-      queue: [waiting("a", 1), waiting("b", 2), waiting("c", 3), waiting("d", 4)],
-      onQueueRemove: vi.fn(),
-    });
-    const scroll = container.querySelector<HTMLElement>(".chat-queue__scroll")!;
+    const container = renderQueue({ queue: items("abcd") });
+    const scroll = find(container, "scroll")!;
     Object.defineProperties(scroll, {
       clientHeight: { configurable: true, value: 149 },
       scrollHeight: { configurable: true, value: 220 },
     });
 
-    expect(scroll.dataset.scrollable).toBe("true");
-    expect(scroll.dataset.atStart).toBe("true");
-    expect(scroll.dataset.atEnd).toBe("false");
+    expect(scroll.dataset).toMatchObject({ scrollable: "true", atStart: "true", atEnd: "false" });
     scroll.scrollTop = 24;
     scroll.dispatchEvent(new Event("scroll"));
-    expect(scroll.dataset.atStart).toBe("false");
-    expect(scroll.dataset.atEnd).toBe("false");
+    expect(scroll.dataset).toMatchObject({ atStart: "false", atEnd: "false" });
     scroll.scrollTop = 71;
     scroll.dispatchEvent(new Event("scroll"));
     expect(scroll.dataset.atEnd).toBe("true");
   });
 
   it("auto-scrolls a long queue while a drag stays near its edge", () => {
-    const frames: FrameRequestCallback[] = [];
-    const requestFrame = vi.fn((callback: FrameRequestCallback) => {
-      frames.push(callback);
-      return frames.length;
-    });
+    const { frames, request } = createFrameQueue();
+    const requestFrame = vi.fn(request);
     const cancelFrame = vi.fn();
     vi.stubGlobal("requestAnimationFrame", requestFrame);
     vi.stubGlobal("cancelAnimationFrame", cancelFrame);
-    const container = renderQueue({
-      queue: [waiting("a", 1), waiting("b", 2), waiting("c", 3), waiting("d", 4)],
-      onQueueMove: vi.fn(),
-      onQueueRemove: vi.fn(),
-    });
-    const scroll = container.querySelector<HTMLElement>(".chat-queue__scroll")!;
-    vi.spyOn(scroll, "getBoundingClientRect").mockReturnValue({
-      bottom: 100,
-      height: 100,
-      left: 0,
-      right: 100,
-      top: 0,
-      width: 100,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    });
+    const container = renderQueue({ queue: items("abcd"), onQueueMove: vi.fn() });
+    // Settle text measurement before observing the drag's animation frames.
+    frames.splice(0).forEach((frame) => frame(0));
+    requestFrame.mockClear();
+    const scroll = find(container, "scroll")!;
+    vi.spyOn(scroll, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
     scroll.scrollTop = 10;
-    const dragOver = new Event("dragover", { bubbles: true });
-    Object.defineProperties(dragOver, {
-      clientY: { value: 99 },
-      dataTransfer: { value: { types: ["application/x-openclaw-queued-message"] } },
+    drag(scroll, "dragover", {
+      clientY: 99,
+      dataTransfer: { types: ["application/x-openclaw-queued-message"] },
     });
-    scroll.dispatchEvent(dragOver);
     expect(requestFrame).toHaveBeenCalledOnce();
     frames.shift()?.(0);
     expect(scroll.scrollTop).toBeGreaterThan(10);
 
-    const dragLeave = new Event("dragleave", { bubbles: true });
-    Object.defineProperty(dragLeave, "relatedTarget", { value: null });
-    scroll.dispatchEvent(dragLeave);
+    drag(scroll, "dragleave", { relatedTarget: null });
     expect(cancelFrame).toHaveBeenCalled();
   });
 
-  it("leaves other keys alone on the handle", () => {
+  it.each([false, true])("ignores non-reorder gestures (editing=%s)", (editing) => {
     const onQueueMove = vi.fn();
     const container = renderQueue({
-      queue: [waiting("a", 1), waiting("b", 2)],
+      queue: items(editing ? "abc" : "ab"),
+      queuedEdit: editing ? queueEdit({ editingId: "b" }) : undefined,
       onQueueMove,
-      onQueueRemove: vi.fn(),
     });
 
-    const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
-    container.querySelector(".chat-queue__grip")!.dispatchEvent(event);
+    const rows = all(container, "item");
+    const grips = rows.map((row) => find(row, "grip"));
+    if (editing) {
+      expect(grips.every((grip) => grip !== null)).toBe(true);
+      expect(grips.map((grip) => grip!.hasAttribute("disabled"))).toEqual([true, true, true]);
+      expect(rows[1]?.classList.contains("chat-queue__item--editing")).toBe(true);
+    }
 
-    expect(onQueueMove).not.toHaveBeenCalled();
-    expect(event.defaultPrevented).toBe(false);
-  });
-
-  it("holds the column with an inert handle on the row being edited", () => {
-    const onQueueMove = vi.fn();
-    const container = renderQueue({
-      queue: [waiting("a", 1), waiting("b", 2), waiting("c", 3)],
-      queuedEdit: queueEdit({ editingId: "b" }),
-      onQueueMove,
-      onQueueRemove: vi.fn(),
-    });
-
-    const rows = [...container.querySelectorAll(".chat-queue__item")];
-    const grips = rows.map((row) => row.querySelector(".chat-queue__grip"));
-    expect(grips.every((grip) => grip !== null)).toBe(true);
-    // The edited row holds the drain, so it splits the queue: neither neighbour
-    // has anywhere to go, and every handle waits without leaving the column.
-    expect(grips.map((grip) => grip!.hasAttribute("disabled"))).toEqual([true, true, true]);
-    expect(rows[1]?.classList.contains("chat-queue__item--editing")).toBe(true);
-
-    const event = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true });
-    grips[1]!.dispatchEvent(event);
+    const event = keydown(editing ? "ArrowUp" : "Enter", { cancelable: true });
+    grips[editing ? 1 : 0]!.dispatchEvent(event);
 
     expect(onQueueMove).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(false);
   });
 
   it("renders the inline editor while keeping other rows actionable", () => {
-    const onQueueEdit = vi.fn();
-    const onQueueSteer = vi.fn();
     const onQueueRemove = vi.fn();
     const container = renderQueue({
       canAbort: true,
-      queue: [
-        { id: "a", text: "a", createdAt: 1, sendState: "waiting-idle" },
-        { id: "b", text: "b", createdAt: 2, sendState: "waiting-idle" },
-        { id: "c", text: "c", createdAt: 3, sendState: "waiting-idle" },
-      ],
-      queuedEdit: queueEdit({ editingId: "b", onEdit: onQueueEdit }),
-      onQueueSteer,
+      queue: items("abc", "waiting-idle"),
+      queuedEdit: queueEdit({ editingId: "b", onEdit: vi.fn() }),
+      onQueueSteer: vi.fn(),
       onQueueMove: vi.fn(),
       onQueueRemove,
     });
 
-    const rows = [...container.querySelectorAll(".chat-queue__item")];
-    expect(rows.map((row) => row.querySelector(".chat-queue__overflow") !== null)).toEqual([
-      true,
-      false,
-      true,
-    ]);
-    expect(rows[1]?.querySelector(".chat-queue__edit-input")).not.toBeNull();
-    expect(rows[1]?.querySelector(".chat-queue__edit-submit")).not.toBeNull();
-    expect(rows[1]?.querySelector(".chat-queue__edit-cancel")).not.toBeNull();
-    expect(rows.map((row) => row.querySelector(".chat-queue__action") !== null)).toEqual([
-      true,
-      false,
-      true,
-    ]);
+    const rows = all(container, "item");
+    const has = (part: string) => rows.map((row) => find(row, part) !== null);
+    expect(has("overflow")).toEqual([true, false, true]);
+    expect(has("action")).toEqual([true, false, true]);
+    const disabled = (part: string) =>
+      rows.map((row) => find(row, part)?.hasAttribute("disabled") ?? false);
+    expect(disabled("more")).toEqual([true, false, true]);
+    expect(disabled("remove")).toEqual([false, false, false]);
+    for (const part of ["edit-input", "edit-submit", "edit-cancel"]) {
+      expect(find(rows[1], part)).not.toBeNull();
+    }
 
-    const disabled = (selector: string) =>
-      rows.map((row) => row.querySelector(selector)?.hasAttribute("disabled") ?? false);
-    expect(disabled(".chat-queue__more")).toEqual([true, false, true]);
-    expect(disabled(".chat-queue__remove")).toEqual([false, false, false]);
-
-    rows[2]?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
+    find(rows[2], "remove")?.click();
     expect(onQueueRemove).toHaveBeenCalledWith("c");
   });
 
-  it("routes inline draft changes, submit, cancel, and keyboard shortcuts", () => {
-    const onQueueEditChange = vi.fn();
-    const onQueueEditSubmit = vi.fn();
-    const onQueueEditCancel = vi.fn();
-    const props = {
-      queue: [waiting("a", 1)],
-      queuedEdit: queueEdit({
-        editingId: "a",
-        editingText: "a draft",
-        onEditChange: onQueueEditChange,
-        onEditSubmit: onQueueEditSubmit,
-        onCancel: onQueueEditCancel,
-      }),
-      onQueueRemove: vi.fn(),
-    };
-    const container = renderQueue(props);
-    const editor = container.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")!;
+  it.each([false, true])("routes queue editing on mobile=%s", (mobile) => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(mobile ? "Android" : "Windows");
+    const { props, container, editor, change, submit, cancel } = editFixture("a draft");
     expect(editor.value).toBe("a draft");
     editor.dispatchEvent(new FocusEvent("focus"));
     expect(editor.selectionStart).toBe(editor.value.length);
     editor.value = "updated draft";
     editor.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onQueueEditChange).toHaveBeenCalledWith("updated draft");
+    expect(change).toHaveBeenCalledWith("updated draft");
     const valueWrites = vi.spyOn(editor, "value", "set");
     const publishDraft = (editingText: string) =>
       renderQueue({ ...props, queuedEdit: { ...props.queuedEdit, editingText } }, container);
     publishDraft("updated draft");
-    expect(container.querySelector(".chat-queue__edit-input")).toBe(editor);
+    expect(find(container, "edit-input")).toBe(editor);
     expect(valueWrites).not.toHaveBeenCalled();
     publishDraft("recovered draft");
     expect(editor.value).toBe("recovered draft");
     expect(valueWrites).toHaveBeenCalledExactlyOnceWith("recovered draft");
-    editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(onQueueEditCancel).toHaveBeenCalledOnce();
-    editor.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true }),
-    );
-    expect(onQueueEditSubmit).not.toHaveBeenCalled();
-    editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(onQueueEditSubmit).toHaveBeenCalledOnce();
+    editor.dispatchEvent(keydown("Escape"));
+    expect(cancel).toHaveBeenCalledOnce();
+    editor.dispatchEvent(keydown("Enter", { shiftKey: true }));
+    expect(submit).not.toHaveBeenCalled();
+    const enter = keydown("Enter", { cancelable: true });
+    editor.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(!mobile);
+    expect(submit).toHaveBeenCalledTimes(mobile ? 0 : 1);
+    if (mobile) {
+      container.querySelector<HTMLButtonElement>(".chat-queue__edit-submit")!.click();
+      expect(submit).toHaveBeenCalledOnce();
+    }
   });
 
   it("leaves queue editor shortcuts to IME confirmation until keyup", () => {
-    const onQueueEditSubmit = vi.fn();
-    const onQueueEditCancel = vi.fn();
-    const container = renderQueue({
-      queue: [waiting("a", 1)],
-      queuedEdit: queueEdit({
-        editingId: "a",
-        onEditSubmit: onQueueEditSubmit,
-        onCancel: onQueueEditCancel,
-      }),
-      onQueueRemove: vi.fn(),
-    });
-    const editor = container.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")!;
-    const composingEnter = new KeyboardEvent("keydown", {
-      key: "Enter",
-      bubbles: true,
-      cancelable: true,
-      isComposing: true,
-    });
-    const legacyImeEscape = new KeyboardEvent("keydown", {
-      key: "Escape",
-      bubbles: true,
-      cancelable: true,
-      keyCode: 229,
-    });
+    const { editor, submit, cancel } = editFixture();
+    const composingEnter = keydown("Enter", { cancelable: true, isComposing: true });
+    const legacyImeEscape = keydown("Escape", { cancelable: true, keyCode: 229 });
 
     editor.dispatchEvent(composingEnter);
     editor.dispatchEvent(legacyImeEscape);
     const compositionEnd = new CompositionEvent("compositionend", { bubbles: true });
     editor.dispatchEvent(compositionEnd);
-    const confirmingEnter = new KeyboardEvent("keydown", {
-      key: "Enter",
-      keyCode: 13,
-      bubbles: true,
-      cancelable: true,
-    });
-    Object.defineProperty(confirmingEnter, "timeStamp", {
-      value: compositionEnd.timeStamp - 1,
-    });
+    const confirmingEnter = keydown("Enter", { keyCode: 13, cancelable: true });
+    Object.defineProperty(confirmingEnter, "timeStamp", { value: compositionEnd.timeStamp - 1 });
     editor.dispatchEvent(confirmingEnter);
 
-    expect(composingEnter.defaultPrevented).toBe(false);
-    expect(legacyImeEscape.defaultPrevented).toBe(false);
-    expect(confirmingEnter.defaultPrevented).toBe(false);
-    expect(onQueueEditSubmit).not.toHaveBeenCalled();
-    expect(onQueueEditCancel).not.toHaveBeenCalled();
+    expect(
+      [composingEnter, legacyImeEscape, confirmingEnter].map((event) => event.defaultPrevented),
+    ).toEqual([false, false, false]);
+    expect(submit).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
     editor.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
-    editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(onQueueEditSubmit).toHaveBeenCalledOnce();
+    editor.dispatchEvent(keydown("Enter"));
+    expect(submit).toHaveBeenCalledOnce();
   });
 
   it("edits and explicitly removes queued recipients without reassigning identical labels", () => {
@@ -417,19 +298,17 @@ describe("chat composer queue reordering", () => {
       { profileId: "first-alex", start: 0, end: 5 },
       { profileId: "second-alex", start: 6, end: 11 },
     ];
-    const container = document.createElement("div");
-    document.body.append(container);
+    const container = document.body.appendChild(document.createElement("div"));
     const draw = () =>
       renderQueue(
         {
           queue: [{ ...waiting("a", 1), text: "@Alex @Alex" }],
-          onQueueRemove: vi.fn(),
           queuedEdit: queueEdit({
             editingId: "a",
             editingText,
             editingMentions,
-            onEditChange: (text, mentions) => {
-              editingText = text;
+            onEditChange: (draft, mentions) => {
+              editingText = draft;
               editingMentions = mentions ?? [];
               draw();
             },
@@ -455,70 +334,36 @@ describe("chat composer queue reordering", () => {
     expect(container.textContent).not.toContain("Will notify:");
   });
 
-  it("projects one offline state on each row without a queue header", () => {
-    const container = renderQueue({
-      offline: true,
-      queue: [{ id: "a", text: "a", createdAt: 1, queueMode: "steer", sendState: "waiting-idle" }],
-      onQueueRemove: vi.fn(),
-    });
-
-    const row = container.querySelector(".chat-queue__item");
-    expect(row?.classList.contains("chat-queue__item--reconnect")).toBe(true);
-    expect(row?.querySelectorAll(".chat-queue__badge")).toHaveLength(1);
-    expect(row?.querySelector(".chat-queue__badge--reconnect")?.textContent?.trim()).toBe(
-      t("chat.queue.states.waitingForReconnect"),
-    );
-    expect(row?.querySelector(".chat-queue__state")).toBeNull();
-    expect(container.querySelectorAll(".chat-queue__global-state")).toHaveLength(0);
-  });
-
   it("projects applying settings once and preserves the steer affordance", () => {
     const container = renderQueue({
       canAbort: true,
       queue: [
-        {
-          id: "a",
-          text: "a",
-          createdAt: 1,
-          queueMode: "steer",
-          sendState: "waiting-model",
-        },
-        { id: "b", text: "b", createdAt: 2, sendState: "waiting-model" },
+        waiting("a", 1, { queueMode: "steer", sendState: "waiting-model" }),
+        waiting("b", 2, { sendState: "waiting-model" }),
       ],
       onQueueSteer: vi.fn(),
-      onQueueRemove: vi.fn(),
     });
 
-    expect(container.querySelectorAll(".chat-queue__global-state")).toHaveLength(1);
-    expect(container.querySelector(".chat-queue__global-state")?.textContent?.trim()).toBe(
-      t("chat.queue.states.applyingSettings"),
-    );
-    expect(container.querySelectorAll(".chat-queue__state")).toHaveLength(0);
-    const steerButtons = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__steer")];
+    expect(all(container, "global-state")).toHaveLength(1);
+    expect(text(container, "global-state")).toBe(t("chat.queue.states.applyingSettings"));
+    expect(all(container, "state")).toHaveLength(0);
+    const steerButtons = all<HTMLButtonElement>(container, "steer");
     expect(steerButtons).toHaveLength(2);
     expect(steerButtons.every((button) => button.disabled)).toBe(true);
-    expect(container.querySelectorAll(".chat-queue__badge--steered")).toHaveLength(1);
+    expect(all(container, "badge--steered")).toHaveLength(1);
   });
 
   it("reports the drop position of the row the message was dropped on", () => {
     const onQueueMove = vi.fn();
-    const container = renderQueue({
-      queue: [waiting("a", 1), waiting("b", 2), waiting("c", 3)],
-      onQueueMove,
-      onQueueRemove: vi.fn(),
+    const container = renderQueue({ queue: items("abc"), onQueueMove });
+    const rows = all(container, "item");
+    drag(rows[0]!, "drop", {
+      dataTransfer: {
+        types: ["application/x-openclaw-queued-message"],
+        getData: () => "c",
+        dropEffect: "none",
+      },
     });
-    const rows = [...container.querySelectorAll(".chat-queue__item")];
-    const dataTransfer = {
-      types: ["application/x-openclaw-queued-message"],
-      getData: () => "c",
-      setData: vi.fn(),
-      dropEffect: "none",
-      effectAllowed: "none",
-    };
-
-    const drop = new Event("drop", { bubbles: true, cancelable: true });
-    Object.defineProperty(drop, "dataTransfer", { value: dataTransfer });
-    rows[0]!.dispatchEvent(drop);
 
     expect(onQueueMove.mock.calls).toEqual([["c", "a"]]);
   });

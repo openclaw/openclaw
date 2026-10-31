@@ -7,6 +7,7 @@ import {
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { completeInitialSessionTurn } from "./initial-session-turn-handoff.ts";
 import { InstantThreadHandoff } from "./instant-thread-handoff.ts";
+import { createNewSessionRouteData } from "./location.test-support.ts";
 import * as rejected from "./rejected-initial-turn.ts";
 import { StartedSessionNavigation } from "./started-session-navigation.ts";
 
@@ -36,13 +37,7 @@ describe("first-turn publication", () => {
       key,
       "main",
       {
-        data: {
-          agentId: "main",
-          requestedAgentId: "main",
-          catalogId: "",
-          catalogLabel: "",
-          startTerminal: false,
-        },
+        data: createNewSessionRouteData(),
         page: document.createElement("div"),
         release: vi.fn(),
         synchronizeGateway: vi.fn(),
@@ -102,13 +97,7 @@ describe("first-turn publication", () => {
         key,
         "main",
         {
-          data: {
-            agentId: "main",
-            requestedAgentId: "main",
-            catalogId: "",
-            catalogLabel: "",
-            startTerminal: false,
-          },
+          data: createNewSessionRouteData(),
           page: document.createElement("div"),
           release: vi.fn(),
           synchronizeGateway: vi.fn(),

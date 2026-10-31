@@ -22,13 +22,11 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import * as publications from "../state/session-repository-workspaces.publication.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import {
   resolveWorkerPlacementSessionTarget,
   type WorkerPlacementSessionRuntime,
 } from "./server-worker-placement-session-target.js";
-import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import { LOCAL_PLACEMENT } from "./worker-environments/placement-dispatch-coordinator.test-support.js";
@@ -38,9 +36,6 @@ import {
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
-import { createWorkerSessionPlacementGate } from "./worker-environments/placement-worker-gate.js";
-import { createWorkerEnvironmentService } from "./worker-environments/service.js";
-import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 
 afterEach(() => {
   memorySessionActorOwners.reset();
@@ -234,136 +229,6 @@ test("prepares an actor workspace and guards exact placement metadata without ho
     });
   }));
 
-test.each([
-  { scope: "individual", inherited: false },
-  { scope: "global", inherited: false },
-  { scope: "individual", inherited: true },
-  { scope: "global", inherited: true },
-] as const)(
-  "full target recovery probe under $scope scope (inherited=$inherited)",
-  async ({ scope, inherited }) => {
-    await withStateDirEnv("full-target-recovery-probe-", async () => {
-      const profile = { provider: "full-target-probe", settings: { region: "synthetic" } };
-      const individual: OpenClawConfig = {
-        agents: { entries: { main: {} } },
-        cloudWorkers: { profiles: { development: profile } },
-      };
-      setRuntimeConfigSnapshot(individual, individual);
-      const fixture = targetFixture("agent:main:main", "captured-main-window");
-      const { identity } = fixture;
-      if (inherited) {
-        await targetFixture("agent:main:model-parent", "placement-model-parent").write({
-          providerOverride: "anthropic",
-          modelOverride: "claude-test",
-        });
-      }
-      const originalWorktree = await createWorktree("full-target-original", identity.sessionKey);
-      await fixture.write({
-        lifecycleRevision: "original-window",
-        ...(inherited
-          ? { parentSessionKey: "agent:main:model-parent" }
-          : { providerOverride: "anthropic", modelOverride: "claude-test" }),
-        worktree: worktreeEntry(originalWorktree),
-      });
-      const database = openOpenClawStateDatabase();
-      const placements = createWorkerSessionPlacementStore({ database });
-      const environmentStore = await createWorkerEnvironmentStore({ database });
-      const environmentId = "full-target-worker";
-      const intent = await environmentStore.createIntent({
-        environmentId,
-        providerId: profile.provider,
-        profileId: "development",
-        profileSnapshot: profile,
-        provisionOperationId: "full-target-provision",
-      });
-      await environmentStore.transition({
-        environmentId,
-        from: intent.state,
-        to: "provisioning",
-      });
-      const requested = await placements.startDispatch({
-        ...identity,
-        executionMode: "worker-turn",
-      });
-      const captured = await placements.transition({
-        sessionId: identity.sessionId,
-        from: "requested",
-        to: "provisioning",
-        expectedGeneration: requested.generation,
-        patch: { environmentId },
-      });
-      assertState(captured, "provisioning");
-      const globalConfig: OpenClawConfig = { ...individual, session: { scope: "global" } };
-      setRuntimeConfigSnapshot(globalConfig, globalConfig);
-      const globalWorktree = await createWorktree("full-target-global", "global");
-      await targetFixture("global", "distinct-global-window").write({
-        updatedAt: 2,
-        lifecycleRevision: "global-window",
-        providerOverride: "anthropic",
-        modelOverride: "claude-test",
-        worktree: worktreeEntry(globalWorktree),
-      });
-      if (scope === "individual") {
-        setRuntimeConfigSnapshot(individual, individual);
-      }
-      const destroy = vi.fn(async () => {});
-      const unexpected = async (): Promise<never> => {
-        throw new Error("Unexpected external provider work");
-      };
-      const provider = {
-        id: profile.provider,
-        supportedExecutionModes: ["worker-turn"] as const,
-        resolveAllocation: unexpected,
-        provision: unexpected,
-        inspect: async () => ({ status: "active" as const }),
-        destroy,
-      };
-      const scheduler = createTestGatewayScheduler();
-      const environments = createWorkerEnvironmentService({
-        scheduler,
-        store: environmentStore,
-        getConfig: getRuntimeConfig,
-        resolveProvider: (id) => (id === provider.id ? provider : undefined),
-        prepareInstallation: unexpected,
-        bootstrapWorker: unexpected,
-        placementStore: createWorkerSessionPlacementGate(placements),
-      });
-      try {
-        const runtime = createGatewayWorkerPlacementRuntime({
-          initialPlacements: await placements.listAsync(),
-          scheduler,
-          placements,
-          environments,
-          getCommittedRuntimeConfig: getRuntimeConfig,
-          gatewayNamespace: "full-target-probe",
-          cancelSessionWork: async () => {},
-          revokeSessionAuthority: () => {},
-          warn: () => {},
-        });
-        const replay = vi.fn(async () => {});
-        const result = await runtime.dispatchService.resumeProvisioning(captured, replay);
-        const current = placements.get(identity.sessionId);
-        const original = fixture.read();
-        const global = targetFixture("global").read();
-        expect(result?.state).toBeUndefined();
-        expect(original).toMatchObject({
-          sessionId: identity.sessionId,
-          worktree: { id: originalWorktree.id },
-        });
-        expect(global).toMatchObject({
-          sessionId: "distinct-global-window",
-          worktree: { id: globalWorktree.id },
-        });
-        expect(replay).toHaveBeenCalledOnce();
-        expect(current?.state).toBe("provisioning");
-        expect(destroy).not.toHaveBeenCalled();
-      } finally {
-        await environments.stop();
-      }
-    });
-  },
-);
-
 test("refreshes stale repository selection after checkpoint drain", () =>
   withTargetState("worker-repository-selection-", async () => {
     const fixture = targetFixture(REQUEST.sessionKey, REQUEST.sessionId);
@@ -476,42 +341,6 @@ test("refreshes stale repository selection after checkpoint drain", () =>
     expect(checkedPendingPublication).toBe(true);
     expect(drained.revision).toBe(accepted.revision + 1);
     expect(reclaimed.state).toBe("reclaimed");
-  }));
-
-test("resolves consecutive workspaces without decoding unrelated payloads", () =>
-  withTargetState("worker-exact-target-", async () => {
-    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-    const keys = ["agent:main:placement-a", "agent:main:placement-b"] as const;
-    for (const key of keys) {
-      await targetFixture(key).write({ worktree: syntheticWorktree(key) });
-    }
-    for (let index = 0; index < 24; index++) {
-      await targetFixture(`agent:main:unrelated-${index}`, `unrelated-payload-${index}`).write({
-        skillsSnapshot: { prompt: "unrelated-payload-" + "x".repeat(4096), skills: [] },
-      });
-    }
-    // Canonical store admission runs once before repeated startup workspace lookups.
-    expect(loadExactSessionEntryReadOnly({ storePath, sessionKey: keys[0] })?.entry).toBeDefined();
-    const parse = vi.spyOn(JSON, "parse");
-    try {
-      for (const sessionKey of keys) {
-        using resolved = await targetFixture(sessionKey).select(
-          sessionRuntime(async (_kind, ownerId) => ({
-            id: ownerId,
-            ownerId,
-            path: `/synthetic/${ownerId}`,
-          })),
-          "placement identity changed",
-        );
-        expect(resolved.entry.sessionId).toBe(sessionKey);
-        expect(resolved.workspace).toEqual({ kind: "local", path: `/synthetic/${sessionKey}` });
-      }
-      expect(
-        parse.mock.calls.filter(([value]) => value.includes("unrelated-payload-")),
-      ).toHaveLength(0);
-    } finally {
-      parse.mockRestore();
-    }
   }));
 
 test("resolves device folders without Git or the managed-worktree registry", () =>

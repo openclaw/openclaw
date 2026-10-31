@@ -14,6 +14,14 @@ Use `sandbox.backend: "podman"` to select the native `podman` CLI directly. This
 
 Podman reuses the existing `sandbox.docker.*` settings and the active native `podman` CLI context; it adds no separate connection configuration surface.
 
+On Linux, a rootless local Podman backend launched from a delegated Gateway
+service uses a transient systemd user scope for its container commands. This
+keeps Podman and its container processes in the same user-manager cgroup tree,
+including when restarting an existing sandbox or running `exec`. The user
+manager and its bus must be available to the Gateway. Keep `Delegate=yes`,
+`DelegateSubgroup=gateway`, and the sandbox's resource limits enabled; switching
+the cgroup manager or clearing `INVOCATION_ID` does not repair this boundary.
+
 Rootless Podman defaults to `--userns=keep-id` for writable workspace mounts. A long-lived sandbox can reserve subordinate IDs and block unrelated `--userns=auto` workloads; remove it before starting those workloads. Set `sandbox.docker.user` to a nonzero numeric UID or UID:GID to control the container user. Rootless Podman rejects UID or GID 0 because Podman 4.x cannot remap namespace root while preserving workspace bind ownership; bake root-required setup into the image or use rootful Podman. Rootful Podman otherwise uses the workspace owner when available.
 
 ```json5
@@ -26,7 +34,7 @@ Rootless Podman defaults to `--userns=keep-id` for writable workspace mounts. A 
         scope: "session",
         workspaceAccess: "rw",
         docker: {
-          image: "openclaw-sandbox:bookworm-slim",
+          image: "openclaw-sandbox:trixie-slim",
           network: "none",
           readOnlyRoot: true,
           capDrop: ["ALL"],
@@ -40,7 +48,7 @@ Rootless Podman defaults to `--userns=keep-id` for writable workspace mounts. A 
 Build or pull the sandbox image into the selected Podman store before enabling the backend. From a source checkout, build the same sandbox Dockerfile with Podman:
 
 ```bash
-podman build -t openclaw-sandbox:bookworm-slim -f scripts/docker/sandbox/Dockerfile .
+podman build -t openclaw-sandbox:trixie-slim -f scripts/docker/sandbox/Dockerfile .
 ```
 
 ## Changing connections and upgrading existing sandboxes
@@ -112,3 +120,5 @@ A containerized Gateway creates sibling sandboxes through the host's local Podma
 - **Keep Podman access Gateway-only**: never mount the engine socket, connection material, or SSH identity into agent sandboxes. Arbitrary remote connections are unsupported; use the SSH backend instead.
 
 </Warning>
+
+Each running rootless Podman container holds a session keyring charged to the engine host user's kernel key quota. Busy hosts can exhaust the default quota and fail with `create keyring: Disk quota exceeded` even with free disk space. On the engine host, use `sudo sysctl -w kernel.keys.maxkeys=2000 kernel.keys.maxbytes=200000` and persist both values in a file under `/etc/sysctl.d/`. OpenClaw retries a quota failure once after stopping at most one least-recently-used inactive sandbox; active contexts, live or uncertain exec processes, and persistent Docker exec custody prevent reclamation. Stopping preserves the writable layer but ends processes and clears `tmpfs`; regular idle and age removal policies are unchanged.

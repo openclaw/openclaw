@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import { vi } from "vitest";
+import { createChangeListeners } from "../../../src/shared/listeners.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createDraftFixture } from "../pages/new-session/draft-submission-flow.test-support.ts";
@@ -15,13 +16,11 @@ import { flush } from "./solid-settle.ts";
 
 export class PaletteDraftHost {
   readonly element = document.createElement("div");
-  readonly ownerDocument = document;
   readonly querySelector = this.element.querySelector.bind(this.element);
   readonly querySelectorAll = this.element.querySelectorAll.bind(this.element);
   private publish = () => {};
   private readonly onDraftChange = () => this.publish();
   private readonly unmount: () => void;
-  readonly context: ApplicationContext;
   paletteOpen = true;
   readonly started = vi.fn();
   readonly settingsReady = createDeferred();
@@ -48,10 +47,9 @@ export class PaletteDraftHost {
       onClose: () => this.started(),
     },
   );
-  constructor(context: ApplicationContext) {
-    this.context = context;
+  constructor(readonly context: ApplicationContext) {
     document.body.append(this.element);
-    const mounted = mountSolid(
+    this.unmount = mountSolid(
       () => {
         const [revision, setRevision] = createSignal({}, { ownedWrite: true });
         this.publish = () => setRevision({});
@@ -69,12 +67,8 @@ export class PaletteDraftHost {
           this.updated();
         });
         onSettled(() => {
-          const stops = [
-            context.agents,
-            context.agentIdentity,
-            context.sessions,
-            context.config,
-          ].map((source) => source.subscribe(this.onDraftChange));
+          const sources = [context.agents, context.agentIdentity, context.sessions, context.config];
+          const stops = sources.map((source) => source.subscribe(this.onDraftChange));
           this.draft.connect();
           this.onDraftChange();
           return () => {
@@ -96,8 +90,7 @@ export class PaletteDraftHost {
         );
       },
       { container: this.element },
-    );
-    this.unmount = mounted.unmount;
+    ).unmount;
   }
 
   get updateComplete() {
@@ -116,17 +109,12 @@ export class PaletteDraftHost {
 export async function mount(options: Parameters<typeof createDraftFixture>[0] = {}) {
   const fixture = createDraftFixture(options);
   const { context } = fixture;
-  const listeners = new Set<() => void>();
+  const changes = createChangeListeners();
   Object.assign(context.gateway, {
     connectionRevision: 1,
-    subscribe: (listener: () => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: changes.subscribe,
   });
   Object.assign(context.agents.state, { connected: true, client: context.gateway.snapshot.client });
-  Object.assign(context.sessions, { subscribe: () => () => {} });
-  Object.assign(context.config, { subscribe: () => () => {} });
   Object.assign(context, {
     agentIdentity: {
       subscribe: () => () => {},
@@ -140,5 +128,5 @@ export async function mount(options: Parameters<typeof createDraftFixture>[0] = 
   host.draft.open();
   await host.updateComplete;
   await host.updateComplete;
-  return { ...fixture, host, publish: () => listeners.forEach((listener) => listener()) };
+  return { ...fixture, host, publish: changes.publish };
 }

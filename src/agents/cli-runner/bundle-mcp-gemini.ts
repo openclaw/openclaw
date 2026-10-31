@@ -1,7 +1,7 @@
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { tryReadJson } from "../../infra/json-files.js";
-import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.types.js";
+import type { BundleMcpConfig } from "../../plugins/bundle-mcp.types.js";
 import {
   decodeHeaderEnvPlaceholder,
   isRecord,
@@ -12,17 +12,13 @@ import { withOpenClawMcpCaptureHeader, writeTemporaryBundleMcpJson } from "./bun
 
 const GEMINI_MCP_SERVER_FIELDS = { strings: ["type"], booleans: ["trust"] } as const;
 
-async function readJsonObject(filePath: string): Promise<Record<string, unknown>> {
-  const raw = await tryReadJson<unknown>(filePath);
-  return isRecord(raw) ? raw : {};
-}
-
 async function readGeminiBaseSettings(
   inheritedEnv: Record<string, string> | undefined,
 ): Promise<Record<string, unknown>> {
   const settingsPath =
     inheritedEnv?.GEMINI_CLI_SYSTEM_SETTINGS_PATH ?? process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
-  return settingsPath?.trim() ? await readJsonObject(settingsPath) : {};
+  const raw = settingsPath?.trim() ? await tryReadJson<unknown>(settingsPath) : undefined;
+  return isRecord(raw) ? raw : {};
 }
 
 function mergeGeminiWebSearchDisabled(base: Record<string, unknown>): Record<string, unknown> {
@@ -53,58 +49,6 @@ export async function writeGeminiWebSearchDisabledSettings(
   );
 }
 
-function resolveEnvPlaceholder(
-  value: string,
-  inheritedEnv: Record<string, string> | undefined,
-): string {
-  // Gemini settings need concrete header values; resolve placeholders from the
-  // inherited run env first, then the process env.
-  const decoded = decodeHeaderEnvPlaceholder(value);
-  if (!decoded) {
-    return value;
-  }
-  const resolved = inheritedEnv?.[decoded.envVar] ?? process.env[decoded.envVar] ?? "";
-  return decoded.bearer ? `Bearer ${resolved}` : resolved;
-}
-
-function normalizeGeminiServerConfig(
-  server: BundleMcpServerConfig,
-  inheritedEnv: Record<string, string> | undefined,
-  deniedTools: readonly string[] | undefined,
-): Record<string, unknown> | undefined {
-  const next = normalizeBundleMcpServerConfig(server, GEMINI_MCP_SERVER_FIELDS);
-  const headers = normalizeMcpStringRecord(server.headers);
-  if (headers) {
-    next.headers = Object.fromEntries(
-      Object.entries(headers).map(([name, value]) => [
-        name,
-        resolveEnvPlaceholder(value, inheritedEnv),
-      ]),
-    );
-  }
-  const toolFilter = isRecord(server.toolFilter) ? server.toolFilter : {};
-  const included = filterStringEntries(toolFilter.include);
-  if (included.length > 0) {
-    const existing = filterStringEntries(server.includeTools);
-    const finalIncluded =
-      existing.length > 0
-        ? included.filter((name) => existing.includes(name)).toSorted()
-        : [...new Set(included)].toSorted();
-    if (finalIncluded.length === 0) {
-      return undefined;
-    }
-    next.includeTools = finalIncluded;
-  }
-  const filteredDenied = filterStringEntries(toolFilter.exclude);
-  if (deniedTools?.length || filteredDenied.length > 0) {
-    const existing = filterStringEntries(server.excludeTools);
-    next.excludeTools = [
-      ...new Set([...existing, ...filteredDenied, ...(deniedTools ?? [])]),
-    ].toSorted();
-  }
-  return next;
-}
-
 export async function writeGeminiSystemSettings(
   mergedConfig: BundleMcpConfig,
   inheritedEnv: Record<string, string> | undefined,
@@ -114,12 +58,44 @@ export async function writeGeminiSystemSettings(
   const base = await readGeminiBaseSettings(inheritedEnv);
   const mcpServers = Object.fromEntries(
     Object.entries(mergedConfig.mcpServers).flatMap(([name, server]) => {
-      const normalized = normalizeGeminiServerConfig(
-        server,
-        inheritedEnv,
-        mcpToolsDeny && Object.hasOwn(mcpToolsDeny, name) ? mcpToolsDeny[name] : undefined,
-      );
-      return normalized ? [[name, normalized]] : [];
+      const deniedTools =
+        mcpToolsDeny && Object.hasOwn(mcpToolsDeny, name) ? mcpToolsDeny[name] : undefined;
+      const next = normalizeBundleMcpServerConfig(server, GEMINI_MCP_SERVER_FIELDS);
+      const headers = normalizeMcpStringRecord(server.headers);
+      if (headers) {
+        next.headers = Object.fromEntries(
+          Object.entries(headers).map(([headerName, value]) => {
+            // Gemini needs concrete headers, using the inherited run env before process env.
+            const decoded = decodeHeaderEnvPlaceholder(value);
+            if (!decoded) {
+              return [headerName, value];
+            }
+            const resolved = inheritedEnv?.[decoded.envVar] ?? process.env[decoded.envVar] ?? "";
+            return [headerName, decoded.bearer ? `Bearer ${resolved}` : resolved];
+          }),
+        );
+      }
+      const toolFilter = isRecord(server.toolFilter) ? server.toolFilter : {};
+      const included = filterStringEntries(toolFilter.include);
+      if (included.length > 0) {
+        const existing = filterStringEntries(server.includeTools);
+        const finalIncluded =
+          existing.length > 0
+            ? included.filter((toolName) => existing.includes(toolName)).toSorted()
+            : [...new Set(included)].toSorted();
+        if (finalIncluded.length === 0) {
+          return [];
+        }
+        next.includeTools = finalIncluded;
+      }
+      const filteredDenied = filterStringEntries(toolFilter.exclude);
+      if (deniedTools?.length || filteredDenied.length > 0) {
+        const existing = filterStringEntries(server.excludeTools);
+        next.excludeTools = [
+          ...new Set([...existing, ...filteredDenied, ...(deniedTools ?? [])]),
+        ].toSorted();
+      }
+      return [[name, next]];
     }),
   );
   const settings = applyMergePatch(

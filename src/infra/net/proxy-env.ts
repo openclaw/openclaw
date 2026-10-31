@@ -232,7 +232,7 @@ function parseIpv4Address(host: string): number | undefined {
       return undefined;
     }
     const octet = Number(part);
-    if (!Number.isInteger(octet) || octet < 0 || octet > 255) {
+    if (octet > 255) {
       return undefined;
     }
     value = (value << 8) | octet;
@@ -249,7 +249,7 @@ function matchesIpv4NoProxyPattern(target: number | undefined, entryHost: string
   if (cidrMatch) {
     const network = parseIpv4Address(expectDefined(cidrMatch[1], "cidr match capture group 1"));
     const prefixLength = Number(cidrMatch[2]);
-    if (network === undefined || prefixLength < 0 || prefixLength > 32) {
+    if (network === undefined || prefixLength > 32) {
       return false;
     }
     const mask = prefixLength === 0 ? 0 : (0xffffffff << (32 - prefixLength)) >>> 0;

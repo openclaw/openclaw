@@ -69,7 +69,7 @@ of tool and session policy.
       discord: { mode: "idle", idleMinutes: 30 },
     },
     resetTriggers: ["/new", "/reset"],
-    store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
+    store: "agents/{agentId}/sessions/sessions.json",
     maintenance: {
       mode: "enforce", // enforce (default) | warn
       pruneAfter: "30d",
@@ -122,6 +122,7 @@ of tool and session policy.
   - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Doctor migrates legacy `dm` entries to `direct`; the schema rejects `dm`.
 - **`resetByChannel`**: per-channel reset overrides keyed by provider/channel id. When the session's channel has a matching entry, it wins outright over `resetByType`/`reset` for that session. Use only when one channel needs reset behavior different from the type-level policy.
 - **`mainKey`**: accepted but ignored. The per-agent main-session suffix is always `main`; omit this field. Global session scope uses `global` instead.
+- **`store`**: session-store selector. Relative paths resolve against the active state directory (`OPENCLAW_STATE_DIR`, or the selected profile's state directory), independent of the Gateway's working directory. `{agentId}` expands to the owning agent id. Absolute paths and `~` paths keep their explicit locations. If an older version created a second store from a relative path, stop the Gateway and run `openclaw doctor --fix` to merge its sessions with backups before restarting.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: session-store cleanup + retention controls.
   - `mode`: `enforce` applies age, count, and disk-budget cleanup and is the default; `warn` reports those policies without applying them. The separate opt-in `coldStorage.enabled` switch controls cold transcript extraction independently.

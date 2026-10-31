@@ -2,6 +2,15 @@ import type { PassThrough } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
+function consultEvent(id: string, question: string) {
+  return {
+    itemId: `item-${id}`,
+    callId: `call-${id}`,
+    name: "openclaw_agent_consult",
+    args: { question },
+  };
+}
+
 defineDiscordVoiceTests(
   ({
     expect,
@@ -27,28 +36,13 @@ defineDiscordVoiceTests(
     expectUserMessageNotIncludes,
   }) => {
     it("queues forced agent-proxy answers until current realtime playback idles", async () => {
-      let resolveFirst: ((value: { payloads: Array<{ text: string }> }) => void) | undefined;
-      let resolveSecond: ((value: { payloads: Array<{ text: string }> }) => void) | undefined;
-      let resolveThird: ((value: { payloads: Array<{ text: string }> }) => void) | undefined;
+      const first = createDeferred<{ payloads: Array<{ text: string }> }>();
+      const second = createDeferred<{ payloads: Array<{ text: string }> }>();
+      const third = createDeferred<{ payloads: Array<{ text: string }> }>();
       agentCommandMock
-        .mockImplementationOnce(
-          () =>
-            new Promise<{ payloads: Array<{ text: string }> }>((resolve) => {
-              resolveFirst = resolve;
-            }),
-        )
-        .mockImplementationOnce(
-          () =>
-            new Promise<{ payloads: Array<{ text: string }> }>((resolve) => {
-              resolveSecond = resolve;
-            }),
-        )
-        .mockImplementationOnce(
-          () =>
-            new Promise<{ payloads: Array<{ text: string }> }>((resolve) => {
-              resolveThird = resolve;
-            }),
-        );
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(second.promise)
+        .mockReturnValueOnce(third.promise);
       const { bridgeParams, entry, player: rawPlayer } = await createJoinedAgentProxyFixture();
       const player = rawPlayer as {
         on: ReturnType<typeof vi.fn>;
@@ -63,12 +57,12 @@ defineDiscordVoiceTests(
         bridgeParams?.onTranscript?.("user", "third question", true);
       });
 
-      resolveFirst?.({ payloads: [{ text: "first answer" }] });
+      first.resolve({ payloads: [{ text: "first answer" }] });
       await vi.waitFor(() => expectUserMessageIncludes("first answer"));
       bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
 
-      resolveSecond?.({ payloads: [{ text: "second answer" }] });
-      resolveThird?.({ payloads: [{ text: "third answer" }] });
+      second.resolve({ payloads: [{ text: "second answer" }] });
+      third.resolve({ payloads: [{ text: "third answer" }] });
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -244,12 +238,7 @@ defineDiscordVoiceTests(
         guest.bridgeParams.onTranscript?.("user", "guest question", true);
         owner.bridgeParams.onTranscript?.("user", "owner question", true);
         void owner.bridgeParams.onToolCall?.(
-          {
-            itemId: "item-owner",
-            callId: "call-owner",
-            name: "openclaw_agent_consult",
-            args: { question: "owner question" },
-          },
+          consultEvent("owner", "owner question"),
           owner.session,
         );
         await Promise.resolve();
@@ -275,15 +264,7 @@ defineDiscordVoiceTests(
       beginSpeakerTurn(entry);
       await emitFinalRealtimeUserTranscript(bridgeParams, "late question");
 
-      void bridgeParams?.onToolCall?.(
-        {
-          itemId: "item-late",
-          callId: "call-late",
-          name: "openclaw_agent_consult",
-          args: { question: "late question" },
-        },
-        realtimeSessionMock,
-      );
+      void bridgeParams?.onToolCall?.(consultEvent("late", "late question"), realtimeSessionMock);
       await Promise.resolve();
       await Promise.resolve();
 
@@ -300,12 +281,7 @@ defineDiscordVoiceTests(
 
       realtimeSessionMock.bridge.supportsToolResultSuppression = false;
       void bridgeParams?.onToolCall?.(
-        {
-          itemId: "item-late-unsuppressed",
-          callId: "call-late-unsuppressed",
-          name: "openclaw_agent_consult",
-          args: { question: "late question" },
-        },
+        consultEvent("late-unsuppressed", "late question"),
         realtimeSessionMock,
       );
       await vi.waitFor(() => {
@@ -323,27 +299,18 @@ defineDiscordVoiceTests(
     });
 
     it("lets an unsuppressed in-flight native result own forced consult delivery", async () => {
-      let resolveAgentTurn: ((result: { payloads: Array<{ text: string }> }) => void) | undefined;
-      agentCommandMock.mockReturnValueOnce(
-        new Promise((resolve) => {
-          resolveAgentTurn = resolve;
-        }),
-      );
+      const agentTurn = createDeferred<{ payloads: Array<{ text: string }> }>();
+      agentCommandMock.mockReturnValueOnce(agentTurn.promise);
       const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
       beginSpeakerTurn(entry);
       await emitFinalRealtimeUserTranscript(bridgeParams, "late question");
       realtimeSessionMock.bridge.supportsToolResultSuppression = false;
 
       const submission = bridgeParams?.onToolCall?.(
-        {
-          itemId: "item-late",
-          callId: "call-late",
-          name: "openclaw_agent_consult",
-          args: { question: "late question" },
-        },
+        consultEvent("late", "late question"),
         realtimeSessionMock,
       );
-      resolveAgentTurn?.({ payloads: [{ text: "forced answer" }] });
+      agentTurn.resolve({ payloads: [{ text: "forced answer" }] });
       await submission;
 
       expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-late", {
@@ -352,27 +319,18 @@ defineDiscordVoiceTests(
       expectUserMessageNotIncludes("forced answer");
       expectUserMessageNotIncludes("I hit an error while checking that. Please try again.");
 
-      let resolveRetryTurn: ((result: { payloads: Array<{ text: string }> }) => void) | undefined;
-      agentCommandMock.mockReturnValueOnce(
-        new Promise((resolve) => {
-          resolveRetryTurn = resolve;
-        }),
-      );
+      const retryTurn = createDeferred<{ payloads: Array<{ text: string }> }>();
+      agentCommandMock.mockReturnValueOnce(retryTurn.promise);
       beginSpeakerTurn(entry);
       await emitFinalRealtimeUserTranscript(bridgeParams, "retry question");
       realtimeSessionMock.submitToolResult.mockRejectedValueOnce(
         new Error("native delivery rejected"),
       );
       const rejectedSubmission = bridgeParams?.onToolCall?.(
-        {
-          itemId: "item-retry",
-          callId: "call-retry",
-          name: "openclaw_agent_consult",
-          args: { question: "retry question" },
-        },
+        consultEvent("retry", "retry question"),
         realtimeSessionMock,
       );
-      resolveRetryTurn?.({ payloads: [{ text: "local retry answer" }] });
+      retryTurn.resolve({ payloads: [{ text: "local retry answer" }] });
 
       await expect(rejectedSubmission).rejects.toThrow("native delivery rejected");
       await vi.waitFor(() => expectUserMessageIncludes("local retry answer"));
@@ -397,12 +355,7 @@ defineDiscordVoiceTests(
           realtimeSessionMock.bridge.supportsToolResultSuppression =
             delivery !== "forced-unsuppressed";
           submission = bridgeParams.onToolCall?.(
-            {
-              itemId: "item-late",
-              callId: "call-late",
-              name: "openclaw_agent_consult",
-              args: { question: "late question" },
-            },
+            consultEvent("late", "late question"),
             realtimeSessionMock,
           );
           await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
@@ -467,15 +420,7 @@ defineDiscordVoiceTests(
       beginSpeakerTurn(entry, { senderIsOwner: false });
       const guest = lastRealtimeBridge();
 
-      void bridgeParams?.onToolCall?.(
-        {
-          itemId: "item-late",
-          callId: "call-late",
-          name: "openclaw_agent_consult",
-          args: { question: "late question" },
-        },
-        realtimeSessionMock,
-      );
+      void bridgeParams?.onToolCall?.(consultEvent("late", "late question"), realtimeSessionMock);
       await Promise.resolve();
       await Promise.resolve();
 
@@ -507,15 +452,7 @@ defineDiscordVoiceTests(
       const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
 
       beginSpeakerTurn(entry);
-      void bridgeParams?.onToolCall?.(
-        {
-          itemId: "item-old",
-          callId: "call-old",
-          name: "openclaw_agent_consult",
-          args: { question: "repeat question" },
-        },
-        realtimeSessionMock,
-      );
+      void bridgeParams?.onToolCall?.(consultEvent("old", "repeat question"), realtimeSessionMock);
       await vi.waitFor(() =>
         expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-old", {
           text: "old direct answer",
@@ -525,15 +462,7 @@ defineDiscordVoiceTests(
       beginSpeakerTurn(entry);
       await emitFinalRealtimeUserTranscript(bridgeParams, "repeat question");
 
-      void bridgeParams?.onToolCall?.(
-        {
-          itemId: "item-new",
-          callId: "call-new",
-          name: "openclaw_agent_consult",
-          args: { question: "repeat question" },
-        },
-        realtimeSessionMock,
-      );
+      void bridgeParams?.onToolCall?.(consultEvent("new", "repeat question"), realtimeSessionMock);
       await Promise.resolve();
       await Promise.resolve();
 
@@ -632,15 +561,7 @@ defineDiscordVoiceTests(
       expect(bridgeParams?.instructions).toContain("Call openclaw_agent_consult");
       expect(bridgeParams?.tools?.map((tool) => tool.name)).toContain("openclaw_agent_consult");
 
-      void bridgeParams?.onToolCall?.(
-        {
-          itemId: "item-1",
-          callId: "call-1",
-          name: "openclaw_agent_consult",
-          args: { question: "check my Discord" },
-        },
-        realtimeSessionMock,
-      );
+      void bridgeParams?.onToolCall?.(consultEvent("1", "check my Discord"), realtimeSessionMock);
       await vi.waitFor(() =>
         expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-1", {
           text: "consult answer",
@@ -739,12 +660,7 @@ defineDiscordVoiceTests(
       beginSpeakerTurn(entry);
 
       void bridgeParams?.onToolCall?.(
-        {
-          itemId: "item-1",
-          callId: "call-1",
-          name: "openclaw_agent_consult",
-          args: { question: "check the maintainer channel context" },
-        },
+        consultEvent("1", "check the maintainer channel context"),
         realtimeSessionMock,
       );
       await vi.waitFor(() =>
@@ -756,80 +672,49 @@ defineDiscordVoiceTests(
       expect(lastAgentCommandArgs().sessionKey).toBe("agent:main:discord:channel:maintainers");
     });
 
-    it("keeps bidi realtime consults on the audio turn speaker context", async () => {
-      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "guest consult answer" }] });
-      const { bridgeParams, entry } = await createJoinedBidiFixture({
-        voice: {
-          realtime: {
-            toolPolicy: "safe-read-only",
-            consultPolicy: "always",
+    it.each(["another speaker starts", "the previous speaker closes"] as const)(
+      "keeps bidi consults on the guest speaker when %s",
+      async (capture) => {
+        agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "guest consult answer" }] });
+        const { bridgeParams, entry } = await createJoinedBidiFixture({
+          voice: {
+            realtime: {
+              toolPolicy: "safe-read-only",
+              consultPolicy: "always",
+            },
           },
-        },
-      });
-      beginSpeakerTurn(entry, { senderIsOwner: false });
-      beginSpeakerTurn(entry);
+        });
+        if (capture === "the previous speaker closes") {
+          const ownerTurn = beginSpeakerTurn(entry);
+          ownerTurn.close();
+          beginSpeakerTurn(entry, { senderIsOwner: false });
+        } else {
+          beginSpeakerTurn(entry, { senderIsOwner: false });
+          beginSpeakerTurn(entry);
+        }
+        const guest =
+          capture === "the previous speaker closes"
+            ? lastRealtimeBridge()
+            : { bridgeParams, session: realtimeSessionMock };
 
-      void bridgeParams?.onToolCall?.(
-        {
-          itemId: "item-guest",
-          callId: "call-guest",
-          name: "openclaw_agent_consult",
-          args: { question: "guest question" },
-        },
-        realtimeSessionMock,
-      );
-      await Promise.resolve();
-      await Promise.resolve();
+        void guest.bridgeParams?.onToolCall?.(
+          consultEvent("guest", "guest question"),
+          guest.session,
+        );
+        await Promise.resolve();
+        await Promise.resolve();
 
-      const commandArgs = lastAgentCommandArgs();
-      expect(commandArgs.senderIsOwner).toBe(false);
-      expect(commandArgs.toolsAllow).toEqual([
-        "read",
-        "web_search",
-        "web_fetch",
-        "x_search",
-        "memory_search",
-        "memory_get",
-      ]);
-    });
-
-    it("attributes a later bidi consult after the previous speaker capture closes", async () => {
-      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "guest consult answer" }] });
-      const { entry } = await createJoinedBidiFixture({
-        voice: {
-          realtime: {
-            toolPolicy: "safe-read-only",
-            consultPolicy: "always",
-          },
-        },
-      });
-      const ownerTurn = beginSpeakerTurn(entry);
-      ownerTurn.close();
-      beginSpeakerTurn(entry, { senderIsOwner: false });
-      const guest = lastRealtimeBridge();
-
-      void guest.bridgeParams.onToolCall?.(
-        {
-          itemId: "item-guest",
-          callId: "call-guest",
-          name: "openclaw_agent_consult",
-          args: { question: "guest question" },
-        },
-        guest.session,
-      );
-      await Promise.resolve();
-      await Promise.resolve();
-
-      const commandArgs = lastAgentCommandArgs();
-      expect(commandArgs.senderIsOwner).toBe(false);
-      expect(commandArgs.toolsAllow).toEqual([
-        "read",
-        "web_search",
-        "web_fetch",
-        "x_search",
-        "memory_search",
-        "memory_get",
-      ]);
-    });
+        const commandArgs = lastAgentCommandArgs();
+        expect(commandArgs.senderIsOwner).toBe(false);
+        expect(commandArgs.toolsAllow).toEqual([
+          "read",
+          "web_search",
+          "web_fetch",
+          "x_search",
+          "memory_search",
+          "memory_get",
+        ]);
+      },
+    );
   },
 );

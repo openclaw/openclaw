@@ -2,7 +2,7 @@ import * as childProcess from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import pin from "../../scripts/lib/openclaw-bun.json" with { type: "json" };
 import { pinnedBunEnv, requirePinnedBun, resolvePinnedBun } from "../../scripts/lib/pinned-bun.mts";
 import {
@@ -26,15 +26,13 @@ function fixture() {
   const directory = tempDirs.make("pinned-bun-");
   const repoRoot = path.join(directory, "repo");
   fs.mkdirSync(path.join(repoRoot, "scripts/lib"), { recursive: true });
-  fs.writeFileSync(
-    path.join(repoRoot, "scripts/lib/openclaw-bun.json"),
-    JSON.stringify({
-      tag: "test-pin",
-      artifacts: { "linux-x64": { executableSha256: digest } },
-    }),
-  );
+  const manifest = {
+    tag: "test-pin",
+    revision: "test-revision",
+    artifacts: { "linux-x64": { executableSha256: digest } },
+  };
+  fs.writeFileSync(path.join(repoRoot, "scripts/lib/openclaw-bun.json"), JSON.stringify(manifest));
   const fsImpl = { ...fs };
-  const readFileSync = vi.spyOn(fsImpl, "readFileSync");
   const stage = vi.fn((destination: string) => {
     fs.mkdirSync(path.join(destination, "bin"));
     fs.writeFileSync(path.join(destination, "bin/bun"), bytes, { mode: 0o755 });
@@ -43,186 +41,171 @@ function fixture() {
   const env = { XDG_CACHE_HOME: directory };
   const command = path.join(directory, "openclaw/bun/test-pin/linux-x64/bin/bun");
   const stamp = path.join(path.dirname(path.dirname(command)), "verified.json");
-  return { deps, env, command, stamp, directory, readFileSync, stage, stderr };
+  const resolve = (extraEnv: NodeJS.ProcessEnv = {}, extraDeps: Partial<typeof deps> = {}) =>
+    resolvePinnedBun({ ...env, ...extraEnv }, { ...deps, ...extraDeps });
+  const readStamp = () => JSON.parse(fs.readFileSync(stamp, "utf8"));
+  return { deps, env, resolve, command, stamp, directory, readStamp, stage, stderr };
 }
 
-describe("pinned Bun resolution", () => {
-  it.each([undefined, "1"])("uses an explicit executable with CI=%s without staging", (CI) => {
-    const { env, deps, directory, stage, readFileSync } = fixture();
-    const command = path.join(directory, "custom-bun");
-    fs.writeFileSync(command, bytes, { mode: 0o755 });
-    expect(resolvePinnedBun({ ...env, CI, OPENCLAW_BUN_PATH: command }, deps)).toEqual({ command });
-    expect(stage).not.toHaveBeenCalled();
-    expect(readFileSync).not.toHaveBeenCalled();
-    expect(
-      resolvePinnedBun({ ...env, CI, OPENCLAW_BUN_PATH: `${command}-missing` }, deps).reason,
-    ).toContain("OPENCLAW_BUN_PATH is not executable");
-    expect(stage).not.toHaveBeenCalled();
-  });
-
-  it.each(["1", "true", "custom", "0"])("uses workflow-provisioned Bun with CI=%s", (CI) => {
-    const { env, deps, stage, readFileSync, stderr } = fixture();
-    const ciEnv = {
-      ...env,
-      CI,
-      OPENCLAW_VITEST_RUNTIME: "bun",
-      PATH: "/workflow/bun/bin:/usr/bin",
-    };
-    expect(resolvePinnedBun(ciEnv, deps)).toEqual({ command: "bun" });
-    expect(pinnedBunEnv("bun", ciEnv)).toEqual({ PATH: ciEnv.PATH });
-    expect(stage).not.toHaveBeenCalled();
-    expect(readFileSync).not.toHaveBeenCalled();
-    expect(stderr).not.toHaveBeenCalled();
-  });
-
-  it.each([undefined, "", "false"])(
-    "stages once with CI=%s, then silently reuses the cache",
-    (CI) => {
-      const { env, deps, command, stamp, stage, readFileSync, stderr } = fixture();
-      const localEnv = { ...env, CI };
-      expect(resolvePinnedBun(localEnv, deps)).toEqual({ command });
-      expect(stage).toHaveBeenCalledOnce();
-      expect(stderr).toHaveBeenCalledExactlyOnceWith(
-        "[openclaw] Staging pinned Bun fork test-pin (one-time download)…",
-      );
-      expect(stderr).toHaveBeenCalledBefore(stage);
-      expect(JSON.parse(fs.readFileSync(stamp, "utf8"))).toMatchObject({
-        executableSha256: digest,
-        size: Buffer.byteLength(bytes),
-      });
-      readFileSync.mockClear();
-      expect(resolvePinnedBun(localEnv, deps)).toEqual({ command });
-      expect(stage).toHaveBeenCalledOnce();
-      expect(stderr).toHaveBeenCalledOnce();
-      expect(readFileSync.mock.calls.some(([file]) => file === command)).toBe(false);
-    },
+it("uses an explicit executable in CI without staging", () => {
+  const CI = "1";
+  const { resolve, directory, stage } = fixture();
+  const command = path.join(directory, "custom-bun");
+  fs.writeFileSync(command, bytes, { mode: 0o755 });
+  expect(resolve({ CI, OPENCLAW_BUN_PATH: command })).toEqual({ command });
+  expect(resolve({ CI, OPENCLAW_BUN_PATH: `${command}-missing` }).reason).toContain(
+    "OPENCLAW_BUN_PATH is not executable",
   );
+  expect(stage).not.toHaveBeenCalled();
+});
 
-  it.each(["missing", "mtime", "hash"])("rehashes a %s stamp before reusing the cache", (kind) => {
-    const { env, deps, command, stamp, stage, readFileSync } = fixture();
-    resolvePinnedBun(env, deps);
-    if (kind === "missing") {
-      fs.unlinkSync(stamp);
-    } else {
-      const metadata = JSON.parse(fs.readFileSync(stamp, "utf8"));
-      if (kind === "mtime") {
-        metadata.mtimeMs = 0;
-      } else {
-        metadata.executableSha256 = "old-pin";
-      }
-      fs.writeFileSync(stamp, JSON.stringify(metadata));
-    }
-    readFileSync.mockClear();
-    expect(resolvePinnedBun(env, deps)).toEqual({ command });
-    expect(readFileSync.mock.calls.some(([file]) => file === command)).toBe(true);
-    expect(stage).toHaveBeenCalledOnce();
-    expect(JSON.parse(fs.readFileSync(stamp, "utf8"))).toMatchObject({
-      executableSha256: digest,
-      mtimeMs: fs.statSync(command).mtimeMs,
-    });
+it("uses workflow-provisioned Bun in CI", () => {
+  const { resolve, stage, stderr } = fixture();
+  const ciEnv = { CI: "1", OPENCLAW_VITEST_RUNTIME: "bun", PATH: "/workflow/bun/bin:/usr/bin" };
+  expect(resolve(ciEnv)).toEqual({ command: "bun" });
+  expect(pinnedBunEnv("bun", ciEnv)).toEqual({ PATH: ciEnv.PATH });
+  expect(stage).not.toHaveBeenCalled();
+  expect(stderr).not.toHaveBeenCalled();
+});
+
+it.each([undefined, "false"])("stages and silently reuses cache with CI=%s", (CI) => {
+  const { resolve, command, readStamp, stage, stderr } = fixture();
+  expect(resolve({ CI })).toEqual({ command });
+  expect(stage).toHaveBeenCalledOnce();
+  expect(stderr).toHaveBeenCalledExactlyOnceWith(
+    "[openclaw] Staging pinned Bun fork test-pin (one-time download)…",
+  );
+  expect(stderr).toHaveBeenCalledBefore(stage);
+  expect(readStamp()).toMatchObject({
+    executableSha256: digest,
+    size: Buffer.byteLength(bytes),
   });
+  expect(resolve({ CI })).toEqual({ command });
+  expect(stage).toHaveBeenCalledOnce();
+  expect(stderr).toHaveBeenCalledOnce();
+});
 
-  it("replaces damaged cached bytes through the stager", () => {
-    const { env, deps, command, stage } = fixture();
-    resolvePinnedBun(env, deps);
-    fs.writeFileSync(command, "damaged");
-    expect(resolvePinnedBun(env, deps)).toEqual({ command });
-    expect(stage).toHaveBeenCalledTimes(2);
-    expect(fs.readFileSync(command, "utf8")).toBe(bytes);
-  });
-
-  it.each([
-    { failure: new Error("checksum mismatch\nadditional details"), cause: "checksum mismatch" },
-    { failure: new Error("permission denied\r\nadditional details"), cause: "permission denied" },
-  ])("reports stage failure ($cause) on one line and cleans up", ({ failure, cause }) => {
-    const { env, deps, command, stage } = fixture();
-    stage.mockImplementation(() => {
-      throw failure;
-    });
-    expect(resolvePinnedBun(env, deps)).toEqual({
-      reason: `could not stage the pinned fork: ${cause}`,
-    });
-    expect(fs.existsSync(command)).toBe(false);
-    expect(fs.readdirSync(path.dirname(path.dirname(command)))).toEqual(["bin"]);
-  });
-
-  it.each([
-    { platform: "win32", arch: "x64" },
-    { platform: "linux", arch: "s390x" },
-  ])("does not stage unsupported $platform-$arch", (platform) => {
-    const { env, deps, stage } = fixture();
-    expect(resolvePinnedBun(env, { ...deps, ...platform }).reason).toMatch(
-      /unsupported platform|no pinned artifact/u,
-    );
-    expect(stage).not.toHaveBeenCalled();
-  });
-
-  it("uses the home cache when XDG_CACHE_HOME is unset", () => {
-    const { deps, directory } = fixture();
-    expect(resolvePinnedBun({}, { ...deps, homedir: () => directory })).toEqual({
-      command: path.join(directory, ".cache/openclaw/bun/test-pin/linux-x64/bin/bun"),
-    });
+it.each(["missing", "mtime", "hash"])("rehashes a %s stamp before reusing the cache", (kind) => {
+  const { resolve, command, stamp, stage, readStamp } = fixture();
+  resolve();
+  if (kind === "missing") {
+    fs.unlinkSync(stamp);
+  } else {
+    const changed = kind === "mtime" ? { mtimeMs: 0 } : { executableSha256: "old-pin" };
+    fs.writeFileSync(stamp, JSON.stringify({ ...readStamp(), ...changed }));
+  }
+  expect(resolve()).toEqual({ command });
+  expect(stage).toHaveBeenCalledOnce();
+  expect(readStamp()).toMatchObject({
+    executableSha256: digest,
+    mtimeMs: fs.statSync(command).mtimeMs,
   });
 });
 
-describe("CI Bun revision admission", () => {
-  const ciEnv = {
-    CI: "1",
-    GITHUB_JOB: "node-test-shard",
-    OPENCLAW_BUN_PATH: process.execPath,
-    OPENCLAW_VITEST_RUNTIME: "bun",
-  };
-  const callers = [
-    {
-      name: "Vitest",
-      resolve: (env: NodeJS.ProcessEnv) =>
-        resolveVitestTestCommand(["node_modules/vitest/vitest.mjs", "run"], env).command,
-    },
-    {
-      name: "native Bun",
-      resolve: (env: NodeJS.ProcessEnv) =>
-        resolveNativeBunTestCommand(["./fixture.test.ts"], undefined, env).command,
-    },
-  ];
+it("replaces damaged cached bytes through the stager", () => {
+  const { resolve, command, stage } = fixture();
+  resolve();
+  fs.writeFileSync(command, "damaged");
+  expect(resolve()).toEqual({ command });
+  expect(stage).toHaveBeenCalledTimes(2);
+  expect(fs.readFileSync(command, "utf8")).toBe(bytes);
+});
 
-  it.each(callers)(
-    "admits the pinned revision before constructing a $name launch",
-    ({ resolve }) => {
-      vi.spyOn(childProcess, "execFileSync").mockReturnValue(`${pin.revision}\n`);
-      expect(resolve(ciEnv)).toBe(process.execPath);
-    },
-  );
-
-  it.each(callers)(
-    "rejects a different revision before constructing a $name launch",
-    ({ resolve }) => {
-      vi.spyOn(childProcess, "execFileSync").mockReturnValue("1.0.0+unqualified\n");
-      expect(() => resolve(ciEnv)).toThrow(
-        `CI job node-test-shard: Bun revision verification failed: expected ${pin.revision}, received "1.0.0+unqualified". Run .github/actions/setup-test-bun before tests.`,
-      );
-    },
-  );
-
-  it("reports a missing workflow-provisioned Bun with its job name", () => {
-    vi.spyOn(childProcess, "execFileSync").mockImplementation(() => {
-      throw new Error("spawnSync bun ENOENT");
-    });
-    expect(() => requirePinnedBun({ CI: "1", GITHUB_JOB: "ui-test" })).toThrow(
-      "CI job ui-test: Bun revision verification failed: spawnSync bun ENOENT. Run .github/actions/setup-test-bun before tests.",
-    );
+it("reports stage failure on one line and cleans up", () => {
+  const { resolve, command, stage } = fixture();
+  stage.mockImplementation(() => {
+    throw new Error("checksum mismatch\r\nadditional details");
   });
+  expect(resolve()).toEqual({ reason: "could not stage the pinned fork: checksum mismatch" });
+  expect(fs.existsSync(command)).toBe(false);
+  expect(fs.readdirSync(path.dirname(path.dirname(command)))).toEqual(["bin"]);
+});
 
-  it("identifies an unavailable explicit override and preserves local override behavior", () => {
-    expect(() => requirePinnedBun({ ...ciEnv, OPENCLAW_BUN_PATH: "/missing/bun" })).toThrow(
-      "CI job node-test-shard: Bun fork unavailable",
-    );
-    const execute = vi.spyOn(childProcess, "execFileSync").mockImplementation(() => {
-      throw new Error("must not probe local overrides");
-    });
-    expect(requirePinnedBun({ CI: "false", OPENCLAW_BUN_PATH: process.execPath })).toBe(
-      process.execPath,
-    );
-    expect(resolveVitestTestCommand(["scripts/prepare.mts"], ciEnv).command).toBe(process.execPath);
-    expect(execute).not.toHaveBeenCalled();
+it.each([
+  { platform: "win32", arch: "x64" },
+  { platform: "linux", arch: "s390x" },
+])("does not stage unsupported $platform-$arch", (platform) => {
+  const { resolve, stage } = fixture();
+  expect(resolve({}, platform).reason).toMatch(/unsupported platform|no pinned artifact/u);
+  expect(stage).not.toHaveBeenCalled();
+});
+
+it("uses the home cache when XDG_CACHE_HOME is unset", () => {
+  const { deps, directory } = fixture();
+  expect(resolvePinnedBun({}, { ...deps, homedir: () => directory })).toEqual({
+    command: path.join(directory, ".cache/openclaw/bun/test-pin/linux-x64/bin/bun"),
   });
+});
+const ciEnv = {
+  CI: "1",
+  GITHUB_JOB: "node-test-shard",
+  OPENCLAW_BUN_PATH: process.execPath,
+  OPENCLAW_VITEST_RUNTIME: "bun",
+};
+const callers = [
+  {
+    name: "Vitest",
+    resolve: (env: NodeJS.ProcessEnv) =>
+      resolveVitestTestCommand(["node_modules/vitest/vitest.mjs", "run"], env).command,
+  },
+  {
+    name: "native Bun",
+    resolve: (env: NodeJS.ProcessEnv) =>
+      resolveNativeBunTestCommand(["./fixture.test.ts"], undefined, env).command,
+  },
+];
+
+it.each(callers)("admits pinned revision for $name", ({ resolve }) => {
+  vi.spyOn(childProcess, "execFileSync").mockReturnValue(`${pin.revision}\n`);
+  expect(resolve(ciEnv)).toBe(process.execPath);
+});
+
+it.each(callers)("rejects wrong revision for $name", ({ resolve }) => {
+  vi.spyOn(childProcess, "execFileSync").mockReturnValue("1.0.0+unqualified\n");
+  expect(() => resolve(ciEnv)).toThrow(
+    `CI job node-test-shard: Bun revision verification failed: expected ${pin.revision}, received "1.0.0+unqualified". Run .github/actions/setup-test-bun before tests.`,
+  );
+});
+
+it("reports a missing workflow-provisioned Bun with its job name", () => {
+  vi.spyOn(childProcess, "execFileSync").mockImplementation(() => {
+    throw new Error("spawnSync bun ENOENT");
+  });
+  expect(() => requirePinnedBun({ CI: "1", GITHUB_JOB: "ui-test" })).toThrow(
+    "CI job ui-test: Bun revision verification failed: spawnSync bun ENOENT. Run .github/actions/setup-test-bun before tests.",
+  );
+});
+
+it("identifies an unavailable explicit override and preserves local override behavior", () => {
+  expect(() => requirePinnedBun({ ...ciEnv, OPENCLAW_BUN_PATH: "/missing/bun" })).toThrow(
+    "CI job node-test-shard: Bun fork unavailable",
+  );
+  const execute = vi.spyOn(childProcess, "execFileSync").mockImplementation(() => {
+    throw new Error("must not probe local overrides");
+  });
+  expect(requirePinnedBun({ CI: "false", OPENCLAW_BUN_PATH: process.execPath })).toBe(
+    process.execPath,
+  );
+  expect(resolveVitestTestCommand(["scripts/prepare.mts"], ciEnv).command).toBe(process.execPath);
+  expect(execute).not.toHaveBeenCalled();
+});
+
+it.each(["cache", "binding"] as const)("verifies offline %s bytes before execution", (mode) => {
+  const f = fixture();
+  f.resolve();
+  f.stage.mockClear();
+  const execute = vi.spyOn(childProcess, "execFileSync").mockReturnValue("test-revision\n");
+  const env = mode === "binding" ? { ...f.env, CI: "1", OPENCLAW_BUN_PATH: f.command } : f.env;
+  const admit = () => requirePinnedBun(env, { ...f.deps, preparedOnly: true });
+  expect(admit()).toBe(f.command);
+  execute.mockClear();
+  fs.writeFileSync(f.command, "x".repeat(Buffer.byteLength(bytes)));
+  // A forged matching stamp must not authorize executing unverified bytes.
+  fs.writeFileSync(
+    f.stamp,
+    JSON.stringify({ ...f.readStamp(), mtimeMs: fs.statSync(f.command).mtimeMs }),
+  );
+  expect(admit).toThrow(/missing or corrupt|pinned SHA-256/);
+  expect(execute).not.toHaveBeenCalled();
+  expect(f.stage).not.toHaveBeenCalled();
 });

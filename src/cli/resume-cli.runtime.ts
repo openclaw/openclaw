@@ -1,28 +1,25 @@
 import { cancel } from "@clack/prompts";
-import { lazyCompile } from "../../packages/gateway-protocol/src/protocol-validator.js";
-import { SessionsResolveResultSchema } from "../../packages/gateway-protocol/src/schema/sessions-resolve.js";
+import { validateSessionsResolveResult as validateHandoffSessionResolveResult } from "../../packages/gateway-protocol/src/session-result-validators.js";
 import { selectStyled } from "../../packages/terminal-core/src/prompt-select-styled.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { decodeResumeHandoff } from "../shared/resume-handoff.js";
-import type { TuiSessionList } from "../tui/tui-backend.js";
+import type { GatewayChatClient } from "../tui/gateway-chat.js";
 import {
   buildSessionChoices,
   loadRecentSessions,
   resolveResumeSession,
-  type ResumeResolution,
   type SessionPickerChoice,
 } from "../tui/tui-session-picker.js";
 import type { ResumeCliOptions } from "./resume-cli.js";
+import { registerSignalExitGate } from "./signal-exit-barrier.js";
 import { isTerminalInteractive } from "./terminal-interactivity.js";
 
 const RESUME_INTERACTIVE_TERMINAL_GUIDANCE =
   "Attaching to a session requires an interactive terminal. Re-run `openclaw resume [query]` from an interactive terminal.";
 const RESUME_HANDOFF_UNRESOLVED =
   "Could not resolve the session handoff. Copy a fresh command from the Control UI.";
-
-const validateHandoffSessionResolveResult = lazyCompile(SessionsResolveResultSchema);
 
 async function formatResumeConnectionError(error: unknown): Promise<Error> {
   const [{ formatTuiErrorMessage }, { resolveGatewayDisconnectState }] = await Promise.all([
@@ -53,122 +50,64 @@ async function connectResumeGateway(opts: ResumeCliOptions, handoffTarget: boole
       ? { allowConfiguredAuthForExactTarget: true, suppressEnvAuthFallback: true }
       : {}),
   });
+  // The transport exists before the handshake completes, so cancellation must be
+  // registered here: the reported interruption arrives while the peer withholds it.
+  let interrupted = false;
+  let signalInterrupted = () => {};
+  const interruptedWait = new Promise<void>((resolve) => {
+    signalInterrupted = resolve;
+  });
+  const clientOwner = trackResumeClientGate(client, () => {
+    interrupted = true;
+    signalInterrupted();
+  });
   try {
-    await new Promise<void>((resolve, reject) => {
+    const handshake = new Promise<void>((resolve, reject) => {
       client.onConnected = resolve;
       client.onConnectError = reject;
       client.onDisconnected = (reason) => reject(new Error(reason || "Gateway connection closed"));
       client.start();
     });
-    return client;
+    await Promise.race([handshake, interruptedWait]);
+    if (interrupted) {
+      throw new Error("Gateway connection interrupted.");
+    }
+    return { client, clientOwner };
   } catch (error) {
-    await client.stop();
-    throw await formatResumeConnectionError(error);
-  }
-}
-
-async function resolveHandoffConnection(
-  opts: ResumeCliOptions,
-  handoff: { sessionKey: string; agentId: string },
-) {
-  const client = await connectResumeGateway(opts, true);
-  try {
-    let result: unknown;
     try {
-      result = await client.resolveSession({
-        key: handoff.sessionKey,
-        agentId: handoff.agentId,
-        includeGlobal: true,
-        allowMissing: true,
-      });
-    } catch {
-      throw new Error(RESUME_HANDOFF_UNRESOLVED);
+      await clientOwner.stop();
+    } finally {
+      clientOwner.release();
     }
-    if (!validateHandoffSessionResolveResult(result) || !result.ok) {
-      throw new Error(RESUME_HANDOFF_UNRESOLVED);
-    }
-    const canonicalKeyOwner = parseAgentSessionKey(result.key)?.agentId;
-    if (result.agentId !== handoff.agentId || canonicalKeyOwner !== result.agentId) {
-      throw new Error(RESUME_HANDOFF_UNRESOLVED);
-    }
-    return { connection: client.connection, sessionKey: result.key };
-  } finally {
-    await client.stop();
-  }
-}
-
-async function fetchResumeSessions(
-  opts: ResumeCliOptions,
-  options: { agentId?: string; includeGlobal?: boolean } = {},
-) {
-  const client = await connectResumeGateway(opts, false);
-  try {
-    return {
-      connection: client.connection,
-      sessions: await loadRecentSessions(client, options),
-    };
-  } catch (error) {
     throw await formatResumeConnectionError(error);
-  } finally {
-    await client.stop();
   }
 }
 
-async function promptResumeSession(
-  sessions: readonly TuiSessionList["sessions"][number][],
-): Promise<string | null> {
-  const choices = buildSessionChoices(sessions);
-  if (choices.length === 0) {
-    throw new Error(
-      "No recent sessions found. Run `openclaw sessions` to inspect sessions or `openclaw tui` to start one.",
-    );
-  }
-  const selected = await selectStyled({
-    message: "Resume a session",
-    options: choices.map((choice) => ({
-      value: choice.value,
-      label: formatResumeCandidate(choice),
-      hint: choice.description ? sanitizeTerminalText(choice.description) : undefined,
-    })),
+/** Retain transport cleanup until its owning branch settles, even if stop rejects. */
+function trackResumeClientGate(client: GatewayChatClient, onInterrupt: () => void) {
+  let releaseGate = () => {};
+  const gateFinished = new Promise<void>((resolve) => {
+    releaseGate = resolve;
   });
-  if (typeof selected === "symbol") {
-    cancel("Cancelled.");
-    return null;
-  }
-  return selected;
-}
-
-function reportResumeFailure(
-  query: string,
-  resolution: Exclude<ResumeResolution, { kind: "match" }>,
-) {
-  if (resolution.kind === "ambiguous") {
-    defaultRuntime.error(`Session query ${JSON.stringify(query)} is ambiguous. Candidates:`);
-    for (const candidate of resolution.candidates) {
-      defaultRuntime.error(`  ${formatResumeCandidate(candidate)}`);
-    }
-    defaultRuntime.error("Use a longer name or the exact session key.");
-    return;
-  }
-  defaultRuntime.error(`No recent session matched ${JSON.stringify(query)}.`);
-  defaultRuntime.error(
-    "Run `openclaw resume` to choose from recent sessions or `openclaw sessions` to inspect all sessions.",
-  );
+  let stopping: Promise<void> | undefined;
+  const stop = () => (stopping ??= Promise.resolve().then(() => client.stop()));
+  const unregisterGate = registerSignalExitGate(gateFinished, () => {
+    onInterrupt();
+    void stop().catch(() => undefined);
+  });
+  return {
+    stop,
+    release() {
+      releaseGate();
+      unregisterGate();
+    },
+  };
 }
 
 function formatResumeCandidate(candidate: SessionPickerChoice): string {
   const label = sanitizeTerminalText(candidate.label);
   const key = sanitizeTerminalText(candidate.value);
   return label === key ? key : `${label} [${key}]`;
-}
-
-function resolveExplicitGlobalSessionKey(
-  query: string | undefined,
-): { agentId: string; key: string } | undefined {
-  const parsed = parseAgentSessionKey(query);
-  return parsed?.rest === "global"
-    ? { agentId: parsed.agentId, key: `agent:${parsed.agentId}:global` }
-    : undefined;
 }
 
 export async function runResumeCommand(query: string | undefined, opts: ResumeCliOptions) {
@@ -181,40 +120,107 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
     throw new Error(RESUME_INTERACTIVE_TERMINAL_GUIDANCE);
   }
   const resolvedQuery = query?.trim();
-  const explicitGlobalSession = resolveExplicitGlobalSessionKey(resolvedQuery);
-  let connection: Awaited<ReturnType<typeof connectResumeGateway>>["connection"];
+  const parsedQuery = parseAgentSessionKey(resolvedQuery);
+  const explicitGlobalSession = parsedQuery?.rest === "global" ? parsedQuery : undefined;
+  let connection: GatewayChatClient["connection"];
   let sessionKey: string | null;
   if (handoff) {
     const parsed = parseAgentSessionKey(handoff.sessionKey)!;
-    const resolved = await resolveHandoffConnection(
-      {
-        ...connectionOptions,
-        url: handoff.gatewayUrl,
-      },
-      { sessionKey: handoff.sessionKey, agentId: parsed.agentId },
+    const { client, clientOwner } = await connectResumeGateway(
+      { ...connectionOptions, url: handoff.gatewayUrl },
+      true,
     );
-    connection = resolved.connection;
-    sessionKey = resolved.sessionKey;
+    try {
+      let result: unknown;
+      try {
+        result = await client.resolveSession({
+          key: handoff.sessionKey,
+          agentId: parsed.agentId,
+          includeGlobal: true,
+          allowMissing: true,
+        });
+      } catch {
+        throw new Error(RESUME_HANDOFF_UNRESOLVED);
+      }
+      if (!validateHandoffSessionResolveResult(result) || !result.ok) {
+        throw new Error(RESUME_HANDOFF_UNRESOLVED);
+      }
+      const canonicalKeyOwner = parseAgentSessionKey(result.key)?.agentId;
+      if (result.agentId !== parsed.agentId || canonicalKeyOwner !== result.agentId) {
+        throw new Error(RESUME_HANDOFF_UNRESOLVED);
+      }
+      connection = client.connection;
+      sessionKey = result.key;
+    } finally {
+      try {
+        await clientOwner.stop();
+      } finally {
+        clientOwner.release();
+      }
+    }
   } else {
-    const discovery = await fetchResumeSessions(
-      connectionOptions,
-      explicitGlobalSession
-        ? { agentId: explicitGlobalSession.agentId, includeGlobal: true }
-        : undefined,
-    );
-    connection = discovery.connection;
+    const { client, clientOwner } = await connectResumeGateway(connectionOptions, false);
+    let sessions: Awaited<ReturnType<typeof loadRecentSessions>>;
+    try {
+      connection = client.connection;
+      sessions = await loadRecentSessions(
+        client,
+        explicitGlobalSession
+          ? { agentId: explicitGlobalSession.agentId, includeGlobal: true }
+          : undefined,
+      );
+    } catch (error) {
+      throw await formatResumeConnectionError(error);
+    } finally {
+      try {
+        await clientOwner.stop();
+      } finally {
+        clientOwner.release();
+      }
+    }
     if (explicitGlobalSession) {
-      sessionKey = explicitGlobalSession.key;
+      sessionKey = `agent:${explicitGlobalSession.agentId}:global`;
     } else if (resolvedQuery) {
-      const resolution = resolveResumeSession(discovery.sessions, resolvedQuery);
+      const resolution = resolveResumeSession(sessions, resolvedQuery);
       if (resolution.kind !== "match") {
-        reportResumeFailure(resolvedQuery, resolution);
+        if (resolution.kind === "ambiguous") {
+          defaultRuntime.error(
+            `Session query ${JSON.stringify(resolvedQuery)} is ambiguous. Candidates:`,
+          );
+          for (const candidate of resolution.candidates) {
+            defaultRuntime.error(`  ${formatResumeCandidate(candidate)}`);
+          }
+          defaultRuntime.error("Use a longer name or the exact session key.");
+        } else {
+          defaultRuntime.error(`No recent session matched ${JSON.stringify(resolvedQuery)}.`);
+          defaultRuntime.error(
+            "Run `openclaw resume` to choose from recent sessions or `openclaw sessions` to inspect all sessions.",
+          );
+        }
         defaultRuntime.exit(1);
         return;
       }
       sessionKey = resolution.session.value;
     } else {
-      sessionKey = await promptResumeSession(discovery.sessions);
+      const choices = buildSessionChoices(sessions);
+      if (choices.length === 0) {
+        throw new Error(
+          "No recent sessions found. Run `openclaw sessions` to inspect sessions or `openclaw tui` to start one.",
+        );
+      }
+      const selected = await selectStyled({
+        message: "Resume a session",
+        options: choices.map((choice) => ({
+          value: choice.value,
+          label: formatResumeCandidate(choice),
+          hint: choice.description ? sanitizeTerminalText(choice.description) : undefined,
+        })),
+      });
+      if (typeof selected === "symbol") {
+        cancel("Cancelled.");
+        return;
+      }
+      sessionKey = selected;
     }
   }
   if (!sessionKey) {

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { WorkerHelloOk } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { waitForExecScope } from "../agents/bash-process-registry.js";
 import type { ComputerContextEpoch } from "../agents/tools/computer-tool.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -19,6 +20,7 @@ import {
 import type { NativeRuntime, NativeRuntimeResolved } from "./native-runtime.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
+import { createWorkerExecApprovalTransport } from "./worker-exec-approval.js";
 import { WorkerNodeLostError } from "./worker-node-loss.js";
 import type { WorkerRuntimeResult } from "./worker-process-protocol.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
@@ -26,6 +28,7 @@ import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
 import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
 
 const WORKER_REMOTE_CANCEL_GRACE_MS = 1_000;
+const WORKER_TURN_ADMISSION_TIMEOUT_MS = 10 * 60_000;
 declare const WORKER_DEPLOY_BUILD: boolean;
 
 function toWorkerRuntimeError(value: unknown, fallback: string): Error {
@@ -50,6 +53,11 @@ async function assertWorkerDirectory(pathname: string, label: string): Promise<s
 
 /** Holds process-local state until every command owned by this environment has exited. */
 export async function createWorkerRuntimeEnvironment(sessionId: string) {
+  // The dedicated node supplies this process-local transport outside the descriptor.
+  // Register again in the worker process before any turn can emit diagnostics.
+  if (process.env.IDENTITY_HEADER) {
+    registerSecretValueForRedaction(process.env.IDENTITY_HEADER);
+  }
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-"));
   await chmod(stateDir, 0o700);
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -302,6 +310,7 @@ export async function runWorkerDescriptor(
             turnId: descriptor.assignment.turnId,
             modelRef: descriptor.assignment.modelRef,
             computerContextEpoch,
+            onCancelled: (reason) => abortController.abort(reason),
           });
     options.assertWorkspaceCurrent?.();
     const github = descriptor.assignment.github
@@ -357,6 +366,26 @@ export async function runWorkerDescriptor(
             : {}),
           ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
           inference: { stream },
+          admitTurn: hello.protocolFeatures.includes(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE)
+            ? async (event) => {
+                const response = await connection.rpc.request(
+                  "turn-admission",
+                  { ...event, runEpoch: descriptor.admission.ownerEpoch },
+                  undefined,
+                  // Hooks run sequentially with their own Gateway-enforced deadlines (15 s each),
+                  // so several plugins can exceed the 30 s RPC default; the Gateway always answers.
+                  WORKER_TURN_ADMISSION_TIMEOUT_MS,
+                );
+                if (!response.ok) {
+                  throw new Error("Gateway rejected worker turn admission");
+                }
+                if (response.payload.outcome === "block") {
+                  return false;
+                }
+                transcript.admitInput(response.payload.baseLeafId);
+                return true;
+              }
+            : undefined,
           transcript,
           live: {
             enqueuePreview: (event) => live.enqueuePreview(descriptor.assignment.runId, event),
@@ -367,6 +396,8 @@ export async function runWorkerDescriptor(
             },
           },
           gatewayTools: connection,
+          createApprovalTransport: (toolCallId, signal) =>
+            createWorkerExecApprovalTransport(connection, toolCallId, signal),
           signal: abortController.signal,
         });
       };

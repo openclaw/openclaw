@@ -4,65 +4,42 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { z } from "zod";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
+import { ignoreMissingPath } from "./errno.js";
 import { hasNodeErrorCode } from "./path-guards.js";
+import { prepareRuntimeProcessScriptInvocation } from "./runtime-process-url.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "./sqlite-readonly-worker.js";
-import {
-  createUpdateStateInspectionDiagnostics,
-  UPDATE_STATE_INSPECTION_PROGRESS_PREFIX,
-} from "./update-candidate-state.diagnostics.js";
+import { createUpdateStateInspectionDiagnostics } from "./update-candidate-state.diagnostics.js";
 import { withUpdateStateInspectionWork } from "./update-candidate-state.process.js";
 
-// Retain a core-only program: activation can remove the updater package from disk.
-// The child owns all source/sidecar stats, including blocked remote filesystem calls.
-const inventorySource = `
-  const fs = require("node:fs");
-  let input = "";
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", chunk => { input += chunk; });
-  process.stdin.on("end", () => {
-    const result = [];
-    const progress = path => {
-      try {
-        fs.writeSync(2, ${JSON.stringify(UPDATE_STATE_INSPECTION_PROGRESS_PREFIX)} + JSON.stringify({ phase: "metadata inventory", path }) + "\\n");
-      } catch (error) {
-        // Advisory progress must not abort inventory when its nonblocking pipe is full.
-        // Drop this write without queueing bytes or delaying the metadata reads.
-        if (error.code !== "EAGAIN" && error.code !== "EWOULDBLOCK") throw error;
-      }
-    };
-    for (const file of JSON.parse(input).files) {
-      let size;
-      progress(file);
-      try { size = fs.statSync(file, { bigint: true }).size; }
-      catch (error) {
-        if (error.code !== "ENOENT") result.push({ path: file });
-        continue;
-      }
-      for (const suffix of ["-wal", "-shm", "-journal"]) {
-        progress(file + suffix);
-        try { size += fs.statSync(file + suffix, { bigint: true }).size; }
-        catch (error) {
-          if (error.code !== "ENOENT") { size = undefined; break; }
-        }
-      }
-      result.push({ path: file, sizeBytes: size?.toString() });
-    }
-    process.stdout.write(JSON.stringify(result));
-  });
-`;
 const inventorySchema = z.array(
   z.object({ path: z.string(), sizeBytes: z.string().regex(/^\d+$/).optional() }),
 );
+
+function* inventoryBatches(files: readonly string[]): Generator<string[]> {
+  let batch: string[] = [];
+  let bytes = 0;
+  for (const file of files) {
+    // Include JSON escaping and UTF-8, plus room for the result's keys and bigint size.
+    const entryBytes = Buffer.byteLength(JSON.stringify(file), "utf8") + 64;
+    if (batch.length && bytes + entryBytes > 512 * 1024) {
+      yield batch;
+      batch = [];
+      bytes = 0;
+    }
+    batch.push(file);
+    bytes += entryBytes;
+  }
+  if (batch.length) {
+    yield batch;
+  }
+}
 
 export async function updateStateDatabaseExists(file: string): Promise<boolean> {
   try {
     await fs.access(file);
     return true;
   } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? false;
   }
 }
 
@@ -119,49 +96,67 @@ export async function readUpdateStateDatabaseSizes(
     phase: "metadata inventory",
     paths: files,
   });
-  let result;
+  const deadline =
+    Date.now() + resolveTimerTimeoutMs(Math.max(options.timeoutMs ?? 0, budget), budget);
+  const entries: Array<{ path: string; sizeBytes: bigint | undefined }> = [];
+  let dispose: (() => void) | undefined;
+  let cleanupUncertain = false;
+  let termination: string | undefined;
   try {
-    result = await withUpdateStateInspectionWork(
-      () =>
-        runUtf8CommandWithTimeout(
-          [options.nodeRunner, "--input-type=commonjs", "--eval", inventorySource],
-          {
+    options.signal?.throwIfAborted();
+    // Embedded source remains available after activation replaces the updater package.
+    const script = prepareRuntimeProcessScriptInvocation("updateStateSizes", options.nodeRunner, {
+      parentDirectory: options.stagingRoot,
+    });
+    dispose = () => script.dispose();
+    for (const batch of inventoryBatches(files)) {
+      options.signal?.throwIfAborted();
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        termination = "timeout";
+        throw new Error("Aggregate metadata inventory deadline exceeded");
+      }
+      const result = await withUpdateStateInspectionWork(
+        () =>
+          runUtf8CommandWithTimeout(script.argv, {
             cwd: os.tmpdir(),
-            input: JSON.stringify({ files }),
+            input: JSON.stringify({ files: batch }),
             baseEnv: options.sourceEnv,
             env: { XDG_CACHE_HOME: options.stagingRoot },
             signal: options.signal,
-            timeoutMs: resolveTimerTimeoutMs(Math.max(options.timeoutMs ?? 0, budget), budget),
+            timeoutMs: remainingMs,
             killGraceMs: 500,
             killProcessTree: true,
             maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
             outputCapture: { stdout: "head", stderr: "discard" },
             terminateOnOutputLimit: { stdout: true },
             onOutputChunk: inspection.onOutputChunk,
-          },
-        ),
-      options.signal,
-    );
+          }),
+        options.signal,
+      );
+      options.signal?.throwIfAborted();
+      if (result.code !== 0 || result.termination !== "exit" || result.outputLimitExceeded) {
+        termination = result.outputLimitExceeded ? "output-limit" : result.termination;
+        throw new Error(inspection.stderr());
+      }
+      for (const entry of inventorySchema.parse(JSON.parse(result.stdout))) {
+        entries.push({
+          path: entry.path,
+          sizeBytes: entry.sizeBytes === undefined ? undefined : BigInt(entry.sizeBytes),
+        });
+      }
+    }
+    options.signal?.throwIfAborted();
+    return entries;
   } catch (error) {
-    if (!hasCommandProcessCleanupError(error)) {
+    cleanupUncertain = hasCommandProcessCleanupError(error);
+    if (!cleanupUncertain) {
       options.signal?.throwIfAborted();
     }
-    throw inspection.failure(error);
-  }
-  options.signal?.throwIfAborted();
-  if (result.code !== 0 || result.termination !== "exit" || result.outputLimitExceeded) {
-    throw inspection.failure(
-      inspection.stderr() ||
-        (result.outputLimitExceeded ? "Worker output exceeded its capture limit" : ""),
-      result.termination,
-    );
-  }
-  try {
-    return inventorySchema.parse(JSON.parse(result.stdout)).map((entry) => ({
-      path: entry.path,
-      sizeBytes: entry.sizeBytes === undefined ? undefined : BigInt(entry.sizeBytes),
-    }));
-  } catch (error) {
-    throw inspection.failure(error);
+    throw inspection.failure(error, termination);
+  } finally {
+    if (!cleanupUncertain) {
+      dispose?.();
+    }
   }
 }

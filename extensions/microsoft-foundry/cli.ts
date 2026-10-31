@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { StringDecoder } from "node:string_decoder";
-import { runCommandWithTimeout, runExec } from "openclaw/plugin-sdk/process-runtime";
+import { runUtf8CommandWithTimeout, runExec } from "openclaw/plugin-sdk/process-runtime";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -151,46 +150,29 @@ export async function azLoginDeviceCodeWithOptions(params: {
   tenantId?: string;
   allowNoSubscriptions?: boolean;
 }): Promise<void> {
-  const maxCapturedLoginOutputChars = 8_000;
   const args = [
     "login",
     "--use-device-code",
     ...(params.tenantId ? ["--tenant", params.tenantId] : []),
     ...(params.allowNoSubscriptions ? ["--allow-no-subscriptions"] : []),
   ];
-  const chunks = { stdout: [] as string[], stderr: [] as string[] };
-  const lengths = { stdout: 0, stderr: 0 };
-  const decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") };
-  const appendOutput = (stream: "stdout" | "stderr", text: string): void => {
-    if (!text) {
-      return;
-    }
-    chunks[stream].push(text);
-    lengths[stream] += text.length;
-    while (lengths[stream] > maxCapturedLoginOutputChars && chunks[stream].length > 0) {
-      lengths[stream] -= chunks[stream].shift()?.length ?? 0;
-    }
-    process[stream].write(text);
-  };
-
-  const result = await runCommandWithTimeout(["az", ...args], {
+  const result = await runUtf8CommandWithTimeout(["az", ...args], {
     timeoutMs: AZ_LOGIN_TIMEOUT_MS,
     killProcessTree: true,
-    outputCapture: "discard",
+    outputCapture: "tail",
+    maxOutputBytes: 8_000,
     onOutputChunk: (chunk, stream) => {
-      appendOutput(stream, decoders[stream].write(chunk));
+      process[stream].write(chunk);
     },
   });
 
-  appendOutput("stdout", decoders.stdout.end());
-  appendOutput("stderr", decoders.stderr.end());
   if (result.termination === "timeout") {
     throw new Error("az login timed out after 20 minutes");
   }
   if (result.code === 0) {
     return;
   }
-  const output = normalizeOptionalString([...chunks.stderr, ...chunks.stdout].join("")) ?? "";
+  const output = normalizeOptionalString(`${result.stderr}${result.stdout}`) ?? "";
   throw new Error(
     output
       ? `az login exited with code ${result.code}: ${output}`

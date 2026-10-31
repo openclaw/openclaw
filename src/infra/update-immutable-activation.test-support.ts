@@ -92,21 +92,20 @@ export function syntheticImmutableGatewayObservation(
   serving: { pid: number; generationPath: string } | null,
   outcome: ImmutableGatewayObservation["outcome"],
 ): ImmutableGatewayObservation {
-  return {
+  const observation: ImmutableGatewayObservation = {
     outcome,
     service: syntheticImmutableServiceObservation(descriptor, serving),
-    ...(outcome === "verified" && serving
-      ? {
-          verification: {
-            pid: serving.pid,
-            bootId: `boot-${serving.pid}`,
-            version: "2026.10.3",
-            buildId: generation.sha,
-            generationSha: generation.sha,
-          },
-        }
-      : {}),
   };
+  if (outcome === "verified" && serving) {
+    observation.verification = {
+      pid: serving.pid,
+      bootId: `boot-${serving.pid}`,
+      version: "2026.10.3",
+      buildId: generation.sha,
+      generationSha: generation.sha,
+    };
+  }
+  return observation;
 }
 
 /** Physical pointer and SQLite fixture; only privileged ownership is projected. */
@@ -126,15 +125,13 @@ export function createImmutableActivationLayout(parent: string) {
   const candidatePath = path.join(root, "releases", candidateSha);
   const schemaVersions = { state: 1, agent: 1 };
   fs.mkdirSync(candidatePath, { mode: 0o755 });
+  const manifest = JSON.stringify({
+    name: "openclaw",
+    version: "2026.10.3",
+    openclaw: { schemaVersions },
+  });
   for (const generation of [descriptor.current.path, candidatePath]) {
-    fs.writeFileSync(
-      path.join(generation, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "2026.10.3",
-        openclaw: { schemaVersions },
-      }),
-    );
+    fs.writeFileSync(path.join(generation, "package.json"), manifest);
   }
   const candidate: ImmutablePreparedGeneration = {
     sha: candidateSha,

@@ -9,12 +9,14 @@ export type PreparedToolSchemaNormalization = {
   readonly inputJson: string;
 };
 
-type SchemaCacheEntry<T> = {
-  key: string;
-  value: T;
-};
-
 let preparedSchemas: ReadonlyMap<object, PreparedToolSchemaNormalization> | undefined;
+
+/** Request preparation already detached and depth-bounded these schemas. */
+export function isPreparedToolSchemaNormalization(schema: unknown): boolean {
+  return schema !== null && typeof schema === "object" && preparedSchemas?.has(schema) === true;
+}
+
+const MAX_CACHE_ENTRIES_PER_SCHEMA = 8;
 
 /** Only synchronous conversion owns these fresh projections; no facts survive its return. */
 export function withPreparedToolSchemaNormalization<T>(
@@ -30,8 +32,8 @@ export function withPreparedToolSchemaNormalization<T>(
   }
 }
 
-function createBoundedSchemaCache<T>(maxEntries: number) {
-  const schemas = new WeakMap<object, Array<SchemaCacheEntry<T>>>();
+function createBoundedSchemaCache<T>() {
+  const schemas = new WeakMap<object, Array<{ key: string; value: T }>>();
   return {
     get(source: object, key: string): T | undefined {
       return schemas.get(source)?.find((entry) => entry.key === key)?.value;
@@ -40,7 +42,10 @@ function createBoundedSchemaCache<T>(maxEntries: number) {
       const entries = schemas.get(source) ?? [];
       schemas.set(
         source,
-        [{ key, value }, ...entries.filter((entry) => entry.key !== key)].slice(0, maxEntries),
+        [{ key, value }, ...entries.filter((entry) => entry.key !== key)].slice(
+          0,
+          MAX_CACHE_ENTRIES_PER_SCHEMA,
+        ),
       );
       return value;
     },
@@ -48,14 +53,14 @@ function createBoundedSchemaCache<T>(maxEntries: number) {
 }
 
 /** Prepared variants cannot evict direct callers' identity-preserving cache entries. */
-export function createToolSchemaNormalizationCache<T>(maxEntries: number) {
-  const directCache = createBoundedSchemaCache<T>(maxEntries);
+export function createToolSchemaNormalizationCache<T>() {
+  const directCache = createBoundedSchemaCache<T>();
   const preparedCache = createBoundedSchemaCache<{
     inputJson: string;
     inputTruncated: boolean;
     outputJson: string;
     truncated: boolean;
-  }>(maxEntries);
+  }>();
   return {
     get(source: object, key: string): T | undefined {
       const prepared = preparedSchemas?.get(source);

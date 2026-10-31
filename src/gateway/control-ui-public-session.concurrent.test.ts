@@ -1,7 +1,6 @@
-import { once } from "node:events";
 import { buildControlUiPublicSessionSharePath } from "@openclaw/session-url-contract/public-share";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
@@ -10,6 +9,7 @@ import {
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as publicAttachments from "./control-ui-public-session-attachments.js";
+import { publicReadBarrier } from "./control-ui-public-session-barrier.test-support.js";
 import { loadPublicSessionShareTokenCodec } from "./control-ui-public-session-token.js";
 import { AUTH_TOKEN, createTestGatewayServer } from "./server-http.test-harness.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -29,6 +29,26 @@ it("serves public text and images through real publication, isolation, and revoc
       sessionId: "public-instance",
       shareId: "a".repeat(48),
     };
+    async function publish(
+      target: typeof locator,
+      messages: { id: string; message: object }[],
+      label?: string,
+    ) {
+      await upsertSessionEntryCore(target, {
+        sessionId: target.sessionId,
+        updatedAt: 1,
+        label,
+        publicShare: { id: target.shareId, sessionId: target.sessionId, createdAt: 1 },
+      });
+      await replaceTranscriptEvents(target, [
+        { type: "session", version: 3, id: target.sessionId },
+        ...messages.map((entry, index) => ({
+          type: "message",
+          ...entry,
+          parentId: messages[index - 1]?.id ?? null,
+        })),
+      ]);
+    }
     const png = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5r8AAAAASUVORK5CYII=",
       "base64",
@@ -39,42 +59,21 @@ it("serves public text and images through real publication, isolation, and revoc
       sessionId: "other-public-instance",
       shareId: "b".repeat(48),
     };
-    await upsertSessionEntryCore(other, {
-      sessionId: other.sessionId,
-      updatedAt: 1,
-      publicShare: { id: other.shareId, sessionId: other.sessionId, createdAt: 1 },
-    });
     const imageMessage = {
       role: "assistant",
       content: [{ type: "image", data: png.toString("base64"), mimeType: "image/png" }],
     };
-    await replaceTranscriptEvents(other, [
-      { type: "session", version: 3, id: other.sessionId },
-      { type: "message", id: "other-image", parentId: null, message: imageMessage },
-    ]);
-    await upsertSessionEntryCore(locator, {
-      sessionId: locator.sessionId,
-      updatedAt: 1,
-      label: "Public concurrency",
-      publicShare: { id: locator.shareId, sessionId: locator.sessionId, createdAt: 1 },
-    });
-    await replaceTranscriptEvents(locator, [
-      { type: "session", version: 3, id: locator.sessionId },
-      {
-        type: "message",
-        id: "question",
-        parentId: null,
-        message: { role: "user", content: "Public question" },
-      },
-      {
-        type: "message",
-        id: "answer",
-        parentId: "question",
-        message: { role: "assistant", content: "Public answer" },
-      },
-      { type: "message", id: "image", parentId: "answer", message: imageMessage },
-      { type: "message", id: "held-image", parentId: "image", message: imageMessage },
-    ]);
+    await publish(other, [{ id: "other-image", message: imageMessage }]);
+    await publish(
+      locator,
+      [
+        { id: "question", message: { role: "user", content: "Public question" } },
+        { id: "answer", message: { role: "assistant", content: "Public answer" } },
+        { id: "image", message: imageMessage },
+        { id: "held-image", message: imageMessage },
+      ],
+      "Public concurrency",
+    );
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const context = createGatewayRequestContext(makeContextParams());
     context.resolveGatewayContext = () => context;
@@ -91,23 +90,16 @@ it("serves public text and images through real publication, isolation, and revoc
     });
     try {
       await projection.ensureMaterialized();
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("HTTP fixture has no address");
-      }
+      const origin = await httpFixtures.listenLoopback(server);
       const codec = await loadPublicSessionShareTokenCodec();
       const token = codec.mint(locator);
       const otherToken = codec.mint(other);
       const path = buildControlUiPublicSessionSharePath({ token });
-      const origin = `http://127.0.0.1:${address.port}`;
       const mediaUrl = (shareToken: string, entry: string) =>
         `${origin}/share/session/media?${new URLSearchParams({ token: shareToken, entry, attachment: "content-0" })}`;
       const paths = [path, "/chat/main/public-concurrency-bbbbbbbbaaaa40008000000000000001"];
       const validators = new Map<string, string>();
       for (const publicPath of paths) {
-        const started = performance.now();
         const replies = await Promise.all(
           Array.from({ length: 20 }, async () => {
             const response = await fetch(`${origin}${publicPath}`);
@@ -134,11 +126,6 @@ it("serves public text and images through real publication, isolation, and revoc
         });
         expect(unchanged.status).toBe(304);
         await unchanged.arrayBuffer();
-        console.info("public-reader proof", {
-          route: publicPath === path ? "legacy" : "canonical",
-          readers: 20,
-          elapsedMs: Math.round(performance.now() - started),
-        });
       }
       const image = await fetch(mediaUrl(token, "image"));
       expect(image.status).toBe(200);
@@ -161,30 +148,21 @@ it("serves public text and images through real publication, isolation, and revoc
       expect(crossPublication.status).toBe(404);
       expect(await crossPublication.text()).toBe(await unknownEntry.text());
 
-      const entered = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
+      const barrier = publicReadBarrier(signal);
       const readAttachment = publicAttachments.readPublicSessionAttachment;
       const heldRead = vi
         .spyOn(publicAttachments, "readPublicSessionAttachment")
         .mockImplementationOnce(async (...args) => {
           const bytes = await readAttachment(...args);
-          entered.resolve();
-          await withinTest(release.promise, signal);
+          await barrier.hold();
           return bytes;
         });
       const pending = fetch(mediaUrl(token, "held-image"));
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            entered.promise,
-            pending,
-            "Media request settled before reading the attachment",
-          ),
-          signal,
-        );
+        await barrier.wait(pending, "Media request settled before reading the attachment");
         await patchSessionEntryCore(locator, () => ({ publicShare: undefined }));
       } finally {
-        release.resolve();
+        barrier.release();
         heldRead.mockRestore();
       }
       const deniedInFlight = await pending;
@@ -196,12 +174,6 @@ it("serves public text and images through real publication, isolation, and revoc
       });
       expect(revokedImage.status).toBe(404);
       expect(await revokedImage.text()).toBe("This public session is unavailable.");
-      console.info("public-media proof", {
-        allowed: image.status,
-        crossPublication: crossPublication.status,
-        revokedInFlight: deniedInFlight.status,
-        revokedConditional: revokedImage.status,
-      });
       for (const [publicPath, etag] of validators) {
         const revoked = await fetch(`${origin}${publicPath}`, {
           headers: { "If-None-Match": etag },

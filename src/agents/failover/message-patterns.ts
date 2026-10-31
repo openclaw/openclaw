@@ -59,8 +59,20 @@ const PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES = new Set([
   "Responses stream completed tool call with invalid JSON arguments",
 ]);
 
+// Anthropic-compatible relay gateways validate tool_use input themselves and,
+// on malformed upstream arguments, fail the response with this diagnostic
+// instead of forwarding the call. Nothing was dispatched. Keep it anchored.
+const GATEWAY_INVALID_TOOL_INPUT_RE =
+  /^Upstream returned invalid tool input for '[^'\r\n]{1,128}'\.?$/;
+
 export function isPreDispatchToolCallRejectionMessage(errorMessage?: string): boolean {
-  return errorMessage !== undefined && PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES.has(errorMessage);
+  if (errorMessage === undefined) {
+    return false;
+  }
+  return (
+    PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES.has(errorMessage) ||
+    GATEWAY_INVALID_TOOL_INPUT_RE.test(errorMessage.trim())
+  );
 }
 const PERIODIC_USAGE_LIMIT_RE =
   /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b|已达到 Token Plan 用量上限|已达到每[日周月天](?:\/每[日周月天])*使用上限|(?:配额|额度)已用尽/i;
@@ -100,7 +112,8 @@ const COMMON_AUTH_ERROR_PATTERNS = [
   "insufficient permissions",
   "insufficient permission",
   /missing scopes?:/i,
-  "expired",
+  // gRPC DEADLINE_EXCEEDED is "deadline expired", a request timeout rather than a credential.
+  /(?<!deadline )expired/i,
   AUTH_HTTP_STATUS_RE,
   "no credentials found",
   "no api key found",
@@ -190,6 +203,7 @@ const ERROR_PATTERNS = {
     "timeout",
     "timed out",
     "deadline exceeded",
+    "deadline expired",
     /^(?=[\s\S]*\bgot status:\s*internal\b)(?=[\s\S]*\bcode["']?\s*[:=]\s*500\b)/i,
     /^(?=[\s\S]*["']status["']\s*:\s*["']internal["'])(?=[\s\S]*["']code["']\s*:\s*500\b)/i,
     "connection error",
@@ -230,6 +244,8 @@ const ERROR_PATTERNS = {
   ],
   billing: [
     BILLING_ERROR_HARD_402_RE,
+    // Already rendered billing copy re-enters classification; "usage limits" in it must not read as rate_limit.
+    /\breturned a billing error\b/i,
     /\b(?:got|returned|received)\s+(?:a\s+)?402\b(?!\s+records\b)/i,
     "payment required",
     "insufficient credits",

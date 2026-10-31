@@ -42,30 +42,6 @@ function snapshotFrom(value: unknown): NativeGatewaysSnapshot | null {
     : null;
 }
 
-function embedderSnapshotFrom(value: unknown): NativeGatewaysSnapshot | null {
-  if (
-    !isRecord(value) ||
-    value.type !== "openclaw.embedder.gateways" ||
-    value.version !== 1 ||
-    !isRecord(value.snapshot)
-  ) {
-    return null;
-  }
-  const snapshot = snapshotFrom(value.snapshot);
-  return snapshot?.gateways.every(
-    (gateway: unknown): gateway is NativeGateway =>
-      isRecord(gateway) &&
-      typeof gateway.id === "string" &&
-      typeof gateway.name === "string" &&
-      gateway.kind === "remote" &&
-      typeof gateway.isPrimary === "boolean" &&
-      typeof gateway.canPromote === "boolean" &&
-      (gateway.health === "ok" || gateway.health === "error" || gateway.health === "unknown"),
-  )
-    ? { gateways: snapshot.gateways, currentId: snapshot.currentId }
-    : null;
-}
-
 function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
   if (typeof window === "undefined") {
     return null;
@@ -92,7 +68,28 @@ function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
       if (message.source !== parent) {
         return;
       }
-      next = embedderSnapshotFrom(message.data);
+      const value = message.data;
+      if (
+        !isRecord(value) ||
+        value.type !== "openclaw.embedder.gateways" ||
+        value.version !== 1 ||
+        !isRecord(value.snapshot)
+      ) {
+        return;
+      }
+      const embeddedSnapshot = snapshotFrom(value.snapshot);
+      next = embeddedSnapshot?.gateways.every(
+        (gateway: unknown): gateway is NativeGateway =>
+          isRecord(gateway) &&
+          typeof gateway.id === "string" &&
+          typeof gateway.name === "string" &&
+          gateway.kind === "remote" &&
+          typeof gateway.isPrimary === "boolean" &&
+          typeof gateway.canPromote === "boolean" &&
+          (gateway.health === "ok" || gateway.health === "error" || gateway.health === "unknown"),
+      )
+        ? { gateways: embeddedSnapshot.gateways, currentId: embeddedSnapshot.currentId }
+        : null;
     } else {
       next = snapshotFrom((event as CustomEvent<unknown>).detail);
     }

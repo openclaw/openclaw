@@ -12,6 +12,7 @@ import { captureSessionTranscriptTargetBinding } from "../../config/sessions/tra
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import type { WorkerConnectionIdentity as Identity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { prepareWorkerTurnTranscriptSource } from "./worker-turn-transcript-target.js";
 
 export const SID = "session-worker-live";
@@ -19,31 +20,29 @@ export const KEY = "agent:main:worker-live";
 export const EPOCH = 7;
 export const RUN = "run-worker-live";
 export const LOCAL = { agentId: "main", sessionId: SID, sessionKey: KEY };
-export const ID: Identity = {
-  environmentId: "environment-live",
-  credentialHash: ["credential", "hash", "live"].join("-"),
-  bundleHash: "b".repeat(64),
-  sessionId: SID,
-  runId: RUN,
-  turnClaim: {
-    sessionId: SID,
-    claimId: "claim-worker-live",
-    runId: RUN,
+function connectionIdentity(n?: number): Identity {
+  const suffix = n === undefined ? "worker-live" : `farm-${n}`;
+  const environmentId = n === undefined ? "environment-live" : `environment-${suffix}`;
+  const turnClaim: NonNullable<Identity["turnClaim"]> = {
+    sessionId: `session-${suffix}`,
+    claimId: `claim-${suffix}`,
+    runId: `run-${suffix}`,
     placementGeneration: 4,
-    owner: { kind: "worker", environmentId: "environment-live", ownerEpoch: EPOCH },
-  },
-  ownerEpoch: EPOCH,
-  rpcSetVersion: 1,
-  protocolFeatures: ["worker-live-event-v1"],
-  credentialExpiresAtMs: 10_000,
-};
+    owner: { kind: "worker", environmentId, ownerEpoch: EPOCH },
+  };
+  return createWorkerConnectionIdentity(turnClaim, {
+    credentialHash: ["credential", "hash", "live"].join("-"),
+    bundleHash: "b".repeat(64),
+    protocolFeatures: ["worker-live-event-v1"],
+  });
+}
+export const ID = connectionIdentity();
+export const farmIdentity = (n: number) => connectionIdentity(n);
 
 export const msg = (seq: number, delta = "hello", ack = 0, runId = RUN, epoch = EPOCH): Params => ({
+  ...live(seq, { kind: "assistant", payload: { text: delta, delta } }, runId),
   runEpoch: epoch,
   lastAckedSeq: ack,
-  seq,
-  runId,
-  event: { kind: "assistant", payload: { text: delta, delta } },
 });
 
 export function live(seq: number, event: Params["event"], runId = RUN): Params {
@@ -73,11 +72,7 @@ export async function captureWorkerTranscriptSource(target: SessionTranscriptRun
     expectedWriterRunId: entry.activeWriterRunId,
   };
   const authority = await prepareWorkerTurnTranscriptSource(sessionTarget);
-  return {
-    sessionTarget,
-    receiptAuthority: authority,
-    release: () => authority.release(),
-  };
+  return { sessionTarget, receiptAuthority: authority, release: () => authority.release() };
 }
 
 export function holdWorkerTranscriptWriter(storePath: string) {
@@ -109,24 +104,5 @@ export async function seedWorkerLiveSession(storePath: string, n: number, update
   return captureWorkerTranscriptSource(target);
 }
 
-export const farmIdentity = (n: number): Identity => ({
-  ...ID,
-  environmentId: `environment-farm-${n}`,
-  sessionId: `session-farm-${n}`,
-  runId: `run-farm-${n}`,
-  turnClaim: {
-    sessionId: `session-farm-${n}`,
-    claimId: `claim-farm-${n}`,
-    runId: `run-farm-${n}`,
-    placementGeneration: 4,
-    owner: { kind: "worker", environmentId: `environment-farm-${n}`, ownerEpoch: EPOCH },
-  },
-});
-
-export const farmEvent = (n: number, seq: number, event: Params["event"]): Params => ({
-  runEpoch: EPOCH,
-  lastAckedSeq: seq - 1,
-  seq,
-  runId: `run-farm-${n}`,
-  event,
-});
+export const farmEvent = (n: number, seq: number, event: Params["event"]): Params =>
+  live(seq, event, `run-farm-${n}`);

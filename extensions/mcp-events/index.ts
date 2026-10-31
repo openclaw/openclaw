@@ -2,9 +2,10 @@ import {
   definePluginEntry,
   type OpenClawPluginServiceContextV2,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMcpEventsConfig } from "./src/config.js";
 import { createCallbackHandler } from "./src/http.js";
-import { CALLBACK_PREFIX, MCP_EVENTS_PROFILE, record } from "./src/protocol.js";
+import { CALLBACK_PREFIX, MCP_EVENTS_PROFILE } from "./src/protocol.js";
 import { McpEventsService } from "./src/service.js";
 import type { EventCron } from "./src/types.js";
 
@@ -14,6 +15,42 @@ function currentCron(context: OpenClawPluginServiceContextV2): EventCron {
     throw new Error("MCP Events requires Gateway event-driven automation admission");
   }
   return { readEventSources: cron.readEventSources, runEvent: cron.runEvent };
+}
+
+export function getMcpEventsDiagnostics(service: McpEventsService) {
+  return [
+    ...[...service.bindings.values()].map(({ facts, live }) => ({
+      bindingId: facts.bindingId,
+      jobId: facts.jobId,
+      sourceIdentity: facts.sourceIdentity,
+      serverName: facts.serverName,
+      name: facts.definition.name,
+      profile: MCP_EVENTS_PROFILE,
+      status: !live
+        ? "revoked"
+        : facts.refreshBefore && facts.refreshBefore <= service.now
+          ? "expired"
+          : facts.status,
+      refreshBefore: facts.refreshBefore,
+      replayAvailable: facts.cursor !== null,
+      truncated: facts.truncated,
+      failures: facts.failures,
+      nextAttemptAt: facts.nextAttemptAt,
+      cleanupPending: facts.cleanupPending,
+      lastError: facts.lastError,
+      updatedAt: facts.updatedAt,
+    })),
+    ...[...service.unavailable.values()].map(({ source, attempts }) => ({
+      jobId: source.jobId,
+      sourceIdentity: source.sourceIdentity,
+      serverName: typeof source.options.server === "string" ? source.options.server : undefined,
+      name: typeof source.options.name === "string" ? source.options.name : undefined,
+      profile: MCP_EVENTS_PROFILE,
+      status: "unavailable",
+      lastError: "source_unavailable",
+      failures: attempts,
+    })),
+  ];
 }
 
 export default definePluginEntry({
@@ -93,7 +130,7 @@ export default definePluginEntry({
         respond(true, {
           running: Boolean(service),
           profile: MCP_EVENTS_PROFILE,
-          subscriptions: service?.diagnostics() ?? [],
+          subscriptions: service ? getMcpEventsDiagnostics(service) : [],
         });
       },
       { scope: "operator.admin" },
@@ -129,9 +166,7 @@ export default definePluginEntry({
         try {
           await active.start();
         } catch (error) {
-          if (service === active) {
-            service = undefined;
-          }
+          service = undefined;
           await active.stop();
           throw error;
         }

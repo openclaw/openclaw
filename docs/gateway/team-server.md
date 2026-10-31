@@ -50,6 +50,7 @@ activation and verification. See [Keep operations recoverable](/gateway/team-ser
 
 - A Linux host with persistent storage and a dedicated service account. Use a
   [supported Node runtime](/install/node) and an [OpenClaw installation](/install).
+  Plan its storage layout first; see [Optimal setup](#optimal-setup).
 - A Cloudflare-managed domain, Zero Trust account, and `cloudflared` on the host.
 - An identity provider and an explicit policy for who may sign in.
 - Model credentials and, if needed, a bot account for your team chat.
@@ -60,6 +61,54 @@ A Gateway is one trust boundary. Roles and session ownership support
 collaboration; they do not isolate hostile users from each other. Keep untrusted
 code in sandboxes or remote workers. Use separate Gateways, OS users, or hosts
 for mutually untrusted teams. See [Security trust model](/gateway/security/trust-model).
+
+## Optimal setup
+
+A busy team server runs many agents, managed worktrees, and SQLite databases on
+one host. Its storage layout decides how responsive it stays under that load.
+
+**Keep OpenClaw state off the worktree filesystem.** Put the state directory
+(`~/.openclaw` by default, or [`OPENCLAW_STATE_DIR`](/help/environment)) on XFS
+or ext4. Put managed worktrees on Btrfs with
+[`worktreeRoot`](/concepts/managed-worktrees#choose-where-worktrees-are-stored),
+where snapshots make new checkouts nearly instant; XFS reflinks also work. See
+[Filesystem acceleration](/concepts/managed-worktrees#filesystem-acceleration).
+
+Btrfs commits are filesystem-wide. While a commit runs, SQLite reads and writes
+that update file metadata can wait for it, and worktree snapshot creation and
+deletion make commits long. On a busy shared Btrfs volume we have measured
+single commits that took minutes and database commits that stalled for seconds.
+OpenClaw already creates SQLite stores with
+[NOCOW on Btrfs](/reference/database-schemas/integrity-and-recovery#btrfs-and-nocow),
+which limits fragmentation but does not remove these waits.
+
+Keep the whole state directory on one filesystem. OpenClaw moves files between
+its subdirectories with renames, and a rename cannot cross filesystems.
+
+**Mount with `noatime`.** Under the default `relatime`, a database that is
+written continuously gets an access-time update on almost every read. On Btrfs,
+each update joins the current transaction and can wait for a running commit;
+`lazytime` does not avoid this on Btrfs. OpenClaw does not read access times.
+You can switch a mounted filesystem without a restart, then add `noatime` to its
+`/etc/fstab` entry:
+
+```bash
+sudo mount -o remount,noatime /
+```
+
+**Choose disks for the databases.** Mirror the state filesystem (RAID1) when you
+can, so one failed drive does not take the databases with it. Drives with
+power-loss protection acknowledge cache flushes quickly, which keeps SQLite
+fsync latency low.
+
+**Move an existing Btrfs-only host.** Apply `noatime` first; it needs no
+downtime. Moving state then needs block-device space outside Btrfs: a new drive
+or partition, or space at the end of the device released with
+`btrfs filesystem resize`. Stop the Gateway, copy the state directory, mount the
+new filesystem at the same path, and bind-mount the worktree directories back
+from Btrfs so recorded worktree paths stay valid. If the new filesystem lives in
+space released from Btrfs, never grow that Btrfs filesystem again
+(`btrfs filesystem resize max`): it would overwrite the new filesystem.
 
 ## 1. Install under one service account
 
@@ -281,12 +330,14 @@ definitions: {
 Everyone who resolves to the default role needs a current visitor grant. Before
 switching the default, assign every staff member an explicit role with
 `users.setRole` or `gateway.roles.assignments.byGithubLogin`. An administrator
-then asks the agent to call `visitor_invite` with a GitHub login or email; the
-guest signs in at the normal Team URL.
+then asks the agent to call `visitor_invite` with a GitHub login or email and an
+optional note, such as a session link to start from. The result includes short
+invitation text to hand to the guest: who invited them, the sign-in address from
+`gateway.publicOrigin`, the identity to sign in with, the expiry, and the note.
 
-Guests can create sandboxed sessions on the listed agents and publish draft
-pull requests from their own sessions through the shared GitHub account. They
-cannot merge through OpenClaw. Before inviting anyone, review the paths a
+Guests can create sandboxed sessions on the listed agents and publish open or
+explicitly requested draft pull requests from their own sessions through the
+shared GitHub account. They cannot merge through OpenClaw. Before inviting anyone, review the paths a
 required sandbox does not contain, listed under
 [Named operator roles](/gateway/operator-scopes#named-operator-roles), and
 [Workflow and CI changes](/gateway/config-tools/github-identity#workflow-and-ci-changes)
@@ -546,6 +597,8 @@ small `/tmp` quota. Configure needed temporary space in the actual service
 environment, not only an SSH shell. On Btrfs, inspect metadata allocation and
 retained snapshots as well as `df`: snapshots can pin space after files are
 deleted. Retire only known disposable data and completed recovery points.
+
+For rootless Podman sandboxes, budget one kernel session keyring per running container under the Gateway service user's per-user quota. On a busy host, set `kernel.keys.maxkeys=2000` and `kernel.keys.maxbytes=200000` with `sudo sysctl -w kernel.keys.maxkeys=2000 kernel.keys.maxbytes=200000`, and persist both values in `/etc/sysctl.d/61-openclaw-keyring-quota.conf`. A `create keyring: Disk quota exceeded` error can mean this quota is exhausted even when the filesystem has space; inspect `sysctl kernel.keys.maxkeys kernel.keys.maxbytes` on the container engine host.
 
 Monitor process restarts, readiness, channel connectivity, storage, and real
 session/model failures. Keep incident alerts outside the Gateway that might be

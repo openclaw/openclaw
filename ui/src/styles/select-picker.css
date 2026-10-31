@@ -185,11 +185,6 @@ openclaw-select-picker {
   outline: none;
 }
 
-/* Filtered flat options stay mounted so a keystroke does not invalidate siblings. */
-.picker-select__option[hidden] {
-  display: none;
-}
-
 .picker-select__empty {
   padding: 8px;
   color: var(--muted);
@@ -309,7 +304,7 @@ openclaw-select-picker {
   padding: 0 var(--chat-mobile-edge-inset) calc(var(--space-2) + var(--shell-safe-area-bottom));
   border: 0;
   box-shadow: none;
-  animation: picker-sheet-page-in 200ms var(--ease-out);
+  animation: picker-sheet-page-in var(--motion-sheet);
 }
 
 .picker-select--sheet .picker-select__options {
@@ -368,4 +363,23 @@ openclaw-select-picker {
   .picker-select--sheet:dir(rtl) .picker-select__menu {
     animation: none;
   }
+}
+
+/* Intrinsic-width probes stay outside the list's scroll region and consume no height. */
+.picker-select__sizer {
+  flex: 0 0 auto;
+  width: max-content;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+
+.picker-select__window {
+  position: relative;
+}
+
+.picker-select__option--windowed {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
 }

@@ -1,12 +1,12 @@
 import type { SecretInputMode } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import type {
   EmbeddingProviderAdapter,
   EmbeddingProvider,
 } from "../plugins/embedding-provider-types.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
-import { withTimeout } from "../utils/with-timeout.js";
 import {
   WizardCancelledError,
   WizardNavigationError,
@@ -28,63 +28,6 @@ async function closeProvider(provider: EmbeddingProvider): Promise<void> {
     );
   } catch {
     // Cleanup cannot turn a failed readiness check into a surfaced provider error.
-  }
-}
-
-async function probeProvider(params: {
-  adapter: EmbeddingProviderAdapter;
-  config: OpenClawConfig;
-  agentDir?: string;
-  providerId: string;
-  model: string;
-  search: Search;
-  remote?: Remote;
-}): Promise<boolean> {
-  const controller = new AbortController();
-  let provider: EmbeddingProvider | null = null;
-  const check = async () => {
-    const createOptions = {
-      config: params.config,
-      agentDir: params.agentDir,
-      provider: params.providerId,
-      model: params.model,
-      remote: params.remote,
-      inputType: params.search.inputType,
-      queryInputType: params.search.queryInputType,
-      documentInputType: params.search.documentInputType,
-      dimensions: params.search.outputDimensionality,
-    };
-    const result = await params.adapter.create({
-      ...createOptions,
-      model: params.adapter.normalizeModel?.(createOptions) ?? createOptions.model,
-    });
-    // Creation has no abort contract; release a late result without embedding.
-    if (controller.signal.aborted) {
-      if (result.provider) {
-        await closeProvider(result.provider);
-      }
-      return false;
-    }
-    provider = result.provider;
-    if (!provider) {
-      return false;
-    }
-    const vector = await provider.embed("ping", { signal: controller.signal, inputType: "query" });
-    return Array.isArray(vector) && vector.length > 0 && vector.every(Number.isFinite);
-  };
-  try {
-    return await withTimeout(check(), PROBE_TIMEOUT_MS, {
-      createError: () => {
-        controller.abort();
-        return new Error("embedding probe timed out");
-      },
-    });
-  } catch {
-    return false;
-  } finally {
-    if (provider) {
-      await closeProvider(provider);
-    }
   }
 }
 
@@ -183,7 +126,8 @@ export async function runMemorySetupFlow(
     return config;
   }
 
-  const sameProvider = selected === previousProvider;
+  const { isSameMemorySearchProvider } = await import("../agents/memory-search.js");
+  const sameProvider = isSameMemorySearchProvider(selected, previousProvider);
   const initialModel = (sameProvider ? previous?.model : undefined) || adapter.defaultModel || "";
   const model = (
     await prompter.text({
@@ -267,9 +211,71 @@ export async function runMemorySetupFlow(
     enabled: true,
     remote: remoteForSave,
   };
-  const candidateConfig = { ...config, memory: { ...config.memory, search: candidateSearch } };
+  let candidateConfig: OpenClawConfig = {
+    ...config,
+    memory: { ...config.memory, search: candidateSearch },
+  };
   try {
     const { resolveMemorySearchConfig } = await import("../agents/memory-search.js");
+    if (!sameProvider && config.agents?.entries) {
+      const entries = { ...config.agents.entries };
+      for (const [agentId, agent] of Object.entries(entries)) {
+        const search = agent.memory?.search;
+        const ownsRemote = [
+          search?.remote?.baseUrl,
+          search?.remote?.apiKey,
+          search?.remote?.headers,
+        ].some((value) => value !== undefined);
+        const inheritsRemote =
+          search?.provider !== undefined &&
+          [previous?.remote?.baseUrl, previous?.remote?.apiKey, previous?.remote?.headers].some(
+            (value) => value !== undefined,
+          );
+        if (!search || (!ownsRemote && !inheritsRemote)) {
+          continue;
+        }
+        // Include disabled agents: enabling one later must not reroute its saved credential.
+        const effective = resolveMemorySearchConfig(
+          {
+            ...config,
+            agents: {
+              ...config.agents,
+              entries: {
+                ...entries,
+                [agentId]: {
+                  ...agent,
+                  memory: { ...agent.memory, search: { ...search, enabled: true } },
+                },
+              },
+            },
+          },
+          agentId,
+        );
+        if (!effective) {
+          continue;
+        }
+        const { baseUrl, apiKey, headers } = effective.remote ?? {};
+        entries[agentId] = {
+          ...agent,
+          memory: {
+            ...agent.memory,
+            search: {
+              ...search,
+              provider: effective.provider,
+              model: effective.model,
+              // Empty overrides retain absence after JSON persistence instead of inheriting new auth.
+              remote: {
+                ...search.remote,
+                baseUrl: baseUrl ?? "",
+                apiKey: apiKey ?? "",
+                headers: headers ?? {},
+              },
+            },
+          },
+        };
+      }
+      candidateConfig = { ...candidateConfig, agents: { ...config.agents, entries } };
+    }
     // Validate shared defaults without letting a per-agent override mask incompatibility.
     resolveMemorySearchConfig({ ...candidateConfig, agents: undefined }, "main");
     for (const agentId of Object.keys(config.agents?.entries ?? {})) {
@@ -337,15 +343,57 @@ export async function runMemorySetupFlow(
   const progress = prompter.progress(
     "Checking embedding readiness (local model loading can take two minutes)…",
   );
-  const ready = await probeProvider({
-    adapter,
-    config: probeConfig,
-    agentDir: opts.agentDir,
-    providerId: selected,
-    model,
-    search: candidateSearch,
-    remote: remoteForProbe,
-  });
+  const probeAdapter = adapter;
+  const configForProbe = probeConfig;
+  const probeAgentDir = opts.agentDir;
+  const probeRemote = remoteForProbe;
+  let ready: boolean;
+  const controller = new AbortController();
+  let provider: EmbeddingProvider | null = null;
+  const check = async () => {
+    const createOptions = {
+      config: configForProbe,
+      agentDir: probeAgentDir,
+      provider: selected,
+      model,
+      remote: probeRemote,
+      inputType: candidateSearch.inputType,
+      queryInputType: candidateSearch.queryInputType,
+      documentInputType: candidateSearch.documentInputType,
+      dimensions: candidateSearch.outputDimensionality,
+    };
+    const result = await probeAdapter.create({
+      ...createOptions,
+      model: probeAdapter.normalizeModel?.(createOptions) ?? createOptions.model,
+    });
+    // Creation has no abort contract; release a late result without embedding.
+    if (controller.signal.aborted) {
+      if (result.provider) {
+        await closeProvider(result.provider);
+      }
+      return false;
+    }
+    provider = result.provider;
+    if (!provider) {
+      return false;
+    }
+    const vector = await provider.embed("ping", { signal: controller.signal, inputType: "query" });
+    return Array.isArray(vector) && vector.length > 0 && vector.every(Number.isFinite);
+  };
+  try {
+    ready = await withTimeout(check(), PROBE_TIMEOUT_MS, {
+      createError: () => {
+        controller.abort();
+        return new Error("embedding probe timed out");
+      },
+    });
+  } catch {
+    ready = false;
+  } finally {
+    if (provider) {
+      await closeProvider(provider);
+    }
+  }
   progress.stop(ready ? "Embedding check passed" : "Embedding check failed");
   if (!ready) {
     await prompter.note(
@@ -355,7 +403,7 @@ export async function runMemorySetupFlow(
     return config;
   }
   await prompter.note(
-    "Embedding readiness passed in this CLI session. The Gateway daemon must also be able to resolve any environment-based SecretRef. This changes shared memory defaults; existing per-agent overrides remain in effect. If the provider or model changes, rebuild the index explicitly with `openclaw memory index --force` before vector search resumes.",
+    "Embedding readiness passed in this CLI session. The Gateway daemon must also be able to resolve any environment-based SecretRef. This changes shared memory defaults. On a provider change, agents with remote overrides retain their previous embedding destination and model. If the provider or model changes, rebuild the index explicitly with `openclaw memory index --force` before vector search resumes.",
     "Ready to save",
   );
   if (

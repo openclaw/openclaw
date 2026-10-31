@@ -14,18 +14,6 @@ type SelfChatLookup = SelfChatCacheKeyParts & {
   allowCreatedAtSkew?: boolean;
 };
 
-type SelfChatCacheEntry = {
-  key: string;
-  createdAt: number;
-  createdAtSkewToleranceMs: number;
-  rememberedAt: number;
-};
-
-export type SelfChatCache = {
-  remember: (lookup: SelfChatLookup) => void;
-  has: (lookup: SelfChatLookup) => boolean;
-};
-
 const SELF_CHAT_TTL_MS = 10_000;
 const SELF_CHAT_CREATED_AT_TOLERANCE_MS = 1_000;
 const MAX_SELF_CHAT_CACHE_ENTRIES = 512;
@@ -51,8 +39,13 @@ function buildScope(parts: SelfChatCacheKeyParts): string {
   return `${parts.accountId}:${chatTarget}:imessage:${parts.sender}`;
 }
 
-class DefaultSelfChatCache implements SelfChatCache {
-  private entries: SelfChatCacheEntry[] = [];
+export class SelfChatCache {
+  private entries: {
+    key: string;
+    createdAt: number;
+    createdAtSkewToleranceMs: number;
+    rememberedAt: number;
+  }[] = [];
   private lastCleanupAt = 0;
 
   private buildBucketKey(lookup: SelfChatLookup): string | null {
@@ -105,8 +98,4 @@ class DefaultSelfChatCache implements SelfChatCache {
       .filter((entry) => now - entry.rememberedAt <= SELF_CHAT_TTL_MS)
       .slice(-MAX_SELF_CHAT_CACHE_ENTRIES);
   }
-}
-
-export function createSelfChatCache(): SelfChatCache {
-  return new DefaultSelfChatCache();
 }

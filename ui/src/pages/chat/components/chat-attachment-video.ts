@@ -1,3 +1,5 @@
+import { listen } from "../../../lib/reactive/listener.ts";
+
 export type VideoCompressionRequest = { file: File; maxBytes: number };
 export type VideoCompressionError = "unsupported" | "too-large" | "failed";
 export type VideoCompressionResponse =
@@ -21,6 +23,8 @@ export function compressChatAttachmentVideo(
       const worker = new Worker(new URL("./chat-attachment-video.worker.ts", import.meta.url), {
         type: "module",
       });
+      const listeners = new AbortController();
+      const listenerOptions = { signal: listeners.signal };
       let timer: ReturnType<typeof setTimeout>;
       let settled = false;
       const finish = (prepared?: File, reason: VideoCompressionError = "failed") => {
@@ -29,8 +33,8 @@ export function compressChatAttachmentVideo(
         }
         settled = true;
         clearTimeout(timer);
+        listeners.abort();
         worker.terminate();
-        signal.removeEventListener("abort", abort);
         if (prepared && !signal.aborted) {
           resolve(prepared);
         } else {
@@ -44,25 +48,35 @@ export function compressChatAttachmentVideo(
         clearTimeout(timer);
         timer = setTimeout(() => finish(), 120_000);
       };
-      signal.addEventListener("abort", abort, { once: true });
-      worker.addEventListener("message", ({ data }: MessageEvent<VideoCompressionResponse>) => {
-        if (settled) {
-          return;
-        }
-        if (data.type === "progress") {
-          armWatchdog();
-          onProgress(data.progress);
-        } else if (data.type === "ready") {
-          finish(data.file);
-        } else {
-          finish(undefined, data.reason);
-        }
-      });
-      worker.addEventListener("error", (event) => {
-        event.preventDefault();
-        finish();
-      });
-      worker.addEventListener("messageerror", () => finish());
+      listen(signal, "abort", abort, { ...listenerOptions, once: true });
+      listen(
+        worker,
+        "message",
+        ({ data }: MessageEvent<VideoCompressionResponse>) => {
+          if (settled) {
+            return;
+          }
+          if (data.type === "progress") {
+            armWatchdog();
+            onProgress(data.progress);
+          } else if (data.type === "ready") {
+            finish(data.file);
+          } else {
+            finish(undefined, data.reason);
+          }
+        },
+        listenerOptions,
+      );
+      listen(
+        worker,
+        "error",
+        (event) => {
+          event.preventDefault();
+          finish();
+        },
+        listenerOptions,
+      );
+      listen(worker, "messageerror", () => finish(), listenerOptions);
       armWatchdog();
       try {
         worker.postMessage({ file, maxBytes } satisfies VideoCompressionRequest, []);

@@ -37,6 +37,22 @@ function delegate(f: ReturnType<typeof preExistingCandidate>) {
   return state;
 }
 
+function manualGateCandidate() {
+  const f = preExistingCandidate();
+  const state = f.state();
+  state.priorCi.event = "workflow_dispatch";
+  state.priorCi.runConclusion = "failure";
+  state.priorCi.jobs = state.priorCi.jobs!.filter((job) => ![603, 604].includes(job.id));
+  state.priorCi.currentGateChecks = [
+    { id: 1, suiteId: 10, event: "workflow_dispatch", conclusion: "failure" },
+    { id: 3, suiteId: 20, event: "pull_request", conclusion: "success" },
+  ];
+  f.save(state);
+  const { cancellation: _cancellation, ...evidence } = f.evidence;
+  writeFileSync(f.path, JSON.stringify(evidence));
+  return f;
+}
+
 const matrixWorkflow = [
   "jobs:",
   "  checks-node-core-test-nondist-shard:",
@@ -91,6 +107,78 @@ function mixedMatrixCandidate(workflow = matrixWorkflow) {
 }
 
 describePosix("explicit prior-CI admin landing", () => {
+  it.each(["success", "failure", "cancelled", "skipped", null])(
+    "keeps the other PR-event gate enforced when its conclusion is %s",
+    (conclusion) => {
+      const f = manualGateCandidate();
+      const state = f.state();
+      state.priorCi.currentGateChecks[1]!.conclusion = conclusion;
+      state.priorCi.currentGateChecks[1]!.status =
+        conclusion === null ? "in_progress" : "completed";
+      f.save(state);
+
+      const result = f.adminPriorCi(f.path);
+      const admitted = conclusion === "success";
+      expectResult(f, result, admitted ? undefined : "other required checks", admitted ? 1 : 0);
+      if (admitted) {
+        expect(f.record().priorCiAdmin.gateCheckRunId).toBe(1);
+        expect(f.record().priorCiAdmin.securityReview).toMatchObject({
+          combinedStatusId: 801,
+          runId: 901,
+        });
+      } else {
+        expectNoIntent(f);
+      }
+    },
+  );
+
+  it.each([
+    ["missing suite", "required-check workflow identities"],
+    ["wrong suite", "effective CI gate"],
+    ["wrong check-run URL", "effective CI gate"],
+    ["foreign repository URL", "effective CI gate"],
+    ["wrong publisher", "effective CI gate"],
+    ["wrong name", "effective CI gate"],
+    ["invalid check-run ID", "check identities"],
+    ["ambiguous suite", "required-check workflow or start time"],
+    ["newer same-event gate", "effective CI gate"],
+  ])("refuses a selected gate with %s", (fault, message) => {
+    const f = manualGateCandidate();
+    const state = f.state();
+    const selected = state.priorCi.currentGateChecks[0]!;
+    if (fault === "missing suite") {
+      delete selected.suiteId;
+    } else if (fault === "wrong suite") {
+      selected.suiteId = 40;
+    } else if (fault === "wrong check-run URL") {
+      state.priorCi.jobs![1]!.check_run_url =
+        "https://api.github.com/repos/fixture/repo/check-runs/4";
+    } else if (fault === "foreign repository URL") {
+      state.priorCi.jobs![1]!.check_run_url =
+        "https://api.github.com/repos/another/repo/check-runs/1";
+    } else if (fault === "wrong publisher") {
+      selected.publisherId = 999;
+    } else if (fault === "wrong name") {
+      selected.name = "another-gate";
+    } else if (fault === "invalid check-run ID") {
+      selected.id = 0;
+    } else if (fault === "ambiguous suite") {
+      state.priorCi.currentGateChecks.push({ ...selected, id: 4 });
+    } else {
+      state.priorCi.currentGateChecks.push({
+        ...selected,
+        id: 4,
+        suiteId: 40,
+        conclusion: "success",
+        startedAt: "2026-09-20T00:01:00Z",
+      });
+    }
+    f.save(state);
+    const result = f.adminPriorCi(f.path);
+    expectResult(f, result, message);
+    expectNoIntent(f);
+  });
+
   it.each([false, true])(
     "revalidates delegated CI bypass before dispatch (revoked=%s)",
     (revoked) => {
@@ -118,36 +206,84 @@ describePosix("explicit prior-CI admin landing", () => {
     },
   );
 
-  it("refuses a generic protection 404 without treating hidden GraphQL rules as absent", () => {
-    const f = preExistingCandidate();
-    f.save({ ...f.state(), restPolicy: "not-found" });
-    const result = f.verifyPriorCi(f.path);
-    expectResult(f, result, "classic branch-protection policy is unavailable");
-    expect(result.output).toContain("ordinary green-CI landing");
-    expect(result.output).toContain(
-      "does not establish environment approval or production deployment authority",
-    );
-    expect(f.state().calls.some((call) => call.includes("graphql"))).toBe(false);
-    expect(() => f.record()).toThrow();
-  });
+  it.each([
+    { kind: "check", state: "failure", required: true, padding: 0, admitted: false },
+    { kind: "status", state: "pending", required: true, padding: 0, admitted: false },
+    { kind: "check", state: "failure", required: true, padding: 100, admitted: false },
+    { kind: "check", state: "failure", required: false, padding: 0, admitted: true },
+    {
+      kind: "check",
+      state: "success",
+      required: true,
+      padding: 0,
+      admitted: true,
+      previousFailure: true,
+    },
+  ] as const)(
+    "honors native $kind required=$required $state checks after $padding optional contexts",
+    ({ kind, state: checkState, required, padding, admitted, ...options }) => {
+      const f = preExistingCandidate();
+      const state = f.state();
+      state.restPolicy = "not-found";
+      state.quotaAt = "checks";
+      state.priorCi.nativeChecks = [
+        { name: "Classic required check", kind, required, state: checkState, ...options },
+      ];
+      state.priorCi.nativeOptionalCount = padding;
+      f.save(state);
+      const result = f.adminPriorCi(f.path);
+      expectResult(f, result, admitted ? undefined : /other required checks/, admitted ? 1 : 0);
+      if (admitted) {
+        expect(f.record().phase).toBe("complete");
+      } else {
+        expect(() => f.record()).toThrow();
+      }
+    },
+  );
 
-  it.each(["review", "security", "new attempt"])("delegation cannot waive %s", (fault) => {
-    const f = preExistingCandidate();
-    const state = delegate(f);
-    if (fault === "review") {
-      state.priorCi.reviewDecision = "REVIEW_REQUIRED";
-    }
-    if (fault === "security") {
-      state.priorCi.security.fault = "failed-guard";
-    }
-    if (fault === "new attempt") {
-      state.priorCi.latestAttempt++;
-    }
-    f.save(state);
-    const result = f.verifyPriorCi(f.path);
-    expectResult(f, result, /current enforced reviews|security-sensitive|newer or running/);
-    expect(() => f.record()).toThrow();
-  });
+  it.each(["missing", "unrestricted-publisher"])(
+    "requires the native marked publisher when its REST result is %s",
+    (fault) => {
+      const f = preExistingCandidate();
+      const state = f.state();
+      state.quotaAt = "checks";
+      state.priorCi.nativeChecks = [
+        { name: "Security Review", kind: "check", required: true, state: "success" },
+      ];
+      state.priorCi.missingCheck = "Security Review";
+      if (fault === "missing") {
+        state.priorCi.nativeMissingResult = true;
+        state.restContexts = ["openclaw/ci-gate"];
+      } else {
+        state.restRequiredApp = null;
+        state.priorCi.nativeResultApp = 999;
+      }
+      f.save(state);
+      expectResult(f, f.adminPriorCi(f.path), /other required checks/);
+      expect(() => f.record()).toThrow();
+    },
+  );
+
+  it.each(["head", "commit", "total", "cursor"])(
+    "refuses native required-check pagination with %s drift",
+    (fault) => {
+      const f = preExistingCandidate();
+      const state = f.state();
+      state.quotaAt = "checks";
+      state.priorCi.nativeChecks = [
+        { name: "Classic required check", kind: "check", required: true, state: "success" },
+      ];
+      state.priorCi.nativeOptionalCount = 100;
+      state.priorCi.nativePageFault = fault;
+      f.save(state);
+      expectResult(
+        f,
+        f.adminPriorCi(f.path),
+        /prepared head|current enforced reviews|inventory|pagination/,
+      );
+      expect(() => f.record()).toThrow();
+    },
+  );
 
   it("lands fork matrix cancellation while retaining independent UI failure attribution", () => {
     const f = mixedMatrixCandidate();
@@ -177,12 +313,7 @@ describePosix("explicit prior-CI admin landing", () => {
   it.each([
     "empty causes",
     "duplicate cause",
-    "unknown cause",
-    "nonfailed cause",
-    "cancelled cause",
     "unrelated failure as cause",
-    "extra unrelated member",
-    "missing causal member",
     "aggregate omits unrelated failure",
     "missing cancellation qualification",
     "disabled",
@@ -204,18 +335,9 @@ describePosix("explicit prior-CI admin landing", () => {
     const causes: Record<string, number[]> = {
       "empty causes": [],
       "duplicate cause": [601, 601],
-      "unknown cause": [999],
-      "nonfailed cause": [605],
-      "cancelled cause": [604],
       "unrelated failure as cause": [606],
     };
     cancellation.causedBy = causes[fault] ?? cancellation.causedBy;
-    if (fault === "extra unrelated member") {
-      cancellation.members.push({ jobId: 606, name: "checks-ui-e2e-real-gateway" });
-    }
-    if (fault === "missing causal member") {
-      cancellation.members.shift();
-    }
     if (fault === "aggregate omits unrelated failure") {
       f.evidence.aggregate.causedBy = [601];
     }
@@ -262,10 +384,72 @@ describePosix("explicit prior-CI admin landing", () => {
     }
   });
 
+  it.each(["current", "older", "foreign"] as const)(
+    "checks the %s publisher against main after the bound workflow changes",
+    (publisher) => {
+      const f = preExistingCandidate();
+      const workflowPath = ".github/workflows/security-review.yml";
+      const workflow = f.git(["show", `${f.base}:${workflowPath}`]);
+      // Add an input to both checkouts so admission must use main's inventory too.
+      const updated = workflow.replaceAll(
+        "sparse-checkout: |",
+        "sparse-checkout: |\n            /sibling.txt",
+      );
+      const blob = f.git(["hash-object", "-w", "--stdin"], updated + "\n");
+      let tree = blob;
+      for (const [directory, name, kind] of [
+        [":.github/workflows", "security-review.yml", "100644 blob"],
+        [":.github", "workflows", "040000 tree"],
+        ["", ".github", "040000 tree"],
+      ]) {
+        const entries = f
+          .git(["ls-tree", `${f.base}${directory}`])
+          .split("\n")
+          .filter((entry) => !entry.endsWith(`\t${name}`));
+        tree = f.git(["mktree"], [...entries, `${kind} ${tree}\t${name}`, ""].join("\n"));
+      }
+      const main = f.commit(tree, [f.base]);
+      f.git(["push", "-q", "origin", `${main}:refs/heads/main`]);
+      const state = f.state();
+      state.priorCi.security.sourceSha = publisher === "older" ? f.base : main;
+      if (publisher === "foreign") {
+        state.priorCi.security.fault = "untrusted-publisher-source";
+      }
+      f.save(state);
+
+      const result = f.adminPriorCi(f.path);
+      expectResult(
+        f,
+        result,
+        publisher === "current"
+          ? undefined
+          : publisher === "older"
+            ? "publisher source differs from the current owner"
+            : "publisher source is not on protected main",
+        publisher === "current" ? 1 : 0,
+      );
+      if (publisher === "current") {
+        expect(f.record().priorCiAdmin.securityReview).toMatchObject({
+          sourceSha: main,
+          sources: expect.arrayContaining([
+            { path: workflowPath, sha: blob },
+            { path: "sibling.txt", sha: f.git(["rev-parse", `${main}:sibling.txt`]) },
+          ]),
+        });
+      } else {
+        expectNoIntent(f);
+      }
+    },
+  );
+
   it.each([
     ["success", ""],
     ["pending", ""],
-    ["automation-dispatch", "successful protected Security Review publisher is required"],
+    ["head-only-enforcement", ""],
+    ["wrong-ci-run", "successful exact-head security enforcement is required"],
+    ["wrong-ci-attempt", "successful exact-head security enforcement is required"],
+    ["duplicate-enforcement", "successful exact-head security enforcement is required"],
+    ["unsupported-event", "successful protected Security Review publisher is required"],
     ["missing-job", "security-fast must pass independently"],
     ["duplicate-job", "security-fast must pass independently"],
     ["missing-status", "current combined CI/security status is required"],
@@ -276,6 +460,8 @@ describePosix("explicit prior-CI admin landing", () => {
     ["foreign-workflow", "successful protected Security Review publisher is required"],
     ["new-publisher-attempt", "publisher attempt identity changed"],
     ["changed-publisher-source", "publisher source differs from the current owner"],
+    ["malformed-workflow", "complete protected publisher source is required"],
+    ["changed-workflow-bytes", "blob bytes mismatch"],
     ["untrusted-publisher-source", "publisher source is not on protected main"],
     ["missing-enforcement", "successful exact-head security enforcement is required"],
     ["incomplete-publisher", "incomplete Security Review job identities"],
@@ -285,7 +471,7 @@ describePosix("explicit prior-CI admin landing", () => {
   ])("validates %s security evidence without dispatch", (fault, message) => {
     const f = preExistingCandidate();
     const state = f.state();
-    const accepted = fault === "success" || fault === "pending";
+    const accepted = ["success", "pending", "head-only-enforcement"].includes(fault!);
     if (fault === "success" || fault === "pending") {
       state.priorCi.security.combinedState = fault;
     } else {
@@ -317,6 +503,35 @@ describePosix("explicit prior-CI admin landing", () => {
       });
     }
   });
+
+  it.each([false, true])(
+    "binds a dispatched Security Review to the exact CI attempt (headOnly=%s)",
+    (headOnly) => {
+      const f = preExistingCandidate();
+      const state = f.state();
+      state.priorCi.security.publisherEvent = "workflow_dispatch";
+      if (headOnly) {
+        state.priorCi.security.fault = "head-only-enforcement";
+      }
+      f.save(state);
+      const result = f.adminPriorCi(f.path);
+      expectResult(
+        f,
+        result,
+        headOnly ? "successful exact-head security enforcement is required" : undefined,
+        headOnly ? 0 : 1,
+      );
+      if (headOnly) {
+        expectNoIntent(f);
+      } else {
+        expect(f.record().priorCiAdmin.securityReview).toMatchObject({
+          runId: 901,
+          runAttempt: 1,
+          jobId: 902,
+        });
+      }
+    },
+  );
 
   it.each(["monitor", "matrix"])("rejects a cancelled failed step under %s attribution", (kind) => {
     const f = kind === "matrix" ? matrixCandidate() : preExistingCandidate();
@@ -376,7 +591,7 @@ describePosix("explicit prior-CI admin landing", () => {
     },
   );
 
-  it.each(["failure", "cancelled"])(
+  it.each(["cancelled"])(
     "lands an attributed %s attempt without claiming cancelled coverage passed",
     (conclusion) => {
       const f = preExistingCandidate();

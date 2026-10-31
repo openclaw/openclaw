@@ -5,7 +5,8 @@ import {
   type CapabilityConsentErrorDetails,
 } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { PluginsInspectResult } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 export function inspectPlugin(
   client: GatewayBrowserClient,

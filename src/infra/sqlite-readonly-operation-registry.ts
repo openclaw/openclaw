@@ -1,5 +1,5 @@
 import type { AgentDeletionSessionStoreAbsentReadOperations } from "../agents/agent-delete-session-store-safety.worker-contract.js";
-import type { stateSnapshotReadOperations } from "../state/openclaw-state-read-snapshot.js";
+import type { startupMetadataReadOperations } from "../state/startup-metadata-live-read.worker.js";
 import {
   createWorkerOperationRegistry,
   type WorkerOperations,
@@ -12,7 +12,7 @@ import type { SqliteReadOnlyOperationContext } from "./sqlite-readonly-operation
 export type SqliteReadOnlyOperations = WorkerOperations<
   typeof immutableInstallReadOperations &
     typeof pageCacheReadOperations &
-    typeof stateSnapshotReadOperations
+    typeof startupMetadataReadOperations
 > &
   DeferredSessionTranscriptReadOperations &
   AgentDeletionSessionStoreAbsentReadOperations;
@@ -21,6 +21,10 @@ export const sqliteReadOnlyOperations = createWorkerOperationRegistry<
   SqliteReadOnlyOperations,
   SqliteReadOnlyOperationContext
 >({
+  startupMetadata: () =>
+    import("../state/startup-metadata-live-read.worker.js").then(
+      (module) => module.startupMetadataReadOperations,
+    ),
   deferredSessionImport: () =>
     import("./deferred-plugin-session-transcript-read.worker.js").then(
       (module) => module.deferredSessionTranscriptReadOperations,
@@ -34,9 +38,5 @@ export const sqliteReadOnlyOperations = createWorkerOperationRegistry<
   immutableInstall: () =>
     import("./package-update-activation-immutable.js").then(
       (module) => module.immutableInstallReadOperations,
-    ),
-  stateSnapshot: () =>
-    import("../state/openclaw-state-read-snapshot.js").then(
-      (module) => module.stateSnapshotReadOperations,
     ),
 });

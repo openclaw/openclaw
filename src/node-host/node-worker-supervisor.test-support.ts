@@ -11,6 +11,7 @@ import {
   type NodeWorkerSupervisorIdentity,
 } from "../worker/node-supervisor-protocol.js";
 import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
+import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
 
 const TEST_BUNDLE_HASH = "a".repeat(64);
 export const TEST_WORKER_CREDENTIAL = 'node worker/"credential\\secret?';
@@ -183,6 +184,26 @@ if (mode === "admission-rearm") {
   await new Promise((resolve) => setTimeout(resolve, 100));
   fs.writeFileSync(marker, "normal");
   finish(descriptor);
+} else if (mode === "managed-identity") {
+  writeArtifact(descriptor, "env", process.env);
+  let output = "transport-unavailable";
+  if (process.env.IDENTITY_ENDPOINT && process.env.IDENTITY_HEADER) {
+    const child = spawn(process.execPath, ["-e", [
+      "require('node:http').get(process.env.IDENTITY_ENDPOINT + '?resource=fixture-audience&client_id=fixture-client',",
+      "{ headers: { 'X-IDENTITY-HEADER': process.env.IDENTITY_HEADER } }, res => {",
+      "res.setEncoding('utf8'); res.on('data', chunk => process.stdout.write(chunk));",
+      "}).on('error', () => process.exit(32));",
+    ].join("\n")], { stdio: ["ignore", "pipe", "inherit"] });
+    output = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", chunk => { output += chunk; });
+    const code = await new Promise(resolve => child.once("exit", resolve));
+    if (code !== 0) exitWorker(32);
+  }
+  writeArtifact(descriptor, "identity", { home: process.env.HOME, output });
+  // Exercise the supervisor's diagnostic egress with a synthetic provider header.
+  process.stderr.write(process.env.IDENTITY_HEADER ?? "transport-unavailable");
+  exitWorker(7);
 } else if (mode === "env") {
   writeArtifact(descriptor, "env", process.env);
   finish(descriptor);
@@ -318,5 +339,30 @@ export function testWorkerLaunchInput(
       prompt,
       launchId,
     ),
+  };
+}
+
+export function testIsolatedWorkerLaunchInput(
+  workspaceDir: string,
+  launchId: string,
+  prompt = "success",
+) {
+  const input = testWorkerLaunchInput(workspaceDir, launchId, prompt);
+  input.descriptor.admission.environmentId = `environment-${launchId}`;
+  input.descriptor.admission.sessionId = `session-${launchId}`;
+  return input;
+}
+
+export function createPortalSupervisor(): NodeWorkerSupervisorControl {
+  const unexpectedSupervisorCommand = async (): Promise<never> => {
+    throw new Error("Portal stream must not call another supervisor command");
+  };
+  return {
+    launch: unexpectedSupervisorCommand,
+    status: unexpectedSupervisorCommand,
+    retainWorkspaces: unexpectedSupervisorCommand,
+    cancel: unexpectedSupervisorCommand,
+    observeProcesses: unexpectedSupervisorCommand,
+    stopEnvironment: unexpectedSupervisorCommand,
   };
 }

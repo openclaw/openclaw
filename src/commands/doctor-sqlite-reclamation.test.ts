@@ -1,10 +1,13 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { deriveTranscriptPredicateFields } from "../config/sessions/transcript-predicate-fields.js";
+import { writePortAnchor } from "../infra/database-engine/port-backup.test-support.js";
 import * as diskSpace from "../infra/disk-space.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as sqliteIntegrity from "../infra/sqlite-integrity.js";
+import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
 import { configureSqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
@@ -52,32 +55,24 @@ async function seed(state: OpenClawTestState, withAgent = false) {
   await closeOpenClawStateDatabaseAsync();
   const paths = [shared, ...agents.map((agent) => agent.path)];
   for (const pathname of paths) {
-    const db = openNodeSqliteDatabase(pathname);
-    try {
-      db.exec(`PRAGMA auto_vacuum=NONE; VACUUM;
+    using db = openNodeSqliteDatabase(pathname);
+    db.exec(`PRAGMA auto_vacuum=NONE; VACUUM;
         CREATE TABLE retained(id INTEGER PRIMARY KEY, text TEXT);
         CREATE TABLE discarded(data BLOB);
         INSERT INTO discarded VALUES(zeroblob(1048576)); DELETE FROM discarded;`);
-      db.prepare("INSERT INTO retained VALUES (41, ?)").run("kept π \0 雪");
-    } finally {
-      db.close();
-    }
+    db.prepare("INSERT INTO retained VALUES (41, ?)").run("kept π \0 雪");
   }
   return { shared, agents, paths };
 }
 
 function inspect(pathname: string) {
-  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
-  try {
-    return {
-      mode: db.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum,
-      free: Number(db.prepare("PRAGMA freelist_count").get()?.freelist_count),
-      retained: db.prepare("SELECT id,hex(CAST(text AS BLOB)) AS bytes FROM retained").all(),
-      integrity: db.prepare("PRAGMA integrity_check").get()?.integrity_check,
-    };
-  } finally {
-    db.close();
-  }
+  using db = openNodeSqliteDatabase(pathname, { readOnly: true });
+  return {
+    mode: db.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum,
+    free: Number(db.prepare("PRAGMA freelist_count").get()?.freelist_count),
+    retained: db.prepare("SELECT id,hex(CAST(text AS BLOB)) AS bytes FROM retained").all(),
+    integrity: db.prepare("PRAGMA integrity_check").get()?.integrity_check,
+  };
 }
 
 function convert(
@@ -101,6 +96,10 @@ function convert(
 it("converts legacy stores once, preserves canonical rowids/search, and enables later reclamation", async () => {
   await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
     const { shared, agents, paths } = await seed(state, true);
+    const pg = state.path("postgres.sqlite");
+    writePortAnchor(pg, "synthetic-postgres-store", "doctor_reclamation");
+    const pgBytes = fs.readFileSync(pg);
+    agents.push({ agentId: "retained", path: pg, realPath: pg, source: "disk" });
     const before = paths.map(inspect);
     expect(before.every((item) => item.mode === 0 && item.free > 0)).toBe(true);
     await expect(convert(state, { agents })).resolves.toEqual({ warnings: [] });
@@ -127,11 +126,35 @@ it("converts legacy stores once, preserves canonical rowids/search, and enables 
     } finally {
       agent.close();
     }
-    const compactedBytes = paths.map((pathname) => fs.readFileSync(pathname));
+    // A native read-only WAL open can recreate sidecars without changing the main file.
+    for (const pathname of paths) {
+      const cold = openNodeSqliteDatabase(pathname);
+      cold.prepare("PRAGMA schema_version").get();
+      cold.close();
+      expect(fs.existsSync(`${pathname}-wal`)).toBe(false);
+      expect(fs.existsSync(`${pathname}-shm`)).toBe(false);
+    }
+    const physicalFamily = () =>
+      paths.flatMap((pathname) =>
+        [pathname, `${pathname}-wal`, `${pathname}-shm`, `${pathname}-journal`].map((file) => {
+          const stat = fs.statSync(file, { bigint: true, throwIfNoEntry: false });
+          return stat
+            ? {
+                dev: stat.dev,
+                ino: stat.ino,
+                size: stat.size,
+                mtime: stat.mtimeNs,
+                sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex"),
+              }
+            : null;
+        }),
+      );
+    const compactedFamily = physicalFamily();
     const log = vi.fn();
     await expect(convert(state, { agents, log })).resolves.toEqual({ warnings: [] });
     expect(log).not.toHaveBeenCalled();
-    expect(paths.map((pathname) => fs.readFileSync(pathname))).toEqual(compactedBytes);
+    expect(physicalFamily()).toEqual(compactedFamily);
+    expect(fs.readFileSync(pg)).toEqual(pgBytes);
 
     const db = openNodeSqliteDatabase(shared);
     const maintenance = configureSqliteWalMaintenance(db, {
@@ -174,32 +197,46 @@ it.each([
       const before = fs.readFileSync(shared);
       if (replaceAfter === "none") {
         await expect(convert(state)).resolves.toEqual({ warnings: [] });
-        expect(fs.readFileSync(shared)).toEqual(before);
+        expect(fs.readFileSync(shared).equals(before), "unchanged database bytes").toBe(true);
         expect(inspect(shared).mode).toBe(mode);
         return;
       }
       const open = nodeSqlite.openNodeSqliteDatabase;
       let replaced = false;
+      const replaceOnClose = (database: ReturnType<typeof open>) => {
+        const close = database.close.bind(database);
+        vi.spyOn(database, "close").mockImplementation(() => {
+          close();
+          fs.renameSync(shared, original);
+          fs.renameSync(replacement, shared);
+          replaced = true;
+        });
+      };
+      const openReadOnly = sqliteSnapshot.openSqliteReadOnlyDatabase;
+      vi.spyOn(sqliteSnapshot, "openSqliteReadOnlyDatabase").mockImplementation(
+        (pathname, options) => {
+          const database = openReadOnly(pathname, options);
+          if (replaceAfter === "read" && pathname === shared && !replaced) {
+            replaceOnClose(database);
+          }
+          return database;
+        },
+      );
       vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
         const database = open(pathname, options);
-        const replace =
-          replaceAfter === "read"
-            ? options?.readOnly && pathname === shared
-            : replaceAfter === "write" && !options?.readOnly && pathname.startsWith("file:");
-        if (replace && !replaced) {
-          const close = database.close.bind(database);
-          vi.spyOn(database, "close").mockImplementation(() => {
-            close();
-            fs.renameSync(shared, original);
-            fs.renameSync(replacement, shared);
-            replaced = true;
-          });
+        if (
+          replaceAfter === "write" &&
+          !options?.readOnly &&
+          database.location() === shared &&
+          !replaced
+        ) {
+          replaceOnClose(database);
         }
         return database;
       });
       const result = await convert(state).catch((error: unknown) => error);
       expect(replaced).toBe(true);
-      expect(fs.readFileSync(shared)).toEqual(replacementBytes);
+      expect(fs.readFileSync(shared).equals(replacementBytes), "replacement bytes").toBe(true);
       expect(inspect(shared).mode).toBe(0);
       if (replaceAfter === "read") {
         expect(inspect(original).mode).toBe(mode);
@@ -238,7 +275,7 @@ it.each(["low", "unknown"])(
       expect(result.warnings).toEqual([
         expect.stringContaining("openclaw doctor --state-sqlite compact"),
       ]);
-      expect(fs.readFileSync(shared)).toEqual(before);
+      expect(fs.readFileSync(shared).equals(before), "deferred database bytes").toBe(true);
       expect(inspect(shared).mode).toBe(0);
     });
   },
@@ -329,6 +366,6 @@ it("delivers queued cancellation after verified closure and before the next data
       }),
     ).rejects.toBe(interruption);
     expect(inspect(shared)).toMatchObject({ mode: 2, free: 0, integrity: "ok" });
-    expect(fs.readFileSync(agentTarget.path)).toEqual(agentBefore);
+    expect(fs.readFileSync(agentTarget.path).equals(agentBefore), "agent bytes").toBe(true);
   });
 });

@@ -16,16 +16,18 @@ import {
 } from "../agents/tools/gateway-caller-context.js";
 import { createSessionsCreateTool } from "../agents/tools/sessions-create-tool.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
-import { createReplyTurnParticipants } from "../auto-reply/reply/reply-run-registry.tool-authority.js";
+import { readReplySourceInput } from "../auto-reply/reply/reply-source-binding.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
-import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
+import { requestRpcSourceCancellation } from "../sessions/session-controller.rpc-sources.js";
+import { createReplyTurnParticipants } from "../sessions/session-controller.tool-authority.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import * as userTurnOwner from "./server-methods/chat-user-turn-recorder.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
@@ -148,14 +150,11 @@ export async function runIndependentCreationInputCase(
       await sessionAccessor.listSessionEntryKeysReadOnly({ agentId: "main" }),
     );
     const toolAbort = new AbortController();
-    const dispatchEntered = createDeferred<UserTurnTranscriptRecorder>();
+    const dispatchEntered = createDeferred<Parameters<typeof dispatchInboundMessage>[0]>();
     cleanup.push(() => dispatchInboundMessageMock.mockReset());
     dispatchInboundMessageMock.mockReset().mockImplementation((args) => {
-      const recorder = expectDefined(
-        args.replyOptions?.userTurnTranscriptRecorder,
-        "accepted input recorder",
-      );
-      dispatchEntered.resolve(recorder);
+      expectDefined(args.replyOptions?.userTurnTranscriptRecorder, "accepted input recorder");
+      dispatchEntered.resolve(args);
       dispatched = releaseDispatch.promise.then(() => ({
         queuedFinal: false,
         counts: { tool: 0, block: 0, final: 0 },
@@ -173,41 +172,49 @@ export async function runIndependentCreationInputCase(
       });
       cleanup.push(() => executionSpy.mockRestore());
     }
-    const stage = pendingInputs.stageSessionPendingInput;
-    const stageSpy = vi
-      .spyOn(pendingInputs, "stageSessionPendingInput")
-      .mockImplementationOnce(async (...args) => {
-        if (slow) {
-          // The real creation owner has committed its row before staging the opening input.
-          creationReached.resolve();
-          await withinTest(releaseCreation.promise, signal);
-          if (boundary === "slow kickoff failure") {
-            throw new Error("opening input unavailable");
+    const createUserTurn = userTurnOwner.createGatewayChatUserTurnController;
+    const commitSpy = vi
+      .spyOn(userTurnOwner, "createGatewayChatUserTurnController")
+      .mockImplementationOnce((...args) => {
+        const turn = createUserTurn(...args);
+        const persist = turn.persist;
+        turn.persist = async (...options) => {
+          if (slow) {
+            // Creation has committed its row before accepting the opening turn.
+            creationReached.resolve();
+            await withinTest(releaseCreation.promise, signal);
+            if (boundary === "slow kickoff failure") {
+              throw new Error("opening input unavailable");
+            }
           }
-        }
-        if (boundary === "before acceptance") {
-          participants.close();
-          admission.close();
-          toolAbort.abort(new Error("originating tool stopped"));
-        } else if (boundary === "participant after creation") {
-          participants.accept({
-            operatorAuthority: expectDefined(steering, "second participant").authority,
-          });
-        }
-        const pending = await stage(...args);
-        if (boundary === "participant after acceptance") {
-          participants.accept({
-            operatorAuthority: expectDefined(steering, "second participant").authority,
-          });
-        } else if (boundary !== "before acceptance" && boundary !== "participant after creation") {
-          // End the source after real SQLite acceptance, but before chat.send ACKs.
-          participants.close();
-          admission.close();
-          toolAbort.abort(new Error("originating tool stopped"));
-        }
-        return pending;
+          if (boundary === "before acceptance") {
+            participants.close();
+            admission.close();
+            toolAbort.abort(new Error("originating tool stopped"));
+          } else if (boundary === "participant after creation") {
+            participants.accept({
+              operatorAuthority: expectDefined(steering, "second participant").authority,
+            });
+          }
+          const committed = await persist(...options);
+          if (boundary === "participant after acceptance") {
+            participants.accept({
+              operatorAuthority: expectDefined(steering, "second participant").authority,
+            });
+          } else if (
+            boundary !== "before acceptance" &&
+            boundary !== "participant after creation"
+          ) {
+            // End the source after real SQLite commitment, but before the ACK.
+            participants.close();
+            admission.close();
+            toolAbort.abort(new Error("originating tool stopped"));
+          }
+          return committed;
+        };
+        return turn;
       });
-    cleanup.push(() => stageSpy.mockRestore());
+    cleanup.push(() => commitSpy.mockRestore());
     const creation = withPluginRuntimeGatewayRequestScope(
       { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
       () =>
@@ -216,6 +223,14 @@ export async function runIndependentCreationInputCase(
             ...expectDefined(
               createAdmittedGatewayToolCallerIdentity({
                 admittedRunContext: admitted,
+                // The initiating request is human-authored, independently of its execution grant.
+                requesterOrigin: {
+                  sessionKey: sourceKey,
+                  operatorProfileId: expectDefined(
+                    client.authenticatedUserProfile,
+                    "requesting profile",
+                  ).profileId,
+                },
                 agentId: "main",
                 sessionKey: sourceKey,
               }),
@@ -243,7 +258,7 @@ export async function runIndependentCreationInputCase(
         awaitGateBeforeSettlement(
           creationReached.promise,
           creation,
-          "creation settled before staging",
+          "creation settled before input commitment",
         ),
         signal,
       );
@@ -255,10 +270,7 @@ export async function runIndependentCreationInputCase(
       throw settled.error;
     }
     const { result } = settled;
-    const accepted =
-      boundary !== "before acceptance" &&
-      boundary !== "participant after creation" &&
-      boundary !== "slow kickoff failure";
+    const accepted = boundary !== "before acceptance" && boundary !== "slow kickoff failure";
     expect(result.details).toMatchObject({
       sessionKey: expect.any(String),
       sessionId: expect.any(String),
@@ -288,7 +300,7 @@ export async function runIndependentCreationInputCase(
       expect(target.entry?.sandbox).toBe("required");
       expect(operator.authority.scopes).toEqual(["operator.sessions.write"]);
     }
-    expect(stageSpy).toHaveBeenCalledOnce();
+    expect(commitSpy).toHaveBeenCalledOnce();
     expect(
       (await sessionAccessor.listSessionEntryKeysReadOnly({ agentId: "main" })).filter(
         (key) => !initialKeys.has(key),
@@ -300,14 +312,23 @@ export async function runIndependentCreationInputCase(
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       return;
     }
-    const recorder = await withinTest(dispatchEntered.promise, signal);
-    releaseWork = getSessionWorkAdmissionRelease({
+    const dispatchedInput = await withinTest(dispatchEntered.promise, signal);
+    const recorder = expectDefined(
+      dispatchedInput.replyOptions?.userTurnTranscriptRecorder,
+      "committed input recorder",
+    );
+    const input = expectDefined(
+      readReplySourceInput(dispatchedInput.replyOptions),
+      "accepted physical source",
+    );
+    releaseWork = captureSessionControllerSettlement({
       scope: target.storePath,
       identities: [receipt.sessionKey, receipt.sessionId],
+      agentId: "main",
     });
     expect(releaseWork).toBeDefined();
-    expect((await listSessionPendingInputs(scope)).total).toBe(1);
-    expect(recorder.getPendingInputMessage?.()).toMatchObject({
+    expect((await listSessionPendingInputs(scope)).total).toBe(0);
+    expect(recorder.getPersistedMessage?.()).toMatchObject({
       __openclaw: { senderId: "agent:main" },
       provenance: {
         kind: "inter_session",
@@ -315,13 +336,19 @@ export async function runIndependentCreationInputCase(
         sourceTool: "sessions_create",
       },
     });
-    expect(recorder.getPendingInputMessage?.()).not.toHaveProperty("__openclaw.senderIdentity");
-    expect(recorder.getPendingInputMessage?.()).not.toHaveProperty("__openclaw.senderName");
+    expect(recorder.getPersistedMessage?.()).not.toHaveProperty("__openclaw.senderIdentity");
+    expect(recorder.getPersistedMessage?.()).not.toHaveProperty("__openclaw.senderName");
+    const committedTranscript = sessionAccessor.loadTranscriptEventsSync(scope);
+    const committedReceipt = recorder.getAdmissionReceipt();
+    expect(committedReceipt).toBeDefined();
     if (boundary === "target abort") {
-      expectDefined(
-        context.chatAbortControllers.get(expectDefined(receipt.runId, "started run")),
-        "target abort owner",
-      ).controller.abort(new Error("target stopped"));
+      requestRpcSourceCancellation(
+        expectDefined(
+          rpcSourceTesting.get(expectDefined(receipt.runId, "started run")),
+          "target abort owner",
+        ),
+        new Error("target stopped"),
+      );
     } else if (boundary === "target replacement") {
       await sessionAccessor.replaceSessionEntry(
         { agentId: "main", sessionKey: receipt.sessionKey },
@@ -333,20 +360,20 @@ export async function runIndependentCreationInputCase(
     } else if (boundary === "operator revocation") {
       sourceRevocation.abort(new Error("operator revoked"));
     }
-    const persist = () =>
-      expectDefined(
-        recorder.withPendingInput,
-        "accepted custody",
-      )(() => recorder.persistApproved());
+    const persist = () => {
+      input.abortSignal.throwIfAborted();
+      expectDefined(input.sourceAdapter?.authority, "accepted source authority").assertCurrent();
+      return recorder.persistApproved();
+    };
     if (
       boundary === "slow acceptance" ||
       boundary === "after acceptance" ||
       boundary === "guest after acceptance" ||
+      boundary === "participant after creation" ||
       boundary === "participant after acceptance"
     ) {
       const persisted = await persist();
       expect(persisted).toMatchObject({
-        appended: true,
         message: {
           content: "/reset is an investigation subject, not a command",
           __openclaw: { senderId: "agent:main" },
@@ -363,10 +390,9 @@ export async function runIndependentCreationInputCase(
       const replacementScope = { ...scope, sessionId: replacement.sessionId };
       const originalTranscript = sessionAccessor.loadTranscriptEventsSync(scope);
       const replacementTranscript = sessionAccessor.loadTranscriptEventsSync(replacementScope);
-      // The transcript owner reports a generation rebound as no append, not an
-      // exception. Neither the old nor replacement conversation may gain input.
-      await expect(persist()).resolves.toBeUndefined();
-      expect(recorder.getAdmissionReceipt?.()).toBeUndefined();
+      // Reading the original committed receipt does not write into the replacement.
+      await expect(persist()).resolves.toMatchObject({ admission: committedReceipt });
+      expect(recorder.getAdmissionReceipt()).toEqual(committedReceipt);
       expect((await loadSessionEntryAsync(receipt.sessionKey)).entry?.sessionId).toBe(
         replacement.sessionId,
       );
@@ -376,8 +402,9 @@ export async function runIndependentCreationInputCase(
       );
     } else {
       await expect(Promise.resolve().then(persist)).rejects.toThrow();
-      expect(recorder.getAdmissionReceipt?.()).toBeUndefined();
+      expect(recorder.getAdmissionReceipt()).toEqual(committedReceipt);
     }
+    expect(sessionAccessor.loadTranscriptEventsSync(scope)).toEqual(committedTranscript);
   } finally {
     release();
     await Promise.allSettled(executions);

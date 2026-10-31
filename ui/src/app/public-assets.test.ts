@@ -1,5 +1,6 @@
 // Control UI tests cover public assets behavior.
 import { afterEach, describe, expect, it } from "vitest";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { controlUiPublicAssetPath, inferControlUiPublicAssetPath } from "./public-assets.ts";
 
 function withConfiguredBasePath<T>(basePath: string, run: () => T): T {
@@ -9,11 +10,7 @@ function withConfiguredBasePath<T>(basePath: string, run: () => T): T {
   try {
     return run();
   } finally {
-    if (previous) {
-      Object.defineProperty(window, key, previous);
-    } else {
-      Reflect.deleteProperty(window, key);
-    }
+    restorePropertyDescriptor(window, key, previous);
   }
 }
 

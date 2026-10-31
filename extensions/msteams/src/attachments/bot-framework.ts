@@ -96,55 +96,6 @@ async function fetchBotFrameworkAttachment(
   return response;
 }
 
-async function fetchBotFrameworkAttachmentInfo(
-  params: BotFrameworkAttachmentRequest,
-): Promise<BotFrameworkAttachmentInfo | undefined> {
-  const response = await fetchBotFrameworkAttachment(params, "attachmentInfo");
-  if (!response) {
-    return undefined;
-  }
-  try {
-    return await readProviderJsonResponse<BotFrameworkAttachmentInfo>(
-      response,
-      "msteams botFramework attachmentInfo",
-    );
-  } catch (err) {
-    params.logger?.warn?.("msteams botFramework attachmentInfo parse failed", {
-      error: coerceErrorMessage(err),
-    });
-    return undefined;
-  }
-}
-
-async function saveBotFrameworkAttachmentView(
-  params: BotFrameworkAttachmentRequest & {
-    maxBytes: number;
-    fileNameHint?: string;
-    contentTypeHint?: string;
-  },
-): Promise<{ path: string; contentType?: string } | undefined> {
-  const response = await fetchBotFrameworkAttachment(params, "attachmentView");
-  if (!response) {
-    return undefined;
-  }
-  try {
-    return await getMSTeamsRuntime().channel.media.saveResponseMedia(response, {
-      sourceUrl: params.url,
-      filePathHint: params.fileNameHint,
-      maxBytes: params.maxBytes,
-      fallbackContentType: params.contentTypeHint,
-      subdir: "inbound",
-    });
-  } catch (err) {
-    params.logger?.warn?.("msteams botFramework attachmentView save failed", {
-      error: coerceErrorMessage(err),
-    });
-    return undefined;
-  } finally {
-    await response.body?.cancel().catch(() => undefined);
-  }
-}
-
 /**
  * Download media for a single attachment via the Bot Framework v3 attachments
  * endpoint. Used for personal DM conversations where the Graph `/chats/{id}`
@@ -201,7 +152,22 @@ async function downloadMSTeamsBotFrameworkAttachment(
     logger: params.logger,
     deadline: params.deadline,
   };
-  const info = await fetchBotFrameworkAttachmentInfo(request);
+  const infoResponse = await fetchBotFrameworkAttachment(request, "attachmentInfo");
+  if (!infoResponse) {
+    return undefined;
+  }
+  let info: BotFrameworkAttachmentInfo;
+  try {
+    info = await readProviderJsonResponse<BotFrameworkAttachmentInfo>(
+      infoResponse,
+      "msteams botFramework attachmentInfo",
+    );
+  } catch (err) {
+    request.logger?.warn?.("msteams botFramework attachmentInfo parse failed", {
+      error: coerceErrorMessage(err),
+    });
+    return undefined;
+  }
   if (!info) {
     return undefined;
   }
@@ -229,13 +195,32 @@ async function downloadMSTeamsBotFrameworkAttachment(
   const fileNameHint = (typeof info.name === "string" && info.name) || undefined;
   const contentTypeHint = (typeof info.type === "string" && info.type) || undefined;
 
-  const saved = await saveBotFrameworkAttachmentView({
-    ...request,
-    url: `${baseUrl}/views/${encodeURIComponent(viewId)}`,
-    maxBytes: params.maxBytes,
-    fileNameHint,
-    contentTypeHint,
-  });
+  const viewUrl = `${baseUrl}/views/${encodeURIComponent(viewId)}`;
+  const maxBytes = params.maxBytes;
+  const response = await fetchBotFrameworkAttachment(
+    { ...request, url: viewUrl },
+    "attachmentView",
+  );
+  if (!response) {
+    return undefined;
+  }
+  let saved: { path: string; contentType?: string } | undefined;
+  try {
+    saved = await getMSTeamsRuntime().channel.media.saveResponseMedia(response, {
+      sourceUrl: viewUrl,
+      filePathHint: fileNameHint,
+      maxBytes,
+      fallbackContentType: contentTypeHint,
+      subdir: "inbound",
+    });
+  } catch (err) {
+    request.logger?.warn?.("msteams botFramework attachmentView save failed", {
+      error: coerceErrorMessage(err),
+    });
+    return undefined;
+  } finally {
+    await response.body?.cancel().catch(() => undefined);
+  }
   if (!saved) {
     return undefined;
   }

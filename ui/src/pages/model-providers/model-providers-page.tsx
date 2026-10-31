@@ -37,6 +37,9 @@ export function ModelProvidersContent(props: { controller: ModelProvidersOwner }
       body={
         <ModelProviders
           {...current().props}
+          defaultsSaving={props.controller.mutations.defaultsSaving()}
+          defaultsSavingField={props.controller.mutations.defaultsSavingField()}
+          logoutSaving={props.controller.logoutSaving()}
           providerDetailsReady={showProviderDetails()}
           accountRecovery={<Recovery />}
           installedAgents={current().installedAgentsAvailable ? installedAgents : undefined}

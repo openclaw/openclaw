@@ -14,6 +14,7 @@ import {
   createPluginStateError,
   getPluginStateKysely,
   selectPluginStateEntriesInKeyRange,
+  selectLivePluginStateRows,
   iteratePluginStateEntries,
   parseStoredJson,
   rowToEntry,
@@ -36,20 +37,24 @@ export function lookupPluginStateEntries(
   const now = Date.now();
   const rows = executeSqliteQuerySync(
     store.db,
-    getPluginStateKysely(store.db)
-      .selectFrom("plugin_state_entries")
+    selectLivePluginStateRows(store.db, { ...params, now })
       .select(["entry_key", "value_json"])
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where("entry_key", "in", sqliteStringSet(params.keys))
-      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", now)])),
+      .where("entry_key", "in", sqliteStringSet(params.keys)),
   ).rows;
   const values = new Map(rows.map((row) => [row.entry_key, row.value_json]));
-  return params.keys.map((key): Result<unknown, PluginStateStoreError> => {
+  return decodePluginStateLookups(params.keys, (key) => values.get(key), store.path);
+}
+
+export function decodePluginStateLookups(
+  keys: readonly string[],
+  valueJson: (key: string) => string | undefined,
+  path: string,
+): Array<Result<unknown, PluginStateStoreError>> {
+  return keys.map((key): Result<unknown, PluginStateStoreError> => {
     // Match node:sqlite text binding, including lone UTF-16 surrogates.
-    const raw = values.get(toUSVString(key));
+    const raw = valueJson(toUSVString(key));
     try {
-      return ok(raw === undefined ? undefined : parseStoredJson(raw, "lookup", store.path));
+      return ok(raw === undefined ? undefined : parseStoredJson(raw, "lookup", path));
     } catch (error) {
       // Let ordered readers stop before a later corrupt value, just as with lookup.
       if (error instanceof PluginStateStoreError && error.code === "PLUGIN_STATE_CORRUPT") {

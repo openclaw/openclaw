@@ -462,7 +462,7 @@ export async function ensureWorkerSessionPlacement(params: {
     releaseRequestedHandoff?.();
   };
   try {
-    const read = () => {
+    const readPlacement = () => {
       params.signal?.throwIfAborted();
       params.assertCurrent();
       const placement = prepared.current();
@@ -477,6 +477,13 @@ export async function ensureWorkerSessionPlacement(params: {
         throw new Error(
           "The existing placement conflicts with worker execution; repair its recorded owner before retrying.",
         );
+      }
+      return placement;
+    };
+    const read = () => {
+      const placement = readPlacement();
+      if (!placement || placement.state === "local") {
+        return placement;
       }
       const environment = placement.environmentId
         ? params.environments.get(placement.environmentId)
@@ -517,6 +524,17 @@ export async function ensureWorkerSessionPlacement(params: {
           environmentService: params.environments,
         }));
     const useRecorded = async () => {
+      const pending = readPlacement();
+      if (
+        params.waitForReady !== false &&
+        pending &&
+        ["requested", "provisioning", "syncing", "starting"].includes(pending.state)
+      ) {
+        // Setup owns the changing inventory. Join it before validating its environment.
+        await params.waitForInitialPlacement(pending, params.signal);
+        assertReady();
+        return true;
+      }
       const placement = read();
       if (!placement || canStartDispatch(placement)) {
         return false;
@@ -531,9 +549,6 @@ export async function ensureWorkerSessionPlacement(params: {
         });
         assertReady();
       } else if (params.waitForReady !== false) {
-        if (["requested", "provisioning", "syncing", "starting"].includes(placement.state)) {
-          await params.waitForInitialPlacement(placement, params.signal);
-        }
         assertReady();
       }
       return true;

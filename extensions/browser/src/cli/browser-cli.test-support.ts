@@ -3,6 +3,7 @@
  */
 import { Command } from "commander";
 import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { expect, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
 import type { CliRuntimeCapture } from "../../test-support.js";
@@ -64,4 +65,14 @@ export function getBrowserCliRuntimeCapture(): CliRuntimeCapture {
 /** Returns the default runtime from the Browser CLI capture. */
 export function getBrowserCliRuntime() {
   return getBrowserCliRuntimeCapture().defaultRuntime;
+}
+
+/** Captures the default runtime before importing Browser command registrations. */
+export function mockBrowserCliRuntime() {
+  const runtime = getBrowserCliRuntime();
+  vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation(runtime.writeJson);
+  vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+  vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
+  return runtime;
 }

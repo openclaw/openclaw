@@ -44,6 +44,7 @@ import {
 } from "./state-migrations.transcript-archive-publication.js";
 import { transformArchiveBytesIncrementally } from "./state-migrations.transcript-archive-stream.js";
 import { repairHistoricalTranscriptEventJson } from "./state-migrations.transcript-directives-transform.js";
+import { Utf8InputError } from "./utf8-input.js";
 
 export const TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE = TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE;
 export const MEDIA_ARCHIVE_VERIFICATION_KEY = "media-transcript-archive-verification-v1";
@@ -207,6 +208,9 @@ async function listArchiveBatch(
       });
     } catch (error) {
       if (options?.signal?.aborted && error === options.signal.reason) {
+        throw error;
+      }
+      if (error instanceof Utf8InputError) {
         throw error;
       }
       const detail = error instanceof Error ? error.message : String(error);

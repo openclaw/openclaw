@@ -1,7 +1,8 @@
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { Client, SdkErrorCode } from "@modelcontextprotocol/client";
 import { describe, expect, it, vi } from "vitest";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { disposeMcpClient, isMcpHttpSessionExpired } from "./mcp-client-lifecycle.js";
@@ -228,7 +229,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
       try {
         await client.connect(transport);
         const error = await client
-          .callTool({ name: "oversized", arguments: {} }, undefined, { timeout: 100 })
+          .callTool({ name: "oversized", arguments: {} }, { timeout: 100 })
           .then(
             () => undefined,
             (reason: unknown) => reason,
@@ -694,15 +695,10 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
           expect(response.status).toBe(200);
           await response.arrayBuffer();
           return new Response(
-            new ReadableStream({
-              start(controller) {
-                controller.enqueue(new TextEncoder().encode("bye"));
-              },
-              cancel() {
-                return cancellation === "rejecting"
-                  ? Promise.reject(new Error("synthetic cancellation rejection"))
-                  : new Promise(() => {});
-              },
+            makeStallingStream([new TextEncoder().encode("bye")], () => {
+              return cancellation === "rejecting"
+                ? Promise.reject(new Error("synthetic cancellation rejection"))
+                : new Promise(() => {});
             }),
             {
               status: response.status,
@@ -823,7 +819,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     );
     await expect(
       disposeMcpClient({ client, transport, transportType: "streamable-http" }),
-    ).resolves.toBe("uncertain");
+    ).resolves.toBe("closed");
     expect(onDelete).toHaveBeenCalledTimes(3);
   });
 
@@ -925,7 +921,10 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     });
     const client = new Client({ name: "test", version: "1" });
     await client.connect(transport);
-    await expect(client.ping()).rejects.toThrow(/Streamable HTTP error/);
+    await expect(client.ping()).rejects.toMatchObject({
+      code: SdkErrorCode.ClientHttpNotImplemented,
+      status: 500,
+    });
     await expect(settlesWithin(cancelPromise, 1_000)).resolves.toBe(true);
     await client.close();
   });

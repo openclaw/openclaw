@@ -26,6 +26,8 @@ export function planSessionEntryMaintenance(params: {
   maintenance: EntryMaintenanceConfig;
   initialUnarchivedCount: number;
   forceMaintenance?: boolean;
+  modelRunPrune?: boolean;
+  nowMs?: number;
   readPreserveKeys: () => ReadonlySet<string> | undefined;
   log?: boolean;
   readAgeCandidates: (
@@ -38,11 +40,13 @@ export function planSessionEntryMaintenance(params: {
   onArchived?: (candidate: MaintenanceCandidate, phase: ArchivePhase) => void;
   onRemoved?: (candidate: MaintenanceCandidate, reason: RemovalReason) => void;
 }) {
-  const runModelRunPrune = shouldRunModelRunPrune({
-    maintenance: params.maintenance,
-    entryCount: params.initialUnarchivedCount,
-    force: params.forceMaintenance,
-  });
+  const runModelRunPrune =
+    params.modelRunPrune ??
+    shouldRunModelRunPrune({
+      maintenance: params.maintenance,
+      entryCount: params.initialUnarchivedCount,
+      force: params.forceMaintenance,
+    });
   const candidateAges = [
     params.maintenance.pruneAfterMs,
     params.maintenance.archiveDashboardAfterMs,
@@ -56,6 +60,7 @@ export function planSessionEntryMaintenance(params: {
   const counts = { archived: 0, capArchived: 0, modelRunPruned: 0, pruned: 0, capped: 0 };
   const options = {
     log: params.log,
+    nowMs: params.nowMs,
     preserveRecentMs: params.maintenance.preserveRecentMs,
   };
   let protectedOptions: (typeof options & { preserveKeys?: ReadonlySet<string> }) | undefined;

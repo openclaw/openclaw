@@ -1,5 +1,8 @@
 import { createServer } from "node:http";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback as listenLoopbackServer } from "../test-support/hanging-loopback-server.js";
 import { cancelTrackedTextResponse } from "../test-support/streaming-error-response.js";
 import { runOpenAiEmbeddingBatches } from "./embedding-batch.js";
 
@@ -158,21 +161,6 @@ function parseStringBody(init: RequestInit | undefined): unknown {
   return JSON.parse(init.body) as unknown;
 }
 
-async function listenLoopbackServer(server: ReturnType<typeof createServer>): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
-}
-
 async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.close((err) => {
@@ -191,6 +179,81 @@ afterEach(() => {
 });
 
 describe("OpenAI embedding batch output", () => {
+  it.each([
+    ["non-array", '"poison"', "invalid"],
+    ["array-like object", '{"length":1}', "invalid"],
+    ["boolean", "false", "empty"],
+    ["string coordinate", '["poison"]', "invalid"],
+    ["null coordinate", "[null]", "invalid"],
+    ["positive overflow coordinate", "[1e309]", "invalid"],
+    ["negative overflow coordinate", "[-1e309]", "invalid"],
+    ["empty vector", "[]", "empty"],
+  ])("rejects a %s in batch output", async (_name, embedding, condition) => {
+    const fetchImpl = batchFetch({
+      output: new Response(
+        `{"custom_id":"0","response":{"status_code":200,"body":{"data":[{"embedding":${embedding}}]}}}`,
+      ),
+    });
+
+    await expect(
+      runOpenAiEmbeddingBatches(singleRequestBatchParams(fetchImpl, 1, 1_000)),
+    ).rejects.toThrow(`openai batch batch-0 failed: 0: ${condition} embedding`);
+  });
+
+  it.each([
+    {
+      name: "line error before response error",
+      line: {
+        error: { message: "provider failed" },
+        response: { status_code: 500, body: { error: { message: "secondary error" } } },
+      },
+      detail: "provider failed",
+    },
+    {
+      name: "nested response error",
+      line: { response: { status_code: 500, body: { error: { message: "internal" } } } },
+      detail: "internal",
+    },
+    {
+      name: "response message fallback",
+      line: { response: { status_code: 500, message: "provider response failed", body: "" } },
+      detail: "provider response failed",
+    },
+    {
+      name: "missing embedding",
+      line: { response: { status_code: 200, body: { data: [] } } },
+      detail: "empty embedding",
+    },
+  ])("reports $name through the batch runner", async ({ line, detail }) => {
+    const fetchImpl = batchFetch({
+      output: Response.json({ custom_id: "0", ...line }),
+    });
+
+    await expect(
+      runOpenAiEmbeddingBatches(singleRequestBatchParams(fetchImpl, 1, 1_000)),
+    ).rejects.toThrow(`openai batch batch-0 failed: 0: ${detail}`);
+  });
+
+  it.each(["unsubmitted", "duplicate"])(
+    "ignores a %s ID without losing missing-response accounting",
+    async (kind) => {
+      const output = [
+        outputLine("0", [1]),
+        { custom_id: kind === "duplicate" ? "0" : "unknown", error: { message: "ignored" } },
+      ];
+      const fetchImpl = batchFetch({
+        output: new Response(output.map((line) => JSON.stringify(line)).join("\n")),
+      });
+
+      await expect(
+        runOpenAiEmbeddingBatches({
+          ...singleRequestBatchParams(fetchImpl, 1, 1_000),
+          requests: batchRequests(2),
+        }),
+      ).rejects.toThrow("openai batch batch-0 missing 1 embedding responses");
+    },
+  );
+
   it.each(["/files", "/batches", "/files/output-0/content"])(
     "refreshes and retries only the rejected %s request",
     async (expiredPath) => {
@@ -291,7 +354,7 @@ describe("OpenAI embedding batch output", () => {
     }
   });
 
-  it.each([
+  it.for([
     {
       name: "pending status",
       pollIntervalMs: 2_000,
@@ -319,16 +382,19 @@ describe("OpenAI embedding batch output", () => {
       advanceClock: false,
       timeoutCause: undefined,
     },
-  ])("clamps $name waits to the remaining batch timeout", async (scenario) => {
+  ])("clamps $name waits to the remaining batch timeout", async (scenario, { signal }) => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    // Provider error-body reads own independent 10s chunk timers; only poll
-    // delays belong to the embedding batch's 1s operation deadline.
+    // The polling owner logs immediately before arming its sleep. Dispatcher
+    // cleanup also owns 100ms timers, so delay values alone cannot identify polls.
+    const pollTimeoutIndexes: number[] = [];
     const pollTimeoutCalls = () =>
-      setTimeoutSpy.mock.calls.filter(([, timeout]) =>
-        scenario.expectedWaits.includes(Number(timeout)),
-      );
+      pollTimeoutIndexes.map((index) => setTimeoutSpy.mock.calls[index]);
+    const polling = scenario.expectedWaits.map((waitMs) => ({
+      waitMs,
+      gate: createDeferred(),
+    }));
     let statusCalls = 0;
     const statusTimes: number[] = [];
     const fetchImpl = batchFetch({
@@ -351,7 +417,11 @@ describe("OpenAI embedding batch output", () => {
       ...singleRequestBatchParams(fetchImpl, scenario.pollIntervalMs, 1_000),
       debug: (message) => {
         if (scenario.advanceClock && message.includes("batch-0 in_progress")) {
-          vi.setSystemTime(500);
+          vi.advanceTimersByTime(500);
+        }
+        if (message.startsWith("openai batch batch-0 ") && message.includes("; waiting ")) {
+          pollTimeoutIndexes.push(setTimeoutSpy.mock.calls.length);
+          polling[pollTimeoutIndexes.length - 1]?.gate.resolve();
         }
       },
     });
@@ -360,20 +430,32 @@ describe("OpenAI embedding batch output", () => {
       ...(scenario.timeoutCause ? { cause: { status: scenario.timeoutCause } } : {}),
     });
 
-    for (const [index, waitMs] of scenario.expectedWaits.entries()) {
-      for (let attempt = 0; attempt < 100 && pollTimeoutCalls().length < index + 1; attempt++) {
-        await Promise.resolve();
+    const settled = Promise.allSettled([result, rejection]);
+    try {
+      for (const [index, { waitMs, gate }] of polling.entries()) {
+        // Submission and response cleanup may span I/O turns before polling can arm a timer.
+        await withinTest(
+          awaitGateBeforeSettlement(gate.promise, result, "OpenAI batch settled before polling"),
+          signal,
+        );
+        expect(pollTimeoutCalls()).toHaveLength(index + 1);
+        expect(pollTimeoutCalls()[index]?.[1]).toBe(waitMs);
+        await vi.advanceTimersByTimeAsync(waitMs);
       }
-      expect(pollTimeoutCalls()).toHaveLength(index + 1);
-      expect(pollTimeoutCalls()[index]?.[1]).toBe(waitMs);
-      await vi.advanceTimersByTimeAsync(waitMs);
+      await withinTest(rejection, signal);
+      if (scenario.timeoutCause === undefined) {
+        await expect(result).rejects.not.toHaveProperty("cause");
+      }
+      expect(statusCalls).toBe(scenario.expectedStatusTimes.length);
+      expect(statusTimes).toEqual(scenario.expectedStatusTimes);
+    } finally {
+      vi.advanceTimersByTime(Math.max(0, 1_000 - performance.now()));
+      try {
+        await vi.runOnlyPendingTimersAsync();
+      } finally {
+        await settled;
+      }
     }
-    await rejection;
-    if (scenario.timeoutCause === undefined) {
-      await expect(result).rejects.not.toHaveProperty("cause");
-    }
-    expect(statusCalls).toBe(scenario.expectedStatusTimes.length);
-    expect(statusTimes).toEqual(scenario.expectedStatusTimes);
   });
 
   it.each(["create", "status", "failed"] as const)(

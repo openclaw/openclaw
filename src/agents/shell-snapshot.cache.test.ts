@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnProcess } from "../process/spawn-utils.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 
-vi.mock("node:fs", () => ({ statSync: vi.fn(() => ({ mtimeMs: 0, size: 0 })) }));
 vi.mock("node:fs/promises", () => ({
   default: {
     mkdir: vi.fn().mockResolvedValue(undefined),

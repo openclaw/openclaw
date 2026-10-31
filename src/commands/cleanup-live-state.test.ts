@@ -161,7 +161,7 @@ describe.each([
         : {}),
       agents: {
         ownership: "explicit",
-        defaults: { heartbeat: { agentId: "main" }, systemAgent: { agentId: "main" } },
+        defaults: { systemAgent: { agentId: "main" } },
         entries: {
           [agentId]: {
             workspace: warningPath ? "${OPENCLAW_TEST_MISSING_WORKSPACE}" : state.workspaceDir,

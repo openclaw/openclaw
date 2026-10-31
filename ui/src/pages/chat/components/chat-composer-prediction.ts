@@ -23,8 +23,7 @@ export function createComposerPrediction(read: () => ComposerPredictionSource | 
   let pendingRunId: string | null = null;
   let lastRunId: string | null = null;
 
-  function sync() {
-    const next = read();
+  function sync(next: ComposerPredictionSource | null) {
     const scopeChanged = !sameScope(next, source);
     const enabled = next?.enabled && next.eligible;
     if (scopeChanged) {
@@ -153,7 +152,7 @@ export function createComposerPrediction(read: () => ComposerPredictionSource | 
     lastRunId = payload.runId;
     pendingRunId = payload.runId;
     // A final event can precede the composer's idle render. That render calls sync again.
-    sync();
+    sync(current);
   }
 
   async function predict(origin: ComposerPredictionSource, runId: string) {

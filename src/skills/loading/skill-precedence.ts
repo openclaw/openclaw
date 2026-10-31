@@ -69,12 +69,14 @@ export function reportSkillPrecedenceCollisions(
     reportedGroupsBySource.delete(sourceKey);
   }
   for (const [key, group] of groups) {
-    const digest = sha256Hex(JSON.stringify([...group.contents].toSorted()));
+    // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
+    const digest = sha256Hex(JSON.stringify([...group.contents].sort()));
     if (reportedSkillCollisions.get(key) === digest) {
       continue;
     }
     reportedSkillCollisions.set(key, digest);
-    const names = [...group.names].toSorted();
+    // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
+    const names = [...group.names].sort();
     const sample = names.slice(0, 3).map((name) => name.slice(0, 128));
     if (names.length > sample.length) {
       sample.push(`+${names.length - sample.length} more`);
@@ -105,13 +107,14 @@ export function reportSkillPrecedenceCollisions(
 export function mergeSkillRecords<T extends { skill: Skill }>(
   records: T[],
   sourceKey: string,
-  collisions?: SkillCollision[],
+  collisions?: SkillCollision[] | false,
 ): T[] {
   const discoveredCollisions = collisions ?? [];
   const merged = new Map<string, T>();
   for (const record of records) {
-    const replaced = merged.get(record.skill.name);
+    const replaced = discoveredCollisions && merged.get(record.skill.name);
     if (
+      discoveredCollisions &&
       replaced &&
       canonicalizePath(record.skill.filePath) !== canonicalizePath(replaced.skill.filePath)
     ) {
@@ -119,10 +122,11 @@ export function mergeSkillRecords<T extends { skill: Skill }>(
     }
     merged.set(record.skill.name, record);
   }
-  if (!collisions) {
+  if (collisions === undefined && discoveredCollisions) {
     reportSkillPrecedenceCollisions(discoveredCollisions, sourceKey);
   }
-  return [...merged.values()].toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"));
+  // oxlint-disable-next-line unicorn/no-array-sort -- The Map spread is a private array.
+  return [...merged.values()].sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"));
 }
 
 /** Append lower-precedence names without changing the order of either tier. */

@@ -1,10 +1,19 @@
 import type { ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { toErrorObject } from "../../infra/errors.js";
 import type { ProcessCleanupResult } from "./types.js";
 
-/** Transport loss asks a native owner to drain; killing it would abandon descendant custody. */
-export function stopServiceChildOwner(child: ChildProcess, retainDescendantCustody: boolean): void {
+/** Retain admitted transport for cancellation; transport loss asks the native owner to drain. */
+export function stopServiceChildOwner(
+  child: ChildProcess,
+  retainDescendantCustody: boolean,
+  cancelAdmitted?: () => void,
+): void {
+  if (cancelAdmitted) {
+    cancelAdmitted();
+    return;
+  }
   if (retainDescendantCustody) {
     if (child.connected) {
       child.disconnect();
@@ -34,6 +43,7 @@ export function createServiceChildRelayRetirement(params: {
     signalError = signalError
       ? new AggregateError([signalError, failure], "service child retirement signals failed")
       : failure;
+    materializeErrorStack(signalError);
   };
   const reconcile = () => {
     if (!requested || exit || !params.canRetire()) {

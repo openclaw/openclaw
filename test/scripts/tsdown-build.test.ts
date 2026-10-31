@@ -16,7 +16,10 @@ import {
   vi,
 } from "vitest";
 import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
-import { readProcessMemoryCapacity } from "../../scripts/lib/process-memory.mts";
+import {
+  readProcessCgroupV2Snapshot,
+  readProcessMemoryCapacity,
+} from "../../scripts/lib/process-memory.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
@@ -46,7 +49,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
+import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { withinTest } from "../helpers/promise.js";
 import { createSourcePluginDependenciesFixture } from "./source-plugin-dependencies-fixture.js";
 
@@ -104,35 +107,6 @@ async function fixtureEventBeforeSettlement(
     ]),
     signal,
   );
-}
-
-function waitForForeignProcessExit(pid: number, signal: AbortSignal): Promise<void> {
-  // The product owns these child handles, and deliberate parent death or rescue
-  // SIGKILL leaves no test-owned exit event. Only test cancellation bounds reaping.
-  return new Promise((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (error?: Error) => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", abort);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const abort = () => finish(new Error(`process still alive: ${pid}`, { cause: signal.reason }));
-    const check = () => {
-      if (!isProcessAlive(pid)) {
-        finish();
-      } else if (signal.aborted) {
-        abort();
-      } else {
-        timer = setTimeout(check, 5);
-      }
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    check();
-  });
 }
 
 const MiB = 1024 ** 2;
@@ -576,6 +550,23 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.invocations[1]?.args).not.toContain("--filter");
   });
 
+  it.each([
+    { label: "defaults", env: {}, limit: "3GiB" },
+    { label: "explicit tuning", env: { GOMEMLIMIT: "6GiB" }, limit: "6GiB" },
+  ])("bounds native declaration compiler memory with $label", ({ env, limit }) => {
+    const cpus = vi.spyOn(os, "availableParallelism").mockReturnValue(8);
+    onTestFinished(() => cpus.mockRestore());
+    const result = resolveTsdownBuildInvocation({
+      args: ["--filter", "openclaw-dts"],
+      env: { CI: "true", ...env },
+      physicalMemoryBytes: 16 * GiB,
+      cgroupMemoryLimitBytes: 16 * GiB,
+    });
+    expect(result.options.env.GOMEMLIMIT).toBe(limit);
+    expect(result.options.env.GOMAXPROCS).toBe("2");
+    expect(result.options.env.GOGC).toBe("30");
+  });
+
   it("keeps the selected Windows runtime and literal compiler arguments", () => {
     const args = ["--format", "esm", "--concurrency", "2"];
     const result = resolveTsdownBuildInvocation({
@@ -599,7 +590,13 @@ describe("resolveTsdownBuildInvocation", () => {
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
       windowsVerbatimArguments: undefined,
-      env: { NODE_OPTIONS: "--max-old-space-size=8192", npm_execpath: "/unrelated/pnpm.cjs" },
+      env: {
+        NODE_OPTIONS: "--max-old-space-size=8192",
+        npm_execpath: "/unrelated/pnpm.cjs",
+        GOGC: "30",
+        GOMAXPROCS: "2",
+        GOMEMLIMIT: "3GiB",
+      },
     });
   });
 
@@ -787,6 +784,49 @@ describe("resolveTsdownBuildInvocation", () => {
       ),
     };
   }
+
+  it("observes raw counters along the mapped cgroup subtree and ancestors", () => {
+    const mountPoint = "/sys/fs/cgroup dir";
+    const leaf = `${mountPoint}/parent/leaf`;
+    const snapshot = readProcessCgroupV2Snapshot(
+      cgroupMemory(
+        "0::/container/parent/leaf\n",
+        "30 25 0:26 /container /sys/fs/cgroup\\040dir rw - cgroup2 cgroup2 rw\n",
+        [
+          [`${leaf}/cpu.stat`, "usage_usec 1200\n"],
+          [`${leaf}/memory.peak`, "900\n"],
+          [`${leaf}/cpuset.cpus.effective`, "0-3\n"],
+          [`${mountPoint}/parent/cpu.max`, "200000 100000\n"],
+          [`${mountPoint}/cpu.max`, "max 100000\n"],
+        ],
+      ),
+    );
+    expect(snapshot?.map((row) => row.directory)).toEqual([
+      leaf,
+      `${mountPoint}/parent`,
+      mountPoint,
+    ]);
+    expect(snapshot?.map((row) => row.counters)).toMatchObject([
+      {
+        "cpu.stat": "usage_usec 1200\n",
+        "memory.peak": "900\n",
+        "cpuset.cpus.effective": "0-3\n",
+        "memory.current": null,
+      },
+      { "cpu.max": "200000 100000\n" },
+      { "cpu.max": "max 100000\n" },
+    ]);
+  });
+
+  it("does not substitute an unrelated cgroup mount for an unmapped process", () => {
+    expect(
+      readProcessCgroupV2Snapshot(
+        cgroupMemory("0::/\n", `30 25 0:26 /other ${cgroupRoot} rw - cgroup2 cgroup2 rw\n`, [
+          [`${cgroupRoot}/cpu.stat`, "usage_usec 1200\n"],
+        ]),
+      ),
+    ).toBeNull();
+  });
 
   const memoryCases: [
     name: string,
@@ -1589,7 +1629,7 @@ describe("runTsdownBuildInvocation", () => {
               await completion;
               if (pid !== undefined && isProcessAlive(pid)) {
                 process.kill(pid, "SIGKILL");
-                await waitForForeignProcessExit(pid, signal);
+                await waitForDead(pid, signal, "reject");
               }
             } finally {
               signal.removeEventListener("abort", abort);
@@ -1749,7 +1789,7 @@ describe("runTsdownBuildInvocation", () => {
                 : undefined;
               if (childPid !== undefined && isProcessAlive(childPid)) {
                 process.kill(childPid, "SIGKILL");
-                await waitForForeignProcessExit(childPid, signal);
+                await waitForDead(childPid, signal, "reject");
               }
             }
           });
@@ -1869,7 +1909,7 @@ describe("runTsdownBuildInvocation", () => {
           supervisor.advance(250);
           await fixtureEventBeforeSettlement(termPath, "SIGTERM", supervisor.completion, signal);
           const parentPid = Number(fs.readFileSync(parentPidPath, "utf8"));
-          await waitForForeignProcessExit(parentPid, signal);
+          await waitForDead(parentPid, signal, "reject");
           supervisor.advance(249);
           expect(isProcessAlive(childPid)).toBe(true);
           expect(output.chunks.join("")).not.toContain("forcing SIGKILL");
@@ -1938,7 +1978,7 @@ describe("runTsdownBuildInvocation", () => {
           supervisor.advance(250);
           await fixtureEventBeforeSettlement(termPath, "SIGTERM", supervisor.completion, signal);
           const parentPid = Number(fs.readFileSync(parentPidPath, "utf8"));
-          await waitForForeignProcessExit(parentPid, signal);
+          await waitForDead(parentPid, signal, "reject");
           supervisor.advance(249);
           expect(isProcessAlive(childPid)).toBe(true);
           expect(fs.readFileSync(cleanupPath, "utf8")).toBe("");
@@ -2019,7 +2059,7 @@ describe("runTsdownBuildInvocation", () => {
             await runnerClosed;
             if (childPid && isProcessAlive(childPid)) {
               process.kill(childPid, "SIGKILL");
-              await waitForForeignProcessExit(childPid, signal);
+              await waitForDead(childPid, signal, "reject");
             }
           });
         }

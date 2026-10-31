@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
@@ -14,26 +14,20 @@ import type { PluginModelCatalogCredentialCandidate } from "./plugin-model-catal
 export async function removePersistedPluginModelCatalogCredentials(params: {
   candidates: readonly PluginModelCatalogCredentialCandidate[];
   credentials: ReadonlySet<string>;
-  env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   if (params.candidates.length === 0 || params.credentials.size === 0) {
     return;
   }
   const credentials = [...params.credentials];
-  const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
+  const env = cloneEnvWithPlatformSemantics(process.env);
   const capturedCandidates = params.candidates.map(({ agentId, databasePath }) => ({
     agentId,
     databasePath: resolvePathViaExistingAncestorSync(databasePath),
   }));
   const candidates: PluginModelCatalogCredentialCandidate[] = [];
   for (const candidate of capturedCandidates) {
-    try {
-      await stat(candidate.databasePath);
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        continue;
-      }
-      throw error;
+    if (!(await stat(candidate.databasePath).catch(ignoreMissingPath))) {
+      continue;
     }
     candidates.push(candidate);
   }

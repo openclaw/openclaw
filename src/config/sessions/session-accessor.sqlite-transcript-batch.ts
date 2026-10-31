@@ -1,3 +1,4 @@
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
@@ -22,6 +23,9 @@ import {
   touchTranscriptMutationInTransaction,
   touchTranscriptWindowRecency,
 } from "./session-accessor.sqlite-transcript-state.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
+import type { TranscriptMutationAdvance } from "./session-transcript-mutation-projection.js";
 import { scheduleTranscriptProjectionReconcile } from "./session-transcript-reconcile.js";
 import { copyRetainedTranscriptPayload } from "./session-transcript-retained-data.js";
 import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
@@ -67,17 +71,24 @@ export function createTranscriptAppendBatch(
       }
     }
   }
-  const cursor: TranscriptAppendCursor = { deferWrites: true, batch };
-  const flushRows = () =>
+  const cursor: TranscriptAppendCursor & { batch: typeof batch } = { deferWrites: true, batch };
+  const flushRows = (flushProjectionRows: boolean) =>
     withSqliteDatabaseWriteScope(
       database.db,
       [scope.sessionKey, sqliteSessionIdWriteScope(scope.sessionId)],
       () =>
         preserveSessionEntryCacheAcrossWrite(database, () => {
-          // Immediate foreign keys require payloads before identities and active rows.
-          cursor.insertEvent?.batch(batch.events);
-          cursor.insertIdentity?.batch([...batch.identities.values()]);
-          cursor.appendToIndex?.flushRows();
+          // PG uses the payload CTE's accepted sequences; SQLite keeps its two writes.
+          const identities = [...batch.identities.values()];
+          if (cursor.insertEvent?.batchWithIdentities) {
+            cursor.insertEvent.batchWithIdentities(batch.events, identities);
+          } else {
+            cursor.insertEvent?.batch(batch.events);
+            cursor.insertIdentity?.batch(identities);
+          }
+          if (flushProjectionRows) {
+            cursor.appendToIndex?.flushRows();
+          }
           batch.events.length = 0;
           batch.identities.clear();
           batch.bytes = 0;
@@ -91,24 +102,81 @@ export function createTranscriptAppendBatch(
     cursor,
     flushFullChunk() {
       if (batch.events.length >= TRANSCRIPT_INSERT_BATCH_SIZE || batch.bytes >= 1024 * 1024) {
-        flushRows();
+        flushRows(true);
       }
     },
-    settle(completed: boolean, appended: number, projectionNeedsRebuild: boolean) {
+    settle(
+      completed: boolean,
+      appended: number,
+      projectionNeedsRebuild: boolean,
+      logicalAdvance?: TranscriptMutationAdvance,
+    ) {
+      let version: SessionTranscriptContextVersion | undefined;
       // A caller may catch an iterator error and commit the accepted prefix.
       // Settle its index and attempt recency without advancing the mutation fence.
       preserveSessionEntryCacheAcrossWrite(database, () => {
-        flushRows();
-        cursor.appendToIndex?.flush();
-        if (completed && appended > 0 && options.touchMutation !== false) {
-          touchTranscriptMutationInTransaction(
+        flushRows(false);
+        const index = cursor.appendToIndex;
+        const touches = completed && appended > 0 && options.touchMutation !== false;
+        const actorWindow = readSessionActorTransactionState(database, scope)?.window;
+        const flushProjectionWithMutation =
+          touches && !projectionNeedsRebuild && isPostgresSqlConnection(database.db) && actorWindow
+            ? index?.flush
+            : undefined;
+        const postimage = !projectionNeedsRebuild ? index?.readPostimage() : undefined;
+        const generation = cursor.generation;
+        const rawSeq = (cursor.nextSeq ?? 0) - 1;
+        const fold =
+          touches &&
+          logicalAdvance !== undefined &&
+          !actorWindow &&
+          isPostgresSqlConnection(database.db) &&
+          index &&
+          generation &&
+          postimage?.state.indexedSeq === rawSeq
+            ? { index, generation, rawSeq, state: postimage.state }
+            : undefined;
+        if (!flushProjectionWithMutation && !fold) {
+          index?.flush();
+        }
+        let flushedWithWindow = false;
+        if (touches) {
+          version = touchTranscriptMutationInTransaction(
             database,
             scope.sessionId,
-            cursor.windowUpdatedAt,
-            projectionNeedsRebuild ? undefined : cursor.rowTranscript,
+            {
+              windowUpdatedAt: cursor.windowUpdatedAt,
+              rowTranscript: projectionNeedsRebuild ? undefined : cursor.rowTranscript,
+              projectionReady: !projectionNeedsRebuild,
+              writeActorMutation: flushProjectionWithMutation,
+              ...(fold
+                ? {
+                    writeWindowMutation: (update) => {
+                      const window = fold.index.flush(update);
+                      flushedWithWindow = true;
+                      return window
+                        ? {
+                            sessionId: scope.sessionId,
+                            ...window,
+                            generation: fold.generation,
+                            rawSeq: fold.rawSeq,
+                            leafEventId: fold.state.leafEventId,
+                            indexedSeq: fold.state.indexedSeq,
+                            activeMessageCount: fold.state.activeMessageCount,
+                            needsRebuild: 0,
+                          }
+                        : undefined;
+                    },
+                  }
+                : {}),
+            },
+            logicalAdvance,
           );
         } else if (cursor.windowUpdatedAt !== undefined) {
           touchTranscriptWindowRecency(database, scope.sessionId, cursor.windowUpdatedAt, cursor);
+        }
+        if (fold && !flushedWithWindow) {
+          index?.flush();
         }
       });
       if (completed && appended > 0) {
@@ -119,6 +187,7 @@ export function createTranscriptAppendBatch(
           options,
         );
       }
+      return version;
     },
   };
 }

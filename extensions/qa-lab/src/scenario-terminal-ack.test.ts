@@ -10,18 +10,19 @@ import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const temporary = createTempDirHarness();
 afterEach(() => temporary.cleanup());
+const scenario = readQaScenarioById("subagent-completion-direct-fallback");
+const step = scenario.execution.flow!.steps[0]!;
+const guarded = step.actions.find((action) => isRecord(action) && "try" in action);
+if (!isRecord(guarded) || !isRecord(guarded.try) || !Array.isArray(guarded.try.actions)) {
+  throw new Error("expected guarded terminal flow actions");
+}
+const actions: unknown[] = guarded.try.actions;
+const flow = (selected: unknown[]) => ({ steps: [{ name: step.name, actions: selected }] });
 
 async function startPublicCase(
   acknowledgments: number,
   initialAck: "missing" | "deleted" | "foreign" = "missing",
 ) {
-  const scenario = readQaScenarioById("subagent-completion-direct-fallback");
-  const step = scenario.execution.flow!.steps[0]!;
-  const guarded = step.actions.find((action) => isRecord(action) && "try" in action);
-  if (!isRecord(guarded) || !isRecord(guarded.try) || !Array.isArray(guarded.try.actions)) {
-    throw new Error("expected guarded terminal flow actions");
-  }
-  const actions: unknown[] = guarded.try.actions;
   const publicIndex = actions.findIndex((action) => isRecord(action) && "forEach" in action);
   if (publicIndex < 0) {
     throw new Error("expected public terminal cases");
@@ -43,19 +44,11 @@ async function startPublicCase(
   let parentSend: Promise<void> | undefined;
   const result = runLoadedScenarioFlow(scenario.id, {
     state,
-    // Execute the shipped public-case actions and assertions, stopping before
-    // the independent private/restart scenarios rather than emulating them.
-    flow: {
-      steps: [
-        {
-          name: step.name,
-          actions: [
-            ...step.actions.slice(0, step.actions.indexOf(guarded)),
-            ...actions.slice(0, publicIndex + 1),
-          ],
-        },
-      ],
-    },
+    // Public assertions stop before the independent private/restart scenarios.
+    flow: flow([
+      ...step.actions.slice(0, step.actions.indexOf(guarded)),
+      ...actions.slice(0, publicIndex + 1),
+    ]),
     api: {
       fs,
       path,
@@ -76,8 +69,10 @@ async function startPublicCase(
                   {
                     role: "assistant",
                     provider: "openclaw",
-                    model: "delivery-mirror",
-                    __openclaw: { idempotencyKey: "announce:v1:child:run:text-direct" },
+                    model: "automation-result",
+                    __openclaw: {
+                      idempotencyKey: "outbound-delivery:announce:v1:child:run:text-direct:0",
+                    },
                     content: [{ type: "text", text: marker }],
                   },
                 ],
@@ -158,51 +153,34 @@ async function startPublicCase(
 }
 
 describe("terminal completion scenario parent acknowledgment", () => {
-  it.each(["missing", "deleted", "foreign"] as const)(
-    "waits for a live parent send after child delivery when the initial acknowledgment is %s",
-    async (initialAck) => {
-      const run = await startPublicCase(1, initialAck);
-      try {
-        expect(await run.observed).toBeUndefined();
-      } finally {
-        await run.release();
-      }
-      expect(await run.outcome).toMatchObject({ value: { status: "pass" } });
-    },
-  );
-
-  it.each([0, 2])(
-    "rejects %i parent acknowledgments despite settled child delivery",
-    async (count) => {
-      const run = await startPublicCase(count);
-      try {
-        await run.observed;
-      } finally {
-        await run.release();
-      }
-      const outcome = await run.outcome;
+  it.each([
+    [1, "missing", undefined],
+    [1, "deleted", undefined],
+    [1, "foreign", undefined],
+    [0, "missing", "parent acknowledgment missing"],
+    [2, "missing", "spawning parent did not acknowledge"],
+  ] as const)("checks %i final acknowledgments after %s", async (count, initialAck, error) => {
+    const run = await startPublicCase(count, initialAck);
+    try {
+      expect(await run.observed).toBeUndefined();
+    } finally {
+      await run.release();
+    }
+    const outcome = await run.outcome;
+    if (error) {
       expect(outcome).toHaveProperty("error");
       if ("error" in outcome) {
-        expect(String(outcome.error)).toContain(
-          count === 0 ? "parent acknowledgment missing" : "spawning parent did not acknowledge",
-        );
+        expect(String(outcome.error)).toContain(error);
       }
-    },
-  );
+    } else {
+      expect(outcome).toMatchObject({ value: { status: "pass" } });
+    }
+  });
 });
 
 async function replayPrivateKickoff(text: string, fault?: string) {
-  const scenario = readQaScenarioById("subagent-completion-direct-fallback");
-  const guarded = scenario.execution.flow?.steps[0]?.actions
-    .map((action) => (isRecord(action) ? action.try : undefined))
-    .find(isRecord);
-  if (!Array.isArray(guarded?.actions)) {
-    throw new Error("missing terminal scenario body");
-  }
-  const start = guarded.actions.findIndex(
-    (action) => isRecord(action) && action.set === "privateOutbound",
-  );
-  const end = guarded.actions.findIndex(
+  const start = actions.findIndex((action) => isRecord(action) && action.set === "privateOutbound");
+  const end = actions.findIndex(
     (action, index) => index > start && isRecord(action) && "forEach" in action,
   );
   if (start < 0 || end < 0) {
@@ -210,33 +188,35 @@ async function replayPrivateKickoff(text: string, fault?: string) {
   }
   const state = createQaBusState();
   const conversation = "terminal-private-fixture";
-  const kickoff = state.addOutboundMessage({
-    accountId: "default",
+  const send = (
+    bodyText: string,
+    overrides: Partial<Parameters<typeof state.addOutboundMessage>[0]> = {},
+  ) =>
+    state.addOutboundMessage({
+      accountId: "default",
+      to: `dm:${conversation}`,
+      replyToId: "ingress",
+      text: bodyText,
+      ...overrides,
+    });
+  const kickoff = send(fault === "transient" ? "private child prose" : text, {
     to: "dm:" + (fault === "target" ? "foreign" : conversation),
-    replyToId: "ingress",
-    text: fault === "transient" ? "private child prose" : text,
-    ...(fault === "media"
-      ? {
-          attachments: [
+    attachments:
+      fault === "media"
+        ? [
             {
               id: "private-image",
-              kind: "image" as const,
+              kind: "image",
               mimeType: "image/png",
               url: "https://example.com/private.png",
             },
-          ],
-        }
-      : {}),
+          ]
+        : undefined,
   });
   if (fault === "transient") {
     state.editMessage({ accountId: "default", messageId: kickoff.id, text });
   }
-  state.addOutboundMessage({
-    accountId: "default",
-    to: "dm:" + conversation,
-    replyToId: "ingress",
-    text: "Worker started.",
-  });
+  send("Worker started.");
   const wire = [text, "Worker started."].map((bodyText) => ({
     type: "api",
     path: "/bot<redacted>/sendMessage",
@@ -252,9 +232,7 @@ async function replayPrivateKickoff(text: string, fault?: string) {
   }
   return runLoadedScenarioFlow(scenario.id, {
     state,
-    flow: {
-      steps: [{ name: "private outbound privacy", actions: guarded.actions.slice(start, end) }],
-    },
+    flow: flow(actions.slice(start, end)),
     api: {
       privateStartIndex: 0,
       privateEventCursor: 0,

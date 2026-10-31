@@ -1,14 +1,4 @@
-import {
-  Agent,
-  type AgentEvent,
-  type AgentTool,
-  type StreamFn,
-} from "openclaw/plugin-sdk/agent-core";
-import {
-  type AssistantMessage,
-  createAssistantMessageEventStream,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import { Agent, type AgentEvent, type AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -25,12 +15,15 @@ import {
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
-import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { assertCompleteToolResult, resolveToolResultBudget } from "./tool-result-limits.js";
 import {
   addClientToolsToToolCatalog,
   compactToolSearchCatalogEntry,
 } from "./tool-search-catalog.js";
+import {
+  singleToolCallStreamFn as createSingleToolCallStreamFn,
+  toolSearchTestModel as model,
+} from "./tool-search-loop.test-support.js";
 import {
   prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
@@ -164,61 +157,6 @@ describe("Tool Search dispatcher argument preparation", () => {
   });
 
   describe("through the real agent loop", () => {
-    const model: Model = {
-      id: "test-model",
-      name: "Test Model",
-      api: "test-api",
-      provider: "test-provider",
-      baseUrl: "https://example.test",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1000,
-      maxTokens: 1000,
-    };
-
-    function makeAssistantMessage(
-      content: AssistantMessage["content"],
-    ): AssistantMessage & { stopReason: "toolUse" | "stop" } {
-      return {
-        role: "assistant",
-        content,
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: createZeroUsageFixture(),
-        stopReason: content.some((item) => item.type === "toolCall") ? "toolUse" : "stop",
-        timestamp: 1,
-      };
-    }
-
-    function createSingleToolCallStreamFn(toolCall: {
-      id: string;
-      name: string;
-      arguments: Record<string, unknown>;
-    }): StreamFn {
-      // The stop turn terminates the loop after the tool result.
-      const turns: AssistantMessage["content"][] = [
-        [{ type: "toolCall", ...toolCall }],
-        [{ type: "text", text: "done" }],
-      ];
-      let turnIndex = 0;
-      return () => {
-        const content = turns[turnIndex];
-        if (!content) {
-          throw new Error("unexpected extra model turn");
-        }
-        turnIndex += 1;
-        const stream = createAssistantMessageEventStream();
-        queueMicrotask(() => {
-          const message = makeAssistantMessage(content);
-          stream.push({ type: "done", reason: message.stopReason, message });
-          stream.end();
-        });
-        return stream;
-      };
-    }
-
     function findToolExecutionEnd(
       events: AgentEvent[],
     ): Extract<AgentEvent, { type: "tool_execution_end" }> | undefined {
@@ -642,7 +580,7 @@ describe("Tool Search catalog indexing", () => {
     const { catalogRef, runtime } = createRuntime([shadowed, visible]);
     addClientToolsToToolCatalog({ tools: [client], enabled: true, catalogRef });
     const projection = createCodeModeCatalogProjection(
-      catalogRef.current!.entries.map(compactToolSearchCatalogEntry),
+      catalogRef.current!.entries.map((entry) => compactToolSearchCatalogEntry(entry)),
     );
     const effectiveOptions = { limit: 1, allowedIds: projection.byId };
 

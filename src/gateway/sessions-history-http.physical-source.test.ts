@@ -4,13 +4,18 @@ import { afterEach, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { resetSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
-import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import {
   emitSessionTranscriptUpdate,
   onInternalSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { readSseEvent } from "./session-history-fixtures.test-support.js";
+import {
+  appendHistoryMessage,
+  historyStream,
+  historyTexts,
+  readSessionHistoryBody,
+} from "./sessions-history-http-read.test-support.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   createGatewaySuiteHarness,
@@ -29,24 +34,21 @@ function assistantMessage(text: string) {
   return makeAgentAssistantMessage({ content: [{ type: "text", text }] });
 }
 
-type AppendOptions = Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0];
 async function appendMessage(
   storePath: string,
   text: string,
   key = sessionKey,
-  expected: Pick<AppendOptions, "expectedSessionId" | "expectedLifecycleRevision"> = {},
+  expectedLifecycleRevision?: string,
 ) {
-  const result = await appendExactAssistantMessageToSessionTranscript({
+  const result = await appendHistoryMessage({
     agentId: "main",
     sessionKey: key,
     storePath,
     message: assistantMessage(text),
-    ...expected,
+    ...(expectedLifecycleRevision
+      ? { expectedSessionId: sessionId, expectedLifecycleRevision }
+      : {}),
   });
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error(result.reason);
-  }
   return result.messageId;
 }
 
@@ -58,8 +60,6 @@ async function captureAppend(storePath: string, text: string, key: string) {
   const id = await appendMessage(storePath, text, key);
   return updates.find((update) => update.messageId === id);
 }
-
-const historyMessage = (text: string) => ({ content: [{ text }] });
 
 installGatewayTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -87,7 +87,6 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
       throw new Error("expected the committed inline transcript update");
     }
     const harness = await createGatewaySuiteHarness();
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     const abort = new AbortController();
     let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -96,14 +95,10 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
         headers: { ...headers, accept: "text/event-stream" },
         signal: abort.signal,
       });
-      expect(response.status).toBe(200);
-      reader = expectDefined(response.body?.getReader(), "session history event stream");
-      const stream = { buffer: "" };
-      const initial = await readSseEvent(reader, stream);
-      expect(initial).toMatchObject({
-        event: "history",
-        data: { messages: [historyMessage("bound initial message")] },
-      });
+      await using stream = historyStream(response);
+      using _ = { [Symbol.dispose]: () => clearTimeout(deadline) };
+      const { reader } = stream;
+      await stream.expectTexts(["bound initial message"]);
       if (mismatch === "lifecycle owner") {
         const reset = await resetSessionEntryLifecycle({
           agentId: "main",
@@ -126,36 +121,26 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
           5_000,
         );
         const replacementText = "replacement lifecycle message";
-        await appendMessage(storePath, replacementText, requestedKey, {
-          expectedSessionId: sessionId,
-          expectedLifecycleRevision: "after-reset",
-        });
-        let remaining = stream.buffer;
+        await appendMessage(storePath, replacementText, requestedKey, "after-reset");
+        let remaining = stream.streamState.buffer;
         const decoder = new TextDecoder();
         for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
           remaining += decoder.decode(chunk.value, { stream: true });
         }
         expect(remaining).not.toContain(replacementText);
         clearTimeout(deadline);
-        const current = await fetch(url, { headers });
-        expect(current.status).toBe(200);
-        expect(JSON.stringify(await current.json())).toContain(replacementText);
+        expect(
+          historyTexts(await readSessionHistoryBody(harness.port, requestedKey, { headers })),
+        ).toContain(replacementText);
         return;
       }
       const foreignText = `unrelated payload from ${mismatch}`;
       if (mismatch === "physical store") {
         const foreignUpdate = await captureAppend(otherStorePath, foreignText, requestedKey);
-        const owner = {
-          target: {
-            agentId: initialUpdate.target.agentId,
-            sessionId: initialUpdate.target.sessionId,
-            sessionKey: initialUpdate.target.sessionKey,
-            storePath: expect.any(String),
-          },
+        expect(foreignUpdate).toMatchObject({
+          target: { ...initialUpdate.target, storePath: expect.any(String) },
           lifecycleRevision: "copied-history-owner",
-        };
-        expect(initialUpdate).toMatchObject(owner);
-        expect(foreignUpdate).toMatchObject(owner);
+        });
         expect(foreignUpdate?.target?.storePath).not.toBe(initialUpdate.target.storePath);
         expect(foreignUpdate?.messageSeq).toBeGreaterThan(initialUpdate.messageSeq);
       } else {
@@ -177,21 +162,14 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
       // The committed bound append is an ordering barrier, so no quiet-period timer is needed.
       let published = "";
       do {
-        published = JSON.stringify((await readSseEvent(reader, stream)).data);
+        published = JSON.stringify((await readSseEvent(reader, stream.streamState)).data);
         expect(published).not.toContain(foreignText);
       } while (!published.includes(visibleText));
-      const history = await fetch(url, { headers });
-      expect(history.status).toBe(200);
-      expect(await history.json()).toMatchObject({
-        messages: [historyMessage("bound initial message"), historyMessage(visibleText)],
-      });
+      expect(
+        historyTexts(await readSessionHistoryBody(harness.port, requestedKey, { headers })),
+      ).toEqual(["bound initial message", visibleText]);
     } finally {
-      clearTimeout(deadline);
-      try {
-        await reader?.cancel();
-      } finally {
-        await harness.close();
-      }
+      await harness.close();
     }
   },
 );

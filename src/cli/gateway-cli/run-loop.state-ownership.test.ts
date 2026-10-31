@@ -12,12 +12,13 @@ import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import * as stateDb from "../../state/openclaw-state-db.js";
 import { runGatewayLoop } from "./run-loop.js";
-import { withIsolatedSignals } from "./run-loop.test-support.js";
+import {
+  createGatewayServer,
+  createLifecycleGate,
+  withIsolatedSignals,
+} from "./run-loop.test-support.js";
 
 // Exercise real lock files, lease publication, workers and release inside Vitest.
 vi.mock("../../infra/gateway-lock.js", async (original) => {
@@ -32,7 +33,7 @@ vi.mock("../../infra/gateway-lock.js", async (original) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
+  await stateDb.closeOpenClawStateDatabaseAsync();
   resetGatewayRestartStateForInProcessRestart();
   resetGatewayWorkAdmission();
   vi.unstubAllEnvs();
@@ -50,10 +51,10 @@ it("reacquires state after SIGUSR2 retires its emitting scope and asynchronously
   const reloadWork = new AsyncWorkScope();
   const initialOwner = createDeferred<string | undefined>();
   const restartedOwner = createDeferred<string | undefined>();
-  const closing = createDeferred();
-  const releaseClose = createDeferred();
+  const closing = createLifecycleGate();
   let starts = 0;
   let closeContext: string | undefined;
+  const requestRestart = () => requestGatewayRestartWithSignalAdmission("config reload: fixture");
 
   await withIsolatedSignals(async ({ captureSignal }) => {
     const loop = context.run("gateway-loop", () =>
@@ -61,58 +62,43 @@ it("reacquires state after SIGUSR2 retires its emitting scope and asynchronously
         // This port is lease metadata only; the fixture opens no listener.
         lockPort: 43821,
         start: async () => {
-          openOpenClawStateDatabase();
+          stateDb.openOpenClawStateDatabase();
           const owner = readGatewayOwnerLease({ current: true })?.owner;
           (starts++ === 0 ? initialOwner : restartedOwner).resolve(owner);
-          return {
-            getTailscaleIngressEndpoint: () => undefined,
-            startupSettled: Promise.resolve(),
-            close: async () => {
-              closeContext = context.getStore();
-              await reloadWork.drain();
-              closing.resolve();
-              await releaseClose.promise;
-              await drainGlobalSingletonLifecycleState("restart");
-            },
-          };
+          return createGatewayServer(async () => {
+            closeContext = context.getStore();
+            await reloadWork.drain();
+            await closing.wait();
+            await drainGlobalSingletonLifecycleState("restart");
+          });
         },
       }),
     );
-    const first = await awaitGateBeforeSettlement(
-      initialOwner.promise,
-      loop,
-      "Gateway exited before initial startup",
-    );
+    const waitFor = <T>(gate: PromiseLike<T>, phase: string) =>
+      awaitGateBeforeSettlement(gate, loop, `Gateway exited before ${phase}`);
+    const first = await waitFor(initialOwner.promise, "initial startup");
     const stop = captureSignal("SIGINT");
     try {
       expect(first).toBeTruthy();
-      expect(
-        context.run("config-reload", () =>
-          reloadWork.run(() => requestGatewayRestartWithSignalAdmission("config reload: fixture")),
-        ),
-      ).toEqual({ status: "emitted" });
-      await awaitGateBeforeSettlement(closing.promise, loop, "Gateway exited before closing");
-      expect(reloadWork.signal.aborted).toBe(true);
-      expect(starts).toBe(1);
+      expect(context.run("config-reload", () => reloadWork.run(requestRestart))).toEqual({
+        status: "emitted",
+      });
+      await waitFor(closing.entered, "closing");
+      expect({ aborted: reloadWork.signal.aborted, starts }).toEqual({ aborted: true, starts: 1 });
       // Delayed close retains real custody; another startup cannot enter it.
       await expect(acquireGatewayLock({ timeoutMs: 0 })).rejects.toThrow(
         "OpenClaw state database is busy",
       );
-      releaseClose.resolve();
-      const second = await awaitGateBeforeSettlement(
-        restartedOwner.promise,
-        loop,
-        "Gateway exited instead of reacquiring state ownership",
-      );
+      closing.release();
+      const second = await waitFor(restartedOwner.promise, "reacquiring state ownership");
       expect(second).toBeTruthy();
       expect(second).not.toBe(first);
       expect(closeContext).toBe("gateway-loop");
     } finally {
-      releaseClose.resolve();
+      closing.release();
       stop();
-      await loop;
+      await expect(loop).resolves.toBe(0);
     }
-    await expect(loop).resolves.toBe(0);
     expect(readGatewayOwnerLease({ current: true })).toBeUndefined();
   });
 });

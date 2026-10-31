@@ -2,7 +2,6 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
 import type {
@@ -15,6 +14,7 @@ import {
 } from "./session-transcript-anchor-read.js";
 import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
+import { readSessionTranscriptCohort } from "./session-transcript-read-cohort.js";
 import {
   resolveSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
@@ -27,6 +27,8 @@ import { readSessionTranscriptModelContextInWorker } from "./session-transcript-
 import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import {
   sameTranscriptEntryAnchor,
+  snapshotTranscriptEntryAnchor,
+  snapshotTranscriptTurnAdmission,
   type TranscriptEntryAnchor,
 } from "./transcript-entry-anchor.js";
 import { getOwnedSessionTranscriptReader } from "./transcript-write-context.js";
@@ -64,7 +66,7 @@ export async function readSessionTranscriptContextProjectionAsync<T>(
 ): Promise<T> {
   const captured = { ...target };
   const admission = resolveSessionTranscriptReadFence(captured);
-  const capturedAdmission = admission && structuredClone(admission);
+  const capturedAdmission = admission && snapshotTranscriptTurnAdmission(admission);
   const memory = captureSessionActorTranscriptRead(captured, signal);
   if (memory) {
     const result = await project({ target: memory.target, admission: capturedAdmission });
@@ -118,8 +120,8 @@ export function readSessionTranscriptModelContextAsync<T>(
   consumeSynchronously = false,
 ): Promise<T> {
   const capturedTarget = { ...target };
-  const capturedAdmission = admission ? structuredClone(admission) : undefined;
-  const capturedThrough = through ? structuredClone(through) : undefined;
+  const capturedAdmission = admission ? snapshotTranscriptTurnAdmission(admission) : undefined;
+  const capturedThrough = through ? snapshotTranscriptEntryAnchor(through) : undefined;
   const capturedLimits = limits ? { ...limits } : undefined;
   const accept = async (
     scope: SessionTranscriptRuntimeTarget,
@@ -128,11 +130,14 @@ export function readSessionTranscriptModelContextAsync<T>(
     contextAdmission = capturedAdmission,
     source?: SessionTranscriptWorkerReadSource,
   ): Promise<T> => {
-    const contextValidation = structuredClone({
-      version: context.version,
+    const version = context.version;
+    const contextValidation = {
+      version: version
+        ? { generation: version.generation, rawSeq: version.rawSeq, updatedAt: version.updatedAt }
+        : undefined,
       admission: contextAdmission,
       through: capturedThrough,
-    });
+    };
     const admissionAnchor = source ? contextAdmission : undefined;
     const sharesThroughAnchor =
       admissionAnchor && capturedThrough?.entryId === admissionAnchor.entryId;
@@ -225,39 +230,27 @@ export function readSessionTranscriptModelContextAsync<T>(
         capturedLimits &&
         getOwnedSessionTranscriptReader(captured);
       if (selected) {
-        const { captureSessionEntryNativeMutationWitness } =
-          await import("./session-entry-read-ordered.js");
-        assertCurrent();
-        const database = selected.database;
-        return runOpenClawAgentWriteAdmission(
-          database,
-          async (_identity, assertOwner) => {
-            assertCurrent();
-            const assertNative = captureSessionEntryNativeMutationWitness([database]);
-            const context = await readSessionTranscriptModelContextInWorker(
+        return readSessionTranscriptCohort(
+          selected.database,
+          () =>
+            readSessionTranscriptModelContextInWorker(
               captured,
               capturedAdmission,
               signal,
               capturedThrough,
               capturedLimits,
               expectedIdentity,
-            );
-            signal?.throwIfAborted();
-            assertOwner();
-            assertCurrent();
-            assertNative();
+            ),
+          (context) => {
             const value = consume(context);
             if (isPromiseLike(value)) {
               void Promise.resolve(value).catch(() => {});
               throw new Error("Prepared model-context consumers must remain synchronous");
             }
-            assertOwner();
             assertCurrent();
-            assertNative();
             return value;
           },
-          true,
-          undefined,
+          assertCurrent,
           signal,
           "history.model-context",
         );

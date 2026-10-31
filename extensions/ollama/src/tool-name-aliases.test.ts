@@ -4,14 +4,17 @@ import {
   type AssistantMessage,
   type Context,
   type Model,
+  type SimpleStreamOptions,
 } from "openclaw/plugin-sdk/llm";
 import {
   buildOpenAICompletionsParams,
   createEmptyTransportUsage,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { afterEach, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../test-support/message-fixtures.test-support.js";
 import { createConfiguredOllamaCompatStreamWrapper } from "./stream-compat.js";
 import { createOllamaStreamFn } from "./stream.runtime.js";
+import { wrapOllamaToolNames } from "./tool-name-aliases.js";
 
 const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
 
@@ -53,14 +56,7 @@ function context(names: string[], replayName = "ls"): Context {
     messages: [
       { role: "user", content: "Use ls; keep this user text unchanged.", timestamp: 0 },
       assistant(replayName),
-      {
-        role: "toolResult",
-        toolCallId: "previous",
-        toolName: replayName,
-        content: [{ type: "text", text: "literal ls output" }],
-        isError: false,
-        timestamp: 0,
-      },
+      makeTextToolResult("previous", replayName, "literal ls output", false, 0),
     ],
   };
 }
@@ -369,6 +365,53 @@ it.each(["function", "allowed_tools"] as const)(
             allowed_tools: { mode: "required", tools: [wireSelection] },
           },
     );
+    expect(selection.function.name).toBe("ls");
+  },
+);
+
+it.each(["enumerable", "non-enumerable", "inherited"] as const)(
+  "preserves caller options and %s payload hooks while aliasing tools",
+  async (placement) => {
+    const selection = Object.freeze({
+      type: "function",
+      function: Object.freeze({ name: "ls" }),
+    });
+    const replacement = { tool_choice: selection };
+    const onPayload = vi.fn(() => replacement);
+    const options = {
+      temperature: 0,
+      toolChoice: selection,
+    };
+    if (placement === "inherited") {
+      Object.setPrototypeOf(options, { onPayload });
+    } else {
+      Object.defineProperty(options, "onPayload", {
+        value: onPayload,
+        enumerable: placement === "enumerable",
+      });
+    }
+    Object.freeze(options);
+    let wireOptions: SimpleStreamOptions | undefined;
+    const payload = { tool_choice: selection };
+    const wrapped = wrapOllamaToolNames(async (wireModel, _input, prepared) => {
+      wireOptions = prepared;
+      expect(await prepared?.onPayload?.(payload, wireModel)).toBe(replacement);
+      const stream = createAssistantMessageEventStream();
+      stream.push({ type: "done", reason: "toolUse", message: assistant("openclaw_ls") });
+      return stream;
+    });
+    await (await wrapped(model, context(["ls"]), options)).result();
+    expect(onPayload).toHaveBeenCalledExactlyOnceWith(payload, model);
+    expect(wireOptions).not.toBe(options);
+    expect(wireOptions).toMatchObject({
+      temperature: 0,
+      toolChoice: { type: "function", function: { name: "openclaw_ls" } },
+    });
+    expect(replacement.tool_choice).toEqual({
+      type: "function",
+      function: { name: "openclaw_ls" },
+    });
+    expect(options.toolChoice).toBe(selection);
     expect(selection.function.name).toBe("ls");
   },
 );

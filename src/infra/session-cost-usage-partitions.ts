@@ -1,6 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sha256Hex } from "./crypto-digest.js";
 import {
+  encodeUsageCostQuarters,
+  type UsageCostQuarterRow,
+} from "./session-cost-usage-quarters.js";
+import {
   encodeUsageCostRollup,
   type UsageCostRollupEntry,
   type UsageCostRollupEnvelope,
@@ -21,6 +25,8 @@ export type UsageCostPartition = {
   date: string;
   valueJson: string;
   blob: Uint8Array;
+  /** Report summary committed with this partition; absent on partitions read back. */
+  quarters?: UsageCostQuarterRow;
 };
 
 export function usageCostPartitionKey(sessionFile: string, date: string): string {
@@ -42,7 +48,7 @@ function encodeUsageCostPartition(
   rollup: SessionUsageRollupData,
 ): UsageCostPartition & { blob: Uint8Array<ArrayBuffer> } {
   const raw = Buffer.from(JSON.stringify(rollup));
-  const compressed = raw.byteLength >= 1024 ? codec?.compress(raw, 1) : undefined;
+  const compressed = raw.byteLength >= 1024 ? codec.compress(raw, 1) : undefined;
   const useCompressed = compressed !== undefined && compressed.byteLength < raw.byteLength;
   return {
     date,
@@ -95,9 +101,9 @@ export function decodeUsageCostPartition(
     }
     const raw =
       metadata.encoding === "zstd"
-        ? codec?.decompress(blob, metadata.bytes)
+        ? codec.decompress(blob, metadata.bytes)
         : Buffer.from(blob.buffer, blob.byteOffset, blob.byteLength);
-    if (!raw || raw.byteLength !== metadata.bytes || sha256Hex(raw) !== metadata.sha256) {
+    if (raw.byteLength !== metadata.bytes || sha256Hex(raw) !== metadata.sha256) {
       return undefined;
     }
     const value: unknown = JSON.parse(raw.toString("utf8"));
@@ -156,6 +162,10 @@ export function partitionUsageCostRollup(entry: UsageCostRollupEntry): {
   return {
     valueJson: JSON.stringify(envelope),
     blob: encoded.blob,
-    partitions: [...months].map(([date, rollup]) => encodeUsageCostPartition(date, rollup)),
+    partitions: [...months].map(([date, rollup]) =>
+      Object.assign(encodeUsageCostPartition(date, rollup), {
+        quarters: encodeUsageCostQuarters(date, rollup),
+      }),
+    ),
   };
 }

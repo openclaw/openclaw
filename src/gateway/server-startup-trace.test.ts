@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
 import { createGatewayDispatchStartupTrace } from "../cli/startup-trace.js";
 import { measureDoctorConfigPreflightStep } from "../commands/doctor-config-preflight-measure.js";
+import { captureWorkerStartObserver } from "../infra/worker-request-diagnostics.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const eventLoopDelay = vi.hoisted(() => ({
@@ -46,68 +47,54 @@ describe("gateway startup trace", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    { enabled: "0", fail: false },
-    { enabled: "0", fail: true },
-    { enabled: "1", fail: false },
-  ])(
-    "summarizes recovery once at phase end ($enabled, failure=$fail)",
-    async ({ enabled, fail }) => {
-      vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", enabled);
-      let now = 0;
-      vi.spyOn(performance, "now").mockImplementation(() => now);
-      const log = createSubsystemLogger("gateway-startup-test");
-      const info = vi.spyOn(log, "info").mockImplementation(() => {});
-      const trace = createGatewayStartupTrace(log, 0);
-      const step = (name: string, ms: number) =>
-        trace.measure(name, () => {
-          now += ms;
-        });
-      const failure = new Error("synthetic private recovery payload");
-      try {
-        trace.mark("ready");
-        info.mockClear();
-        const recovery = trace.measure("sidecars.subagent-recovery", async () => {
-          await step("sidecars.recovery-readers", 100);
-          await trace.measure("sidecars.delivery-recovery", async () => {
-            await step("sidecars.delivery-discovery", 10);
-            await step("sidecars.delivery-entries", 20);
-            await step("sidecars.delivery-history", 30);
-            await step("sidecars.delivery-replay", 15);
-            await step("sidecars.delivery-replay", 25);
-            await step("sidecars.delivery-notices", 200);
-            await step("sidecars.delivery-notices", 300);
-            await step("sidecars.delivery-retry-wait", 1_000);
-          });
-          await step("sidecars.exec-recovery", 20);
-          await step("sidecars.subagent-load", 30);
-          await trace.measure("sidecars.subagent-activation", () => {
-            now += 40;
-            if (fail) {
-              throw failure;
-            }
-          });
-        });
-        if (fail) {
-          await expect(recovery).rejects.toBe(failure);
-        } else {
-          await recovery;
-        }
-        const messages = info.mock.calls.map(([message]) => message);
-        const summary = messages.filter((message) => message.includes("readersMs="));
-        expect(summary).toEqual([
-          `startup ${enabled === "1" ? "trace" : "phase"}: sidecars.subagent-recovery 1790.0ms total=1790.0ms ${enabled === "1" ? "eventLoopMax=0.0ms " : ""}readersMs=100.0 deliveryMs=1600.0 deliveryDiscoveryMs=10.0 deliveryEntriesMs=20.0 deliveryHistoryMs=30.0 deliveryReplayMs=40.0 deliveryNoticesMs=500.0 retryWaitMs=1000.0 execMs=20.0 registryLoadMs=30.0 registryActivationMs=40.0 outcome=${fail ? "failure" : "success"}`,
-        ]);
-        if (enabled === "0") {
-          expect(messages).toHaveLength(2);
-        }
-        expect(messages.join("\n")).not.toContain(failure.message);
+  it("attributes overlapping plugin worker starts without counting unrelated recovery", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "0");
+    const info = vi.fn();
+    const trace = createGatewayStartupTrace({ info } as never);
+    const startWorker = (script: string) => {
+      captureWorkerStartObserver(new URL(script, import.meta.url))?.();
+    };
+    const first = "plugins.gateway-load.plugin.first";
+    const second = "plugins.gateway-load.plugin.second";
+    try {
+      const preparing = trace.run(first, async () => {
+        await Promise.resolve();
+        startWorker("plugin-generation-preparation.worker.js");
+      });
+      trace.run(second, () => startWorker("git-operation.worker.js"));
+      startWorker("session-transcript.worker.js");
+      trace.detail(second, [["loadAndRegisterMs", 1]]);
+      await preparing;
+      trace.detail(first, [["loadAndRegisterMs", 2]]);
+      trace.detail("plugins.gateway-load.plugin.fast", [["loadAndRegisterMs", 1]]);
+      trace.detail("plugins.gateway-load.plugin.slow", [["loadAndRegisterMs", 250]]);
+      await Promise.resolve();
+      expect(info.mock.calls.map(([message]) => message)).toEqual([
+        `startup trace: ${second} loadAndRegisterMs=1.0 workersStarted=1 workerScripts=git-operation.worker.js:1`,
+        `startup trace: ${first} loadAndRegisterMs=2.0 workersStarted=1 workerScripts=plugin-generation-preparation.worker.js:1`,
+        "startup trace: plugins.gateway-load.plugin.slow loadAndRegisterMs=250.0 workersStarted=0 workerScripts=none",
+      ]);
+    } finally {
+      trace.close();
+    }
+  });
 
-        info.mockClear();
-        await trace.measure("sidecars.subagent-recovery", () => {});
-        expect(info.mock.calls.at(-1)?.[0]).toContain(
-          "readersMs=0.0 deliveryMs=0.0 deliveryDiscoveryMs=0.0 deliveryEntriesMs=0.0 deliveryHistoryMs=0.0 deliveryReplayMs=0.0 deliveryNoticesMs=0.0 retryWaitMs=0.0 execMs=0.0 registryLoadMs=0.0 registryActivationMs=0.0 outcome=success",
-        );
+  it.each(["0", "1"])(
+    "reports process RSS and main heap at phase completion (trace=%s)",
+    async (enabled) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", enabled);
+      const rss = vi.spyOn(process.memoryUsage, "rss").mockReturnValue(128 * 1024 * 1024);
+      const info = vi.fn();
+      const trace = createGatewayStartupTrace({ info } as never);
+      try {
+        await trace.measure("sessions.admission", () => {
+          rss.mockReturnValue(256 * 1024 * 1024);
+        });
+        expect(info.mock.calls[0]?.[0]).not.toContain("rssMb=");
+        expect(info.mock.calls[1]?.[0]).toMatch(/ rssMb=256\.0 heapUsedMb=\d+\.\d workers=0 /);
+        rss.mockReturnValue(512 * 1024 * 1024);
+        trace.mark("ready");
+        expect(info.mock.calls.at(-1)?.[0]).toMatch(/ rssMb=512\.0 heapUsedMb=\d+\.\d workers=0 /);
       } finally {
         trace.close();
       }
@@ -146,7 +133,9 @@ describe("gateway startup trace", () => {
         expect(info.mock.calls.map(([message]) => message)).toEqual(
           visible
             ? [
-                `startup trace: ${name} ${duration.toFixed(1)}ms total=${duration.toFixed(1)}ms eventLoopMax=0.0ms outcome=${fail ? "failure" : "success"}`,
+                expect.stringContaining(
+                  `startup trace: ${name} ${duration.toFixed(1)}ms total=${duration.toFixed(1)}ms eventLoopMax=0.0ms outcome=${fail ? "failure" : "success"}`,
+                ),
               ]
             : [],
         );
@@ -239,6 +228,7 @@ describe("gateway startup trace", () => {
       message.startsWith("startup trace: process.bootstrap.cli.bootstrap.database-admission "),
     );
     expect(admissionStep).toMatch(/start=\d+\.\dms calls=2\.0 agents=400\.0$/);
+    expect(admissionStep).not.toContain("rssMb=");
     expect(messages.find((message) => message.startsWith("startup trace: ready "))).toContain(
       "cli.bootstrap.database-admission:",
     );

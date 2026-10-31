@@ -193,6 +193,16 @@ export async function prepareMcpEventConnection(params: {
   }
 }
 
+export function projectMcpEventRequester(
+  requester: NonNullable<ReturnType<typeof resolveCronAuthenticatedChannelRequester>>,
+): NonNullable<McpEventPrincipal["requester"]> {
+  return {
+    requesterSenderId: requester.senderId,
+    messageChannel: requester.channel,
+    agentAccountId: requester.accountId,
+  };
+}
+
 function jobPrincipal(job: CronStoredJob, defaultAgentId?: string): McpEventPrincipal {
   const policy = resolveCronScheduledToolPolicy({
     toolsAllow: job.payload.toolsAllow,
@@ -216,15 +226,7 @@ function jobPrincipal(job: CronStoredJob, defaultAgentId?: string): McpEventPrin
           },
         }
       : {}),
-    ...(requester
-      ? {
-          requester: {
-            requesterSenderId: requester.senderId,
-            messageChannel: requester.channel,
-            agentAccountId: requester.accountId,
-          },
-        }
-      : {}),
+    ...(requester ? { requester: projectMcpEventRequester(requester) } : {}),
   };
 }
 
@@ -247,7 +249,7 @@ function subscriptionIdentity(params: Record<string, unknown>) {
   }
   return {
     name: params.name,
-    arguments: structuredClone(params.arguments),
+    arguments: params.arguments,
     delivery: { mode: "webhook", url: delivery.url },
   };
 }

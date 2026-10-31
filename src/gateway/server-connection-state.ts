@@ -4,9 +4,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-// Gateway connection and run registries.
 // This state is transport-fed but can be constructed without HTTP or WebSocket servers.
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createEventWebPushDelivery } from "./event-web-push.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
@@ -20,17 +18,20 @@ import { GatewayConnectionWork } from "./server-connection-work.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import { ConnectionSessionRows } from "./session-ancestor-references.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { canReceiveSessionEvent, prepareProjectedSessionSharing } from "./session-sharing.js";
+import type { SessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 
 /** Creates transport-independent connection, subscription, and run state. */
 export function createGatewayConnectionState(params: {
   scheduler: GatewayScheduler;
   bootId: string;
+  resolveGatewayContext?: GatewayContextResolver;
   cfg: import("../config/config.js").OpenClawConfig;
   getRuntimeConfig?: () => import("../config/config.js").OpenClawConfig;
 }) {
@@ -50,18 +51,21 @@ export function createGatewayConnectionState(params: {
     }
   };
   const clearConnectionRows = () => {
+    const histories = new Map<object, object>();
     for (const client of clients) {
-      connectionRows.get(client)?.clear("projection");
+      connectionRows.get(client)?.clear("projection", histories);
     }
   };
   const clearAncestors = () => {
+    const histories = new Map<object, object>();
     for (const client of clients) {
-      connectionRows.get(client)?.clearAncestors();
+      connectionRows.get(client)?.clearAncestors(histories);
     }
   };
   const forgetAncestor = (key: string) => {
+    const histories = new Map<object, object>();
     for (const client of clients) {
-      connectionRows.get(client)?.forget(key);
+      connectionRows.get(client)?.forget(key, histories);
     }
   };
   // RPCs survive ordinary disconnects, so connection-owned projections still
@@ -78,7 +82,16 @@ export function createGatewayConnectionState(params: {
     isConnectionActive,
     forgetConnectionAncestors,
   );
-  const eventWebPush = createEventWebPushDelivery({ getRuntimeConfig: loadRuntimeConfig });
+  // Lifecycle owns viewer declarations; agent-finished pushes fail open until it attaches them.
+  let sessionViewers: SessionViewerPresenceDeclarations | undefined;
+  const eventWebPush = createEventWebPushDelivery(
+    loadRuntimeConfig,
+    {
+      isViewedOnDevice: (deviceId, sessionKey) =>
+        sessionViewers?.isViewedOnDevice(deviceId, sessionKey) === true,
+    },
+    () => sessionRowProjection,
+  );
   const gatewayBroadcaster = createGatewayBroadcaster({
     clients,
     preparePresenceProjection: (presence) =>
@@ -157,11 +170,12 @@ export function createGatewayConnectionState(params: {
             }
             return references;
           },
-          forgetConnectionAncestors: (client) => connectionRows.get(client)?.clearAncestors(),
           createRunProjector: () =>
             createVisibleActiveSessionRunProjector(
-              { chatAbortControllers },
               projection.state.rowContext.projectedAgentRuns,
+              undefined,
+              params.resolveGatewayContext,
+              projection.physicalPaths,
             ),
         },
       );
@@ -199,8 +213,6 @@ export function createGatewayConnectionState(params: {
   const chatRunRegistry = chatRunState.registry;
   const addChatRun = chatRunRegistry.add;
   const removeChatRun = chatRunRegistry.remove;
-  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-  const chatQueuedTurns = new Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>();
   const toolEventRecipients = chatRunState.toolEventRecipients;
 
   return {
@@ -226,6 +238,9 @@ export function createGatewayConnectionState(params: {
         }
       };
     },
+    attachSessionViewerPresence(this: void, declarations: SessionViewerPresenceDeclarations) {
+      sessionViewers = declarations;
+    },
     clients,
     forgetConnectionAncestors,
     connectionWork: new GatewayConnectionWork(),
@@ -237,8 +252,6 @@ export function createGatewayConnectionState(params: {
     chatRunState,
     addChatRun,
     removeChatRun,
-    chatAbortControllers,
-    chatQueuedTurns,
     toolEventRecipients,
     sessionEventSubscribers,
     sessionMessageSubscribers,

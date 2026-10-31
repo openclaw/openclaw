@@ -12,13 +12,9 @@ const loaded = vi.hoisted(() => {
     },
   };
 });
-const runtime = vi.hoisted(() => ({
-  error: vi.fn(),
-  exit: vi.fn(),
-  log: vi.fn(),
-  writeJson: vi.fn(),
-  writeStdout: vi.fn(),
-}));
+const runtime = await vi.hoisted(async () =>
+  vi.mocked((await import("../test-utils/plugin-runtime-env.js")).createNonExitingRuntimeEnv()),
+);
 
 vi.mock("./program/config-guard.js", () => {
   loaded.mark("config-guard");

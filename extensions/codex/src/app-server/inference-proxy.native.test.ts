@@ -367,7 +367,7 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
           parentId = thread.id;
         }
         const controller = new AbortController();
-        const registration = proxy.context.register({
+        const registration = await proxy.context.register({
           threadId: thread.id,
           text: "synthetic root context",
           signal: controller.signal,
@@ -496,7 +496,7 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
         config: { openai_base_url: proxy.baseUrl },
       });
       const controller = new AbortController();
-      const registration = proxy.context.register({
+      const registration = await proxy.context.register({
         threadId: thread.id,
         text: "Reply concisely.",
         signal: controller.signal,

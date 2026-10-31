@@ -106,14 +106,6 @@
   background: var(--bg);
 }
 
-.wizard-step__waiting {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  min-height: 24px;
-}
-
 .wizard-step__spinner {
   width: 18px;
   height: 18px;

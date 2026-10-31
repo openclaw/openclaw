@@ -79,6 +79,12 @@ from a CLI connected to its Gateway and inspect `nodes[].version`.
 `openclaw --version` reports that CLI's installed version, which can differ
 after a node update.
 
+Installed node services must launch through `openclaw.mjs` (or `dist/entry.js`),
+which starts the update supervisor. If an older service points directly at
+`dist/index.js`, run `openclaw doctor --fix` on that node machine to repair its
+entrypoint while preserving the installed connection options. A node started
+through the old entrypoint logs a warning when automatic updates are enabled.
+
 Look in the foreground node's stderr or its service logs for update preparation,
 busy deferral, activation, and fallback messages. If an update is deferred for
 schema migration or repair, run `openclaw update` on the node machine. Then
@@ -160,6 +166,10 @@ in the restart sentinel and surface after the Gateway returns.
 `update.checkOnStart: false` disables all automatic update checks, feature
 statistics, and update notices, even when `update.auto.enabled` is `true`.
 `OPENCLAW_NO_AUTO_UPDATE=1` also disables automatic checks and applies.
+With either opt-out, Gateway startup does not probe Git or package managers for
+installation details. When checks are enabled, discovery starts with the first
+scheduled check. Explicit update and status requests still discover installation
+details on demand.
 External-supervisor mode disables automatic applies; startup update hints can
 still run unless `update.checkOnStart` is also disabled. See
 [Usage telemetry and update checks](/gateway/telemetry) for the information
@@ -229,7 +239,7 @@ app runs `openclaw update --tag <app-version> --json`, restarts its Gateway,
 and verifies health in a setup-style progress window. The window appears only
 when that managed Gateway needs update, repair, or installation; app-only updates relaunch
 directly into the app. Failure details stay visible with Retry, [Update guide](/install/updating), and
-[Discord](https://discord.gg/clawd) actions. The app never uses this coordinated
+[Get support](https://community.openclaw.ai/) actions. The app never uses this coordinated
 path for a remote or externally managed Gateway, never downgrades a newer
 Gateway, and never overrides an `extended-stable` channel pin.
 

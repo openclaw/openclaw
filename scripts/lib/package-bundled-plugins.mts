@@ -14,6 +14,7 @@ import {
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
 } from "./bundled-plugin-build-entries.mjs";
 import { assertRealOutputRoot } from "./output-root-guard.mjs";
+import { listBundleDependencies } from "./package-bundle-dependencies.mts";
 import {
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -51,13 +52,15 @@ export async function preparePackageBundledPlugins(
 ) {
   const selected = resolvePackageBundledPlugins(sourceDir, pluginIds);
   if (selected.length === 0) {
-    return async () => {};
+    return { cleanup: async () => {}, bundleOwners: new Map<string, string>() };
   }
   assertRealOutputRoot(path.join(sourceDir, "dist"));
   const packagePath = path.join(sourceDir, "package.json");
   const original = await fs.readFile(packagePath, "utf8");
   const sourcePackageJson = JSON.parse(original) as PackageJson;
   const pluginPackages = new Map<string, PackageJson>();
+  const coreBundles = new Set(listBundleDependencies(sourcePackageJson));
+  const bundleOwners = new Map<string, string>();
   for (const { id, sourceEntries } of selected) {
     const sourcePackage = JSON.parse(
       await fs.readFile(path.join(sourceDir, "extensions", id, "package.json"), "utf8"),
@@ -89,6 +92,11 @@ export async function preparePackageBundledPlugins(
     const extension = path.extname(builtPackage.openclaw?.extensions?.[0] ?? "index.js");
     for (const entry of sourceEntries) {
       await fs.access(path.join(pluginRoot, entry.replace(/\.[^.]+$/u, extension)));
+    }
+    for (const name of listBundleDependencies(sourcePackage)) {
+      if (!coreBundles.has(name) && !bundleOwners.has(name)) {
+        bundleOwners.set(name, path.join(sourceDir, "extensions", id));
+      }
     }
     pluginPackages.set(`dist/extensions/${id}/package.json`, builtPackage);
   }
@@ -154,7 +162,7 @@ export async function preparePackageBundledPlugins(
     // Inventory must see the custom manifest before pack, or postinstall would prune the plugin.
     const { writePackageDistInventoryForPublish } = await import("./package-dist-inventory.ts");
     await writePackageDistInventoryForPublish(sourceDir);
-    return cleanup;
+    return { cleanup, bundleOwners };
   } catch (error) {
     await cleanup({ cause: error });
     throw error;

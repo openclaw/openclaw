@@ -200,7 +200,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
   };
 }
 
-function readLocalSkillCardSync(
+export function readLocalSkillCardSync(
   skillDir: string,
   includeContent = false,
 ): LocalSkillCardRead | undefined {
@@ -242,12 +242,6 @@ function readLocalSkillCardSync(
   }
 }
 
-export function resolveLocalSkillCardStatusSync(
-  skillDir: string,
-): LocalSkillCardStatus | undefined {
-  return readLocalSkillCardSync(skillDir);
-}
-
 export function readLocalSkillCardContentSync(skillDir: string): string | undefined {
   return readLocalSkillCardSync(skillDir, true)?.content;
 }
@@ -255,12 +249,12 @@ export function readLocalSkillCardContentSync(skillDir: string): string | undefi
 export async function searchSkillsFromClawHub(params: {
   query?: string;
   limit?: number;
-  baseUrl?: string;
+  signal?: AbortSignal;
 }): Promise<ClawHubSkillSearchResult[]> {
   return await searchClawHubSkills({
     query: params.query?.trim() ?? "",
     limit: params.limit,
-    baseUrl: params.baseUrl,
+    signal: params.signal,
   });
 }
 

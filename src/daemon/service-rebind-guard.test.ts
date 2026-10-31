@@ -1,14 +1,14 @@
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
-import { isDefaultInstallIdentity } from "../config/paths.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { resolveNodeService } from "./node-service.js";
 import {
-  captureGatewayServiceRebind,
-  currentGatewayServiceRebindReceipt,
-  fingerprintGatewayServiceDefinition,
-  withGatewayServiceRebindCapture,
+  captureGatewayServiceRebind as captureRebind,
+  currentGatewayServiceRebindReceipt as receipt,
+  settleGatewayServiceRebind as settleRebind,
+  fingerprintGatewayServiceDefinition as fingerprint,
+  withGatewayServiceRebindCapture as withRebind,
 } from "./service-rebind.js";
 import type { GatewayServiceCommandConfig, GatewayServiceInstallArgs } from "./service-types.js";
 import { resolveGatewayService } from "./service.js";
@@ -21,9 +21,14 @@ vi.mock("./launchd.js", async (original) => ({
   readLaunchAgentProgramArguments: leaves.read,
 }));
 vi.mock("./future-config-guard.js", () => ({ assertFutureConfigActionAllowed: leaves.config }));
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
+const defaultIdentity = {
+  OPENCLAW_HOME: undefined,
+  OPENCLAW_PROFILE: undefined,
+  OPENCLAW_LAUNCHD_LABEL: undefined,
+  OPENCLAW_SYSTEMD_UNIT: undefined,
+  OPENCLAW_WINDOWS_TASK_NAME: undefined,
+};
 it.each(
   (["gateway", "node"] as const).flatMap((kind) =>
     (["success", "config-revoked", "definition-raced"] as const).map((scenario) => ({
@@ -32,47 +37,26 @@ it.each(
     })),
   ),
 )("guards the admitted $kind native rebind: $scenario", async ({ kind, scenario }) => {
-  const state = await createOpenClawTestState({ layout: kind === "node" ? "split" : "home" });
-  try {
+  await withOpenClawTestState({ layout: kind === "node" ? "split" : "home" }, async (state) => {
     await seedCompletedRuntimePinMigration(state.env);
     mockProcessPlatform("darwin");
+    Object.assign(state.envVars, defaultIdentity);
     state.applyEnv();
     mockSystemAccountHome();
-    for (const key of [
-      "OPENCLAW_HOME",
-      "OPENCLAW_PROFILE",
-      "OPENCLAW_LAUNCHD_LABEL",
-      "OPENCLAW_SYSTEMD_UNIT",
-      "OPENCLAW_WINDOWS_TASK_NAME",
-    ]) {
-      vi.stubEnv(key, undefined);
-    }
-    const env = {
-      ...state.env,
-      OPENCLAW_HOME: undefined,
-      OPENCLAW_PROFILE: undefined,
-      OPENCLAW_LAUNCHD_LABEL: undefined,
-      OPENCLAW_SYSTEMD_UNIT: undefined,
-      OPENCLAW_WINDOWS_TASK_NAME: undefined,
-    };
-    expect(isDefaultInstallIdentity(process.env)).toBe(kind === "gateway");
-    expect(isDefaultInstallIdentity(env)).toBe(kind === "gateway");
+    const env = { ...state.env, ...defaultIdentity };
     let current = true;
     let command: GatewayServiceCommandConfig = { programArguments: ["/node", "/A/openclaw.mjs"] };
     leaves.read.mockImplementation(async () => command);
     leaves.config.mockImplementation(async () => {
-      if (scenario === "config-revoked") {
-        current = false;
-      }
+      current = scenario !== "config-revoked";
     });
-    leaves.install.mockReset();
-    leaves.install.mockImplementation(async (args: GatewayServiceInstallArgs) => {
+    leaves.install.mockReset().mockImplementation(async (args: GatewayServiceInstallArgs) => {
       args.assertCurrent?.();
       expect(args.preserveAutoStart).toBe(true);
       command = { programArguments: args.programArguments };
     });
-    const before = await fingerprintGatewayServiceDefinition(command);
-    await withGatewayServiceRebindCapture(before, async () => {
+    const before = await fingerprint(command);
+    await withRebind(before, async () => {
       const service = kind === "node" ? resolveNodeService() : resolveGatewayService();
       const work = service.install({
         env,
@@ -91,10 +75,9 @@ it.each(
       });
       if (scenario === "success") {
         await work;
-        expect(leaves.install).toHaveBeenCalledOnce();
-        expect(currentGatewayServiceRebindReceipt()).toEqual({
+        expect(receipt()).toEqual({
           before,
-          after: await fingerprintGatewayServiceDefinition(command),
+          after: await fingerprint(command),
           mutated: true,
           runtimePinBefore: expect.stringMatching(/^[a-f0-9]{64}$/),
           runtimePinAfter: expect.stringMatching(/^[a-f0-9]{64}$/),
@@ -103,25 +86,94 @@ it.each(
         await expect(work).rejects.toThrow(
           scenario === "config-revoked" ? "revoked" : "definition changed before rebind",
         );
-        expect(leaves.config).toHaveBeenCalled();
         expect(leaves.install).not.toHaveBeenCalled();
-        expect(currentGatewayServiceRebindReceipt()).toBeUndefined();
+        expect(receipt()).toBeUndefined();
       }
     });
-  } finally {
-    // Unwind nested stubs before the state fixture restores its original home.
-    vi.unstubAllEnvs();
-    await state.cleanup();
-  }
+  });
 });
 it("ordinary native installation retains its default enable behavior", async () => {
-  const mutate = vi.fn(async (preserveAutoStart: boolean) => preserveAutoStart);
-  await expect(
-    captureGatewayServiceRebind(
-      async () => null,
-      () => undefined,
-      mutate,
-    ),
-  ).resolves.toBe(false);
-  expect(mutate).toHaveBeenCalledWith(false);
+  await captureRebind(
+    async () => null,
+    () => {},
+    async (preserveAutoStart) => {
+      expect(preserveAutoStart).toBe(false);
+    },
+  );
+});
+
+it.each<[string, boolean, string?]>([
+  ["failed-after-write", false],
+  ["revoked", false, "owner revoked"],
+  ["pin-raced", true, "runtime intent changed"],
+  ["pre-write", true],
+  ["compensated", true],
+  ["final-revoked", false],
+])("records admitted rebind evidence: %s (pinned=%s)", async (scenario, pinned, refusal) => {
+  const original = { programArguments: ["/nodeA", "/A/openclaw.mjs"] };
+  let command = original;
+  const before = await fingerprint(original);
+  const originalPin = "a".repeat(64);
+  let pin = scenario === "pin-raced" ? "c".repeat(64) : originalPin;
+  const failure = new Error(scenario === "pre-write" ? "pre-write refused" : "native load failed");
+  const cleanupFailure = new Error("final authority revoked");
+  let retired = false;
+  const expectReceipt = async (mutated = true) => {
+    expect(receipt()).toEqual({
+      before,
+      after: await fingerprint(command),
+      ...(mutated ? { mutated: true } : {}),
+      ...(pinned ? { runtimePinBefore: originalPin, runtimePinAfter: pin } : {}),
+    });
+  };
+  const mutate = vi.fn(async () => {
+    if (scenario !== "final-revoked") {
+      if (scenario !== "pre-write") {
+        command = { programArguments: ["/nodeB", "/B/openclaw.mjs"] };
+        pin = "b".repeat(64);
+      }
+      throw failure;
+    }
+  });
+  const assertCurrent = () => {
+    if (retired || scenario === "revoked") {
+      throw retired ? cleanupFailure : new Error("owner revoked");
+    }
+  };
+  await withRebind(
+    before,
+    async () => {
+      const capture = () =>
+        captureRebind(async () => command, assertCurrent, mutate, pinned ? () => pin : undefined);
+      const operation =
+        scenario === "compensated" || scenario === "final-revoked"
+          ? settleRebind(assertCurrent, async () => {
+              await capture().catch(async (error: unknown) => {
+                await expectReceipt();
+                command = original;
+                pin = originalPin;
+                throw error;
+              });
+              retired = true;
+              throw failure;
+            })
+          : capture();
+      if (scenario === "final-revoked") {
+        await expect(operation).rejects.toMatchObject({
+          errors: [failure, cleanupFailure],
+          cause: cleanupFailure,
+        });
+        expect(receipt()).toBeUndefined();
+      } else if (refusal) {
+        await expect(operation).rejects.toThrow(refusal);
+        expect(receipt()).toBeUndefined();
+        expect(mutate).not.toHaveBeenCalled();
+      } else {
+        await expect(operation).rejects.toBe(failure);
+        await expectReceipt(scenario !== "pre-write");
+      }
+    },
+    pinned ? originalPin : undefined,
+  );
+  expect(receipt()).toBeUndefined();
 });

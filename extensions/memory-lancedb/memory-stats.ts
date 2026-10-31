@@ -18,43 +18,17 @@ export type MemoryStatsSource = {
   storageOptions?: Record<string, string>;
 };
 
-// Native connection/count calls have no cancellation API. A process owns their
-// lifetime; this reader never creates a table or mutates existing memory data.
-const STATS_READER = `
-import { readFileSync } from "node:fs";
-const input = JSON.parse(readFileSync(0, "utf8"));
-let db;
-let table;
-const result = {};
-try {
-  const { loadLanceDbModule } = await import(input.moduleUrl);
-  const lancedb = await loadLanceDbModule();
-  db = await lancedb.connect(input.dbPath, { storageOptions: input.storageOptions });
-  if ((await db.tableNames()).includes(input.tableName)) {
-    table = await db.openTable(input.tableName);
-    result.columns = (await table.schema()).fields.map((field) => field.name);
-    result.count = await table.countRows(input.predicate);
-  } else {
-    result.count = 0;
-  }
-} catch (error) {
-  result.error = String(error);
-} finally {
-  table?.close();
-  db?.close();
-}
-process.stdout.write(JSON.stringify(result));
-`;
-
 export async function readMemoryStats(source: MemoryStatsSource, agentId: string): Promise<number> {
   const moduleUrl = resolveRuntimeWorkerUrl(memoryStatsRuntimeEntrypoint);
-  const preload = resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1);
   const result = await runUtf8CommandWithTimeout(
-    [process.execPath, ...preload, "--input-type=module", "--eval", STATS_READER],
+    [process.execPath, ...resolveRuntimeWorkerArgv(moduleUrl)],
     {
       input: JSON.stringify({
         ...source,
-        moduleUrl: moduleUrl.href,
+        // Source children do not inherit the host plugin loader's SDK aliases.
+        fileLockUrl: moduleUrl.pathname.endsWith(".ts")
+          ? import.meta.resolve("openclaw/plugin-sdk/file-lock")
+          : undefined,
         tableName: MEMORY_TABLE_NAME,
         predicate: memoryAgentPredicate(agentId),
       }),

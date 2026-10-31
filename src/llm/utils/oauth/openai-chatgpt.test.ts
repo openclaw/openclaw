@@ -1,5 +1,6 @@
 // OpenAI ChatGPT OAuth tests cover login, token refresh, and auth persistence.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 
 type LoginOpenAICodexOAuth =
   typeof import("../../../plugins/provider-openai-chatgpt-oauth.js").loginOpenAICodexOAuth;
@@ -69,10 +70,7 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
   });
 
   it("waits for the auth URL to render before requesting manual input", async () => {
-    let finishAuth!: () => void;
-    const authRendered = new Promise<void>((resolve) => {
-      finishAuth = resolve;
-    });
+    const { promise: authRendered, resolve: finishAuth } = createDeferred();
     const onAuth = vi.fn(async () => authRendered);
     const onPrompt = vi.fn(async () => "manual-code");
     mocks.loginOpenAICodexOAuth.mockImplementationOnce(async (params) => {
@@ -194,12 +192,32 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
       context: {
         type: "oauth",
         provider: "openai",
-        access: "",
+        access: "expired-access-token",
         refresh: "old-refresh-token",
         expires: 0,
       },
     });
     expect(mocks.loadActivatedBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+  });
+
+  it("requires the plugin owner for flow-specific credentials instead of the standard facade", async () => {
+    mocks.refreshProviderOAuthCredentialWithPlugin.mockResolvedValueOnce(null);
+
+    await expect(
+      openaiCodexOAuthProvider.refreshToken({
+        access: "expired-access-token",
+        refresh: "shared-refresh-token",
+        expires: 0,
+        authFlow: "chatgpt-token-sharing",
+      }),
+    ).rejects.toThrow("OpenAI OAuth flow owner is unavailable");
+
+    expect(mocks.refreshProviderOAuthCredentialWithPlugin).toHaveBeenCalledWith({
+      provider: "openai",
+      context: expect.objectContaining({ authFlow: "chatgpt-token-sharing" }),
+    });
+    expect(mocks.loadActivatedBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+    expect(mocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
   });
 
   it("falls back to the OpenAI plugin facade when provider runtime refresh is unavailable", async () => {

@@ -3,8 +3,9 @@ import { resolve } from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { DIAL_BUNDLES } from "./helper-results.js";
 
-type FaceTimeHelperTarget = "FaceTime" | "Phone";
+type FaceTimeHelperTarget = "FaceTime";
 
 type HelperSupervisorTargetState = {
   target: FaceTimeHelperTarget;
@@ -27,20 +28,12 @@ type HelperSupervisorParams = {
   connectedBundles: () => string[];
 };
 
-const TARGET_BUNDLES: Record<FaceTimeHelperTarget, ReadonlySet<string>> = {
-  FaceTime: new Set(["com.apple.FaceTime", "com.apple.FaceTime.FTConversationService"]),
-  Phone: new Set(["com.apple.mobilephone", "com.apple.TelephonyUtilities"]),
-};
-const TARGET_APP_PATHS: Record<FaceTimeHelperTarget, string> = {
-  FaceTime: "/System/Applications/FaceTime.app",
-  Phone: "/System/Applications/Phone.app",
-};
-const FACETIME_HELPER_TARGETS = ["FaceTime", "Phone"] as const;
+const FACETIME_HELPER_TARGETS = ["FaceTime"] as const;
 
 const RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000] as const;
 
 function targetForBundle(bundleIdentifier: string): FaceTimeHelperTarget | undefined {
-  return FACETIME_HELPER_TARGETS.find((target) => TARGET_BUNDLES[target].has(bundleIdentifier));
+  return DIAL_BUNDLES.has(bundleIdentifier) ? "FaceTime" : undefined;
 }
 
 export class FaceTimeHelperSupervisor {
@@ -52,20 +45,20 @@ export class FaceTimeHelperSupervisor {
 
   constructor(private readonly params: HelperSupervisorParams) {
     this.#states = new Map(
-      FACETIME_HELPER_TARGETS.filter((target) => existsSync(TARGET_APP_PATHS[target])).map(
-        (target) => [
+      FACETIME_HELPER_TARGETS.filter((target) =>
+        existsSync(`/System/Applications/${target}.app`),
+      ).map((target) => [
+        target,
+        {
           target,
-          {
-            target,
-            connected: false,
-            attempts: 0,
-            injecting: false,
-            queued: false,
-            retryScheduled: false,
-            stale: false,
-          },
-        ],
-      ),
+          connected: false,
+          attempts: 0,
+          injecting: false,
+          queued: false,
+          retryScheduled: false,
+          stale: false,
+        },
+      ]),
     );
   }
 
@@ -155,10 +148,9 @@ export class FaceTimeHelperSupervisor {
   #refreshConnections(): void {
     const bundles = new Set(this.params.connectedBundles());
     for (const target of FACETIME_HELPER_TARGETS) {
-      const acceptedBundles = TARGET_BUNDLES[target];
       const state = this.#states.get(target);
       if (state) {
-        state.connected = [...acceptedBundles].some((bundle) => bundles.has(bundle));
+        state.connected = [...DIAL_BUNDLES].some((bundle) => bundles.has(bundle));
       }
     }
   }
@@ -233,8 +225,8 @@ export class FaceTimeHelperSupervisor {
   }
 
   async #waitForAuthenticatedConnection(target: FaceTimeHelperTarget): Promise<void> {
-    const deadline = Date.now() + 10_000;
-    while (this.#started && Date.now() < deadline) {
+    const deadline = performance.now() + 10_000;
+    while (this.#started && performance.now() < deadline) {
       this.#refreshConnections();
       const state = this.#states.get(target);
       if (!state || state.connected || state.stale) {

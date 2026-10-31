@@ -22,11 +22,6 @@ import { startUpdateRunWatcher, wakeUpdateRunWatcher } from "./update-run-watche
 export function createDeferredGatewayUpdateCheck(params: {
   scheduler: GatewayScheduler;
   startupTrace?: GatewayStartupTrace;
-  createUpdateCheck: (
-    ...args: Parameters<typeof createGatewayUpdateCheck>
-  ) =>
-    | ReturnType<typeof createGatewayUpdateCheck>
-    | Promise<ReturnType<typeof createGatewayUpdateCheck>>;
   getConfig: () => OpenClawConfig;
   /** Catalog republication borrows unchanged plugin instances from this live Gateway registry. */
   getPluginRegistry: () => PluginRegistry | undefined;
@@ -46,7 +41,6 @@ export function createDeferredGatewayUpdateCheck(params: {
   let runWatcher: ReturnType<typeof startUpdateRunWatcher> | undefined;
   let owner: ReturnType<typeof createGatewayUpdateCheck> | undefined;
   let ownerReady: Promise<void> | undefined;
-  let initialization: Promise<unknown> | undefined;
   let stopPromise: Promise<void> | undefined;
   let latestUpdateAvailable: GatewayUpdateAvailableEventPayload["updateAvailable"] = null;
   let latestSchedule: GatewayUpdateAvailableEventPayload["schedule"];
@@ -94,7 +88,7 @@ export function createDeferredGatewayUpdateCheck(params: {
     },
   });
 
-  const stop = () => {
+  const stopGatewayUpdateCheck = () => {
     stopped = true;
     return (stopPromise ??= (async () => {
       // Fence immediately; a lazy factory that finishes later stops its own
@@ -102,7 +96,6 @@ export function createDeferredGatewayUpdateCheck(params: {
       const cleanup = Promise.all([lifecycle.stop(), runWatcher?.stop(), owner?.stop()]);
       await ownerReady;
       await cleanup;
-      await initialization;
     })());
   };
 
@@ -127,7 +120,7 @@ export function createDeferredGatewayUpdateCheck(params: {
       }
       ownerReady = (async () => {
         try {
-          owner = await params.createUpdateCheck({
+          owner = (await import("../infra/update-startup.js")).createGatewayUpdateCheck({
             lifecycle,
             getConfig: params.getConfig,
             applyRemoteCatalogUpdate: (signal) =>
@@ -151,19 +144,7 @@ export function createDeferredGatewayUpdateCheck(params: {
         }
         if (stopped || params.isClosing?.()) {
           await owner.stop();
-          return;
         }
-        const updateCheck = owner;
-        initialization = (async () => {
-          const result = await updateCheck.initialize();
-          if (result.status.error) {
-            throw new Error(result.status.error.message);
-          }
-        })().catch((err: unknown) => {
-          if (!stopped) {
-            params.log.warn(`gateway update status failed to initialize: ${String(err)}`);
-          }
-        });
       })();
       await ownerReady;
       await nextTurn();
@@ -184,5 +165,5 @@ export function createDeferredGatewayUpdateCheck(params: {
     });
   };
 
-  return { start, stop };
+  return { start, stop: stopGatewayUpdateCheck };
 }

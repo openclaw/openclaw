@@ -1,405 +1,292 @@
 /* @vitest-environment jsdom */
-
-import { createSignal } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { findMenuShortcut } from "../../../components/menu-shortcuts.ts";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
-import { ChatModelPicker } from "./chat-model-picker.tsx";
+import { installModelPickerLayout } from "../../../test-helpers/model-picker-layout.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import {
+  modelControlSelector,
+  modelOption as option,
+  modelPickerProps as pickerProps,
+  mountModelPicker as mountPicker,
+  waitForModelMenu as waitForMenu,
+} from "./chat-model-picker.test-support.tsx";
 
-afterEach(() => document.body.replaceChildren());
-
-it.each(["open", "closed", "removed", "focus moved"])(
-  "focuses late catalog search only while its opening still owns focus (%s)",
-  async (state) => {
-    const frames: FrameRequestCallback[] = [];
-    const frame = vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
-      frames.push(callback);
-      return frames.length;
-    });
-    try {
-      const params: Parameters<typeof ChatModelPicker>[0] = {
-        disabled: false,
-        modelSelectionLocked: false,
-        modelOptions: [],
-        modelCatalogState: { hasSnapshot: false, status: "loading" },
-        selectedModelValue: "fixture/ready",
-        sessionModelPinned: true,
-        sessionKey: "main",
-        triggerModelLabel: "Loading models",
-        onModelSelect: vi.fn(async () => {}),
-      };
-      let update!: (next: typeof params) => void;
-      const { container } = mountSolid(() => {
-        const [props, setProps] = createSignal(params);
-        update = (next) => {
-          setProps(() => next);
-          flush();
-        };
-        return (
-          <>
-            <textarea />
-            <ChatModelPicker {...props()} />
-          </>
-        );
-      });
-      flush();
-      await Promise.resolve();
-      const picker = container.querySelector("details")!;
-      const trigger = picker.querySelector("summary")!;
-      const composer = container.querySelector("textarea")!;
-      trigger.focus();
-      trigger.click();
-      expect(picker.open).toBe(true);
-      for (const callback of frames.splice(0)) {
-        callback(0);
-      }
-      expect(picker.querySelector("[data-chat-model-search]")).toBeNull();
-      expect(document.activeElement).toBe(trigger);
-
-      if (state === "closed") {
-        trigger.click();
-      } else if (state === "removed") {
-        picker.remove();
-      }
-      if (state !== "open") {
-        composer.focus();
-      }
-      update({
-        ...params,
-        modelCatalogState: { hasSnapshot: true, status: "ready" },
-        modelOptions: [
-          {
-            provider: "fixture",
-            value: "fixture/ready",
-            commitValue: "fixture/ready",
-            label: "Ready",
-            isDefault: false,
-          },
-        ],
-      });
-      await Promise.resolve();
-      const search = picker.querySelector<HTMLInputElement>("[data-chat-model-search]");
-      expect(search).not.toBeNull();
-      expect(document.activeElement).toBe(state === "open" ? search : composer);
-    } finally {
-      frame.mockRestore();
-    }
-  },
-);
-
-it("mounts model choices on first open and retains them across dismissal", async () => {
-  const container = document.body.appendChild(document.createElement("div"));
-  const onModelSelect = vi.fn(async () => {});
-  mountSolid(
-    () => (
-      <ChatModelPicker
-        disabled={false}
-        modelSelectionLocked={false}
-        modelOptions={[
-          {
-            provider: "fixture",
-            value: "fixture/current",
-            commitValue: "fixture/current",
-            label: "Current",
-            isDefault: false,
-          },
-        ]}
-        selectedModelValue="fixture/current"
-        sessionModelPinned
-        sessionKey="main"
-        triggerModelLabel="Current"
-        onModelSelect={onModelSelect}
-      />
-    ),
-    { container },
-  );
-  flush();
-  expect(container.querySelector("[data-chat-model-option]")).toBeNull();
-  const details = container.querySelector("details")!;
-  details.querySelector("summary")!.click();
-  flush();
-  await Promise.resolve();
-  const choice = container.querySelector<HTMLButtonElement>("[data-chat-model-option]")!;
-  expect(choice.hidden).toBe(false);
-  details.open = false;
-  details.dispatchEvent(new Event("toggle"));
-  flush();
-  details.querySelector("summary")!.click();
-  flush();
-  await Promise.resolve();
-  expect(container.querySelector("[data-chat-model-option]")).toBe(choice);
-  choice.click();
-  expect(onModelSelect).toHaveBeenCalledWith("fixture/current", "main", undefined);
+// Cold code loading is covered in Chromium; these cases exercise the loaded panel.
+beforeAll(async () => {
+  await import("./chat-model-picker-panel.tsx");
 });
 
-it.each([false, true])(
-  "initially expands the selected provider and retains toggles on reopen (inherited=%s)",
-  async (inherited) => {
-    const container = document.body.appendChild(document.createElement("div"));
-    const params: Parameters<typeof ChatModelPicker>[0] = {
+beforeEach(installModelPickerLayout);
+afterEach(() => vi.restoreAllMocks());
+
+function control(root: ParentNode, name: string, value?: string): HTMLElement | null {
+  return root.querySelector<HTMLElement>(modelControlSelector(name, value));
+}
+
+function searchFor(input: HTMLInputElement, value: string) {
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+}
+
+function keydown(input: HTMLInputElement, key: string) {
+  input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+  flush();
+}
+
+function accountSection(onSelect = vi.fn(), open = false) {
+  return {
+    onClose() {},
+    viewProps: (startIndex: number) => ({
+      selectionKind: "automatic" as const,
       disabled: false,
-      modelSelectionLocked: false,
-      modelOptions: [
-        {
-          provider: "other",
-          value: "other/first",
-          commitValue: "other/first",
-          label: "Other",
-          isDefault: false,
-        },
-        {
-          provider: "selected",
-          value: "selected/current",
-          commitValue: inherited ? "" : "selected/current",
-          label: "Current",
-          isDefault: inherited,
-        },
-      ],
-      selectedModelValue: inherited ? "" : "selected/current",
-      sessionModelPinned: !inherited,
-      sessionKey: "main",
-      triggerModelLabel: "Current",
-      open: true,
-      onModelSelect: vi.fn(async () => {}),
-    };
-    let update!: (next: typeof params) => void;
-    mountSolid(
-      () => {
-        const [props, setProps] = createSignal(params);
-        update = (next) => {
-          setProps(() => next);
-          flush();
-        };
-        return <ChatModelPicker {...props()} />;
-      },
-      { container },
-    );
-    flush();
-    await Promise.resolve();
-    const details = container.querySelector<HTMLDetailsElement>("details")!;
-    const selected = container.querySelector<HTMLButtonElement>(
-      '[data-chat-model-option="selected/current"]',
-    )!;
-    const other = container.querySelector<HTMLButtonElement>(
-      '[data-chat-model-option="other/first"]',
-    )!;
-    const toggle = selected
-      .closest("section")!
-      .querySelector<HTMLButtonElement>("[data-chat-model-provider-toggle]")!;
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(selected.hidden).toBe(false);
-    expect(other.hidden).toBe(true);
+      selectedIdentity: "Current account",
+      options: [{ value: "current", label: "Needle account" }],
+      currentValue: "current",
+      open,
+      error: null,
+      startIndex,
+      onToggle() {},
+      onSelect,
+    }),
+  };
+}
 
-    // A deliberate collapse survives closing and reopening the picker.
-    toggle.click();
-    flush();
-    expect(selected.hidden).toBe(true);
-    details.open = false;
-    details.dispatchEvent(new Event("toggle"));
-    details.open = true;
-    details.dispatchEvent(new Event("toggle"));
-    await Promise.resolve();
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(selected.hidden).toBe(true);
-    expect(other.hidden).toBe(true);
+it("forgets disclosure for removed providers", async () => {
+  const params = pickerProps({
+    open: true,
+    modelOptions: [
+      option("selected", "current"),
+      option("other", "lead", { recommended: true }),
+      option("other", "rest"),
+    ],
+    selectedModelValue: "selected/current",
+  });
+  const { container, update } = mountPicker(params);
+  await waitForMenu(container);
+  const group = () =>
+    container.querySelector<HTMLElement>('[data-chat-model-provider-group="other"]')!;
+  const toggle = () => control(group(), "provider-toggle")!;
+  const rest = () => control(group(), "option", "other/rest")!;
+  toggle().click();
+  flush();
+  control(group(), "more-toggle")!.click();
+  flush();
+  expect(rest().hidden).toBe(false);
 
-    // The next selection, including a change while closed, owns the open group.
-    update({ ...params, open: false, selectedModelValue: "other/first" });
-    details.dispatchEvent(new Event("toggle"));
-    details.open = true;
-    details.dispatchEvent(new Event("toggle"));
-    await Promise.resolve();
-    expect(other.hidden).toBe(false);
-    expect(selected.hidden).toBe(true);
+  update({
+    ...params,
+    modelOptions: params.modelOptions.filter((entry) => entry.provider !== "other"),
+  });
+  expect(group()).toBeNull();
+  update(params);
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  toggle().click();
+  flush();
+  expect(rest()).toBeNull();
+  expect(control(group(), "more-toggle")!.hidden).toBe(false);
+});
+
+it.each([
+  {
+    hasDefault: false,
+    inherited: false,
+    leading: ["fixture/model-299", "fixture/model-0", "fixture/model-1"],
+    selectedIndex: 0,
   },
-);
-
-it.each([false, true])(
-  "keeps current visible in a bounded catalog with Default=%s",
-  async (hasDefault) => {
-    const container = document.body.appendChild(document.createElement("div"));
-    mountSolid(
-      () => (
-        <ChatModelPicker
-          {...{
-            disabled: false,
-            modelSelectionLocked: false,
-            open: true,
-            modelOptions: Array.from({ length: 300 }, (_, index) => ({
-              provider: "fixture",
-              value: `fixture/model-${index}`,
-              commitValue: hasDefault && index === 0 ? "" : `fixture/model-${index}`,
-              label: `Model ${index}`,
-              isDefault: hasDefault && index === 0,
-            })),
-            selectedModelValue: "fixture/model-299",
-            sessionModelPinned: true,
-            sessionKey: "main",
-            triggerModelLabel: "Model 299",
-            onModelSelect: vi.fn(async () => {}),
-          }}
-        />
+  {
+    hasDefault: true,
+    inherited: false,
+    leading: ["fixture/model-0", "fixture/model-299", "fixture/model-1"],
+    selectedIndex: 1,
+  },
+  {
+    hasDefault: true,
+    inherited: true,
+    leading: ["fixture/model-0", "fixture/model-1", "fixture/model-2"],
+    selectedIndex: 0,
+  },
+])(
+  "keeps the selection in a bounded catalog (default=$hasDefault, inherited=$inherited)",
+  async ({ hasDefault, inherited, leading, selectedIndex }) => {
+    const { container } = mountPicker({
+      open: true,
+      modelOptions: Array.from({ length: 300 }, (_, index) =>
+        option("fixture", `model-${index}`, {
+          commitValue: hasDefault && index === 0 ? "" : `fixture/model-${index}`,
+          label: `Model ${index}`,
+          isDefault: hasDefault && index === 0,
+        }),
       ),
-      { container },
-    );
-    flush();
-    await Promise.resolve();
-    const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-chat-model-option]"));
-    expect(rows).toHaveLength(300);
-    expect(rows.filter((row) => !row.hidden)).toHaveLength(9);
-    expect(rows.slice(0, 3).map((row) => row.dataset.chatModelOption)).toEqual(
-      hasDefault
-        ? ["fixture/model-0", "fixture/model-299", "fixture/model-1"]
-        : ["fixture/model-299", "fixture/model-0", "fixture/model-1"],
-    );
-    expect(rows[hasDefault ? 1 : 0]?.getAttribute("aria-selected")).toBe("true");
-    const more = container.querySelector<HTMLButtonElement>("[data-chat-model-more-toggle]")!;
-    const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]")!;
-    search.value = "Model 298";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(rows.filter((row) => !row.hidden).map((row) => row.dataset.chatModelOption)).toEqual([
-      "fixture/model-298",
-    ]);
-    expect(more.hidden).toBe(true);
-    search.value = "";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(rows.filter((row) => !row.hidden)).toHaveLength(9);
-    more.click();
-    expect(rows.filter((row) => !row.hidden)).toHaveLength(300);
-    expect(more.hidden).toBe(true);
+      selectedModelValue: inherited ? "" : "fixture/model-299",
+      sessionModelPinned: !inherited,
+      triggerModelLabel: "Model 299",
+    });
+    await waitForMenu(container);
+    const visibleRows = () =>
+      Array.from(container.querySelectorAll<HTMLElement>("[data-chat-model-option]"));
+    const rows = visibleRows();
+    expect(rows).toHaveLength(9);
+    expect(rows.slice(0, 3).map((row) => row.dataset.chatModelOption)).toEqual(leading);
+    expect(rows[selectedIndex]?.getAttribute("aria-selected")).toBe("true");
   },
 );
 
 it.each([false, true])(
   "drops the All models row once expanded so the rest continue the group (rest disabled=%s)",
   async (restDisabled) => {
-    const container = document.body.appendChild(document.createElement("div"));
-    document.body.append(container);
-    mountSolid(
-      () => (
-        <ChatModelPicker
-          {...{
-            disabled: false,
-            modelSelectionLocked: false,
-            modelOptions: [
-              {
-                provider: "fixture",
-                value: "fixture/lead",
-                commitValue: "fixture/lead",
-                label: "lead",
-                isDefault: false,
-                recommended: true,
-              },
-              {
-                provider: "fixture",
-                value: "fixture/rest",
-                commitValue: "fixture/rest",
-                label: "rest",
-                isDefault: false,
-                disabled: restDisabled,
-              },
-            ],
-            selectedModelValue: "fixture/lead",
-            sessionModelPinned: true,
-            sessionKey: "main",
-            triggerModelLabel: "lead",
-            open: true,
-            onModelSelect: vi.fn(async () => {}),
-          }}
-        />
-      ),
-      { container },
-    );
-    flush();
-    await Promise.resolve();
-    const more = container.querySelector<HTMLButtonElement>("[data-chat-model-more-toggle]")!;
-    const details = container.querySelector("details")!;
-    details.open = true;
-    details.dispatchEvent(new Event("toggle"));
-    await Promise.resolve();
-    const rest = container.querySelector<HTMLButtonElement>(
-      '[data-chat-model-option="fixture/rest"]',
-    )!;
-    const group = container.querySelector<HTMLButtonElement>("[data-chat-model-provider-toggle]")!;
+    const { container } = mountPicker({
+      modelOptions: [
+        option("fixture", "lead", { recommended: true }),
+        option("fixture", "rest", { disabled: restDisabled }),
+      ],
+      selectedModelValue: "fixture/lead",
+      triggerModelLabel: "lead",
+      open: true,
+    });
+    await waitForMenu(container);
+    const more = control(container, "more-toggle")!;
+    const rest = () => control(container, "option", "fixture/rest");
+    const group = control(container, "provider-toggle")!;
     expect(more.hidden).toBe(false);
-    expect(rest.hidden).toBe(true);
+    expect(rest()).toBeNull();
 
     more.focus();
     more.click();
     flush();
-    expect(more.hidden).toBe(true);
-    expect(rest.hidden).toBe(false);
+    expect(more.isConnected).toBe(false);
+    expect(rest()?.hidden).toBe(false);
     // Keyboard focus lands on the first selectable revealed model, else back on search.
-    expect(document.activeElement).toBe(
-      restDisabled ? container.querySelector("[data-chat-model-search]") : rest,
-    );
+    expect(document.activeElement).toBe(restDisabled ? control(container, "search") : rest());
 
-    // Collapsing and reopening the provider group keeps the models inline, with no row to re-collapse.
     group.click();
     flush();
     group.click();
     flush();
-    expect(more.hidden).toBe(true);
-    expect(rest.hidden).toBe(false);
-    container.remove();
+    expect(more.isConnected).toBe(false);
+    expect(rest()?.hidden).toBe(false);
   },
 );
 
-it("groups Anthropic refs pinned to Claude CLI under Claude CLI", () => {
-  const container = document.body.appendChild(document.createElement("div"));
-  const option = (provider: string, id: string, agentRuntimeId?: string) => ({
-    provider,
-    value: `${provider}/${id}`,
-    commitValue: `${provider}/${id}`,
-    label: id,
-    isDefault: false,
-    ...(agentRuntimeId ? { agentRuntimeId } : {}),
+it("groups Anthropic refs pinned to Claude CLI under Claude CLI", async () => {
+  const { container } = mountPicker({
+    open: true,
+    modelOptions: [
+      option("anthropic", "claude-opus-4-8", { agentRuntimeId: "claude-cli" }),
+      option("claude-cli", "claude-haiku-5-5"),
+      option("anthropic", "claude-sonnet-5-5", { agentRuntimeId: "openclaw" }),
+    ],
+    selectedModelValue: "anthropic/claude-opus-4-8",
+    triggerModelLabel: "claude-opus-4-8",
+    providerAuth: new Map<string, ModelProviderAuthLabel>([
+      ["anthropic", { kind: "subscription", label: "Claude Max" }],
+    ]),
   });
-  mountSolid(
-    () => (
-      <ChatModelPicker
-        {...{
-          disabled: false,
-          open: true,
-          modelSelectionLocked: false,
-          modelOptions: [
-            option("anthropic", "claude-opus-4-8", "claude-cli"),
-            option("claude-cli", "claude-haiku-5-5"),
-            option("anthropic", "claude-sonnet-5-5", "openclaw"),
-          ],
-          selectedModelValue: "anthropic/claude-opus-4-8",
-          sessionModelPinned: true,
-          sessionKey: "main",
-          triggerModelLabel: "claude-opus-4-8",
-          onModelSelect: vi.fn(async () => {}),
-          providerAuth: new Map<string, ModelProviderAuthLabel>([
-            ["anthropic", { kind: "subscription", label: "Claude Max" }],
-          ]),
-        }}
-      />
-    ),
-    { container },
-  );
+  await waitForMenu(container);
+  container
+    .querySelector<HTMLButtonElement>(
+      '[data-chat-model-provider-group="anthropic"] [data-chat-model-provider-toggle]',
+    )!
+    .click();
   flush();
-  const groups = Object.fromEntries(
-    Array.from(container.querySelectorAll<HTMLElement>("[data-chat-model-provider-group]")).map(
-      (group) => [
-        group.dataset.chatModelProviderGroup,
-        Array.from(group.querySelectorAll<HTMLElement>("[data-chat-model-option]")).map(
-          (row) => row.dataset.chatModelOption,
-        ),
-      ],
-    ),
-  );
-  expect(groups).toEqual({
-    "claude-cli": ["anthropic/claude-opus-4-8", "claude-cli/claude-haiku-5-5"],
-    anthropic: ["anthropic/claude-sonnet-5-5"],
-  });
+  const provider = (value: string) =>
+    control(container, "option", value)?.closest("section")?.dataset.chatModelProviderGroup;
+  expect([
+    provider("anthropic/claude-opus-4-8"),
+    provider("claude-cli/claude-haiku-5-5"),
+    provider("anthropic/claude-sonnet-5-5"),
+  ]).toEqual(["claude-cli", "claude-cli", "anthropic"]);
   // Claude CLI signs in through the Anthropic account, so its group carries that auth label.
   expect(
     container.querySelector(
       '[data-chat-model-provider-group="claude-cli"] .chat-controls__auth-meta-label',
     )?.textContent,
   ).toBe("Claude Max");
+});
+
+it("keeps search live while targets load, then ranks model, target, and account choices", async () => {
+  const selectTarget = vi.fn();
+  const selectAccount = vi.fn();
+  const completion = Promise.withResolvers<readonly { value: string; label: string }[]>();
+  const options = [{ value: "remote", label: "Needle target" }];
+  const group = {
+    id: "target",
+    label: "CLI agents",
+    errorLabel: "Unavailable",
+    options: [],
+    completion: { promise: completion.promise },
+  };
+  const params = pickerProps({
+    open: true,
+    modelOptions: [
+      option("needle", "provider", { label: "Provider match" }),
+      option("fixture", "disabled", { label: "Needle disabled", disabled: true }),
+      option("fixture", "model", { label: "Needle model" }),
+    ],
+    selectedModelValue: "needle/provider",
+    targetGroups: [group],
+    onTargetSelect: selectTarget,
+    accountSection: accountSection(selectAccount),
+  });
+  const { container, update } = mountPicker(params);
+  await waitForMenu(container);
+  const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
+  expect(
+    container.querySelector(
+      '[data-chat-model-target-group] [data-chat-model-catalog-state="loading"]',
+    ),
+  ).not.toBeNull();
+  search.focus();
+  searchFor(search, "needle");
+  const model = control(container, "option", "fixture/model")!;
+  expect(model.hidden).toBe(false);
+  expect(search.getAttribute("aria-activedescendant")).toBe(model.id);
+  expect(control(container, "option", "account:current")?.dataset.chatModelRank).toBe("2");
+  const loadedParams = { ...params, targetGroups: [{ ...group, options }] };
+  update(loadedParams);
+  completion.resolve(options);
+  await waitForSolid(() => expect(control(container, "target", "remote")).not.toBeNull());
+  expect(control(container, "search")).toBe(search);
+  expect(control(container, "option", "fixture/model")).toBe(model);
+  expect(document.activeElement).toBe(search);
+  expect(
+    container.querySelector("[data-chat-model-target-group] [data-chat-model-catalog-state]"),
+  ).toBeNull();
+  expect(control(container, "option", "account:current")?.dataset.chatModelRank).toBe("3");
+  const ranked = () =>
+    [
+      ...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]:not([hidden])"),
+    ].toSorted((a, b) => Number(a.dataset.chatModelRank) - Number(b.dataset.chatModelRank));
+  expect(ranked().map((row) => row.dataset.chatModelOption)).toEqual([
+    "fixture/disabled",
+    "fixture/model",
+    "target:target:remote",
+    "account:current",
+    "needle/provider",
+  ]);
+  const details = container.querySelector<HTMLDetailsElement>("details")!;
+  expect(findMenuShortcut(details, "1")).toBe(model);
+  expect(findMenuShortcut(details, "2")).toBe(ranked()[2]);
+  // Account and selected rows consume positions without advertising a global shortcut.
+  expect(findMenuShortcut(details, "3")).toBeUndefined();
+  expect(findMenuShortcut(details, "4")).toBeUndefined();
+  expect(model.hasAttribute("data-chat-model-highlighted")).toBe(true);
+  expect(search.getAttribute("aria-activedescendant")).toBe(model.id);
+  expect(
+    model
+      .querySelector("[data-chat-model-shortcut]")
+      ?.getAttribute("data-chat-model-shortcut-number"),
+  ).toBe("1");
+  keydown(search, "ArrowDown");
+  const target = ranked()[2]!;
+  expect(search.getAttribute("aria-activedescendant")).toBe(target.id);
+  update({
+    ...loadedParams,
+    modelOptions: [option("fixture", "new", { label: "Needle new" }), ...params.modelOptions],
+  });
+  expect(control(container, "highlighted")).toBe(target);
+  keydown(search, "Enter");
+  expect(selectTarget).toHaveBeenCalledWith("target", "remote");
+  expect(selectAccount).not.toHaveBeenCalled();
 });

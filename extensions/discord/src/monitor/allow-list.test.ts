@@ -1,4 +1,3 @@
-// Discord tests cover allow list plugin behavior.
 import { typedCases } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import {
@@ -22,12 +21,10 @@ describe("discord slug normalization", () => {
   });
 });
 
-function createAutoThreadMentionContext() {
+function createMentionContext(autoThread = true) {
   const guildInfo: DiscordGuildEntryResolved = {
     requireMention: true,
-    channels: {
-      general: { enabled: true, autoThread: true },
-    },
+    channels: { general: { enabled: true, autoThread } },
   };
   const channelConfig = resolveDiscordChannelConfig({
     guildInfo,
@@ -40,18 +37,7 @@ function createAutoThreadMentionContext() {
 
 describe("discord mention gating", () => {
   it("requires mention by default", () => {
-    const guildInfo: DiscordGuildEntryResolved = {
-      requireMention: true,
-      channels: {
-        general: { enabled: true },
-      },
-    };
-    const channelConfig = resolveDiscordChannelConfig({
-      guildInfo,
-      channelId: "1",
-      channelName: "General",
-      channelSlug: "general",
-    });
+    const { guildInfo, channelConfig } = createMentionContext(false);
     expect(
       resolveDiscordShouldRequireMention({
         isGuildMessage: true,
@@ -63,68 +49,45 @@ describe("discord mention gating", () => {
   });
 
   it("applies autoThread mention rules based on thread ownership", () => {
-    const cases = typedCases<{
-      name: string;
-      threadOwnerId?: string;
-      isAutoThreadOwnedByBot?: boolean;
-      requireMentionInBotThreads?: boolean;
-      expected: boolean;
-    }>([
-      { name: "bot-owned thread", threadOwnerId: "bot123", expected: false },
-      { name: "user-owned thread", threadOwnerId: "user456", expected: true },
-      { name: "unknown thread owner", threadOwnerId: undefined, expected: true },
-      {
-        name: "precomputed bot-owned auto-thread without owner metadata",
-        isAutoThreadOwnedByBot: true,
-        expected: false,
-      },
-      {
-        name: "precomputed exclusion overrides inferred auto-thread ownership",
-        threadOwnerId: "bot123",
-        isAutoThreadOwnedByBot: false,
-        expected: true,
-      },
-      {
-        name: "explicit bot-thread policy requires mentions with precomputed ownership",
-        isAutoThreadOwnedByBot: true,
-        requireMentionInBotThreads: true,
-        expected: true,
-      },
-      {
-        name: "explicit bot-thread policy bypasses mentions outside auto-threads",
-        threadOwnerId: "bot123",
-        isAutoThreadOwnedByBot: false,
-        requireMentionInBotThreads: false,
-        expected: false,
-      },
+    const cases = typedCases<
+      [
+        name: string,
+        owner: string | undefined,
+        autoOwned: boolean | undefined,
+        requireMention: boolean | undefined,
+        expected: boolean,
+      ]
+    >([
+      ["bot-owned thread", "bot123", undefined, undefined, false],
+      ["user-owned thread", "user456", undefined, undefined, true],
+      ["unknown thread owner", undefined, undefined, undefined, true],
+      ["precomputed ownership without metadata", undefined, true, undefined, false],
+      ["precomputed exclusion overrides inferred ownership", "bot123", false, undefined, true],
+      ["explicit mention requirement in bot threads", undefined, true, true, true],
+      ["explicit bypass outside auto-threads", "bot123", false, false, false],
     ]);
 
-    for (const testCase of cases) {
-      const { guildInfo, channelConfig } = createAutoThreadMentionContext();
+    for (const [name, owner, autoOwned, requireMention, expected] of cases) {
+      const { guildInfo, channelConfig } = createMentionContext();
       expect(
         resolveDiscordShouldRequireMention({
           isGuildMessage: true,
           isThread: true,
           botId: "bot123",
-          threadOwnerId: testCase.threadOwnerId,
-          isAutoThreadOwnedByBot: testCase.isAutoThreadOwnedByBot,
+          threadOwnerId: owner,
+          isAutoThreadOwnedByBot: autoOwned,
           channelConfig,
-          guildInfo: {
-            ...guildInfo,
-            requireMentionInBotThreads: testCase.requireMentionInBotThreads,
-          },
+          guildInfo: { ...guildInfo, requireMentionInBotThreads: requireMention },
         }),
-        testCase.name,
-      ).toBe(testCase.expected);
+        name,
+      ).toBe(expected);
     }
   });
 
   it("inherits parent channel mention rules for threads", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       requireMention: true,
-      channels: {
-        "parent-1": { enabled: true, requireMention: false },
-      },
+      channels: { "parent-1": { enabled: true, requireMention: false } },
     };
     const channelConfig = resolveDiscordChannelConfigWithFallback({
       guildInfo,
@@ -136,8 +99,7 @@ describe("discord mention gating", () => {
       parentSlug: "parent",
       scope: "thread",
     });
-    expect(channelConfig?.matchSource).toBe("parent");
-    expect(channelConfig?.matchKey).toBe("parent-1");
+    expect(channelConfig).toMatchObject({ matchSource: "parent", matchKey: "parent-1" });
     expect(
       resolveDiscordShouldRequireMention({
         isGuildMessage: true,

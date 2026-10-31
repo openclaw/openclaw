@@ -7,13 +7,10 @@ import {
   hasNonEmptyString,
   normalizeOptionalLowercaseString as normalizeEvidenceStatus,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  normalizeSingleOrTrimmedStringList,
-  normalizeTrimmedStringList,
-} from "@openclaw/normalization-core/string-normalization";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 import type { ReplyDeliveryState } from "../reply-completion.js";
-import { collectMediaUrlsFromRecord, hasVisibleAgentPayload } from "./message-visibility.js";
+import { hasVisibleAgentPayload } from "./message-visibility.js";
 export { hasVisibleAgentPayload } from "./message-visibility.js";
 
 // Preserve delivery and side-effect evidence so fallback cannot repeat messages,
@@ -50,6 +47,7 @@ export type AgentDeliveryEvidence = {
     aborted?: unknown;
     finalAssistantVisibleText?: unknown;
     terminalReply?: unknown;
+    terminalReplyExpectation?: unknown;
     toolSummary?: {
       calls?: unknown;
     };
@@ -142,39 +140,6 @@ function hasVisibleMessagingToolTarget(value: unknown): boolean {
     target.hasRichContent === true ||
     target.visible === true
   );
-}
-
-function collectPayloadMediaUrls(
-  payloads: unknown,
-  include?: (payload: unknown) => boolean,
-): string[] {
-  const urls = new Set<string>();
-  for (const payload of Array.isArray(payloads) ? payloads : []) {
-    const record = asOptionalRecord(payload);
-    if (record && (!include || include(payload))) {
-      collectMediaUrlsFromRecord(record, urls);
-    }
-  }
-  return Array.from(urls);
-}
-
-export function collectDeliveredMediaUrls(result: AgentDeliveryEvidence): string[] {
-  return Array.from(
-    new Set([
-      ...collectPayloadMediaUrls(result.payloads),
-      ...collectMessagingToolDeliveredMediaUrls(result),
-    ]),
-  );
-}
-
-export function collectMessagingToolDeliveredMediaUrls(
-  result: Pick<AgentDeliveryEvidence, "messagingToolSentMediaUrls" | "messagingToolSentTargets">,
-): string[] {
-  const urls = new Set(normalizeSingleOrTrimmedStringList(result.messagingToolSentMediaUrls));
-  for (const url of collectPayloadMediaUrls(result.messagingToolSentTargets)) {
-    urls.add(url);
-  }
-  return Array.from(urls);
 }
 
 function getPayloadDeliveryOutcomes(

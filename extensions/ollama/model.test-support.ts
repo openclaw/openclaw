@@ -1,4 +1,5 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
+import { vi } from "vitest";
 
 export function createModel(
   id: string,
@@ -18,4 +19,13 @@ export function createModel(
     contextWindow,
     maxTokens,
   } satisfies ModelDefinitionConfig;
+}
+
+export function dynamicContext(modelId: string, config: Record<string, unknown> = {}) {
+  return {
+    config,
+    provider: "ollama",
+    modelId,
+    modelRegistry: { find: vi.fn(() => null) },
+  };
 }

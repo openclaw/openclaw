@@ -7,12 +7,13 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
+import type { EmbedSandboxMode } from "../../lib/chat/canvas-embed-policy.ts";
 import type {
   ChatComposerMemoryFallback,
   ChatGuardianNotice,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
-import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
+import type { DraftPreferenceState } from "../new-session/draft-preference-state.ts";
 import type { PendingChatAbort } from "./chat-abort-request.ts";
 import type { ChatErrorState } from "./chat-error-state.ts";
 import type { PullRequestRefreshHost } from "./chat-pull-request-refresh.ts";
@@ -20,9 +21,11 @@ import type { ChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import type { SessionWorkspaceHost } from "./components/chat-session-workspace.ts";
-import type { SidebarSelection } from "./components/chat-sidebar-content-types.ts";
+import type {
+  SidebarOpenResult,
+  SidebarSelection,
+} from "./components/chat-sidebar-content-types.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
-import type { RenderLifecycle } from "./render-lifecycle.ts";
 import type { handleAbortChat } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SidebarLayout } from "./sidebar-layout.ts";
@@ -38,12 +41,13 @@ export type ChatPageHost = ChatHost &
   ChatErrorState &
   ChatRealtimeState &
   PullRequestRefreshHost &
-  SessionWorkspaceHost & {
-    renderLifecycle: RenderLifecycle;
-    requestUpdate: () => void;
+  Omit<SessionWorkspaceHost, "handleOpenSidebar"> & {
+    handleOpenSidebar: (content: SidebarSelection | null) => SidebarOpenResult;
     reviewQueuedMessageEdit?: () => void;
     captureComposerRecoveryReload?: () => () => Promise<boolean>;
     chatMetadataIsPresented?: () => boolean;
+    accessPreferences?: DraftPreferenceState;
+    accessPreferenceRevision?: number;
     assistantName: string;
     assistantAvatar: string | null;
     assistantAvatarStatus: "none" | "local" | "remote" | "data" | null;
@@ -62,6 +66,7 @@ export type ChatPageHost = ChatHost &
     resourceBasePath: string;
     chatAvatarUrl: string | null;
     senderAgentAvatars?: ReadonlyMap<string, string | null>;
+    cacheChatAvatarSource?: (agentId: string, source: string | null) => void;
     chatAvatarStatus: "none" | "local" | "remote" | "data" | null;
     chatAvatarReason: string | null;
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
@@ -75,7 +80,6 @@ export type ChatPageHost = ChatHost &
     chatAccountSelection?: ChatAccountSelection | null;
     modelAuthStatusRequestVersion: number;
     modelAuthStatusResult: ModelAuthStatusResult | null;
-    modelAuthStatusError: string | null;
     sessionsResult: SessionsListResult | null;
     sessionsResultAgentId: string | null;
     sessionsError: string | null;
@@ -99,13 +103,9 @@ export type ChatPageHost = ChatHost &
     chatStreamRenderFrame: number | null;
     chatLastScrollHeight: number;
     sidebarLayout: SidebarLayout;
-    sidebarContent: SidebarSelection | null;
-    sidebarFocusPanelId: string;
-    sidebarFocusVersion: number;
     updateSidebarActivePanel: (panelId: string) => void;
     imageLightbox: ImageLightboxItem | null;
     imageLightboxRequestVersion: number;
-    querySelector: (selectors: string) => Element | null;
     resetToolStream: () => void;
     resetChatInputHistoryNavigation: () => void;
     scrollToBottom: (opts?: { smooth?: boolean }) => void;
@@ -134,7 +134,8 @@ export type ChatPageHost = ChatHost &
         persist?: boolean;
         dashboardPresentation?: "personal";
         geometryOnly?: boolean;
-        automaticResource?: "desktop" | "browser";
+        automaticResource?: "desktop";
+        retireAutomaticResource?: "desktop";
       },
     ) => void;
     beginImageOpen: () => number;

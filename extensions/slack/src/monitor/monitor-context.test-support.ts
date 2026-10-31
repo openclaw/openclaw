@@ -15,6 +15,7 @@ export function createMonitorTestContext(overrides: Partial<CreateSlackMonitorCo
     teamId: "T_EXPECTED",
     apiAppId: "A_EXPECTED",
     historyLimit: 0,
+    dmHistoryLimit: 0,
     sessionScope: "per-sender",
     mainKey: "main",
     dmEnabled: true,
@@ -24,6 +25,7 @@ export function createMonitorTestContext(overrides: Partial<CreateSlackMonitorCo
     groupDmEnabled: false,
     groupDmChannels: [],
     defaultRequireMention: true,
+    channelsConfig: undefined,
     groupPolicy: "allowlist",
     useAccessGroups: true,
     reactionMode: "off",
@@ -41,5 +43,6 @@ export function createMonitorTestContext(overrides: Partial<CreateSlackMonitorCo
     typingReaction: "",
     mediaMaxBytes: 20 * 1024 * 1024,
     ...overrides,
+    channelsConfigKeys: overrides.channelsConfigKeys ?? Object.keys(overrides.channelsConfig ?? {}),
   });
 }

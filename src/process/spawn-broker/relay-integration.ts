@@ -1,12 +1,16 @@
 import type { ChildProcess, Serializable, SpawnOptions } from "node:child_process";
 import type { Duplex } from "node:stream";
+import { stripNodeStartupHooks } from "../../../node-runtime-env.mjs";
 import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viability.js";
-import { resolveRuntimeWorkerArgv } from "../../infra/runtime-worker-url.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerEnv,
+} from "../../infra/runtime-worker-url.js";
 import { resolveLaunchableNodePath } from "../../infra/stable-node-path.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withChildProcessOperation } from "../spawn-diagnostics.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 import { spawnProcess } from "../spawn-utils.js";
-import { createServiceChildCleanup } from "../supervisor/service-child-cleanup.js";
 import {
   encodeServiceChildMessage,
   type ServiceChildControlMessage,
@@ -44,21 +48,40 @@ export function createServiceChildControlSender(params: {
         reject(new Error("service child control pipe is closed"));
         return;
       }
-      const launch = () =>
-        control.write(encodeServiceChildMessage(message), "utf8", (error) => {
+      let launched = false;
+      const launch = () => {
+        launched = true;
+        return control.write(encodeServiceChildMessage(message), "utf8", (error) => {
           if (error) {
             reject(error);
           } else {
             resolve();
           }
         });
-      if (initiate) {
-        initiate(launch, settlement);
-      } else {
+      };
+      if (!initiate) {
         launch();
+        return;
+      }
+      try {
+        initiate(launch, settlement);
+      } catch (error) {
+        if (launched) {
+          throw error;
+        }
+        // Without a written frame the anchor never received launch authority.
+        reject(new ServiceChildLaunchNotInitiatedError(error));
       }
     });
   };
+}
+
+/** A launch refusal that provably never wrote the frame granting the anchor spawn authority. */
+export class ServiceChildLaunchNotInitiatedError extends Error {
+  constructor(cause: unknown) {
+    super(String(cause), { cause });
+    this.name = "ServiceChildLaunchNotInitiatedError";
+  }
 }
 
 /** Admit the target command when its final frame enters native IPC, after any broker queue. */
@@ -86,12 +109,42 @@ function initiateServiceChildRelay(
   });
 }
 
+function createServiceChildCleanup() {
+  const completion = createDeferredCore();
+  let authorityClose: Promise<PromiseSettledResult<void>> | undefined;
+  const promise = (async () => {
+    const [outcome] = await Promise.allSettled([completion.promise]);
+    const closed = await authorityClose;
+    const failure = closed?.status === "rejected" ? closed : outcome;
+    if (failure.status === "rejected") {
+      throw failure.reason;
+    }
+  })();
+  const outcome = Promise.allSettled([promise]);
+
+  return {
+    completion,
+    promise,
+    outcome,
+    bindAuthorityClose:
+      (close: () => Promise<void>, onFailure: (reason: unknown) => void) => () => {
+        authorityClose = Promise.allSettled([close()]).then(([result]) => {
+          if (result.status === "rejected") {
+            onFailure(result.reason);
+          }
+          return result;
+        });
+      },
+  };
+}
+
 /** Publish cleanup ownership before waiting for the broker's pipe and IPC handoff. */
 export function spawnServiceChildRelay(params: {
   workerUrl: URL;
   stdio: SpawnOptions["stdio"];
   env: NodeJS.ProcessEnv;
   detached: boolean;
+  nativeProcessOwner?: string;
   onSpawnCleanup?: (completion: Promise<void>) => void;
 }): {
   child: ChildProcess;
@@ -101,13 +154,22 @@ export function spawnServiceChildRelay(params: {
   const executable = resolveLaunchableNodePath();
   const child = withChildProcessOperation(
     "service.relay",
-    () =>
-      spawnProcess(executable, resolveRuntimeWorkerArgv(params.workerUrl, executable), {
+    () => {
+      const env = resolveRuntimeWorkerEnv(params.workerUrl, params.env);
+      if (env.NODE_OPTIONS !== undefined) {
+        env.NODE_OPTIONS = stripNodeStartupHooks(env.NODE_OPTIONS);
+      }
+      // The admitted owner can select a native entry without the caller's image inventory.
+      if (params.nativeProcessOwner === params.workerUrl.href) {
+        delete env.BUN_BE_BUN;
+      }
+      return spawnProcess(executable, resolveRuntimeWorkerArgv(params.workerUrl, executable), {
         stdio: params.stdio,
         detached: params.detached,
         windowsHide: true,
-        env: params.env,
-      }),
+        env,
+      });
+    },
     "default",
   );
   const cleanup = createServiceChildCleanup();

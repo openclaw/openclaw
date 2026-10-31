@@ -12,7 +12,7 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, { historyMessages: [] });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.fill("Explain secure password storage.");
       await composer.press("Enter");
@@ -40,6 +40,7 @@ suite.define(() => {
         });
       await emitNotice(1, "buffering");
       await expect.poll(() => notice.textContent()).toContain("Cyber safety review");
+      const noticeNode = await notice.elementHandle();
       expect(await notice.getAttribute("role")).toBe("status");
       await expect
         .poll(async () => {
@@ -77,6 +78,7 @@ suite.define(() => {
       await emitNotice(2, "blocked");
       await expect.poll(() => notice.textContent()).toContain("Cyber policy block");
       expect(await notice.getAttribute("role")).toBe("alert");
+      expect(await notice.evaluate((element, first) => element === first, noticeNode)).toBe(true);
       await emitNotice(3, "cleared");
       expect(await notice.textContent()).toContain("Cyber policy block");
       if (artifactDir) {

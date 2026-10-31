@@ -23,7 +23,6 @@ const SESSION_WATCH_PROVENANCE_COLUMN_SQL =
 type SessionWatchCursorDatabase = Pick<OpenClawStateKyselyDatabase, "session_watch_cursors">;
 
 type SessionWatchCursorProvenanceMigrationResult = {
-  addedColumn: boolean;
   migratedAmbientWatches: number;
   removedLegacySentinels: number;
 };
@@ -78,14 +77,10 @@ export function migrateSessionWatchCursorProvenance(
   db: DatabaseSync,
 ): SessionWatchCursorProvenanceMigrationResult {
   if (!tableExists(db, "session_watch_cursors")) {
-    return { addedColumn: false, migratedAmbientWatches: 0, removedLegacySentinels: 0 };
+    return { migratedAmbientWatches: 0, removedLegacySentinels: 0 };
   }
 
-  const addedColumn = ensureColumn(
-    db,
-    "session_watch_cursors",
-    SESSION_WATCH_PROVENANCE_COLUMN_SQL,
-  );
+  ensureColumn(db, "session_watch_cursors", SESSION_WATCH_PROVENANCE_COLUMN_SQL);
   const kysely = getSessionWatchCursorKysely(db);
   const legacyMarkers = executeSqliteQuerySync(
     db,
@@ -133,7 +128,6 @@ export function migrateSessionWatchCursorProvenance(
     );
   }
   return {
-    addedColumn,
     migratedAmbientWatches,
     removedLegacySentinels: legacyMarkers.length,
   };

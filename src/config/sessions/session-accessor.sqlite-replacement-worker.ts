@@ -35,8 +35,8 @@ import {
 } from "./session-accessor.sqlite-entry-cache.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import type {
+  SessionEntryWorkerLifecycle,
   SessionEntryReplacementCandidate,
-  SessionEntryReplacementCommitted,
 } from "./session-accessor.sqlite-replacement-types.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 import { withSessionEntryWriterReads } from "./session-entry-read-facts.js";
@@ -59,7 +59,6 @@ export type SessionEntryWorkerPreparation = (
 ) => {
   prepare: () => Promise<void>;
   beforeWrite: () => void;
-  release: () => Promise<void>;
 };
 
 export async function withSessionEntryWorker<T>(
@@ -205,7 +204,6 @@ export async function withSessionEntryWorker<T>(
               ? err(decodeSessionTranscriptWorkerReadError(result.readError))
               : ok(result.entry)),
             source: result.source,
-            facts: result.facts,
           };
         },
         async entries(request) {
@@ -258,7 +256,6 @@ export async function withSessionEntryWorker<T>(
         : await runOpenClawAgentWorkerWrite(
             options,
             () => {
-              preparation?.beforeWrite();
               const writingExecution: OpenClawAgentDatabaseExecution = {
                 ...execution,
                 get fileIdentity() {
@@ -268,7 +265,10 @@ export async function withSessionEntryWorker<T>(
                   // Lend the existing scope so a failed read unwinds before native cleanup.
                   return execution.runExisting(
                     readSource,
-                    (worker) => withWriterReads(worker, () => operation(worker)),
+                    (worker) => {
+                      preparation?.beforeWrite();
+                      return withWriterReads(worker, () => operation(worker));
+                    },
                     readOptions,
                   );
                 },
@@ -289,13 +289,10 @@ export async function withSessionEntryWorker<T>(
     outcome = { ok: false, error };
   }
   const cleanupErrors: unknown[] = [];
-  for (const cleanup of [
-    () => releaseSource?.(),
-    () => preparation?.release(),
-    () => (retainedExecution ? undefined : execution.release()),
-  ]) {
+  const releaseExecution = retainedExecution ? undefined : () => execution.release();
+  for (const cleanup of [releaseSource, releaseExecution]) {
     try {
-      await cleanup();
+      await cleanup?.();
     } catch (error) {
       cleanupErrors.push(error);
     }
@@ -452,13 +449,7 @@ export async function runSessionEntryWorkerMutation<T>(
   databaseIdentity: string | undefined,
   assertCurrent: () => void,
   run: (worker: AgentDatabaseExecutionScope) => Promise<SessionEntryWorkerMutationResult<T>>,
-  lifecycle: {
-    identityAgentId: string;
-    onResult?: (value: T | undefined) => void;
-    beforeCommit?: (publication: SessionEntryReplacementPublication) => void;
-    afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
-    onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
-  },
+  lifecycle: SessionEntryWorkerLifecycle<T>,
   executionOptions: {
     retainedExecution?: OpenClawAgentDatabaseExecution;
     signal?: AbortSignal;
@@ -505,6 +496,9 @@ export async function runSessionEntryWorkerMutation<T>(
       try {
         if (receipt) {
           lifecycle.onResult?.(completed?.value);
+          if (!unknown) {
+            lifecycle.onCommittedEntries?.(receipt.current, receipt.patchDiffBaselines);
+          }
           lifecycle.onLifecycleCommitted?.(receipt.pendingArchiveRecovery);
         }
       } finally {
@@ -551,8 +545,7 @@ export async function runSessionEntryWorkerMutation<T>(
           if (outcome.ok) {
             completed = outcome.value;
           }
-          // Keep the executing scope and FIFO writer through native publication settlement.
-          // Close joins this callback; a delayed result cannot borrow a successor owner.
+          // Close joins publication and FIFO scope; late results cannot borrow a successor.
           if (await settle(publication, identity)) {
             throwSessionWorkerOutcomeUnknown(
               unknownMessage,
@@ -589,7 +582,7 @@ export async function runSessionEntryWorkerMutation<T>(
       }
       // SAFETY: This command's native kernel supplies the typed publication, not external input.
       const committed = facts.publication as SessionEntryReplacementPublication;
-      lifecycle.beforeCommit?.(committed);
+      lifecycle.beforeCommit?.(committed, retained);
       admitted = { admission, retained };
       publication.begin(
         committed.changedKeys,
@@ -602,6 +595,8 @@ export async function runSessionEntryWorkerMutation<T>(
             ([key]) => !committed.unavailableParticipantKeys?.includes(key),
           ),
         ),
+        committed.conversationPublication,
+        committed.fullEntries,
       );
     },
     executionOptions.retainedExecution,
@@ -616,14 +611,10 @@ export async function commitSessionEntryReplacementsInWorker(
   databaseIdentity: string,
   input: AgentDatabaseOperations["session.entries.replace"]["input"],
   assertCurrent: SessionSourceAssertion,
-  lifecycle: {
-    identityAgentId: string;
-    afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
-    onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
-  },
+  lifecycle: Omit<SessionEntryWorkerLifecycle, "onResult">,
   retainedExecution?: OpenClawAgentDatabaseExecution,
   nativeDeletion?: ReturnType<typeof captureNativeSessionWorkerDeletion>,
-): Promise<SessionEntryReplacementCommitted> {
+): Promise<SessionEntryReplacementCandidate["result"]> {
   const source = await prepareSessionSourceAuthority(assertCurrent);
   const sameStore = source.checks.every(
     ({ predicate }) => predicate.source.databaseIdentity === databaseIdentity,
@@ -647,7 +638,7 @@ export async function commitSessionEntryReplacementsInWorker(
         await import("./session-native-binding.js");
       return await runSessionNativeBindingWorkerOperation<
         SessionEntryReplacementCandidate,
-        SessionEntryReplacementCommitted
+        SessionEntryReplacementCandidate["result"]
       >({
         database: options,
         databaseIdentity,
@@ -666,9 +657,15 @@ export async function commitSessionEntryReplacementsInWorker(
             input: { ...guardedInput, nativeBindings },
           }),
         onTransactionFacts: acceptValidation,
+        assertCandidate: (candidate, operation) =>
+          lifecycle.beforeCommit?.(candidate.publication, operation),
         async onCommitted(candidate, published, identity, context) {
           try {
-            lifecycle.onLifecycleCommitted?.(candidate.result.pendingArchiveRecovery);
+            lifecycle.onCommittedEntries?.(
+              candidate.publication.current,
+              candidate.publication.patchDiffBaselines,
+            );
+            lifecycle.onLifecycleCommitted?.(candidate.publication.pendingArchiveRecovery);
           } finally {
             if (published) {
               publishCommittedSessionIdentity(
@@ -685,7 +682,7 @@ export async function commitSessionEntryReplacementsInWorker(
         },
       });
     }
-    return await runSessionEntryWorkerMutation<SessionEntryReplacementCommitted>(
+    return await runSessionEntryWorkerMutation<SessionEntryReplacementCandidate["result"]>(
       options,
       databaseIdentity,
       source.assertCurrent,

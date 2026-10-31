@@ -3,6 +3,7 @@ import { createMemo, createSignal, onSettled } from "solid-js";
 import { TERMINAL_UPLOAD_RETENTION_MS } from "../../../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import {
@@ -16,20 +17,13 @@ import {
   uploadTerminalFile,
 } from "./terminal-file-upload.ts";
 
+registerTerminalEnglish();
+
 type TerminalUploadTab = {
   gatewaySessionId: string;
   shell: string;
   status: string;
   controller: GhosttyTerminalController;
-};
-
-type TerminalPanelUploadHost = {
-  config?: () => ApplicationConfigCapability | undefined;
-  activeTab: () => TerminalUploadTab | undefined;
-  client: () => TerminalGatewayClient | null;
-  isCurrent: (tab: TerminalUploadTab) => boolean;
-  fileInput: () => HTMLInputElement | null;
-  setError: (message: string | null) => void;
 };
 
 type TerminalUploadBatch = {
@@ -55,7 +49,20 @@ function isRetryableUploadError(error: unknown): boolean {
   return true;
 }
 
-export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
+export function createTerminalPanelUpload(host: {
+  config?: () => ApplicationConfigCapability | undefined;
+  activeTab: () => TerminalUploadTab | undefined;
+  client: () => TerminalGatewayClient | null;
+  isCurrent: (tab: TerminalUploadTab) => boolean;
+  fileInput: () => HTMLInputElement | null;
+  setError: (message: string | null) => void;
+  /** An embedded composer may retain editable arguments; never submit them here. */
+  stagePaths?: (
+    tab: TerminalUploadTab,
+    paths: readonly string[],
+    files: readonly File[],
+  ) => boolean;
+}) {
   const [dragActive, setDragActive] = createSignal(false);
   let activeBatch: TerminalUploadBatch | null = null;
   let dragDepth = 0;
@@ -83,6 +90,9 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
   }
 
   function admitUpload(): boolean {
+    if (!host.client()) {
+      return false;
+    }
     if (uploadsEnabled()) {
       return true;
     }
@@ -123,7 +133,7 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
     if (!hasDraggedFiles(event)) {
       return false;
     }
-    if (!uploadsEnabled()) {
+    if (!uploadsEnabled() || !host.client()) {
       event.preventDefault();
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect = "none";
@@ -159,7 +169,7 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
   }
 
   function ensureCurrent(batch: TerminalUploadBatch): boolean {
-    if (activeBatch !== batch || batch.abortController.signal.aborted) {
+    if (activeBatch !== batch) {
       return false;
     }
     if (!uploadsEnabled()) {
@@ -194,6 +204,7 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
 
   async function runBatch(batch: TerminalUploadBatch): Promise<void> {
     const client = host.client();
+    const signal = batch.abortController.signal;
     if (!client || !ensureCurrent(batch)) {
       cancelBatch(batch);
       return;
@@ -207,10 +218,13 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
       try {
         contentBase64 = await encodeTerminalUpload(file);
       } catch (error) {
+        if (signal.aborted) {
+          return;
+        }
         failBatch(batch, error, false);
         return;
       }
-      if (!ensureCurrent(batch)) {
+      if (signal.aborted || !ensureCurrent(batch)) {
         return;
       }
 
@@ -221,12 +235,15 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
           client,
           batch.tab.gatewaySessionId,
           { name: file.name, contentBase64 },
-          batch.abortController.signal,
+          signal,
         );
-        if (!ensureCurrent(batch)) {
+        if (signal.aborted || !ensureCurrent(batch)) {
           return;
         }
       } catch (error) {
+        if (signal.aborted) {
+          return;
+        }
         failBatch(batch, error, isRetryableUploadError(error));
         return;
       }
@@ -254,13 +271,15 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
   }
 
   function insertPaths(batch: TerminalUploadBatch): void {
-    if (!ensureCurrent(batch) || !ensureUploadsRetained(batch)) {
+    if (!host.client() || !ensureCurrent(batch) || !ensureUploadsRetained(batch)) {
       return;
     }
     // Ghostty preserves bracketed-paste mode. This produces editable input,
     // never Enter, so adding a file cannot execute a shell command.
-    batch.tab.controller.terminal.paste(batch.paths.join(" "));
-    batch.tab.controller.terminal.focus();
+    if (!host.stagePaths?.(batch.tab, batch.paths, batch.files)) {
+      batch.tab.controller.terminal.paste(batch.paths.join(" "));
+      batch.tab.controller.terminal.focus();
+    }
     activeBatch = null;
     notifyBatch();
   }
@@ -369,7 +388,10 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
       if (!batch || batch.state !== "failed" || !batch.retryable) {
         return;
       }
-      if (!host.isCurrent(batch.tab) || !host.client()) {
+      if (!host.client()) {
+        return;
+      }
+      if (!host.isCurrent(batch.tab)) {
         cancelBatch(batch);
         return;
       }
@@ -385,6 +407,18 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
     },
     cancel,
     cancelForTab,
+    suspend(): void {
+      const batch = activeBatch;
+      if (batch?.state === "uploading") {
+        batch.abortController.abort();
+        batch.state = "failed";
+        batch.error = t("terminal.deliveryFailed");
+        batch.retryable = true;
+        notifyBatch();
+      }
+      setDragActive(false);
+      dragDepth = 0;
+    },
     dispose,
   };
 }

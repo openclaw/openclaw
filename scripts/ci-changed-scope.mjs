@@ -1,19 +1,11 @@
 import { execFileSync } from "node:child_process";
-import {
-  appendFileSync,
-  existsSync,
-  lstatSync,
-  readFileSync,
-  readdirSync,
-  writeFileSync,
-} from "node:fs";
+import { appendFileSync, lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import {
   NATIVE_COOWNED_GENERATED_I18N_RE,
   NATIVE_HARD_GENERATED_I18N_RE,
-  NATIVE_CANONICAL_V2_MIGRATION_GENERATED_RE,
 } from "./lib/ci-native-generated-scope.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
@@ -147,13 +139,13 @@ const MACOS_SCRIPT_SCOPE_RE =
 const WORKER_DEPLOY_ARTIFACT_SCOPE_RE =
   /^src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
-  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|simulator-prepare|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|(?:ios|mobile)-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
+  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|simulator-prepare|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|(?:ios|mobile)-version\.ts|ios-test-results\.(?:mjs|d\.mts)|release-version\.mjs|version-script-args\.ts)$)/;
 // Tests and WatchTests Swift sources belong only to retained native unit-test targets.
 // UITests, resources, and project changes still prove the screenshot target graph.
 const IOS_SCREENSHOT_APP_SCOPE_RE =
   /^(?:apps\/ios\/(?!(?:Tests|WatchTests)\/.*\.swift$)|apps\/shared\/OpenClawKit\/|apps\/swabble\/|Swabble\/)/;
 const IOS_SCREENSHOT_SCRIPT_SCOPE_RE =
-  /^scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|simulator-prepare|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|(?:ios|mobile)-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
+  /^scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|simulator-prepare|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|(?:ios|mobile)-version\.ts|ios-test-results\.(?:mjs|d\.mts)|release-version\.mjs|version-script-args\.ts)$/;
 const ANDROID_NATIVE_RE =
   /^(apps\/android\/|apps\/shared\/|\.github\/actions\/setup-android-toolchain\/)/;
 // JVM tests and benchmark-only changes do not enter the store capture graph.
@@ -190,7 +182,7 @@ const WINDOWS_USAGE_TEMPLATE_SCOPE_RE =
 const WINDOWS_MEDIA_UNDERSTANDING_FILE_URL_SCOPE_RE =
   /^src\/media-understanding\/attachments\.(?:cache(?:\.test)?|file-url\.windows\.test|normalize(?:\.test)?)\.ts$/;
 const WINDOWS_HOME_DISPLAY_SCOPE_RE =
-  /^(?:src\/(?:utils(?:\.test)?|infra\/(?:home-display|path-guards)|commands\/agents\.commands\.list(?:\.test)?|cli\/daemon-cli\/status\.print(?:\.test)?|agents\/(?:sandbox\/fs-paths|sessions\/tools\/render-utils)(?:\.test)?)|packages\/terminal-core\/src\/display-string(?:\.test)?)\.ts$/;
+  /^(?:src\/(?:utils(?:\.test)?|infra\/(?:home-display|path-guards)|commands\/agents\.commands\.list(?:\.test)?|cli\/daemon-cli\/status\.print(?:\.test)?|agents\/(?:sandbox\/fs-paths(?:\.test)?|sessions\/tools\/(?:read|render-utils\.test)))|packages\/terminal-core\/src\/display-string(?:\.test)?)\.ts$/;
 const WINDOWS_CHILD_ENV_SCOPE_RE =
   /^src\/(?:agents\/provider-local-service(?:-process|\.(?:env-case|shutdown|settlement)\.test)?|cli\/mcp-cli(?:\.path-case\.windows)?\.test|cli\/mcp-cli|infra\/process-env(?:\.test)?)\.ts$/;
 const WINDOWS_SOURCE_CLI_SCOPE_RE =
@@ -213,7 +205,7 @@ const WINDOWS_WORKER_BUNDLE_SCOPE_RE =
 const WINDOWS_WORKER_WORKSPACE_SCOPE_RE =
   /^src\/(?:infra\/git-exec(?:\.test)?|agents\/worktrees\/(?:git|base-ref)(?:\.test)?|node-host\/node-worker-transfer-client(?:\.test)?|gateway\/worker-environments\/(?:node-worker-tunnel(?:\.test)?|workspace-result-(?:git(?:\.test)?|staging|ref-mutation\.test)|session-repository-checkpoints(?:\.test)?|workspace-sync-(?:scripts|manifest\.test)))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
-  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|extensions\/(?:active-memory|memory-wiki)\/control-ui\.presentation\.json$|extensions\/[^/]+\/(?:package\.json$|(?:.*\/)?i18n\/(?:locales|\.i18n)\/)|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/(?:control-ui-plugin-i18n-catalog\.ts|control-ui-i18n-(?:(?:catalog(?:-values)?|config|raw-copy|sync-plan)\.ts|config\.json)))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+  /^(src\/shared\/(?:control-ui-locale|public-session-copy)\.ts$|ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|extensions\/(?:active-memory|memory-wiki)\/control-ui\.presentation\.json$|extensions\/[^/]+\/(?:package\.json$|(?:.*\/)?i18n\/(?:locales|\.i18n)\/)|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/(?:control-ui-plugin-i18n-catalog\.ts|control-ui-i18n-(?:(?:catalog(?:-values)?|config|raw-copy|sync-plan)\.ts|config\.json)))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 // A plugin can declare its browser entry in any package directory. Keep this
 // path-only planner conservative; source discovery selects actual UI owners.
 const CONTROL_UI_I18N_PRODUCTION_SOURCE_RE =
@@ -636,12 +628,6 @@ export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName 
   if (sourcePaths.length === 0) {
     return;
   }
-  if (isNativeCanonicalV2Migration(changedPaths, generatedPaths)) {
-    return;
-  }
-  if (isAndroidBuildTimeI18nMigration(changedPaths, generatedPaths, sourcePaths)) {
-    return;
-  }
   throw new NativeGeneratedArtifactsMixedError(
     [
       "Native generated locale artifacts must be isolated from source changes.",
@@ -650,70 +636,6 @@ export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName 
       ...generatedCompanionPaths.map((filePath) => `- generated companion: ${filePath}`),
       ...sourcePaths.map((filePath) => `- source: ${filePath}`),
     ].join("\n"),
-  );
-}
-
-/**
- * The projection retirement must carry its output-only translations into canonical inputs.
- * Requiring the deleted lookup path confines this exception to the cutover diff.
- * @param {string[]} changedPaths
- * @param {string[]} generatedPaths
- * @param {string[]} sourcePaths
- */
-function isAndroidBuildTimeI18nMigration(changedPaths, generatedPaths, sourcePaths) {
-  const retiredLookup =
-    "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt";
-  const owners = [
-    ".github/workflows/native-app-locale-refresh.yml",
-    "apps/.i18n/native-source.json",
-    "apps/android/app/build.gradle.kts",
-    "scripts/android-app-i18n.ts",
-    "scripts/native-app-i18n.ts",
-    "scripts/ci-changed-scope.mjs",
-    "test/scripts/android-app-i18n.test.ts",
-    "test/scripts/native-app-i18n.test.ts",
-    "src/scripts/ci-changed-scope.native-i18n.test.ts",
-  ];
-  return (
-    changedPaths.includes(retiredLookup) &&
-    !existsSync(new URL(`../${retiredLookup}`, import.meta.url)) &&
-    owners.every((owner) => changedPaths.includes(owner)) &&
-    sourcePaths.every(
-      (filePath) =>
-        owners.includes(filePath) ||
-        filePath === "package.json" ||
-        filePath === "apps/android/README.md",
-    ) &&
-    generatedPaths.every(
-      (filePath) =>
-        filePath === retiredLookup ||
-        /^(?:apps\/\.i18n\/native\/[^/]+\.json|apps\/android\/app\/src\/main\/res\/values-[^/]+\/strings\.xml)$/.test(
-          filePath,
-        ),
-    )
-  );
-}
-
-/**
- * One-time v2 native artifact migration escape; remove after the migration PR lands.
- * @param {string[]} changedPaths
- * @param {string[]} generatedPaths
- * @returns {boolean}
- */
-function isNativeCanonicalV2Migration(changedPaths, generatedPaths) {
-  const requiredOwners = [
-    ".gitattributes",
-    "scripts/ci-changed-scope.mjs",
-    "scripts/native-app-i18n.ts",
-    "scripts/android-app-i18n.ts",
-    "scripts/apple-app-i18n.ts",
-    "test/scripts/native-app-i18n.test.ts",
-    "test/scripts/apple-app-i18n.test.ts",
-    "src/scripts/ci-changed-scope.native-i18n.test.ts",
-  ];
-  return (
-    requiredOwners.every((owner) => changedPaths.includes(owner)) &&
-    generatedPaths.every((filePath) => NATIVE_CANONICAL_V2_MIGRATION_GENERATED_RE.test(filePath))
   );
 }
 

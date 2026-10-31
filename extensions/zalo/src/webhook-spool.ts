@@ -4,7 +4,6 @@ import {
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-  type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -123,13 +122,10 @@ function createZaloWebhookIngress(options: {
   accountId: string;
   runtime: Pick<ZaloRuntimeEnv, "error" | "log">;
   deliver: (update: ZaloUpdate, lifecycle: ZaloWebhookIngressLifecycle) => Promise<void>;
-  queue?: ChannelIngressQueue<ZaloWebhookSpoolPayload>;
 }) {
-  const queue =
-    options.queue ??
-    getZaloRuntime().state.openChannelIngressQueue<ZaloWebhookSpoolPayload>({
-      accountId: options.accountId,
-    });
+  const queue = getZaloRuntime().state.openChannelIngressQueue<ZaloWebhookSpoolPayload>({
+    accountId: options.accountId,
+  });
   const monitor = createChannelIngressMonitor<string, string, ZaloWebhookSpoolPayload>({
     queue,
     inspect: (rawEvent) => inspectZaloWebhookEvent(rawEvent),

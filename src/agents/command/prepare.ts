@@ -20,6 +20,7 @@ import {
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
+  scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -32,6 +33,7 @@ import {
   hasAgentDatabaseAdmissions,
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveUserPath } from "../../utils.js";
 import { isDeliverableMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
@@ -40,6 +42,7 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveSessionAgentId,
+  resolveSessionAgentIds,
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
@@ -48,6 +51,7 @@ import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
+import { buildThinkingCatalog } from "../model-thinking-default-core.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
 import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
@@ -55,7 +59,6 @@ import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { ensureAgentWorkspace } from "../workspace.js";
 import { acquireWorktreeRunLease, resolveWorktreeForPath } from "../worktrees/run-lease.js";
-import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { resolveSession } from "./session.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -131,14 +134,24 @@ export async function prepareAgentCommandExecution(
     classifySessionKeyShape(rawExplicitSessionKey) === "legacy_or_alias" &&
     !isUnscopedSessionKeySentinel(rawExplicitSessionKey),
   );
-  const explicitSessionKey =
-    toSessionKey ??
-    resolveExplicitAgentCommandSessionKey({
-      rawExplicitSessionKey,
-      agentIdOverride,
-      shouldScopeDefaultAgentKey,
-      cfg,
+  // Storage sentinels keep their logical key; resolveSession validates the separate owner.
+  let explicitSessionKey = toSessionKey ?? rawExplicitSessionKey;
+  if (toSessionKey === undefined && !isUnscopedSessionKeySentinel(rawExplicitSessionKey)) {
+    const unscopedOwnerAgentId =
+      classifySessionKeyShape(rawExplicitSessionKey) === "legacy_or_alias" &&
+      (agentIdOverride || shouldScopeDefaultAgentKey)
+        ? resolveSessionAgentIds({
+            config: cfg,
+            agentId: agentIdOverride,
+            sessionKey: rawExplicitSessionKey,
+          }).sessionAgentId
+        : undefined;
+    explicitSessionKey = scopeLegacySessionKeyToAgent({
+      agentId: unscopedOwnerAgentId ?? agentIdOverride,
+      sessionKey: rawExplicitSessionKey,
+      mainKey: cfg.session?.mainKey,
     });
+  }
   if (explicitSessionKey && classifySessionKeyShape(explicitSessionKey) === "malformed_agent") {
     throw new Error(
       `Invalid --session-key "${explicitSessionKey}". Agent-prefixed session keys must use agent:<agent-id>:<session-key>.`,
@@ -160,9 +173,10 @@ export async function prepareAgentCommandExecution(
     if (!hasAgentDatabaseAdmissions()) {
       recordAgentDatabaseAdmissions(await evaluateAgentDatabaseAdmissions(cfg));
     }
-    assertAgentDatabaseAdmitted(
-      agentIdOverride ?? resolveSessionAgentId({ sessionKey: explicitSessionKey, config: cfg }),
-    );
+    const admissionAgentId =
+      agentIdOverride ?? resolveSessionAgentId({ sessionKey: explicitSessionKey, config: cfg });
+    await waitForAgentInputAdmission(admissionAgentId, { cfg, signal: abortSignal });
+    assertAgentDatabaseAdmitted(admissionAgentId);
   }
   const agentCfg = cfg.agents?.defaults;
 
@@ -238,6 +252,7 @@ export async function prepareAgentCommandExecution(
     storePath,
     isNewSession,
     previousSessionId,
+    automaticReset,
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
@@ -252,6 +267,8 @@ export async function prepareAgentCommandExecution(
   }
   const sessionStore: Record<string, InternalSessionEntry> =
     sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
+  await waitForAgentInputAdmission(sessionAgentId, { cfg, signal: abortSignal });
+  assertPreparationCurrent();
   assertAgentDatabaseAdmitted(sessionAgentId);
   const outboundSession = buildOutboundSessionContext({
     cfg,
@@ -332,7 +349,6 @@ export async function prepareAgentCommandExecution(
     ...(sessionEntryRaw &&
     isSyntheticSourceReplyTurn({
       inputProvenance: commandOpts.inputProvenance,
-      isHeartbeat: commandOpts.bootstrapContextRunKind === "heartbeat",
     })
       ? {
           // Direct Gateway wakes have no inbound dispatcher to apply effective reply policy.
@@ -340,20 +356,26 @@ export async function prepareAgentCommandExecution(
         }
       : {}),
   };
-  const thinkingLevelsHint = formatThinkingLevels(
-    configuredModel.provider,
-    configuredModel.model,
-    ", ",
-    configuredThinkingCatalog.length > 0 ? configuredThinkingCatalog : undefined,
-    configuredThinkingRuntime,
-  );
+  // Built only for the error, since it loads the selected model's bundled row.
+  const formatThinkingLevelsHint = () =>
+    formatThinkingLevels(
+      configuredModel.provider,
+      configuredModel.model,
+      ", ",
+      buildThinkingCatalog({
+        cfg,
+        provider: configuredModel.provider,
+        model: configuredModel.model,
+      }),
+      configuredThinkingRuntime,
+    );
   const thinkOverride = normalizeThinkLevel(opts.thinking);
   const thinkOnce = normalizeThinkLevel(opts.thinkingOnce);
   if (opts.thinking && !thinkOverride) {
-    throw new Error(`Invalid thinking level. Use one of: ${thinkingLevelsHint}.`);
+    throw new Error(`Invalid thinking level. Use one of: ${formatThinkingLevelsHint()}.`);
   }
   if (opts.thinkingOnce && !thinkOnce) {
-    throw new Error(`Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`);
+    throw new Error(`Invalid one-shot thinking level. Use one of: ${formatThinkingLevelsHint()}.`);
   }
   const resolvedCwd = cwd ? resolveUserPath(cwd) : undefined;
   const worktreeSource = await resolveWorktreeForPath({
@@ -460,6 +482,7 @@ export async function prepareAgentCommandExecution(
       storePath,
       isNewSession,
       previousSessionId,
+      ...(automaticReset ? { automaticReset } : {}),
       persistedThinking,
       persistedVerbose,
       sessionAgentId,

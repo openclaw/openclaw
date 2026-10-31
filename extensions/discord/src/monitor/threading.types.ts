@@ -60,7 +60,6 @@ export type DiscordAutoThreadContext = {
 };
 
 export type DiscordAutoThreadReplyPlan = DiscordReplyDeliveryPlan & {
-  createdThreadId?: string;
   autoThreadContext: DiscordAutoThreadContext | null;
 };
 
@@ -68,7 +67,7 @@ export type MaybeCreateDiscordAutoThreadParams = {
   client: Client;
   message: DiscordMessageEvent["message"];
   messageChannelId?: string;
-  channel?: string;
+  channel: string;
   isGuildMessage: boolean;
   channelConfig?: DiscordChannelConfigResolved | null;
   threadChannel?: DiscordThreadChannel | null;
@@ -78,5 +77,5 @@ export type MaybeCreateDiscordAutoThreadParams = {
   baseText: string;
   combinedBody: string;
   cfg: OpenClawConfig;
-  agentId?: string;
+  agentId: string;
 };

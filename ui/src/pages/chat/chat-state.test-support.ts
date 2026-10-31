@@ -1,10 +1,18 @@
-import { onTestFinished, vi } from "vitest";
+import { vi } from "vitest";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { chatRunPresentation } from "./chat-run-presentation.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
+
+export function emitGatewayEvent(
+  state: ChatPageHost,
+  event: Parameters<typeof handlePageGatewayEvent>[1]["event"],
+  payload: Parameters<typeof handlePageGatewayEvent>[1]["payload"],
+) {
+  handlePageGatewayEvent(state, { type: "event", event, payload });
+}
 
 export function createSessionEventState(overrides: Partial<ChatPageHost> = {}) {
   const request = vi.fn().mockResolvedValue({
@@ -12,7 +20,6 @@ export function createSessionEventState(overrides: Partial<ChatPageHost> = {}) {
     sessionId: "selected-session",
     thinkingLevel: null,
   });
-  const requestUpdate = overrides.requestUpdate ?? vi.fn();
   const host = makeChatHost({
     client: createTestGatewayClient(request),
     connectionEpoch: 1,
@@ -27,14 +34,10 @@ export function createSessionEventState(overrides: Partial<ChatPageHost> = {}) {
     ...host,
     currentSessionId: "selected-session",
     chatMessagesBySession: new Map(),
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatStreamStartedAt: null,
-    renderLifecycle: { invalidate: requestUpdate },
-    requestUpdate,
     ...overrides,
   } as unknown as ChatPageHost;
-  onTestFinished(chatRunPresentation(state).subscribe(requestUpdate));
   return { request, state };
 }
 
