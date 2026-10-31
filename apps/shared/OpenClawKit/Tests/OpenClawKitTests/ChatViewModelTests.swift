@@ -8992,6 +8992,60 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches().isEmpty)
     }
 
+    @Test(arguments: ["/compact", "/reset", "/new"])
+    func `failed local command restores submitted draft`(_ command: String) async throws {
+        let failure = NSError(domain: "LocalCommand", code: 42)
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            createSessionHook: { _, _ in throw failure },
+            resetSessionHook: { _ in throw failure },
+            compactSessionHook: { _ in throw failure })
+        try await loadAndWaitBootstrap(vm: vm)
+        await sendUserMessage(vm, text: command)?.value
+        #expect(await MainActor.run { vm.input } == command)
+        #expect(await MainActor.run { vm.localCommandStatus } == nil)
+    }
+
+    @Test func `failed command does not overwrite newly typed draft`() async throws {
+        let gate = SessionSubscribeGate()
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            compactSessionHook: { _ in
+                await gate.wait()
+                throw NSError(domain: "LocalCommand", code: 42)
+            })
+        try await loadAndWaitBootstrap(vm: vm)
+        let task = await sendUserMessage(vm, text: "/compact")
+        await gate.waitUntilBlocked()
+        #expect(await MainActor.run { vm.input.isEmpty })
+        #expect(await MainActor.run { vm.localCommandStatus } == "/compact")
+        await MainActor.run { vm.input = "next message" }
+        await gate.release()
+        await task?.value
+        #expect(await MainActor.run { vm.input } == "next message")
+    }
+
+    @Test func `failed command restores only its original session draft`() async throws {
+        let gate = SessionSubscribeGate()
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            compactSessionHook: { _ in
+                await gate.wait()
+                throw NSError(domain: "LocalCommand", code: 42)
+            })
+        try await loadAndWaitBootstrap(vm: vm)
+        let task = await sendUserMessage(vm, text: "/compact")
+        await gate.waitUntilBlocked()
+        #expect(await MainActor.run { vm.input.isEmpty })
+        #expect(await MainActor.run { vm.localCommandStatus } == "/compact")
+        await MainActor.run { vm.switchSession(to: "other"); vm.input = "other draft" }
+        await gate.release()
+        await task?.value
+        #expect(await MainActor.run { vm.input } == "other draft")
+        await MainActor.run { vm.switchSession(to: "main") }
+        #expect(await MainActor.run { vm.input } == "/compact")
+    }
+
     @Test func `compact trigger compacts session and reloads history`() async throws {
         let before = historyPayload(
             messages: [

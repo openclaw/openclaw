@@ -527,6 +527,15 @@ extension OpenClawChatView {
                 }
             }
 
+            if let command = self.viewModel.localCommandStatus {
+                HStack {
+                    ProgressView()
+                    Text(verbatim: command)
+                        .font(OpenClawChatTypography.caption)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .accessibilityIdentifier("Chat.LocalCommand.Running")
+            }
             if self.viewModel.isLoading, self.composerChrome == .full {
                 ProgressView()
                     .controlSize(.large)

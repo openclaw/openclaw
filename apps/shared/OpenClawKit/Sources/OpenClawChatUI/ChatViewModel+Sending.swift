@@ -375,16 +375,34 @@ extension OpenClawChatViewModel {
                 errorText = "Connect to the gateway to run this command."
                 return false
             }
-            if input == draft.input { input = "" }
-            switch command {
-            case "/new": await performStartNewSession(worktree: false)
+            guard self.composerRevision(for: self.sessionKey) == draft.composerRevision,
+                  self.input == draft.input else { return false }
+            self.input = ""
+            let clearedRevision = self.composerRevision(for: self.sessionKey)
+            self.localCommandStatus = command
+            defer { self.localCommandStatus = nil }
+            let ran = switch command {
+            case "/new": await startNewSessionOutcome(worktree: false) != .failed
             case "/compact": await performCompact()
             default: await performReset()
             }
-            self.recordSuccessfulInput(
-                draft.trimmed,
-                submittedRevision: draft.composerRevision,
-                sessionKey: draft.composerSessionKey)
+            if ran {
+                self.recordSuccessfulInput(
+                    draft.trimmed,
+                    submittedRevision: draft.composerRevision,
+                    sessionKey: draft.composerSessionKey)
+            } else if self.composerSessionKey(for: self.sessionKey) == draft.composerSessionKey,
+                      self.composerRevision(for: self.sessionKey) == clearedRevision,
+                      self.input.isEmpty
+            {
+                self.input = draft.input
+            } else if self.composerSessionKey(for: self.sessionKey) != draft.composerSessionKey,
+                      self.composerRevisionsBySession[draft.composerSessionKey, default: 0] == clearedRevision,
+                      self.draftsBySession[draft.composerSessionKey] == nil
+            {
+                self.draftsBySession[draft.composerSessionKey] = draft.input
+                self.savedDraftRevisionsBySession[draft.composerSessionKey] = clearedRevision
+            }
             return false
         }
         return await self.validateSlashCommandDraftForSend(
