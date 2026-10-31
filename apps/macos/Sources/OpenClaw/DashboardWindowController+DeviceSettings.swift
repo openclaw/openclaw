@@ -164,6 +164,9 @@ extension DashboardWindowController {
         guard isCurrent(), self.canUseDeviceSettings(sourceID: sourceID),
               self.requiredDeviceSettingConsent(key, value: value) == consent else { return }
         switch (key, value) {
+        case let (.launchAtLogin, .boolean(enabled)):
+            guard !enabled || self.deviceLaunchAtLoginAvailable else { return }
+            try await AppStateStore.shared.setLaunchAtLogin(enabled)
         case let (.keepGatewayRunning, .boolean(enabled)):
             try await GatewayProcessManager.shared.setKeepGatewayRunning(enabled) {
                 isCurrent() && self.canUseDeviceSettings(sourceID: sourceID)
@@ -204,9 +207,6 @@ extension DashboardWindowController {
             return
         }
         switch key {
-        case .launchAtLogin:
-            guard !enabled || self.deviceLaunchAtLoginAvailable else { return }
-            state.launchAtLogin = enabled
         case .quickChatEnabled:
             state.quickChatEnabled = enabled
             QuickChatController.shared.setEnabled(enabled)

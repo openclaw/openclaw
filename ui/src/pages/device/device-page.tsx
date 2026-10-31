@@ -36,6 +36,7 @@ import { projectNativeDeviceSettings } from "../../lib/reactive/application-nati
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
+import { LaunchAtLoginSetting } from "./launch-at-login-setting.tsx";
 import "./device.css";
 
 registerEnglishCatalog(registerAppsEnglish);
@@ -460,17 +461,7 @@ export function DevicePage() {
               label="iconAnimations"
               description={t("configPage.deviceSettings.iconAnimationsHint")}
             />
-            <Toggle
-              setting="app.launchAtLogin"
-              checked={props.snapshot.app!.launchAtLogin}
-              label="launchAtLogin"
-              description={
-                props.snapshot.app!.launchAtLoginAvailable === false
-                  ? t("configPage.deviceSettings.launchAtLoginUnavailable")
-                  : undefined
-              }
-              disabled={props.snapshot.app!.launchAtLoginAvailable === false}
-            />
+            <LaunchAtLoginSetting app={props.snapshot.app!} />
             <GatewayHosting app={props.snapshot.app!} />
             <Toggle
               setting="app.quickChatEnabled"

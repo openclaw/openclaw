@@ -45,7 +45,8 @@ final class LaunchAgentManager {
     func set(
         enabled: Bool,
         bundlePath: String,
-        profile: AppProfile = .current) -> Task<Bool, Never>
+        profile: AppProfile = .current,
+        onResult: (@MainActor (Bool?, String?) -> Void)? = nil) -> Task<Bool, Never>
     {
         // Reserve user-event order before creating async work; startup hydration
         // cannot overwrite a choice while its launchctl operation is pending.
@@ -54,11 +55,14 @@ final class LaunchAgentManager {
         let previous = self.mutationTail
         let task = Task {
             await previous?.value
-            return await self.apply(
+            let result = await self.apply(
                 enabled: enabled,
                 bundlePath: bundlePath,
                 profile: profile,
                 generation: generation)
+            guard self.generation == generation, let result else { return false }
+            onResult?(result.enabled, result.error)
+            return result.error == nil
         }
         self.mutationTail = task
         return task
@@ -98,34 +102,82 @@ final class LaunchAgentManager {
         enabled: Bool,
         bundlePath: String,
         profile: AppProfile,
-        generation: UInt64) async -> Bool
+        generation: UInt64) async -> (enabled: Bool?, error: String?)?
     {
-        guard self.generation == generation else { return false }
+        guard self.generation == generation else { return nil }
         guard !profile.isActive else {
             Self.logger.info("login-agent change skipped (unavailable under app profile)")
-            return false
+            return (false, String(localized: "Launch at Login is unavailable under a named profile."))
         }
+        let previousPlist: Data?
         do {
+            previousPlist = enabled && FileManager.default.fileExists(atPath: self.plistURL.path)
+                ? try Data(contentsOf: self.plistURL) : nil
             try await Self.persist(enabled: enabled, bundlePath: bundlePath, plistURL: self.plistURL)
         } catch {
             Self.logger.error("login-agent persistence failed: \(error.localizedDescription, privacy: .public)")
-            return false
+            // Persistence must succeed before any launchctl operation, including a status probe.
+            // Leave reconciliation with the caller's previous value when no state was observed.
+            return (nil, String(localized:
+                "Could not save Launch at Login. Check permissions for ~/Library/LaunchAgents and try again."))
         }
-        guard self.generation == generation else { return false }
-        guard enabled else { return true }
-        let alreadyLoaded = await self.runLaunchctl(["print", "gui/\(getuid())/\(launchdLabel)"]) == 0
-        guard self.generation == generation else { return false }
+        guard self.generation == generation else { return nil }
+        guard enabled else { return (false, nil) }
+        let target = "gui/\(getuid())/\(launchdLabel)"
+        let status = await self.runLaunchctl(["print", target])
+        guard self.generation == generation else { return nil }
         // Reinstalling a loaded login job would boot out the app that must bootstrap it again.
-        guard !alreadyLoaded else { return false }
-        for arguments in [
-            ["bootout", "gui/\(getuid())/\(launchdLabel)"],
-            ["bootstrap", "gui/\(getuid())", self.plistURL.path],
-            ["kickstart", "-k", "gui/\(getuid())/\(launchdLabel)"],
-        ] {
-            guard self.generation == generation else { return false }
-            _ = await self.runLaunchctl(arguments)
+        if status == 0 { return (true, nil) }
+        // launchctl reports a missing service with ESRCH or its service-not-found code.
+        guard status == 3 || status == 113 else {
+            return await self.failedChange(command: "print", status: status, previousPlist: previousPlist)
         }
-        return true
+        // An absent job needs no bootout; never unload the app that owns this request.
+        for arguments in [
+            ["bootstrap", "gui/\(getuid())", self.plistURL.path],
+            ["kickstart", "-k", target],
+        ] {
+            guard self.generation == generation else { return nil }
+            let status = await self.runLaunchctl(arguments)
+            guard self.generation == generation else { return nil }
+            guard status == 0 else {
+                return await self.failedChange(
+                    command: arguments[0], status: status, previousPlist: previousPlist)
+            }
+        }
+        let finalStatus = await self.runLaunchctl(["print", target])
+        guard self.generation == generation else { return nil }
+        guard finalStatus == 0 else {
+            return await self.failedChange(command: "print", status: finalStatus, previousPlist: previousPlist)
+        }
+        return (true, nil)
+    }
+
+    private func failedChange(
+        command: String, status: Int32, previousPlist: Data?) async -> (enabled: Bool?, error: String?)
+    {
+        var message = String(localized: """
+        Could not enable Launch at Login. Check OpenClaw in System Settings → General → Login Items and try again.
+        """)
+        message += " (launchctl \(command): \(status))"
+        do {
+            try await Self.restorePlist(previousPlist, at: self.plistURL)
+        } catch {
+            message += " " + String(localized:
+                "The previous login item could not be restored. Check ~/Library/LaunchAgents before retrying.")
+        }
+        let current = await Self.readStatus(
+            plistURL: self.plistURL, profile: AppProfile(environment: [:]), runLaunchctl: self.runLaunchctl)
+        return (current, message)
+    }
+
+    @concurrent
+    private static func restorePlist(_ previousPlist: Data?, at url: URL) async throws {
+        if let previousPlist {
+            try previousPlist.write(to: url, options: .atomic)
+        } else {
+            try await self.persist(enabled: false, bundlePath: "", plistURL: url)
+        }
     }
 
     @concurrent
