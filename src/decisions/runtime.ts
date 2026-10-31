@@ -24,9 +24,9 @@ import { modelKey } from "../shared/model-key.js";
 import { DecisionContractError } from "./contract-error.js";
 import { logDecisionEvaluation } from "./diagnostics.js";
 import type { DecisionEvaluateOptions, DecisionEvaluateOptionsV2 } from "./execution-types.js";
+import type { PreparedDecisionBillingFacts } from "./host-billing.js";
 import type { DecisionOutcome, DecisionOutcomeV2 } from "./host-outcomes.js";
 import { validateDecisionBatchV2 } from "./input-validation.js";
-import type { PreparedDecisionBilling } from "./provider-host.js";
 import type { DecisionBatchV2 } from "./types-v2.js";
 import type { DecisionBatch } from "./types.js";
 import { validateDecisionBatch } from "./validation.js";
@@ -277,8 +277,8 @@ async function evaluateVersion(
     if (timeoutMs <= 0) {
       return skipped(entry.host.unavailable("deadline"));
     }
-    let preparedBilling: PreparedDecisionBilling | undefined;
-    const onPreparedBilling = (facts: PreparedDecisionBilling) => {
+    let preparedBilling: PreparedDecisionBillingFacts | undefined;
+    const onPreparedBilling = (facts: PreparedDecisionBillingFacts) => {
       preparedBilling = facts;
     };
     const result = await entry.host.evaluate(
