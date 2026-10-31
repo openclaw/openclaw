@@ -3,7 +3,6 @@
 // linking current code there resolves cached older modules and can fail at link time.
 // This file is copied into dist beside those bridges and may import only Node builtins:
 // it runs the current export in a worker, whose module map loads one consistent tree.
-/* oxlint-disable unicorn/require-post-message-target-origin -- Node worker ports have no browser target origin. */
 import {
   isMainThread,
   MessageChannel,
@@ -266,7 +265,7 @@ export async function runIsolatedUpdateCompatExport(moduleUrl, exportName, args)
       const id = nextCall++;
       pending.set(id, { resolve, reject });
       worker.ref();
-      worker.postMessage({ type: "invoke", id, ref, method, args: codec.encode(callArgs) });
+      worker.postMessage({ type: "invoke", id, ref, method, args: codec.encode(callArgs) }, []);
     });
   port1.on("message", (request) => {
     let reply;
@@ -286,7 +285,7 @@ export async function runIsolatedUpdateCompatExport(moduleUrl, exportName, args)
     } catch (error) {
       reply = { ok: false, error: codec.encodeError(error) };
     }
-    port1.postMessage(reply);
+    port1.postMessage(reply, []);
     Atomics.store(flag, 0, 1);
     Atomics.notify(flag, 0);
   });
@@ -335,7 +334,7 @@ async function runWorker() {
   const codec = createCodec("w");
   const callParent = (ref, method, args) => {
     Atomics.store(flag, 0, 0);
-    port.postMessage({ ref, method, args: codec.encode(args) });
+    port.postMessage({ ref, method, args: codec.encode(args) }, []);
     Atomics.wait(flag, 0, 0);
     const reply = receiveMessageOnPort(port)?.message;
     if (!reply) {
@@ -349,10 +348,7 @@ async function runWorker() {
   // Current code must not claim custody of the older updater's executor.
   globalThis[Symbol.for("openclaw.updateCompat.olderUpdater")] = true;
   const module = await import(moduleUrl);
-  parentPort.on("message", async (message) => {
-    if (message.type !== "invoke") {
-      return;
-    }
+  const handle = async (message) => {
     let args = [];
     try {
       args = codec.decode(message.args, callParent);
@@ -361,25 +357,36 @@ async function runWorker() {
           ? await module[message.method](...args)
           : await codec.invoke(message.ref, message.method, args);
       // Send back caller-owned arguments so in-place mutations reach the caller.
-      parentPort.postMessage({
-        id: message.id,
-        ok: true,
-        value: codec.encode(value),
-        args: codec.encode(args),
-      });
+      parentPort.postMessage(
+        {
+          id: message.id,
+          ok: true,
+          value: codec.encode(value),
+          args: codec.encode(args),
+        },
+        [],
+      );
       if (message.ref === null && !containsFunction(value)) {
         parentPort.close();
       }
     } catch (error) {
-      parentPort.postMessage({
-        id: message.id,
-        ok: false,
-        error: codec.encodeError(error),
-        args: codec.encode(args),
-      });
+      parentPort.postMessage(
+        {
+          id: message.id,
+          ok: false,
+          error: codec.encodeError(error),
+          args: codec.encode(args),
+        },
+        [],
+      );
       if (message.ref === null) {
         parentPort.close();
       }
+    }
+  };
+  parentPort.on("message", (message) => {
+    if (message.type === "invoke") {
+      void handle(message);
     }
   });
 }
