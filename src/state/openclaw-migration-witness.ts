@@ -504,6 +504,11 @@ export function captureOpenClawMigrationWitness(
           (object.type === "index" &&
             (indexKey === "session_windows.idx_agent_session_windows_conversation" ||
               indexKey === "trajectory_runtime_events.idx_agent_trajectory_runtime_run" ||
+              (schemaVersion >= 39 &&
+                (indexKey ===
+                  "session_input_completions.idx_agent_session_input_completions_session_key" ||
+                  indexKey ===
+                    "conversation_deliveries.idx_agent_conversation_deliveries_source_session")) ||
               (schemaVersion < AGENT_INDEX_RETIREMENT_SCHEMA_VERSION &&
                 (indexKey === "session_nodes.idx_agent_session_nodes_last_interaction_at" ||
                   indexKey === "session_reactions.idx_agent_session_reactions_message")) ||
