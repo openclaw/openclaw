@@ -141,6 +141,8 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
   private devTargetCommit = readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF");
   private artifact: PackageArtifact | null = null;
   private minGitZipPath = "";
+  private getMinGitZipPath = async (): Promise<string> =>
+    (this.minGitZipPath ||= await prepareMinGitZip(this.tgzDir));
   private latestVersion = "";
   private installVersion = "";
   private snapshot!: SnapshotInfo;
@@ -181,7 +183,6 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
         this.options.vmName,
       );
 
-      this.minGitZipPath = await prepareMinGitZip(this.tgzDir);
       if (this.needsHostTgz()) {
         [this.artifact, this.server, this.hostPort] = await packAndServeSmokeArtifact(
           this.tgzDir,
@@ -239,7 +240,11 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     await this.phases.phase("fresh.restore-snapshot", 240, () => this.restoreSnapshot());
     await this.phases.phase("fresh.wait-for-user", 240, () => this.waitForGuestReady());
     await this.phases.phase("fresh.ensure-git", 1200, () =>
-      ensureGuestGit({ guest: this.guest, minGitZipPath: this.minGitZipPath, server: this.server }),
+      ensureGuestGit({
+        guest: this.guest,
+        getMinGitZipPath: this.getMinGitZipPath,
+        server: this.server,
+      }),
     );
     await this.phases.phase("fresh.preflight", 120, () => this.logGuestPreflight(true));
     await this.phases.phase("fresh.install-main", WINDOWS_PACKAGE_INSTALL_TIMEOUT_SECONDS, () =>
@@ -269,7 +274,11 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     await this.phases.phase("upgrade.restore-snapshot", 240, () => this.restoreSnapshot());
     await this.phases.phase("upgrade.wait-for-user", 240, () => this.waitForGuestReady());
     await this.phases.phase("upgrade.ensure-git", 1200, () =>
-      ensureGuestGit({ guest: this.guest, minGitZipPath: this.minGitZipPath, server: this.server }),
+      ensureGuestGit({
+        guest: this.guest,
+        getMinGitZipPath: this.getMinGitZipPath,
+        server: this.server,
+      }),
     );
     await this.phases.phase("upgrade.preflight", 120, () => this.logGuestPreflight(false));
     const fromPackage = Boolean(
