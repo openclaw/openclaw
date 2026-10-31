@@ -651,50 +651,55 @@ it.each([
   },
 );
 
-it("lifts tool images into user content for OpenAI while preserving result associations", async () => {
-  const image = { type: "image" as const, mimeType: "image/png", data: png };
-  const context = {
-    messages: [
-      toolResult("call_first", [textBlock("first result"), image, image]),
-      toolResult("call_second", [image], "inspect", true),
-      toolResult("call_text", [textBlock("plain result")], "read"),
-    ],
-    tools: [readTool],
-  };
-  const before = structuredClone(context);
-  const input = await capturePayload(
-    bedrockModel({ id: "us.openai.gpt-5.6-sol", input: ["text", "image"] }),
-    context,
-  );
-  const expectedImage = {
-    image: { format: "png", source: { bytes: new Uint8Array(Buffer.from(png, "base64")) } },
-  };
-  const placeholder = (toolCallId: string) => ({
-    text: `(see attached images labeled "Images from tool result ${toolCallId}")`,
-  });
-  expect(input.messages).toEqual([
-    wireUser(
-      wireToolResult("call_first", [{ text: "first result" }, placeholder("call_first")]),
-      wireToolResult("call_second", [placeholder("call_second")], "error"),
-      wireToolResult("call_text", [{ text: "plain result" }]),
-      { text: "Images from tool result call_first:" },
-      expectedImage,
-      expectedImage,
-      { text: "Images from tool result call_second:" },
-      expectedImage,
-    ),
-  ]);
-  expect(context).toEqual(before);
+it.each([
+  "us.openai.gpt-5.6-sol",
+  "global.openai.gpt-6-sol",
+  "global.openai.gpt-6.1-sol",
+  "global.moonshotai.kimi-k3",
+])(
+  "lifts tool images into user content for %s while preserving result associations",
+  async (id) => {
+    const image = { type: "image" as const, mimeType: "image/png", data: png };
+    const context = {
+      messages: [
+        toolResult("call_first", [textBlock("first result"), image, image]),
+        toolResult("call_second", [image], "inspect", true),
+        toolResult("call_text", [textBlock("plain result")], "read"),
+      ],
+      tools: [readTool],
+    };
+    const before = structuredClone(context);
+    const input = await capturePayload(bedrockModel({ id, input: ["text", "image"] }), context);
+    const expectedImage = {
+      image: { format: "png", source: { bytes: new Uint8Array(Buffer.from(png, "base64")) } },
+    };
+    const placeholder = (toolCallId: string) => ({
+      text: `(see attached images labeled "Images from tool result ${toolCallId}")`,
+    });
+    expect(input.messages).toEqual([
+      wireUser(
+        wireToolResult("call_first", [{ text: "first result" }, placeholder("call_first")]),
+        wireToolResult("call_second", [placeholder("call_second")], "error"),
+        wireToolResult("call_text", [{ text: "plain result" }]),
+        { text: "Images from tool result call_first:" },
+        expectedImage,
+        expectedImage,
+        { text: "Images from tool result call_second:" },
+        expectedImage,
+      ),
+    ]);
+    expect(context).toEqual(before);
 
-  const unaffected = await capturePayload(bedrockModel({ input: ["text", "image"] }), context);
-  expect(unaffected.messages).toEqual([
-    wireUser(
-      wireToolResult("call_first", [{ text: "first result" }, expectedImage, expectedImage]),
-      wireToolResult("call_second", [expectedImage], "error"),
-      wireToolResult("call_text", [{ text: "plain result" }]),
-    ),
-  ]);
-});
+    const unaffected = await capturePayload(bedrockModel({ input: ["text", "image"] }), context);
+    expect(unaffected.messages).toEqual([
+      wireUser(
+        wireToolResult("call_first", [{ text: "first result" }, expectedImage, expectedImage]),
+        wireToolResult("call_second", [expectedImage], "error"),
+        wireToolResult("call_text", [{ text: "plain result" }]),
+      ),
+    ]);
+  },
+);
 
 function bedrockEvent(type: string, payload: unknown): Buffer {
   // Amazon event-stream frames carry string headers and CRCs over the prelude

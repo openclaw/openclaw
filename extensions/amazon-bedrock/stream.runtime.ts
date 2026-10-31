@@ -87,6 +87,7 @@ import {
   resolveBedrockPromptCachePolicy,
   type BedrockOptions,
 } from "./bedrock-options.js";
+import { buildBedrockToolResultUserContent } from "./stream.tool-result-images.js";
 import {
   isClaude5BedrockModel,
   resolveBedrockClaudeThinkingProfile,
@@ -1012,33 +1013,7 @@ function convertMessages(
 
         const toolResults = group.map((resultMessage) => createBedrockToolResult(resultMessage));
 
-        // GPT-5.6 Sol accepts user images but rejects images nested in tool results.
-        // Keep all tool outputs contiguous before labeled images, without rewriting history.
-        const attachedImages: ContentBlock[] = [];
-        const userContent: ContentBlock[] = model.id.includes("openai.gpt-5.6-sol")
-          ? toolResults.map((block): ContentBlock => {
-              const images: ContentBlock[] = [];
-              const content = (block.toolResult.content ?? []).filter((part) => {
-                if (part.image) {
-                  images.push({ image: part.image });
-                  return false;
-                }
-                return true;
-              });
-              if (images.length === 0) {
-                return block;
-              }
-              const label = `Images from tool result ${block.toolResult.toolUseId}`;
-              attachedImages.push({ text: `${label}:` }, ...images);
-              return {
-                toolResult: {
-                  ...block.toolResult,
-                  content: [...content, { text: `(see attached images labeled "${label}")` }],
-                },
-              };
-            })
-          : toolResults;
-        userContent.push(...attachedImages);
+        const userContent = buildBedrockToolResultUserContent(model.id, toolResults);
         result.push({
           role: ConversationRole.USER,
           content: userContent,
