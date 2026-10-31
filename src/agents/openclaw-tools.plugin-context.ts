@@ -8,6 +8,7 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import { modelKey } from "./model-ref-shared.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
+import { capturePluginToolRequesterProfile } from "./plugin-tool-requester-profile.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 export type OpenClawPluginToolOptions = Pick<
@@ -134,6 +135,12 @@ export function resolveOpenClawPluginToolInputs(params: {
       deliveryContext,
       nativeChannelId: options?.nativeChannelId,
       requesterSenderId: options?.requesterSenderId ?? undefined,
+      requesterProfile: capturePluginToolRequesterProfile({
+        agentId: sessionAgentId,
+        sessionKey,
+        sessionId: options?.sessionId,
+        runId: options?.runId,
+      }),
       senderIsOwner: options?.senderIsOwner,
       memoryAudience: options?.memoryAudience,
       memoryFlush: options?.memoryFlush,

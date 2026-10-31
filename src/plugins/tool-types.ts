@@ -109,6 +109,12 @@ type OpenClawPluginToolContextBase = {
   nativeChannelId?: string;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
+  /** Verified initiating profile, separate from transport identity and owner permission. */
+  requesterProfile?: Readonly<{
+    id: string;
+    /** Recheck with assertInvocationCurrent immediately before every protected effect. */
+    assertCurrent: () => void;
+  }>;
   /** Trusted owner bit from inbound context (runtime-provided, not tool args). */
   senderIsOwner?: boolean;
   /** Host-resolved memory partition for this turn. Providers must not reconstruct it. */

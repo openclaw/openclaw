@@ -307,6 +307,55 @@ providers, Code Mode, and calls through the Tool Search catalog are unchanged;
 declare `catalogMode: "direct-only"` to keep the tool directly visible. Omitting
 the property keeps the default behavior.
 
+### Verified requester profiles
+
+For an admitted Control UI human turn, `toolContext.requesterProfile` may
+provide `{ id, assertCurrent }`. The ID is the verified initiating Gateway
+profile, not a channel sender ID, display name, session owner, or permission
+grant. `requesterSenderId` keeps its existing transport meaning and
+`senderIsOwner` remains an independent authorization requirement.
+
+A profile-dependent version 2 factory can fail closed when either fact is missing:
+
+```typescript
+create(context) {
+  const profile = context.requesterProfile;
+  if (context.senderIsOwner !== true || !profile) return null;
+  return createRoomTool({
+    profileId: profile.id,
+    assertCurrent() {
+      context.assertInvocationCurrent();
+      profile.assertCurrent();
+    },
+  });
+}
+```
+
+The tool must call both guards in its final synchronous read, write, or request
+admission, including after awaited preparation. A check at factory construction
+or after an effect is not enough. The profile guard rechecks the original ingress
+binding and the admitted run, operator source, and plugin lifetime. It rejects
+expired/replaced identity, disconnect, revocation, and retained use after the
+owning invocation ends. It does not grant resource access: the plugin still owns
+its room/account policy. Work already handed to an external service cannot be
+retracted by these guards.
+
+This contract identifies the original admitted requester while the turn has one
+participant. A later steer never replaces that person or transfers permissions.
+If another person joins, the retained profile guard rejects further personal
+effects; a newly constructed factory receives no profile. Start a separate turn
+for the intended person. This does not change the explicit `user` selection
+supported by core personal tools or the original run's other authority.
+The profile is absent when the host cannot prove this binding, including ordinary
+CLI, synthetic/system, shared-owner, and unbound delegated runs. Channel sender
+identity is unchanged; no profile is inferred from channel IDs or names. Older
+hosts omit the field, so plugins must keep the missing-profile check.
+
+The host passes this value directly to the factory. Serialized prompt/client
+claims cannot supply it, and plugins must not persist its guard for later turns.
+This is a trusted-plugin contract, not isolation from installed code with access
+to the Gateway process. It does not change MCP sign-in or hook attribution.
+
 ### Owner-authorized continuations
 
 To participate when the exact parent resumes after an explicit `sessions_yield`,

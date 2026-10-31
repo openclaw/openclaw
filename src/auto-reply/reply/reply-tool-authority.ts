@@ -57,7 +57,10 @@ import {
 } from "../../sessions/session-controller.message-join-observation.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
-import { readTransferredRequesterProfile } from "../requester-profile.js";
+import {
+  copyTransferredRequesterProfile,
+  readTransferredRequesterProfile,
+} from "../requester-profile.js";
 import { MessageInjectionPolicyMismatchError } from "./message-injection-authority.js";
 import {
   captureReplyToolAuthoritySession,
@@ -563,6 +566,9 @@ export function prepareReplyToolAuthority(
     projectRequesterAsync: projectAsync,
     projectRequester: project,
   };
+  if (requesterProfileId) {
+    copyTransferredRequesterProfile(run, result.personalToolOwner);
+  }
   bindReplyToolAuthorityCallerRead(result.projectAsync, (caller, expected, route, assertActive) => {
     const {
       continuationKind,

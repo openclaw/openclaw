@@ -39,6 +39,12 @@ class RequesterProfile {
       ? value.#profile
       : undefined;
   }
+
+  static copy(value: unknown, carrier: object): void {
+    if (typeof value === "object" && value !== null && #profile in value) {
+      Object.assign(carrier, { [REQUESTER_PROFILE]: value });
+    }
+  }
 }
 
 /** Host-only, live identity fact: survives context copies, never JSON or plugin-authored fields. */
@@ -61,4 +67,9 @@ export function readTransferredRequesterProfile(
   carrier: object,
 ): PreparedRequesterProfile | undefined {
   return RequesterProfile.read(Reflect.get(carrier, REQUESTER_PROFILE));
+}
+
+/** Preserve the ingress binding on host-owned projections; currency is checked at consumption. */
+export function copyTransferredRequesterProfile(source: object, carrier: object): void {
+  RequesterProfile.copy(Reflect.get(source, REQUESTER_PROFILE), carrier);
 }

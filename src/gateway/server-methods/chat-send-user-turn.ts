@@ -36,7 +36,7 @@ import type { PreparedChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
-import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
+import { isSyntheticGatewayCaller, isSyntheticGatewayClient } from "./gateway-personal-caller.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 const audioPreflightLoader = createLazyImportLoader(
@@ -327,7 +327,7 @@ export function prepareChatSendUserTurn(params: {
         return (
           !client.invalidated &&
           !client.connectionSignal?.aborted &&
-          !isSyntheticGatewayCaller(client) &&
+          !isSyntheticGatewayClient(client) &&
           Boolean(client.authenticatedUserId || client.internal?.authenticatedOperator) &&
           client.authenticatedUserId === authenticatedUserId &&
           client.authenticatedUserProfile?.profileId === profileId

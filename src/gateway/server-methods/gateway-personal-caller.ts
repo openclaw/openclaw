@@ -3,13 +3,17 @@ import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-
 import type { GatewayClient } from "./client-types.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export function isSyntheticGatewayCaller(client: GatewayClient | null): boolean {
+/** Source classification stays valid when its admitted identity is read inside an agent turn. */
+export function isSyntheticGatewayClient(client: GatewayClient | null): boolean {
   return Boolean(
     client?.internal?.syntheticClient ||
     client?.internal?.agentToolCaller ||
-    client?.internal?.agentRuntimeIdentity ||
-    getGatewayToolCallerIdentity(),
+    client?.internal?.agentRuntimeIdentity,
   );
+}
+
+export function isSyntheticGatewayCaller(client: GatewayClient | null): boolean {
+  return isSyntheticGatewayClient(client) || Boolean(getGatewayToolCallerIdentity());
 }
 
 /** Handshake-attested person identity; callers still own current request and target authority. */
