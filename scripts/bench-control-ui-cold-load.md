@@ -134,7 +134,20 @@ Repeat with `--engine webkit` for the same media workload in WebKit. Chromium
 is the default; WebKit records wall timings, request counts, blob lifetimes, and
 feature-detected layout shifts without CDP CPU, heap, or trace metrics. Unsupported
 native Layout Instability is recorded as `nativeLayoutShiftSupported: false` and
-`cls: null` / `mediaCls: null`; it is never presented as zero CLS.
+null values for `layoutShiftSum`, `mediaAttributedShiftSum`, and
+`maxSessionWindowShift`; it is never presented as zero shifts.
+
+The observer resets immediately before held media is released. Each `stable`,
+`scrolled`, and `disposed` snapshot retains all non-recent-input events since that
+reset. `layoutShiftSum` adds their values; `mediaAttributedShiftSum` adds whole
+events with at least one media-containing source, which does not establish that
+media caused the entire event. `maxSessionWindowShift` records the largest window
+sum, starting a new window at a gap of at least 1,000 ms or a duration of at least
+5,000 ms. This reset-bounded score is not navigation-lifetime Web Vitals CLS.
+`layoutShiftPhaseSums` reports the load sum and additional scroll/disposal sums
+from those existing snapshot boundaries. Legacy artifacts retain their old
+`cls`/`mediaCls` cumulative sums; derive a window score from their raw `shifts`
+rather than relabeling those values.
 
 Use `--dimensions canonical` to include the persisted `__openclaw.media` image
 width/height and inline slot mapping. The default `--dimensions missing` preserves
@@ -152,7 +165,7 @@ not a synthetic CLS score. The geometry reads add layout work, so do not mix
 these diagnostic timings with uninstrumented timing runs.
 
 The initial viewport is settled while media is held. Releasing those requests
-measures media-induced CLS separately from scrolling. Each measured phase allows
+records the load-phase shifts before scrolling. Each measured phase allows
 intersection admission frames, then waits for all admitted media HTTP requests
 and visible loading images/favicons across two settled frame checks; unadmitted
 off-screen placeholders do not block. The runner then scrolls the
@@ -160,28 +173,27 @@ transcript and online roster, remounts the first/last rows, and removes the nati
 `openclaw-app` host to exercise production disconnection while preserving the
 document for lifetime measurement. Settings parks chat and cannot prove disposal.
 A document nonce assertion rejects any reload as invalid disposal evidence.
-Per-sample JSON records synthetic route admission counts by full URL (including revision, ticket,
+Per-sample JSON records browser request events by full URL (including revision, ticket,
 and size queries), method, kind and opaque auth-context identity; credentials are
 never recorded. Cumulative before/stable/scroll/disposal snapshots and separate
 boot/steady duplicate counts distinguish request ownership from bootstrap work.
-`cacheProbe.routeFulfillments` separately counts successfully fulfilled synthetic
-responses, split by Playwright resource type (`image` versus `fetch`).
+`cacheProbe.serverRequests` separately records actual HTTP admissions.
 `cacheProbe.fetchAttempts` separates `cacheOnly` (`only-if-cached`) thumbnail probes
 from `networkEligible` fetches and records their cache mode, request mode,
 credentials mode, opaque authorization identity, and outcome. Correlate these with
-fulfillments by exact URL and method; the browser-side authorization identities
-are independent of route-side auth contexts, which also include cookies.
-`cacheProbe.networkDownloads` is `null`: these responses never reach
-an HTTP server, so this harness does not measure real downloads or browser-cache
-hits. The `requests`, snapshot, and duplicate fields all count route admissions,
-including admissions that fail before fulfillment. A repeat may be a cache-only
-probe rather than missing application reuse; it cannot prove a repeated network
-transfer.
+server admissions by exact URL and method; fetch authorization identities are
+independent of browser request contexts, which also include cookies.
+`cacheProbe.networkDownloads` is `null`: HTTP admissions do not establish complete
+download bytes. Browser request events include cache hits and failed requests;
+cache-only probes must not reach the server. A repeated browser event cannot by
+itself prove a repeated network transfer. The native HTTP fixture serves bounded
+WebP thumbnails and the original full-image PNG; earlier routed-media workloads
+are not directly comparable.
 Chromium duration metrics use its `threadTicks` clock to measure thread CPU time,
 excluding time descheduled by other work on the host. Wall-clock load/scroll
 timings remain separate.
 
-It also records native CLS source rectangles, timestamps, and media attribution when
+It also records native layout-shift source rectangles, timestamps, and media attribution when
 the engine supports Layout Instability, object URL
 creation/revocation and remaining DOM consumers, CDP script/task/layout/style
 duration, and JS heap before scrolling and after forced GC immediately before
