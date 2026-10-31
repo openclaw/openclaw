@@ -40,7 +40,7 @@ function fixture(
   ]);
   return {
     entries,
-    resolve: (toolName = "browser", assertNativeRuntimeCurrent?: () => void) =>
+    resolve: (toolName = "browser", assertNativeRuntimeCurrent?: () => void, pluginId?: string) =>
       resolveSessionResourceToolPolicy({
         config,
         client,
@@ -55,6 +55,7 @@ function fixture(
         },
         readPreparedSessionEntry: (query) => entries.get(query.key),
         toolName,
+        toolMeta: pluginId ? { pluginId } : undefined,
         assertNativeRuntimeCurrent,
       }),
   };
@@ -153,4 +154,10 @@ it("rechecks selected model policy when the stored provider changes", () => {
     modelOverride: "test-model",
   });
   expect(() => test.resolve()).toThrow("current tool policy");
+});
+
+it("admits a coding-profile MCP App tool only with its bundle MCP ownership", () => {
+  const { resolve } = fixture({ config: { tools: { profile: "coding" } } });
+  expect(() => resolve("demo_show")).toThrow();
+  expect(() => resolve("demo_show", undefined, "bundle-mcp")).not.toThrow();
 });

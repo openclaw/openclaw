@@ -360,6 +360,8 @@ export async function prepareModelCreatedAppToolCall(
       current: live,
       readPreparedSessionEntry: (source) => projection.sharingTarget(source)?.entry,
       toolName: projected.name,
+      // Bundle MCP ownership (not the server name) is what plugin-scoped policy entries match.
+      toolMeta: getPluginToolMeta(projected),
       assertNativeRuntimeCurrent: runtime.assertOwnerCurrent,
     });
     // Native plugin inventory supplies identity, not an implicit allow grant.
