@@ -448,6 +448,60 @@ describe("pruneUnreferencedSessionArtifacts", () => {
     await expectPathExists(blobPath);
     expect(result.removedFiles).toBe(0);
   });
+
+  // Cleanup reads legacy checkpoint references without a try/catch, so a malformed shape has to
+  // abort the sweep rather than let protected history look unreferenced.
+  const legacyRefsLayout = async (dir: string) => {
+    const agentDir = path.join(dir, "agents", "main");
+    const sessionsDir = path.join(agentDir, "sessions");
+    const checkpointPath = path.join(
+      sessionsDir,
+      "keep.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
+    );
+    await writeArtifact(checkpointPath, "checkpoint fixture", true);
+    return { checkpointPath, storePath: path.join(agentDir, "agent", "openclaw-agent.sqlite") };
+  };
+
+  it("fails closed instead of reclaiming history when legacy references are malformed", async ({
+    dir,
+  }) => {
+    const { checkpointPath, storePath } = await legacyRefsLayout(dir);
+    const store = {
+      "agent:main:main": {
+        ...makeEntry("keep"),
+        compactionCheckpoints: "corrupt",
+      } as unknown as SessionEntry,
+    };
+
+    await expect(
+      pruneUnreferencedSessionArtifacts({ store, storePath, olderThanMs: 0 }),
+    ).rejects.toThrow("Invalid legacy compaction history references");
+    await expectPathExists(checkpointPath);
+  });
+
+  it("keeps a checkpoint that a valid legacy reference still protects", async ({ dir }) => {
+    const { checkpointPath, storePath } = await legacyRefsLayout(dir);
+    const store = {
+      "agent:main:main": {
+        ...makeEntry("keep"),
+        compactionCheckpoints: [
+          {
+            preCompaction: { sessionFile: checkpointPath },
+            postCompaction: { sessionFile: checkpointPath },
+          },
+        ],
+      } as unknown as SessionEntry,
+    };
+
+    const result = await pruneUnreferencedSessionArtifacts({
+      store,
+      storePath,
+      olderThanMs: 0,
+    });
+
+    expect(result.removedFiles).toBe(0);
+    await expectPathExists(checkpointPath);
+  });
 });
 
 const EMPTY_PROMPT_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
