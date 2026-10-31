@@ -96,12 +96,19 @@ source and rebuilding after a source change. Consumed JSON imports remain consum
 
 ## Automatic setup
 
-On a fresh Mac, choose **This Mac** during onboarding. **Getting things ready**
-prepares the included runtime, starts the Gateway, and verifies that it is
-ready. This setup needs no runtime download, Node installation, Terminal,
+On a fresh local setup with no existing configuration or saved connections, an
+interactive launch automatically shows **Setting up OpenClaw on this Mac**. It
+prepares the included runtime, starts the local Gateway, and opens automatic
+setup in the dashboard once the Gateway is ready. Choose **Set up manually** to
+open native setup instead; its **Getting things ready** page prepares the same
+bundled runtime when local setup is needed. Existing configurations keep their
+connection. See [Onboarding (macOS app)](/start/onboarding) for eligibility and
+fallbacks.
+
+This bundled setup needs no runtime download, Node installation, Terminal,
 Homebrew, or administrator access. Connecting an AI provider can still require
 internet access. The first-run handoff keeps waiting while the app retries
-Gateway startup, then opens automatic setup once the Gateway is ready. A terminal
+Gateway startup. A terminal failure opens the relevant native setup step;
 failure or cancellation leaves onboarding unfinished.
 
 The app creates `<state>/bin/openclaw`, a small shell wrapper that runs the

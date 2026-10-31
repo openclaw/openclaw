@@ -8,16 +8,44 @@ title: "Onboarding (macOS app)"
 sidebarTitle: "Onboarding: macOS App"
 ---
 
-The macOS app's first-run flow: pick where the Gateway runs, install any
-missing local runtime, and automatically connect a verified AI backend. The app then opens
-guided onboarding in the dashboard for optional setup and the handoff to your
-agent.
+On a fresh local setup, the macOS app prepares its bundled runtime, starts a
+Gateway on this Mac, and opens automatic AI setup in the dashboard. Existing
+configurations keep their connection, and native manual setup remains available.
 For CLI onboarding and a comparison of both paths, see [Onboarding Overview](/start/onboarding-overview).
 
 <Tip>
 Need the app first? [Download OpenClaw for macOS](/platforms/macos#download),
 then return here for first-run setup.
 </Tip>
+
+## Automatic first run
+
+With no existing configuration, saved Gateway profiles, connection settings, or
+previous onboarding, an interactive launch of the bundled app shows **Setting up
+OpenClaw on this Mac**. The progress window prepares the private runtime, starts
+the local Gateway, and opens the dashboard once the Gateway is ready and supports
+automatic setup. It does not automatically select a discovered Gateway. Older
+app builds may open [manual setup](/start/onboarding#manual-setup) first.
+
+The dashboard connects available AI access and verifies a real completion before
+continuing guided setup for optional features. An already configured model is
+kept. The AI connection choices and security trust model below apply to both
+automatic and manual setup.
+
+Choose **Set up manually** in the progress window to cancel automatic first-run
+setup and open the native welcome flow. Existing local or remote configurations
+are not reset: they keep their connection and use native onboarding only when
+setup is still needed. Nix mode and background-only launches do not run this
+automatic flow.
+
+If runtime preparation, Gateway startup, authentication, or dashboard loading
+fails, native setup opens at the relevant step with the error visible. A Gateway
+without automatic setup support opens the native AI picker instead. Closing setup
+before the handoff leaves onboarding unfinished; reopen it from the app menu.
+
+## macOS prompts
+
+These operating-system prompts can appear during setup; their timing can vary.
 
 <Steps>
 <Step title="Approve macOS warning">
@@ -45,8 +73,19 @@ in macOS System Settings.
 <img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="macOS dialog that asks whether OpenClaw may find devices on the local network" />
 </Frame>
 </Step>
+</Steps>
+
+## Manual setup
+
+Use this flow after choosing **Set up manually**, when automatic setup falls back,
+or when an existing configuration still needs onboarding. Unbundled developer
+builds also use native setup. The welcome and Gateway-choice screenshots below
+illustrate an earlier version of the manual flow, not the automatic progress
+window; labels and layout can differ in your build.
+
+<Steps>
 <Step title="Welcome and security notice">
-The app opens on its welcome screen with the security notice. Read the notice,
+The manual welcome screen includes the security notice. Read the notice,
 then continue when you accept the trust model below.
 
 <Frame caption="Read the security notice displayed and decide accordingly">
@@ -86,9 +125,14 @@ Where does the **Gateway** run?
 </Tip>
 </Step>
 <Step title="CLI">
-  Local setup reuses a compatible CLI installation or uses the bundled installer
-  to install `openclaw` and Node in a private managed runtime. It does not require
-  a global npm, pnpm, or bun install.
+  Bundled local setup prepares a private copy of the included Bun runtime and
+  matching OpenClaw package (CLI, Gateway, and Control UI). The app contains no
+  Node executable and needs no global npm, pnpm, or bun install. The manual
+  **Getting things ready** page appears only when local runtime setup is needed.
+
+Unbundled DEBUG builds retain the developer installer and channel chooser. That
+path can reuse a compatible CLI or install `openclaw` and Node in a private
+managed runtime; it is separate from the app's bundled runtime.
 
 When creating a brand-new workspace without Git metadata, OpenClaw checks
 `git --version` and attempts `git init` if Git is available. On a Mac without
