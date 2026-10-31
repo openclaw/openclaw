@@ -12,7 +12,8 @@ const WEBHOOK = "https://example.invalid/cron-finished";
 
 const noteMock = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
 
-vi.mock("../../../../packages/terminal-core/src/note.js", () => ({
+vi.mock("../../../../packages/terminal-core/src/note.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../packages/terminal-core/src/note.js")>()),
   note: noteMock,
 }));
 
