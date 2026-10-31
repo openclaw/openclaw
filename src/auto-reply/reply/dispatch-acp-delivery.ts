@@ -16,7 +16,7 @@ import {
   cleanDeferredFinalText,
   mergeDeferredFinalText,
 } from "../../tts/captioned-final.js";
-import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
+import { createTtsDirectiveTextStreamCleaner } from "../../tts/directive-facts.js";
 import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import {
   copyReplyPayloadMetadata,
