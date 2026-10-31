@@ -1,4 +1,7 @@
-/** Synthetic schema-39 fixture; run with node --import ./scripts/tsx.mjs. */
+/**
+ * Synthetic schema-39 fixture; run with node --import ./scripts/tsx.mjs.
+ * --database-only omits the unrelated 62,000-file workspace for SQL owner measurements.
+ */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -16,9 +19,11 @@ const { values } = parseArgs({
     "target-body-bytes": { type: "string", default: "1024" },
     "snapshot-bytes": { type: "string", default: "65536" },
     "workspace-only": { type: "boolean" },
+    "database-only": { type: "boolean" },
   },
 });
 assert(values.root, "--root is required and must not already exist");
+assert(!(values["workspace-only"] && values["database-only"]));
 const positive = (input) => {
   const number = Number(input);
   assert(Number.isSafeInteger(number) && number > 0);
@@ -200,7 +205,9 @@ try {
   );
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   assert.equal(inserted, eventCount);
-  const workspace = createSyntheticWorkspace(path.join(root, "workspace"));
+  const workspace = values["database-only"]
+    ? undefined
+    : createSyntheticWorkspace(path.join(root, "workspace"));
   const summary = {
     format: "openclaw-session-read-transactions-v1",
     root,
