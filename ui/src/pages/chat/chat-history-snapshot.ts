@@ -1,6 +1,7 @@
 import {
   readSessionMessageIdentity,
   reduceSessionProjection,
+  type SessionProjectionEntry,
 } from "@openclaw/gateway-client/browser";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
@@ -40,7 +41,7 @@ import {
   getChatSessionProjection,
   publishChatSessionProjection,
   publishChatSessionProjectionMessages,
-  readChatLocalOutputs,
+  readChatLocalOutputEntries,
 } from "./history-merge.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import {
@@ -335,8 +336,9 @@ export function prepareChatHistoryPages(
   state: Pick<ChatState, "chatMessages" | "chatHistoryPagination" | "readTranscriptAnchorSource">,
   results: readonly ChatHistoryResult[],
   direction: "older" | "newer" | "around",
-  localOutputs: readonly unknown[] = readChatLocalOutputs(state),
+  localEntries: readonly SessionProjectionEntry[] = readChatLocalOutputEntries(state),
 ) {
+  const localOutputs = localEntries.map((entry) => entry.message);
   const previous = state.chatMessages;
   const previousPagination = state.chatHistoryPagination;
   const reader = state.readTranscriptAnchorSource?.();
@@ -369,8 +371,8 @@ export function prepareChatHistoryPages(
     if (direction !== "around") {
       const merged =
         direction === "older"
-          ? prependUniqueNativeMessages(incoming, messages)
-          : prependUniqueNativeMessages(messages, incoming);
+          ? prependUniqueNativeMessages(incoming, messages, localEntries)
+          : prependUniqueNativeMessages(messages, incoming, localEntries);
       const heldExpanded =
         direction === "older" ? merged.currentExpandedSources : merged.incomingExpandedSources;
       const incomingExpanded =
@@ -437,8 +439,9 @@ export function admitChatHistoryPages(
   }
   const previous = state.chatMessages;
   const previousPagination = state.chatHistoryPagination;
-  const localOutputs = readChatLocalOutputs(state);
-  const prepared = prepareChatHistoryPages(state, results, direction, localOutputs);
+  const localEntries = readChatLocalOutputEntries(state);
+  const localOutputs = localEntries.map((entry) => entry.message);
+  const prepared = prepareChatHistoryPages(state, results, direction, localEntries);
   if (!prepared.fits) {
     // Around navigation cannot retire a required target after accepting its
     // coverage or receipts; its existing caller surfaces this capacity reason.

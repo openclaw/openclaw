@@ -20,7 +20,7 @@ import type { ChatState } from "./chat-state-contract.ts";
 import {
   getChatSessionProjection,
   ownsChatSessionProjectionScope,
-  readChatLocalOutputs,
+  readChatLocalOutputEntries,
 } from "./history-merge.ts";
 import { hasPendingManualChatScroll } from "./scroll.ts";
 
@@ -168,7 +168,7 @@ export async function fillHeldHistoryGap<Tail extends ChatHistoryResult>(
       },
     ],
     "around",
-    readChatLocalOutputs(state),
+    readChatLocalOutputEntries(state),
   );
   let result = tail;
   if (!prepared.fits) {
@@ -200,7 +200,7 @@ export async function fillHeldHistoryGap<Tail extends ChatHistoryResult>(
       },
       [older],
       "older",
-      readChatLocalOutputs(state),
+      readChatLocalOutputEntries(state),
     );
     const retained = new Set(next.pagination.segments?.flatMap((segment) => segment.sources));
     // Refilling cannot evict its fresh tail or an already accepted gap packet.

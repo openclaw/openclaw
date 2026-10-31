@@ -1,9 +1,9 @@
 import type { SessionProjectionEntry } from "@openclaw/gateway-client/browser";
 
-export function chatLocalOutputMessages(
+export function chatLocalOutputEntries(
   entries: readonly SessionProjectionEntry[] | undefined,
-): unknown[] {
-  return entries?.filter((entry) => entry.localOutput).map((entry) => entry.message) ?? [];
+): SessionProjectionEntry[] {
+  return entries?.filter((entry) => entry.localOutput) ?? [];
 }
 
 export function withoutChatLocalOutputs<T extends { messages: unknown[] }>(

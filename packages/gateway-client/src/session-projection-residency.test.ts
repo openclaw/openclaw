@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { insertSessionProjectionEntry } from "./session-projection-order.js";
 import {
   hasSessionProjectionAcceptedFinal,
   reduceSessionProjection,
@@ -33,6 +34,68 @@ it("preserves explicit local output on refresh but lets residency and reset reti
   const retired = admit(state, [before, after]);
   expect(retired.messages).toEqual([before, after]);
   expect(reduceSessionProjection(state, { type: "sessionReset" }).messages).toEqual([]);
+});
+
+it("records local output after a supported roleless source", () => {
+  const before = savedUser("before", "before", 2);
+  const marker = { type: "compaction", __openclaw: { seq: 3 } };
+  const after = savedUser("after", "after", 4);
+  const output = { role: "system", content: "command result" };
+  let state = reduceSessionProjection(projection([before, marker]), {
+    type: "localOutput",
+    message: output,
+  });
+  expect(state.entries.at(-1)).toMatchObject({ localOutput: true, afterSequence: 3 });
+  state = reduceSessionProjection(state, {
+    type: "snapshotLoaded",
+    messages: [before, marker, after],
+  });
+  expect(state.messages).toEqual([before, marker, output, after]);
+});
+
+it.each([false, true])(
+  "keeps local output before a later roleless source with predecessor retired=%s",
+  (retired) => {
+    const before = savedUser("before", "before", 2);
+    const marker = { type: "compaction", __openclaw: { seq: 3 } };
+    const after = savedUser("after", "after", 4);
+    const output = { role: "system", content: "command result" };
+    let state = reduceSessionProjection(projection([before]), {
+      type: "localOutput",
+      message: output,
+    });
+    if (retired) {
+      state = admit(state, [output, after]);
+      expect(state.messages).toEqual([output, after]);
+    }
+    const messages = retired ? [marker, after] : [before, marker, after];
+    state = reduceSessionProjection(state, { type: "snapshotLoaded", messages });
+    expect(state.messages).toEqual(
+      retired ? [output, marker, after] : [before, output, marker, after],
+    );
+    expect(state.entries.find((entry) => entry.localOutput)?.message).toBe(output);
+  },
+);
+
+it("keeps envelope-owned sequence facts in local output cuts and boundaries", () => {
+  const durable = { role: "assistant", content: "envelope-owned source" };
+  const output = { role: "system", content: "command result" };
+  let state = reduceSessionProjection(projection(), {
+    type: "messagePersisted",
+    message: durable,
+    envelope: { messageSeq: 3 },
+  });
+  state = reduceSessionProjection(state, { type: "localOutput", message: output });
+  expect(state.entries[1]).toMatchObject({ localOutput: true, afterSequence: 3 });
+  const earlier = reduceSessionProjection(projection([savedUser("before", "before", 2)]), {
+    type: "localOutput",
+    message: output,
+  });
+  expect(
+    insertSessionProjectionEntry([state.entries[0]], earlier.entries[1]).map(
+      (entry) => entry.message,
+    ),
+  ).toEqual([output, durable]);
 });
 
 it("releases a settled durable primary while preserving payload-free replay facts", () => {

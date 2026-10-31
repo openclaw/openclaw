@@ -32,7 +32,7 @@ import {
   projectResidentChatHistory,
   publishResidentChatMessages,
 } from "./chat-history-window.ts";
-import { chatLocalOutputMessages } from "./chat-local-outputs.ts";
+import { chatLocalOutputEntries } from "./chat-local-outputs.ts";
 import { matchesCompactionOperation } from "./chat-progress.ts";
 import {
   CHAT_PROJECTION_SCOPE_KEYS,
@@ -241,8 +241,12 @@ export function ownsChatSessionProjectionScope(
 }
 
 /** Read existing custody without initializing or publishing during tentative admission. */
+export function readChatLocalOutputEntries(owner: object): readonly SessionProjectionEntry[] {
+  return chatLocalOutputEntries(chatSessionProjections.get(owner)?.projection?.entries);
+}
+
 export function readChatLocalOutputs(owner: object): readonly unknown[] {
-  return chatLocalOutputMessages(chatSessionProjections.get(owner)?.projection?.entries);
+  return readChatLocalOutputEntries(owner).map((entry) => entry.message);
 }
 
 export function getChatRunOwner(owner: object): string | undefined {

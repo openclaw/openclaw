@@ -1,3 +1,4 @@
+import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expect, it, vi } from "vitest";
 import {
   nativeHistoryMessageIdentity,
@@ -146,3 +147,121 @@ it("keeps an unkeyed outcome after its matched source when merging a newer page"
   expect(merged.incomingExpandedSources.size).toBe(0);
   expect(merged.currentExpandedSources.size).toBe(0);
 });
+
+it("moves only recorded local occurrences without deduplicating other object occurrences", () => {
+  const [first, second, third, fourth] = [1, 2, 3, 4].map((seq) => nativeHistoryMessage(seq));
+  const output = { role: "system", content: "Local command result" };
+  const entries = reduceSessionProjection(createSessionProjection({}, [second]), {
+    type: "localOutput",
+    message: output,
+  }).entries.filter((entry) => entry.localOutput);
+  const merged = prependUniqueNativeMessages(
+    [first, { ...second }, third, { ...fourth }],
+    [second, output, fourth, output],
+    entries,
+  );
+  expect(merged.messages).toEqual([first, second, output, third, fourth, output]);
+  expect(merged.messages.filter((message) => message === output)).toHaveLength(2);
+  expect(merged.incomingExpandedSources.size).toBe(0);
+  expect(merged.currentExpandedSources.size).toBe(0);
+});
+
+it("keeps source sibling occurrence and expansion facts while placing typed local output", () => {
+  const [first, second, third, fourth] = [1, 2, 3, 4].map((seq) => nativeHistoryMessage(seq));
+  const [left, right] = ["left", "right"].map((part) =>
+    Object.assign({}, second, { content: part }),
+  );
+  const output = { role: "system", content: "Local command result" };
+  const laterOutput = { role: "system", content: "Later command result" };
+  const firstOutput = reduceSessionProjection(createSessionProjection({}, [second]), {
+    type: "localOutput",
+    message: output,
+  });
+  const entries = reduceSessionProjection(firstOutput, {
+    type: "localOutput",
+    message: laterOutput,
+  }).entries.filter((entry) => entry.localOutput);
+  const merged = prependUniqueNativeMessages(
+    [first, { ...left }, { ...right }, { ...right }, third, { ...fourth }],
+    [left, right, output, laterOutput, fourth],
+    entries,
+  );
+  expect(merged.messages).toEqual([first, right, left, right, output, laterOutput, third, fourth]);
+  expect(merged.messages[2]).toBe(left);
+  expect(merged.messages[3]).toBe(right);
+  expect(merged.incomingExpandedSources).toEqual(new Set());
+  expect(merged.currentExpandedSources).toEqual(new Set(["seq:2"]));
+});
+
+it("leaves unowned rows and unanchored local output in their existing page order", () => {
+  const [first, second, third, fourth] = [1, 2, 3, 4].map((seq) => nativeHistoryMessage(seq));
+  const unanchored = { role: "system", content: "Earlier command result" };
+  const live = { role: "assistant", content: "Live reply", idempotencyKey: "live" };
+  const pending = { role: "user", content: "Pending prompt", idempotencyKey: "pending" };
+  const imported = {
+    role: "assistant",
+    content: "Imported reply",
+    __openclaw: { importedFrom: "cli", cliSessionId: "import", externalId: "row" },
+  };
+  const state = reduceSessionProjection(createSessionProjection({}), {
+    type: "localOutput",
+    message: unanchored,
+  });
+  const merged = prependUniqueNativeMessages(
+    [first, { ...second }, third, { ...fourth }],
+    [second, live, pending, imported, unanchored, fourth],
+    state.entries,
+  );
+  expect(merged.messages).toEqual([
+    first,
+    second,
+    third,
+    live,
+    pending,
+    imported,
+    unanchored,
+    fourth,
+  ]);
+  expect(merged.messages.slice(3, 7)).toEqual([live, pending, imported, unanchored]);
+  expect(state.entries[0]).toMatchObject({ localOutput: true, afterSequence: undefined });
+});
+
+it.each([false, true])(
+  "keeps an already-correct anchored local before held unsequenced rows with later source=%s",
+  (later) => {
+    const [first, second, fourth] = [1, 2, 4].map((seq) => nativeHistoryMessage(seq));
+    const output = { role: "system", content: "Local command result" };
+    const live = { role: "assistant", content: "Live reply" };
+    const pending = { role: "user", content: "Pending prompt" };
+    const unowned = { role: "system", content: "Unowned presentation" };
+    let state = reduceSessionProjection(createSessionProjection({}, [second]), {
+      type: "localOutput",
+      message: output,
+    });
+    state = reduceSessionProjection(state, {
+      type: "messagePersisted",
+      message: live,
+      envelope: { runId: "live" },
+    });
+    state = reduceSessionProjection(state, {
+      type: "sendPending",
+      runId: "pending",
+      message: pending,
+    });
+    expect(state.messages).toEqual([second, output, live, pending]);
+    expect(state.entries.find((entry) => entry.message === live)).toMatchObject({ live: true });
+    expect(state.entries.find((entry) => entry.message === pending)).toMatchObject({
+      pending: true,
+    });
+    const current = [...state.messages, unowned, ...(later ? [fourth] : [])];
+    const merged = prependUniqueNativeMessages(
+      [first, { ...second }],
+      current,
+      state.entries.filter((entry) => entry.localOutput),
+    );
+    expect(merged.messages).toEqual([first, ...current]);
+    expect(merged.messages[1 + current.indexOf(output)]).toBe(output);
+    expect(merged.incomingExpandedSources.size).toBe(0);
+    expect(merged.currentExpandedSources.size).toBe(0);
+  },
+);

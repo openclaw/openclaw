@@ -1,4 +1,8 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import {
+  readSessionMessageIdentity,
+  readSessionMessageSequence,
+  type SessionProjectionEntry,
+} from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 
 export function readChatThreadMessageIdentity(message: unknown) {
@@ -84,7 +88,11 @@ export function nativeHistoryMessageIdentity(message: unknown): string | null {
 }
 
 /** Preserve projected siblings while removing only overlapping page occurrences. */
-export function prependUniqueNativeMessages(messages: unknown[], current: unknown[]) {
+export function prependUniqueNativeMessages(
+  messages: unknown[],
+  current: unknown[],
+  localEntries: readonly SessionProjectionEntry[] = [],
+) {
   const incomingSources = new Set<string>();
   for (const message of messages) {
     const source = nativeHistoryMessageSourceIdentity(message);
@@ -147,6 +155,33 @@ export function prependUniqueNativeMessages(messages: unknown[], current: unknow
     }
     if (index < current.length) {
       merged.push(current[index]);
+    }
+  }
+  if (localEntries.length) {
+    // Only recorded local occurrences move earlier across a newly filled gap.
+    // Keep already-correct placement among unsequenced live/pending rows; the
+    // predecessor may be retired, but its cut survives in the entry.
+    const cuts = new Map<unknown, number[]>();
+    for (const entry of localEntries) {
+      if (entry.localOutput && entry.afterSequence != null) {
+        const queue = cuts.get(entry.message) ?? [];
+        queue.push(entry.afterSequence);
+        cuts.set(entry.message, queue);
+      }
+    }
+    for (let index = 0; index < merged.length; index += 1) {
+      const message = merged[index];
+      const cut = cuts.get(message)?.shift();
+      if (cut == null) {
+        continue;
+      }
+      const boundary = merged.findIndex(
+        (candidate) => (readSessionMessageSequence(candidate) ?? -1) > cut,
+      );
+      if (boundary >= 0 && boundary < index) {
+        merged.splice(index, 1);
+        merged.splice(boundary, 0, message);
+      }
     }
   }
   return { messages: merged, incomingExpandedSources, currentExpandedSources };

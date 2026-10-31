@@ -21,6 +21,7 @@ import {
   createSessionProjectionEntry as createEntry,
   isLocallyOptimisticSessionMessage,
   sameTranscriptIdentity,
+  readSessionMessageSequence,
   normalizeSessionProjectionRunId,
   sameAssistantPersistenceReceipt,
   type SessionMessageEnvelope,
@@ -562,8 +563,12 @@ export function reduceSessionProjection(
   switch (event.type) {
     case "localOutput": {
       // Retain placement, not a fabricated durable sequence, across refreshes.
-      const afterSequence = state.entries.findLast((entry) => entry.identity?.sequence != null)
-        ?.identity?.sequence;
+      const previous = state.entries.findLast(
+        (entry) => (entry.identity?.sequence ?? readSessionMessageSequence(entry.message)) != null,
+      );
+      const afterSequence = previous
+        ? (previous.identity?.sequence ?? readSessionMessageSequence(previous.message))
+        : undefined;
       return withEntries(state, [
         ...state.entries,
         { ...createEntry(event.message), localOutput: true, afterSequence },

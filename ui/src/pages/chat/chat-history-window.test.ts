@@ -666,6 +666,57 @@ it("preserves local outcome placement when a newer page overlaps its preceding s
   );
 });
 
+it.each([
+  { retired: false, sequenceOnly: false, roleless: false },
+  { retired: true, sequenceOnly: false, roleless: false },
+  { retired: false, sequenceOnly: true, roleless: false },
+  { retired: true, sequenceOnly: true, roleless: false },
+  { retired: false, sequenceOnly: true, roleless: true },
+  { retired: true, sequenceOnly: true, roleless: true },
+])(
+  "keeps local output at its recorded cut through older overlap $retired/$sequenceOnly/$roleless",
+  ({ retired, sequenceOnly, roleless }) => {
+    const row = (seq: number) =>
+      sequenceOnly ? { role: "user", content: `source-${seq}`, __openclaw: { seq } } : durable(seq);
+    const host = makeChatHost();
+    const second = row(2);
+    const fourth = row(4);
+    admitChatHistoryPages(host, [{ messages: [second] }], "around");
+    const output = { role: "system", content: "Local command result", timestamp: 1 };
+    reduceChatSessionProjection(host, { type: "localOutput", message: output });
+    if (retired) {
+      admitChatHistoryPages(host, [{ messages: [fourth] }], "around");
+    } else {
+      reduceChatSessionProjection(host, { type: "messagePersisted", message: fourth });
+    }
+    expect(host.chatMessages).toEqual(retired ? [output, fourth] : [second, output, fourth]);
+    const local = getChatSessionProjection(host).entries.find((entry) => entry.localOutput);
+    expect(local).toMatchObject({ message: output, localOutput: true, afterSequence: 2 });
+    const first = row(1);
+    const third = roleless ? { type: "compaction", __openclaw: { seq: 3 } } : row(3);
+    const incoming = [first, { ...second }, third, { ...fourth }];
+    const packet = prepareChatHistoryPacket(incoming, { hasMore: false });
+    expect(packet.boundedPacket).toBe(true);
+
+    expect(admitChatHistoryPages(host, [{ messages: incoming, packet }], "older")).toBe("messages");
+
+    expect(host.chatMessages).toEqual([first, second, output, third, fourth]);
+    expect(host.chatMessages[2]).toBe(output);
+    expect(host.chatMessages.at(-1)).toBe(fourth);
+    expect(getChatSessionProjection(host).entries.filter((entry) => entry.localOutput)).toEqual([
+      local,
+    ]);
+    if (sequenceOnly) {
+      expect(host.chatMessages.filter((message) => message !== output)).toEqual([
+        first,
+        second,
+        third,
+        fourth,
+      ]);
+    }
+  },
+);
+
 it.each(["older", "newer"] as const)(
   "preserves original reader-packet custody when %s admission changes only its adjacent edge",
   (direction) => {

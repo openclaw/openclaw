@@ -1,5 +1,8 @@
 import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionProjectionEntry } from "./session-projection-message-identity.js";
+import {
+  readSessionMessageSequence,
+  type SessionProjectionEntry,
+} from "./session-projection-message-identity.js";
 import type { SessionProjectionRun } from "./session-projection.js";
 
 export function insertSessionProjectionEntry(
@@ -20,7 +23,10 @@ export function insertSessionProjectionEntry(
   }
   if (incoming.localOutput && incoming.afterSequence != null) {
     const after = incoming.afterSequence;
-    nextIndex = entries.findIndex((entry) => (entry.identity?.sequence ?? -1) > after);
+    nextIndex = entries.findIndex(
+      (entry) =>
+        (entry.identity?.sequence ?? readSessionMessageSequence(entry.message) ?? -1) > after,
+    );
   }
   if (incoming.identity?.role === "user" && incoming.identity.runId) {
     const runId = incoming.identity.runId;

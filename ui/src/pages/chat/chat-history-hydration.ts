@@ -54,7 +54,7 @@ import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-sta
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import {
   getChatSessionProjection,
-  readChatLocalOutputs,
+  readChatLocalOutputEntries,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   publishChatSessionProjection,
@@ -401,7 +401,7 @@ export async function hydrateChatHistory(
         },
         [res],
         "around",
-        readChatLocalOutputs(state),
+        readChatLocalOutputEntries(state),
       );
       if (!prepared.fits) {
         throw new Error(t("chat.thread.historyCapacity"));
