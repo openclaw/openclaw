@@ -21,5 +21,6 @@ export const stateMigrations = [
     id: "discord-legacy-state",
     label: "Discord command deployment cache",
     resolvePlans: detectDiscordCommandDeployCacheMigration,
+    collectBackupResources: () => [],
   }),
 ];

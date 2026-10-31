@@ -30,13 +30,14 @@ async function bundledMigrations(pluginIds: string[]) {
 beforeAll(async () => {
   const ids = new Set([
     "crabbox-warm-profile-v3",
+    "discord-legacy-state",
     "workboard-28-kv-to-sqlite",
     "memory-core-qmd-workspace-retired",
     "memory-core-qmd-file-locks-to-sqlite-leases",
   ]);
-  noDataMigrations = (await bundledMigrations(["crabbox", "workboard", "memory-core"])).filter(
-    ({ migration }) => ids.has(migration.id),
-  );
+  noDataMigrations = (
+    await bundledMigrations(["crabbox", "discord", "workboard", "memory-core"])
+  ).filter(({ migration }) => ids.has(migration.id));
   recoveryMigrations = await bundledMigrations(["codex", "voice-call"]);
 });
 
@@ -107,12 +108,20 @@ it.each([
   },
 );
 
-it("does not claim missing recovery coverage for bundled core-only and disposable migrations", async () => {
-  expect(noDataMigrations).toHaveLength(4);
-  const result = await preparePluginDoctorMigrationResources(noDataMigrations, input);
-  expect(result.resources).toEqual([]);
-  expect(input.warnings).toEqual([]);
-});
+it.each(["absent", "populated"] as const)(
+  "does not claim missing recovery coverage for bundled core-only and disposable migrations with %s Discord cache",
+  async (layout) => {
+    expect(noDataMigrations).toHaveLength(5);
+    if (layout === "populated") {
+      const cachePath = path.join(stateDir, "discord", "command-deploy-cache.json");
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+      fs.writeFileSync(cachePath, '{"legacy":"cache"}');
+    }
+    const result = await preparePluginDoctorMigrationResources(noDataMigrations, input);
+    expect(result.resources).toEqual([]);
+    expect(input.warnings).toEqual([]);
+  },
+);
 
 it.each(["absent", "default", "configured"] as const)(
   "declares Codex sidecars and Voice Call SQLite recovery resources for %s state",
