@@ -246,7 +246,6 @@ export function ChatComposerPlusMenuBody(props: ChatComposerPlusMenuResolvedProp
       if (!menu.mutationBlockedReason) {
         menu.onPatchToolOverrides(null);
       }
-      return;
     }
   };
   const rootInputs = createMemo(

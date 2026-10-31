@@ -9,8 +9,7 @@ import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 afterEach(() => vi.doUnmock("./chat-composer-plus-menu-subview.tsx"));
 
 it("keeps root actions available after a capability chunk fails and retries the subview", async () => {
-  // Separate module scope from the successful lazy-import tests: a resolved lazy
-  // component no longer imports, even if the module is subsequently mocked.
+  // mock-isolation: reject the lazy import itself to exercise chunk-load recovery.
   vi.doMock("./chat-composer-plus-menu-subview.tsx", () => {
     throw new Error("Capability chunk could not be loaded");
   });
