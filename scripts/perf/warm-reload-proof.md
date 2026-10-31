@@ -45,7 +45,7 @@ transcript includes extended nested lists, bold text, code, tables, and links.
 The synthetic operator uses Involving me, category
 grouping, Created sorting, five collapsed categories, always-visible empty groups,
 and no previews; the catalog has 97 groups and 102 section-order entries. This
-mode records read-only IndexedDB request start/completion times and whether an
+mode records complete-message text hashes and heights, plus read-only IndexedDB request start/completion times and whether an
 exact snapshot read found a record, without recording cache keys or contents.
 `firstTranscriptDomMs` records visible text on either transcript placement,
 independently of a dashboard occupying the main region. These are DOM and I/O

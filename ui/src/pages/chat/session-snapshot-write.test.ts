@@ -1,7 +1,9 @@
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { projectChatDisplayMessages } from "../../../../src/gateway/chat-display-projection.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
+import { chatHistoryRequestParams } from "./chat-history-request-params.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import {
   CHAT_SNAPSHOT_METADATA_STORE_NAME,
@@ -58,6 +60,26 @@ describe("snapshot write serialization and scheduling", () => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
+
+  it.each(["chat.startup", "chat.history"] as const)(
+    "retains complete long Markdown from %s through disk reload",
+    async (method) => {
+      const markdown = Array.from(
+        { length: 24 },
+        (_, index) => `- **Verification ${index + 1}** ${"Synthetic evidence. ".repeat(30)}`,
+      ).join("\n\n");
+      const params = chatHistoryRequestParams(method, "agent:main:saved", undefined);
+      const messages = projectChatDisplayMessages(
+        [{ role: "assistant", content: markdown, __openclaw: { id: "long-answer", seq: 1 } }],
+        params,
+      );
+      writeSnapshotFixture(store, sessionKey, { ...snapshot(), messages });
+      await store.flush();
+      const restored = await store.read(sessionKey);
+      expect(restored?.messages).toEqual([expect.objectContaining({ content: markdown })]);
+      expect(JSON.stringify(restored)).not.toContain("...(truncated)...");
+    },
+  );
 
   it.each([
     { hasMore: false as const, completeSnapshot: true as const, totalMessages: 1_100 },
