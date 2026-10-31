@@ -432,11 +432,11 @@ it.each(["tool", "user"])("keeps stale counts independent of %s and search", (ro
   const container = mount([point({ timestamp: start }), point({ timestamp: start + 1000 })], {
     start,
     end: start + 1000,
-    sessionLogsData: [log(start, "user", "Mu\u0308nchen"), log(start + 1000, "assistant", "Answer")],
+    sessionLogsData: [log(start, "user", "A\u0308"), log(start + 1000, "assistant", "Answer")],
     sessionLogsHasLoaded: true,
     sessionLogs: "refresh failed",
     stale: true,
-    logFilters: { roles: [role], tools: [], hasTools: false, query: "münchen" },
+    logFilters: { roles: [role], tools: [], hasTools: false, query: "ä" },
   });
   expect(summary(container)).toMatchObject([
     { value: "2", meta: "1 user · 1 assistant Loaded conversation · selected interval" },
