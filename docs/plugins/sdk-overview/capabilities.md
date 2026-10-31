@@ -210,6 +210,12 @@ The four explicit codecs are `decisionBatchV1ToV2`,
 `DecisionContractError`. They preserve values rather than performing inference,
 thresholding, argmax, probability normalization, or accounting estimates.
 
+`isDecisionBatchV1Representable(batch)` validates V2 input and narrows its types
+without creating a V1 request. It returns `false` for unsupported kinds, explicit
+JSON scalars, or resource limits, including V1's 256-question ceiling. Malformed
+input throws `DecisionContractError`. Use it when preserving V1 admission while
+encoding a native protocol directly; it does not grant execution authority.
+
 System One adapters can share `encodeSystemOneQuestions` and
 `decodeSystemOneResponse` from the same entrypoint. Encoding renames Boolean
 questions to native `noul`; the caller still owns input and question admission.

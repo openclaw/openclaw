@@ -360,7 +360,12 @@ it.skipIf(process.platform === "win32").for([true, false])(
         activation: { onStartup: true },
         configSchema: { type: "object", properties: {} },
       },
-      `export default { id: "slow-finalizer", register(api) {
+      `import { channel } from "node:diagnostics_channel";
+      export default { id: "slow-finalizer", register(api) {
+      channel("openclaw.agent-database.reservation").subscribe((event) => {
+        if (event.workerOperations?.includes("session.rowTranscript.backfill"))
+          api.logger.info("[close-backfill-proof] " + JSON.stringify(event));
+      });
       api.registerService({ id: "shared-state-timer", start(ctx) {
         ctx.scheduler.schedule({ id: "cron-read", delayMs: 0, everyMs: 1000, async run() {
           await ctx.getCron().list();
@@ -406,22 +411,36 @@ it.skipIf(process.platform === "win32").for([true, false])(
         pendingInputs?: { items: Array<{ state: string; message: unknown }> };
         sessionInfo: { hasActiveRun: boolean };
       }>("chat.history", { sessionKey, limit: 100 });
+    const waitHistory = (
+      sessionKey: string,
+      check: (result: Awaited<ReturnType<typeof history>>) => void,
+      timeout = 30_000,
+    ) => race(vi.waitFor(async () => check(await history(sessionKey)), { timeout }));
     const waitFinal = (sessionKey: string, text: string) =>
-      race(
-        vi.waitFor(
-          async () => {
-            const result = await history(sessionKey);
-            expect(JSON.stringify(result.messages), instance.logs()).toContain(text);
-            expect(result.sessionInfo.hasActiveRun).toBe(false);
-          },
-          { timeout: 30_000 },
-        ),
+      waitHistory(sessionKey, (result) => {
+        expect(JSON.stringify(result.messages), instance.logs()).toContain(text);
+        expect(result.sessionInfo.hasActiveRun).toBe(false);
+      });
+    const waitQueued = (sessionKey: string, messages: string[]) =>
+      waitHistory(
+        sessionKey,
+        (result) => {
+          const pending = result.pendingInputs?.items ?? [];
+          expect(
+            pending.filter(
+              (item) =>
+                item.state === "queued" &&
+                messages.some((text) => JSON.stringify(item.message).includes(text)),
+            ),
+          ).toHaveLength(messages.length);
+        },
+        5_000,
       );
     const send = (
       sessionKey: string,
       message: string,
       queueMode?: "followup" | "steer",
-      timeoutMs?: number,
+      options?: { timeoutMs?: number; suppressCommandInterpretation?: boolean },
     ) =>
       client!.request<{ runId: string }>(
         "chat.send",
@@ -429,9 +448,10 @@ it.skipIf(process.platform === "win32").for([true, false])(
           sessionKey,
           message,
           idempotencyKey: randomUUID(),
+          suppressCommandInterpretation: options?.suppressCommandInterpretation,
           ...(queueMode ? { queueMode } : {}),
         },
-        { expectFinal: false, ...(timeoutMs ? { timeoutMs } : {}) },
+        { expectFinal: false, timeoutMs: options?.timeoutMs },
       );
     await runQaGatewayFixture(
       async () => {
@@ -507,34 +527,11 @@ it.skipIf(process.platform === "win32").for([true, false])(
               }),
             ),
           );
-          await client.request(
-            "chat.send",
-            {
-              sessionKey: key(cycle, "stream"),
-              message: LITERAL_QUEUED_COMMAND,
-              idempotencyKey: randomUUID(),
-              queueMode: "followup",
-              suppressCommandInterpretation: true,
-            },
-            { expectFinal: false },
-          );
+          await send(key(cycle, "stream"), LITERAL_QUEUED_COMMAND, "followup", {
+            suppressCommandInterpretation: true,
+          });
           await send(key(cycle, "stream"), queued(cycle, 2), "followup");
-          await race(
-            vi.waitFor(
-              async () => {
-                const pending = (await history(key(cycle, "stream"))).pendingInputs?.items ?? [];
-                expect(
-                  pending.filter(
-                    (item) =>
-                      item.state === "queued" &&
-                      (JSON.stringify(item.message).includes(LITERAL_QUEUED_COMMAND) ||
-                        JSON.stringify(item.message).includes("QUEUED_BEFORE_RESTART")),
-                  ),
-                ).toHaveLength(2);
-              },
-              { timeout: 5_000 },
-            ),
-          );
+          await waitQueued(key(cycle, "stream"), [LITERAL_QUEUED_COMMAND, queued(cycle, 2)]);
           const child = instance.child;
           assert(child?.pid, "Owned Gateway process unavailable");
           const closed = once(child, "close");
@@ -619,15 +616,13 @@ it.skipIf(process.platform === "win32").for([true, false])(
             blockedStore?.close();
           }
           if (mode === "SIGTERM") {
-            await race(
-              awaitGateBeforeSettlement(
-                provider.wait("finalize"),
-                closed,
-                "Gateway exited before the finalizer entered",
-              ).catch((error: unknown) => {
-                throw new Error(`${String(error)}\n${instance.logs()}`, { cause: error });
-              }),
-            );
+            await awaitGateBeforeSettlement(
+              provider.wait("finalize"),
+              closed,
+              "Gateway exited before the finalizer entered",
+            ).catch((error: unknown) => {
+              throw new Error(`${String(error)}\n${instance.logs()}`, { cause: error });
+            });
             await vi.waitFor(
               () =>
                 expect(instance.logs()).toContain(
@@ -653,11 +648,12 @@ it.skipIf(process.platform === "win32").for([true, false])(
           const cleanClose = shutdownLogs.indexOf("agent database clean-close receipt:");
           expect(markerSummary, shutdownLogs).toBeGreaterThan(-1);
           expect(cleanClose, shutdownLogs).toBeGreaterThan(markerSummary);
+          expect(shutdownLogs.slice(cleanClose).includes("[close-backfill-proof]")).toBe(false);
           const markerAndAbortMs = shutdownLogs.match(
             /restart trace: restart.close.session-abort ([\d.]+)ms/,
           )?.[1];
           process.stdout.write(
-            `[restart-resume-proof] ${mode} markerAndAbortMs=${markerAndAbortMs ?? "unavailable"} shutdownMs=${shutdownMs}\n`,
+            `[restart-resume-proof] ${mode} markerAndAbortMs=${markerAndAbortMs ?? "unavailable"} shutdownMs=${shutdownMs} cleanCloses=${shutdownLogs.match(/^.*agent database clean-close receipt:.*$/gm)?.length ?? 0}\n`,
           );
           expect.soft(exit, instance.logs()).toEqual([0, null]);
           expect
@@ -694,7 +690,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
           // Admission must finish while the resumed provider request is still held.
           await expect
             .soft(
-              race(send(key(cycle, "stream"), fresh(cycle), "steer", 2_000)),
+              race(send(key(cycle, "stream"), fresh(cycle), "steer", { timeoutMs: 2_000 })),
               "a fresh message must not wait behind restart recovery admission",
             )
             .resolves.toMatchObject({ runId: expect.any(String) });
@@ -774,19 +770,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
         await send(crashKey, marker(2, "stream"));
         await provider.wait("ready:2:stream");
         await send(crashKey, CRASH_QUEUED, "followup");
-        await race(
-          vi.waitFor(
-            async () => {
-              expect(
-                (await history(crashKey)).pendingInputs?.items.some(
-                  (item) =>
-                    item.state === "queued" && JSON.stringify(item.message).includes(CRASH_QUEUED),
-                ),
-              ).toBe(true);
-            },
-            { timeout: 5_000 },
-          ),
-        );
+        await waitQueued(crashKey, [CRASH_QUEUED]);
         await instance.crashGateway();
         await client.stopAndWait();
         client = undefined;
@@ -826,9 +810,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
         expect(provider.calls.some((call) => call.current.includes(CRASH_QUEUED))).toBe(false);
       },
       () => client?.stopAndWait(),
-      async () => {
-        provider.releaseFinalizer();
-      },
+      provider.releaseFinalizer,
       () => instance.cleanup(),
       provider.close,
     );

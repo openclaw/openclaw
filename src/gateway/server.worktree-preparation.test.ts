@@ -135,6 +135,7 @@ it.each([
           url: "https://github.com/example/project/pull/7",
           host: "github.com",
           number: 7,
+          origin: "external-pr" as const,
           base: {
             repository: "example/project",
             repositoryId: 1,

@@ -773,7 +773,26 @@ export default function controlUiViteConfig(
       ? createControlUiDevGateway(process.env.OPENCLAW_UI_DEV_GATEWAY_URL)
       : undefined;
   const staticImports = new Map<string, readonly string[]>();
+  const styledChunks = new Set<string>();
+  const parallelStyleTargets = new Set<string>();
+  const parallelStyleEntries = [
+    "/ui/src/pages/config/config-page.tsx",
+    "/ui/src/pages/usage/usage-page.tsx",
+    "/ui/src/components/board/board-view.tsx",
+    "/ui/src/pages/chat/components/chat-sidebar-region.runtime.tsx",
+  ];
   const copiedInputs = new Set<string>();
+  const collectStaticImports = (entry: string) => {
+    const loaded = new Set<string>();
+    const imports = [...(staticImports.get(entry) ?? [])];
+    for (const dependency of imports) {
+      if (!loaded.has(dependency)) {
+        loaded.add(dependency);
+        imports.push(...(staticImports.get(dependency) ?? []));
+      }
+    }
+    return loaded;
+  };
   const resolveModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
     filename,
     deps,
@@ -784,18 +803,17 @@ export default function controlUiViteConfig(
     }
     // The executing importer has already loaded its whole static JS graph.
     // Keep the lazy target, its other dependencies, and Vite's CSS preloads.
-    const loaded = new Set<string>();
-    const imports = [...(staticImports.get(context.hostId) ?? [])];
-    for (const dependency of imports) {
-      if (!loaded.has(dependency)) {
-        loaded.add(dependency);
-        imports.push(...(staticImports.get(dependency) ?? []));
-      }
-    }
-    // Without stylesheet waits, import() immediately fetches its own target.
-    // Keep the target preload when CSS would otherwise delay that request.
-    const waitsForStyles = deps.some((dep) => dep.endsWith(".css"));
-    return deps.filter((dep) => !loaded.has(dep) && (waitsForStyles || dep !== filename));
+    const loaded = collectStaticImports(context.hostId);
+    // Vite removes CSS before calling this hook. Chunk metadata tells us when
+    // its stylesheet wait would otherwise delay fetching the target script.
+    // Keep optional artwork behind its existing wait so it cannot compete
+    // with foreground data on a slow connection.
+    const waitsForStyles =
+      parallelStyleTargets.has(filename) &&
+      (styledChunks.has(filename) ||
+        [...collectStaticImports(filename)].some((dep) => styledChunks.has(dep)));
+    const dependencies = deps.filter((dep) => !loaded.has(dep) && dep !== filename);
+    return waitsForStyles && !loaded.has(filename) ? [filename, ...dependencies] : dependencies;
   };
   return {
     base,
@@ -878,9 +896,21 @@ export default function controlUiViteConfig(
         name: "control-ui-static-import-preloads",
         generateBundle(_options, bundle) {
           staticImports.clear();
+          styledChunks.clear();
+          parallelStyleTargets.clear();
           for (const chunk of Object.values(bundle)) {
             if (chunk.type === "chunk") {
               staticImports.set(chunk.fileName, chunk.imports);
+              if (chunk.viteMetadata?.importedCss.size) {
+                styledChunks.add(chunk.fileName);
+              }
+              if (
+                chunk.moduleIds.some((id) =>
+                  parallelStyleEntries.some((entry) => id.replaceAll("\\", "/").endsWith(entry)),
+                )
+              ) {
+                parallelStyleTargets.add(chunk.fileName);
+              }
             }
           }
         },
