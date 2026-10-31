@@ -178,7 +178,8 @@ export async function requireGitHubPublicationCommit(
         "--no-tags",
         "--no-write-fetch-head",
         "--recurse-submodules=no",
-        ...(missing ? ["--refetch", "--stdin"] : []),
+        // Keep ancestry and tree metadata; callers request file contents below.
+        ...(missing ? ["--refetch", "--stdin"] : ["--filter=blob:none"]),
         "--",
         githubRepositoryUrl(repository, host),
         ...(missing ? [] : [sha]),

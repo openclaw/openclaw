@@ -101,6 +101,14 @@ describe("GitHub Copilot usage credential routing", () => {
 });
 
 describe("fetchCopilotUsage", () => {
+  it("guides operators to refresh usage after a malformed Copilot response", async () => {
+    const fetchFn = createProviderUsageFetch(async () => new Response("{", { status: 200 }));
+
+    await expect(fetchSnapshot(fetchFn)).rejects.toThrow(
+      "Copilot returned unreadable usage data. Try refreshing usage later.",
+    );
+  });
+
   it("cancels failed response bodies", async () => {
     const cancel = vi.fn(() => {
       throw new Error("stream already closed");

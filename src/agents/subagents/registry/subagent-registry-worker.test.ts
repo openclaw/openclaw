@@ -8,6 +8,11 @@ import {
   observeParentSqlite,
 } from "../../../../test/helpers/sqlite-parent-observer.js";
 import { createContext as createGatewayContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import {
+  expectCollected,
+  weak,
+  weakControl,
+} from "../../../gateway/session-collection.test-support.js";
 import * as snapshotSource from "../../../infra/sqlite-snapshot-source.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
@@ -43,6 +48,7 @@ import {
   saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import {
+  clearSubagentRunsReadCacheForTest,
   getSubagentRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   prepareSubagentRegistrationRows,
@@ -413,6 +419,35 @@ it("publishes overlapping durable and runtime-only mutations in FIFO order", asy
     release.resolve();
     await Promise.allSettled([first, second, third]);
   }
+});
+
+it("releases unrelated registration rows while following new owners and deletion receipts", async () => {
+  vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1");
+  const child = "agent:main:subagent:retained-registration";
+  async function capture() {
+    // A completed row is compacted away from the worker reply's object lifetime.
+    seed(
+      entry("selected", { childSessionKey: child }),
+      entry("unrelated", { execution: { status: "terminal", endedAt: 2 }, cleanupCompletedAt: 3 }),
+    );
+    const preparedRows = await prepareSubagentRegistrationRows(
+      child,
+      ["selected"],
+      captureOpenClawStateWorkerContext(),
+    );
+    const retired = weak(getSubagentRunsSnapshotForRead(new Map()).get("unrelated")!);
+    clearSubagentRunsReadCacheForTest();
+    return { preparedRows, retired };
+  }
+  // Finish the frame that read the full snapshot before testing the reader's retention.
+  const { preparedRows, retired } = await capture();
+  await expectCollected(weakControl(), retired);
+  expect([...preparedRows().keys()]).toEqual(["selected"]);
+  await register(entry("unrelated", { childSessionKey: child, generation: 2 }));
+  expect(preparedRows().get("unrelated")?.generation).toBe(2);
+  await mutateSubagentRuns(["selected"], () => postimages([["selected", null]]));
+  expect(preparedRows().has("selected")).toBe(false);
+  expect(preparedRows().has("unrelated")).toBe(true);
 });
 
 it("persists prepared-only registration without resurrecting it after a queued deletion", async () => {

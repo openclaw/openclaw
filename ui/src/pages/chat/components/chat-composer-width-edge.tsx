@@ -1,4 +1,4 @@
-import { onSettled } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { createPointerDrag } from "../../../lib/reactive/pointer-drag.ts";
@@ -10,6 +10,16 @@ import { transcriptColumnWidth, type ComposerWidthOptions } from "./chat-compose
  */
 export function ResizeEdge(props: { options: () => ComposerWidthOptions }) {
   const options = () => props.options();
+  const geometry = createMemo(
+    () => ({
+      width: options().chatMessageMaxWidth ?? undefined,
+      transcript: options().getTranscriptElement?.(),
+    }),
+    {
+      equals: (previous, next) =>
+        previous.width === next.width && previous.transcript === next.transcript,
+    },
+  );
   const drag = createPointerDrag();
   let edge: HTMLDivElement | undefined;
   const shell = () => edge?.parentElement;
@@ -79,26 +89,23 @@ export function ResizeEdge(props: { options: () => ComposerWidthOptions }) {
     edge.setAttribute("aria-valuemax", String(Math.round(available)));
   };
   const schedule = createLayoutMeasurement(
-    () => {
-      // Read each reactive prop here; callers may return a stable props object.
-      const { chatMessageMaxWidth, onComposerWidthChange, getTranscriptElement } = options();
-      return { chatMessageMaxWidth, onComposerWidthChange, getTranscriptElement };
-    },
+    // Streaming replaces callbacks without changing the geometry to measure.
+    geometry,
     (next) => {
       if (!next) {
         return;
       }
-      const width = next.chatMessageMaxWidth ?? undefined;
+      const width = next.width;
       if (width !== lastWidth) {
         baseline = width;
         refreshMinimum = true;
       }
       lastWidth = width;
-      measure(next);
+      measure(options());
     },
     {
-      targets: (next) =>
-        [shell(), input(), shell() && region(), next?.getTranscriptElement?.()].filter(
+      targets: () =>
+        [shell(), input(), shell() && region(), options().getTranscriptElement?.()].filter(
           (node): node is Element => Boolean(node),
         ),
       changeTiming: "sync",

@@ -317,12 +317,15 @@ not identify the thread consuming CPU or prove a main-thread hang. Inspect the
 delay measurements alongside CPU pressure. The `eventLoop` diagnostic does not
 change the readiness result by itself.
 
-Main-thread callbacks longer than one second produce a `main-thread stall` log
-with a code-owned task label where available. On Node 26, a bounded CPU flight
+Instrumented synchronous work lasting at least 250 ms and unattributed event-loop
+gaps longer than one second produce a `main-thread stall` log with a code-owned
+task label where available. Native launches through the process and command
+runners and PTY helper have fixed task labels; these measure
+the synchronous launch, not the child's running time. On Node 26, a bounded CPU flight
 recorder writes one additional bounded `main-thread stall profile` line with a
-trailing window's top inclusive frames, sample count, and truncation status.
-Several callbacks can finish before a sample, so this window is not assigned to
-an individual task. It samples every 25 ms and rotates five-second windows without
+stall interval's top inclusive frames, sample count, and truncation status.
+Several stalls can finish before reporting; only the longest interval is profiled.
+It samples every 25 ms and rotates five-second windows without
 stopping the sampler. At most two windows are retained; no profile files are
 written. Symbols and locations use the same redaction policy as on-demand
 diagnostic profiles. Inclusive counts overlap when a sampled stack contains
@@ -334,6 +337,12 @@ options. Callback labels still work on those runtimes. Native blocking work can
 remain unsymbolized, and an unusually long stall can exhaust the sample cap;
 `truncated=true` identifies incomplete evidence. Recorder failures are logged
 once and disable recording for that monitor's lifetime.
+
+`samples=0` means neither retained profile contains a timestamped sample in that
+stall interval. It does not prove the entire process stopped or identify the
+blocking operation. For example, Linux libuv blocks the sampling signal on the
+calling thread around `fork()`, including allocator fork hooks. The synchronous
+task labels remain available during such sampling gaps.
 
 ## Uptime monitoring
 

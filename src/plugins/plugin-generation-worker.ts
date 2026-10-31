@@ -13,6 +13,11 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import {
+  addPluginGenerationMetrics,
+  getPluginGenerationMetrics,
+  type PluginGenerationMetrics,
+} from "./plugin-generation-metrics.js";
 import { createPluginGenerationNativeRoots } from "./plugin-generation-native-roots.js";
 import type {
   inspectPluginGenerationSources,
@@ -25,7 +30,11 @@ import type {
   GenerationWorkerCallback,
   PluginGenerationInspection,
 } from "./plugin-generation-worker-contract.js";
-import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
+import {
+  markPluginSourceAcquisitionError,
+  PluginDependencyLinkError,
+  PluginSourceRecoveryUnavailableError,
+} from "./plugin-instance-error.js";
 import {
   adoptPluginNativeAdmissions,
   nativeAdmissionStateFor,
@@ -330,7 +339,13 @@ async function prepareOwnedPluginGeneration(
       importRoot: (id) => nativeRoots.retain(id),
     },
   );
-  function accept(reply: GenerationWorkerReply): unknown {
+  function accept(
+    reply: GenerationWorkerReply,
+    metrics: PluginGenerationMetrics | undefined,
+  ): unknown {
+    if (reply.metrics) {
+      addPluginGenerationMetrics(metrics, reply.metrics);
+    }
     resources = reply.resources;
     codec.releaseReceivedHandles(reply.released ?? []);
     if ("error" in reply) {
@@ -338,10 +353,13 @@ async function prepareOwnedPluginGeneration(
       const error =
         reply.error.name === "PluginSourceRecoveryUnavailableError"
           ? new PluginSourceRecoveryUnavailableError(undefined)
-          : reply.error.name === "SyntaxError"
-            ? new SyntaxError(reply.error.message)
-            : new Error(reply.error.message);
-      throw Object.assign(error, reply.error);
+          : reply.error.name === "PluginDependencyLinkError"
+            ? new PluginDependencyLinkError(reply.error.message)
+            : reply.error.name === "SyntaxError"
+              ? new SyntaxError(reply.error.message)
+              : new Error(reply.error.message);
+      Object.assign(error, reply.error);
+      throw reply.sourceAcquisitionFailure ? markPluginSourceAcquisitionError(error) : error;
     }
     if (reply.admission) {
       adoptPluginNativeAdmissions(
@@ -357,6 +375,8 @@ async function prepareOwnedPluginGeneration(
     if (closing) {
       throw new Error("Plugin preparation worker has closed");
     }
+    const metrics = getPluginGenerationMetrics();
+    const started = performance.now();
     pending++;
     let task: ReturnType<typeof pool.startTask> | undefined;
     try {
@@ -372,7 +392,7 @@ async function prepareOwnedPluginGeneration(
         },
       );
       pendingNativeLoads.clear();
-      const value = accept(await task.result);
+      const value = accept(await task.result, metrics);
       // Async preparation/disposal joins the captured admission owner. Sync lazy
       // imports only queue facts, so they cannot block the host's async writes.
       await settlePluginNativeAdmissionState(admission);
@@ -383,6 +403,9 @@ async function prepareOwnedPluginGeneration(
           await shared.release(task).result;
         }
       } finally {
+        if (metrics) {
+          metrics.hostMs += performance.now() - started;
+        }
         pending--;
         if (!pending) {
           drained?.resolve();
@@ -397,6 +420,8 @@ async function prepareOwnedPluginGeneration(
     if (closing) {
       throw new Error("Plugin preparation worker has closed");
     }
+    const metrics = getPluginGenerationMetrics();
+    const started = performance.now();
     pending++;
     let task: ReturnType<typeof pool.startTask> | undefined;
     const join = <T>(operation: {
@@ -431,13 +456,16 @@ async function prepareOwnedPluginGeneration(
         { progressSignal: waitSignal, ...(sourceCapture ? {} : { timeoutMs: 30_000 }) },
       );
       pendingNativeLoads.clear();
-      return accept(join(task));
+      return accept(join(task), metrics);
     } finally {
       try {
         if (task) {
           join(shared.release(task));
         }
       } finally {
+        if (metrics) {
+          metrics.hostMs += performance.now() - started;
+        }
         pending--;
         if (!pending) {
           drained?.resolve();

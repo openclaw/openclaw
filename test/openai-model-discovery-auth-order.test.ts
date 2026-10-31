@@ -56,7 +56,7 @@ vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
         (!params.providerRefs?.length ||
           params.providerRefs.some((ref) => matchesProviderPluginRef(provider, ref))),
     );
-  return createProviderHookRuntime({
+  const providerResolvers: Parameters<typeof createProviderHookRuntime>[0] = {
     isPluginProvidersLoadInFlight: () => false,
     resolvePluginProviderRegistryCore: (params) => {
       const providers = selectProviders(params);
@@ -81,7 +81,12 @@ vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
       }
       return providers.map((provider) => Object.assign({}, provider, { pluginId: provider.id }));
     },
-  });
+    withPluginProviderRegistry: async (params, run) =>
+      run(providerResolvers.resolvePluginProviderRegistryCore(params)),
+    withPluginProviders: async (params, run) =>
+      run(providerResolvers.resolvePluginProvidersCore(params)),
+  };
+  return createProviderHookRuntime(providerResolvers);
 });
 
 function createCatalogProviderRegistry(providers = discovery.providers) {
