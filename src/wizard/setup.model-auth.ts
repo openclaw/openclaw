@@ -13,6 +13,7 @@ import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import { readSetupConfigAuthority } from "./setup.shared.js";
@@ -326,16 +327,57 @@ export async function runSetupModelAuthStep(params: {
         (!params.preserveExistingModelSelection ||
           !authChoiceModelSelectionPolicy.allowKeepCurrent));
     if (shouldPromptModelSelection) {
+      const preferredProvider = authChoiceModelSelectionPolicy.preferredProvider;
+
+      // Extract credentials/API key the user just entered
+      let enteredApiKey: string | undefined;
+      for (const profile of authProfiles) {
+        if ("key" in profile.credential && typeof profile.credential.key === "string") {
+          enteredApiKey = profile.credential.key;
+          break;
+        }
+      }
+
+      const candidateProvider =
+        preferredProvider ??
+        (authProfiles[0]?.credential &&
+        "provider" in authProfiles[0].credential &&
+        typeof authProfiles[0].credential.provider === "string"
+          ? authProfiles[0].credential.provider
+          : undefined);
+      const declaredEnvVars = candidateProvider
+        ? getProviderEnvVarsCore(candidateProvider, {
+            config: nextConfig,
+            workspaceDir: target.workspaceDir,
+            env,
+          })
+        : [];
+      const discoveryEnv: NodeJS.ProcessEnv = {
+        ...(env ?? process.env),
+      };
+      if (enteredApiKey) {
+        if (declaredEnvVars.length > 0) {
+          for (const envVar of declaredEnvVars) {
+            discoveryEnv[envVar] = enteredApiKey;
+          }
+        } else if (candidateProvider) {
+          discoveryEnv[`${candidateProvider.toUpperCase().replace(/-/g, "_")}_API_KEY`] =
+            enteredApiKey;
+        }
+      }
+
       const modelSelection = await promptDefaultModel({
         config: nextConfig,
         prompter,
         allowKeep: authChoiceModelSelectionPolicy.allowKeepCurrent,
         includeProviderPluginSetups: true,
-        preferredProvider: authChoiceModelSelectionPolicy.preferredProvider,
+        preferredProvider,
         browseCatalogOnDemand: true,
         agentId: target.agentId,
         agentDir: target.agentDir,
         workspaceDir: target.workspaceDir,
+        pendingAuthProfiles: authProfiles,
+        discoveryEnv,
         runtime,
       });
       if (modelSelection.config) {
