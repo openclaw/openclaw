@@ -1,9 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
-import {
-  parseSidebarSnapshot,
-  removeSidebarSnapshotSession,
-} from "../../components/sidebar-snapshot-data.ts";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import {
@@ -187,6 +183,11 @@ export async function deleteSessionSnapshotEntries(
     return;
   }
   try {
+    // Load the deletion-only model before opening the transaction.
+    const sidebar =
+      !byPrefix && reason !== "cache-eviction"
+        ? await import("../../components/sidebar-snapshot-data.ts")
+        : null;
     await new Promise<void>((resolve, reject) => {
       const names = [
         CHAT_SNAPSHOT_STORE_NAME,
@@ -215,13 +216,13 @@ export async function deleteSessionSnapshotEntries(
               typeof cursor.primaryKey === "string"
                 ? sidebarSnapshotDeletedSessionKey(cursor.primaryKey, invalidation)
                 : undefined;
-            if (deletedSession) {
+            if (deletedSession && sidebar) {
               const record = asOptionalRecord(cursor.value);
-              const model = parseSidebarSnapshot(record?.model);
+              const model = sidebar.parseSidebarSnapshot(record?.model);
               if (!model) {
                 cursor.delete();
               } else {
-                const next = removeSidebarSnapshotSession(model, deletedSession);
+                const next = sidebar.removeSidebarSnapshotSession(model, deletedSession);
                 if (next !== model) {
                   cursor.update({ ...record, model: next });
                 }

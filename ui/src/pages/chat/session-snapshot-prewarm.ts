@@ -3,10 +3,7 @@ import {
   subscribeBootRecordChanges,
   type BootRecord,
 } from "../../app/boot-record.ts";
-import {
-  removeSidebarSnapshotSession,
-  type SidebarSnapshotModel,
-} from "../../components/sidebar-snapshot-data.ts";
+import type { SidebarSnapshotModel } from "../../components/sidebar-snapshot-data.ts";
 import { readStoredChatSnapshotRecord } from "./session-snapshot-database.ts";
 import {
   sidebarSnapshotInvalidationMatches,
@@ -105,9 +102,10 @@ subscribeSnapshotInvalidation((invalidation) => {
     const key = sidebarSnapshotScopeKey(entry.scope);
     const deleted = sidebarSnapshotDeletedSessionKey(key, invalidation);
     if (deleted) {
-      entry.snapshot = entry.snapshot.then(
-        (model) => model && removeSidebarSnapshotSession(model, deleted),
-      );
+      entry.snapshot = Promise.all([
+        entry.snapshot,
+        import("../../components/sidebar-snapshot-data.ts"),
+      ]).then(([model, data]) => model && data.removeSidebarSnapshotSession(model, deleted));
     } else if (sidebarSnapshotInvalidationMatches(key, invalidation)) {
       sidebarScopes.delete(gateway);
     }
