@@ -664,6 +664,18 @@ and `receipt.json`. Symlink permission bits can differ across input filesystems;
 that count is recorded, while file/directory modes, content, targets and
 containment remain strict. No input is modified.
 
+Full-inventory checking remains the default. To reuse a prior strict composition,
+add `--qualified-dependency-receipt /path/to/prior/receipt.json` and
+`--qualified-dependency-receipt-sha256 "$PRIOR_RECEIPT_SHA256"`. The release owner
+must supply the trusted receipt digest; a caller-written operation report is not
+qualification. The receipt must bind the same dependency manifest, source package,
+lockfile, and target. Relocated donors are supported, but never trusted by location
+or by a prior receipt alone: composition rechecks their complete topology, modes,
+sizes, link targets/containment, and package manifests, then hashes the actual
+selected copies against the qualified inventory. Unselected payload bytes are
+not rehashed. The new receipt labels this `qualified-reuse` with
+`inputInventory: false`; it cannot qualify another reuse.
+
 Before passing the composition to Docker, verify it and obtain the maintained
 image recipe:
 
@@ -680,11 +692,20 @@ node --import ./scripts/tsx.mjs scripts/compose-installed-runtime.mts \
 ```
 
 All six location/identity flags are required. `--operation verify` uses the same
-flags. Both operations verify the complete installed inventory; there is no
-receipt-only shortcut. They also check the tooling lockfile against the runtime
+flags. By default both operations verify the complete installed inventory.
+They also check the tooling lockfile against the runtime
 source lock, the Docker entrypoint against the original runtime commit's Git
 blob, and the maintained final-stage COPY inputs. The runtime commit must be
 available in the tooling checkout's Git object database.
+
+For an archive-bound recipe, add `--image-input archive` to `image-recipe`. This
+checks the receipt, archive, and manifest digests plus the small identity, root
+module, and helper inputs used during admission, without rehashing all of `app/`.
+Its `archive-bound` result is not a full directory verification. The recipe adds
+`OPENCLAW_INSTALLED_RUNTIME_INPUT=installed-runtime-archive-input` and
+`OPENCLAW_INSTALLED_RUNTIME_SHA256`: Docker copies the archive, verifies that exact
+digest inside the build, and only then extracts it. Changes to unchecked `app/`
+bytes cannot enter this route; a changed archive fails before extraction.
 
 The JSON recipe names the maintained Dockerfile, `openclaw-runtime` target,
 `OPENCLAW_RUNTIME_ASSETS=installed-runtime-assets` build argument, and

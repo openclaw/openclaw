@@ -44,6 +44,7 @@ export type CompositionOptions = {
   dependencyRoot: string;
   dependencyManifest: string;
   dependencyManifestSha256: string;
+  qualifiedDependencyInput?: { receipt: { path: string; sha256: string } };
   sourceRoot: string;
   platform: string;
   arch: string;
@@ -68,8 +69,9 @@ function inside(root: string, candidate: string) {
   );
 }
 
-async function inventory(root: string, prefix = ""): Promise<InventoryEntry[]> {
+async function inventory(root: string, prefix = "", graphOnly = false): Promise<InventoryEntry[]> {
   const rows: InventoryEntry[] = [];
+  const manifestTargets = new Set<string>();
   async function visit(relative: string) {
     const file = path.join(root, relative);
     const stat = await fs.lstat(file);
@@ -81,14 +83,24 @@ async function inventory(root: string, prefix = ""): Promise<InventoryEntry[]> {
     if (stat.isSymbolicLink()) {
       row.kind = "link";
       row.target = await fs.readlink(file);
-      if (path.isAbsolute(row.target) || !inside(root, await fs.realpath(file))) {
+      const resolved = await fs.realpath(file);
+      if (path.isAbsolute(row.target) || !inside(root, resolved)) {
         throw new Error(`Unsafe dependency link: ${row.path}`);
+      }
+      if (graphOnly && path.basename(file) === "package.json") {
+        manifestTargets.add(
+          [prefix, path.relative(root, resolved).split(path.sep).join("/")]
+            .filter(Boolean)
+            .join("/"),
+        );
       }
     } else if (stat.isDirectory()) {
       row.kind = "directory";
     } else if (stat.isFile()) {
       row.size = stat.size;
-      row.sha256 = await sha256(file);
+      if (!graphOnly || path.basename(file) === "package.json") {
+        row.sha256 = await sha256(file);
+      }
     } else {
       throw new Error(`Unsupported runtime file: ${row.path}`);
     }
@@ -100,10 +112,17 @@ async function inventory(root: string, prefix = ""): Promise<InventoryEntry[]> {
     }
   }
   await visit("");
+  for (const row of rows) {
+    if (row.kind === "file" && manifestTargets.has(row.path) && !row.sha256) {
+      row.sha256 = await sha256(
+        path.join(root, prefix ? row.path.slice(prefix.length + 1) : row.path),
+      );
+    }
+  }
   return rows;
 }
 
-async function verifyDependencyInput(options: CompositionOptions) {
+async function verifyDependencyInput(options: CompositionOptions, runtimeInput: RuntimeInput) {
   if ((await sha256(options.dependencyManifest)) !== options.dependencyManifestSha256) {
     throw new Error("Dependency manifest digest mismatch");
   }
@@ -116,7 +135,43 @@ async function verifyDependencyInput(options: CompositionOptions) {
   if (byPath.size !== expected.length) {
     throw new Error("Duplicate dependency inventory path");
   }
-  const actual = await inventory(options.dependencyRoot, prefix);
+  const evidence = options.qualifiedDependencyInput?.receipt;
+  if (evidence) {
+    if (
+      !/^[a-f0-9]{64}$/u.test(evidence.sha256) ||
+      (await sha256(evidence.path)) !== evidence.sha256
+    ) {
+      throw new Error("Dependency qualification digest mismatch");
+    }
+    const prior = await readJson<{
+      schema: string;
+      compositionOnly: boolean;
+      checks: { inputInventory: boolean };
+      inputs: {
+        dependencyManifest: { sha256: string; inputVerification: { mode: string } };
+        sourcePackageSha256: string;
+        sourceLockSha256: string;
+      };
+      target: { platform: string; arch: string };
+    }>(evidence.path);
+    if (
+      prior.schema !== "openclaw.installed-runtime.v1" ||
+      !prior.compositionOnly ||
+      !prior.checks.inputInventory ||
+      prior.inputs.dependencyManifest.inputVerification.mode !== "full-inventory" ||
+      prior.inputs.dependencyManifest.sha256 !== options.dependencyManifestSha256 ||
+      prior.inputs.sourcePackageSha256 !== runtimeInput.packageJsonSha256 ||
+      prior.inputs.sourceLockSha256 !== runtimeInput.lockfileSha256 ||
+      prior.target.platform !== options.platform ||
+      prior.target.arch !== options.arch
+    ) {
+      throw new Error("Dependency qualification identity mismatch");
+    }
+  }
+  // A prior receipt qualifies the manifest, not today's mutable donor. Always check
+  // topology, modes and package manifests (including optional edges the planner skips).
+  // Reuse hashes the remaining payload only after copying the selected closure.
+  const actual = await inventory(options.dependencyRoot, prefix, Boolean(evidence));
   // Linux target symlinks do not grant access through their physical permission bits.
   // Keep that transport difference visible; all data, targets and other modes stay exact.
   if (expected.length !== actual.length) {
@@ -128,7 +183,10 @@ async function verifyDependencyInput(options: CompositionOptions) {
     if (
       !wanted ||
       (["kind", "mode", "size", "sha256", "target"] as const).some(
-        (key) => !(key === "mode" && row.kind === "link") && wanted[key] !== row[key],
+        (key) =>
+          !(key === "mode" && row.kind === "link") &&
+          !(key === "sha256" && evidence && row.sha256 === undefined) &&
+          wanted[key] !== row[key],
       )
     ) {
       throw new Error(`Dependency inventory mismatch: ${row.path}`);
@@ -140,7 +198,13 @@ async function verifyDependencyInput(options: CompositionOptions) {
   return {
     entries: byPath,
     physicalSymlinkModeDifferences,
-    inputVerification: { mode: "full-inventory" as const },
+    inputVerification: evidence
+      ? {
+          mode: "qualified-reuse" as const,
+          receipt: evidence,
+          scope: "graph-metadata-and-selected-content" as const,
+        }
+      : { mode: "full-inventory" as const },
   };
 }
 
@@ -150,6 +214,7 @@ async function materializeClosure(
   target: { platform: string; arch: string },
   admittedEntries: Map<string, InventoryEntry>,
   sourceManifest: Manifest,
+  verifySelected: boolean,
 ) {
   // Temporary resolver links exist only in the new, unpublished output. The canonical planner
   // sees packaged bundled dependencies first and the frozen-lock Linux graph for everything else.
@@ -293,6 +358,7 @@ async function materializeClosure(
     if (exists) {
       throw new Error(`Dependency placement collision: ${path.relative(app, entry.destination)}`);
     }
+    const selected = new Map<string, InventoryEntry>();
     await fs.cp(entry.root, entry.destination, {
       recursive: true,
       preserveTimestamps: true,
@@ -303,17 +369,35 @@ async function materializeClosure(
           return false;
         }
         const relative = path.relative(dependencyRoot, source).split(path.sep).join("/");
-        if (
-          inside(dependencyRoot, source) &&
-          !admittedEntries.has(
-            `node-runtime-dependencies/${target.platform}-${target.arch}/${relative}`,
-          )
-        ) {
-          throw new Error(`Dependency absent from admitted manifest: ${relative}`);
+        if (inside(dependencyRoot, source)) {
+          const wanted = admittedEntries.get(
+            "node-runtime-dependencies/" + target.platform + "-" + target.arch + "/" + relative,
+          );
+          if (!wanted) {
+            throw new Error("Dependency absent from admitted manifest: " + relative);
+          }
+          selected.set(path.relative(entry.root, source).split(path.sep).join("/"), wanted);
         }
         return true;
       },
     });
+    if (verifySelected && selected.size) {
+      const copied = await inventory(entry.destination);
+      if (copied.length !== selected.size) {
+        throw new Error("Dependency inventory selected entry count mismatch");
+      }
+      for (const row of copied) {
+        const wanted = selected.get(row.path);
+        if (
+          !wanted ||
+          (["kind", "mode", "size", "sha256", "target"] as const).some(
+            (key) => !(key === "mode" && row.kind === "link") && row[key] !== wanted[key],
+          )
+        ) {
+          throw new Error("Dependency inventory selected content mismatch: " + row.path);
+        }
+      }
+    }
   }
 }
 
@@ -387,6 +471,7 @@ export async function composeInstalledRuntime(input: CompositionOptions) {
     options.package,
     options.packageReceipt,
     options.dependencyManifest,
+    ...(options.qualifiedDependencyInput ? [options.qualifiedDependencyInput.receipt.path] : []),
   ].map((value) => path.resolve(value))) {
     if (inside(inputPath, output) || inside(output, inputPath)) {
       throw new Error("Output overlaps a composition input");
@@ -411,7 +496,10 @@ export async function composeInstalledRuntime(input: CompositionOptions) {
   ) {
     throw new Error("Linux dependency source identity mismatch");
   }
-  const { entries: admittedEntries, ...dependencyInput } = await verifyDependencyInput(options);
+  const { entries: admittedEntries, ...dependencyInput } = await verifyDependencyInput(
+    options,
+    runtimeInput,
+  );
   await fs.mkdir(output); // Exclusive new output; never merge with a prior install.
   const extracted = path.join(output, "extract");
   const workspace = await fs.mkdtemp(path.join(output, ".package-extraction-"));
@@ -491,6 +579,7 @@ export async function composeInstalledRuntime(input: CompositionOptions) {
     { platform: options.platform, arch: options.arch },
     admittedEntries,
     sourceManifest,
+    Boolean(options.qualifiedDependencyInput),
   );
   const toolingHelpers = await prepareTargetHelpers(app, sourceRoot);
   console.error(
@@ -498,7 +587,7 @@ export async function composeInstalledRuntime(input: CompositionOptions) {
   );
   // Keep lifecycle pending for the real Linux image: native probes must not run on the build host.
   await fs.writeFile(path.join(app, ".openclaw-lifecycle-pending"), "");
-  await verifyDependencyInput(options);
+  await verifyDependencyInput(options, runtimeInput);
   if ((await sha256(options.package)) !== packageSha) {
     throw new Error("Portable input changed during composition");
   }
@@ -574,7 +663,8 @@ export async function composeInstalledRuntime(input: CompositionOptions) {
     },
     checks: {
       packageIdentity: true,
-      inputInventory: true,
+      inputInventory: !options.qualifiedDependencyInput,
+      selectedDependencyContent: true,
       relativeImportClosure: true,
       externalLinks: false,
     },
@@ -600,8 +690,9 @@ export type InstalledRuntimeVerificationOptions = {
   expectedRuntime: Pick<RuntimeBuild, "version" | "commit" | "buildId">;
 };
 
-export async function verifyInstalledRuntimeComposition(
+async function resolveInstalledRuntimeComposition(
   options: InstalledRuntimeVerificationOptions,
+  fullInventory: boolean,
 ) {
   for (const digest of [options.receiptSha256, options.portablePackageSha256]) {
     if (!/^[a-f0-9]{64}$/u.test(digest)) {
@@ -667,7 +758,7 @@ export async function verifyInstalledRuntimeComposition(
   if (expected.length !== receipt.manifest.entries || byPath.size !== expected.length) {
     throw new Error("Installed runtime inventory entry count mismatch");
   }
-  {
+  if (fullInventory) {
     const actual = await inventory(appRoot, "app");
     if (actual.length !== expected.length) {
       throw new Error("Installed runtime inventory entry count mismatch");
@@ -684,6 +775,37 @@ export async function verifyInstalledRuntimeComposition(
       }
     }
   }
+  if (!fullInventory) {
+    if (
+      !receipt.checks.packageIdentity ||
+      !receipt.checks.relativeImportClosure ||
+      !(receipt.checks.inputInventory || receipt.checks.selectedDependencyContent)
+    ) {
+      throw new Error("Composition qualification is incomplete");
+    }
+    // Only these small files are read during recipe admission. Bind those reads to
+    // the inventory; Docker consumes the archive, never the unchecked app payload.
+    const readPaths = new Set([
+      "app/package.json",
+      "app/dist/build-info.json",
+      ...expected
+        .filter((row) => path.posix.dirname(row.path) === "app" && row.path.endsWith(".mjs"))
+        .map((row) => row.path),
+      ...receipt.helpers.closure.map((relative) => "app/.runtime-bootstrap/" + relative),
+    ]);
+    for (const relative of readPaths) {
+      const wanted = byPath.get(relative);
+      const file = path.join(compositionRoot, relative);
+      if (
+        !inside(appRoot, file) ||
+        wanted?.kind !== "file" ||
+        !inside(appRoot, await fs.realpath(file)) ||
+        (await sha256(file)) !== wanted.sha256
+      ) {
+        throw new Error("Installed runtime recipe input mismatch: " + relative);
+      }
+    }
+  }
   const imageAssets = await verifyInstalledRuntimeImageInputs({
     appRoot,
     nativeToolRoot: fileURLToPath(new URL("../", import.meta.url)),
@@ -691,7 +813,7 @@ export async function verifyInstalledRuntimeComposition(
     sourceLockSha256: receipt.inputs.sourceLockSha256,
     availableFiles: expected.filter((row) => row.kind === "file").map((row) => row.path.slice(4)),
   });
-  const files = expected
+  const files = (fullInventory ? expected : [])
     .filter((row) => row.kind === "file" && row.path.startsWith("app/dist/"))
     .map((row) => row.path.slice(4));
   for (const relative of receipt.helpers.closure) {
@@ -710,7 +832,10 @@ export async function verifyInstalledRuntimeComposition(
   }
   await fs.access(path.join(appRoot, ".openclaw-lifecycle-pending"));
   return {
-    schema: "openclaw.installed-runtime.verification.v1",
+    schema: fullInventory
+      ? "openclaw.installed-runtime.verification.v1"
+      : "openclaw.installed-runtime.archive-admission.v1",
+    verification: { mode: fullInventory ? "full-inventory" : "archive-bound" },
     compositionOnly: true,
     compositionRoot,
     appRoot,
@@ -726,17 +851,32 @@ export async function verifyInstalledRuntimeComposition(
   };
 }
 
-export async function resolveInstalledRuntimeImageRecipe(
+export async function verifyInstalledRuntimeComposition(
   options: InstalledRuntimeVerificationOptions,
 ) {
-  const composition = await verifyInstalledRuntimeComposition(options);
+  return resolveInstalledRuntimeComposition(options, true);
+}
+
+export async function resolveInstalledRuntimeImageRecipe(
+  options: InstalledRuntimeVerificationOptions & { imageInput?: "directory" | "archive" },
+) {
+  const archive = options.imageInput === "archive";
+  const composition = await resolveInstalledRuntimeComposition(options, !archive);
   const dockerfilePath = fileURLToPath(new URL("../Dockerfile", import.meta.url));
   return {
     schema: "openclaw.installed-runtime.image-recipe.v1",
     composition,
     dockerfile: { path: dockerfilePath, sha256: await sha256(dockerfilePath) },
     target: "openclaw-runtime",
-    buildArgs: { OPENCLAW_RUNTIME_ASSETS: "installed-runtime-assets" },
+    buildArgs: {
+      OPENCLAW_RUNTIME_ASSETS: "installed-runtime-assets",
+      ...(archive
+        ? {
+            OPENCLAW_INSTALLED_RUNTIME_INPUT: "installed-runtime-archive-input",
+            OPENCLAW_INSTALLED_RUNTIME_SHA256: composition.archive.sha256,
+          }
+        : {}),
+    },
     namedContexts: { openclaw_installed_runtime: composition.compositionRoot },
     requiredTargetChecks: composition.requiredTargetChecks,
   };
@@ -764,10 +904,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   ];
   const { values } = parseArgs({
     options: Object.fromEntries(
-      [...composeNames, ...verificationNames, "operation"].map((name) => [
-        name,
-        { type: "string" as const },
-      ]),
+      [
+        ...composeNames,
+        ...verificationNames,
+        "operation",
+        "image-input",
+        "qualified-dependency-receipt",
+        "qualified-dependency-receipt-sha256",
+      ].map((name) => [name, { type: "string" as const }]),
     ),
     strict: true,
   });
@@ -779,6 +923,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     if (!values[name]) {
       throw new Error(`Missing --${name}`);
     }
+  }
+  const imageInput = values["image-input"];
+  if (
+    imageInput &&
+    (operation !== "image-recipe" || !["directory", "archive"].includes(imageInput))
+  ) {
+    throw new Error("--image-input requires image-recipe and directory or archive");
   }
   if (operation !== "compose") {
     const options = {
@@ -795,11 +946,23 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       JSON.stringify(
         await (operation === "verify"
           ? verifyInstalledRuntimeComposition(options)
-          : resolveInstalledRuntimeImageRecipe(options)),
+          : resolveInstalledRuntimeImageRecipe({
+              ...options,
+              imageInput: imageInput === "archive" ? "archive" : "directory",
+            })),
       ),
     );
   } else {
+    const qualified = values["qualified-dependency-receipt"];
+    const qualifiedSha256 = values["qualified-dependency-receipt-sha256"];
+    if (Boolean(qualified) !== Boolean(qualifiedSha256)) {
+      throw new Error("Qualified dependency receipt requires its path and SHA256");
+    }
     const result = await composeInstalledRuntime({
+      qualifiedDependencyInput:
+        qualified && qualifiedSha256
+          ? { receipt: { path: qualified, sha256: qualifiedSha256 } }
+          : undefined,
       package: values.package!,
       packageReceipt: values["package-receipt"]!,
       dependencyRoot: values["dependency-root"]!,

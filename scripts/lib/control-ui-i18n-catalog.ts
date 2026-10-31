@@ -184,6 +184,7 @@ const sourceFiles = [
   "en-portals.ts",
   "en-profile.ts",
   "en-settings.ts",
+  "en-settings-sidebar.ts",
   "en-sidebar-attention.ts",
   "en-skill-library.ts",
   "en-session-skill-library.ts",

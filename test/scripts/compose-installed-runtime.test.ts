@@ -27,6 +27,24 @@ async function write(root: string, relative: string, contents: string) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, contents);
 }
+function compositionCli(options: Record<string, string>) {
+  return JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "scripts/compose-installed-runtime.mts",
+        ...Object.entries(options).flatMap(([name, value]) => [
+          "--" + name.replace(/[A-Z]/g, (letter) => "-" + letter.toLowerCase()),
+          value,
+        ]),
+      ],
+      { cwd: repo, encoding: "utf8" },
+    ),
+  );
+}
+
 async function fixture(
   rootImports?: "present" | "missing",
   promotion?: "present" | "bundled" | "version" | "undeclared" | "transitive-missing",
@@ -45,7 +63,7 @@ async function fixture(
     type: "module",
     files: [],
     devDependencies: { private: "9.0.0" },
-    dependencies: { bundled: "1.0.0", external: "1.0.0", left: "1.0.0" },
+    dependencies: { bundled: "1.0.0", external: "1.0.0", fs: "1.0.0" },
   };
   const build = { version: "1.0.0", commit: runtimeCommit, buildId: "fixture-a" };
   for (const dir of [source, deps, pack]) {
@@ -166,8 +184,8 @@ async function fixture(
     await fs.symlink("../.store/node_modules/external", path.join(deps, "node_modules/external"));
     await write(deps, "._authored", "authored input, not generated transport metadata\n");
   }
-  await addPackage(path.join(deps, "node_modules/left"), "left", "1.0.0", { nested: "1.0.0" });
-  await addPackage(path.join(deps, "node_modules/left/node_modules/nested"), "nested", "1.0.0");
+  await addPackage(path.join(deps, "node_modules/fs"), "fs", "1.0.0", { nested: "1.0.0" });
+  await addPackage(path.join(deps, "node_modules/fs/node_modules/nested"), "nested", "1.0.0");
   await addPackage(
     path.join(deps, "extensions/demo/node_modules/private"),
     "private",
@@ -347,7 +365,7 @@ describe("offline installed runtime composition", () => {
       let expected = "Dependency inventory mismatch: node-runtime-dependencies/linux-x64/";
       if (failure === "target") {
         await fs.unlink(path.join(deps, "node_modules/external"));
-        await fs.symlink("left", path.join(deps, "node_modules/external"));
+        await fs.symlink("fs", path.join(deps, "node_modules/external"));
         expected += "node_modules/external";
       } else if (failure === "extra-entry") {
         await write(deps, "._transport-extra", "unexpected\n");
@@ -363,6 +381,128 @@ describe("offline installed runtime composition", () => {
       await expect(fs.access(path.join(options.outputDir, "receipt.json"))).rejects.toThrow();
     },
   );
+  it("reuses a strict qualification after relocation, checking graph and selected bytes", async () => {
+    const { root, deps, options } = await fixture(undefined, undefined, true);
+    await composeInstalledRuntime(options);
+    const receipt = path.join(options.outputDir, "receipt.json");
+    const qualifiedDependencyInput = {
+      receipt: { path: receipt, sha256: digest(await fs.readFile(receipt)) },
+    };
+    const relocated = path.join(root, "relocated");
+    await fs.cp(deps, relocated, { recursive: true, verbatimSymlinks: true });
+    // Unselected payloads are not admitted by reuse. Their graph metadata still is.
+    await write(relocated, "node_modules/private/index.js", 'export default "8.0.0";\n');
+    const reuse = {
+      ...options,
+      dependencyRoot: relocated,
+      qualifiedDependencyInput,
+      outputDir: path.join(root, "reuse"),
+    };
+    await expect(
+      composeInstalledRuntime({ ...reuse, qualifiedDependencyInput: undefined }),
+    ).rejects.toThrow(/Dependency inventory mismatch/);
+    const result = compositionCli({
+      ...options,
+      dependencyRoot: relocated,
+      outputDir: reuse.outputDir,
+      qualifiedDependencyReceipt: receipt,
+      qualifiedDependencyReceiptSha256: qualifiedDependencyInput.receipt.sha256,
+    });
+    expect(result.inputs.dependencyManifest.inputVerification.mode).toBe("qualified-reuse");
+    expect(result.checks.inputInventory).toBe(false);
+    expect(
+      await fs.readFile(path.join(reuse.outputDir, "app/node_modules/external/index.js"), "utf8"),
+    ).toBe('export default "1.0.0";\n');
+    const selected = ".store/node_modules/external/src/node_modules/implementation-helper/index.js";
+    for (const failure of ["content", "mode", "missing", "manifest", "link", "escape"] as const) {
+      const donor = path.join(root, failure);
+      await fs.cp(relocated, donor, { recursive: true, verbatimSymlinks: true });
+      if (failure === "content") {
+        await write(donor, selected, 'export default "8.0.0";\n');
+      }
+      if (failure === "mode") {
+        await fs.chmod(path.join(donor, selected), 0o700);
+      }
+      if (failure === "missing") {
+        await fs.rm(path.join(donor, selected));
+      }
+      if (failure === "manifest") {
+        const file = path.join(donor, ".store/node_modules/external/package.json");
+        const manifest = JSON.parse(await fs.readFile(file, "utf8"));
+        manifest.dependencies.nested = "9.0.0";
+        await fs.writeFile(file, JSON.stringify(manifest));
+      }
+      if (failure === "link" || failure === "escape") {
+        await fs.unlink(path.join(donor, "node_modules/external"));
+        await fs.symlink(
+          failure === "link" ? "fs" : path.join(relocated, ".store/node_modules/external"),
+          path.join(donor, "node_modules/external"),
+        );
+      }
+      const outputDir = path.join(root, "rejected-" + failure);
+      await expect(
+        composeInstalledRuntime({ ...reuse, dependencyRoot: donor, outputDir }),
+      ).rejects.toThrow(/Dependency inventory|Unsafe dependency link/);
+      await expect(fs.access(path.join(outputDir, "receipt.json"))).rejects.toThrow();
+    }
+    // A partial composition must never become a full qualification for another reuse.
+    const partial = path.join(reuse.outputDir, "receipt.json");
+    await expect(
+      composeInstalledRuntime({
+        ...reuse,
+        outputDir: path.join(root, "recursive"),
+        qualifiedDependencyInput: {
+          receipt: { path: partial, sha256: digest(await fs.readFile(partial)) },
+        },
+      }),
+    ).rejects.toThrow(/qualification/);
+  });
+  it("binds archive recipes to consumed bytes, not the mutable app directory", async () => {
+    const { root, options } = await fixture();
+    const result = await composeInstalledRuntime(options);
+    const verification = {
+      compositionRoot: options.outputDir,
+      receiptSha256: digest(await fs.readFile(path.join(options.outputDir, "receipt.json"))),
+      portablePackageSha256: digest(await fs.readFile(options.package)),
+      expectedRuntime: result.runtime,
+    };
+    await write(path.join(options.outputDir, "app"), "dist/entry.js", "tampered app\n");
+    await expect(resolveInstalledRuntimeImageRecipe(verification)).rejects.toThrow(
+      /inventory mismatch/,
+    );
+    const recipe = compositionCli({
+      operation: "image-recipe",
+      imageInput: "archive",
+      compositionRoot: verification.compositionRoot,
+      receiptSha256: verification.receiptSha256,
+      portablePackageSha256: verification.portablePackageSha256,
+      runtimeVersion: result.runtime.version,
+      runtimeCommit: result.runtime.commit,
+      runtimeBuildId: result.runtime.buildId,
+    });
+    expect(recipe.composition.verification.mode).toBe("archive-bound");
+    expect(recipe.buildArgs).toMatchObject({
+      OPENCLAW_INSTALLED_RUNTIME_INPUT: "installed-runtime-archive-input",
+      OPENCLAW_INSTALLED_RUNTIME_SHA256: result.archive.sha256,
+    });
+    const unpacked = path.join(root, "archive-consumer");
+    await fs.mkdir(unpacked);
+    await tar.extract({ file: result.archive.path, cwd: unpacked });
+    expect(await fs.readFile(path.join(unpacked, "app/dist/entry.js"), "utf8")).toBe(
+      "export const fromPortable = true;\n",
+    );
+    const rootModule = path.join(options.outputDir, "app/node-runtime-update.mjs");
+    const original = await fs.readFile(rootModule);
+    await fs.writeFile(rootModule, "// replaced root module\n");
+    await expect(
+      resolveInstalledRuntimeImageRecipe({ ...verification, imageInput: "archive" }),
+    ).rejects.toThrow(/recipe input mismatch/);
+    await fs.writeFile(rootModule, original);
+    await fs.appendFile(result.archive.path, "tamper");
+    await expect(
+      resolveInstalledRuntimeImageRecipe({ ...verification, imageInput: "archive" }),
+    ).rejects.toThrow(/archive\/manifest identity/);
+  });
   it("preserves portable bundled content and importer-relative versions without source links", async () => {
     const { root, options } = await fixture();
     const result = await composeInstalledRuntime(options);
@@ -378,7 +518,7 @@ describe("offline installed runtime composition", () => {
       [
         "--input-type=module",
         "-e",
-        `import {createRequire} from 'node:module'; const r=createRequire(${JSON.stringify(path.join(app, "package.json"))}); const e=r.resolve('external'); const l=r.resolve('left'); console.log(r(r.resolve('nested',{paths:[e]})).default); const b=r.resolve('bundled'); for (const name of ['bundled-transitive','bundled-native']) console.log(r(r.resolve(name,{paths:[b]})).default); const p=createRequire(${JSON.stringify(path.join(app, "extensions/demo/package.json"))}); console.log(p('hoisted-only').default); console.log(r('external/implementation').default)`,
+        `import {createRequire} from 'node:module'; const r=createRequire(${JSON.stringify(path.join(app, "package.json"))}); const e=r.resolve('external'); console.log(r(r.resolve('nested',{paths:[e]})).default); const b=r.resolve('bundled'); for (const name of ['bundled-transitive','bundled-native']) console.log(r(r.resolve(name,{paths:[b]})).default); const p=createRequire(${JSON.stringify(path.join(app, "extensions/demo/package.json"))}); console.log(p('hoisted-only').default); console.log(r('external/implementation').default)`,
       ],
       { encoding: "utf8" },
     );
@@ -386,7 +526,7 @@ describe("offline installed runtime composition", () => {
     const moduleVersion = async (file: string) =>
       JSON.parse(await fs.readFile(file, "utf8")).version;
     expect(
-      await moduleVersion(path.join(app, "node_modules/left/node_modules/nested/package.json")),
+      await moduleVersion(path.join(app, "node_modules/fs/node_modules/nested/package.json")),
     ).toBe("1.0.0");
     expect(
       await moduleVersion(path.join(app, "extensions/demo/node_modules/private/package.json")),
@@ -622,7 +762,7 @@ describe("offline installed runtime composition", () => {
     const { root, options } = await fixture();
     await composeInstalledRuntime(options);
     const tools = path.join(root, "tools");
-    execFileSync("git", ["clone", "--shared", "--no-checkout", "--quiet", repo, tools]);
+    execFileSync("git", ["clone", "--depth=1", "--no-local", "-n", "-q", repo, tools]);
     for (const name of ["Dockerfile", "pnpm-lock.yaml", "docker-entrypoint.mjs"]) {
       await fs.copyFile(path.join(repo, name), path.join(tools, name));
     }

@@ -36,6 +36,9 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
       loadOpenClawPlugins: () => {
         throw new Error("cold plugin load");
       },
+      acquirePluginRegistryForInspection: async () => {
+        throw new Error("cold plugin inspection");
+      },
       resolveRuntimePluginRegistry: () => undefined,
       isPluginRegistryLoadInFlight: () => false,
     }),

@@ -45,7 +45,11 @@ export type GenerationWorkerInput = (
 ) & { nativeLoads?: string[] };
 export type GenerationWorkerReply = (
   | { value: GenerationWireValue; resources: number; admission?: GenerationWireValue }
-  | { error: { message: string; name: string; stack?: string }; resources: number }
+  | {
+      error: { message: string; name: string; stack?: string; code?: string };
+      sourceAcquisitionFailure?: true;
+      resources: number;
+    }
 ) & { released?: number[]; metrics?: PluginGenerationMetrics };
 export type GenerationWorkerCallback =
   | { kind: "mapping"; id: number; captureId: number; filename: string; signal: Int32Array }

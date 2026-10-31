@@ -135,6 +135,8 @@ suite.define(() => {
           response.url().includes("/assistant-media?") &&
           !new URL(response.url()).searchParams.has("meta"),
       );
+      // An earlier assertion can close the page before the response is awaited.
+      void canonicalRead.catch(() => undefined);
       const canonicalId = `mock-user:${sent.idempotencyKey}`;
       const canonicalSeq = history.length + 1;
       const canonical = {
@@ -169,9 +171,9 @@ suite.define(() => {
           message: canonical,
         });
         await page.locator(`[data-entry-id="${canonicalId}"]`).waitFor();
-        await quote.scrollIntoViewIfNeeded();
         expect(await quote.isVisible()).toBe(true);
         expect(await inline.textContent()).toContain(comment);
+        expect(await inline.textContent()).not.toContain("Loading");
         expect((await inline.boundingBox())?.height).toBe(before!.height);
       } finally {
         canonicalBody.resolve();

@@ -48,16 +48,36 @@ it.skipIf(process.platform === "win32").each([
   ["0660", 0o022, 0o640],
   ["0660", 0o077, 0o600],
 ] as const)(
-  "creates named outputs using policy %s and host umask %i",
+  "preserves directories and creates named outputs using policy %s and host umask %i",
   async (policy, mask, expected) => {
     const workspace = await createTempWorkspace("workspace-mode-");
     vi.spyOn(process, "umask").mockReturnValue(mask);
+    await fs.chmod(workspace, 0o770);
+    const sharedDirectories = new Set([workspace]);
+    const open = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (sharedDirectories.has(String(args[0]))) {
+        vi.spyOn(handle, "chmod").mockRejectedValue(
+          Object.assign(new Error("non-owner directory chmod denied"), { code: "EPERM" }),
+        );
+      }
+      return handle;
+    });
     const files = await publish(workspace, policy);
+    expect((await fs.stat(workspace)).mode & 0o7777).toBe(0o770);
+    const reportParent = path.dirname(files[2]!);
+    for (const directory of ["memory", "memory/dreaming", "memory/dreaming/light"]) {
+      expect((await fs.stat(path.join(workspace, directory))).mode & 0o7777).toBe(0o700);
+    }
+    await fs.chmod(reportParent, 0o770);
+    sharedDirectories.add(reportParent);
     for (const file of files) {
       expect((await fs.stat(file)).mode & 0o777).toBe(expected);
       await fs.chmod(file, 0o620);
     }
     await publish(workspace, policy);
+    expect((await fs.stat(reportParent)).mode & 0o7777).toBe(0o770);
     for (const file of files) {
       expect((await fs.stat(file)).mode & 0o777).toBe(0o620);
     }
@@ -112,10 +132,10 @@ it.skipIf(process.platform === "win32")(
   async () => {
     const workspaceDir = await createTempWorkspace("workspace-umask-snapshot-");
     const umask = vi.spyOn(process, "umask").mockReturnValue(0o022);
-    const mkdir = fs.mkdir;
-    vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
+    const lstat = fs.lstat;
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
       umask.mockReturnValue(0o077);
-      return await mkdir(...args);
+      return await lstat(...args);
     });
     await updateDreamsFile({
       workspaceDir,

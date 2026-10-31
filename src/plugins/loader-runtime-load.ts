@@ -72,6 +72,7 @@ export function resolveRuntimePluginRegistry(
 const providerRegistry = Object.freeze(
   createProviderRegistryResolver({
     loadOpenClawPlugins,
+    acquirePluginRegistryForInspection,
     resolveRuntimePluginRegistry,
     isPluginRegistryLoadInFlight,
   }),
