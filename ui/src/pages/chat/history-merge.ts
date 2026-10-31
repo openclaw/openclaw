@@ -256,7 +256,11 @@ export function readChatHistoryRequestBudget(
   prepared: { messages: readonly unknown[]; requiredSources: ReadonlySet<string> },
 ) {
   const projection = chatSessionProjections.get(owner)?.projection;
-  const scope = readChatSessionProjectionScope(owner);
+  // Pending-input hydration binds the selected agent even when the wire request omits it.
+  // Capacity must compare that same identity without initializing unknown custody.
+  const scope = readChatSessionProjectionScope(owner, {
+    agentId: resolveUiSelectedSessionAgentId(owner),
+  });
   return projection &&
     CHAT_PROJECTION_SCOPE_KEYS.every((key) => projection.scope[key] === scope[key])
     ? prepareChatHistoryRequestBudget(

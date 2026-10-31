@@ -5,16 +5,23 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import "./chat-pane.tsx";
 import {
   admitChatHistoryPages,
+  prepareChatHistoryPages,
   resolveChatHistoryPagination,
   type ChatHistoryResult,
 } from "./chat-history-snapshot.ts";
 import { prepareChatHistoryPacket } from "./chat-history-window.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import {
   createStagedPrefetchPane,
   nativeHistoryMessage,
   nativeHistorySeq,
 } from "./chat-pane-history.test-support.ts";
-import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
+import { readChatInputRunIds } from "./chat-pending-inputs.ts";
+import {
+  getChatSessionProjection,
+  readChatHistoryRequestBudget,
+  reduceChatSessionProjection,
+} from "./history-merge.ts";
 
 function source(seq: number, keyed = true) {
   return Object.assign(nativeHistoryMessage(seq, "x".repeat(4_000)), {
@@ -33,6 +40,72 @@ function page(start: number, end: number, keyed = true): ChatHistoryResult {
   };
 }
 
+async function hydrateCapacityPane(sessionKey: string) {
+  const request = vi.fn(async (_method: string, params: Request) => {
+    if (!params.cursor) {
+      return {
+        ...page(400, 400),
+        sessionInfo: { key: sessionKey, sessionId: "physical", activeLeafEntryId: "leaf-400" },
+      };
+    }
+    const end = Number(params.cursor.split("-")[1]);
+    return page(Math.max(1, end - params.limit + 1), end);
+  });
+  const { pane, state } = createStagedPrefetchPane(request);
+  state.sessionKey = sessionKey;
+  state.assistantAgentId = sessionKey === "global" ? "main" : "unrelated-global";
+  await expect(loadChatHistory(state, { deferBranches: true })).resolves.toBeDefined();
+  expect(getChatSessionProjection(state).scope).toMatchObject({
+    sessionKey,
+    agentId: "main",
+    sessionId: "physical",
+    activeLeafEntryId: "leaf-400",
+  });
+  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([400]);
+  state.readTranscriptAnchorSource = () => "id:source-400";
+  expect(request.mock.calls[0]![1]).toMatchObject({ limit: 80, maxBytes: 256 * 1024 });
+  request.mockClear();
+  return { pane, state, request };
+}
+
+it.each(["global", "agent:main:capacity"])(
+  "amortizes foreground reads after actual selected-session hydration (%s)",
+  async (sessionKey) => {
+    const { pane, request } = await hydrateCapacityPane(sessionKey);
+    await expect(pane.loadOlderMessages()).resolves.toBe(true);
+    expect(request.mock.calls[0]![1].limit).toBe(399);
+    expect(request.mock.calls[0]![1].maxBytes).toBeGreaterThan(256 * 1024);
+  },
+);
+
+it.each(["session", "leaf", "agent"] as const)(
+  "refuses hydrated capacity after the current %s changes",
+  async (changed) => {
+    const { state } = await hydrateCapacityPane("global");
+    if (changed === "session") {
+      state.currentSessionId = "replacement";
+    } else if (changed === "leaf") {
+      state.chatDisplayedLeafEntryId = "replacement";
+    } else {
+      state.assistantAgentId = "replacement";
+    }
+    expect(
+      readChatHistoryRequestBudget(state, prepareChatHistoryPages(state, [], "older")),
+    ).toBeUndefined();
+  },
+);
+
+it("refuses capacity when a learned lifecycle is unavailable to the current scope", async () => {
+  const { state } = await hydrateCapacityPane("global");
+  getChatSessionProjection(state, {
+    ...getChatSessionProjection(state).scope,
+    lifecycleRevision: "learned",
+  });
+  expect(
+    readChatHistoryRequestBudget(state, prepareChatHistoryPages(state, [], "older")),
+  ).toBeUndefined();
+});
+
 it.each([true, false])(
   "amortizes keyed foreground reads against the complete reader bridge (keyed bridge=%s)",
   async (keyedBridge) => {
@@ -41,6 +114,7 @@ it.each([true, false])(
       return page(Math.max(1, end - params.limit + 1), end);
     });
     const { pane, state } = createStagedPrefetchPane(request);
+    readChatInputRunIds(state);
     const initial = page(400, 400, keyedBridge);
     initial.packet = prepareChatHistoryPacket(
       initial.messages!,
@@ -90,6 +164,7 @@ it.each(["unkeyed", "mixed", "hidden-unkeyed"] as const)(
       };
     });
     const { pane, state } = createStagedPrefetchPane(request);
+    readChatInputRunIds(state);
     admitChatHistoryPages(state, [page(400, 400)], "around");
     state.readTranscriptAnchorSource = () => "id:source-400";
 
@@ -120,6 +195,7 @@ it("does not certify a large raw packet after hidden rows reduce its visible bod
     hasMore: false,
   }));
   const { pane, state } = createStagedPrefetchPane(request);
+  readChatInputRunIds(state);
   admitChatHistoryPages(state, [page(400, 400)], "around");
   state.readTranscriptAnchorSource = () => "id:source-400";
   await expect(pane.loadOlderMessages()).resolves.toBe(true);
@@ -150,6 +226,7 @@ it("discards rejected raw receipts and edges before the same-cursor small reply 
       : small.promise,
   );
   const { pane, state } = createStagedPrefetchPane(request);
+  readChatInputRunIds(state);
   admitChatHistoryPages(state, [page(400, 400)], "around");
   state.readTranscriptAnchorSource = () => "id:source-400";
   reduceChatSessionProjection(state, {
@@ -182,6 +259,7 @@ it("uses the same capacity owner for foreground newer reads", async () => {
     return page(start, Math.min(400, start + params.limit - 1));
   });
   const { pane, state } = createStagedPrefetchPane(request);
+  readChatInputRunIds(state);
   const initial = page(1, 1);
   initial.packet = prepareChatHistoryPacket(
     initial.messages!,
@@ -204,6 +282,7 @@ it("reports discarded large-prefix capacity after a local reply arrives during t
     params.cursor === "older-399" ? page(300, 399) : next.promise,
   );
   const { pane, state } = createStagedPrefetchPane(request);
+  readChatInputRunIds(state);
   admitChatHistoryPages(state, [page(400, 400)], "around");
   state.readTranscriptAnchorSource = () => "id:source-400";
   const loading = pane.loadOlderMessages();
@@ -234,6 +313,7 @@ it("keeps a fitting small prefix and prefetches from its edge after discarding l
     return next.promise;
   });
   const { pane, state } = createStagedPrefetchPane(request);
+  readChatInputRunIds(state);
   admitChatHistoryPages(state, [page(400, 400)], "around");
   state.readTranscriptAnchorSource = () => "id:source-400";
   const loading = pane.loadOlderMessages();
@@ -264,6 +344,7 @@ it.each([true, false])(
     const held = createDeferred<ChatHistoryResult>();
     const request = vi.fn(async (_method: string, _params: Request) => held.promise);
     const { pane, state } = createStagedPrefetchPane(request);
+    readChatInputRunIds(state);
     admitChatHistoryPages(state, [page(400, 400)], "around");
     state.readTranscriptAnchorSource = () => "id:source-400";
     const before = state.chatMessages;

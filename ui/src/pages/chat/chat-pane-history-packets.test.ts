@@ -17,6 +17,7 @@ import {
   sparsePrefetchRequest,
   stagedPagesRequest,
 } from "./chat-pane-history.test-support.ts";
+import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import {
   getChatSessionProjection,
   publishChatSessionProjection,
@@ -57,6 +58,7 @@ it("publishes a valid packet prefix while exposing a later foreground failure", 
 
 it("keeps one overflow packet, consumes it once, and reverses through its opaque edge without source IDs", async () => {
   const { pane, state, request, moveReader } = packetHistoryPane();
+  readChatInputRunIds(state);
   const published = vi.spyOn(state, "chatMessages", "set");
   await expect(pane.loadOlderMessages()).resolves.toBe(true);
   expect(published).toHaveBeenCalledTimes(1);
@@ -460,6 +462,7 @@ it.each(["older", "newer"] as const)(
       };
     });
     const { pane, state } = createStagedPrefetchPane(request);
+    readChatInputRunIds(state);
     admitChatHistoryPages(
       state,
       [
@@ -511,6 +514,7 @@ it("refines multiple intrinsic sources without granting their whole packet an ex
       : { messages: b, hasMore: false, newerCursor: "newer-2" },
   );
   const { pane, state } = createStagedPrefetchPane(request);
+  readChatInputRunIds(state);
   admitChatHistoryPages(
     state,
     [{ messages: [nativeHistoryMessage(3)], hasMore: true, olderCursor: "older-2" }],
@@ -619,6 +623,7 @@ it.each(["fit", "raw"] as const)(
       return { messages, hasMore: false, newerCursor: "newer-7" };
     });
     const { pane, state } = createStagedPrefetchPane(request);
+    readChatInputRunIds(state);
     admitChatHistoryPages(
       state,
       [{ messages: [nativeHistoryMessage(7)], hasMore: true, olderCursor: "older-6" }],
@@ -627,10 +632,11 @@ it.each(["fit", "raw"] as const)(
     state.readTranscriptAnchorSource = () => "seq:7";
     const loading = pane.loadOlderMessages();
     await requested.promise;
-    // Mock result histories own resolved promises independently of the producer.
-    request.mockClear();
-    const control = await (async () => new WeakRef({ unowned: true }))();
     try {
+      expect(rejected).toBeDefined();
+      // Mock result histories own resolved promises independently of the producer.
+      request.mockClear();
+      const control = await (async () => new WeakRef({ unowned: true }))();
       await collectGarbageForTest();
       expect(control.deref()).toBeUndefined();
       expect(rejected?.deref()).toBeUndefined();

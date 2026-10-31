@@ -31,7 +31,7 @@ import {
   nativeHistoryMessage,
   nativeHistorySeq,
 } from "./chat-pane-history.test-support.ts";
-import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
+import { applyChatPendingInputs, readChatInputRunIds } from "./chat-pending-inputs.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { reduceChatSessionProjection } from "./history-merge.ts";
@@ -584,6 +584,7 @@ it.each([
     }),
   });
   const { pane, state } = createStagedPrefetchPane(request);
+  readChatInputRunIds(state);
   await pane.loadOlderMessages();
   await vi.waitFor(() => expect(pane.stagedHistory.page).not.toBeNull());
   if (row.reset) {
