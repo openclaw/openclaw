@@ -433,14 +433,10 @@ export function renderCodexSkillsInstructions(params: {
     "## OpenClaw Skills",
     ...(search
       ? [
-          "The directory is bounded. Use OpenClaw's skills_search tool to find relevant installed skills omitted from it. Search does not install skills.",
+          "The OpenClaw skills list may omit installed skills. Use OpenClaw's skills_search to discover relevant installed skills. Search does not install anything.",
         ]
       : []),
-    ...(read
-      ? [
-          "Use OpenClaw's skills_read tool with an exact name for complete instructions; a known name does not require search first.",
-        ]
-      : []),
+    ...(read ? ["Use OpenClaw's skills_read with a known exact name for full instructions."] : []),
     ...(prompt ? [prompt] : []),
   ].join("\n");
 }
