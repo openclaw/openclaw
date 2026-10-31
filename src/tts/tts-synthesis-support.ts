@@ -1,3 +1,12 @@
+import {
+  asFiniteNumberInRange,
+  asSafeIntegerInRange,
+} from "@openclaw/normalization-core/number-coercion";
+import {
+  asOptionalObjectRecord,
+  omitUndefinedFields,
+  readStringField,
+} from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig, ResolvedTtsPersona, TtsProvider } from "../config/types.js";
@@ -41,6 +50,33 @@ import {
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
 import type { VoiceProviderCandidate } from "./voice-models.js";
+
+function readTtsFailureMetadata(
+  error: unknown,
+): Pick<TtsProviderAttempt, "errorCode" | "status" | "closeCode" | "retryAfterMs"> {
+  try {
+    const record = asOptionalObjectRecord(error);
+    if (!record) {
+      return {};
+    }
+    const code = readStringField(record, "errorCode") ?? readStringField(record, "code");
+    // Project only explicit fields on this failure, never prose or unrelated causes.
+    return omitUndefinedFields({
+      errorCode: code && /^[A-Za-z0-9_.:-]{1,128}$/.test(code) ? code : undefined,
+      status:
+        asSafeIntegerInRange(record.status, { min: 100, max: 599 }) ??
+        asSafeIntegerInRange(record.statusCode, { min: 100, max: 599 }),
+      closeCode: asSafeIntegerInRange(record.closeCode, { min: 1000, max: 4999 }),
+      retryAfterMs: asFiniteNumberInRange(record.retryAfterMs, {
+        min: 0,
+        max: Number.MAX_SAFE_INTEGER,
+      }),
+    });
+  } catch {
+    // Optional metadata must not replace the original failure if a getter throws.
+    return {};
+  }
+}
 
 // The transport names its abort "TimeoutError" (fetch-timeout.ts) and provider
 // deadlines throw plain Errors ending in "timed out"; AbortError alone misses both.
@@ -464,6 +500,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
               ? "missing"
               : "none",
         error: errorMsg,
+        ...readTtsFailureMetadata(err),
       });
       if (provider === primaryProvider) {
         const hasFallbacks = providers.length > 1;

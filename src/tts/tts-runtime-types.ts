@@ -13,6 +13,11 @@ export type TtsProviderAttempt = {
   personaBinding?: "applied" | "missing" | "none";
   latencyMs?: number;
   error?: string;
+  /** Structured provider failure details; not a retry decision. */
+  errorCode?: string;
+  status?: number;
+  closeCode?: number;
+  retryAfterMs?: number;
 };
 
 type TtsAttemptOutcome = {
