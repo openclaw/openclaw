@@ -71,9 +71,10 @@ export async function throwTtsProjectionError(
   error: unknown,
   cleanup: () => void | Promise<void>,
 ): Promise<never> {
-  const [result] = await Promise.allSettled([Promise.resolve().then(cleanup)]);
-  if (result.status === "rejected") {
-    throw new AggregateError([error, result.reason], formatErrorMessage(error), { cause: error });
+  try {
+    await Promise.resolve().then(cleanup);
+  } catch (cleanupError) {
+    throw new AggregateError([error, cleanupError], formatErrorMessage(error), { cause: error });
   }
   throw error;
 }
