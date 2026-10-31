@@ -499,6 +499,82 @@ describe("processDiscordMessage draft streaming progress", () => {
   });
 });
 
+describe("processDiscordMessage queued thread route", () => {
+  // The queued run starts after its own dispatch has returned. A thread it creates
+  // from its source message must still count as that message's reply.
+  it("keeps the source-message thread route for a queued turn until it settles", async () => {
+    let replyOptions: DispatchInboundParams["replyOptions"];
+    let sessionKey = "";
+    mockDispatch(async (params) => {
+      replyOptions = params?.replyOptions;
+      sessionKey = String(params?.ctx?.SessionKey);
+      return createNoQueuedDispatchResult();
+    });
+    await runBase({
+      message: {
+        id: "2001",
+        channelId: "c1",
+        timestamp: new Date().toISOString(),
+        attachments: [],
+      },
+    });
+    const threadReplyDelivered = () =>
+      notifyDiscordActiveTurnThreadReplyDelivered({
+        sessionKey,
+        accountId: "default",
+        threadId: "thread-2001",
+      });
+
+    await replyOptions?.onQueuedFollowupAdmitted?.();
+    await notifyDiscordActiveTurnThreadCreated({
+      sessionKey,
+      accountId: "default",
+      sourceChannelId: "c1",
+      sourceMessageId: "2001",
+      threadId: "thread-2001",
+    });
+    expect(threadReplyDelivered()).toBe(true);
+
+    await replyOptions?.onQueuedFollowupSettled?.();
+    expect(threadReplyDelivered()).toBe(false);
+  });
+
+  it("keeps the route for a queued turn admitted before its dispatch returns", async () => {
+    let replyOptions: DispatchInboundParams["replyOptions"];
+    let sessionKey = "";
+    mockDispatch(async (params) => {
+      replyOptions = params?.replyOptions;
+      sessionKey = String(params?.ctx?.SessionKey);
+      await replyOptions?.onQueuedFollowupAdmitted?.();
+      return createNoQueuedDispatchResult();
+    });
+    await runBase({
+      message: {
+        id: "2002",
+        channelId: "c1",
+        timestamp: new Date().toISOString(),
+        attachments: [],
+      },
+    });
+
+    await notifyDiscordActiveTurnThreadCreated({
+      sessionKey,
+      accountId: "default",
+      sourceChannelId: "c1",
+      sourceMessageId: "2002",
+      threadId: "thread-2002",
+    });
+    expect(
+      notifyDiscordActiveTurnThreadReplyDelivered({
+        sessionKey,
+        accountId: "default",
+        threadId: "thread-2002",
+      }),
+    ).toBe(true);
+    await replyOptions?.onQueuedFollowupSettled?.();
+  });
+});
+
 describe("processDiscordMessage draft streaming reasoning", () => {
   it("hides gated reasoning and replaces public reasoning snapshots", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();

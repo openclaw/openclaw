@@ -24,7 +24,7 @@ import type {
 } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { beginDiscordActiveTurnThreadRoute } from "../active-turn-thread-route.js";
+import { createDiscordActiveTurnThreadRouteHolder } from "../active-turn-thread-route.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { discordTextHasBroadcastMention } from "../mentions.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
@@ -152,7 +152,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   // returns, but that continuation cannot undo the visible thread reply.
   let threadReplyDelivered = false;
   let onThreadAdopted: ((threadId: string) => Promise<void>) | undefined = undefined;
-  const endActiveThreadRoute = beginDiscordActiveTurnThreadRoute(ctxPayload.SessionKey, {
+  const activeThreadRoute = createDiscordActiveTurnThreadRouteHolder(ctxPayload.SessionKey, {
     accountId,
     sourceChannelId: messageChannelId,
     sourceMessageId,
@@ -273,15 +273,17 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           return false;
         }
       : undefined,
-    onQueuedFollowupAdmitted: draftPreview.draftStream
-      ? () => {
-          if (draftPreview.handleQueuedFollowupAdmitted()) {
-            pendingToolWarningFinal = undefined;
-          }
-        }
-      : undefined,
+    onQueuedFollowupAdmitted: () => {
+      activeThreadRoute.holdQueued();
+      if (draftPreview.draftStream && draftPreview.handleQueuedFollowupAdmitted()) {
+        pendingToolWarningFinal = undefined;
+      }
+    },
     // Queued turns can finish after dispatch closeout has already cleaned up.
-    onQueuedFollowupSettled: draftPreview.draftStream ? () => draftPreview.cleanup() : undefined,
+    onQueuedFollowupSettled: () => {
+      activeThreadRoute.releaseQueued();
+      return draftPreview.draftStream ? draftPreview.cleanup() : undefined;
+    },
     suppressDefaultToolProgressMessages:
       (sourceRepliesAreToolOnly && reactions.statusReactionsExplicitlyEnabled) ||
       draftPreview.suppressDefaultToolProgressMessages
@@ -711,7 +713,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     }
     throw err;
   } finally {
-    endActiveThreadRoute();
+    activeThreadRoute.end();
     endDeliveryCorrelation();
     dispatchError ||= readAgentRunTerminalOutcome(dispatchResult) === "failed";
     const finalReceipt = dispatchResult?.settledReceipt?.counts.final;
