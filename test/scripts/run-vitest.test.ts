@@ -401,10 +401,10 @@ registerHooks({resolve(specifier, context, nextResolve) {
           platform: "win32",
           requireResolve,
         }),
-      ).toBe("/repo/node_modules/vitest/vitest.mjs");
+      ).toBe(nodePath.join("/repo", "node_modules", "vitest", "vitest.mjs"));
       expect(symlinkSync.mock.calls).toEqual([
-        [modulesDir, modulesDir + "/node_modules", "junction"],
-        [modulesDir, "/repo/node_modules", "junction"],
+        [nodePath.normalize(modulesDir), nodePath.join(modulesDir, "node_modules"), "junction"],
+        [nodePath.normalize(modulesDir), nodePath.join("/repo", "node_modules"), "junction"],
       ]);
       expect(requireResolve).not.toHaveBeenCalled();
     },
@@ -715,15 +715,60 @@ registerHooks({resolve(specifier, context, nextResolve) {
       "⎯⎯ Unhandled Rejection ⎯⎯",
       "TypeError: request failed",
       'This error originated in "' + origin + '" test file.',
-    ]
-      .map((line) => "\u001b[31m" + line + "\u001b[0m")
-      .join("\n");
-    detector.observe(output);
+    ].map((line) => "\u001b[31m" + line + "\u001b[0m");
+    output.forEach(detector.observeLine);
     expect(detector.finish()).toEqual({
       count: 1,
       errorFirstLine: "TypeError: request failed",
       origin,
     });
+  });
+
+  it("keeps unhandled error lines separate across stream EOF", async ({ signal }) => {
+    const env = testRunnerFixtureEnv({ OPENCLAW_VITEST_RUNTIME: "node" });
+    const watched = spawnWatchedVitestProcess({
+      pnpmArgs: [
+        "exec",
+        "node",
+        "-e",
+        `const fs = require("node:fs");
+fs.writeSync(1, "\\u001b[31m⎯⎯ Unhandled Errors ⎯⎯\\u001b[0m");
+fs.writeSync(2, [
+  "Vitest caught 1 unhandled error during the test run.",
+  "⎯⎯ Unhandled Rejection ⎯⎯",
+  "TypeError: request failed",
+  'This error originated in "fixture.test.ts" test file.',
+].join("\\n"));`,
+      ],
+      spawnParams: { ...resolveVitestSpawnParams(env), stdio: ["pipe", "pipe", "pipe"] },
+      env,
+      homeMode: "hermetic",
+    });
+    // Windows leaves fd1 open on closeSync(1). Hold the real stderr pipe instead;
+    // child-exit cleanup can resume it, so pause every resume until stdout's EOF.
+    const stdout = watched.child.stdout!;
+    const stderr = watched.child.stderr!;
+    const holdStderr = () => stderr.pause();
+    const releaseStderr = () => {
+      stderr.off("resume", holdStderr);
+      stderr.resume();
+    };
+    stderr.on("resume", holdStderr);
+    stderr.pause();
+    stdout.once("end", releaseStderr);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect((await withinTest(watched.completion, signal)).code).toBe(0);
+      expect(log).toHaveBeenCalledWith(
+        "[vitest] UNHANDLED ERRORS (1): fixture.test.ts — TypeError: request failed",
+      );
+    } finally {
+      stdout.off("end", releaseStderr);
+      releaseStderr();
+      watched.teardown();
+      forceKillVitestProcessGroup(watched.child);
+      log.mockRestore();
+    }
   });
 
   it("adds workflow annotations only under GitHub Actions", () => {

@@ -954,12 +954,12 @@ export function spawnWatchedVitestProcess({
   });
   const unhandledErrors = createVitestUnhandledErrorDetector();
   const forwardedOutput = Promise.all([
-    forwardVitestOutput(child.stdout, process.stdout, undefined, unhandledErrors.observe),
+    forwardVitestOutput(child.stdout, process.stdout, undefined, unhandledErrors.observeLine),
     forwardVitestOutput(
       child.stderr,
       process.stderr,
       shouldSuppressVitestStderrLine,
-      unhandledErrors.observe,
+      unhandledErrors.observeLine,
     ),
   ]);
 
