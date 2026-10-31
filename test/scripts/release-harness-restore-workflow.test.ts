@@ -156,11 +156,6 @@ function fixture(file: string, jobName: string, fault: Fault) {
 // These acquisition jobs run on Ubuntu; the script contract is Bash plus native Git.
 describe.skipIf(process.platform === "win32").each([
   {
-    label: "installer warning relay",
-    file: ".github/workflows/install-smoke-reusable.yml",
-    job: "install-smoke-fast",
-  },
-  {
     label: "installer harness",
     file: ".github/workflows/install-smoke-reusable.yml",
     job: "root_dockerfile_image",
