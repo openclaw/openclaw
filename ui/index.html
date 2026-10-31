@@ -42,6 +42,10 @@
       crossorigin="use-credentials"
     />
     <script data-cfasync="false">
+      // Advertise command readiness before deferred startup can outlive document load.
+      // The shell listener owner changes this to true after installing its handlers.
+      window.__OPENCLAW_NATIVE_COMMANDS_READY__ = false;
+
       // Configure Zod before module evaluation so its JIT probe cannot violate strict CSP.
       globalThis.__zod_globalConfig ??= {};
       globalThis.__zod_globalConfig.jitless = true;
