@@ -25,7 +25,7 @@ import {
   acquirePluginSourceSnapshot,
   collectPluginSourceSnapshots,
   pluginSourceSnapshotClosureDigest,
-  publishPluginSourceSnapshot,
+  stagePluginSourceSnapshot,
 } from "./plugin-source-snapshot-artifact.js";
 import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
 import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
@@ -76,12 +76,12 @@ async function fixture(native = true, hardlinked = false, linkedDependency = fal
     dependencyClosureDigest: pluginSourceSnapshotClosureDigest(capture),
     buildResolutionDigest: "options",
   };
-  const published = await publishPluginSourceSnapshot({
+  const published = await stagePluginSourceSnapshot({
     stateDir,
     capture,
     binding,
     assertCurrent,
-  });
+  }).then((staged) => staged.publish());
   const descriptor: PluginSourceSnapshotDescriptor = { ...published, installedRevision: 1 };
   return { stateDir, source, descriptor, capture, binding };
 }
@@ -113,12 +113,12 @@ it("keeps absolute dependency links valid across atomic publication", async () =
   vi.spyOn(fs, "symlinkSync").mockImplementation((target, link, type) =>
     symlink(path.resolve(path.dirname(String(link)), String(target)), link, type),
   );
-  const published = await publishPluginSourceSnapshot({
+  const published = await stagePluginSourceSnapshot({
     stateDir,
     capture,
     binding,
     assertCurrent,
-  });
+  }).then((staged) => staged.publish());
   const descriptor = { ...published, installedRevision: 1 };
   const reader = await acquirePluginSourceSnapshot({ stateDir, descriptor, assertCurrent });
   releases.push(reader.release);
@@ -152,7 +152,7 @@ it("releases staging token descriptor custody before atomic rename", async () =>
     rename(from, to);
   });
   let checks = 0;
-  const published = await publishPluginSourceSnapshot({
+  const published = await stagePluginSourceSnapshot({
     stateDir,
     capture,
     binding,
@@ -169,14 +169,14 @@ it("releases staging token descriptor custody before atomic rename", async () =>
       expect(tokenDescriptor).toBeDefined();
       tokenIdentity = fs.fstatSync(tokenDescriptor!, { bigint: true });
     },
-  });
+  }).then((staged) => staged.publish());
   expect(fs.existsSync(published.artifact.path)).toBe(true);
 });
 
 it("keeps a current-process snapshot publisher out of capture maintenance", async () => {
   const { stateDir, capture, binding } = await fixture(false);
   let checks = 0;
-  await publishPluginSourceSnapshot({
+  await stagePluginSourceSnapshot({
     stateDir,
     capture,
     binding,
@@ -193,7 +193,7 @@ it("keeps a current-process snapshot publisher out of capture maintenance", asyn
       await prunePluginNativeCaptureDirectories(stateDir, new Set(), () => {}, { startup: true });
       expect(fs.existsSync(stage)).toBe(true);
     },
-  });
+  }).then((staged) => staged.publish());
 });
 
 it.each(process.platform === "win32" ? [false] : [false, true])(
@@ -419,12 +419,12 @@ it("retains frozen logical aliases and closure restrictions through recovery for
 it("refuses publication when the capture no longer matches its installation binding", async () => {
   const { stateDir, capture, binding } = await fixture();
   await expect(
-    publishPluginSourceSnapshot({
+    stagePluginSourceSnapshot({
       stateDir,
       capture,
       binding: { ...binding, contentDigest: "changed" },
       assertCurrent,
-    }),
+    }).then((staged) => staged.publish()),
   ).rejects.toThrow("does not match the installation record");
 });
 
@@ -462,7 +462,9 @@ it.each(["content", "link", "directory", "executable"] as const)(
       fs.chmodSync(path.join(capture.rootDir, "index.cjs"), 0o700);
     }
     await expect(
-      publishPluginSourceSnapshot({ stateDir, capture, binding, assertCurrent }),
+      stagePluginSourceSnapshot({ stateDir, capture, binding, assertCurrent }).then((staged) =>
+        staged.publish(),
+      ),
     ).rejects.toThrow("source changed after its installation receipt");
   },
 );
@@ -526,7 +528,7 @@ it.each(["authority", "staging-payload", "published-payload"] as const)(
     const parent = path.join(stateDir, "tmp", "plugin-captures");
     const rootsBefore = fs.readdirSync(parent);
     await expect(
-      publishPluginSourceSnapshot({
+      stagePluginSourceSnapshot({
         stateDir,
         capture,
         binding,
@@ -549,7 +551,7 @@ it.each(["authority", "staging-payload", "published-payload"] as const)(
             );
           }
         },
-      }),
+      }).then((staged) => staged.publish()),
     ).rejects.toThrow(change === "authority" ? "installation changed" : "after source validation");
     expect(fs.readdirSync(parent)).toEqual(rootsBefore);
   },
