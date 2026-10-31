@@ -767,6 +767,13 @@ count toward downtime. Unchanged plugins use read-only validation and readiness
 checks without another full Doctor pass. Service ownership is revalidated after
 convergence, and final runtime verification checks the resulting snapshot.
 
+Final plugin configuration publication rebases only its changed fields onto a
+fresh configuration snapshot. Unrelated edits and already-applied changes are
+preserved, including authored environment references and supported include files.
+A conflicting edit to a changed field, or an incompatible parent shape, still
+fails finalization. Resolve the reported conflict before retrying
+`openclaw update repair`; publication retries do not repeat package work.
+
 On Windows, Scheduled Task autostart stays suspended until the candidate finalizer
 activates the updated Gateway. After migration, the retained updater checks its
 live executor lease without reopening the newer state database. Plugin version

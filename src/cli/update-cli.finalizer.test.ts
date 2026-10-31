@@ -1,6 +1,7 @@
 import path from "node:path";
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { runPostCorePluginConvergence } from "../commands/doctor/shared/post-core-plugin-convergence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
@@ -58,6 +59,40 @@ describe("update-cli", () => {
     setTty,
     tempDirs,
   } = createUpdateCliFixture();
+
+  it("finalizes after an unrelated edit during plugin convergence", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(FRESH_POST_UPDATE_ENTRYPOINT);
+    const initial: OpenClawConfig = {
+      plugins: { enabled: false, entries: { fixture: { enabled: true } } },
+      gateway: { port: 18789 },
+    };
+    let current = configSnapshot(initial, { hash: "planning" });
+    vi.mocked(readConfigFileSnapshot).mockImplementation(async () => current);
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => pluginSyncResult(config));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) =>
+      npmPluginUpdateResult(config),
+    );
+    vi.mocked(runPostCorePluginConvergence).mockImplementationOnce(async ({ cfg }) => {
+      current = configSnapshot({ ...initial, gateway: { port: 19001 } }, { hash: "concurrent" });
+      return {
+        config: { ...cfg, plugins: { ...cfg.plugins, entries: { fixture: { enabled: false } } } },
+        configChanges: ["Disabled fixture."],
+        changes: [],
+        warnings: [],
+        errored: false,
+        installedPluginIdRecovery: new Map(),
+        smokeFailures: [],
+        installRecords: {},
+      };
+    });
+    await updateFinalizeCommand({ json: true, yes: true });
+    expect(lastReplaceConfigCall()?.nextConfig).toMatchObject({
+      gateway: { port: 19001 },
+      plugins: { entries: { fixture: { enabled: false } } },
+    });
+    expect(lastReplaceConfigCall()?.baseHash).toBe("concurrent");
+    expect(lastWriteJsonCall()).toMatchObject({ status: "ok", mode: "finalize" });
+  });
 
   it.each([
     { name: "Node", bun: undefined, failure: false },

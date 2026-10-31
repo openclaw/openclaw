@@ -344,6 +344,7 @@ export async function preparePostCorePluginConfig(params: {
   const restored = restoreDroppedPreUpdateChannels(prepared.snapshot, params.preUpdateConfig);
   return {
     configSnapshot: restored.snapshot,
+    configBaseline: prepared.snapshot.sourceConfig,
     configWriteOptions: withUpdateConfigWriteAuthority(
       {
         ...prepared.writeOptions,
