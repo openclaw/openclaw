@@ -390,4 +390,121 @@ describe("Telegram retained message history", () => {
     expect(await get(cache, 22)).toBeNull();
     expect(await historyIds(cache)).toEqual(["23"]);
   });
+
+  it("retires a precisely identified message from retained history", async () => {
+    const cache = createCache();
+    await record(cache, message(1));
+    await record(cache, message(2));
+
+    expect(await cache.retireMessage({ accountId, chatId, messageId: 1 })).toBe(true);
+    expect(await get(cache, 1)).toBeNull();
+    expect((await get(cache, 2))?.messageId).toBe("2");
+    expect(await historyIds(cache)).toEqual(["2"]);
+
+    // A reopened bucket must not resurrect the retired entry from the store.
+    resetTelegramMessageCacheForTest();
+    resetPluginStateStoreForTests();
+    const reopened = createCache();
+    expect(await get(reopened, 1)).toBeNull();
+    expect((await get(reopened, 2))?.messageId).toBe("2");
+
+    expect(await cache.retireMessage({ accountId, chatId, messageId: 1 })).toBe(false);
+    expect(await cache.retireMessage({ accountId, chatId, messageId: "not-a-native-id" })).toBe(
+      false,
+    );
+  });
+
+  it("retires a persisted preview after its memory entry was evicted", async () => {
+    const privateChat = { id: 7, type: "private" as const, first_name: "Ada" };
+    const dmPrefix = `${scopeKey}:${accountId}:7:`;
+    importPluginStateEntriesForDoctorForTests(
+      "telegram",
+      fixture.options(),
+      Array.from({ length: TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES }, (_, index) => {
+        const id = index + 1;
+        return {
+          key: `${dmPrefix}${id}`,
+          value: legacyRow(message(id, { chat: privateChat })),
+          createdAt: 1000 + id,
+        };
+      }),
+    );
+    const cache = createCache();
+    await get(cache, 1, 7);
+    await cache.record({
+      accountId,
+      chatId: 7,
+      msg: message(TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES + 1, { chat: privateChat }),
+      historyEligible: true,
+    });
+
+    const { bounded } = openStores();
+    expect(await get(cache, 2, 7)).toBeNull();
+    expect(await bounded.lookup(`${dmPrefix}2`)).toBeDefined();
+    expect(await bounded.lookup(`${dmPrefix}1`)).toBeUndefined();
+
+    expect(await cache.retireMessage({ accountId, chatId: 7, messageId: 2 })).toBe(true);
+    expect(await bounded.lookup(`${dmPrefix}2`)).toBeUndefined();
+
+    resetTelegramMessageCacheForTest();
+    resetPluginStateStoreForTests();
+    expect(await get(createCache(), 2, 7)).toBeNull();
+  });
+
+  it("keeps a preview retired while its own observation was still in flight", async () => {
+    const cache = createCache();
+    let retirePromise: Promise<boolean> | undefined;
+    fixture.beforeCompare = async () => {
+      // The record already passed the fence and is about to commit; the
+      // retirement queues on the same per-key writer and settles the order.
+      retirePromise = cache.retireMessage({ accountId, chatId, messageId: 60 });
+    };
+    await record(cache, message(60));
+    await retirePromise;
+    expect(await get(cache, 60)).toBeNull();
+    expect(await historyIds(cache)).toEqual([]);
+  });
+
+  it("shares the writer queue across cache instances over one bucket", async () => {
+    const recording = createCache();
+    const retiring = createCache();
+    const retireDone = Promise.withResolvers<void>();
+    fixture.beforeCompare = async () => {
+      // Production recording and preview retirement use separate handles over
+      // the same bucket. Without a shared writer queue the retiring handle
+      // can complete its fence + delete before this compare commits, and the
+      // stale observation then resurrects the preview.
+      void retiring
+        .retireMessage({ accountId, chatId, messageId: 60 })
+        .then(() => retireDone.resolve());
+      // Give a separate-chain retire time to finish; a shared-chain retire
+      // queues behind this write and the race resolves first.
+      await Promise.race([
+        retireDone.promise,
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 20);
+        }),
+      ]);
+    };
+
+    await record(recording, message(60));
+    await retireDone.promise;
+
+    expect(await get(recording, 60)).toBeNull();
+    expect(await historyIds(recording)).toEqual([]);
+  });
+
+  it("keeps a bounded-cache preview retired while its observation was in flight", async () => {
+    const cache = createCache();
+    const dmChat = { id: 7, type: "private" as const, first_name: "Ada" };
+    const dmMessage = (messageId: number): Message => message(messageId, { chat: dmChat });
+    let retirePromise: Promise<boolean> | undefined;
+    fixture.beforeRegister = async () => {
+      retirePromise = cache.retireMessage({ accountId, chatId: 7, messageId: 70 });
+    };
+    // Positive chat id: the bounded map path, no retained CAS involved.
+    await cache.record({ accountId, chatId: 7, msg: dmMessage(70) });
+    await retirePromise;
+    expect(await cache.get({ accountId, chatId: 7, messageId: "70" })).toBeNull();
+  });
 });
