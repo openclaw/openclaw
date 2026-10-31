@@ -1,30 +1,8 @@
-/** A long synthetic answer whose fences, tables, and inline tokens cross delta boundaries. */
-export function createControlUiStreamingReply(
-  deltasPerSecond = 30,
-  content: "markdown" | "tool-code" = "markdown",
-) {
-  const text =
-    content === "tool-code"
-      ? `The tool output and this code block grow together.\n\n\`\`\`typescript\n${Array.from(
-          { length: 180 },
-          (_, index) => `export const checkpoint${index + 1} = ${index + 1};\n`,
-        ).join("")}\`\`\`\n\nStreaming code complete.\n`
-      : Array.from({ length: 24 }, (_, index) => {
-          const section = index + 1;
-          return `## Checkpoint ${section}\n\nThe streaming renderer should retain completed content while the next paragraph grows. This checkpoint includes **important details**, an [example link](https://example.com/checkpoint/${section}), and inline \`code\` without moving the surrounding conversation.\n\n\`\`\`typescript\nexport function checkpoint${section}(values: readonly number[]) {\n  return values.filter((value) => value < 100).map((value) => ({ value, doubled: value * 2 }));\n}\n\`\`\`\n\n| Measurement | Expected behavior |\n| --- | --- |\n| Completed blocks | Retain their DOM |\n| Open paragraph | Update in place |\n| Checkpoint | ${section} of 24 |\n\nThe result is ready for the next checkpoint.\n\n`;
-        }).join("");
-  // A deterministic variable chunk size avoids aligning deltas with Markdown block boundaries.
-  const deltas: string[] = [];
-  let offset = 0;
-  while (offset < text.length) {
-    offset = Math.min(text.length, offset + 12 + ((deltas.length * 17) % 25));
-    deltas.push(text.slice(0, offset));
-  }
-  return { text, deltas, deltasPerSecond, growingTool: content === "tool-code" };
-}
+import type { ToolStreamHost } from "../../ui/src/pages/chat/tool-stream-contract.ts";
+import { summarizeStreamingDistribution } from "./control-ui-streaming-statistics.ts";
 
 export function createStreamingReplyProbeInitScript(): string {
-  return `;(() => { const __name = (target) => target; (${installStreamingReplyProbe.toString()})(); })();`;
+  return `;(() => { const __name = (target) => target; const summarizeStreamingDistribution = ${summarizeStreamingDistribution.toString()}; (${installStreamingReplyProbe.toString()})(); })();`;
 }
 
 function installStreamingReplyProbe() {
@@ -34,12 +12,14 @@ function installStreamingReplyProbe() {
     parseMs: 0,
     geometryReads: 0,
     styleReads: 0,
+    fragmentClones: 0,
   };
   type Delta = typeof emptyCounters & {
     index: number;
     chars: number;
     at: number;
     taskAndMicrotasksMs?: number;
+    eventToNextFrameMs?: number;
   };
   let active = false;
   let startedAt = 0;
@@ -93,6 +73,8 @@ function installStreamingReplyProbe() {
   });
   // Observe existing owners from their registration, without a production probe seam.
   const OriginalWeakMap = window.WeakMap;
+  type PaneState = Pick<ToolStreamHost, "chatReasoning" | "toolStreamById">;
+  const paneOwners = new OriginalWeakMap<HTMLElement, object>();
   class ProbeWeakMap<K extends WeakKey, V> extends OriginalWeakMap<K, V> {
     override set(host: K, owner: V): this {
       super.set(host, owner);
@@ -129,6 +111,7 @@ function installStreamingReplyProbe() {
         typeof render === "function"
       ) {
         paneProbeAttached = true;
+        paneOwners.set(host, owner);
         Reflect.set(owner, "render", function (this: object, ...args: unknown[]) {
           const start = performance.now();
           try {
@@ -167,8 +150,14 @@ function installStreamingReplyProbe() {
   const deltas: Delta[] = [];
   const frames: number[] = [];
   const inputs: Array<{ delayMs: number; nextFrameMs?: number; chars: number }> = [];
+  const sidebarInputs: Array<{ delayMs: number; commitMs?: number; nextFrameMs?: number }> = [];
   const longFrames: Array<{ start: number; duration: number; blocking: number }> = [];
   const setupLongFrames: typeof longFrames = [];
+  const longTasks: Array<{ start: number; duration: number }> | null =
+    PerformanceObserver.supportedEntryTypes.includes("longtask") ? [] : null;
+  const commitToNextFrameMs: number[] = [];
+  let commitObserver: MutationObserver | undefined;
+  let measureFrames = false;
   const channel = new MessageChannel();
   const taskEnds: Array<{ delta: Delta; at: number }> = [];
   channel.port1.addEventListener("message", () => {
@@ -205,6 +194,12 @@ function installStreamingReplyProbe() {
           ...emptyCounters,
         };
         deltas.push(current);
+        if (measureFrames) {
+          const sample = current;
+          requestAnimationFrame(() => {
+            sample.eventToNextFrameMs = performance.now() - startedAt - sample.at;
+          });
+        }
         if (observeTextVisibility) {
           const source: string = payload.message.content[0].text;
           const boundary = source.lastIndexOf("\n\n");
@@ -276,6 +271,14 @@ function installStreamingReplyProbe() {
   const parserPrototype: {
     parseFromString: (this: DOMParser, source: string, type: DOMParserSupportedType) => Document;
   } = DOMParser.prototype;
+  const nodePrototype: { cloneNode: (this: Node, deep?: boolean) => Node } = Node.prototype;
+  const cloneNode = nodePrototype.cloneNode;
+  Node.prototype.cloneNode = function (this: Node, deep?: boolean) {
+    if (active && current && deep && this instanceof DocumentFragment) {
+      current.fragmentClones++;
+    }
+    return cloneNode.call(this, deep);
+  };
   const parse = parserPrototype.parseFromString;
   DOMParser.prototype.parseFromString = function (this: DOMParser, source: unknown, type) {
     return measureParse(source, () => Reflect.apply(parse, this, [source, type]));
@@ -320,23 +323,71 @@ function installStreamingReplyProbe() {
       Object.assign(sample, { nextFrameMs: performance.now() - event.timeStamp });
     });
   });
-  new PerformanceObserver((list) => {
-    if (!active) {
-      return;
-    }
-    for (const entry of list.getEntries()) {
-      if (entry.startTime + entry.duration <= startedAt) {
-        continue;
+  document.addEventListener(
+    "click",
+    (event) => {
+      if (!active || !measureFrames || !event.isTrusted || !(event.target instanceof Element)) {
+        return;
       }
-      const blocking = Reflect.get(entry, "blockingDuration");
-      const targetFrames = entry.startTime < startedAt ? setupLongFrames : longFrames;
-      targetFrames.push({
-        start: entry.startTime - startedAt,
-        duration: entry.duration,
-        blocking: typeof blocking === "number" ? blocking : 0,
+      const toggle = event.target.closest(".sidebar-session-pagination__button");
+      if (!toggle) {
+        return;
+      }
+      const rowSelector = ".sidebar-recent-session[data-session-key]";
+      const previous = document.querySelectorAll(rowSelector).length;
+      const sample: (typeof sidebarInputs)[number] = {
+        delayMs: Math.max(0, performance.now() - event.timeStamp),
+      };
+      sidebarInputs.push(sample);
+      const observer = new MutationObserver(() => {
+        if (document.querySelectorAll(rowSelector).length <= previous) {
+          return;
+        }
+        sample.commitMs = performance.now() - event.timeStamp;
+        observer.disconnect();
+        requestAnimationFrame(() => {
+          sample.nextFrameMs = performance.now() - event.timeStamp;
+        });
       });
+      observer.observe(document.body, { childList: true, subtree: true });
+    },
+    true,
+  );
+  const recordLongTasks = (entries: PerformanceEntry[]) => {
+    for (const entry of entries) {
+      if (entry.startTime >= startedAt && (!stoppedAt || entry.startTime < stoppedAt)) {
+        longTasks?.push({ start: entry.startTime - startedAt, duration: entry.duration });
+      }
     }
-  }).observe({ type: "long-animation-frame", buffered: true });
+  };
+  const longTaskObserver =
+    longTasks === null
+      ? undefined
+      : new PerformanceObserver((list) => {
+          if (active) {
+            recordLongTasks(list.getEntries());
+          }
+        });
+  longTaskObserver?.observe({ type: "longtask" });
+  if (PerformanceObserver.supportedEntryTypes.includes("long-animation-frame")) {
+    new PerformanceObserver((list) => {
+      if (!active) {
+        return;
+      }
+      for (const entry of list.getEntries()) {
+        if (entry.startTime + entry.duration <= startedAt) {
+          continue;
+        }
+        const blocking = Reflect.get(entry, "blockingDuration");
+        const targetFrames = entry.startTime < startedAt ? setupLongFrames : longFrames;
+        targetFrames.push({
+          start: entry.startTime - startedAt,
+          duration: entry.duration,
+          blocking: typeof blocking === "number" ? blocking : 0,
+        });
+      }
+    }).observe({ type: "long-animation-frame", buffered: true });
+  }
   const frame = (at: number) => {
     if (!active) {
       return;
@@ -383,8 +434,10 @@ function installStreamingReplyProbe() {
       burstSize: number;
       observeTextVisibility?: boolean;
       growingTool: boolean;
+      mixed?: { reasoning: string; toolCount: number; imageUrl: string };
     }) {
       observeTextVisibility = input.observeTextVisibility ?? false;
+      measureFrames = input.mixed !== undefined;
       if (window.WeakMap === ProbeWeakMap) {
         window.WeakMap = OriginalWeakMap;
       }
@@ -398,18 +451,92 @@ function installStreamingReplyProbe() {
       }
       startedAt = performance.now();
       active = true;
+      if (measureFrames) {
+        commitObserver = new MutationObserver(() => {
+          const committedAt = performance.now();
+          requestAnimationFrame(() => commitToNextFrameMs.push(performance.now() - committedAt));
+        });
+        for (const stream of streams) {
+          commitObserver.observe(paneFor(stream.sessionKey)!.querySelector(".chat-thread")!, {
+            subtree: true,
+            childList: true,
+            characterData: true,
+          });
+        }
+      }
       requestAnimationFrame(frame);
       const gateway = Reflect.get(window, "openclawControlUiE2eGateway");
+      let mixedSequence = 0;
+      const emitActivity = (
+        owner: Stream,
+        kind: "thinking" | "tool",
+        data: Record<string, unknown>,
+      ) =>
+        gateway.emit("session.tool", {
+          ...owner,
+          seq: ++mixedSequence,
+          ts: 1_800_000_400_000 + mixedSequence,
+          stream: kind,
+          data,
+        });
       for (const [index, text] of input.deltas.entries()) {
         setTimeout(
           () => {
             for (const stream of streams) {
               gateway.emit("chat", {
                 ...stream,
-                seq: input.growingTool ? index * 2 + 3 : index + 1,
+                seq: input.mixed ? ++mixedSequence : input.growingTool ? index * 2 + 3 : index + 1,
                 state: "delta",
                 message: { role: "assistant", content: [{ type: "text", text }] },
               });
+              if (input.mixed && index === 0) {
+                emitActivity(stream, "thinking", {
+                  itemId: "mixed-reasoning",
+                  text: input.mixed.reasoning,
+                });
+              }
+              const startTools = index === Math.floor(input.deltas.length / 4);
+              const finishTools = index === Math.floor(input.deltas.length / 2);
+              if (input.mixed && (startTools || finishTools)) {
+                for (let tool = 1; tool <= input.mixed.toolCount; tool++) {
+                  emitActivity(stream, "tool", {
+                    phase: startTools ? "start" : "result",
+                    name: "exec",
+                    toolCallId: `mixed-tool-${tool}`,
+                    ...(startTools
+                      ? { args: { command: `verify-mixed-${tool}` } }
+                      : { result: { text: `Mixed tool result ${tool}.` } }),
+                  });
+                }
+              }
+              if (input.mixed && finishTools) {
+                const messageId = `mixed-image-${stream.runId}`;
+                gateway.emit("session.message", {
+                  sessionKey: stream.sessionKey,
+                  runId: stream.runId,
+                  hasActiveRun: true,
+                  messageId,
+                  messageSeq: 401,
+                  message: {
+                    role: "toolResult",
+                    toolName: "exec",
+                    toolCallId: `mixed-tool-${input.mixed.toolCount}`,
+                    content: [
+                      {
+                        type: "image",
+                        artifactId: messageId,
+                        data: input.mixed.imageUrl,
+                        mimeType: "image/png",
+                        alt: "Synthetic streaming attachment",
+                        width: 64,
+                        height: 64,
+                      },
+                    ],
+                    timestamp: 1_800_000_400_000 + mixedSequence,
+                    __openclaw: { id: messageId, seq: 401, runId: stream.runId },
+                  },
+                });
+              }
               if (input.growingTool) {
                 gateway.emit("session.tool", {
                   ...stream,
@@ -434,9 +561,17 @@ function installStreamingReplyProbe() {
     read() {
       return { active, delivered: deltas.length, finalReceived };
     },
+    sidebarInputs() {
+      return sidebarInputs;
+    },
     stop() {
       active = false;
       stoppedAt = performance.now();
+      commitObserver?.disconnect();
+      if (longTaskObserver) {
+        recordLongTasks(longTaskObserver.takeRecords());
+        longTaskObserver.disconnect();
+      }
     },
     finish() {
       const panes = streams.map((stream) => {
@@ -444,7 +579,7 @@ function installStreamingReplyProbe() {
         const thread = pane.querySelector<HTMLElement>(".chat-thread")!;
         const bubble = pane.querySelector(".chat-bubble.streaming .chat-text");
         const bounds = pane.getBoundingClientRect();
-        return {
+        const result = {
           sessionKey: stream.sessionKey,
           runId: stream.runId,
           visible:
@@ -468,6 +603,29 @@ function installStreamingReplyProbe() {
             distanceFromBottom: thread.scrollHeight - thread.clientHeight - thread.scrollTop,
           },
         };
+        const paneOwner = measureFrames ? paneOwners.get(pane) : undefined;
+        const state: PaneState | undefined = paneOwner
+          ? Reflect.get(paneOwner, "state")
+          : undefined;
+        return state
+          ? Object.assign(result, {
+              finalMarkdownText: Array.from(
+                bubble?.querySelectorAll("h2, p, pre code, table") ?? [],
+              )
+                .map((block) => block.textContent ?? "")
+                .join(""),
+              reasoning: state.chatReasoning,
+              renderedImageCount: pane.querySelectorAll(".chat-message-image").length,
+              toolResults: Array.from(
+                state.toolStreamById.values(),
+                ({ toolCallId, output, resultReceived }) => ({
+                  toolCallId,
+                  output,
+                  resultReceived,
+                }),
+              ),
+            })
+          : result;
       });
       if (!pipeline.streamWrites || !pipeline.publications || !paneProbeAttached) {
         throw new Error("Streaming owner probes did not capture the measured pipeline");
@@ -475,21 +633,7 @@ function installStreamingReplyProbe() {
       if (deltas.some((delta) => !Number.isFinite(delta.parseChars))) {
         throw new Error("Streaming HTML probe produced a non-finite character count");
       }
-      const distribution = (values: number[]) => {
-        const xs = values.toSorted((a, b) => a - b);
-        const quantile = (q: number) => {
-          const at = (xs.length - 1) * q;
-          const lo = Math.floor(at);
-          return xs.length ? xs[lo]! + (xs[Math.ceil(at)]! - xs[lo]!) * (at - lo) : 0;
-        };
-        return {
-          median: quantile(0.5),
-          p95: quantile(0.95),
-          iqr: quantile(0.75) - quantile(0.25),
-          min: xs[0] ?? 0,
-          max: xs.at(-1) ?? 0,
-        };
-      };
+      const distribution = summarizeStreamingDistribution;
       const optionalDistribution = (values: Array<number | undefined>) =>
         distribution(values.filter((value): value is number => value !== undefined));
       const gaps = frames.slice(1).map((at, index) => at - frames[index]!);
@@ -514,7 +658,7 @@ function installStreamingReplyProbe() {
       });
       return {
         measurement:
-          "Untraced streaming only. Per-delta taskAndMicrotasksMs is delivery to a MessageChannel task (includes app microtasks and scheduling delay). Parse/geometry/style totals include asynchronous work until the next delta. Frame loss assumes 60 Hz; keydown samples are trusted native input to next rAF, not presentation timestamps.",
+          "Streaming interval only; see the run manifest for tracing overhead. Per-delta taskAndMicrotasksMs is delivery to a MessageChannel task (includes app microtasks and scheduling delay). Parse/geometry/style totals include asynchronous work until the next delta. Event-to-frame starts at WebSocket delivery; commit-to-frame starts at a transcript MutationObserver callback. Both end at rAF, not paint. Frame loss assumes 60 Hz; keydown samples are trusted native input to next rAF, not presentation timestamps.",
         startedAt,
         elapsedMs: stoppedAt - startedAt,
         pipeline,
@@ -535,9 +679,14 @@ function installStreamingReplyProbe() {
           0,
         ),
         longFrames,
+        longTasks,
+        eventToNextFrameMs: optionalDistribution(deltas.map((delta) => delta.eventToNextFrameMs)),
+        commitToNextFrameMs: distribution(commitToNextFrameMs),
+        taskAndMicrotasksMs: optionalDistribution(deltas.map((delta) => delta.taskAndMicrotasksMs)),
         setupLongFrames,
         longFrameBlockingMs: longFrames.reduce((sum, item) => sum + item.blocking, 0),
         inputs,
+        sidebarInputs,
         textVisibility,
         inputDelayMs: distribution(inputs.map((sample) => sample.delayMs)),
         inputToNextFrameMs: optionalDistribution(inputs.map((sample) => sample.nextFrameMs)),

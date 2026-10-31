@@ -14,11 +14,16 @@ import { isArtifactPreservingStateRead } from "../state/artifact-preserving-stat
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { createPluginGenerationNativeRoots } from "./plugin-generation-native-roots.js";
+import type {
+  inspectPluginGenerationSources,
+  inspectPluginSourceDependencies,
+} from "./plugin-generation-source-inspection.js";
 import { GenerationCodec } from "./plugin-generation-worker-codec.js";
 import type {
   GenerationWorkerInput,
   GenerationWorkerReply,
   GenerationWorkerCallback,
+  PluginGenerationInspection,
 } from "./plugin-generation-worker-contract.js";
 import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
 import {
@@ -151,6 +156,59 @@ function preparationOwnerFor(source: RetainedNativeWorkerSource): PreparationOwn
 export async function preparePluginGenerationArtifact(
   params: PreparationParameters,
 ): Promise<PreparedPluginGenerationArtifact> {
+  const prepared = await prepareOwnedPluginGeneration(params);
+  return {
+    // SAFETY: The ordinary capture command encodes the worker's PluginGenerationArtifact.
+    artifact: prepared.value as PluginGenerationArtifact,
+    attachModuleSource: prepared.attachModuleSource,
+  };
+}
+
+/** Inspect exact captured inputs without blocking the host or evaluating plugin code. */
+export async function inspectPluginSourceDependenciesAsync(
+  entries: Parameters<typeof inspectPluginSourceDependencies>[0],
+  boundary?: Parameters<typeof inspectPluginSourceDependencies>[1],
+): Promise<ReturnType<typeof inspectPluginSourceDependencies>> {
+  const first = entries[0];
+  if (!first) {
+    return { files: [], packageRoots: [], unresolved: [], references: [] };
+  }
+  const prepared = await prepareOwnedPluginGeneration({
+    rootDir: first.rootDir,
+    source: first.entryFile,
+    inspection: { kind: "dependencies", entries, dependencyRoot: boundary?.root },
+  });
+  // SAFETY: The internal dependency command returns plain facts and ordered warning arguments.
+  const result = prepared.value as {
+    inspection: ReturnType<typeof inspectPluginSourceDependencies>;
+    unresolvedAncestors: Array<{ name: string; importer: string }>;
+  };
+  for (const { name, importer } of result.unresolvedAncestors) {
+    boundary?.onUnresolvable(name, importer);
+  }
+  return result.inspection;
+}
+
+export async function inspectPluginGenerationSourcesAsync(
+  entries: Parameters<typeof inspectPluginGenerationSources>[0],
+): Promise<ReturnType<typeof inspectPluginGenerationSources>> {
+  const first = entries[0];
+  if (!first) {
+    return { sourceDigests: {} };
+  }
+  const prepared = await prepareOwnedPluginGeneration({
+    rootDir: first.rootDir,
+    source: first.entryFile ?? first.rootDir,
+    inspection: { kind: "sources", entries },
+  });
+  // SAFETY: The internal source command returns only its inspected digest projection.
+  return (prepared.value as { inspection: ReturnType<typeof inspectPluginGenerationSources> })
+    .inspection;
+}
+
+async function prepareOwnedPluginGeneration(
+  params: PreparationParameters & { inspection?: PluginGenerationInspection },
+) {
   const nativeSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
   const owner = preparationOwnerFor(nativeSource);
   const shared =
@@ -167,8 +225,10 @@ export async function preparePluginGenerationArtifact(
   const readOnly = isArtifactPreservingStateRead();
   const admission = nativeAdmissionStateFor();
   const nativeRoots = createPluginGenerationNativeRoots(storage);
-  const admissionRoot = path.resolve(params.rootDir);
-  const admissionOwner = admission.owners.get(admissionRoot);
+  const admissionRoots = new Set(
+    (params.inspection?.entries ?? [params]).map(({ rootDir }) => path.resolve(rootDir)),
+  );
+  const admissionPrefixes = [...admissionRoots].map((rootDir) => `${rootDir}\0`);
   const root = createPluginSourceCaptureRoot(
     storage.stateDir,
     "plugin-preparation-",
@@ -278,7 +338,9 @@ export async function preparePluginGenerationArtifact(
       const error =
         reply.error.name === "PluginSourceRecoveryUnavailableError"
           ? new PluginSourceRecoveryUnavailableError(undefined)
-          : new Error(reply.error.message);
+          : reply.error.name === "SyntaxError"
+            ? new SyntaxError(reply.error.message)
+            : new Error(reply.error.message);
       throw Object.assign(error, reply.error);
     }
     if (reply.admission) {
@@ -400,22 +462,24 @@ export async function preparePluginGenerationArtifact(
       readOnly,
       scratch: root.directory,
       managedRoot: root.managedRoot,
+      inspection: params.inspection,
       callbackPort: port2,
       admission: {
-        // One artifact uses one owner; shared native indexes still serve dependencies outside it.
-        owners: new Map(admissionOwner ? [[admissionRoot, admissionOwner]] : []),
+        // Each selected package keeps its own admission authority; dependencies share indexes.
+        owners: new Map([...admission.owners].filter(([rootDir]) => admissionRoots.has(rootDir))),
         managedRoots: admission.managedRoots,
         receipts: new Map(
-          [...admission.receipts].filter(([key]) => key.startsWith(`${admissionRoot}\0`)),
+          [...admission.receipts].filter(([key]) =>
+            admissionPrefixes.some((prefix) => key.startsWith(prefix)),
+          ),
         ),
         files: admission.files,
         namespaces: admission.namespaces,
       },
     });
     return {
-      // SAFETY: A successful capture reply encodes the worker's PluginGenerationArtifact.
-      artifact: artifact as PluginGenerationArtifact,
-      attachModuleSource: (mapper) => {
+      value: artifact,
+      attachModuleSource: (mapper: (filename: string) => string) => {
         moduleSource = mapper;
       },
     };

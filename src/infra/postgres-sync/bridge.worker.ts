@@ -187,7 +187,7 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
     schema = namespace;
   }
 
-  async function useSchema(namespace: string, reconnectIfIdle: boolean) {
+  async function useSchema(namespace: string, reconnectIfIdle: boolean, validateIfIdle: boolean) {
     if (connectionError) {
       // Only a returned transport can reconnect before its new borrower starts work.
       if (!reconnectIfIdle || client.getTransactionStatus() !== "I") {
@@ -196,16 +196,21 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
       await connect(namespace);
       return;
     }
-    if (schema === namespace) {
+    if (schema === namespace && !validateIfIdle) {
       return;
     }
     if (client.getTransactionStatus() !== "I") {
       throw new Error("Cannot switch PostgreSQL schemas inside a transaction");
     }
     try {
-      await client.query("SELECT set_config('search_path', $1, false)", [
-        `"${namespace.replaceAll('"', '""')}"`,
-      ]);
+      if (schema === namespace) {
+        await client.query("SELECT 1");
+      } else {
+        // Switching schemas also validates the transport before any borrower statement.
+        await client.query("SELECT set_config('search_path', $1, false)", [
+          `"${namespace.replaceAll('"', '""')}"`,
+        ]);
+      }
       schema = namespace;
     } catch {
       // No user statement ran; discard the failed setup before opening a fresh transport.
@@ -240,7 +245,11 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
           }
           reply = { id: request.id, reusable };
         } else if (request.operation === "recovery-generation") {
-          await useSchema(request.schema, request.reconnectIfIdle === true);
+          await useSchema(
+            request.schema,
+            request.reconnectIfIdle === true,
+            request.validateIfIdle === true,
+          );
           if (request.lock) {
             await lockPostgresGeneration(client, schema);
           }
@@ -255,7 +264,11 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
             inTransaction: client.getTransactionStatus() !== "I",
           };
         } else {
-          await useSchema(request.schema, request.reconnectIfIdle === true);
+          await useSchema(
+            request.schema,
+            request.reconnectIfIdle === true,
+            request.validateIfIdle === true,
+          );
           const results = await statements.query(request.sql, request.parameters);
           const result: QueryResult = Array.isArray(results) ? results.at(-1)! : results;
           // A trailing SELECT must not hide an earlier write in the same SQL batch.

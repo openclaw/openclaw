@@ -196,24 +196,27 @@ function repositoryCredentialReader(params: {
     actor.assertCurrent();
     assertPolicyCurrent?.();
   };
-  const admit = async (read?: (reader: GitHubCredentialReader) => Promise<unknown>) => {
+  const withAdmission = async (
+    read?: (reader: GitHubCredentialReader) => Promise<string | undefined>,
+  ) => {
     assertReaderCurrent();
-    await withRepositoryIdentity(
+    return await withRepositoryIdentity(
       actor,
       { claim: params.claim, assertCurrent: params.assertCurrent },
       async (_env, readCredential, assertCurrent) => {
         assertPolicyCurrent = assertCurrent;
         assertCurrent();
-        await read?.(readCredential);
+        const token = await read?.(readCredential);
         assertCurrent();
-        return undefined;
+        return token;
       },
     );
-    return undefined;
   };
   const reader: GitHubCredentialReader = (env, admission) =>
-    admit((readCredential) => readCredential(env, admission));
-  reader.admit = admit;
+    withAdmission((readCredential) => readCredential(env, admission));
+  reader.admit = async () => {
+    await withAdmission();
+  };
   reader.assertCurrent = assertReaderCurrent;
   return reader;
 }

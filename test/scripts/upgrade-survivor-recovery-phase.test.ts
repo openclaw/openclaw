@@ -327,7 +327,7 @@ openclaw_e2e_maybe_timeout() {
   esac
 }
 node() {
-  if [ "$1" = -e ]; then printf '1000'; return 0; fi
+  if [ "$1" = -e ] && [ "$2" = 'process.stdout.write(String(Date.now()))' ]; then printf '1000'; return 0; fi
   case "$2" in
     assert-successful-update-json)
       printf 'check\tassertion\n' >&3
