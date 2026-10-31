@@ -16,6 +16,7 @@ import {
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { integrateManagedWorkspaceSource } from "./github-publication-base-refresh.js";
+import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
 import { inspectOwnGitHubPullRequest } from "./github-publication-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
@@ -222,6 +223,7 @@ export async function performSessionGitHubPreparation(
       signal,
       commitGuard: assertCurrent,
     });
+    let projectBase: { repository: string; branch: string } | undefined;
     if (!emptySource) {
       const repository = await prepareGitHubPublicationRepositoryIdentity({
         worktree: owner.worktree,
@@ -238,6 +240,10 @@ export async function performSessionGitHubPreparation(
         throw new Error(
           "This workspace belongs to another repository. Its existing files and history were preserved.",
         );
+      }
+      const branch = parseGitHubPublicationBaseBranch(owner.worktree.baseRef, "");
+      if (branch) {
+        projectBase = { repository: name, branch };
       }
     }
 
@@ -397,6 +403,7 @@ export async function performSessionGitHubPreparation(
         commit: binding.head.commit,
         githubHost: binding.host,
         review: { repository: binding.base.repository, commit: binding.base.commit },
+        projectBase,
         initial: binding.preparedHeadCommit === undefined,
         reviewOnly,
         emptySource,
