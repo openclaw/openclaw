@@ -34,6 +34,11 @@
   }
 }
 
+/* Header actions center on the row's 44px touch menu, which sits 8px from the row's edge. */
+.shell--mobile-nav .sidebar-recent-sessions__head {
+  padding-inline-end: 18px;
+}
+
 /* Reserve the menu beside the title, not in an otherwise empty second row.
    Preview metadata keeps its natural line, and child toggles keep the horizontal
    clearance owned by layout.css. */
