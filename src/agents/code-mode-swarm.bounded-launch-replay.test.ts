@@ -6,6 +6,7 @@ import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -25,7 +26,7 @@ import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.t
 import { spawnSubagentDirect } from "./subagents/spawn/subagent-spawn.js";
 import { testing as subagentSpawnTesting } from "./subagents/spawn/subagent-spawn.test-support.js";
 import { prepareBoundedLaunch } from "./subagents/swarm/bounded-launch/bounded-launch.js";
-import { testing as swarmSchedulerTesting } from "./subagents/swarm/swarm-scheduler.test-support.js";
+import { observeSwarmSchedulerWork } from "./subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
@@ -66,6 +67,7 @@ type DispatchGatewayMethodInProcess = NonNullable<
 >;
 
 let stateDir = "";
+let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
 
 function candidateBinding() {
   return {
@@ -140,13 +142,14 @@ async function writeConfig(): Promise<OpenClawConfig> {
   await writeFile(path.join(stateDir, "openclaw.json"), `${JSON.stringify(config)}\n`);
   clearRuntimeConfigSnapshot();
   clearConfigCache();
+  await captureRuntimeConfigAsyncReader()();
   return config;
 }
 
 describe("Code Mode bounded launch native replay", () => {
   beforeEach(async () => {
     resetGatewayWorkAdmission();
-    swarmSchedulerTesting.reset();
+    schedulerWork = observeSwarmSchedulerWork();
     await resetSubagentRegistryForTests({ persist: false });
     persistedRows.clear();
     persistRegistryRows.mockReset();
@@ -176,7 +179,7 @@ describe("Code Mode bounded launch native replay", () => {
 
   afterEach(async () => {
     resetGatewayWorkAdmission();
-    swarmSchedulerTesting.reset();
+    await schedulerWork.close();
     await resetSubagentRegistryForTests({ persist: false });
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
     persistedRows.clear();
@@ -230,7 +233,8 @@ describe("Code Mode bounded launch native replay", () => {
 
     // Simulate a cold process boundary: discard the resident registry and hydrate the
     // collector through the current durable-registry persistence contract.
-    swarmSchedulerTesting.reset();
+    await schedulerWork.close();
+    schedulerWork = observeSwarmSchedulerWork();
     await resetSubagentRegistryForTests({ persist: false });
     expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBe(1);
     // Caller-facing collector identity is swarmRunId; entry.runId is the Gateway child run.

@@ -6,6 +6,7 @@ import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../../config/io.runtime.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
@@ -18,7 +19,7 @@ import {
 import { restoreSubagentRunsFromDisk } from "../registry/subagent-registry-persistence.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import { prepareBoundedLaunch } from "../swarm/bounded-launch/bounded-launch.js";
-import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import { observeSwarmSchedulerWork } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
 
@@ -33,6 +34,7 @@ vi.mock("../registry/subagent-registry-persistence.js", { spy: true });
 const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
 const persistRegistryRows = vi.fn<MockSubagentRegistryRows>();
 let stateDir = "";
+let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
 
 async function writeConfig(sandboxMode: "off" | "all"): Promise<void> {
   await writeFile(
@@ -51,6 +53,7 @@ async function writeConfig(sandboxMode: "off" | "all"): Promise<void> {
   );
   clearRuntimeConfigSnapshot();
   clearConfigCache();
+  await captureRuntimeConfigAsyncReader()();
 }
 
 function preparedVerifier() {
@@ -106,7 +109,7 @@ async function launchPreparedVerifier() {
 describe("native bounded launch spawn boundary", () => {
   beforeEach(async () => {
     resetGatewayWorkAdmission();
-    swarmSchedulerTesting.reset();
+    schedulerWork = observeSwarmSchedulerWork();
     await resetSubagentRegistryForTests({ persist: false });
     persistRegistryRows.mockReset();
     await configureMockSubagentRegistryPersistence({ persistRegistryRows });
@@ -120,7 +123,7 @@ describe("native bounded launch spawn boundary", () => {
 
   afterEach(async () => {
     resetGatewayWorkAdmission();
-    swarmSchedulerTesting.reset();
+    await schedulerWork.close();
     await resetSubagentRegistryForTests({ persist: false });
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
     persistRegistryRows.mockReset();

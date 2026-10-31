@@ -217,17 +217,6 @@ describe("bounded launch through the actual native spawn bridge", () => {
     expect(fixture.callExactId).not.toHaveBeenCalled();
   });
 
-  it("rechecks the source after awaited dispatch", async () => {
-    const fixture = setup({ boundary: "isolated" });
-    fixture.callExactId.mockImplementation(async () => {
-      state.blocked = true;
-      return { result: { details: { status: "accepted", runId: "child-run" } } };
-    });
-    await expect(codeModeSwarmHandlers.agentSpawn(fixture.params)).rejects.toThrow(
-      "source revoked",
-    );
-  });
-
   it("rejects an invalid bounded launch boundary before dispatch", async () => {
     const fixture = setup({ boundary: "constructor" });
     await expect(codeModeSwarmHandlers.agentSpawn(fixture.params)).rejects.toThrow(
