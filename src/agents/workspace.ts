@@ -5,7 +5,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Minimatch } from "minimatch";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import { isRootFileMissingFailure } from "../infra/boundary-file-read.js";
-import { pathExists } from "../infra/fs-safe.js";
+import { FsSafeError, pathExists } from "../infra/fs-safe.js";
 import { retainMutationAuthority } from "../infra/mutation-authority.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -905,7 +905,9 @@ export async function loadWorkspaceBootstrapFiles(
         name: entry.name,
         path: entry.filePath,
         content: `[UNREADABLE: ${reason}]`,
-        missing: false,
+        missing:
+          loaded.error instanceof FsSafeError &&
+          (loaded.error.code === "symlink" || loaded.error.code === "outside-workspace"),
       });
     }
   }

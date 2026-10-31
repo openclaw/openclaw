@@ -38,6 +38,8 @@ suite.define(() => {
           heldMethods: ["users.prefs.get"],
           methodResponses: {
             "config.get": configSnapshot(config, "theme-defaults"),
+            // This scenario publishes profile snapshots explicitly through respondProfile.
+            "users.prefs.get": {},
             "users.prefs.set": { status: "ok" },
           },
         });

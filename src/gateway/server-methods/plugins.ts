@@ -193,7 +193,6 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         config: context.getRuntimeConfig(),
         ...target,
       });
-      const { inspectDecisionProviders } = await import("../../decisions/runtime.js");
       // Cross-session acquisition IDs are administrator diagnostics, not catalog metadata.
       // Recheck the connection after inventory/module I/O and immediately before disclosure.
       const canInspectRetentions =
@@ -230,6 +229,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
           })
         : [];
       const runtimeRetention = instance?.retentionSnapshot();
+      const decisionConfig = remote ? undefined : context.getRuntimeConfig();
       respond(
         true,
         {
@@ -241,11 +241,11 @@ export const pluginsHandlers: GatewayRequestHandlers = {
                   : (runtimeRetention ?? null),
               }
             : {}),
-          decisions: remote
-            ? []
-            : inspectDecisionProviders(context.getRuntimeConfig()).filter(
-                (entry) => entry.pluginId === inspected.plugin.id,
-              ),
+          decisions: decisionConfig
+            ? (getPluginRegistryForContext()
+                ?.decisionProviders.filter((entry) => entry.pluginId === inspected.plugin.id)
+                .map((entry) => entry.host.inspect(decisionConfig)) ?? [])
+            : [],
         },
         undefined,
       );

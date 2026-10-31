@@ -147,6 +147,23 @@ export function projectTranscriptPayloadNavigationSql(
   db: EngineConnection,
   event: Expression<string | Uint8Array>,
 ): RawBuilder<string> {
+  if (isPostgresSqlConnection(db)) {
+    // JSON (not JSONB) preserves duplicate members used by historical navigation.
+    return /* kysely-allow-raw: bounded native member projection preserves duplicate keys and JSON types. */ sql<string>`(
+      SELECT coalesce(json_object_agg(root_member.key, CASE
+        WHEN root_member.key = 'message' AND json_typeof(root_member.value) = 'object' THEN (
+          SELECT coalesce(json_object_agg(message_member.key, CASE
+            WHEN message_member.key = '__openclaw' AND json_typeof(message_member.value) = 'object' THEN (
+              SELECT coalesce(json_object_agg(internal.key, internal.value), '{}'::json)
+              FROM json_each(message_member.value) AS internal
+              WHERE internal.key IN ('runId', 'steerTargetRunId', 'contextFreeCommand'))
+            ELSE message_member.value END), '{}'::json)
+          FROM json_each(root_member.value) AS message_member
+          WHERE message_member.key IN ('role', 'idempotencyKey', 'provenance', 'excludeFromContext', '__openclaw'))
+        ELSE root_member.value END), '{}'::json)::text
+      FROM json_each(${event}::json) AS root_member
+      WHERE root_member.key IN (${sql.join([...MODEL_CONTEXT_NAVIGATION_KEYS, "message"])}))`;
+  }
   const memberValue =
     /* kysely-allow-raw: fixed JSON member cursor declared in the message projection below. */ sql.ref(
       "message_member.value",
@@ -280,9 +297,12 @@ export function projectModelContextNavigationSql(
         db,
         entry,
         sql.lit("$.data"),
-        jsonPickObject(db, jsonPathValue(db, event, sql.lit("$.data")), [
-          "afterEntryId",
-          "resultEntryIds",
+        // The scalar subquery loses SQLite's JSON subtype before embedding its object.
+        getNodeSqliteKysely(db).fn<string>("json", [
+          jsonPickObject(db, jsonPathValue(db, event, sql.lit("$.data")), [
+            "afterEntryId",
+            "resultEntryIds",
+          ]),
         ]),
         true,
       )}
