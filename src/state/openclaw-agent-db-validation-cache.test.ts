@@ -457,6 +457,8 @@ describe("canonical proof on physical database validation", () => {
         if (race === "schema") {
           assert(original.schema);
           expectFlag(original.schema.valid, 0);
+          // Retry/replay paths classify the typed fact, not only the message.
+          expect(() => adoptSchema(database, true, true)).toThrow(AdmissionChangedError);
           expect(() => adoptSchema(database, true, true)).toThrow(
             "Agent schema admission changed before handle adoption",
           );
