@@ -135,7 +135,7 @@ async function resolvePluginImplicitProviders(
   providers: import("../plugins/types.js").ProviderPlugin[],
   preparedStaticConfigs?: ReadonlyMap<
     string,
-    Pick<PreparedProviderStaticCatalog["entries"][number], "providerConfigs" | "outcomes">
+    Pick<PreparedProviderStaticCatalog["entries"][number], "providerConfigs" | "failed">
   >,
 ): Promise<Record<string, ProviderConfig>> {
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
@@ -260,14 +260,21 @@ async function resolvePluginImplicitProviders(
               });
             }
             if (useStaticCatalog || (!result && provider.staticCatalog)) {
+              if (preparedStatic && !preparedStatic.failed) {
+                return preparedStatic.providerConfigs;
+              }
+              // A failed static run reports every selected identity so publication retains
+              // their previous models as a refresh failure.
+              const unavailable = providerIds ?? [provider.id];
               if (preparedStatic) {
-                // A failed prepared run keeps its outcome so publication retains prior models.
-                outcomes.push(...(preparedStatic.outcomes ?? []));
-                return preparedStatic.outcomes ? undefined : preparedStatic.providerConfigs;
+                outcomes.push(
+                  ...unavailable.map((id) => ({ provider: id, status: "unavailable" as const })),
+                );
+                return undefined;
               }
               result = await runProviderIsolated(
                 {
-                  providerIds: [provider.id],
+                  providerIds: unavailable,
                   stage: "static catalog",
                   reportCatalogOutcome: (outcome) => outcomes.push(outcome),
                 },
@@ -651,9 +658,9 @@ export async function resolveImplicitProviders(
     Object.assign(context, await prepareProviderDiscoveryAuth(context, discoveryAuthConfig));
   }
   const preparedStaticConfigs = new Map(
-    preparedStaticEntries?.map(({ provider, providerConfigs, outcomes }) => [
+    preparedStaticEntries?.map(({ provider, providerConfigs, failed }) => [
       `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
-      { providerConfigs, outcomes },
+      { providerConfigs, failed },
     ]) ?? [],
   );
   return resolvePluginImplicitProviders(context, discoveryProviders, preparedStaticConfigs);

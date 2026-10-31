@@ -181,3 +181,48 @@ it.each([false, true])(
     });
   },
 );
+
+it.each([false, true])(
+  "reports a failed shared static hook for its selected identity (prepared=%s)",
+  async (prepared) => {
+    await withOpenClawTestState({ label: "static-family-failure" }, async (state) => {
+      fixture.providers = [
+        {
+          id: "family",
+          label: "family",
+          auth: [],
+          pluginId: "family-owner",
+          hookAliases: ["family-plan"],
+          staticCatalog: {
+            run: async () => {
+              throw new Error("static catalog bug");
+            },
+          },
+        },
+      ];
+      const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "family-owner", providers: ["family", "family-plan"] }],
+      });
+      const outcomes: ProviderCatalogOutcome[] = [];
+      await resolveImplicitProviders({
+        agentDir: state.agentDir(),
+        env: state.env,
+        ...discovery(),
+        pluginMetadataSnapshot,
+        providerDiscoveryProviderIds: ["family-plan"],
+        ...(prepared
+          ? {
+              preparedStaticProviderCatalog: await prepareImplicitProviderStaticCatalog({
+                config: {},
+                env: state.env,
+                pluginMetadataSnapshot,
+                providerDiscoveryProviderIds: ["family-plan"],
+              }),
+            }
+          : {}),
+        onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+      });
+      expect(outcomes).toEqual([{ provider: "family-plan", status: "unavailable" }]);
+    });
+  },
+);
