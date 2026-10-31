@@ -1,4 +1,5 @@
 import type { MeetingBrowserCandidateTab } from "openclaw/plugin-sdk/meeting-runtime";
+import { teamsWorkMeetingThread } from "./teams-meetings-work-coordinates.js";
 
 type TeamsMeetingIdentity = { kind: "work"; key: string } | { kind: "consumer"; key: string };
 
@@ -33,6 +34,10 @@ function parseTeamsMeetingIdentity(url: string | undefined): TeamsMeetingIdentit
     }
     const hostname = parsed.hostname.toLowerCase();
     if (hostname === "teams.microsoft.com") {
+      if (parsed.pathname.toLowerCase() === "/light-meetings/launch") {
+        const threadId = teamsWorkMeetingThread(parsed.searchParams.getAll("coords"));
+        return threadId ? { kind: "work", key: threadId } : undefined;
+      }
       // Microsoft's short work invitation (teams.microsoft.com/meet/<id>?p=...) can be
       // opened directly, or the server can 302 it to this same-host launcher page before
       // the SPA renders the meeting; both must resolve to the identical owned meeting so

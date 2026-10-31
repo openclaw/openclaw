@@ -281,6 +281,7 @@ export async function runStatusScript(params: StatusScriptParams) {
     URL: globalThis.URL,
     URLSearchParams: globalThis.URLSearchParams,
     atob: globalThis.atob,
+    btoa: globalThis.btoa,
     crypto: { randomUUID: () => "teams-caption-epoch" },
     document,
     location,
@@ -390,6 +391,7 @@ export function runLeaveScript(params: {
       URL: globalThis.URL,
       URLSearchParams: globalThis.URLSearchParams,
       atob: globalThis.atob,
+      btoa: globalThis.btoa,
       document,
       location,
       window,
@@ -426,6 +428,7 @@ export function runAudioCaptureScript(params: {
     URL: globalThis.URL,
     URLSearchParams: globalThis.URLSearchParams,
     atob: globalThis.atob,
+    btoa: globalThis.btoa,
     location,
     window,
     AudioContext: function AudioContext() {
