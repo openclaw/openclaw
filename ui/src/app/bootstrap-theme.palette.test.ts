@@ -120,7 +120,7 @@ it.each([false, true])(
     const styleWrites = vi.spyOn(document.documentElement.style, "setProperty");
     patchSettings({ boardSessionViews: { example: { activeTabId: "reports" } } });
     expect(snapshots).toHaveBeenCalledOnce();
-    expect(theme.settings.boardSessionViews?.example.activeTabId).toBe("reports");
+    expect(theme.settings.boardSessionViews?.example?.activeTabId).toBe("reports");
     expect(theme.appliedPalette).toBe(palette);
     expect(rootWrites).not.toHaveBeenCalled();
     expect(styleWrites).not.toHaveBeenCalled();
