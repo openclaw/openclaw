@@ -259,7 +259,6 @@
 
 .markdown-table-modal {
   --openclaw-modal-width: min(1200px, calc(100vw - 64px));
-  --openclaw-modal-backdrop-filter: blur(3px);
 }
 
 .markdown-table-dialog {
@@ -267,9 +266,6 @@
   max-height: calc(100dvh - 64px);
   padding: 0 28px 20px;
   border: 0;
-  border-radius: var(--radius-xl);
-  background: color-mix(in srgb, var(--bg) 96%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
   overflow: auto;
 }

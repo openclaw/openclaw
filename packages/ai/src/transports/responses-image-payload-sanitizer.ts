@@ -6,6 +6,7 @@
 import { sanitizeInlineImageDataUrl as sanitizeSharedInlineImageDataUrl } from "@openclaw/media-core/inline-image-data-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInputImage } from "openai/resources/responses/responses.js";
+import { getAiTransportHost } from "../host.js";
 
 const IMAGE_OMITTED_TEXT = "omitted image payload: invalid inline image data";
 
@@ -15,6 +16,12 @@ type ImagePayload = ImageSource & {
 };
 const sourceImages = new WeakMap<ImageSource, ImagePayload>();
 const inputImages = new WeakMap<object, { url: string; payload: ImagePayload }>();
+const sanitizedFrozenInputs = new WeakSet<object>();
+
+/** Sanitation has already established immutability for this unchanged publication. */
+export function isSanitizedFrozenResponsesInput(value: object): boolean {
+  return sanitizedFrozenInputs.has(value);
+}
 
 /** Reuse scalar image work, never the mutable item exposed to payload hooks. */
 export function buildResponsesInputImage(source: ImageSource): ResponseInputImage {
@@ -53,14 +60,18 @@ function sanitizePreparedImage(payload: ImagePayload, url: string): string | und
 }
 
 function sanitizeValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(sanitizeValue);
+  if (value && typeof value === "object" && sanitizedFrozenInputs.has(value)) {
+    return value;
   }
-  if (!isRecord(value)) {
+  if (!Array.isArray(value) && !isRecord(value)) {
     return value;
   }
 
-  if (value.type === "input_image" && typeof value.image_url === "string") {
+  if (
+    !Array.isArray(value) &&
+    value.type === "input_image" &&
+    typeof value.image_url === "string"
+  ) {
     const url = value.image_url;
     const prepared = inputImages.get(value);
     // Source edits replace the fact; hook edits must cross sanitation again.
@@ -73,9 +84,27 @@ function sanitizeValue(value: unknown): unknown {
       : { type: "input_text", text: `[${IMAGE_OMITTED_TEXT}]` };
   }
 
-  const next: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value)) {
-    next[key] = sanitizeValue(child);
+  let unchanged = true;
+  const sanitizeChild = (child: unknown) => {
+    const sanitized = sanitizeValue(child);
+    unchanged &&= sanitized === child;
+    return sanitized;
+  };
+  let next: unknown[] | Record<string, unknown>;
+  if (Array.isArray(value)) {
+    next = value.map(sanitizeChild);
+  } else {
+    const object: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) {
+      object[key] = sanitizeChild(child);
+      unchanged &&= Object.hasOwn(object, key);
+    }
+    next = object;
+  }
+  // Never retain composed image URLs: only unchanged immutable subtrees can be reused.
+  if (unchanged && getAiTransportHost().immutableData?.isDeeplyFrozenPlainData(value)) {
+    sanitizedFrozenInputs.add(value);
+    return value;
   }
   return next;
 }
@@ -87,6 +116,6 @@ export function sanitizeResponsesImagePayload<T extends Record<string, unknown>>
   }
   return {
     ...params,
-    input: sanitizeValue(params.input),
+    input: params.input.map(sanitizeValue),
   };
 }

@@ -342,7 +342,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   color: var(--muted);
 }
 
-/* Keep artwork at its resting size inside a consistent 25px circular ring.
+/* Keep artwork at its resting size inside a consistent 24px circular ring.
    Owner pairs retain their fitted trace below rather than shrinking their faces. */
 .session-glyph__ring {
   position: absolute;
@@ -677,11 +677,12 @@ openclaw-toast-host[popover] {
   width: max-content;
   max-width: min(370px, calc(100vw - 32px));
   padding: 7px 7px 7px 13px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--popover);
+  border: 1px solid transparent;
+  border-radius: var(--menu-radius);
+  background: var(--menu-surface);
   color: var(--popover-foreground);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
 }
 
 .shell--chat {
@@ -777,11 +778,11 @@ openclaw-toast-host[data-toast-placement="shell"]
 .app-toast__dismiss {
   flex: 0 0 auto;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--menu-item-radius);
 }
 
 .app-toast__action {
-  min-height: 32px;
+  min-height: var(--overlay-modal-close-size);
   max-width: 35%;
   padding: 5px 10px;
   background: var(--accent-subtle);
@@ -794,8 +795,8 @@ openclaw-toast-host[data-toast-placement="shell"]
 
 .app-toast__dismiss {
   display: grid;
-  width: 32px;
-  height: 32px;
+  width: var(--overlay-modal-close-size);
+  height: var(--overlay-modal-close-size);
   padding: 0;
   place-items: center;
   background: transparent;
@@ -1403,7 +1404,7 @@ select.settings-select:not([multiple]) {
 .lazy-element-loading-modal {
   --openclaw-modal-width: 360px;
   --openclaw-modal-backdrop-filter: none;
-  --openclaw-modal-backdrop-color: color-mix(in srgb, var(--text) 12%, transparent);
+  --openclaw-modal-backdrop-color: var(--overlay-palette-backdrop);
 }
 
 .lazy-element-loading {
@@ -2295,8 +2296,13 @@ td.data-table-key-col {
   background: color-mix(in srgb, var(--exec-approval-accent) 5%, var(--card));
   border: 1px solid color-mix(in srgb, var(--exec-approval-accent) 45%, var(--border));
   border-radius: var(--radius-lg);
-  padding: 20px;
+  padding: var(--overlay-modal-padding);
   animation: scale-in 0.2s var(--ease-out);
+}
+
+.oc-modal-dialog__body > .exec-approval-card {
+  border: 0;
+  background: var(--overlay-modal-surface);
 }
 
 .exec-approval-modal-stack {
@@ -2320,7 +2326,7 @@ td.data-table-key-col {
 }
 
 .exec-approval-title {
-  font-size: 14px;
+  font-size: var(--overlay-modal-title-size);
   font-weight: 600;
 }
 
@@ -2633,10 +2639,6 @@ td.data-table-key-col {
   width: 100%;
   max-height: calc(100dvh - min(20dvh, 160px) - 24px);
   overflow: hidden;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
 }
 
 .cmd-palette__entry {
@@ -2777,10 +2779,6 @@ td.data-table-key-col {
   max-height: var(--openclaw-modal-height-limit);
   flex-direction: column;
   overflow-y: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  background: color-mix(in srgb, var(--card) 96%, black 4%);
-  box-shadow: var(--shadow-xl);
 }
 
 .device-pair-setup__header {

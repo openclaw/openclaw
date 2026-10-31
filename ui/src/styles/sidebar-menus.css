@@ -1532,7 +1532,7 @@
   height: 100%;
   padding: 0;
   border: 0;
-  background: color-mix(in srgb, black 42%, transparent);
+  background: var(--overlay-modal-backdrop);
   animation: fade-in var(--motion-sheet);
 }
 
@@ -1576,7 +1576,7 @@
   padding-inline: var(--chat-mobile-edge-inset);
   padding-block-end: calc(var(--menu-padding) + var(--shell-safe-area-bottom));
   border-width: 1px 0 0;
-  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  border-radius: var(--overlay-modal-radius) var(--overlay-modal-radius) 0 0;
   animation: sidebar-sheet-in var(--motion-sheet);
 }
 
