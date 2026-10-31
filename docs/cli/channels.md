@@ -74,9 +74,27 @@ do not pass an empty shell variable to request that scope.
 - `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `60000`), `--json`
 - `channels capabilities`: `--channel <name>`, `--agent <id>`, `--account <id>` (requires `--channel`), `--target <dest>` (requires `--channel`), `--timeout <ms>` (default `10000`, capped at `30000`), `--json`
 - `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`
-- `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`
+- `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`, `--follow`, `--interval <ms>` (default `1000`)
 
 `channels logs --lines` requires a positive integer. Omit `--lines` to use the default of `200`; explicitly empty values are rejected.
+
+Use `openclaw channels logs --channel slack --follow` to print the initial tail and
+then follow new matching records from the configured local log file. `--lines`
+limits the initial snapshot; `--interval` is a positive polling interval in
+milliseconds. Press Ctrl-C to stop. Filtering and secret redaction also apply to
+new records. The command does not require a running Gateway or contact a channel
+provider.
+
+With `--follow --json`, stdout is newline-delimited JSON: `type: "meta"` identifies
+the file and channel, `type: "log"` carries each parsed log record, and
+`type: "notice"` reports resets or truncation. Without `--follow`, `--json` retains
+its single `{ file, channel, truncated, lines }` result.
+
+Following uses the existing bounded log reader, not an archival stream. Each
+poll returns at most 5,000 matching records within the last 1 MB of new data;
+excess backlog is omitted with a notice. A shrinking file or changed rolling log
+path resets the cursor. Replacing a file at the same path without shrinking it
+may skip records before the old cursor.
 
 `channels logs --channel <name>` matches subsystem or module names rooted at `<name>`,
 `channels/<name>`, or `gateway/channels/<name>`, including slash-separated descendants. Similar names

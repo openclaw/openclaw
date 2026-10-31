@@ -7,7 +7,14 @@ import { setLoggerOverride } from "../logging.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { defaultRuntime } from "../runtime.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
+
+const clock = vi.hoisted(() => ({ delay: vi.fn<() => Promise<void>>() }));
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: clock.delay,
+}));
 
 const pluginRegistryMocks = vi.hoisted(() => {
   const plugins = [{ id: "vendor-external-chat", channels: ["external-chat"] }];
@@ -70,6 +77,7 @@ describe("channelsLogsCommand", () => {
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
+    clock.delay.mockReset();
     vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) =>
       runtime.log(JSON.stringify(value, null, 2)),
@@ -213,5 +221,130 @@ describe("channelsLogsCommand", () => {
     expect(runtime.log.mock.calls.flat().join("\n")).toContain(
       "Log tail truncated; earlier entries were omitted.",
     );
+  });
+
+  it.each([false, true])(
+    "follows filtered, redacted appends and file resets (json=%s)",
+    async (json) => {
+      const scope = new AsyncWorkScope();
+      const writes: string[] = [];
+      vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+        writes.push(String(chunk));
+        return true;
+      });
+      const fixtureCredential = "opaque-follow-value-1234567890";
+      registerSecretValueForRedaction(fixtureCredential);
+      const matching = (message: string) => logLine({ module: "channels/slack/send", message });
+      await fs.writeFile(logPath, matching("old") + matching("initial"));
+      const partial = matching("partial é").trimEnd();
+      let beforeIdle = "";
+      clock.delay
+        .mockImplementationOnce(async () => {
+          await fs.appendFile(
+            logPath,
+            logLine({ module: "channels/slack-shadow", message: "shadow" }) +
+              matching(`new opaque=${fixtureCredential}`) +
+              partial,
+          );
+        })
+        .mockImplementationOnce(async () => {
+          beforeIdle = writes.join("");
+          expect(beforeIdle).not.toContain("partial é");
+        })
+        .mockImplementationOnce(async () => {
+          expect(writes.join("")).toBe(beforeIdle);
+          await fs.appendFile(logPath, "\n" + matching("append two"));
+        })
+        .mockImplementationOnce(async () => {
+          await fs.writeFile(logPath, matching("reset"));
+        })
+        .mockImplementationOnce(async () => {
+          const nextFile = path.join(tempDir, "next.log");
+          await fs.writeFile(
+            nextFile,
+            matching("new file first " + "x".repeat(200)) + matching("new file last"),
+          );
+          setLoggerOverride({ file: nextFile });
+        })
+        .mockImplementationOnce(async () => {
+          scope.beginClose(new Error("fixture shutdown"));
+          throw scope.signal.reason;
+        });
+      try {
+        await scope.track(() =>
+          channelsLogsCommand({ channel: "slack", lines: 1, follow: true, json }),
+        );
+        const output = writes.join("");
+        const messages = json
+          ? output
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line) as { type: string; message?: string })
+              .filter((line) => line.type === "log")
+              .map((line) => line.message)
+          : output
+              .trim()
+              .split("\n")
+              .filter((line) => line.includes(" info "))
+              .map((line) => line.split(" info ")[1]);
+        expect(messages).toEqual([
+          "initial",
+          "new opaque=opaque…7890",
+          "partial é",
+          "append two",
+          "reset",
+          "new file first " + "x".repeat(200),
+          "new file last",
+        ]);
+        expect(output).not.toContain(fixtureCredential);
+        expect(output).not.toContain("shadow");
+        expect(output).toContain("Log cursor reset");
+      } finally {
+        await scope.drain();
+      }
+    },
+  );
+
+  it("keeps following an initially empty file and reports a bounded backlog", async () => {
+    const scope = new AsyncWorkScope();
+    const writes: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    const line = (message: string) => logLine({ plugin: "vendor-external-chat", message });
+    clock.delay
+      .mockImplementationOnce(async () => {
+        await fs.writeFile(
+          logPath,
+          line("omitted") + line("x".repeat(1000)).repeat(1100) + line("latest"),
+        );
+      })
+      .mockImplementationOnce(async () => scope.beginClose());
+    try {
+      await scope.track(() =>
+        channelsLogsCommand({ channel: "external-chat", follow: true, json: true }),
+      );
+      const records = writes
+        .join("")
+        .trim()
+        .split("\n")
+        .map((value) => JSON.parse(value) as { type: string; message?: string });
+      expect(records[0]).toMatchObject({ type: "meta", channel: "external-chat" });
+      expect(records.filter((record) => record.type === "notice")).toEqual([
+        {
+          type: "notice",
+          message: expect.stringMatching(/^Log cursor re-anchored \(skipped \d+ bytes\)\.$/),
+        },
+        { type: "notice", message: "Log tail truncated; earlier entries were omitted." },
+      ]);
+      const messages = records
+        .filter((record) => record.type === "log")
+        .map((record) => record.message);
+      expect(messages).not.toContain("omitted");
+      expect(messages.at(-1)).toBe("latest");
+    } finally {
+      await scope.drain();
+    }
   });
 });
