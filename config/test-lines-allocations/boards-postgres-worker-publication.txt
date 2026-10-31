@@ -1,2 +1,2 @@
-# Real PostgreSQL BoardStore publication/update/read/reopen regression without host SQL admission.
-93
+# PostgreSQL BoardStore regression and documented outcome-boundary isolation.
+94
