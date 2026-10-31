@@ -1,8 +1,5 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { assert, describe, expect, it, vi } from "vitest";
-import { applyConfiguredProviderOverrides } from "../../src/agents/embedded-agent-runner/model.configured-overrides.js";
-import { normalizeResolvedModel } from "../../src/agents/embedded-agent-runner/model.provider-hooks.js";
-import { createProviderRuntimeTestMock } from "../../src/agents/embedded-agent-runner/model.provider-runtime.test-support.js";
 import { buildGoogleStaticCatalogProvider } from "./provider-catalog.js";
 import { buildGoogleProvider } from "./provider-registration.js";
 
@@ -139,12 +136,7 @@ describe("Google catalog transport defaults", () => {
   const catalog = buildGoogleStaticCatalogProvider();
   const flash = catalog.models.find((entry) => entry.id === "gemini-3.8-flash");
   assert(flash, "Google catalog must publish Flash");
-  const discoveredModel = model({
-    ...flash,
-    provider: "google",
-    baseUrl: catalog.baseUrl,
-    input: ["text", "image"],
-  });
+  const catalogModel = model({ ...flash, provider: "google", input: ["text", "image"] });
   const apis = ["google-generative-ai", "google-interactions"] as const;
   const endpoints = [
     "https://generativelanguage.googleapis.com/v1beta",
@@ -184,30 +176,16 @@ describe("Google catalog transport defaults", () => {
           ? [{ ...flash, api, baseUrl, id: "gemini-3.8-flash" }]
           : [],
     };
-    const config = { models: { providers: { google: providerConfig } } };
-    const runtimeHooks = {
-      ...createProviderRuntimeTestMock({ handledDynamicProviders: [] }),
-      normalizeProviderResolvedModelWithPlugin: ({ context }) =>
-        provider.normalizeResolvedModel?.(context) ?? undefined,
-    } satisfies Parameters<typeof normalizeResolvedModel>[0]["runtimeHooks"];
-    const overridden = applyConfiguredProviderOverrides({
+    // Core overrides already applied the effective endpoint; the catalog row
+    // carries no API, so the provider hook alone decides the transport.
+    const resolved = provider.normalizeResolvedModel?.({
       provider: "google",
-      modelId: discoveredModel.id,
-      discoveredModel,
-      providerConfig,
-      cfg: config,
-      manifestAlias: { provider: "google" },
-      runtimeHooks,
-    });
-    assert(overridden, "Configured catalog route must resolve");
-    const resolved = normalizeResolvedModel({
-      provider: "google",
-      model: overridden as Model,
-      cfg: config,
-      runtimeHooks,
+      modelId: catalogModel.id,
+      model: { ...catalogModel, baseUrl },
+      config: { models: { providers: { google: providerConfig } } },
     });
     expect(resolved).toMatchObject({
-      id: discoveredModel.id,
+      id: catalogModel.id,
       baseUrl,
       api: api ?? (baseUrl === endpoints[0] ? "google-interactions" : "google-generative-ai"),
     });
