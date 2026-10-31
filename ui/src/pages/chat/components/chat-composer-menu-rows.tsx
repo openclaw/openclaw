@@ -1,31 +1,80 @@
 import type { JSX } from "@solidjs/web";
-import { icons } from "../../../components/icons.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
+import { Icon, type IconName } from "../../../components/solid/icon.tsx";
+import type { MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
+import "../../../styles/settings-native-controls.css";
 
-export function menuDivider(): JSX.Element {
-  return <div class="agent-chat__capability-menu-divider" role="separator"></div>;
+export function menuDivider(id: string): Extract<MenuEntry, { kind: "content" }> {
+  return {
+    kind: "content",
+    id,
+    content: <div class="agent-chat__capability-menu-divider" role="separator" />,
+  };
 }
-
-export function renderCapabilityMenuState(message: string, role?: "status" | "alert") {
-  return (
-    <div class="agent-chat__capability-menu-state" role={role}>
-      {message}
-    </div>
+export function renderCapabilityMenuState(
+  id: string,
+  message: JSX.Element,
+  role?: "status" | "alert",
+): Extract<MenuEntry, { kind: "content" }> {
+  return {
+    kind: "content",
+    id,
+    content: (
+      <div class="agent-chat__capability-menu-state" role={role}>
+        {message}
+      </div>
+    ),
+  };
+}
+export function menuSection(id: string, title: string, action?: JSX.Element): MenuEntry {
+  return {
+    kind: "content",
+    id,
+    content: (
+      <div class="agent-chat__capability-menu-section">
+        <span>{title}</span>
+        {action}
+      </div>
+    ),
+  };
+}
+export function skillIcon(emoji?: string): JSX.Element {
+  return emoji ? (
+    <span class="agent-chat__capability-menu-emoji" aria-hidden="true">
+      {emoji}
+    </span>
+  ) : (
+    <Icon name="wandSparkles" />
   );
 }
-
-export function renderBackRow() {
+export function menuChevron(): JSX.Element {
   return (
-    <>
-      <wa-dropdown-item class="agent-chat__capability-menu-item" value="back">
-        <span slot="icon" aria-hidden="true">
-          <LitContent value={icons.arrowLeft} />
-        </span>
-        <span>{t("chat.composer.menu.back")}</span>
-      </wa-dropdown-item>
-      {menuDivider()}
-    </>
+    <span class="agent-chat__capability-menu-chevron" aria-hidden="true">
+      <Icon name="chevronRight" />
+    </span>
+  );
+}
+export function renderBackRow(title: string, details?: JSX.Element): MenuItem {
+  return {
+    id: "back",
+    label: title,
+    class: "agent-chat__capability-menu-item agent-chat__capability-menu-header",
+    icon: <Icon name="chevronLeft" />,
+    details,
+    closeOnSelect: false,
+  };
+}
+export function MenuSwitch(props: { checked: boolean }): JSX.Element {
+  return (
+    <span
+      class={[
+        "agent-chat__capability-menu-switch",
+        "settings-toggle",
+        { "agent-chat__capability-menu-switch--active": props.checked },
+      ]}
+      aria-hidden="true"
+    >
+      <span class="settings-toggle__control" />
+    </span>
   );
 }
 
@@ -35,40 +84,27 @@ export function renderCapabilityToggleRow(options: {
   checked: boolean;
   disabled: boolean;
   title?: string | null;
-  icon?: unknown;
-  note?: JSX.Element | null;
-  checkbox?: boolean;
-}) {
-  return (
-    <wa-dropdown-item
-      class="agent-chat__capability-menu-item agent-chat__capability-menu-toggle"
-      value={options.value}
-      type="checkbox"
-      prop:checked={options.checked}
-      disabled={options.disabled}
-      title={options.title ?? ""}
-    >
-      {options.icon ? (
-        <span slot="icon" aria-hidden="true">
-          <LitContent value={options.icon} />
-        </span>
-      ) : null}
-      <span class="agent-chat__capability-menu-label">
-        <span>{options.label}</span>
-        {options.note ?? null}
-      </span>
-      {options.checkbox ? null : (
-        <wa-switch
-          slot="details"
-          class="agent-chat__capability-menu-switch"
-          size="s"
-          tabindex="-1"
-          inert
-          aria-hidden="true"
-          prop:checked={options.checked}
-          disabled={options.disabled}
-        ></wa-switch>
-      )}
-    </wa-dropdown-item>
-  );
+  icon?: IconName;
+  emoji?: string;
+  skill?: boolean;
+}): MenuItem {
+  return {
+    id: options.value,
+    label: options.label,
+    type: "checkbox",
+    checked: options.checked,
+    disabled: options.disabled,
+    class:
+      "agent-chat__capability-menu-item agent-chat__capability-menu-toggle agent-chat__capability-menu-toggle--switch",
+    attributes: { title: options.title ?? "" },
+    icon: options.skill ? (
+      skillIcon(options.emoji)
+    ) : options.icon ? (
+      <Icon name={options.icon} />
+    ) : (
+      <span />
+    ),
+    details: <MenuSwitch checked={options.checked} />,
+    closeOnSelect: false,
+  };
 }

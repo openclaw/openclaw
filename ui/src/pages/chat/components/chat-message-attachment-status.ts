@@ -1,5 +1,9 @@
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
+
+registerChatComposerEnglish();
+
 type AttachmentFailureCode = Extract<
   MessageContentItem,
   { type: "attachment_error" }

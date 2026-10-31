@@ -1,5 +1,5 @@
 import { emitDiagnosticEventWithTrustedTraceContext } from "../infra/diagnostic-events.js";
-import type { ExecProcessOutcome } from "./bash-tools.exec-types.js";
+import type { ExecProcessOutcome } from "./bash-tools.exec-output.js";
 
 export function emitExecProcessCompleted(params: {
   command: string;
@@ -20,7 +20,7 @@ export function emitExecProcessCompleted(params: {
     durationMs: params.outcome.durationMs,
     commandLength: params.command.length,
     ...(params.sessionKey?.trim() ? { sessionKey: params.sessionKey.trim() } : {}),
-    ...(typeof params.outcome.exitCode === "number" ? { exitCode: params.outcome.exitCode } : {}),
+    ...(params.outcome.exitCode != null ? { exitCode: params.outcome.exitCode } : {}),
     ...(exitSignal ? { exitSignal } : {}),
     ...(params.outcome.status === "failed"
       ? {

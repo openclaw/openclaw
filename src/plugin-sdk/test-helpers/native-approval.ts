@@ -1,4 +1,4 @@
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../../infra/plugin-approvals.js";
@@ -29,6 +29,8 @@ export function createNativeApprovalTestFixture(params: {
   buildConfig: ApprovalConfigBuilder;
 }) {
   const { channel, capability, buildConfig } = params;
+  const native = capability.nativeAsync ?? capability.native;
+  const nativeRuntime = capability.nativeRuntimeAsync ?? capability.nativeRuntime;
   const directTarget = "+15551230000";
   function buildExecRequest(
     to = directTarget,
@@ -91,40 +93,43 @@ export function createNativeApprovalTestFixture(params: {
       approvalKind,
     });
   }
-  function describeDelivery(
+  async function describeDelivery(
     cfg: OpenClawConfig,
     request: ApprovalRequest,
     approvalKind: ChannelApprovalKind = "exec",
   ) {
-    return capability.native?.describeDeliveryCapabilities({
+    return native?.describeDeliveryCapabilities({
       cfg,
       accountId: "default",
       approvalKind,
       request,
     });
   }
-  function nativeShouldHandle(input: {
+  async function nativeShouldHandle(input: {
     cfg: OpenClawConfig;
     approvalKind: ChannelApprovalKind;
     request: ApprovalRequest;
     accountId?: string | null;
   }) {
-    return capability.nativeRuntime?.availability.shouldHandle({
+    return nativeRuntime?.availability.shouldHandle({
       ...input,
       accountId: input.accountId ?? "default",
       context: {},
     });
   }
-  function resolveExecOrigin(cfg: OpenClawConfig, request: ExecApprovalRequest) {
-    return capability.native?.resolveOriginTarget?.({
+  async function resolveExecOrigin(cfg: OpenClawConfig, request: ExecApprovalRequest) {
+    return native?.resolveOriginTarget?.({
       cfg,
       accountId: "default",
       approvalKind: "exec",
       request,
     });
   }
-  function suppressForwardingFallback(input: ForwardingParams) {
-    return capability.delivery?.shouldSuppressForwardingFallback?.(input);
+  async function suppressForwardingFallback(input: ForwardingParams) {
+    const suppress =
+      capability.delivery?.shouldSuppressForwardingFallbackAsync ??
+      capability.delivery?.shouldSuppressForwardingFallback;
+    return suppress?.(input);
   }
   function suppressTargetForwarding(cfg: OpenClawConfig, to: string, request = buildExecRequest()) {
     return suppressForwardingFallback({
@@ -144,85 +149,87 @@ export function createNativeApprovalTestFixture(params: {
     resolveExecOrigin,
     checks: {
       systemAgentEvents: () => {
-        expect(capability.nativeRuntime?.eventKinds).toContain("system-agent");
+        expect(nativeRuntime?.eventKinds).toContain("system-agent");
       },
-      disabledByDefault: () => {
+      disabledByDefault: async () => {
         const cfg = buildConfig();
         const execRequest = buildExecRequest();
         const pluginRequest = buildPluginRequest();
         expect(getAvailability(cfg)).toEqual({ kind: "disabled" });
         expect(getAvailability(cfg, "default", "plugin")).toEqual({ kind: "disabled" });
-        expect(describeDelivery(cfg, execRequest)?.enabled).toBe(false);
-        expect(nativeShouldHandle({ cfg, approvalKind: "exec", request: execRequest })).toBe(false);
-        expect(nativeShouldHandle({ cfg, approvalKind: "plugin", request: pluginRequest })).toBe(
+        expect((await describeDelivery(cfg, execRequest))?.enabled).toBe(false);
+        expect(await nativeShouldHandle({ cfg, approvalKind: "exec", request: execRequest })).toBe(
           false,
         );
+        expect(
+          await nativeShouldHandle({ cfg, approvalKind: "plugin", request: pluginRequest }),
+        ).toBe(false);
       },
-      sessionDelivery: () => {
+      sessionDelivery: async () => {
         const cfg = buildConfig({ approvals: { exec: { enabled: true } } });
         const request = buildExecRequest();
-        expect(describeDelivery(cfg, request)).toEqual({
+        expect(await describeDelivery(cfg, request)).toEqual({
           enabled: true,
           preferredSurface: "origin",
           supportsOriginSurface: true,
           supportsApproverDmSurface: false,
           notifyOriginWhenDmOnly: true,
         });
-        expect(nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(true);
+        expect(await nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(true);
       },
-      independentKinds: () => {
+      independentKinds: async () => {
         const execOnly = buildConfig({ approvals: { exec: { enabled: true } } });
         const pluginOnly = buildConfig({ approvals: { plugin: { enabled: true } } });
         expect(
-          nativeShouldHandle({
+          await nativeShouldHandle({
             cfg: execOnly,
             approvalKind: "plugin",
             request: buildPluginRequest(),
           }),
         ).toBe(false);
         expect(
-          nativeShouldHandle({
+          await nativeShouldHandle({
             cfg: pluginOnly,
             approvalKind: "exec",
             request: buildExecRequest(),
           }),
         ).toBe(false);
         expect(
-          nativeShouldHandle({
+          await nativeShouldHandle({
             cfg: pluginOnly,
             approvalKind: "plugin",
             request: buildPluginRequest(),
           }),
         ).toBe(true);
       },
-      foreignOrigin: () => {
+      foreignOrigin: async () => {
         const cfg = buildConfig({ approvals: { exec: { enabled: true } } });
         const request = buildExecRequest("", {
           turnSourceChannel: "slack",
           turnSourceTo: "C123",
           sessionKey: "agent:main:slack:channel:c123",
         });
-        expect(nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(false);
-        expect(describeDelivery(cfg, request)?.enabled).toBe(false);
+        expect(await nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(false);
+        expect((await describeDelivery(cfg, request))?.enabled).toBe(false);
       },
-      targetMode: (cfg = buildTargetModeConfig("exec", [{ channel, to: directTarget }])) => {
+      targetMode: async (cfg = buildTargetModeConfig("exec", [{ channel, to: directTarget }])) => {
         const request = buildExecRequest();
         expect(getAvailability(cfg)).toEqual({ kind: "enabled" });
         expect(
-          capability.nativeRuntime?.availability.isConfigured({
+          await nativeRuntime?.availability.isConfigured({
             cfg,
             accountId: "default",
             context: {},
           }),
         ).toBe(false);
-        expect(nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(false);
-        expect(describeDelivery(cfg, request)?.enabled).toBe(false);
+        expect(await nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(false);
+        expect((await describeDelivery(cfg, request))?.enabled).toBe(false);
       },
       noMatchingTarget: () => {
         const cfg = buildTargetModeConfig("exec", [{ channel: "slack", to: "C123" }]);
         expect(getAvailability(cfg)).toEqual({ kind: "disabled" });
       },
-      requestFilters: () => {
+      requestFilters: async () => {
         const request = buildExecRequest(directTarget, {
           agentId: "main",
           sessionKey: `agent:main:${channel}:+15551230000`,
@@ -233,12 +240,12 @@ export function createNativeApprovalTestFixture(params: {
         const blockedBySession = buildConfig({
           approvals: { exec: { enabled: true, sessionFilter: ["telegram"] } },
         });
-        expect(nativeShouldHandle({ cfg: blockedByAgent, approvalKind: "exec", request })).toBe(
-          false,
-        );
-        expect(nativeShouldHandle({ cfg: blockedBySession, approvalKind: "exec", request })).toBe(
-          false,
-        );
+        expect(
+          await nativeShouldHandle({ cfg: blockedByAgent, approvalKind: "exec", request }),
+        ).toBe(false);
+        expect(
+          await nativeShouldHandle({ cfg: blockedBySession, approvalKind: "exec", request }),
+        ).toBe(false);
       },
       accountScopedTargets: () => {
         const cfg = buildTargetModeConfig(
@@ -249,7 +256,7 @@ export function createNativeApprovalTestFixture(params: {
         expect(getAvailability(cfg)).toEqual({ kind: "disabled" });
         expect(getAvailability(cfg, "work")).toEqual({ kind: "enabled" });
       },
-      exactSessionTarget: () => {
+      exactSessionTarget: async () => {
         const cfg = buildConfig({ approvals: { exec: { enabled: true } } });
         const request = buildExecRequest();
         for (const [to, expected] of [
@@ -257,7 +264,7 @@ export function createNativeApprovalTestFixture(params: {
           ["+15550000000", false],
         ] as const) {
           expect(
-            suppressForwardingFallback({
+            await suppressForwardingFallback({
               cfg,
               approvalKind: "exec",
               target: { channel, to, accountId: "default", source: "session" },
@@ -266,17 +273,17 @@ export function createNativeApprovalTestFixture(params: {
           ).toBe(expected);
         }
       },
-      targetOnlyFallback: () => {
+      targetOnlyFallback: async () => {
         const cfg = buildTargetModeConfig("exec", [{ channel, to: "+15550000000" }]);
-        expect(suppressTargetForwarding(cfg, "+15550000000")).toBe(false);
+        expect(await suppressTargetForwarding(cfg, "+15550000000")).toBe(false);
       },
-      unscopedBothTarget: () => {
+      unscopedBothTarget: async () => {
         const cfg = buildTargetModeConfig("exec", [{ channel, to: directTarget }], {
           mode: "both",
         });
-        expect(suppressTargetForwarding(cfg, directTarget)).toBe(true);
+        expect(await suppressTargetForwarding(cfg, directTarget)).toBe(true);
       },
-      defaultAccountBothTarget: () => {
+      defaultAccountBothTarget: async () => {
         const cfg = buildTargetModeConfig("exec", [{ channel, to: directTarget }], {
           mode: "both",
           channel: {
@@ -285,7 +292,7 @@ export function createNativeApprovalTestFixture(params: {
           },
         });
         expect(
-          suppressTargetForwarding(
+          await suppressTargetForwarding(
             cfg,
             directTarget,
             buildExecRequest(directTarget, { turnSourceAccountId: "work" }),
@@ -419,5 +426,19 @@ export function createLocalApprovalPromptTestFixture(params: {
         }
       },
     },
+  };
+}
+
+export function createNativeApprovalRuntimeStub(): NonNullable<
+  ChannelApprovalCapability["nativeRuntime"]
+> {
+  return {
+    availability: { isConfigured: vi.fn(), shouldHandle: vi.fn() },
+    presentation: {
+      buildPendingPayload: vi.fn(),
+      buildResolvedResult: vi.fn(),
+      buildExpiredResult: vi.fn(),
+    },
+    transport: { prepareTarget: vi.fn(), deliverPending: vi.fn() },
   };
 }

@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "./agent-tool-source-execution-guard.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
-import { resolveSandboxContext } from "./sandbox.js";
+import { resolveSandboxContext } from "./sandbox/context.js";
 import {
   type resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,
@@ -48,7 +49,16 @@ function assertSandboxCwd(requestedCwd: string | undefined, workspaceDir: string
 export function resolveHarnessWorkspace(
   workspaceDir: string,
   params: Pick<WorkspaceSandboxParams, "cwd" | "sessionRoot">,
-  prepared: Awaited<ReturnType<typeof resolveAttemptWorkspaceSandbox>> | undefined,
+  prepared:
+    | Pick<
+        Awaited<ReturnType<typeof resolveAttemptWorkspaceSandbox>>,
+        | "sandbox"
+        | "resolvedWorkspace"
+        | "effectiveWorkspace"
+        | "effectiveCwd"
+        | "sessionPermissionRoot"
+      >
+    | undefined,
   sandbox: Awaited<ReturnType<typeof resolveSandboxContext>> | undefined,
 ) {
   const projected =
@@ -77,8 +87,20 @@ export async function preparePluginHarnessWorkspace(
       ...params,
       placementSandbox: placement.sandbox,
     });
-    placement.assertCurrent();
-    return { ...placement, workspace };
+    try {
+      placement.assertCurrent();
+      return {
+        ...placement,
+        workspace,
+        [Symbol.dispose]: () => {
+          workspace[Symbol.dispose]();
+          placement[Symbol.dispose]();
+        },
+      };
+    } catch (error) {
+      workspace[Symbol.dispose]();
+      throw error;
+    }
   } catch (error) {
     placement[Symbol.dispose]();
     throw error;
@@ -87,6 +109,7 @@ export async function preparePluginHarnessWorkspace(
 
 /** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
 export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxParams) {
+  using phases = observeDiagnosticsTimelinePhases("attempt.setup.workspace.policy");
   const assertRunCurrent = params.admittedRunContext
     ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
     : undefined;
@@ -112,11 +135,14 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
     runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
       assertCurrent();
       if (sandboxRuntimeStatus?.sandboxed) {
+        phases.mark("attempt.setup.workspace.baseline_wait");
         await params.awaitSessionDiffBaseline?.();
         assertCurrent();
       }
+      phases.mark("attempt.setup.workspace.mkdir");
       await fs.mkdir(resolvedWorkspace, { recursive: true });
       assertCurrent();
+      phases.mark("attempt.setup.workspace.sandbox");
       const sandbox = sandboxRuntimeStatus
         ? await resolveSandboxContext({
             config: params.config,
@@ -130,53 +156,65 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
             preparedRuntimeStatus: sandboxRuntimeStatus,
           })
         : null;
-      assertCurrent();
-      const projectedWorkspace = sandbox?.enabled && sandbox.workspaceSource === "managed-worktree";
-      const effectiveWorkspace =
-        sandbox?.enabled && (sandbox.workspaceAccess !== "rw" || projectedWorkspace)
-          ? (sandbox.workspaceCwd ?? sandbox.workspaceDir)
-          : resolvedWorkspace;
-      const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
-      // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
-      // the agent's canonical workspace as their permission boundary.
-      const sessionPermissionRoot = projectedWorkspace
-        ? sandbox.workspaceDir
-        : (params.sessionRoot ?? (await fs.realpath(resolvedWorkspace)));
-      const sessionPermissionPolicy = params.permissionMode
-        ? {
-            root: sessionPermissionRoot,
-            mode: params.permissionMode,
-          }
-        : undefined;
-      if (sandbox?.enabled) {
-        assertSandboxCwd(requestedCwd, resolvedWorkspace);
+      try {
+        phases.mark("attempt.setup.workspace.roots");
+        assertCurrent();
+        const projectedWorkspace =
+          sandbox?.enabled && sandbox.workspaceSource === "managed-worktree";
+        const effectiveWorkspace =
+          sandbox?.enabled && (sandbox.workspaceAccess !== "rw" || projectedWorkspace)
+            ? (sandbox.workspaceCwd ?? sandbox.workspaceDir)
+            : resolvedWorkspace;
+        const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+        // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
+        // the agent's canonical workspace as their permission boundary.
+        const sessionPermissionRoot = projectedWorkspace
+          ? sandbox.workspaceDir
+          : (params.sessionRoot ?? (await fs.realpath(resolvedWorkspace)));
+        const sessionPermissionPolicy = params.permissionMode
+          ? {
+              root: sessionPermissionRoot,
+              mode: params.permissionMode,
+            }
+          : undefined;
+        if (sandbox?.enabled) {
+          assertSandboxCwd(requestedCwd, resolvedWorkspace);
+        }
+        assertCurrent();
+        if (effectiveWorkspace !== resolvedWorkspace) {
+          await fs.mkdir(effectiveWorkspace, { recursive: true });
+        }
+        assertCurrent();
+        phases.mark("attempt.setup.workspace.policy_finalize");
+        return {
+          effectiveCwd: sandbox?.enabled
+            ? effectiveWorkspace
+            : (requestedCwd ?? effectiveWorkspace),
+          effectiveFsWorkspaceOnly:
+            params.requireWorkspaceOnly === true ||
+            resolveEffectiveToolFsWorkspaceOnly({
+              cfg: params.config,
+              agentId: sessionAgentId,
+            }),
+          effectiveWorkspace,
+          resolvedWorkspace,
+          sessionPermissionRoot,
+          sessionPermissionPolicy,
+          sandbox,
+          ...(sandboxRuntimeStatus ? { sandboxRuntime: sandboxRuntimeStatus } : {}),
+          sandboxReport: sandboxRuntimeStatus
+            ? { mode: sandboxRuntimeStatus.mode, sandboxed: sandboxRuntimeStatus.sandboxed }
+            : undefined,
+          sandboxSessionKey,
+          sessionAgentId,
+          [Symbol.dispose]: () => sandbox?.[Symbol.dispose]?.(),
+        };
+      } catch (error) {
+        sandbox?.[Symbol.dispose]?.();
+        throw error;
       }
-      assertCurrent();
-      if (effectiveWorkspace !== resolvedWorkspace) {
-        await fs.mkdir(effectiveWorkspace, { recursive: true });
-      }
-      assertCurrent();
-      return {
-        effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
-        effectiveFsWorkspaceOnly:
-          params.requireWorkspaceOnly === true ||
-          resolveEffectiveToolFsWorkspaceOnly({
-            cfg: params.config,
-            agentId: sessionAgentId,
-          }),
-        effectiveWorkspace,
-        resolvedWorkspace,
-        sessionPermissionRoot,
-        sessionPermissionPolicy,
-        sandbox,
-        sandboxReport: sandboxRuntimeStatus
-          ? { mode: sandboxRuntimeStatus.mode, sandboxed: sandboxRuntimeStatus.sandboxed }
-          : undefined,
-        sandboxSessionKey,
-        sessionAgentId,
-      };
     });
-  return params.placementSandbox
+  return await (params.placementSandbox
     ? prepareWorkspace()
     : withSandboxRuntimeStatusInWorker(
         {
@@ -189,5 +227,5 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
         },
         { env: process.env, cwd: process.cwd(), assertCurrent },
         prepareWorkspace,
-      );
+      ));
 }

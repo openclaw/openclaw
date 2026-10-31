@@ -1,3 +1,4 @@
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import type { OpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
@@ -102,7 +103,7 @@ export type DeleteSessionEntryLifecycleParams = {
    * Revalidate caller and external lifecycle owners at each synchronous deletion boundary.
    * Must not write the deleting agent database: its Worker may hold the transaction lock.
    */
-  commitGuard?: () => void;
+  commitGuard?: (operation?: RetainedWorkerTransactionAdmission) => void;
   /** Agent owner used to resolve backend transcript artifacts. */
   agentId?: string;
   /** Whether transcript artifacts should be archived/deleted with the entry. */
@@ -144,6 +145,8 @@ type SessionEntryLifecycleRemovalBase = {
   archiveRemovedTranscript?: boolean;
   /** Omit removal when the transcript changed after the caller's positive classification. */
   expectedTranscriptSnapshot?: SessionStateDeleteSnapshot;
+  /** Memory cleanup rechecks message absence at the actor deletion boundary. */
+  requiresMissingTranscript?: true;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
   expectedUpdatedAt?: number;
@@ -166,6 +169,8 @@ export type SessionEntryLifecycleRemoval = SessionEntryLifecycleRemovalBase &
 
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;
+  /** Snapshot these related rows and the current entry's stored parent for the builder. */
+  relatedSessionKeys?: readonly string[];
   /** Apply this upsert only when the named removal was projected in the same mutation. */
   requiresRemovalSessionKey?: string;
   /** Authoritative route observation for this write; omitted writes preserve valid evidence. */
@@ -179,16 +184,12 @@ export type SessionEntryLifecycleUpsert = {
   | {
       buildEntry: (context: {
         currentEntry?: SessionEntry;
+        readEntry: (sessionKey: string) => SessionEntry | undefined;
         sessionKey: string;
       }) => Promise<SessionEntry | null | undefined> | SessionEntry | null | undefined;
       entry?: never;
     }
 );
-
-export type SessionArchivedTranscriptCleanupRule = {
-  reason: "deleted" | "reset";
-  olderThanMs: number;
-};
 
 export type SessionEntryLifecycleMutationResult = {
   beforeCount: number;

@@ -1,10 +1,16 @@
 import { getEventListeners } from "node:events";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  captureGatewayDeviceRevocation,
+  retainGatewayDeviceRevocation,
+} from "../device-revocation.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
+import { catalogProvider as provider } from "./session-catalog.fixtures.test-support.js";
+import {
   hoisted,
-  provider,
   resetSessionCatalogTestState,
   startCall,
 } from "./session-catalog.test-helpers.js";
@@ -41,12 +47,14 @@ it.each(["completion", "list"] as const)(
     const gateway = new AbortController();
     const drain = getGatewayRestartDrainSignal();
     const before = getEventListeners(drain, "abort").length;
-    let retainedProviders = 0;
-    let retainedPages = 0;
     try {
       for (let index = 0; index < 1_000; index++) {
         const connection = new AbortController();
-        const client = { connId: `reconnect-${index}`, connectionSignal: connection.signal };
+        const client = {
+          connId: `reconnect-${index}`,
+          connect: gatewayConnect([]),
+          connectionSignal: connection.signal,
+        };
         const pending = startCall("sessions.catalog.list", {}, config, client, {
           requestEntryLifetime: { signal: gateway.signal },
         });
@@ -62,25 +70,14 @@ it.each(["completion", "list"] as const)(
           gateway.signal,
           client as GatewayClient,
         );
-        retainedProviders = Math.max(retainedProviders, operations.providers.size);
-        retainedPages = Math.max(retainedPages, operations.pages.size);
+        expect(operations.providers.size).toBe(0);
+        expect(operations.pages.size).toBe(0);
       }
       await vi.advanceTimersByTimeAsync(60_000);
-      const counts = {
-        reconnects: 1_000,
+      expect({
         drainListeners: getEventListeners(drain, "abort").length - before,
         gatewayListeners: getEventListeners(gateway.signal, "abort").length,
-        retainedProviders,
-        retainedPages,
-      };
-      console.info("catalog reconnect retention", mode, counts);
-      expect(counts).toEqual({
-        reconnects: 1_000,
-        drainListeners: 0,
-        gatewayListeners: 0,
-        retainedProviders: 0,
-        retainedPages: 0,
-      });
+      }).toEqual({ drainListeners: 0, gatewayListeners: 0 });
     } finally {
       gateway.abort();
       release.resolve();
@@ -97,32 +94,48 @@ it("expires delivery without releasing native work that ignores cancellation", a
   const before = getActiveGatewayRootWorkCount();
   const root = tryBeginGatewayRootWorkAdmission("catalog-delivery-deadline");
   const owner = new GatewayConnectionWork();
-  const lifetime = new SessionCatalogListLifetime([], ["fixture"]);
+  const lifetime = new SessionCatalogListLifetime([]);
   const release = createDeferredCore();
+  const connection = new AbortController();
+  const sourceReleased = vi.fn();
+  const caller = captureGatewayDeviceRevocation({}, {}, () => true, connection.signal, {
+    isCurrent: () => true,
+    subscribe: () => sourceReleased,
+  });
   let signal: AbortSignal | undefined;
   try {
     await owner.track(() =>
       root!.run(() =>
-        lifetime.runProvider(undefined, async (params) => {
-          signal = params.signal;
-          params.waitUntil(release.promise);
-        }),
+        withPluginRuntimeGatewayRequestScope(
+          { hasCurrentClientAuthority: caller.isCurrent, isWebchatConnect: () => false },
+          () =>
+            lifetime.runProvider(undefined, async (params) => {
+              signal = params.signal;
+              params.waitUntil(release.promise);
+            }),
+        ),
       ),
     );
     root!.release();
+    caller.release();
     lifetime.finishListing();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(signal?.aborted).toBe(true);
     expect(getActiveGatewayRootWorkCount()).toBe(before + 1);
     expect(owner.hasPendingWork).toBe(true);
+    const releaseNativeCaller = retainGatewayDeviceRevocation(caller.isCurrent);
+    releaseNativeCaller?.();
     release.resolve();
     await owner.drain();
     expect(getActiveGatewayRootWorkCount()).toBe(before);
+    expect(sourceReleased).toHaveBeenCalledOnce();
+    expect(() => retainGatewayDeviceRevocation(caller.isCurrent)).toThrow("no longer active");
   } finally {
     release.resolve();
     lifetime.retire();
     lifetime.finishListing();
     root!.release();
+    caller.release();
     await owner.drain();
   }
 });
@@ -139,7 +152,7 @@ it("caps pending provider keys and refuses late pages from evicted operations", 
   };
   const page = { catalogs: [catalog], instancesByCatalog: new Map([[catalog.id, new Map()]]) };
   const releases = Array.from({ length: 129 }, () => createDeferredCore<typeof page>());
-  const lifetimes = releases.map(() => new SessionCatalogListLifetime([], [catalog.id]));
+  const lifetimes = releases.map(() => new SessionCatalogListLifetime([]));
   const lists = releases.map((release, index) =>
     listSessionCatalogWithinBudget(
       operations,
@@ -157,7 +170,7 @@ it("caps pending provider keys and refuses late pages from evicted operations", 
     await vi.advanceTimersByTimeAsync(1_000);
     await Promise.all(lists);
     expect(operations.pages.has("query-0")).toBe(false);
-    expect(operations.pages.get("query-1")).toEqual(page);
+    expect(operations.pages.get("query-1")).toEqual({ page });
     await vi.advanceTimersByTimeAsync(59_000);
     expect(operations.providers.size).toBe(0);
     releases[2]!.resolve(page);

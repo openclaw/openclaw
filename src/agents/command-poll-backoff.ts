@@ -23,14 +23,14 @@ export function resetCommandPollCount(state: SessionState, commandId: string): v
   state.commandPollCounts?.delete(commandId);
 }
 
-export function pruneStaleCommandPollsCore(state: SessionState, maxAgeMs = 3600000): void {
+export function pruneStaleCommandPollsCore(state: SessionState): void {
   if (!state.commandPollCounts) {
     return;
   }
 
   const now = Date.now();
   for (const [commandId, data] of state.commandPollCounts.entries()) {
-    if (now - data.lastPollAt > maxAgeMs) {
+    if (now - data.lastPollAt > 3600000) {
       state.commandPollCounts.delete(commandId);
     }
   }

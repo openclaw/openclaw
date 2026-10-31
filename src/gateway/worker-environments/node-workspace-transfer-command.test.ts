@@ -1,16 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { createNodeWorkspaceTransferCommand } from "./node-workspace-transfer-command.js";
 
 const manifestRef = `sha256:${"a".repeat(64)}`;
 const input = { direction: "download", token: "test-token", manifestRef } as const;
 const result = {
   workspaceDir: "/node/workspace",
-  stdout: manifestRef,
-  stderr: "",
-  code: 0,
-  signal: null,
-  killed: false,
-  termination: "exit",
+  ...createCommandResult({ stdout: manifestRef }),
 } as const;
 
 describe("node workspace transfer command", () => {

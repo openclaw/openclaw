@@ -25,7 +25,7 @@ private final class FakeGatewayChild: Sendable {
             },
             wait: {
                 await self.exited.wait()
-                return "exit 1"
+                return .terminated(.exited(1))
             },
             terminate: {
                 self.terminations.withLock { $0 += 1 }

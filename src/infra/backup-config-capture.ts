@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { hashConfigIncludeRaw } from "../config/includes.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
@@ -10,14 +11,15 @@ import type {
   ReadConfigFileSnapshotForWriteResult,
 } from "../config/io.types.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import { selectDatabaseEngine } from "./database-engine/registry.js";
 import { openLocalFileSafely } from "./fs-safe.js";
 
 type CapturedConfigFile = {
   sourcePath: string;
   canonicalPath: string;
   hash: string;
-  dev: number;
-  ino: number;
+  dev: bigint;
+  ino: bigint;
 };
 
 export type BackupConfigCapture = {
@@ -70,16 +72,17 @@ export async function resolveBackupConfigCapture(
   for (const [sourcePath, hash] of files) {
     try {
       const canonicalPath = await fs.realpath(sourcePath);
-      const linkStat = await fs.lstat(sourcePath);
+      const linkStat = await fs.lstat(sourcePath, { bigint: true });
       const rootAlias = sourcePath === snapshot.path && linkStat.isSymbolicLink();
       const includeAliasesAllowed =
         sourcePath !== snapshot.path && options.allowIncludeAliases === true;
-      const stat = rootAlias || includeAliasesAllowed ? await fs.stat(sourcePath) : linkStat;
+      const stat =
+        rootAlias || includeAliasesAllowed ? await fs.stat(sourcePath, { bigint: true }) : linkStat;
       if (rootAlias) {
         // Existing root links keep the archive's ordinary link
         // handling. Pin their payload and refuse a changed alias at publication.
         assertRootAlias = async () => {
-          const current = await fs.lstat(sourcePath);
+          const current = await fs.lstat(sourcePath, { bigint: true });
           if (
             current.dev !== linkStat.dev ||
             current.ino !== linkStat.ino ||
@@ -119,30 +122,25 @@ export async function resolveBackupConfigCapture(
       throw captureError(sourcePath, "file identity could not be pinned", error);
     }
   }
-  // Watch paths include both lexical and canonical names. Every one must belong
-  // to a successfully resolved, hash-pinned file, not a partially visited graph.
-  for (const includePath of snapshot.includedPaths ?? []) {
-    if (
-      !capture.some((file) => file.sourcePath === includePath || file.canonicalPath === includePath)
-    ) {
-      throw captureError(includePath, "include inventory is incomplete");
-    }
-  }
   return {
     files: capture,
     assertRootAlias,
     revalidate: async () => {
       await assertRootAlias?.();
-      const current = await withOpenClawStateDatabaseReadSnapshot(
-        () =>
-          createConfigIO({
-            configPath: snapshot.path,
-            env: options.env,
-            pluginValidation: options.pluginValidation,
-            observe: false,
-          }).readConfigFileSnapshotForWrite(),
-        { env: options.env },
-      );
+      const read = () =>
+        createConfigIO({
+          configPath: snapshot.path,
+          env: options.env,
+          pluginValidation: options.pluginValidation,
+          observe: false,
+        }).readConfigFileSnapshotForWrite();
+      // Core-only revalidation pins config files without reading database state.
+      const current = await (selectDatabaseEngine(
+        { id: "state", postgres: true },
+        snapshot.sourceConfig,
+      ) === "postgres" && options.pluginValidation === "core-only"
+        ? read()
+        : withOpenClawStateDatabaseReadSnapshot(read, { env: options.env }));
       // A file can be reached repeatedly during discovery. Comparing the resolved
       // source as well as the last hashes prevents accepting mixed observations.
       if (
@@ -167,21 +165,21 @@ export async function readBackupConfigCaptureFile(file: CapturedConfigFile): Pro
       throw new Error("file identity changed");
     }
     const opened = await openLocalFileSafely({ filePath: file.canonicalPath });
-    const { handle, stat } = opened;
+    const { handle, exactIdentity } = opened;
     try {
       if (
-        stat.dev !== file.dev ||
-        stat.ino !== file.ino ||
+        exactIdentity.dev !== file.dev ||
+        exactIdentity.ino !== file.ino ||
         opened.realPath !== file.canonicalPath
       ) {
         throw new Error("file identity changed");
       }
-      const bytes = await handle.readFile();
+      const bytes = await readFileHandleBounded(handle, Infinity);
       const raw = bytes.toString("utf8");
       if (!bytes.equals(Buffer.from(raw)) || hashConfigIncludeRaw(raw) !== file.hash) {
         throw new Error("file contents changed");
       }
-      const current = await fs.lstat(file.canonicalPath);
+      const current = await fs.lstat(file.canonicalPath, { bigint: true });
       if (
         !current.isFile() ||
         current.dev !== file.dev ||
@@ -210,11 +208,6 @@ export async function stageBackupConfigCapture(
     await fs.writeFile(stagedPath, bytes, { flag: "wx", mode: 0o600 });
     remaps.set(stagedPath, file.canonicalPath);
   }
-  await capture?.revalidate();
-  // Seal only after every dependency has been copied. Matching all authored
-  // bytes also pins the include edges; no second resolver or mixed retry.
-  for (const file of capture?.files ?? []) {
-    await readBackupConfigCaptureFile(file);
-  }
+  await capture?.assertRootAlias?.();
   return remaps;
 }

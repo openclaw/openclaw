@@ -1,4 +1,3 @@
-import type { ReactiveControllerHost } from "lit";
 import { fetchControlUiResource, subscribeBrowserAuthRestored } from "../app/browser-http.ts";
 
 type AvatarRouteEntry = {
@@ -98,6 +97,9 @@ async function fetchAvatarRoute(
         blobUrl = URL.createObjectURL(await response.blob());
         break;
       }
+      // Rejected bodies are never read, including cached misses. Release them
+      // without letting stalled cleanup block credential recovery or fallback.
+      void response.body?.cancel().catch(() => undefined);
       notFound = response.status === 404;
       entry.unavailable = retryUnavailable && response.status === 503;
       retryDelayMs = entry.unavailable ? retryAfterMs(response) : undefined;
@@ -165,20 +167,10 @@ export class AuthenticatedAvatarRouteLoader {
     }
   };
 
-  private readonly changed: () => void;
-
   constructor(
-    changed: (() => void) | ReactiveControllerHost,
+    private readonly changed: () => void,
     private readonly options: { retryUnavailable?: boolean } = {},
-  ) {
-    this.changed = typeof changed === "function" ? changed : () => changed.requestUpdate();
-    if (typeof changed !== "function") {
-      changed.addController({
-        hostConnected: () => this.connect(),
-        hostDisconnected: () => this.disconnect(),
-      });
-    }
-  }
+  ) {}
 
   connect() {
     this.connected = true;

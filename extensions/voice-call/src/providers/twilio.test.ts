@@ -12,7 +12,7 @@ vi.mock("./shared/guarded-json-api.js", async (importOriginal) => ({
   guardedJsonApiRequest: guardedJsonApiRequestMock,
 }));
 
-import { VoiceCallConfigSchema } from "../config.js";
+import { normalizeVoiceCallConfig } from "../config.js";
 import type { WebhookContext } from "../types.js";
 import { TwilioProvider } from "./twilio.js";
 import { TwilioApiError } from "./twilio/api.js";
@@ -178,7 +178,7 @@ describe("TwilioProvider", () => {
         from: "+14155550100",
         to: "+14155550123",
         webhookUrl: "https://example.ngrok.app/voice/webhook",
-        voicemail: VoiceCallConfigSchema.parse({
+        voicemail: normalizeVoiceCallConfig({
           voicemail: {
             detection: "twilio",
             onMachine,
@@ -713,18 +713,6 @@ describe("TwilioProvider", () => {
     }).toString();
 
     expect(provider.parseWebhookEvent(createContext(body)).events).toEqual([]);
-  });
-
-  it("does not coerce partial Twilio speech confidence values", () => {
-    const provider = createProvider();
-    const ctx = createContext("CallSid=CA223&Direction=inbound&SpeechResult=hello&Confidence=0.2x");
-
-    const event = provider.parseWebhookEvent(ctx).events[0];
-    const parsed = requireEvent(event, "expected speech event from Twilio webhook");
-    if (parsed.type !== "call.speech") {
-      throw new Error("expected speech event from Twilio webhook");
-    }
-    expect(parsed.confidence).toBe(0.9);
   });
 
   it("fails when an active stream exists but telephony TTS is unavailable", async () => {

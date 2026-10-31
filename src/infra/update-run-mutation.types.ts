@@ -1,4 +1,10 @@
 import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
+import type { UpdateResultPayload } from "./update-result-payload.js";
+import type {
+  InterruptedUpdateSettlement,
+  InterruptedUpdateSettlementResult,
+} from "./update-run-interruption-contract.js";
+import type { UpdateRunReconciliationOperations } from "./update-run-reconciliation.types.js";
 import type {
   CreateUpdateRunInput,
   FinishUpdateRunInput,
@@ -22,7 +28,7 @@ export type UpdateRunPatch = Partial<
 
 export type UpdateRunPhasePatch = UpdateRunPatch & { step?: UpdateRunStep };
 
-type UpdateRunWriteInput = {
+export type UpdateRunWriteInput = {
   runId: string;
   redactionFacts: UpdateRunRedactionFacts;
   requireNoRecovery?: true;
@@ -31,7 +37,7 @@ type UpdateRunWriteInput = {
 };
 
 type UpdateRunWriteResult =
-  | { kind: "recorded"; record: UpdateRunRecord }
+  | { kind: "recorded"; record: UpdateRunRecord; updateResult?: UpdateResultPayload }
   | { kind: "bookkeeping-skipped" }
   | { kind: "recovery-required"; recovery: UpdateRecoveryRecord };
 
@@ -68,3 +74,11 @@ export type UpdateRunWriteOperations = {
 };
 
 export type UpdateRunWriteCommand = SqliteWorkerCommand<UpdateRunWriteOperations>;
+
+export type UpdateRunWorkerOperations = UpdateRunWriteOperations &
+  UpdateRunReconciliationOperations & {
+    "updateRuns.reconcileInterrupted": {
+      input: InterruptedUpdateSettlement;
+      output: InterruptedUpdateSettlementResult;
+    };
+  };

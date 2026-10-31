@@ -2,6 +2,9 @@
 
 Official OpenClaw provider plugin for NovitaAI's OpenAI-compatible API.
 
+Video task polling honors the provider's private-network policy even without a
+proxy override. Generated video downloads keep their separate asset boundary.
+
 ## Install
 
 ```sh

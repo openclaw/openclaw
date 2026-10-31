@@ -70,7 +70,7 @@ async function captureRoots() {
 }
 
 describe("guarded capture ownership", () => {
-  it("captures RequestInit overrides as sent by the global fetch transport", async () => {
+  it("normalizes symbol-bearing RequestInit overrides as sent by the global fetch transport", async () => {
     const fixture = await captureRoots();
     try {
       await withServer(
@@ -84,6 +84,7 @@ describe("guarded capture ownership", () => {
                 method: request.method,
                 originalHeader: request.headers["x-original"],
                 overrideHeader: request.headers["x-override"],
+                hiddenHeader: request.headers["x-hidden"],
                 body: Buffer.concat(chunks).toString(),
               }),
             );
@@ -95,16 +96,23 @@ describe("guarded capture ownership", () => {
             headers: { "x-original": "original" },
             body: "original body",
           });
+          const headers = { "x-override": "override", "content-type": "application/json" };
+          Object.defineProperties(headers, {
+            "x-hidden": { value: "yes", enumerable: false },
+            [Symbol("sensitiveHeaders")]: { value: new Set(["content-type"]), enumerable: false },
+          });
           const response = await fixture.savedWrapper(request, {
             method: "POST",
-            headers: { "x-override": "override", "content-type": "application/json" },
+            headers,
             body: "override body",
           });
           expect(await response.json()).toEqual({
             method: "POST",
             overrideHeader: "override",
+            hiddenHeader: "yes",
             body: "override body",
           });
+          expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
         },
       );
       await fixture.close();
@@ -117,6 +125,61 @@ describe("guarded capture ownership", () => {
       expect(JSON.parse(String(events?.[0]?.headersJson))).toEqual({
         "content-type": "application/json",
         "x-override": "override",
+        "x-hidden": "yes",
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("captures redacted Blob bytes before a custom fetch can mutate its input", async () => {
+    const nativeFetch = globalThis.fetch;
+    const fixture = await captureRoots();
+    const secret = "synthetic-blob-capture-secret";
+    registerSecretValueForRedaction(secret);
+    const wire = JSON.stringify({ message: "retained 🦞 history", credential: secret });
+    try {
+      await withServer(
+        (request, response) => {
+          const chunks: Buffer[] = [];
+          request.on("data", (chunk: Buffer) => chunks.push(chunk));
+          request.on("end", () => response.end(Buffer.concat(chunks)));
+        },
+        async (baseUrl) => {
+          const result = await fetchWithSsrFGuard({
+            url: `${baseUrl}/blob`,
+            pinDns: false,
+            policy: { allowPrivateNetwork: true },
+            init: {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: new Blob([wire]),
+            },
+            fetchImpl: async (input, init) => {
+              const response = await nativeFetch(input, init);
+              if (init?.body instanceof Uint8Array) {
+                init.body.fill(0);
+              }
+              return response;
+            },
+          });
+          try {
+            expect(await result.response.text()).toBe(wire);
+          } finally {
+            await result.release();
+          }
+        },
+      );
+      await fixture.close();
+      const requests = (await fixture.readEvents())
+        .flat()
+        .filter((event) => event.kind === "request");
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        method: "POST",
+        path: "/blob",
+        contentType: "application/json",
+        dataText: '{"message":"retained 🦞 history","credential":"[REDACTED]"}',
       });
     } finally {
       await fixture.close();

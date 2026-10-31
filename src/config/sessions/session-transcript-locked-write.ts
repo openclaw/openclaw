@@ -3,6 +3,7 @@ import {
   assertDatabasePathIdentity,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import type {
@@ -68,16 +69,7 @@ export async function withWorkerTranscriptWriteLock<T>(
   const identity = readDatabasePathIdentitySync(scope.path);
   const execution = captureOpenClawAgentDatabaseExecution(
     database,
-    identity.key.startsWith("file:")
-      ? {
-          expectedIdentity: {
-            kind: "file",
-            physicalIdentity: identity.key.slice("file:".length),
-            nativeLocation: identity.canonicalPath,
-            birthtime: identity.birthtime,
-          },
-        }
-      : { expectedCreationIdentity: identity },
+    toAgentExecutionConstraints(identity),
   );
   const resolved: ResolvedTranscriptScope = {
     agentId: scope.agentId,
@@ -93,7 +85,7 @@ export async function withWorkerTranscriptWriteLock<T>(
   try {
     const owned = await prepareSessionSourceAuthority(assertOwned);
     if (owned.nativeSource) {
-      // Released synchronous authority callbacks reread the database; revisit at the next SDK major.
+      // Released synchronous callbacks remain through 2026-12-31, then retire in January 2027 stable.
       try {
         execution.assertCurrent();
         releaseExecution = false;
@@ -184,7 +176,6 @@ export async function withWorkerTranscriptWriteLock<T>(
           assertCurrent();
         },
         beforeWrite: assertCurrent,
-        async release() {},
       }),
       onTransactionFacts(facts) {
         if (!isRecord(facts)) {
@@ -353,7 +344,7 @@ export async function withWorkerTranscriptWriteLock<T>(
               ),
             );
             if (freshGuard?.nativeSource || authority.nativeSource || (legacyPrepare && !prepare)) {
-              // Released synchronous authority callbacks reread the database; revisit at the next SDK major.
+              // Released synchronous callbacks remain through 2026-12-31, then retire in January 2027 stable.
               try {
                 return await native(
                   fenced,
@@ -449,6 +440,7 @@ export async function withWorkerTranscriptWriteLock<T>(
                         input: {
                           ...target,
                           idempotencyKeys: params.idempotencyKeys,
+                          activeBranchOnly: params.activeBranchOnly,
                           sourceRunId: params.sourceRunId,
                         },
                       },

@@ -1,7 +1,12 @@
 import Foundation
 
+func temporaryDirectoryForTests() -> URL {
+    URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory(), isDirectory: true)
+        .resolvingSymlinksInPath()
+}
+
 func makeTempDirForTests() throws -> URL {
-    let base = FileManager.default.temporaryDirectory
+    let base = temporaryDirectoryForTests()
     let dir = base.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
     return dir

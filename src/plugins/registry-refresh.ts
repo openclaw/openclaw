@@ -9,8 +9,8 @@ import type { InstalledPluginIndexRefreshReason } from "./installed-plugin-index
 import { createPluginCache, getScopedPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   hasPluginLifecycleLease,
-  withPluginLifecycleLease,
-  type PluginLifecycleLeaseContext,
+  withPluginLifecycleLeaseAsync,
+  type PluginMetadataLeaseContext,
 } from "./plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
@@ -30,7 +30,7 @@ type PluginRegistryRefreshParams = {
   policyPluginIds?: readonly string[];
   traceCommand?: string;
   logger?: PluginRegistryRefreshLogger;
-  lease?: PluginLifecycleLeaseContext;
+  lease?: PluginMetadataLeaseContext;
 };
 
 /** Refresh inventory from the committed file, including deferred runtime changes. */
@@ -52,117 +52,98 @@ export async function refreshPluginRegistryAfterConfigMutation(
     }
   };
   // A one-shot refusal from either owner check must survive best-effort warning conversion.
-  const callerLease: PluginLifecycleLeaseContext | undefined = owner
-    ? {
-        ...owner,
-        assertCurrent: () => assertAuthority(() => owner.assertCurrent()),
-        assertOwned: () =>
-          assertAuthority(() => {
-            owner.assertCurrent();
-            owner.assertOwned();
-          }),
-        assertOwnedInTransaction: (database) =>
-          assertAuthority(() => owner.assertOwnedInTransaction(database)),
+  const guardLease = (lease: PluginMetadataLeaseContext): PluginMetadataLeaseContext => ({
+    databasePath: lease.databasePath,
+    stateLease: lease.stateLease,
+    assertCurrent: () => assertAuthority(() => lease.assertCurrent()),
+    assertOwned: async () => {
+      assertAuthority(() => lease.assertCurrent());
+      try {
+        await lease.assertOwned();
+        assertAuthority(() => lease.assertCurrent());
+      } catch (error) {
+        assertAuthority(() => {
+          throw error;
+        });
       }
-    : undefined;
-  callerLease?.assertOwned();
+    },
+  });
+  const callerLease = owner && guardLease(owner);
+  callerLease?.assertCurrent();
   const warn = (error: unknown) =>
     params.logger?.warn?.(`Plugin registry refresh failed: ${formatErrorMessage(error)}`);
+  const refresh = async (acquiredLease: PluginMetadataLeaseContext) => {
+    const lease = guardLease(acquiredLease);
+    try {
+      // Standalone policy writes retain their lease's package facts. Gateway source
+      // mutations leave enclosing caches intact, so refresh those independently.
+      const scoped = getScopedPluginCache();
+      const cache =
+        params.reason === "policy-changed" &&
+        suppliedRecordsOwned &&
+        !isGatewayPluginMetadataSnapshotActive() &&
+        scoped?.kind === "operation"
+          ? scoped
+          : createPluginCache();
+      await withPluginCache(cache, async () => {
+        // Completed operations supply observations; only the retained owner can replace rows.
+        const installRecords =
+          (suppliedRecordsOwned ? params.installRecords : undefined) ??
+          (await tracePluginLifecyclePhaseAsync(
+            "install records load",
+            () =>
+              loadInstalledPluginIndexInstallRecords({
+                ...(params.env ? { env: params.env } : {}),
+                filePath: lease.databasePath,
+              }),
+            { command: params.traceCommand ?? "registry-refresh" },
+          ));
+        await tracePluginLifecyclePhaseAsync(
+          "registry refresh",
+          async () => {
+            // Resolve source paths before plugin migrations and validation.
+            const snapshot = await createConfigIO({
+              configPath: params.configPath,
+              env: createManagedRuntimeEnvBase(params.env),
+              observe: false,
+              pluginValidation: "core-only",
+            }).readConfigFileSnapshot();
+            await lease.assertOwned();
+            if (!snapshot.valid) {
+              throw new Error(`Config invalid: ${formatConfigIssueSummary(snapshot.issues)}`);
+            }
+            return refreshPluginRegistry({
+              config: snapshot.runtimeConfig,
+              reason: params.reason,
+              installRecords,
+              ...(params.policyPluginIds ? { policyPluginIds: params.policyPluginIds } : {}),
+              ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+              ...(params.env ? { env: params.env } : {}),
+              filePath: lease.databasePath,
+              lease,
+            });
+          },
+          { command: params.traceCommand ?? "registry-refresh", reason: params.reason },
+        );
+      });
+    } catch (error) {
+      await lease.assertOwned();
+      warn(error);
+    }
+  };
   try {
-    await withPluginLifecycleLease(
-      {
-        ...(params.env ? { env: params.env } : {}),
-        ...(callerLease
-          ? { path: callerLease.databasePath, assertCurrent: () => callerLease.assertCurrent() }
-          : {}),
-      },
-      async (acquiredLease) => {
-        const lease: PluginLifecycleLeaseContext = {
-          ...acquiredLease,
-          assertCurrent: () =>
-            assertAuthority(() => {
-              acquiredLease.assertCurrent();
-              callerLease?.assertCurrent();
-            }),
-          assertOwned: () =>
-            assertAuthority(() => {
-              acquiredLease.assertOwned();
-              callerLease?.assertOwned();
-            }),
-          assertOwnedInTransaction: (database) =>
-            assertAuthority(() => {
-              acquiredLease.assertOwnedInTransaction(database);
-              callerLease?.assertOwnedInTransaction(database);
-            }),
-        };
-        try {
-          // Standalone policy writes retain their lease's package facts. Gateway source
-          // mutations leave enclosing caches intact, so refresh those independently.
-          const scoped = getScopedPluginCache();
-          const cache =
-            params.reason === "policy-changed" &&
-            suppliedRecordsOwned &&
-            !isGatewayPluginMetadataSnapshotActive() &&
-            scoped?.kind === "operation"
-              ? scoped
-              : createPluginCache();
-          await withPluginCache(cache, async () => {
-            // Completed operations supply observations; only the retained owner can replace rows.
-            const installRecords =
-              (suppliedRecordsOwned ? params.installRecords : undefined) ??
-              (await tracePluginLifecyclePhaseAsync(
-                "install records load",
-                () =>
-                  loadInstalledPluginIndexInstallRecords({
-                    ...(params.env ? { env: params.env } : {}),
-                    filePath: lease.databasePath,
-                  }),
-                { command: params.traceCommand ?? "registry-refresh" },
-              ));
-            lease.assertOwned();
-            await tracePluginLifecyclePhaseAsync(
-              "registry refresh",
-              async () => {
-                // Resolve source paths before plugin migrations and validation.
-                const snapshot = await createConfigIO({
-                  configPath: params.configPath,
-                  env: createManagedRuntimeEnvBase(params.env),
-                  observe: false,
-                  pluginValidation: "core-only",
-                }).readConfigFileSnapshot();
-                lease.assertOwned();
-                if (!snapshot.valid) {
-                  throw new Error(`Config invalid: ${formatConfigIssueSummary(snapshot.issues)}`);
-                }
-                return refreshPluginRegistry({
-                  config: snapshot.runtimeConfig,
-                  reason: params.reason,
-                  installRecords,
-                  ...(params.policyPluginIds ? { policyPluginIds: params.policyPluginIds } : {}),
-                  ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-                  ...(params.env ? { env: params.env } : {}),
-                  filePath: lease.databasePath,
-                  lease,
-                });
-              },
-              { command: params.traceCommand ?? "registry-refresh", reason: params.reason },
-            );
-          });
-        } catch (error) {
-          lease.assertOwned();
-          warn(error);
-        }
-        lease.assertOwned();
-      },
-    );
+    if (callerLease) {
+      await refresh(callerLease);
+    } else {
+      await withPluginLifecycleLeaseAsync(params.env ? { env: params.env } : {}, refresh);
+    }
   } catch (error) {
     if (authorityRefusal) {
       throw authorityRefusal.error;
     }
-    callerLease?.assertOwned();
+    await callerLease?.assertOwned();
     warn(error);
   }
-  callerLease?.assertOwned();
   if (params.invalidateRuntimeCache !== false) {
     await invalidatePluginRuntimeDiscoveryAfterConfigMutation({
       ...params,
@@ -173,17 +154,17 @@ export async function refreshPluginRegistryAfterConfigMutation(
 
 export async function invalidatePluginRuntimeDiscoveryAfterConfigMutation(params: {
   logger?: PluginRegistryRefreshLogger;
-  assertCurrent?: () => void;
+  assertCurrent?: () => void | Promise<void>;
 }): Promise<void> {
   let clearPluginRegistryLoadCache: typeof import("./loader.js").clearPluginRegistryLoadCache;
   try {
     ({ clearPluginRegistryLoadCache } = await import("./loader.js"));
   } catch (error) {
-    params.assertCurrent?.();
+    await params.assertCurrent?.();
     params.logger?.warn?.(`Plugin runtime cache invalidation failed: ${formatErrorMessage(error)}`);
     return;
   }
-  params.assertCurrent?.();
+  await params.assertCurrent?.();
   try {
     clearPluginRegistryLoadCache();
   } catch (error) {

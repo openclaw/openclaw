@@ -43,7 +43,8 @@ async function withModelFile<T>(
 ): Promise<T> {
   let handle;
   try {
-    handle = await fs.open(file, "r");
+    // Nonblocking open reaches the regular-file guard for FIFOs without a writer.
+    handle = await fs.open(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size < 1 || stat.size > maxBytes) {
       throw new OnnxWorkerError("model-integrity");

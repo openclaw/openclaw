@@ -6,19 +6,32 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   captureToolAuthoredSourceReply,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  resolveMessageToolSourceReplyFinal,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
 import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
+
+export function applyCurrentMessageProvider(
+  toolName: string,
+  args: Record<string, unknown>,
+  currentProvider: string | undefined,
+): Record<string, unknown> {
+  const hasProvider =
+    (typeof args.provider === "string" && args.provider.trim().length > 0) ||
+    (typeof args.channel === "string" && args.channel.trim().length > 0);
+  const provider = currentProvider?.trim();
+  if (toolName !== "message" || hasProvider || !provider) {
+    return args;
+  }
+  return { ...args, provider };
+}
 
 export type CodexToolResultSourceReply = {
   /** The message tool itself marked its current-source reply terminal. */
   toolConfirmed: boolean;
   /** Final (`true`) or progress (`false`) for a confirmed message-tool reply. */
   final: boolean | undefined;
-  /** Whether this tool result ends the Codex turn. */
-  terminate: true | undefined;
 };
 
 /**
@@ -32,7 +45,6 @@ export type CodexToolResultSourceReply = {
  * cannot end the turn or reach the conversation.
  */
 export function resolveCodexToolResultSourceReply(params: {
-  sourceReplyDeliveryMode: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
   canDeliverSourceReply: boolean | undefined;
   toolName: string;
   call: { callId: string; turnId: string; namespace?: string | null };
@@ -41,17 +53,19 @@ export function resolveCodexToolResultSourceReply(params: {
   result: AgentToolResult<unknown>;
   deliveredSourceReply: boolean;
   executedArgs: Record<string, unknown>;
+  finalByDefault?: boolean;
   runId: string | undefined;
   response: CodexDynamicToolRuntimeResponse;
 }): CodexToolResultSourceReply {
-  const messageToolOnly =
-    params.sourceReplyDeliveryMode === "message_tool_only" && params.toolName === "message";
+  const messageTool = params.toolName === "message";
   const toolConfirmed =
-    messageToolOnly &&
+    messageTool &&
     !params.resultIsError &&
     (params.rawResult.terminate === true || params.result.terminate === true);
-  const confirmed = messageToolOnly && (toolConfirmed || params.deliveredSourceReply);
-  const final = confirmed ? params.executedArgs.final !== false : undefined;
+  const confirmed = messageTool && (toolConfirmed || params.deliveredSourceReply);
+  const final = confirmed
+    ? resolveMessageToolSourceReplyFinal(params.executedArgs, params.finalByDefault)
+    : undefined;
   // Middleware and extensions may withdraw or rewrite the reply, so read the
   // effective result, never the raw tool output.
   const payload =
@@ -81,11 +95,13 @@ export function resolveCodexToolResultSourceReply(params: {
     (confirmed && final === true) ||
     undefined;
   params.response.terminate = terminate;
+  params.response.finalSourceReplyDelivered =
+    (params.deliveredSourceReply && final === true) || undefined;
   if (payload) {
     params.response.toolAuthoredSourceReply = {
       ...payload,
       toolAuthoredForTurnId: params.call.turnId,
     };
   }
-  return { toolConfirmed, final, terminate };
+  return { toolConfirmed, final };
 }

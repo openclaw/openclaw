@@ -4,12 +4,13 @@ import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import {
   formatDeferredPluginMigration,
-  readDeferredPluginMigrations,
+  readDeferredPluginMigrationsAsync,
 } from "./deferred-plugin-migrations.js";
 import { formatErrorMessage } from "./errors.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import { assertNoPendingPackageActivation } from "./package-update-activation.js";
+import { PACKAGE_REFUSAL_CODES } from "./package-update-refusal.js";
 import { compareSemverStrings } from "./update-check.js";
 import { collectGitRuntimeErrors } from "./update-git-runtime.js";
 import { collectInstalledGlobalPackageErrors } from "./update-global.js";
@@ -34,7 +35,7 @@ function matchesIdentity(
 
 const failureFamilies = {
   recovery: ["managed-service-handoff-failed", "update-recovery-pending"],
-  package: ["global-install-failed", "runtime-verification-failed"],
+  package: ["global-install-failed", "runtime-verification-failed", ...PACKAGE_REFUSAL_CODES],
   acquisition: [
     "fetch-failed",
     "no-release-tag",
@@ -90,10 +91,10 @@ function unresolved(message: string, stop = true, nextStep = nextUpdate): Update
   return { ok: false, score: -1, summary, ...(stop ? { stopReason: summary } : {}) };
 }
 
-function validateTriagePendingRecovery(
+async function validateTriagePendingRecovery(
   installRoot: string,
   env: NodeJS.ProcessEnv,
-): UpdateRepairValidation | undefined {
+): Promise<UpdateRepairValidation | undefined> {
   try {
     assertNoPendingPackageActivation(resolveUpdateInstallRoot(installRoot));
   } catch (error) {
@@ -103,7 +104,7 @@ function validateTriagePendingRecovery(
       nextRepair,
     );
   }
-  const warnings = readDeferredPluginMigrations({ env }).map((pending) =>
+  const warnings = (await readDeferredPluginMigrationsAsync({ env })).map((pending) =>
     formatDeferredPluginMigration(pending, env),
   );
   return warnings.length > 0 ? unresolved(warnings.join(" "), true, nextRepair) : undefined;
@@ -120,7 +121,8 @@ export async function validateTriageUpdateResolution(params: {
 }): Promise<UpdateRepairValidation> {
   const { failure, installRoot, env, signal } = params;
   signal.throwIfAborted();
-  const recoveryFailure = validateTriagePendingRecovery(installRoot, env);
+  const recoveryFailure = await validateTriagePendingRecovery(installRoot, env);
+  signal.throwIfAborted();
   if (recoveryFailure) {
     return recoveryFailure;
   }
@@ -135,15 +137,10 @@ export async function validateTriageUpdateResolution(params: {
   const original =
     (params.implicit ? history.failure : undefined) ??
     (runId ? getUpdateRun(runId, options) : undefined);
-  const validateCurrentOwner = () =>
-    findActiveUpdateRun(options) ||
-    readUpdateRunResolutionHistory(options).outcome?.runId !== history.outcome?.runId
-      ? unresolved("The update owner changed during verification.")
-      : validateTriagePendingRecovery(installRoot, env);
   const validateDoctor = async () => {
     const doctor = await params.validateDoctor();
     signal.throwIfAborted();
-    return validateCurrentOwner() ?? doctor;
+    return doctor;
   };
   if (findActiveUpdateRun(options)) {
     return unresolved("An update is still running; wait for its owner to finish.");
@@ -287,15 +284,10 @@ export async function validateTriageUpdateResolution(params: {
       "The managed Gateway's installation, running version, and readiness are not verified.",
     );
   }
-  if ((await readPackageVersion(installRoot)) !== installedVersion) {
-    return unresolved("The installed version changed during verification.");
-  }
-  signal.throwIfAborted();
-  return (
-    validateCurrentOwner() ?? {
-      ok: true,
-      score: 0,
-      summary: `${rolledBack ? "Rollback" : "Update"} to ${expected.version ?? expected.sha}${expected.version && expected.sha ? ` (${expected.sha})` : ""} recorded by the updater; installed runtime and managed Gateway readiness verified.`,
-    }
-  );
+  // This verdict describes the captured update; another update can run after verification.
+  return {
+    ok: true,
+    score: 0,
+    summary: `${rolledBack ? "Rollback" : "Update"} to ${expected.version ?? expected.sha}${expected.version && expected.sha ? ` (${expected.sha})` : ""} recorded by the updater; installed runtime and managed Gateway readiness verified.`,
+  };
 }

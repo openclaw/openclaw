@@ -4,6 +4,7 @@ import type {
   TranscriptMessageAppendResult,
   TranscriptWriteSnapshot,
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
+import type { SessionActorAppendCommitted } from "../../config/sessions/session-actor-contract.js";
 import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json.js";
 import { isIndexedSessionEntry } from "./session-manager-codec.js";
 import type {
@@ -12,6 +13,7 @@ import type {
   SessionMessageEntry,
 } from "./session-manager-types.js";
 import type { PreparedSessionTranscriptReload } from "./session-manager-view-types.js";
+import { shareSessionSystemPrompt } from "./system-prompt-pool.js";
 
 export type PersistRecordResult =
   | undefined
@@ -29,6 +31,9 @@ export type PersistWorkerRecordResult = {
   reload?: PreparedSessionTranscriptReload;
   committedVersion: SessionTranscriptContextVersion;
   viewFailure?: Error;
+  modelPromptProjection?: NonNullable<
+    SessionActorAppendCommitted["modelPromptProjection"]
+  >["result"];
 };
 
 export type PersistRecordOptions = AppendPersistenceOptions & {
@@ -79,7 +84,7 @@ export function canonicalizeSessionEntry<T extends SessionEntry>(entry: T): T {
     throw new Error(`Invalid session transcript entry: ${entry.type}`);
   }
   // SAFETY: Manager-built envelopes retain T's checked discriminant; the codec validates their JSON storage shape.
-  return canonicalEntry as T;
+  return shareSessionSystemPrompt(canonicalEntry) as T;
 }
 
 export function adoptPersistedMessage(

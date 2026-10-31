@@ -1,5 +1,5 @@
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
+import { readWorkerPreparation } from "./preparation-identity.schema.js";
 import * as pool from "./prepared-pool-admission.js";
 import { runPreparedPoolPass } from "./prepared-pool-pass.js";
 import {
@@ -17,9 +17,28 @@ export function createPreparedWorkerPool(options: pool.PoolOptions) {
   let presenceInFlight: Promise<void> | undefined;
   let presenceAdmitted = false;
   const preparations = new Map<string, AbortController>();
+  let previousDiagnostics = new Set<string>();
   const presence = createPreparedPoolPresence({ ...options, schedule: () => schedule() });
-  const runPass = () =>
-    runPreparedPoolPass(options, presence, preparations, () => presenceAdmitted);
+  const runPass = async () => {
+    const diagnostics = new Set<string>();
+    try {
+      await runPreparedPoolPass(
+        options,
+        presence,
+        preparations,
+        () => presenceAdmitted,
+        (message) => {
+          if (!diagnostics.has(message) && !previousDiagnostics.has(message)) {
+            options.warn(message);
+          }
+          diagnostics.add(message);
+        },
+      );
+    } finally {
+      // Repeat only after recovery or a changed reason; retain at most one pass's diagnostics.
+      previousDiagnostics = diagnostics;
+    }
+  };
   const scheduleInventory = () => {
     if (signal.aborted) {
       return Promise.resolve();
@@ -68,7 +87,7 @@ export function createPreparedWorkerPool(options: pool.PoolOptions) {
   const noteDemand = async (environmentId: string) => {
     signal.throwIfAborted();
     const record = store.get(environmentId);
-    const preparation = record && readWorkerProjectPreparation(record.profileSnapshot.project);
+    const preparation = record && readWorkerPreparation(record.profileSnapshot);
     if (record?.state !== "attached" || !record.leaseId || !preparation) {
       return;
     }
@@ -82,8 +101,10 @@ export function createPreparedWorkerPool(options: pool.PoolOptions) {
       { preparationKey: preparation.key, demandAtMs },
     );
   };
-  const candidates = (intent: WorkerProviderPreparedIntent) =>
-    intent.preparationKey
+  const candidates = (intent: WorkerProviderPreparedIntent) => {
+    const preparation =
+      intent.profileSnapshot.runtimePreparation ?? intent.profileSnapshot.project?.preparation;
+    return preparation
       ? store.list().filter((record) => {
           const limits = pool.poolPolicy(options, record.profileId, record.providerId);
           const presenceDemand = presence.current();
@@ -93,11 +114,12 @@ export function createPreparedWorkerPool(options: pool.PoolOptions) {
             record.state === "ready" &&
             record.providerId === intent.providerId &&
             record.preparation !== null &&
-            record.preparation.key === intent.preparationKey &&
+            record.preparation.key === preparation.key &&
             record.preparation.consumedAtMs === null &&
-            ((presenceDemand?.project.key ===
-              readWorkerProjectSnapshot(record.profileSnapshot.project)?.key &&
-              (presenceDemand!.retireAtMs ?? Number.MAX_SAFE_INTEGER) > now()) ||
+            ((presenceDemand &&
+              presenceDemand.project.key ===
+                readWorkerProjectSnapshot(record.profileSnapshot.project)?.key &&
+              (presenceDemand.retireAtMs ?? Number.MAX_SAFE_INTEGER) > now()) ||
               record.preparation.expiresAtMs > now()) &&
             record.destroyRequestedAtMs === null &&
             record.sharedHost === false &&
@@ -106,6 +128,7 @@ export function createPreparedWorkerPool(options: pool.PoolOptions) {
           );
         })
       : [];
+  };
   const maintain = async (environmentId?: string) => {
     if (signal.aborted) {
       return;
@@ -125,7 +148,7 @@ export function createPreparedWorkerPool(options: pool.PoolOptions) {
   };
   const canPruneDemand = (record: Environment, nowMs: number): boolean => {
     const demandAtMs = pool.demandAt(record);
-    if (demandAtMs === undefined || !readWorkerProjectPreparation(record.profileSnapshot.project)) {
+    if (demandAtMs === undefined || !readWorkerPreparation(record.profileSnapshot)) {
       return true;
     }
     const presenceDemand = matchingPreparedPoolPresenceDemand(record, presence.current());

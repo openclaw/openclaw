@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,7 @@ describe("iMessage registered send authority", () => {
   const retired = new Error("iMessage caller retired");
   const onPlatformSendDispatch = vi.fn(async () => {});
   const bytes = Buffer.from("%PDF-1.7\nsynthetic attachment\n");
+  let mediaUrl: string;
 
   function sendContext() {
     return {
@@ -24,20 +26,23 @@ describe("iMessage registered send authority", () => {
     };
   }
 
-  async function retireDuring<T>(
-    delivery: Promise<T>,
-    entered: Promise<unknown>,
-    release: () => void,
-  ) {
-    const settled = delivery.then(
+  async function retireDuring<T>(send: (pause: () => Promise<void>) => Promise<T>) {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const settled = send(async () => {
+      entered.resolve();
+      await release.promise;
+    }).then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
     try {
-      expect(await Promise.race([entered.then(() => true), settled.then(() => false)])).toBe(true);
+      expect(
+        await Promise.race([entered.promise.then(() => true), settled.then(() => false)]),
+      ).toBe(true);
       caller.abort(retired);
     } finally {
-      release();
+      release.resolve();
       await settled;
     }
     return await settled;
@@ -51,6 +56,8 @@ describe("iMessage registered send authority", () => {
     fixture = createIMessageOutboundRpcFixture(state, sendMessageIMessage);
     caller = new AbortController();
     onPlatformSendDispatch.mockReset();
+    mediaUrl = state.path("report.pdf");
+    fs.writeFileSync(mediaUrl, bytes);
   });
 
   afterEach(async () => {
@@ -60,15 +67,8 @@ describe("iMessage registered send authority", () => {
   });
 
   it("stops message media delivery when the caller retires during the actual attachment read", async () => {
-    const send = imessagePlugin.message?.send?.media;
-    if (!send) {
-      throw new Error("Missing registered message media sender");
-    }
-    const mediaUrl = state.path("report.pdf");
-    fs.writeFileSync(mediaUrl, bytes);
-    const reading = createDeferred<void>();
-    const releaseRead = createDeferred<Buffer>();
-    const result = await retireDuring(
+    const send = expectDefined(imessagePlugin.message?.send?.media, "message media sender");
+    const result = await retireDuring((pause) =>
       send({
         ...sendContext(),
         text: "",
@@ -76,13 +76,11 @@ describe("iMessage registered send authority", () => {
         mediaAccess: {
           localRoots: [path.dirname(mediaUrl)],
           readFile: async () => {
-            reading.resolve();
-            return await releaseRead.promise;
+            await pause();
+            return bytes;
           },
         },
       }),
-      reading.promise,
-      () => releaseRead.resolve(bytes),
     );
     expect(result).toEqual({ error: retired });
     expect(fixture.readActions()).toEqual([]);
@@ -91,10 +89,7 @@ describe("iMessage registered send authority", () => {
   });
 
   it("preserves ordinary message text delivery and native dispatch evidence", async () => {
-    const send = imessagePlugin.message?.send?.text;
-    if (!send) {
-      throw new Error("Missing registered message text sender");
-    }
+    const send = expectDefined(imessagePlugin.message?.send?.text, "message text sender");
     onPlatformSendDispatch.mockImplementation(async () => {
       expect(fixture.readRequests()).toEqual([]);
     });
@@ -108,23 +103,13 @@ describe("iMessage registered send authority", () => {
   });
 
   it("rechecks outbound text authority after the dispatch callback waits", async () => {
-    const send = imessagePlugin.outbound?.sendText;
-    if (!send) {
-      throw new Error("Missing registered outbound text sender");
-    }
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    const result = await retireDuring(
+    const send = expectDefined(imessagePlugin.outbound?.sendText, "outbound text sender");
+    const result = await retireDuring((pause) =>
       send({
         ...sendContext(),
         text: "obsolete delivery",
-        onPlatformSendDispatch: async () => {
-          entered.resolve();
-          await release.promise;
-        },
+        onPlatformSendDispatch: pause,
       }),
-      entered.promise,
-      () => release.resolve(),
     );
     expect(result).toEqual({ error: retired });
     expect(fixture.readRequests()).toEqual([]);
@@ -133,32 +118,23 @@ describe("iMessage registered send authority", () => {
   it.each(["message", "outbound"] as const)(
     "retains %s attachment acceptance when retirement stops its later caption",
     async (registration) => {
-      const send =
+      const send = expectDefined(
         registration === "message"
           ? imessagePlugin.message?.send?.media
-          : imessagePlugin.outbound?.sendMedia;
-      if (!send) {
-        throw new Error(`Missing registered ${registration} media sender`);
-      }
-      const mediaUrl = state.path("captioned.pdf");
-      fs.writeFileSync(mediaUrl, bytes);
-      const accepted = createDeferred<void>();
-      const release = createDeferred<void>();
-      const onDeliveryResult = vi.fn(async () => {
-        accepted.resolve();
-        await release.promise;
-      });
-      const result = await retireDuring<Awaited<ReturnType<typeof send>>>(
-        send({
+          : imessagePlugin.outbound?.sendMedia,
+        `${registration} media sender`,
+      );
+      const onDeliveryResult = vi.fn<() => Promise<void>>();
+      const result = await retireDuring<Awaited<ReturnType<typeof send>>>((pause) => {
+        onDeliveryResult.mockImplementation(pause);
+        return send({
           ...sendContext(),
           text: "caption must not be sent",
           mediaUrl,
           mediaLocalRoots: [path.dirname(mediaUrl)],
           onDeliveryResult,
-        }),
-        accepted.promise,
-        () => release.resolve(),
-      );
+        });
+      });
       expect(result).toMatchObject({
         error: {
           code: "CHANNEL_PARTIAL_DELIVERY",

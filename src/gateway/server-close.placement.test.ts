@@ -1,33 +1,23 @@
-import { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
-import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
+import { readClosedDatabase } from "./server-close.lifecycle.test-support.js";
+import { createGatewayCloseRace } from "./server-close.race.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 it("settles accepted placement retirement across the close prelude before shared-state teardown", async ({
   signal,
 }) => {
-  const fixture = await createGatewayMetadataCloseFixture("gateway-placement-close");
-  const retirementEntered = createDeferred();
-  const releaseRetirement = createDeferred();
-  const preludeEntered = createDeferred();
+  const race = await createGatewayCloseRace("gateway-placement-close", signal);
+  const { fixture, kernel } = race;
   let retiring: Promise<void> | undefined;
-  let closing: Promise<void> | undefined;
-  let restoreRetirement: (() => void) | undefined;
+  race.onCleanup(async () => {
+    await Promise.allSettled([retiring]);
+  });
   try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = expectDefined(fixture.kernels.get(port), "Gateway kernel");
     const database = openOpenClawStateDatabase({ env: fixture.state.env });
     const placements = kernel.sdkResourceHost.run(() =>
       createWorkerSessionPlacementStore({ database }),
@@ -45,12 +35,11 @@ it("settles accepted placement retirement across the close prelude before shared
       if (command.type === "workerPlacements.retire") {
         retirementDispatches++;
         acceptedSignal = getAsyncWorkSignal();
-        retirementEntered.resolve();
-        await releaseRetirement.promise;
+        await race.block();
       }
       return scope.execute(command, executeOptions);
     });
-    restoreRetirement = () => recording.mockRestore();
+    race.onCleanup(() => recording.mockRestore());
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     kernel.sdkResourceHost.run(() =>
       kernel.scheduler.schedule({
@@ -67,46 +56,27 @@ it("settles accepted placement retirement across the close prelude before shared
       }),
     );
     await vi.advanceTimersByTimeAsync(0);
-    await withinTest(retirementEntered.promise, signal);
+    await race.waitForEntry(retiring);
     expect(acceptedSignal?.aborted).toBe(false);
-    kernel.scheduler.signal.addEventListener("abort", () => preludeEntered.resolve(), {
-      once: true,
-    });
-    let closed = false;
-    closing = server.close({ reason: "placement retirement close regression" }).then(() => {
-      closed = true;
-    });
-    await withinTest(
-      awaitGateBeforeSettlement(preludeEntered.promise, closing, "Gateway skipped close prelude"),
-      signal,
-    );
+    await race.close(kernel.scheduler.signal, undefined, { reason: "placement close" });
     expect(kernel.scheduler.signal.aborted).toBe(true);
     expect(acceptedSignal?.aborted).toBe(false);
     expect(database.db.isOpen).toBe(true);
-    expect(closed).toBe(false);
+    expect(race.closed).toBe(false);
 
-    releaseRetirement.resolve();
-    await withinTest(Promise.all([retiring, closing]), signal);
+    await race.finish(retiring);
     expect(retirementDispatches).toBe(1);
     expect(database.db.isOpen).toBe(false);
     vi.useRealTimers();
-    const persisted = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
-      readOnly: true,
-    });
-    try {
-      expect(
-        persisted
-          .prepare("SELECT session_id FROM worker_session_placements WHERE session_id = ?")
-          .get(requested.sessionId),
-      ).toBeUndefined();
-    } finally {
-      persisted.close();
-    }
+    expect(
+      readClosedDatabase(
+        resolveOpenClawStateSqlitePath(fixture.state.env),
+        "SELECT session_id FROM worker_session_placements WHERE session_id = ?",
+        requested.sessionId,
+      ),
+    ).toEqual([]);
   } finally {
     vi.useRealTimers();
-    releaseRetirement.resolve();
-    await Promise.allSettled([retiring, closing]);
-    restoreRetirement?.();
-    await fixture.cleanup();
+    await race.dispose();
   }
 });

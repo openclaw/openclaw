@@ -14,6 +14,7 @@ import {
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperations } from "./openclaw-state-worker-contract.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
+import { withPersonalCredentialPublication } from "./user-model-account-authority.js";
 import { parseUserModelAuthProfileId } from "./user-model-account-id.js";
 import { registerUserModelAuthProfileSecrets } from "./user-model-accounts.js";
 import {
@@ -34,40 +35,44 @@ function mutationAdmission(
   profileId: string,
   assertCurrent: (roles?: readonly ModelAccountRole[]) => void,
   authorityProfileIds: readonly string[] = [],
+  credentials = false,
 ) {
+  const createAdmission: SqliteWorkerAdmissionFactory = (operation) => {
+    let fence: ReturnType<typeof fenceUserProfileModelAccountLinks> | undefined;
+    const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+      if (
+        (request.stage !== "transaction" && request.stage !== "commit") ||
+        !isRecord(request.facts) ||
+        request.facts.kind !== "model-account-links" ||
+        request.facts.profileId !== profileId ||
+        !Array.isArray(request.facts.roles) ||
+        !request.facts.roles.every(
+          (role): role is ModelAccountRole =>
+            isRecord(role) &&
+            typeof role.profileId === "string" &&
+            (role.role === null || typeof role.role === "string"),
+        ) ||
+        request.facts.roles.length !== authorityProfileIds.length ||
+        !request.facts.roles.every((role, index) => role.profileId === authorityProfileIds[index])
+      ) {
+        throw new Error("Personal account mutation requires exact transaction admission");
+      }
+      context.admission.assertCurrent();
+      assertCurrent(request.facts.roles);
+      if (request.stage === "commit") {
+        fence ??= fenceUserProfileModelAccountLinks(context.admission, profileId);
+      }
+      grant();
+    });
+    void operation.settled.then((outcome) =>
+      fence?.settle(outcome.kind !== "unknown" || admission.committed !== undefined),
+    );
+    return { admission, nativeLocations: [context.admission.databasePath] };
+  };
   return {
-    createAdmission: ((operation) => {
-      let fence: ReturnType<typeof fenceUserProfileModelAccountLinks> | undefined;
-      const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-        if (
-          (request.stage !== "transaction" && request.stage !== "commit") ||
-          !isRecord(request.facts) ||
-          request.facts.kind !== "model-account-links" ||
-          request.facts.profileId !== profileId ||
-          !Array.isArray(request.facts.roles) ||
-          !request.facts.roles.every(
-            (role): role is ModelAccountRole =>
-              isRecord(role) &&
-              typeof role.profileId === "string" &&
-              (role.role === null || typeof role.role === "string"),
-          ) ||
-          request.facts.roles.length !== authorityProfileIds.length ||
-          !request.facts.roles.every((role, index) => role.profileId === authorityProfileIds[index])
-        ) {
-          throw new Error("Personal account mutation requires exact transaction admission");
-        }
-        context.admission.assertCurrent();
-        assertCurrent(request.facts.roles);
-        if (request.stage === "commit") {
-          fence ??= fenceUserProfileModelAccountLinks(context.admission, profileId);
-        }
-        grant();
-      });
-      void operation.settled.then((outcome) =>
-        fence?.settle(outcome.kind !== "unknown" || admission.committed !== undefined),
-      );
-      return { admission, nativeLocations: [context.admission.databasePath] };
-    }) satisfies SqliteWorkerAdmissionFactory,
+    createAdmission: credentials
+      ? withPersonalCredentialPublication(createAdmission, context)
+      : createAdmission,
   };
 }
 
@@ -78,12 +83,37 @@ function mutate<Key extends Mutation>(
   options: AccountOptions,
 ) {
   const context = options.context ?? captureOpenClawStateWorkerContext(options);
-  const captured = structuredClone(input);
   assertCurrent();
   return runOpenClawStateWorkerOperation(
     context,
-    (scope) => scope.execute({ type, input: captured }),
-    mutationAdmission(context, captured.profileId, assertCurrent, captured.authorityProfileIds),
+    (scope) => scope.execute({ type, input }),
+    mutationAdmission(context, input.profileId, assertCurrent, input.authorityProfileIds),
+  );
+}
+
+/** Capture explicitly enrolls older credentials through the same admitted personal writer. */
+export function enrollPersonalAuthProfileAuthorizationAsync(
+  params: { profileId: string; assertCurrent: () => void },
+  options: AccountOptions = {},
+) {
+  const locator = parseUserModelAuthProfileId(params.profileId);
+  if (!locator) {
+    throw new Error("Personal authorization enrollment requires an exact account ID");
+  }
+  const context = options.context ?? captureOpenClawStateWorkerContext(options);
+  params.assertCurrent();
+  return runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute({
+        type: "userProfiles.modelAccount.enrollAuthorization",
+        input: { profileId: locator.ownerProfileId, authProfileId: params.profileId },
+      }),
+    {
+      existingOnly: true,
+      assertCurrent: params.assertCurrent,
+      ...mutationAdmission(context, locator.ownerProfileId, params.assertCurrent, [], true),
+    },
   );
 }
 
@@ -124,7 +154,7 @@ export function connectUserModelAccountAsync(
         input: { profileId, credential, replacement, authorityProfileIds },
       });
     },
-    mutationAdmission(context, profileId, assertCurrent, authorityProfileIds),
+    mutationAdmission(context, profileId, assertCurrent, authorityProfileIds, true),
   );
 }
 
@@ -154,10 +184,9 @@ async function read<
   Key extends "userProfiles.modelAccount.list" | "userProfiles.modelAccount.selected",
 >(type: Key, input: OpenClawStateWorkerOperations[Key]["input"], options: AccountOptions) {
   const context = options.context ?? captureOpenClawStateWorkerContext(options);
-  const captured = structuredClone(input);
   const result = await runOpenClawStateWorkerOperation(
     context,
-    (scope) => scope.execute({ type, input: captured }),
+    (scope) => scope.execute({ type, input }),
     { existingOnly: true },
   );
   context.admission.assertCurrent();
@@ -182,9 +211,6 @@ export async function readUserModelAccountSummaryAsync(
     { context, current: true, preferIndependentWarmRead: true },
   );
   context.admission.assertCurrent();
-  if (reply && (!reply.ok || reply.type !== "userModelAccounts.summary")) {
-    throw new Error(reply.ok ? "Unexpected personal account summary reply" : reply.message);
-  }
   return reply?.account;
 }
 
@@ -199,9 +225,6 @@ export async function readUserModelAccountSelectionAsync(
     { context, current: true, preferIndependentWarmRead: true },
   );
   context.admission.assertCurrent();
-  if (reply && (!reply.ok || reply.type !== "userModelAccounts.selection")) {
-    throw new Error(reply.ok ? "Unexpected personal account selection reply" : reply.message);
-  }
   return reply?.selection;
 }
 

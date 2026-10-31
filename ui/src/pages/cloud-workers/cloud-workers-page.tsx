@@ -1,16 +1,25 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, createStore, Show, For } from "solid-js";
+import {
+  action,
+  createOptimistic,
+  createMemo,
+  createSignal,
+  createStore,
+  Errored,
+  Loading,
+  onSettled,
+  Show,
+  For,
+} from "solid-js";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   DocsLink,
-  LearnMoreLink,
   SettingsEmpty,
-  SettingsPage,
   SettingsPageHeader,
   SettingsRow,
   SettingsSection,
-  SettingsSegmented,
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
@@ -24,7 +33,8 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
+import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
 import {
   buildCloudWorkerDeletePatch,
@@ -35,61 +45,107 @@ import {
   type CloudWorkerProfileDraft,
   type ConfiguredCloudWorkerProfile,
 } from "./cloud-worker-config.ts";
-import { CloudWorkerPool } from "./cloud-worker-pool.tsx";
-import { CloudWorkerRepositories } from "./cloud-worker-repositories.tsx";
-import { CloudWorkerSnapshots } from "./cloud-worker-snapshots.tsx";
+import { CloudWorkerEnvironments } from "./cloud-worker-environments.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 const CLOUD_WORKERS_DOCS_URL = "https://docs.openclaw.ai/gateway/cloud-workers";
 type ProfileSummary = NonNullable<EnvironmentsListResult["profiles"]>[number];
 type EditorState = { kind: "add" } | { kind: "edit"; profileId: string } | null;
-function formControlValue(event: Event): string {
-  const target = event.currentTarget;
-  return target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement
-    ? target.value
-    : "";
-}
 
-function CloudWorkersContent() {
+export function CloudWorkersPage() {
   const context = useApplication();
-  const [tab, setTab] = createSignal<"profiles" | "pool" | "snapshots">("profiles");
   const [view, setView] = createStore<{ editor: EditorState; draft: CloudWorkerProfileDraft }>({
     editor: null,
     draft: createCloudWorkerDraft(),
   });
-  const [saveRevision, setSaveRevision] = createSignal(0, { ownedWrite: true });
-  const configSave = new CloudWorkerConfigSave(() => setSaveRevision((value) => value + 1));
-  const saveState = () => {
-    saveRevision();
-    return configSave.state;
-  };
+  const configSave = new CloudWorkerConfigSave(() => saveProjection.publish());
+  const saveProjection = projectMutableSource(configSave, (owner) => owner.state);
+  const saveState = saveProjection.read;
+  let saveLifetime = Promise.withResolvers<void>();
+  function retireSavePresentation() {
+    saveLifetime.resolve();
+    saveLifetime = Promise.withResolvers<void>();
+  }
   const configProjection = projectRuntimeConfig(context.runtimeConfig);
-  const [catalog, setCatalog] = createSignal<{
-    pending: boolean;
-    value?: Map<string, ProfileSummary>;
-    error?: string;
-  }>({ pending: false });
+  const [catalog, setCatalog] = createSignal<Map<string, ProfileSummary>>();
+  const [catalogLoad, setCatalogLoad] = createSignal<{ promise: Promise<void> } | null>(null);
+  const catalogCompletion = createMemo(() => catalogLoad()?.promise.then(() => null) ?? null);
+  let previousCatalogReceipt: ReturnType<typeof catalogReceipt> | undefined;
+  let catalogRequest: AbortController | undefined;
+  function clearPresentation() {
+    retireSavePresentation();
+    setView((state) => {
+      state.editor = null;
+      state.draft = createCloudWorkerDraft();
+    });
+    setCatalog(undefined);
+    setCatalogLoad(null);
+  }
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
-    invalidateRequests: () => configSave.update({ busy: false }),
-  });
-  void context.runtimeConfig.ensureLoaded();
-  const catalogKey = createMemo(
-    () => {
-      return [
-        gateway.snapshot?.client,
-        gateway.snapshot?.phase,
-        gateway.epoch,
-        configProjection.read().state.configSnapshot?.appliedConfigHash,
-      ] as const;
+    onIdentityChange: clearPresentation,
+    onSnapshot: ({ snapshot }) => {
+      if (
+        snapshot.phase === "connected" &&
+        !canCallGatewayMethod(snapshot, "config.patch", "operator.admin")
+      ) {
+        gateway.invalidate();
+        configSave.update({ busy: false, error: null, notice: null });
+        clearPresentation();
+      }
+      refreshCatalog();
     },
-    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
-  );
-  createEffect(catalogKey, (key) => {
+    invalidateRequests: () => {
+      retireSavePresentation();
+      catalogRequest?.abort();
+      configSave.update({ busy: false });
+    },
+  });
+  const saveScope = createMemo(() => {
+    saveState();
+    return saveLifetime;
+  });
+  const savePresentation = createMemo(() => {
+    const retired = saveScope().promise;
+    const [saving, setSaving] = createOptimistic(false);
+    return { retired, saving, setSaving };
+  });
+  const saving = () => savePresentation().saving() || saveState().busy;
+  const presentSave = action(function* (
+    current: ReturnType<typeof savePresentation>,
+    pending: Promise<boolean>,
+  ) {
+    if (current.retired === saveLifetime.promise) {
+      current.setSaving(true);
+    }
+    yield Promise.race([pending, current.retired]);
+  });
+  async function saveConfig(...args: Parameters<CloudWorkerConfigSave["save"]>) {
+    const current = savePresentation();
+    const pending = configSave.save(...args);
+    // The plain owner admits the patch before Solid presents its progress.
+    await Promise.resolve();
+    return presentSave(current, pending);
+  }
+  void context.runtimeConfig.ensureLoaded();
+  function catalogReceipt() {
+    const snapshot = context.gateway.snapshot;
+    return [
+      snapshot.client,
+      snapshot.phase,
+      gateway.readEpoch(),
+      context.runtimeConfig.state.configSnapshot?.appliedConfigHash,
+    ] as const;
+  }
+  function refreshCatalog() {
+    const key = catalogReceipt();
+    if (previousCatalogReceipt?.every((value, index) => value === key[index])) {
+      return;
+    }
+    previousCatalogReceipt = key;
+    catalogRequest?.abort();
     const appliedHash = key[3];
-    const controller = new AbortController();
+    const controller = (catalogRequest = new AbortController());
     // A nested bridge can flush effects while its parent is still rendering.
     queueMicrotask(() => {
       if (controller.signal.aborted) {
@@ -100,11 +156,13 @@ function CloudWorkersContent() {
         !scope ||
         !canCallGatewayMethod(gateway.snapshot, "environments.list", "operator.admin")
       ) {
-        setCatalog({ pending: false });
+        if (gateway.connected) {
+          setCatalog(undefined);
+        }
+        setCatalogLoad(null);
         return;
       }
-      setCatalog({ pending: true });
-      void scope.client
+      const promise = scope.client
         .request<EnvironmentsListResult>(
           "environments.list",
           { projection: "profiles" },
@@ -117,32 +175,39 @@ function CloudWorkersContent() {
               gateway.isCurrent(scope) &&
               context.runtimeConfig.state.configSnapshot?.appliedConfigHash === appliedHash
             ) {
-              setCatalog({
-                pending: false,
-                value: new Map((result.profiles ?? []).map((profile) => [profile.id, profile])),
-              });
+              setCatalog(new Map((result.profiles ?? []).map((profile) => [profile.id, profile])));
             }
           },
           (error: unknown) => {
             if (!controller.signal.aborted && gateway.isCurrent(scope)) {
-              setCatalog({ pending: false, error: formatUiError(error) });
+              throw error;
             }
           },
         );
+      setCatalogLoad({ promise });
+      // The async memo owns feedback; retired and unobserved tasks still settle safely.
+      void promise.catch(() => undefined);
     });
-    return () => controller.abort();
-  });
-  function advertisedProfiles() {
-    return catalog().value;
   }
-
+  onSettled(() => {
+    // Applied-config receipts abort the prior catalog request before refreshing profiles.
+    const stop = configProjection.subscribe(refreshCatalog);
+    const stopRoute = context.router.subscribe(() => {
+      retireSavePresentation();
+      saveProjection.publish();
+    });
+    refreshCatalog();
+    return () => {
+      stop();
+      stopRoute();
+      saveLifetime.resolve();
+    };
+  });
   function editableConfig(): Record<string, unknown> | null {
     return resolveEditableSnapshotConfig(configProjection.read().state.configSnapshot);
   }
 
-  function profiles(): ConfiguredCloudWorkerProfile[] {
-    return readCloudWorkerProfiles(editableConfig());
-  }
+  const profiles = createMemo(() => readCloudWorkerProfiles(editableConfig()));
 
   function hasManageAccess(): boolean {
     return canCallGatewayMethod(gateway.snapshot, "config.patch", "operator.admin");
@@ -152,7 +217,7 @@ function CloudWorkersContent() {
     const configState = configProjection.read().state;
     return Boolean(
       hasManageAccess() &&
-      configState?.configSnapshot?.hash &&
+      configState.configSnapshot?.hash &&
       !configState.configLoading &&
       !configState.configSaving &&
       !saveState().busy,
@@ -169,8 +234,6 @@ function CloudWorkersContent() {
     }
     setView((state) => {
       state.editor = profile ? { kind: "edit", profileId: profile.id } : { kind: "add" };
-    });
-    setView((state) => {
       state.draft = createCloudWorkerDraft(profile);
     });
     configSave.update({ error: null, notice: null });
@@ -201,7 +264,9 @@ function CloudWorkersContent() {
     if (!scope || !view.editor || !config || !canManage()) {
       return;
     }
-    const currentProfiles = Object.fromEntries(profiles().map((profile) => [profile.id, true]));
+    const currentProfiles = Object.fromEntries(
+      readCloudWorkerProfiles(config).map((profile) => [profile.id, true]),
+    );
     const validationError = validateCloudWorkerDraft(draft, currentProfiles, editingId);
     if (validationError) {
       configSave.update({ error: t(`cloudWorkersPage.errors.${validationError}`) });
@@ -209,7 +274,7 @@ function CloudWorkersContent() {
     }
     const profileId = editingId ?? draft.id;
     const isCurrent = () => gateway.isCurrent(scope) && context.runtimeConfig === runtimeConfig;
-    await configSave.save(runtimeConfig, isCurrent, {
+    await saveConfig(runtimeConfig, isCurrent, {
       build: (base) => buildCloudWorkerUpsertPatch(base, draft, editingId),
       note: `cloud workers: ${editingId ? "update" : "add"} ${profileId}`,
       canDispatch: isCurrent,
@@ -252,7 +317,7 @@ function CloudWorkersContent() {
       return;
     }
     const isCurrent = () => gateway.isCurrent(scope) && context.runtimeConfig === runtimeConfig;
-    await configSave.save(runtimeConfig, isCurrent, {
+    await saveConfig(runtimeConfig, isCurrent, {
       build: (base) => buildCloudWorkerDeletePatch(base, profile.id),
       note: `cloud workers: delete ${profile.id}`,
       canDispatch: isCurrent,
@@ -281,7 +346,7 @@ function CloudWorkersContent() {
         ? [
             t("cloudWorkersPage.operatingSystemFact", {
               value:
-                advertisedProfiles()
+                catalog()
                   ?.get(profile.id)
                   ?.operatingSystems?.find((system) => system.id === profile.target)?.label ??
                 profile.target,
@@ -297,22 +362,37 @@ function CloudWorkersContent() {
   }
 
   function renderProfile(profile: ConfiguredCloudWorkerProfile) {
-    const statusControl = () =>
-      catalog().pending ? (
-        <SettingsStatus kind={"muted"} label={t("common.loading")} />
-      ) : advertisedProfiles()?.has(profile.id) ? (
-        <SettingsStatus kind={"ok"} label={t("cloudWorkersPage.advertised")} />
-      ) : (
-        <SettingsStatus kind={"warn"} label={t("cloudWorkersPage.unavailable")} />
-      );
+    const unavailable = () => (
+      <SettingsStatus kind={"warn"} label={t("cloudWorkersPage.unavailable")} />
+    );
+    const statusControl = () => (
+      <Show
+        when={catalog()}
+        fallback={
+          <Show when={catalogLoad()} keyed fallback={unavailable()}>
+            {(request) => (
+              <Errored fallback={unavailable()}>
+                <Loading
+                  on={request}
+                  fallback={<SettingsStatus kind={"muted"} label={t("common.loading")} />}
+                >
+                  {catalogCompletion()}
+                  {unavailable()}
+                </Loading>
+              </Errored>
+            )}
+          </Show>
+        }
+      >
+        <Show when={catalog()?.has(profile.id)} fallback={unavailable()}>
+          <SettingsStatus kind={"ok"} label={t("cloudWorkersPage.advertised")} />
+        </Show>
+      </Show>
+    );
 
     return (
       <SettingsRow
-        title={
-          <>
-            <code>{profile.id}</code>
-          </>
-        }
+        title={<code>{profile.id}</code>}
         description={profileDescription(profile)}
         control={
           <>
@@ -321,7 +401,7 @@ function CloudWorkersContent() {
               class="btn btn--sm"
               type="button"
               aria-label={`${t("cloudWorkersPage.editAction")}: ${profile.id}`}
-              disabled={!canManage()}
+              disabled={saving() || !canManage()}
               onClick={() => openEditor(profile)}
             >
               {t("cloudWorkersPage.editAction")}
@@ -330,7 +410,7 @@ function CloudWorkersContent() {
               class="btn btn--sm danger"
               type="button"
               aria-label={`${t("common.delete")}: ${profile.id}`}
-              disabled={!canManage()}
+              disabled={saving() || !canManage()}
               onClick={() => void deleteProfile(profile)}
             >
               {t("common.delete")}
@@ -364,21 +444,19 @@ function CloudWorkersContent() {
         title={t(`cloudWorkersPage.fields.${label}`)}
         description={options.description ?? t(`cloudWorkersPage.fields.${label}Help`)}
         control={
-          <>
-            <input
-              class="settings-input mono"
-              aria-label={t(`cloudWorkersPage.fields.${label}`)}
-              placeholder={options.placeholder ?? undefined}
-              type={options.type ?? undefined}
-              min={field === "readyWorkers" ? "0" : undefined}
-              step={field === "readyWorkers" ? "1" : undefined}
-              autocomplete="off"
-              spellcheck="false"
-              value={view.draft[field]}
-              disabled={saveState().busy}
-              onInput={(event: Event) => patchDraft({ [field]: formControlValue(event) })}
-            />
-          </>
+          <input
+            class="settings-input mono"
+            aria-label={t(`cloudWorkersPage.fields.${label}`)}
+            placeholder={options.placeholder}
+            type={options.type}
+            min={field === "readyWorkers" ? "0" : undefined}
+            step={field === "readyWorkers" ? "1" : undefined}
+            autocomplete="off"
+            spellcheck="false"
+            value={view.draft[field]}
+            disabled={saving()}
+            onInput={(event) => patchDraft({ [field]: event.currentTarget.value })}
+          />
         }
       />
     );
@@ -387,7 +465,7 @@ function CloudWorkersContent() {
   function Editor() {
     const editing = () => view.editor?.kind === "edit";
     const systems = () =>
-      editing() ? (advertisedProfiles()?.get(view.draft.id)?.operatingSystems ?? []) : [];
+      editing() ? (catalog()?.get(view.draft.id)?.operatingSystems ?? []) : [];
     const unadvertised = () =>
       Boolean(view.draft.target && !systems().some((system) => system.id === view.draft.target));
     return (
@@ -415,39 +493,28 @@ function CloudWorkersContent() {
             title={t("cloudWorkersPage.fields.operatingSystem")}
             description={t("cloudWorkersPage.fields.operatingSystemHelp")}
             control={
-              <select
-                class="settings-select"
+              <SettingsSelect
                 aria-label={t("cloudWorkersPage.fields.operatingSystem")}
                 value={view.draft.target}
-                disabled={saveState().busy}
+                options={[
+                  { value: "", label: t("cloudWorkersPage.fields.providerDefault") },
+                  ...systems().map((system) => ({
+                    value: system.id,
+                    label: `${system.label}${system.disabledReason ? ` — ${system.disabledReason}` : ""}`,
+                    disabled: Boolean(system.disabledReason),
+                  })),
+                  ...(unadvertised()
+                    ? [{ value: view.draft.target, label: view.draft.target }]
+                    : []),
+                ]}
+                disabled={saving()}
                 onChange={(event) => {
                   const target = event.currentTarget.value;
                   if (!systems().find((system) => system.id === target)?.disabledReason) {
                     patchDraft({ target });
                   }
                 }}
-              >
-                <option value="" selected={!view.draft.target}>
-                  {t("cloudWorkersPage.fields.providerDefault")}
-                </option>
-                <For each={systems()}>
-                  {(system) => (
-                    <option
-                      value={system.id}
-                      selected={view.draft.target === system.id}
-                      disabled={Boolean(system.disabledReason)}
-                    >
-                      {system.label}
-                      {system.disabledReason ? ` — ${system.disabledReason}` : ""}
-                    </option>
-                  )}
-                </For>
-                <Show when={unadvertised()}>
-                  <option value={view.draft.target} selected>
-                    {view.draft.target}
-                  </option>
-                </Show>
-              </select>
+              />
             }
           />
         </Show>
@@ -468,7 +535,7 @@ function CloudWorkersContent() {
               autocomplete="off"
               spellcheck="false"
               value={view.draft.setup}
-              disabled={saveState().busy}
+              disabled={saving()}
               onInput={(event) => patchDraft({ setup: event.currentTarget.value })}
             />
           }
@@ -477,38 +544,27 @@ function CloudWorkersContent() {
           title={t("cloudWorkersPage.fields.desktop")}
           description={t("cloudWorkersPage.fields.desktopHelp")}
           checked={view.draft.desktop}
-          disabled={saveState().busy}
+          disabled={saving()}
           onChange={(desktop) => patchDraft({ desktop })}
         />
         {renderDraftInput("binary", {
           placeholder: t("cloudWorkersPage.fields.binaryPlaceholder"),
         })}
         <SettingsSection title={t("cloudWorkersPage.advanced")}>
-          <SettingsRow
+          <SettingsSelectRow
             title={t("cloudWorkersPage.fields.warmImage")}
             description={t("cloudWorkersPage.fields.warmImageHelp")}
-            control={
-              <select
-                class="settings-select"
-                aria-label={t("cloudWorkersPage.fields.warmImage")}
-                value={view.draft.warmImage}
-                disabled={saveState().busy}
-                onChange={(event) => {
-                  const value = event.currentTarget.value;
-                  if (value === "auto" || value === "on" || value === "off") {
-                    patchDraft({ warmImage: value });
-                  }
-                }}
-              >
-                <For each={["auto", "on", "off"] as const}>
-                  {(value) => (
-                    <option value={value} selected={view.draft.warmImage === value}>
-                      {t(`cloudWorkersPage.warmImage.${value}`)}
-                    </option>
-                  )}
-                </For>
-              </select>
-            }
+            value={view.draft.warmImage}
+            disabled={saving()}
+            onChange={(value) => {
+              if (value === "auto" || value === "on" || value === "off") {
+                patchDraft({ warmImage: value });
+              }
+            }}
+            options={(["auto", "on", "off"] as const).map((value) => ({
+              value,
+              label: t(`cloudWorkersPage.warmImage.${value}`),
+            }))}
           />
           <For each={["setupEnv", "readyWorkers", "suspendAfter"] as const}>
             {(field) =>
@@ -530,12 +586,12 @@ function CloudWorkersContent() {
               <button
                 class="btn primary"
                 type="button"
-                disabled={!canManage()}
+                disabled={saving() || !canManage()}
                 onClick={() => void saveProfile({ ...view.draft })}
               >
-                {saveState().busy ? t("common.saving") : t("common.save")}
+                {saving() ? t("common.saving") : t("common.save")}
               </button>
-              <button class="btn" type="button" disabled={saveState().busy} onClick={closeEditor}>
+              <button class="btn" type="button" disabled={saving()} onClick={closeEditor}>
                 {t("common.cancel")}
               </button>
             </>
@@ -546,89 +602,61 @@ function CloudWorkersContent() {
   }
 
   return (
-    <>
-      <SettingsPageHeader
-        title={t("tabs.cloudWorkers")}
-        subtitle={
-          <>
-            {t("cloudWorkersPage.intro")} <LearnMoreLink url={CLOUD_WORKERS_DOCS_URL} />
-          </>
-        }
-      />
+    <openclaw-cloud-workers-page>
+      <SettingsPageHeader title={t("tabs.cloudWorkers")} />
       <SettingsWorkspace>
-        <SettingsPage>
-          <SettingsSegmented
-            mode="buttons"
-            value={tab()}
-            ariaLabel={t("cloudWorkersPage.snapshots.viewLabel")}
-            options={[
-              { value: "profiles", label: t("cloudWorkersPage.sectionTitle") },
-              { value: "pool", label: t("cloudWorkersPage.pool.tab") },
-              { value: "snapshots", label: t("cloudWorkersPage.snapshots.title") },
-            ]}
-            onChange={setTab}
-          />
-        </SettingsPage>
-        <Show when={tab() === "profiles"}>
-          <SettingsPage>
-            <Show when={!hasManageAccess()}>
-              <div class="callout warning" role="note">
-                {t("cloudWorkersPage.adminRequired")}
-              </div>
-            </Show>
-            <Show when={catalog().error}>
-              <div class="callout warning" role="status">
-                {t("cloudWorkersPage.catalogFailed", { error: catalog().error ?? "" })}
-              </div>
-            </Show>
-            <Show when={saveState().error && !view.editor}>
-              <div class="callout warning" role="alert">
-                {saveState().error}
-              </div>
-            </Show>
-            <Show when={saveState().notice}>
-              <div class="callout" role="status">
-                {saveState().notice}
-              </div>
-            </Show>
-            <SettingsSection
-              title={t("cloudWorkersPage.sectionTitle")}
-              description={t("cloudWorkersPage.sectionDescription")}
-              count={profiles().length}
-              actions={
-                <Show when={canManage()}>
-                  <button class="btn btn--sm primary" type="button" onClick={() => openEditor()}>
-                    {t("cloudWorkersPage.addProfile")}
-                  </button>
-                </Show>
-              }
-            >
-              <For
-                each={profiles()}
-                fallback={<SettingsEmpty message={t("cloudWorkersPage.empty")} />}
+        <CloudWorkerEnvironments
+          machines={() => (
+            <>
+              <Show when={!hasManageAccess()}>
+                <div class="callout warning" role="note">
+                  {t("cloudWorkersPage.adminRequired")}
+                </div>
+              </Show>
+              <Errored
+                fallback={(error) => (
+                  <div class="callout warning" role="status">
+                    {t("cloudWorkersPage.catalogFailed", { error: formatUiError(error()) })}
+                  </div>
+                )}
               >
-                {(profile) => renderProfile(profile)}
-              </For>
-            </SettingsSection>
-            <Show when={view.editor}>
-              <Editor />
-            </Show>
-            <CloudWorkerRepositories canManage={canManage()} />
-          </SettingsPage>
-        </Show>
-        <Show when={tab() === "pool"}>
-          <CloudWorkerPool />
-        </Show>
-        <Show when={tab() === "snapshots"}>
-          <CloudWorkerSnapshots />
-        </Show>
+                <Loading on={catalogLoad()}>{catalogCompletion()}</Loading>
+              </Errored>
+              <Show when={saveState().error && !view.editor}>
+                <div class="callout warning" role="alert">
+                  {saveState().error}
+                </div>
+              </Show>
+              <Show when={saveState().notice}>
+                <div class="callout" role="status">
+                  {saveState().notice}
+                </div>
+              </Show>
+              <SettingsSection
+                title={t("cloudWorkersPage.environments.machines")}
+                count={profiles().length}
+                actions={
+                  <Show when={!saving() && canManage()}>
+                    <button class="btn btn--sm primary" type="button" onClick={() => openEditor()}>
+                      {t("cloudWorkersPage.addProfile")}
+                    </button>
+                  </Show>
+                }
+              >
+                <For
+                  each={profiles()}
+                  fallback={<SettingsEmpty message={t("cloudWorkersPage.empty")} />}
+                >
+                  {(profile) => renderProfile(profile)}
+                </For>
+              </SettingsSection>
+              <Show when={view.editor}>
+                <Editor />
+              </Show>
+            </>
+          )}
+        />
       </SettingsWorkspace>
-    </>
+    </openclaw-cloud-workers-page>
   );
 }
-
-export const CloudWorkersPage = defineSolidBridge(
-  "openclaw-cloud-workers-page",
-  CloudWorkersContent,
-  { properties: {} },
-);

@@ -1,9 +1,14 @@
-/* @vitest-environment jsdom */
-
 import { afterEach, expect, it, vi } from "vitest";
-import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
+import { makeStallingStream } from "../../../../../src/infra/http-body.test-support.js";
+import type { ApplicationContext } from "../../../app/context.ts";
+import { markdownBlocksRef } from "../../../components/markdown-element-refs-solid.ts";
+import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
+import { mockDocumentVisibility } from "../../../test-helpers/mock-cleanup.ts";
+import { renderSolidRef } from "../../../test-helpers/render-solid-ref.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+/* @vitest-environment jsdom */
+import panelLoadingStyles from "../../../styles/panel-loading-skeleton.css?inline";
 import "./chat-detail-panel.tsx";
 
 async function mountAttachment(
@@ -14,10 +19,7 @@ async function mountAttachment(
     sandboxPort: 8444,
   }),
 ) {
-  const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
-    content: SidebarContent;
-    updateComplete: Promise<unknown>;
-  };
+  const panel = document.createElement("openclaw-chat-detail-panel");
   const previewContext = {
     gateway: {
       snapshot: { client: { request }, phase: "connected" },
@@ -25,15 +27,7 @@ async function mountAttachment(
       subscribe: () => () => {},
     },
   } as unknown as ApplicationContext;
-  panel.addEventListener("context-request", (event) => {
-    if (
-      event.context === applicationContext &&
-      event.contextTarget.localName === "openclaw-chat-html-preview"
-    ) {
-      event.stopPropagation();
-      event.callback(previewContext);
-    }
-  });
+  const wrapper = createApplicationContextProvider(previewContext);
   panel.content = {
     kind: "attachment",
     attachmentKind: "document",
@@ -42,16 +36,84 @@ async function mountAttachment(
     mimeType: "text/plain",
     ...overrides,
   };
-  document.body.append(panel);
+  wrapper.append(panel);
+  document.body.append(wrapper);
   await panel.updateComplete;
   return panel;
 }
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
+
+it.each(["visible", "hidden"] as const)(
+  "parks the shared transcript and attachment syntax worker (initially %s)",
+  async (initial) => {
+    const show = mockDocumentVisibility(initial);
+    const workers: TestWorker[] = [];
+    class TestWorker extends EventTarget {
+      postMessage = vi.fn();
+      terminate = vi.fn();
+      constructor() {
+        super();
+        workers.push(this);
+      }
+    }
+    vi.stubGlobal("Worker", TestWorker);
+    const source = "const answer = 42;\n".repeat(400);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(new Response(`\`\`\`ts\n${source}\`\`\``)),
+    );
+    const root = document.createElement("section");
+    root.innerHTML =
+      '<div class="code-block-wrapper"><pre class="code-block-viewport"><code data-code-highlight="typescript"></code></pre></div>';
+    root.querySelector("code")!.textContent = source;
+    const transcript = renderSolidRef(() => markdownBlocksRef(() => true), { targetElement: root });
+    const panel = await mountAttachment({ title: "notes.md", mimeType: "text/markdown" });
+    try {
+      await waitForSolid(() => expect(panel.querySelector("article code")).not.toBeNull());
+      const code = panel.querySelector("article code")!;
+      if (initial === "visible") {
+        await waitForSolid(() => expect(workers[0]?.postMessage).toHaveBeenCalledTimes(2));
+      } else {
+        expect(workers).toHaveLength(0);
+      }
+      show("hidden");
+      for (const worker of workers) {
+        expect(worker.terminate).toHaveBeenCalledOnce();
+      }
+      const previous = workers.length;
+      show("visible");
+      await waitForSolid(() => expect(workers.at(-1)?.postMessage).toHaveBeenCalledTimes(2));
+      expect(workers).toHaveLength(previous + 1);
+      expect(panel.querySelector("article code")).toBe(code);
+      expect(code.textContent).toBe(source);
+      expect(workers.at(-1)!.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ source }),
+        { transfer: [] },
+      );
+
+      show("hidden");
+      expect(workers.at(-1)!.terminate).toHaveBeenCalledOnce();
+      panel.remove();
+      show("visible");
+      await waitForSolid(() => expect(workers.at(-1)?.postMessage).toHaveBeenCalledOnce());
+      transcript.unmount();
+      expect(workers.at(-1)!.terminate).toHaveBeenCalledOnce();
+      const disposed = workers.length;
+      show("hidden");
+      show("visible");
+      expect(workers).toHaveLength(disposed);
+    } finally {
+      panel.remove();
+      transcript.unmount();
+    }
+  },
+);
 
 it("keeps one pending presentation through metadata and text-body loading", async () => {
   let resolveBody!: (response: Response) => void;
@@ -74,6 +136,9 @@ it("keeps one pending presentation through metadata and text-body loading", asyn
   const header = panel.querySelector(".chat-assistant-attachment-card__header");
   expect(fetchMock).not.toHaveBeenCalled();
   pending = false;
+  if (panel.content?.kind !== "attachment") {
+    throw new Error("Expected the mounted attachment");
+  }
   panel.content = { ...panel.content };
   await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
   expect(panel.querySelector('[role="status"]:not([hidden])')).toBe(presentation);
@@ -88,7 +153,7 @@ it("retries a source-resolution failure through the attachment owner", async () 
   let ready = false;
   const panel = await mountAttachment({
     src: undefined,
-    resolveSource: (requestUpdate) =>
+    resolveSource: (onSourceChange) =>
       ready
         ? { status: "ready", src: "/recovered.txt" }
         : {
@@ -96,7 +161,7 @@ it("retries a source-resolution failure through the attachment owner", async () 
             reason: "Temporarily unavailable",
             onRetry: () => {
               ready = true;
-              requestUpdate();
+              onSourceChange();
             },
           },
   });
@@ -116,7 +181,6 @@ it.each([
     "Pasted notes 🦞\n  preserve indentation\n<script>not executable</script>\n",
   ],
   ["settings.json", "application/json", '{"ready":true}\n'],
-  ["config.xml", "application/xml", "<ready>true</ready>"],
   ["notes.txt", "application/octet-stream", "Text with generic metadata"],
   ["empty.txt", "", ""],
 ])("previews %s as literal text", async (title, mimeType, text) => {
@@ -139,9 +203,10 @@ it.each([
   { title: "long.md", mimeType: "text/plain", kind: "long" },
   { title: "notes.md", mimeType: "text/plain", kind: "inert" },
 ])("renders $kind Markdown attachment $title ($mimeType)", async ({ title, mimeType, kind }) => {
+  // Cross the message parse limit without creating thousands of paragraph elements.
   const text =
     kind === "long"
-      ? `# Long document\n\n${"Paragraph of notes.\n\n".repeat(2_100)}## Last section\n`
+      ? `# Long document\n\n${"Paragraph of notes. ".repeat(2_100)}\n\n## Last section\n`
       : kind === "inert"
         ? "# שלום\n\n<script>alert(1)</script>\n\n[unsafe](javascript:alert(1))\n\n![tracking](https://example.com/tracking.png)\n"
         : "# Release notes\n\n**Ready** with [details](https://example.com).\n\n- First item\n\n| Feature | State |\n| --- | --- |\n| Sidebar | Ready |\n\n```ts\nconst ready = true;\n```\n";
@@ -175,6 +240,68 @@ it.each([
 });
 
 it.each([
+  "",
+  "?download=1",
+  "?source=https://example.com/report",
+  "?source=https%3A%2F%2Fexample.com%2Freport",
+])("offers explicit Files selection without a guessed read: %s", async (query) => {
+  const text = [
+    "# Handoff",
+    `[Report](snapshot-2/dependencies.csv${query})`,
+    "[Missing](snapshot-3/missing.csv)",
+    "[Section](#contents)",
+    "[Reference](https://example.com)",
+    "[Conversation](/chat/main/another)",
+    "`snapshot-2/dependencies.csv` stays literal.",
+  ].join("\n\n");
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => new Response(text));
+  vi.stubGlobal("fetch", fetchMock);
+  const panel = await mountAttachment({ title: "index.md", mimeType: "text/markdown" });
+  const browse = vi.fn();
+  const openFile = vi.fn();
+  panel.onBrowseFiles = browse;
+  panel.onOpenWorkspaceFile = openFile;
+  await waitForSolid(() => expect(panel.querySelector("article h1")?.textContent).toBe("Handoff"));
+  const article = panel.querySelector("article")!;
+  const link = article.querySelector<HTMLAnchorElement>("a")!;
+  expect(link.getAttribute("href")).toBeNull();
+  expect(link.getAttribute("role")).toBe("button");
+  expect(article.querySelector("code")?.closest("a")).toBeNull();
+  for (const href of ["#contents", "https://example.com", "/chat/main/another"]) {
+    expect(article.querySelector(`a[href="${href}"]`)).not.toBeNull();
+  }
+  const action = (label: string) =>
+    [...panel.querySelectorAll("button")].find((button) => button.textContent?.trim() === label)!;
+  link.click();
+  await waitForSolid(() =>
+    expect(panel.querySelector('[role="status"]:not([hidden])')?.textContent).toContain(
+      "snapshot-2/dependencies.csv",
+    ),
+  );
+  expect(document.activeElement).toBe(action("Browse files"));
+  expect(browse).not.toHaveBeenCalled();
+  expect(openFile).not.toHaveBeenCalled();
+  action("Cancel").click();
+  await waitForSolid(() => expect(panel.querySelector('[role="status"]:not([hidden])')).toBeNull());
+  expect(panel.querySelector("article")).toBe(article);
+  expect(document.activeElement).toBe(link);
+  for (const key of ["Enter", " "]) {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    link.dispatchEvent(event);
+    await waitForSolid(() => expect(action("Browse files")).toBeDefined());
+    expect(event.defaultPrevented).toBe(true);
+    action("Browse files").click();
+    await waitForSolid(() =>
+      expect(panel.querySelector('[role="status"]:not([hidden])')).toBeNull(),
+    );
+  }
+  expect(browse).toHaveBeenCalledTimes(2);
+  expect(openFile).not.toHaveBeenCalled();
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(panel.querySelector("article")).toBe(article);
+});
+
+it.each([
   { title: "archive.bin", mimeType: "application/octet-stream" },
   { title: "notes.txt", src: "https://files.example/notes.txt" },
   { title: "page.html", mimeType: "text/html", src: "https://files.example/page.html" },
@@ -199,12 +326,9 @@ const htmlFile = { title: "page.html", mimeType: "text/html" };
 
 it.each<RejectedAttachment>([
   { failure: "metadata", content: plainFile },
-  { failure: "metadata", content: htmlFile, limit: 2 * 1024 * 1024 },
   { failure: "metadata", content: { ...htmlFile, plainText: true } },
   { failure: "advertised", content: plainFile },
   { failure: "streamed", content: plainFile },
-  { failure: "advertised", content: htmlFile, limit: 2 * 1024 * 1024 },
-  { failure: "streamed", content: htmlFile, limit: 2 * 1024 * 1024 },
   { failure: "bytes", bytes: new Uint8Array([0xff]) },
   { failure: "bytes", bytes: new Uint8Array([0x61, 0x00, 0x62]) },
   { failure: "unavailable" },
@@ -216,15 +340,9 @@ it.each<RejectedAttachment>([
     const cancel = vi.fn();
     if (failure === "advertised" || failure === "streamed") {
       fetchMock.mockResolvedValue(
-        new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.enqueue(new Uint8Array(limit + 1));
-            },
-            cancel,
-          }),
-          { headers: failure === "advertised" ? { "Content-Length": String(limit + 1) } : {} },
-        ),
+        new Response(makeStallingStream([new Uint8Array(limit + 1)], cancel), {
+          headers: failure === "advertised" ? { "Content-Length": String(limit + 1) } : {},
+        }),
       );
     } else if (failure === "bytes") {
       fetchMock.mockResolvedValue(new Response(bytes));
@@ -330,7 +448,6 @@ it("aborts a closed preview and reloads it after remount", async () => {
 });
 
 it.each([
-  { title: "large.html", mimeType: "text/html", sizeBytes: 2 * 1024 * 1024, fill: "a", suffix: "" },
   {
     title: "large.HTM",
     mimeType: "application/octet-stream",
@@ -379,6 +496,9 @@ it.each([
     });
     await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe(text));
     const reader = panel.querySelector("openclaw-chat-text-attachment");
+    if (panel.content?.kind !== "attachment") {
+      throw new Error("Expected the mounted attachment");
+    }
     panel.content = { ...panel.content, ...change };
     await vi.waitFor(() =>
       expect(panel.textContent).toContain("Text previews require UTF-8 files up to 256 KiB"),
@@ -405,10 +525,15 @@ it.each([
     });
     const panel = await mountAttachment({ title, mimeType }, request);
     await customElements.whenDefined("openclaw-chat-html-preview");
-    await expect.poll(() => panel.querySelector("openclaw-chat-html-preview")).not.toBeNull();
-    await expect.poll(() => panel.querySelector("iframe")).not.toBeNull();
+    await waitForSolid(() =>
+      expect(panel.querySelector("openclaw-chat-html-preview")).not.toBeNull(),
+    );
+    await waitForSolid(() => expect(panel.querySelector("iframe")).not.toBeNull());
     const frame = panel.querySelector("iframe");
-    expect(panel.querySelector("h1, script, style")).toBeNull();
+    expect(panel.querySelector("h1, script")).toBeNull();
+    expect(Array.from(panel.querySelectorAll("style"), (style) => style.textContent)).toEqual([
+      panelLoadingStyles,
+    ]);
     expect(panel.querySelector("pre")?.hidden).toBe(true);
     expect(panel.querySelector("pre")?.textContent).toBe(text);
     const toggle = panel.querySelector<HTMLButtonElement>(
@@ -428,12 +553,11 @@ it.each([
       "/__openclaw__/assistant-media?mediaTicket=text-preview",
     );
     Reflect.set(panel, "embedSandboxMode", "strict");
-    await expect
-      .poll(() => {
-        const current = panel.querySelector("iframe");
-        return current !== null && current !== frame;
-      })
-      .toBe(true);
+    await waitForSolid(() => {
+      const current = panel.querySelector("iframe");
+      expect(current).not.toBeNull();
+      expect(current).not.toBe(frame);
+    });
     const strictFrame = panel.querySelector("iframe")!;
     expect(strictFrame.hasAttribute("srcdoc")).toBe(false);
     expect(strictFrame.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin allow-forms");
@@ -448,7 +572,7 @@ it.each([
         },
       }),
     );
-    await expect.poll(() => post.mock.calls.length).toBe(1);
+    await waitForSolid(() => expect(post).toHaveBeenCalledOnce());
     expect(post.mock.calls[0]![0].params).toEqual({
       html: text,
       renderId: expect.any(String),

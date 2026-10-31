@@ -279,9 +279,10 @@ describe("session placement recovery", () => {
       getItem: storage.getItem.bind(storage),
       key: storage.key.bind(storage),
       removeItem: vi.fn((key: string) => {
-        if (key !== sourceKey) {
-          storage.removeItem(key);
+        if (key === sourceKey) {
+          throw new DOMException("storage disabled", "SecurityError");
         }
+        storage.removeItem(key);
       }),
       setItem: storage.setItem.bind(storage),
     });
@@ -329,6 +330,46 @@ describe("session placement recovery", () => {
     expect(sessionStorage.getItem(exactKey("agent:cloud:wrong-key"))).toBeNull();
     expect(sessionStorage.getItem(exactKey(invalidPayload.sessionKey))).toBeNull();
     expect(sessionStorage.getItem(malformedKey)).toBeNull();
+  });
+
+  it("round-trips a device folder only with its exact dispatch target", () => {
+    const creating = {
+      ...recovery,
+      phase: "creating" as const,
+      target: { kind: "device" as const, deviceId: "runner" },
+      createParams: {
+        key: recovery.sessionKey,
+        agentId: "cloud",
+        message: "" as const,
+        deviceFolder: { deviceId: "runner", path: "/srv/project" },
+      },
+    };
+    expect(writeSessionPlacementRecovery(creating)).toBe(true);
+    expect(readRecovery()).toEqual(creating);
+    expect(writeSessionPlacementRecovery({ ...creating, target: { kind: "auto-device" } })).toBe(
+      false,
+    );
+    expect(
+      writeSessionPlacementRecovery({ ...creating, target: { kind: "device", deviceId: "other" } }),
+    ).toBe(false);
+  });
+
+  it("rejects a malformed persisted device-folder binding", () => {
+    sessionStorage.setItem(
+      exactKey(recovery.sessionKey),
+      JSON.stringify({
+        ...recovery,
+        phase: "creating",
+        target: { kind: "device", deviceId: "runner" },
+        createParams: {
+          key: recovery.sessionKey,
+          agentId: "cloud",
+          message: "",
+          deviceFolder: null,
+        },
+      }),
+    );
+    expect(readRecovery()).toBeNull();
   });
 
   it("round-trips an attachment-only first turn", () => {

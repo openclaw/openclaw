@@ -1,12 +1,69 @@
 import { createHash } from "node:crypto";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
   OpenClawPluginToolContext,
+  WorkerMachineOption,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { jsonResult } from "openclaw/plugin-sdk/tool-results";
+import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
+
+// These are the fields used for presentation, not replacements for Gateway receipts.
+type CrabboxEnvironment = {
+  id: string;
+  status: string;
+  worker: { state: string; error?: string };
+};
+type CrabboxAttachment = { environmentId: string };
+type CrabboxProfile = {
+  id: string;
+  providerId: string;
+  machines?: WorkerMachineOption[];
+  operatingSystems?: Array<{ id: string; disabledReason?: string }>;
+};
+type CrabboxExecResult = SpawnResult & {
+  environmentId: string;
+  workspaceDir: string;
+  process?: { processId: string; state: "running" | "exited" };
+};
+
+function crabboxEnvironmentText(environment: CrabboxEnvironment): string {
+  return `Environment: ${environment.status} (${environment.worker.state}).${environment.worker.error ? `\n${environment.worker.error}` : ""}`;
+}
+
+function crabboxExecResult(result: CrabboxExecResult) {
+  const process = result.process;
+  const summary = process
+    ? `Process ${process.processId}: ${process.state}.` +
+      (process.state === "running" ? " App readiness has not been checked." : "")
+    : result.code === 0 && result.termination === "exit"
+      ? "Command completed."
+      : "Command failed.";
+  const lines = [
+    summary,
+    `exit code: ${result.code}; termination: ${result.termination}; signal: ${result.signal}; killed: ${result.killed}`,
+    `Environment: ${result.environmentId}; workspace: ${result.workspaceDir}`,
+  ];
+  if (result.stdoutTruncatedBytes) {
+    lines.push(`stdout truncated: ${result.stdoutTruncatedBytes} bytes`);
+  }
+  if (result.stderrTruncatedBytes) {
+    lines.push(`stderr truncated: ${result.stderrTruncatedBytes} bytes`);
+  }
+  if (result.outputLimitExceeded) {
+    lines.push(
+      `Output limit exceeded${result.outputErrorStream ? ` (${result.outputErrorStream})` : ""}.`,
+    );
+  }
+  // Keep output bytes intact; Code Mode also consumes the unchanged structured receipt.
+  return textResult(
+    `${lines.join("\n")}\n\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    result,
+  );
+}
 
 const CRABBOX_TOOL_PARAMETERS = {
   type: "object",
@@ -102,16 +159,26 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
       "Create and use a temporary Crabbox attached to this conversation while keeping the agent and its main workspace in place. profiles lists configured machines and desktop capability; create reuses the current attachment. For open-and-show requests, pass presentation=desktop for native apps or portal for web apps to open the sidebar during provisioning. exec runs commands there, with background=true for persistent apps and servers. Inspect/stop owned processes or stop the entire box. Desktop-enabled profiles support native app viewing and computer use. Read the crabbox-apps skill for the complete workflow.",
     parameters: CRABBOX_TOOL_PARAMETERS,
     resultContentSource: "network",
-    async execute(toolCallId, rawArgs, signal) {
+    async execute(toolCallId, rawArgs, signal, onUpdate) {
       signal?.throwIfAborted();
       // SAFETY: the tool executor validates the declared object schema before calling execute.
       const params = rawArgs as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const environmentId = readStringParam(params, "environmentId");
       const target = environmentId ? { environmentId } : {};
+      const reportProgress = (text: string) => {
+        try {
+          onUpdate?.({
+            ...textResult(text, { action, status: "running" }),
+            progress: { text, visibility: "channel", privacy: "public" },
+          });
+        } catch {
+          // Optional display feedback must not change command dispatch or reconciliation.
+        }
+      };
       if (action === "profiles") {
         const catalog = await gateway.request<{
-          profiles?: Array<{ id: string; providerId: string }>;
+          profiles?: CrabboxProfile[];
         }>("environments.list", { projection: "profiles" });
         const configured = new Map(profiles());
         const machineProfiles = [];
@@ -123,7 +190,24 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
             });
           }
         }
-        return jsonResult({ profiles: machineProfiles });
+        const lines = machineProfiles.map((profile) => {
+          const choices = [
+            profile.desktop ? "desktop enabled" : "desktop disabled",
+            ...(profile.operatingSystems?.map((os) =>
+              os.disabledReason ? `${os.id} (unavailable: ${os.disabledReason})` : os.id,
+            ) ?? []),
+            ...(profile.machines?.map(
+              (machine) => `${machine.id}${machine.os ? ` (${machine.os})` : ""}`,
+            ) ?? []),
+          ];
+          return `- ${profile.id}: ${choices.join("; ")}`;
+        });
+        return textResult(
+          lines.length
+            ? `Crabbox profiles:\n${lines.join("\n")}\nUse action=create with a profileId to create or reuse a Crabbox.`
+            : "No Crabbox profiles are currently available.",
+          { profiles: machineProfiles },
+        );
       }
       if (action === "create") {
         const available = profiles();
@@ -141,42 +225,63 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
         if (presentation !== undefined && presentation !== "desktop" && presentation !== "portal") {
           throw new Error("presentation must be desktop or portal");
         }
+        reportProgress("Requesting a Crabbox for this conversation (create or reuse)…");
         const status = await gateway.request<{
           attachment: { environmentId: string } | null;
         }>("environments.session.status", {}, { timeoutMs: 30_000, scopes: ["operator.read"] });
-        return jsonResult(
-          await gateway.request(
-            "environments.session.create",
-            {
-              profileId,
-              idempotencyKey: operationId(sessionId, toolCallId, status.attachment?.environmentId),
-              ...(os ? { os } : {}),
-              ...(machineClass ? { machineClass } : {}),
-              ...(presentation ? { presentation } : {}),
-            },
-            { timeoutMs: 20 * 60_000, scopes: ["operator.admin"] },
-          ),
+        const result = await gateway.request<{
+          attachment: CrabboxAttachment;
+          environment: CrabboxEnvironment;
+          reused: boolean;
+        }>(
+          "environments.session.create",
+          {
+            profileId,
+            idempotencyKey: operationId(sessionId, toolCallId, status.attachment?.environmentId),
+            ...(os ? { os } : {}),
+            ...(machineClass ? { machineClass } : {}),
+            ...(presentation ? { presentation } : {}),
+          },
+          { timeoutMs: 20 * 60_000, scopes: ["operator.admin"] },
+        );
+        return textResult(
+          `${result.reused ? "Reusing" : "Created"} Crabbox ${result.attachment.environmentId}.\n${crabboxEnvironmentText(result.environment)}`,
+          result,
         );
       }
-      if (action === "status" || action === "stop") {
-        return jsonResult(
-          await gateway.request(
-            action === "status" ? "environments.session.status" : "environments.session.destroy",
-            target,
-            {
-              timeoutMs: action === "stop" ? 10 * 60_000 : 30_000,
-              scopes: [action === "stop" ? "operator.admin" : "operator.read"],
-            },
-          ),
+      if (action === "status") {
+        const result = await gateway.request<
+          | { attachment: null }
+          | { attachment: CrabboxAttachment; closed: boolean; environment: CrabboxEnvironment }
+        >("environments.session.status", target, { timeoutMs: 30_000, scopes: ["operator.read"] });
+        if (!result.attachment) {
+          return textResult(
+            "No Crabbox is attached to this conversation. Use action=create to create one.",
+            result,
+          );
+        }
+        return textResult(
+          `Crabbox ${result.attachment.environmentId} ${result.closed ? "is no longer attached. Use action=create to create one." : "is attached to this conversation."}\n${crabboxEnvironmentText(result.environment)}`,
+          result,
+        );
+      }
+      if (action === "stop") {
+        reportProgress("Requesting Crabbox shutdown…");
+        const result = await gateway.request<{ stopped: true; environment?: CrabboxEnvironment }>(
+          "environments.session.destroy",
+          target,
+          { timeoutMs: 10 * 60_000, scopes: ["operator.admin"] },
+        );
+        return textResult(
+          result.environment
+            ? `Crabbox ${result.environment.id} is detached from this conversation.\n${crabboxEnvironmentText(result.environment)}`
+            : "No Crabbox is attached to this conversation. Nothing to stop.",
+          result,
         );
       }
       if (action === "exec") {
         const argv = params.argv;
-        if (
-          !Array.isArray(argv) ||
-          argv.length === 0 ||
-          !argv.every((arg) => typeof arg === "string")
-        ) {
+        if (!isStringArray(argv) || argv.length === 0) {
           throw new Error("argv must be a non-empty array of strings");
         }
         const input = readStringParam(params, "input", { trim: false, allowEmpty: true });
@@ -186,9 +291,14 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
         }
         const processId =
           params.background === true ? `app-${operationId(sessionId, toolCallId)}` : undefined;
+        reportProgress(
+          params.background === true
+            ? "Requesting a background process in the attached Crabbox…"
+            : "Requesting command execution in the attached Crabbox…",
+        );
         try {
-          return jsonResult(
-            await gateway.request(
+          return crabboxExecResult(
+            await gateway.request<CrabboxExecResult>(
               "environments.session.exec",
               {
                 ...target,
@@ -215,13 +325,19 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
         }
       }
       if (action === "process_status" || action === "process_stop") {
-        return jsonResult(
-          await gateway.request(
+        const processId = readStringParam(params, "processId", { required: true });
+        reportProgress(
+          action === "process_stop"
+            ? "Requesting background process shutdown…"
+            : "Checking the Crabbox background process…",
+        );
+        return crabboxExecResult(
+          await gateway.request<CrabboxExecResult>(
             "environments.session.exec",
             {
               ...target,
               action: action === "process_status" ? "status" : "stop",
-              processId: readStringParam(params, "processId", { required: true }),
+              processId,
             },
             { timeoutMs: 60_000, scopes: ["operator.admin"] },
           ),

@@ -5,7 +5,7 @@ import { resolvePreparedProviderStaticConfigs } from "../plugins/provider-discov
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
-import { discoverModels } from "./agent-model-discovery.js";
+import { discoverModelsAsync } from "./agent-model-discovery.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
 import {
   buildInlineProviderModels,
@@ -13,7 +13,6 @@ import {
 } from "./embedded-agent-runner/model.inline-provider.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "./embedded-agent-runner/model.static-id.js";
-import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import {
   enrichHarnessRows,
   modelCatalogRouteVariantKey,
@@ -25,6 +24,7 @@ import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-pr
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
+import { applyModelServingContextLimit } from "./model-serving-context.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import {
   copyPreparedModelFullCatalogAuth,
@@ -55,7 +55,13 @@ const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
 export async function prepareFullCatalogFacts(
   agentFacts: Parameters<typeof completeConfiguredRuntimeModels>[0] &
     Pick<PreparedModelRuntimeAgentFacts, "templateAuthStorage" | "credentials">,
-  pluginGeneration: PreparedModelRuntimePluginGeneration,
+  pluginGeneration: Pick<
+    PreparedModelRuntimePluginGeneration,
+    | "pluginMetadataSnapshot"
+    | "pluginRegistry"
+    | "preparedStaticProviderCatalog"
+    | "providerStaticModels"
+  >,
   catalogMode: PreparedModelRuntimeCatalogMode,
   catalogSource: PreparedModelRuntimeCatalogSource,
   options: { includeNative?: boolean; providerIds?: readonly string[] } = {},
@@ -67,7 +73,7 @@ export async function prepareFullCatalogFacts(
     const observedProviders = new Set(
       catalogSource.providerOutcomes?.map(({ provider }) => normalizeProviderId(provider)),
     );
-    const templateModelRegistry = discoverModels(templateAuthStorage, input.agentDir, {
+    let templateModelRegistry = await discoverModelsAsync(templateAuthStorage, input.agentDir, {
       config: input.config,
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
       pluginMetadataSnapshot,
@@ -81,6 +87,18 @@ export async function prepareFullCatalogFacts(
         ),
       ),
     });
+    if (catalogSource.servingLimits?.size) {
+      // Serving observations are acquisition facts, not models.json/config fields.
+      // Reuse the registry's immutable publication projection so forks and worker
+      // serialization preserve them after every authored metadata overlay.
+      const published = new Map<string, Model[]>();
+      for (const model of templateModelRegistry.getAll()) {
+        const models = published.get(model.provider) ?? [];
+        models.push(applyModelServingContextLimit(model, catalogSource.servingLimits));
+        published.set(model.provider, models);
+      }
+      templateModelRegistry = templateModelRegistry.fork(templateAuthStorage, published);
+    }
     const catalogModels = templateModelRegistry.getAll();
     const snapshot = await buildPreparedModelCatalogSnapshot({
       agentDir: input.agentDir,
@@ -95,10 +113,16 @@ export async function prepareFullCatalogFacts(
       ...(input.readOnly ? { readOnly: true } : {}),
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     });
-    const modelCatalog =
-      catalogMode === "live" && options.includeNative !== false
-        ? await augmentPreparedModelCatalogWithAgentHarness({ input, snapshot, pluginRegistry })
-        : snapshot;
+    let modelCatalog = snapshot;
+    if (catalogMode === "live" && options.includeNative !== false) {
+      const { augmentPreparedModelCatalogWithAgentHarness } =
+        await import("./harness/model-catalog.js");
+      modelCatalog = await augmentPreparedModelCatalogWithAgentHarness({
+        input,
+        snapshot,
+        pluginRegistry,
+      });
+    }
     const providerStaticModels =
       input.config.models?.mode === "replace"
         ? []
@@ -165,7 +189,6 @@ export async function prepareFullCatalogFacts(
       catalogModels,
       modelCatalog: completeModelCatalog,
       configuredRuntimeModels,
-      inlineProviderModels: pluginGeneration.inlineProviderModels,
     };
   };
   return withPluginRuntimeGenerationScope(
@@ -318,13 +341,14 @@ export function createPreparedModelRuntimeSnapshot(
 ): PreparedModelRuntimeSnapshot {
   const { credentials, input } = agentFacts;
   const {
+    inlineProviderModels,
     mediaCapabilityProviders,
     mediaCapabilityProviderSource,
     messageToolCatalog,
     pluginMetadataSnapshot,
     pluginRegistry,
   } = pluginGeneration;
-  const { configuredRuntimeModels, inlineProviderModels, templateModelRegistry } = catalogFacts;
+  const { configuredRuntimeModels, templateModelRegistry } = catalogFacts;
   const modelCatalog = materializePreparedModelCatalog(
     catalogFacts.modelCatalog,
     agentFacts.runtimeCapabilityModels,
@@ -383,16 +407,20 @@ export function createPreparedModelRuntimeSnapshot(
       pluginMetadataSnapshot,
     ),
     inlineProviderModels,
-    createStores: () => {
+    createStores: (publishedModels?: ReadonlyMap<string, readonly Model[]>) => {
       // Runtime keys and session extensions mutate per-run stores; parsed inputs stay shared.
       const authStorage = AuthStorage.inMemory(credentials);
-      return { authStorage, modelRegistry: templateModelRegistry.fork(authStorage) };
+      return {
+        authStorage,
+        modelRegistry: templateModelRegistry.fork(authStorage, publishedModels),
+      };
     },
     routeModelResolutionMemo: new Map<string, Promise<Model>>(),
   });
   bindPreparedModelRuntimeAuth(snapshot, {
     labels: catalogAccess.initialAuth.providerAuthLabels,
     store: catalogAccess.initialAuth.authStore,
+    readUsage: catalogAccess.readUsage,
     load: catalogAccess.loadAuth,
     materializations: Object.freeze([...getPreparedRuntimeAuthMaterializations(input.agentDir)]),
   });

@@ -7,14 +7,13 @@ import {
   buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
   buildHarnessVisibleReplyGuidance,
-  buildSkillWorkshopPromptSection,
   buildTemporalContextText,
   buildUiPresentationPrompt,
   embeddedAgentLog,
+  listToolPromptGuidance,
   prepareAgentWorkspaceContext,
   prepareWatchedSessionsHarnessContext,
   resolveMainSessionDelegationMode,
-  SKILL_WORKSHOP_TOOL_NAME,
   type AgentHarnessAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentsApiEnvironment } from "./config.js";
@@ -125,9 +124,7 @@ export async function buildAgentsApiInstructions(
           ...workspace.memoryReferenceFiles.map((file) => `- ${file.path}`),
         ].join("\n\n")
       : undefined,
-    toolNames.has(SKILL_WORKSHOP_TOOL_NAME)
-      ? buildSkillWorkshopPromptSection().join("\n")
-      : undefined,
+    listToolPromptGuidance(toolNames).join("\n\n"),
     delegationAvailable
       ? buildDelegationGuidanceSection({
           mode: resolveMainSessionDelegationMode(params),
@@ -173,8 +170,44 @@ export async function buildAgentsApiTurnInput(
   // the workspace owner's freshly prepared executor paths.
   const attachmentNote =
     environmentType === "self_hosted" && prompt.endsWith(`\n\n${mappingText}`) ? "" : mappingText;
+  /** Current facts use the existing input carrier, not immutable session instructions. */
+  async function buildAgentsApiTurnContext(): Promise<string | undefined> {
+    if (!shouldIncludeAgentHarnessRuntimeContext(params)) {
+      return undefined;
+    }
+    const toolNames = new Set(tools.map((tool) => tool.name));
+    return joinSections([
+      "OpenClaw runtime context for this turn (replaces earlier runtime facts):",
+      buildTemporalContextText({
+        configuredTimezone: params.config?.agents?.defaults?.userTimezone,
+        sessionStatusAvailable: toolNames.has("session_status"),
+      }),
+      params.hostCapabilities.activeComputerContext?.() ??
+        "Current active computer: active_node=unknown (host presence unavailable)",
+      buildHarnessVisibleReplyGuidance({
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        messageToolAvailable: toolNames.has("message"),
+        currentConversation: {
+          agentSessionKey: params.sessionKey,
+          currentChannelProvider: params.messageChannel ?? params.messageProvider,
+          currentChannelId: params.currentChannelId,
+          currentMessagingTarget: params.currentMessagingTarget,
+        },
+        requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+        messageToolFinalByDefault: params.messageToolFinalByDefault,
+      }),
+      params.permissionChange?.notice,
+      await prepareWatchedSessionsHarnessContext({
+        config: params.config,
+        sessionKey: params.sessionKey,
+        toolNames,
+        assertCurrent,
+      }),
+      "Current user request:",
+    ]);
+  }
   return [
-    await buildAgentsApiTurnContext(params, tools, assertCurrent),
+    await buildAgentsApiTurnContext(),
     prompt,
     attachmentNote,
     attachmentFeedback,
@@ -186,40 +219,6 @@ export async function buildAgentsApiTurnInput(
   ]
     .filter(Boolean)
     .join("\n\n");
-}
-
-/** Current facts use the existing input carrier, not immutable session instructions. */
-async function buildAgentsApiTurnContext(
-  params: AgentHarnessAttemptParamsV2,
-  tools: readonly AgentToolParam.AgentToolConfigParamFunction[],
-  assertCurrent: () => void,
-): Promise<string | undefined> {
-  if (!shouldIncludeAgentHarnessRuntimeContext(params)) {
-    return undefined;
-  }
-  const toolNames = new Set(tools.map((tool) => tool.name));
-  return joinSections([
-    "OpenClaw runtime context for this turn (replaces earlier runtime facts):",
-    buildTemporalContextText({
-      configuredTimezone: params.config?.agents?.defaults?.userTimezone,
-      sessionStatusAvailable: toolNames.has("session_status"),
-    }),
-    params.hostCapabilities.activeComputerContext?.() ??
-      "Current active computer: active_node=unknown (host presence unavailable)",
-    buildHarnessVisibleReplyGuidance({
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-      messageToolAvailable: toolNames.has("message"),
-      requireExplicitMessageTarget: params.requireExplicitMessageTarget,
-    }),
-    params.permissionChange?.notice,
-    await prepareWatchedSessionsHarnessContext({
-      config: params.config,
-      sessionKey: params.sessionKey,
-      toolNames,
-      assertCurrent,
-    }),
-    "Current user request:",
-  ]);
 }
 
 function joinSections(sections: readonly (string | undefined)[]): string {

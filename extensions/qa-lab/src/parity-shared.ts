@@ -1,14 +1,10 @@
-import { createHash } from "node:crypto";
+import { sha256Hex as sha256 } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type ParityToolCallShape = {
   argsHash: string;
   tool: string;
 };
-
-function sha256(value: string) {
-  return createHash("sha256").update(value).digest("hex");
-}
 
 function normalizeForStableHash(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -130,36 +126,33 @@ function countParityTranscriptRecords(transcriptBytes: string, mode?: "lines" | 
 export function compareParityBehavior(params: {
   left: ParityBehaviorCell;
   right: ParityBehaviorCell;
-  compareStructure?: boolean;
   allowedSharedErrorClass?: "tool-result-error";
   transcriptMode?: "lines" | "messages";
 }): ParityBehaviorDrift {
   const { left, right } = params;
-  if (params.compareStructure !== false) {
-    const toolCallDrift = compareToolCallShape(left.toolCalls, right.toolCalls);
-    if (toolCallDrift) {
-      return { drift: "tool-call-shape", driftDetails: toolCallDrift };
-    }
-    const toolResultDrift = compareToolResultShape(
-      left.toolCalls,
-      right.toolCalls,
-      params.allowedSharedErrorClass,
-    );
-    if (toolResultDrift) {
-      return { drift: "tool-result-shape", driftDetails: toolResultDrift };
-    }
-    const leftCount = countParityTranscriptRecords(left.transcriptBytes, params.transcriptMode);
-    const rightCount = countParityTranscriptRecords(right.transcriptBytes, params.transcriptMode);
-    if (leftCount !== rightCount || Boolean(left.finalText) !== Boolean(right.finalText)) {
-      const counts =
-        params.transcriptMode === "messages"
-          ? `${leftCount} message records vs ${rightCount} message records`
-          : `${leftCount} lines vs ${rightCount}`;
-      return {
-        drift: "structural",
-        driftDetails: `transcript/final-text structure differs (${counts})`,
-      };
-    }
+  const toolCallDrift = compareToolCallShape(left.toolCalls, right.toolCalls);
+  if (toolCallDrift) {
+    return { drift: "tool-call-shape", driftDetails: toolCallDrift };
+  }
+  const toolResultDrift = compareToolResultShape(
+    left.toolCalls,
+    right.toolCalls,
+    params.allowedSharedErrorClass,
+  );
+  if (toolResultDrift) {
+    return { drift: "tool-result-shape", driftDetails: toolResultDrift };
+  }
+  const leftCount = countParityTranscriptRecords(left.transcriptBytes, params.transcriptMode);
+  const rightCount = countParityTranscriptRecords(right.transcriptBytes, params.transcriptMode);
+  if (leftCount !== rightCount || Boolean(left.finalText) !== Boolean(right.finalText)) {
+    const counts =
+      params.transcriptMode === "messages"
+        ? `${leftCount} message records vs ${rightCount} message records`
+        : `${leftCount} lines vs ${rightCount}`;
+    return {
+      drift: "structural",
+      driftDetails: `transcript/final-text structure differs (${counts})`,
+    };
   }
   return normalizeTextForParity(left.finalText) === normalizeTextForParity(right.finalText)
     ? { drift: "none" }

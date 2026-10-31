@@ -38,7 +38,7 @@ it.each([
       });
     }
     const releases = discovery
-      ? ["v28.2.0", "v26.1.0", "v27.9.0", "v26.8.1", "v24.20.0", "invalid", null]
+      ? ["v28.2.0", "v26.12.1", "v27.9.0", "v26.8.1", "v24.20.0", "invalid", null]
       : ["v24.20.0", "v27.9.0"];
     fetchMock.mockResolvedValue(
       scenario === "upstream unavailable"
@@ -51,7 +51,7 @@ it.each([
     );
     expect(
       await resolveTargetNodeRuntime({
-        engine: installed || discovery ? ">=26.1.0" : ">=26.1.0 <27",
+        engine: installed || discovery ? ">=26.12.1" : ">=26.12.1 <27",
         timeoutMs,
         recovery: { env: {}, installCommand },
       }),
@@ -65,9 +65,13 @@ it.each([
     expect(findUsableNodeRuntime).toHaveBeenCalledTimes(discovery ? 2 : 1);
     if (discovery) {
       const selected = vi.mocked(findUsableNodeRuntime).mock.calls[1]?.[0];
-      expect(selected).toMatchObject({ allowInstall: true, nodeVersion: "26.8.1", installCommand });
+      expect(selected).toMatchObject({
+        allowInstall: true,
+        nodeVersion: "26.12.1",
+        installCommand,
+      });
       expect(selected?.acceptVersion?.("24.20.0")).toBe(false);
-      expect(selected?.acceptVersion?.("26.8.1")).toBe(true);
+      expect(selected?.acceptVersion?.("26.12.1")).toBe(true);
     }
   },
 );

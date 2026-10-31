@@ -1,6 +1,8 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
+import { isCiEnvironment, requirePinnedBun } from "./lib/pinned-bun.mts";
+import { resolveTestRuntime } from "./lib/test-runtime.mts";
 import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { resolveVitestNoOutputTimeoutMs } from "./lib/vitest-process-env.mts";
@@ -110,7 +112,16 @@ export async function main(argv = process.argv.slice(2), baseEnv = process.env) 
     return;
   }
 
-  const env = buildTestLiveEnv(args, baseEnv);
+  const runtime = resolveTestRuntime(baseEnv);
+  const env = {
+    ...buildTestLiveEnv(args, baseEnv),
+    OPENCLAW_VITEST_RUNTIME: runtime,
+    // The child's noninteractive CI default must not replace a local cached fork
+    // with PATH Bun. Bind it first; the launch still verifies its pinned revision.
+    ...(runtime === "bun" && !isCiEnvironment(baseEnv)
+      ? { OPENCLAW_BUN_PATH: requirePinnedBun(baseEnv) }
+      : {}),
+  };
   const heartbeatMs = resolveTestLiveHeartbeatMs(baseEnv);
   const noOutputTimeoutMs = resolveVitestNoOutputTimeoutMs(baseEnv);
   const startedAt = Date.now();

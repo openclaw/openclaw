@@ -6,9 +6,8 @@ export function userProfileAvatarUrl(
   profileId: string,
   revision: string | number,
   resourceBasePath = "",
-  documentHref?: string,
 ): string | null {
-  const pageHref = documentHref ?? globalThis.location?.href;
+  const pageHref = globalThis.location?.href;
   if (!pageHref) {
     return null;
   }

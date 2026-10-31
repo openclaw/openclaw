@@ -1,12 +1,24 @@
-// Covers event session routing policy resolution.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveEventSessionKeyForPolicy,
   resolveEventSessionRoutingPolicy,
-  resolveMainScopedEventSessionKey,
-  scopedHeartbeatWakeOptionsForPolicy,
+  resolveMainScopedEventSessionKey as mainSessionKey,
+  type EventSessionRoutingPolicy,
 } from "./event-session-routing.js";
+
+const telegramSessionKey = "agent:main:telegram:work:direct:123";
+const singleOwnerConfig: OpenClawConfig = {
+  agents: { entries: { main: {} } },
+  session: { dmScope: "main" },
+  channels: { telegram: { accounts: { work: { allowFrom: ["123"] } } } },
+};
+function expectRoute(sessionKey: string, policy: EventSessionRoutingPolicy, destination: string) {
+  expect(resolveEventSessionKeyForPolicy(sessionKey, policy)).toBe(destination);
+}
+function allowlistConfig(channels: OpenClawConfig["channels"]): OpenClawConfig {
+  return { agents: { entries: { main: {} } }, channels };
+}
 
 describe("event session routing", () => {
   it.each([
@@ -23,28 +35,23 @@ describe("event session routing", () => {
         const lists = Array.from({ length: 6 }, (_, index) =>
           index < first ? undefined : index === first ? selected : [`other-${index}`],
         );
-        const cfg: OpenClawConfig = {
-          agents: { entries: { main: {} } },
-          channels: {
-            example: {
-              dm: { allowFrom: lists[4] },
-              allowFrom: lists[5],
-              accounts: {
-                work: {
-                  dm: { allowFrom: lists[0] },
-                  allowFrom: lists[2],
-                  config: { dm: { allowFrom: lists[1] }, allowFrom: lists[3] },
-                },
+        const cfg = allowlistConfig({
+          example: {
+            dm: { allowFrom: lists[4] },
+            allowFrom: lists[5],
+            accounts: {
+              work: {
+                dm: { allowFrom: lists[0] },
+                allowFrom: lists[2],
+                config: { dm: { allowFrom: lists[1] }, allowFrom: lists[3] },
               },
             },
           },
-        };
+        });
         const sessionKey = "agent:main:example:work:direct:123:thread:456";
         const policy = resolveEventSessionRoutingPolicy({ cfg, sessionKey });
         expect(policy.allowFrom).toEqual(selected);
-        expect(resolveEventSessionKeyForPolicy(sessionKey, policy)).toBe(
-          selected.length === 0 ? sessionKey : "agent:main:main",
-        );
+        expectRoute(sessionKey, policy, selected.length === 0 ? sessionKey : "agent:main:main");
       }
     },
   );
@@ -53,25 +60,14 @@ describe("event session routing", () => {
     { channel: " Other ", accountId: " ALT ", expected: "override" },
     { channel: "", accountId: " ", expected: "original" },
   ])("resolves channel/account overrides $channel/$accountId", ({ expected, ...overrides }) => {
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: {} } },
-      channels: {
-        example: { accounts: { work: { allowFrom: ["original"] } } },
-        other: {
-          accounts: {
-            work: { allowFrom: ["other-work"] },
-            alt: { allowFrom: ["override"] },
-          },
-        },
+    const cfg = allowlistConfig({
+      example: { accounts: { work: { allowFrom: ["original"] } } },
+      other: {
+        accounts: { work: { allowFrom: ["other-work"] }, alt: { allowFrom: ["override"] } },
       },
-    };
-    const params = {
-      cfg,
-      sessionKey: "agent:main:example:work:direct:123",
-      ...overrides,
-    };
+    });
+    const params = { cfg, sessionKey: "agent:main:example:work:direct:123", ...overrides };
     expect(resolveEventSessionRoutingPolicy(params).allowFrom).toEqual([expected]);
-    expect(resolveEventSessionRoutingPolicy({ ...params, allowFrom: [] }).allowFrom).toEqual([]);
   });
 
   it.each([
@@ -80,124 +76,50 @@ describe("event session routing", () => {
     ["agent:ops_1:example:group:123:thread:t", null],
   ] as const)("preserves direct event owner and thread parsing for %s", (sessionKey, expected) => {
     expect(
-      resolveMainScopedEventSessionKey({
-        cfg: {
-          agents: { entries: { ops_1: {} } },
-          channels: { example: { allowFrom: ["123"] } },
-        },
+      mainSessionKey({
+        cfg: { agents: { entries: { ops_1: {} } }, channels: { example: { allowFrom: ["123"] } } },
         sessionKey,
       }),
     ).toBe(expected);
   });
 
   it("routes single-owner dmScope=main direct event keys to the agent main session", () => {
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: {} } },
-      session: { dmScope: "main" },
-      channels: {
-        telegram: {
-          accounts: {
-            work: { allowFrom: ["123"] },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const policy = resolveEventSessionRoutingPolicy({
-      cfg,
-      sessionKey: "agent:main:telegram:work:direct:123",
-    });
+    const sessionKey = telegramSessionKey;
+    const policy = resolveEventSessionRoutingPolicy({ cfg: singleOwnerConfig, sessionKey });
 
-    expect(resolveEventSessionKeyForPolicy("agent:main:telegram:work:direct:123", policy)).toBe(
-      "agent:main:main",
-    );
-    expect(
-      scopedHeartbeatWakeOptionsForPolicy(
-        "agent:main:telegram:work:direct:123",
-        { reason: "exec-event" },
-        policy,
-      ),
-    ).toEqual({ reason: "exec-event", sessionKey: "agent:main:main" });
-    expect(
-      resolveEventSessionKeyForPolicy(
-        "agent:main:telegram:work:direct:123:thread:1712345678.123",
-        policy,
-      ),
-    ).toBe("agent:main:main");
+    expectRoute(sessionKey, policy, "agent:main:main");
+    expectRoute(`${sessionKey}:thread:1712345678.123`, policy, "agent:main:main");
   });
 
-  it("does not route multi-owner or wildcard direct sessions to main", () => {
-    const baseCfg: OpenClawConfig = {
-      agents: { entries: { main: {} } },
-      session: { dmScope: "main" },
-      channels: {
-        telegram: { allowFrom: ["123", "456"] },
-      },
-    } as unknown as OpenClawConfig;
-
-    expect(
-      resolveMainScopedEventSessionKey({
-        cfg: baseCfg,
-        sessionKey: "agent:main:telegram:default:direct:123",
-      }),
-    ).toBeNull();
-    expect(
-      resolveMainScopedEventSessionKey({
-        cfg: {
-          ...baseCfg,
-          channels: { telegram: { allowFrom: ["*"] } },
-        } as unknown as OpenClawConfig,
-        sessionKey: "agent:main:telegram:default:direct:123",
-      }),
-    ).toBeNull();
-  });
+  it.each([{ allowFrom: ["123", "456"] }, { allowFrom: ["*"] }])(
+    "does not route allowlist $allowFrom to main",
+    ({ allowFrom }) => {
+      expect(
+        mainSessionKey({
+          cfg: { ...singleOwnerConfig, channels: { telegram: { allowFrom } } },
+          sessionKey: "agent:main:telegram:default:direct:123",
+        }),
+      ).toBeNull();
+    },
+  );
 
   it("preserves route-binding direct session overrides under global dmScope=main", () => {
+    const sessionKey = telegramSessionKey;
     const cfg: OpenClawConfig = {
-      agents: { entries: { main: {} } },
-      session: { dmScope: "main" },
-      channels: {
-        telegram: {
-          accounts: {
-            work: { allowFrom: ["123"] },
-          },
-        },
-      },
+      ...singleOwnerConfig,
       bindings: [
         {
           type: "route",
           agentId: "main",
-          match: {
-            channel: "telegram",
-            accountId: "work",
-            peer: { kind: "direct", id: "123" },
-          },
+          match: { channel: "telegram", accountId: "work", peer: { kind: "direct", id: "123" } },
           session: { dmScope: "per-account-channel-peer" },
         },
       ],
-    } as unknown as OpenClawConfig;
-    const sessionKey = "agent:main:telegram:work:direct:123";
-    const policy = resolveEventSessionRoutingPolicy({ cfg, sessionKey });
-    const threadSessionKey = `${sessionKey}:thread:1712345678.123`;
-    const threadPolicy = resolveEventSessionRoutingPolicy({ cfg, sessionKey: threadSessionKey });
-
-    expect(policy.preserveSessionKey).toBe(true);
-    expect(resolveEventSessionKeyForPolicy(sessionKey, policy)).toBe(sessionKey);
-    expect(threadPolicy.preserveSessionKey).toBe(true);
-    expect(resolveEventSessionKeyForPolicy(threadSessionKey, threadPolicy)).toBe(threadSessionKey);
-  });
-
-  it("keeps cron-run remapping behavior unchanged", () => {
-    const policy = { mainKey: "primary", sessionScope: "per-sender" as const };
-
-    expect(resolveEventSessionKeyForPolicy("agent:ops:cron:nightly:run:abc", policy)).toBe(
-      "agent:ops:primary",
-    );
-    expect(
-      scopedHeartbeatWakeOptionsForPolicy(
-        "agent:ops:cron:nightly:run:abc",
-        { reason: "exec-event" },
-        policy,
-      ),
-    ).toEqual({ reason: "exec-event", sessionKey: "agent:ops:primary" });
+    };
+    for (const key of [sessionKey, `${sessionKey}:thread:1712345678.123`]) {
+      const policy = resolveEventSessionRoutingPolicy({ cfg, sessionKey: key });
+      expect(policy.preserveSessionKey).toBe(true);
+      expect(resolveEventSessionKeyForPolicy(key, policy)).toBe(key);
+    }
   });
 });

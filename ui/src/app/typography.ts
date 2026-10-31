@@ -1,5 +1,6 @@
 import { UI_APPEARANCE_TYPEFACE_VALUES } from "../../../packages/gateway-protocol/src/schema/ui-appearance-typefaces.ts";
 import { isBuiltinThemeId } from "../../../packages/gateway-protocol/src/theme-ids.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { inferControlUiPublicAssetPath } from "./public-assets.ts";
 import type { ThemeName } from "./theme.ts";
 
@@ -89,6 +90,7 @@ export function loadTypefaceStylesheet(face: TypefaceId): HTMLLinkElement | unde
   link.id = id;
   link.rel = "stylesheet";
   link.href = inferControlUiPublicAssetPath(asset);
+  listen(link, "error", () => link.remove(), { once: true });
   document.head.append(link);
   return link;
 }
@@ -96,6 +98,20 @@ export function loadTypefaceStylesheet(face: TypefaceId): HTMLLinkElement | unde
 export function syncTypefaceStylesheets(faces: TypefacePair): void {
   if (typeof document === "undefined") {
     return;
+  }
+  for (const face of new Set([faces.ui, faces.chat])) {
+    const id = `openclaw-font-preload-${face}`;
+    if (face !== "system" && !document.getElementById(id)) {
+      const link = document.createElement("link");
+      link.id = id;
+      link.rel = "preload";
+      link.as = "font";
+      link.type = "font/woff2";
+      link.crossOrigin = "anonymous";
+      const file = face === "atkinson-hyperlegible" ? "atkinson-hyperlegible-next" : face;
+      link.href = inferControlUiPublicAssetPath(`fonts/${file}-latin.woff2`);
+      document.head.append(link);
+    }
   }
   loadTypefaceStylesheet(faces.ui);
   loadTypefaceStylesheet(faces.chat);

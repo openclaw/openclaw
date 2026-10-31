@@ -88,11 +88,12 @@ type PendingLiveTextFlush = {
 
 type LiveDisplayState = NonNullable<assistantText.ChatRunBufferState["display"]>;
 
-export type ChatRunRecord = assistantText.ChatRunBufferState & {
+type ChatRunRecord = assistantText.ChatRunBufferState & {
   lastActivityAt: number;
   registrations?: ChatRunEntry[];
   buffer?: string;
   bufferIsCurrent?: () => boolean;
+  releaseBufferAuthority?: () => void;
   /** Retire queued connection snapshots when this buffering generation is cleared. */
   liveTextGroup?: AbortController;
   liveTextEpoch?: object;
@@ -220,6 +221,8 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     delete record.assistantItems;
     delete record.buffer;
     delete record.bufferIsCurrent;
+    record.releaseBufferAuthority?.();
+    delete record.releaseBufferAuthority;
     record.liveTextGroup?.abort();
     delete record.liveTextGroup;
     delete record.liveTextEpoch;
@@ -240,17 +243,17 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
   const clear = () => {
     for (const record of store.runs.values()) {
       clearPendingLiveTextFlushes(record);
+      record.releaseBufferAuthority?.();
       record.liveTextGroup?.abort();
     }
     store.runs.clear();
   };
 
-  const resolveBuffer = (
-    runId: string,
+  const projectBuffer = (
+    record: ChatRunRecord | undefined,
     options?: { final?: boolean },
   ): ReturnType<typeof projectLiveAssistantBufferedText> & { displayText?: string } => {
-    const record = store.runs.get(runId);
-    if (!record || record.bufferIsCurrent?.() === false) {
+    if (!record) {
       return projectLiveAssistantBufferedText("");
     }
     const source = record.rawBuffer;
@@ -270,11 +273,7 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
         return full;
       }
       // Missing source context cannot justify suppressing retained output.
-      const suppressed =
-        !contextEvicted &&
-        (options?.final
-          ? projectLiveAssistantBufferedText(full.text, { suppressLeadFragments: false }).suppress
-          : full.suppress);
+      const suppressed = !contextEvicted && full.suppress;
       const text = suppressed
         ? ""
         : contextEvicted
@@ -284,7 +283,6 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
         ...full,
         text,
         suppress: suppressed || !text,
-        pendingLeadFragment: suppressed && full.pendingLeadFragment,
       };
     };
     // Delivery remains complete; display finalizes the same occurrence-owned tail.
@@ -343,6 +341,11 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     return display.current;
   };
 
+  const resolveBuffer = (runId: string, options?: { final?: boolean }) => {
+    const record = store.runs.get(runId);
+    return projectBuffer(record?.bufferIsCurrent?.() === false ? undefined : record, options);
+  };
+
   const takeBufferDelta = (runId: string, text: string) => {
     const projected = resolveBuffer(runId);
     const record = store.getOrCreate(runId);
@@ -379,6 +382,12 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     /** Acquire mutable state and record activity; readers use runs.get. */
     getOrCreate: store.getOrCreate,
     resolveBuffer,
+    captureFinalBuffer: (runId: string) => {
+      const record = store.runs.get(runId);
+      // Keep terminal text fixed, but share occurrence publication receipts after cleanup.
+      const snapshot = record?.bufferIsCurrent?.() === false ? undefined : record && { ...record };
+      return () => projectBuffer(snapshot, { final: true });
+    },
     updateBuffer: (
       runId: string,
       input: Parameters<typeof assistantText.updateBuffer>[1],

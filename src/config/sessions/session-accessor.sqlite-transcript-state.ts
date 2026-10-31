@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { engineGreatest } from "../../infra/database-engine/scalar.js";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   prepareSqliteQueryTakeFirstSync,
+  prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
   withoutSqliteDatabaseWriteScope,
@@ -16,9 +18,22 @@ import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptContextVersion } from "./session-accessor.sqlite-contract.js";
-import { publishSessionEntryPlaceholderInsertion } from "./session-accessor.sqlite-entry-cache.js";
-import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import {
+  preserveSessionEntryCacheAcrossWrite,
+  publishSessionEntryPlaceholderInsertion,
+} from "./session-accessor.sqlite-entry-cache.js";
+import {
+  getSessionKysely,
+  type ResolvedTranscriptScope,
+} from "./session-accessor.sqlite-scope-helpers.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import {
+  returningTranscriptMutationAuthority,
+  selectTranscriptAppendState,
+  selectTranscriptSessionRoot,
+  transcriptMutationStateQuery,
+  type TranscriptSessionRootRow,
+} from "./session-accessor.sqlite-transcript-state.queries.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import {
   assertCanonicalSqliteSessionRootWrite,
@@ -28,24 +43,22 @@ import {
 import {
   assertSessionTranscriptHot,
   readSessionColdTranscript,
-  SessionTranscriptColdError,
 } from "./session-cold-storage-state.js";
 import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
-import {
-  publishSessionTranscriptAuthority,
-  type SessionTranscriptAuthority,
-} from "./session-transcript-authority.js";
+import { publishSessionTranscriptAuthority } from "./session-transcript-authority.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import {
   readTranscriptContextFacts,
   retainTranscriptContextFacts,
 } from "./session-transcript-context-facts.js";
 import {
-  foldedSessionKeyAliasCandidates,
-  normalizeStoreSessionKey,
-  resolveDeliveryProvenCanonicalSessionKey,
-} from "./store-entry.js";
+  projectTranscriptMutationPublication,
+  type TranscriptMutationAdvance,
+  type TranscriptMutationOptions,
+} from "./session-transcript-mutation-projection.js";
+import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 
-const transcriptContextVersionQuery = createSqliteQueryCache((database) => {
+const transcriptContextVersionQuery = createSqliteQueryCache((database: EngineConnection) => {
   const db = getSessionKysely(database);
   return prepareSqliteQueryTakeFirstSync<
     string,
@@ -217,6 +230,45 @@ function writeTranscriptGeneration(
   });
 }
 
+/** These facts live only for the synchronous append, never across transactions. */
+export function readTranscriptAppendStateInTransaction(
+  database: OpenClawAgentDatabase,
+  scope: ResolvedTranscriptScope,
+  withLatestIdentity = false,
+) {
+  const query = selectTranscriptAppendState(database, scope, withLatestIdentity);
+  const rows = executeSqliteQuerySync(database.db, query).rows;
+  const row = rows[0]!;
+  return {
+    roots: rows,
+    generation: row.generation,
+    cold: Boolean(row.cold),
+    nextSeq: row.max_seq === null ? 0 : sqliteNumber(row.max_seq) + 1,
+    parent: withLatestIdentity
+      ? {
+          latest:
+            row.append_parent_event_type != null && row.append_parent_event_json != null
+              ? {
+                  event_type: row.append_parent_event_type,
+                  event_json: row.append_parent_event_json,
+                }
+              : null,
+        }
+      : undefined,
+    projection:
+      row.indexed_seq === null
+        ? undefined
+        : {
+            activeEventCount: row.active_event_count!,
+            activeMessageCount: row.active_message_count!,
+            indexedSeq: row.indexed_seq,
+            leafEventId: row.leaf_event_id,
+            needsRebuild: row.needs_rebuild !== 0,
+            hasUnclassifiedEvents: Boolean(row.has_unclassified),
+          },
+  };
+}
+
 export function ensureTranscriptSessionRoot(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
@@ -225,6 +277,7 @@ export function ensureTranscriptSessionRoot(
     allowStoredAlias?: boolean;
     onPlaceholderInserted?: (placeholder: { sessionKey: string; sessionId: string }) => void;
     deferExistingWindowTouch?: boolean;
+    preparedRoots?: readonly TranscriptSessionRootRow[];
   } = {},
 ): void {
   return withSqliteDatabaseWriteScope(
@@ -244,36 +297,10 @@ export function ensureTranscriptSessionRoot(
         let nodeExists = false;
         if (!options.allowStoredAlias) {
           assertCanonicalSqliteSessionRootWrite(database, scope.sessionKey);
-          const lookupKeys = uniqueStrings([
-            scope.sessionKey,
-            ...foldedSessionKeyAliasCandidates(normalizeStoreSessionKey(scope.sessionKey)),
-          ]);
-          const candidates = executeSqliteQuerySync(
-            database.db,
-            db
-              .selectFrom("session_nodes")
-              .select(["current_session_id", "entry_valid", "session_key", "updated_at"])
-              .select("entry_json")
-              .select((eb) =>
-                eb
-                  .selectFrom("session_windows")
-                  .select("session_key")
-                  .where("session_id", "=", scope.sessionId)
-                  .as("persisted_session_key"),
-              )
-              .where("session_key", "in", lookupKeys),
-          ).rows;
-          // A retained window can outlive its node, so the empty-candidate case still reads its owner.
-          const persistedSessionKey =
-            candidates.length > 0
-              ? candidates[0]!.persisted_session_key
-              : executeSqliteQueryTakeFirstSync(
-                  database.db,
-                  db
-                    .selectFrom("session_windows")
-                    .select("session_key")
-                    .where("session_id", "=", scope.sessionId),
-                )?.session_key;
+          const candidates =
+            options.preparedRoots ??
+            executeSqliteQuerySync(database.db, selectTranscriptSessionRoot(database, scope)).rows;
+          const persistedSessionKey = candidates[0]?.persisted_session_key;
           if (persistedSessionKey && persistedSessionKey !== scope.sessionKey) {
             throw new Error(
               `Transcript session ${scope.sessionId} is owned by ${persistedSessionKey}, not ${scope.sessionKey}; resolve the transcript target again before retrying.`,
@@ -281,19 +308,20 @@ export function ensureTranscriptSessionRoot(
           }
           let retainedRoot = false;
           for (const candidate of candidates) {
-            const entry = parseSessionEntryJson(candidate, "list");
+            if (candidate.session_key === null) {
+              continue;
+            }
+            const entry = parseSessionEntryJson(
+              {
+                ...candidate,
+                entry_json: candidate.entry_json ?? "",
+                current_session_id: candidate.current_session_id ?? undefined,
+                updated_at: candidate.updated_at ?? undefined,
+              },
+              "list",
+            );
             if (!entry) {
-              const retainedWindow =
-                candidate.entry_json === "{}"
-                  ? executeSqliteQueryTakeFirstSync(
-                      database.db,
-                      db
-                        .selectFrom("session_windows")
-                        .select("session_id")
-                        .where("session_id", "=", candidate.current_session_id)
-                        .where("session_key", "=", candidate.session_key),
-                    )
-                  : undefined;
+              const retainedWindow = candidate.entry_json === "{}" && candidate.retained_window;
               if (!retainedWindow) {
                 throw canonicalSessionKeyMigrationRequiredError(
                   `invalid persisted session row requires repair for ${candidate.session_key}`,
@@ -354,25 +382,30 @@ export function ensureTranscriptSessionRoot(
           }
         }
       }
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("session_windows")
-          .values({
-            session_id: scope.sessionId,
-            session_key: scope.sessionKey,
-            previous_session_id: null,
-            reason: null,
-            session_scope: "conversation",
-            created_at: updatedAt,
-            updated_at: updatedAt,
-          })
-          .onConflict((conflict) =>
-            conflict.column("session_id").doUpdateSet({
+      if (options.deferExistingWindowTouch && options.preparedRoots?.[0]?.persisted_session_key) {
+        return;
+      }
+      preserveSessionEntryCacheAcrossWrite(database, () => {
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .insertInto("session_windows")
+            .values({
+              session_id: scope.sessionId,
+              session_key: scope.sessionKey,
+              previous_session_id: null,
+              reason: null,
+              session_scope: "conversation",
+              created_at: updatedAt,
               updated_at: updatedAt,
-            }),
-          ),
-      );
+            })
+            .onConflict((conflict) =>
+              conflict.column("session_id").doUpdateSet({
+                updated_at: updatedAt,
+              }),
+            ),
+        );
+      });
       if (actor?.window) {
         actor.window.updated_at = updatedAt;
       }
@@ -415,23 +448,6 @@ export function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId
 }
 
 // Only compilation is retained; writer transactions must see their latest mutation fences.
-const transcriptMutationStateQuery = createSqliteQueryCache((database) => {
-  const db = getSessionKysely(database);
-  return prepareSqliteQueryTakeFirstSync<
-    string,
-    { transcript_observed_at: number | null; transcript_updated_at: number | null }
-  >(database, (parameter) =>
-    db
-      .selectFrom("session_windows")
-      .select(["transcript_observed_at", "transcript_updated_at"])
-      .where(
-        "session_id",
-        "=",
-        parameter((sessionId) => sessionId),
-      ),
-  );
-});
-
 export function readTranscriptMutationStateInTransaction(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
@@ -454,49 +470,68 @@ export function advanceTranscriptMutationAtInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
   value: number,
-  options: { strictly?: boolean; windowUpdatedAt?: number } = {},
-): void {
+  options: TranscriptMutationOptions = {},
+): SessionTranscriptContextVersion | undefined {
   return withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
     let transcriptUpdatedAt = Math.floor(value);
+    const steps = options.steps ?? 1;
     if (!Number.isFinite(transcriptUpdatedAt) || transcriptUpdatedAt < 0) {
-      return;
+      return undefined;
     }
     if (!options.strictly) {
       const state = readTranscriptMutationStateInTransaction(database, sessionId);
-      transcriptUpdatedAt = Math.max(transcriptUpdatedAt, state.updatedAt ?? 0);
       if (state.updatedAt !== null && state.updatedAt >= transcriptUpdatedAt) {
-        return;
+        return undefined;
       }
     }
     const db = getSessionKysely(database.db);
     const actor = readSessionActorTransactionState(database, { sessionId });
+    const publicationProjection = projectTranscriptMutationPublication(
+      options.rowTranscript,
+      options.publicationAssistant,
+    );
     if (actor?.window && options.strictly) {
       transcriptUpdatedAt = Math.max(
         transcriptUpdatedAt,
-        (actor.window.transcript_updated_at ?? -1) + 1,
-        (actor.window.transcript_observed_at ?? -1) + 1,
+        (actor.window.transcript_updated_at ?? -1) + steps,
+        (actor.window.transcript_observed_at ?? -1) + steps,
       );
     }
     const update = db
       .updateTable("session_windows")
-      .set((eb) => ({
-        ...(options.windowUpdatedAt !== undefined ? { updated_at: options.windowUpdatedAt } : {}),
-        transcript_updated_at:
+      .set((eb) => {
+        const nextUpdatedAt =
           options.strictly && !actor?.window
-            ? eb.fn<number>("max", [
+            ? engineGreatest(database.db, [
                 eb.val(transcriptUpdatedAt),
-                eb(eb.fn.coalesce("transcript_updated_at", eb.val(-1)), "+", 1),
-                eb(eb.fn.coalesce("transcript_observed_at", eb.val(-1)), "+", 1),
+                eb(eb.fn.coalesce("transcript_updated_at", eb.val(-1)), "+", steps),
+                eb(eb.fn.coalesce("transcript_observed_at", eb.val(-1)), "+", steps),
               ])
-            : transcriptUpdatedAt,
-      }))
+            : transcriptUpdatedAt;
+        return {
+          ...(options.windowUpdatedAt !== undefined ? { updated_at: options.windowUpdatedAt } : {}),
+          transcript_updated_at: nextUpdatedAt,
+          ...(options.rowTranscript
+            ? {
+                row_transcript_json: JSON.stringify(options.rowTranscript),
+                row_transcript_updated_at: nextUpdatedAt,
+              }
+            : {}),
+        };
+      })
       .where("session_id", "=", sessionId);
     if (!findOpenClawAgentDatabaseIdentity(database)) {
       executeSqliteQuerySync(database.db, update);
-      return;
+      return undefined;
     }
     if (actor?.window) {
-      executeSqliteQuerySync(database.db, update);
+      if (options.persistActorMutation !== false) {
+        if (options.writeActorMutation) {
+          options.writeActorMutation(update);
+        } else {
+          executeSqliteQuerySync(database.db, update);
+        }
+      }
       if (options.windowUpdatedAt !== undefined) {
         actor.window.updated_at = options.windowUpdatedAt;
       }
@@ -511,56 +546,21 @@ export function advanceTranscriptMutationAtInTransaction(
         indexedSeq: projection?.indexedSeq ?? null,
         activeMessageCount: projection?.activeMessageCount ?? null,
         needsRebuild: projection ? (projection.needsRebuild ? 1 : 0) : null,
+        ...(!projection?.needsRebuild &&
+        !projection?.hasUnclassifiedEvents &&
+        projection?.indexedSeq === actor.hot.transcript.version.rawSeq
+          ? { projectionReady: true as const }
+          : {}),
+        ...publicationProjection,
       });
-      return;
+      return undefined;
     }
-    const context = executeSqliteQueryTakeFirstSync(
-      database.db,
-      update
-        .returning((eb) => [
-          "session_id as sessionId",
-          "session_key as sessionKey",
-          "transcript_updated_at as updatedAt",
-          eb
-            .selectFrom("transcript_rewrite_watermarks")
-            .select("generation")
-            .where("session_id", "=", sessionId)
-            .as("generation"),
-          eb.fn
-            .coalesce(
-              eb
-                .selectFrom("session_transcript_cold_archives")
-                .select("last_seq")
-                .where("session_id", "=", sessionId),
-              eb
-                .selectFrom("transcript_events")
-                .select((inner) => inner.fn.max<number | null>("seq").as("seq"))
-                .where("session_id", "=", sessionId),
-            )
-            .as("rawSeq"),
-          eb
-            .selectFrom("session_transcript_index_state")
-            .select("leaf_event_id")
-            .where("session_id", "=", sessionId)
-            .as("leafEventId"),
-          eb
-            .selectFrom("session_transcript_index_state")
-            .select("indexed_seq")
-            .where("session_id", "=", sessionId)
-            .as("indexedSeq"),
-          eb
-            .selectFrom("session_transcript_index_state")
-            .select("active_message_count")
-            .where("session_id", "=", sessionId)
-            .as("activeMessageCount"),
-          eb
-            .selectFrom("session_transcript_index_state")
-            .select("needs_rebuild")
-            .where("session_id", "=", sessionId)
-            .as("needsRebuild"),
-        ])
-        .$assertType<SessionTranscriptAuthority>(),
-    );
+    const context = options.writeWindowMutation
+      ? options.writeWindowMutation(update)
+      : executeSqliteQueryTakeFirstSync(
+          database.db,
+          returningTranscriptMutationAuthority(update, sessionId),
+        );
     if (context) {
       retainTranscriptContextFacts(
         database,
@@ -572,20 +572,38 @@ export function advanceTranscriptMutationAtInTransaction(
         },
         getSqliteReadScopeRevision(database.db),
       );
-      publishSessionTranscriptAuthority(database, context);
+      publishSessionTranscriptAuthority(database, {
+        ...context,
+        ...(options.projectionReady ? { projectionReady: true as const } : {}),
+        ...publicationProjection,
+      });
+      return {
+        generation: context.generation,
+        rawSeq: context.rawSeq,
+        updatedAt: context.updatedAt,
+      };
     }
+    return undefined;
   });
 }
 
 export function touchTranscriptMutationInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
-  windowUpdatedAt?: number,
-): void {
-  advanceTranscriptMutationAtInTransaction(database, sessionId, Date.now(), {
-    strictly: true,
-    windowUpdatedAt,
-  });
+  options: Omit<TranscriptMutationOptions, "strictly" | "steps" | "publicationAssistant"> = {},
+  logicalAdvance?: TranscriptMutationAdvance,
+): SessionTranscriptContextVersion | undefined {
+  return advanceTranscriptMutationAtInTransaction(
+    database,
+    sessionId,
+    logicalAdvance?.adjustedTime ?? Date.now(),
+    {
+      ...options,
+      strictly: true,
+      steps: logicalAdvance?.steps,
+      publicationAssistant: logicalAdvance?.publicationAssistant,
+    },
+  );
 }
 
 export function deleteTranscriptEventsInTransaction(
@@ -595,10 +613,6 @@ export function deleteTranscriptEventsInTransaction(
   return withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
     assertSessionTranscriptHot(database.db, sessionId);
     const db = getSessionKysely(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("transcript_event_identities").where("session_id", "=", sessionId),
-    );
     const result = executeSqliteQuerySync(
       database.db,
       db.deleteFrom("transcript_events").where("session_id", "=", sessionId),
@@ -645,4 +659,44 @@ export function pruneTranscriptReactionsInTransaction(
       }
     },
   );
+}
+
+export function touchTranscriptWindowRecency(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  updatedAt: number,
+  cursor: { updateWindow?: (createdAt: number) => unknown },
+): void {
+  withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
+    cursor.updateWindow ??= prepareSqliteQuerySync<number>(database.db, (parameter) =>
+      getSessionKysely(database.db)
+        .updateTable("session_windows")
+        .set({ updated_at: parameter((timestamp) => timestamp) })
+        .where("session_id", "=", sessionId),
+    );
+    const updateWindow = cursor.updateWindow;
+    preserveSessionEntryCacheAcrossWrite(database, () => updateWindow(updatedAt));
+    const actor = readSessionActorTransactionState(database, { sessionId });
+    if (actor?.window) {
+      actor.window.updated_at = updatedAt;
+    }
+  });
+}
+
+export function recordTranscriptReplacementMutation(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  preservedUpdatedAt: number | null | undefined,
+  projectionReady = false,
+): void {
+  if (preservedUpdatedAt === undefined || preservedUpdatedAt === null) {
+    touchTranscriptMutationInTransaction(database, sessionId, { projectionReady });
+    return;
+  }
+  // Maintenance rewrites must invalidate in-flight projections without making an old session
+  // look newly active. A one-tick advance preserves ordering while changing the snapshot key.
+  advanceTranscriptMutationAtInTransaction(database, sessionId, preservedUpdatedAt, {
+    strictly: true,
+    projectionReady,
+  });
 }

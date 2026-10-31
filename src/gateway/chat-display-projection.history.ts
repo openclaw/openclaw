@@ -6,9 +6,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import { prepareCronJobNameResolver } from "../cron/store/job-name.js";
 import {
   isCompletionReportInputProvenance,
+  isCronExecutionInputProvenance,
   isSubagentCoordinationInputProvenance,
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
@@ -31,6 +31,7 @@ import {
   isProjectedForwardedMessage,
   isForwardedUserMessage,
   isCronRunMessage,
+  userMessageStartsDisplayTurn,
   type RoleContentMessage,
 } from "./chat-display-projection.helpers.js";
 import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
@@ -331,11 +332,61 @@ export function dropPreSessionStartAnnouncePairs(
   return createPreSessionStartAnnouncePairFilter(sessionStartedAt)(messages);
 }
 
+export function readPluginSteeringId(message: unknown): string | undefined {
+  const record = readRecord(message);
+  if (record?.role !== "user") {
+    return undefined;
+  }
+  const provenance = normalizeInputProvenance(record.provenance);
+  const sourceTool = provenance?.sourceTool;
+  return provenance?.kind === "internal_system" && sourceTool?.startsWith("plugin:")
+    ? sourceTool.slice("plugin:".length).trim() || undefined
+    : undefined;
+}
+
+/** Plugin input stays canonical and hidden; only the Control UI requests this display copy. */
+export function projectPluginSteeringMessage(message: Record<string, unknown>) {
+  const pluginId = readPluginSteeringId(message);
+  if (!pluginId) {
+    return message;
+  }
+  const metadata = readRecord(message["__openclaw"]);
+  const steering = readRecord(metadata?.pluginSteering);
+  const displayText = typeof steering?.displayText === "string" ? steering.displayText : undefined;
+  return {
+    ...message,
+    display: true,
+    ...(displayText === undefined
+      ? {}
+      : { content: [{ type: "text", text: displayText }], text: displayText }),
+    __openclaw: {
+      ...metadata,
+      // The body belongs in capped content, not duplicated in uncapped metadata.
+      pluginSteering: {
+        pluginId,
+        ...(typeof steering?.pluginName === "string" ? { pluginName: steering.pluginName } : {}),
+      },
+    },
+  };
+}
+
 function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): boolean {
   if (message.display === false) {
     return true;
   }
   return isOpenClawRuntimeContextCustomMessage(message);
+}
+
+function isDisplayHeartbeatAcknowledgement(
+  message: RoleContentMessage,
+  allowTruncated = false,
+): boolean {
+  // Model history ignores reasoning when classifying no-op heartbeats. Chat
+  // displays reasoning-only items, so empty answer text cannot hide those rows.
+  return (
+    (!hasAssistantNonTextContent(message) || Boolean(extractAssistantPhaseText(message))) &&
+    isHeartbeatOkResponse(message, undefined, allowTruncated)
+  );
 }
 
 function shouldHideProjectedHistoryMessage(
@@ -356,8 +407,16 @@ function shouldHideProjectedHistoryMessage(
   if (
     roleContent.role === "user" &&
     provenance?.kind === "internal_system" &&
-    provenance.sourceTool === "exec"
+    (provenance.sourceTool === "exec" ||
+      provenance.sourceTool === "cron_failure_repair" ||
+      provenance.sourceTool === "tool_handoff")
   ) {
+    // Internal repair instructions and yielded tool results belong to the model transcript,
+    // not the chat feed.
+    // Keep the agent's authored outcome visible, including requests for user help.
+    return true;
+  }
+  if (roleContent.role === "user" && isCronExecutionInputProvenance(provenance)) {
     return true;
   }
   if (roleContent.role === "user" && isCompletionReportInputProvenance(message.provenance)) {
@@ -376,17 +435,35 @@ function shouldHideProjectedHistoryMessage(
   if (roleContent.role === "assistant" && isEmptyTextOnlyContent(message.content ?? message.text)) {
     return false;
   }
-  return heartbeatUser || isHeartbeatOkResponse(roleContent);
+  return heartbeatUser || isDisplayHeartbeatAcknowledgement(roleContent);
 }
 
 /** Identifies the hidden native input that starts a heartbeat-driven turn. */
-export function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean {
+function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean {
   const record = readRecord(message);
   if (!record || isForwardedUserMessage(record)) {
     return false;
   }
   const roleContent = asRoleContentMessage(record);
   return roleContent?.role === "user" && isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT);
+}
+
+/** Hidden heartbeat or exec input that must keep the next reply in its own turn. */
+export function isProjectedHistoryTurnBoundaryMessage(message: unknown): boolean {
+  if (isHeartbeatHistoryTurnBoundaryMessage(message)) {
+    return true;
+  }
+  const record = readRecord(message);
+  if (!record || isForwardedUserMessage(record)) {
+    return false;
+  }
+  const roleContent = asRoleContentMessage(record);
+  const provenance = normalizeInputProvenance(record.provenance);
+  return (
+    roleContent?.role === "user" &&
+    provenance?.kind === "internal_system" &&
+    provenance.sourceTool === "exec"
+  );
 }
 
 function attachProjectedTurnBoundary(message: Record<string, unknown>): Record<string, unknown> {
@@ -504,7 +581,13 @@ export function filterVisibleProjectedHistoryMessages(
     if (
       next &&
       nextRoleContent &&
-      isHeartbeatOkResponse(nextRoleContent) &&
+      isDisplayHeartbeatAcknowledgement(
+        nextRoleContent,
+        Boolean(
+          currentRoleContent &&
+          isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT, { heartbeatOnly: true }),
+        ),
+      ) &&
       !isProjectedForwardedMessage(next)
     ) {
       changed = true;
@@ -514,7 +597,7 @@ export function filterVisibleProjectedHistoryMessages(
     }
     if (shouldHideProjectedHistoryMessage(current, currentRoleContent, heartbeatUser)) {
       changed = true;
-      pendingTurnBoundary ||= heartbeatUser && !isForwardedUserMessage(current);
+      pendingTurnBoundary ||= isProjectedHistoryTurnBoundaryMessage(current);
       continue;
     }
     const mirrorSourceId = readRecord(current.openclawDeliveryMirror)?.sourceAssistantMessageId;
@@ -524,7 +607,16 @@ export function filterVisibleProjectedHistoryMessages(
       changed = true;
       continue;
     }
-    if (pendingTurnBoundary && canCarryProjectedTurnBoundary(currentRoleContent)) {
+    if (
+      pendingTurnBoundary &&
+      currentRoleContent?.role === "user" &&
+      userMessageStartsDisplayTurn(current)
+    ) {
+      // Plain user text already starts the next turn. Drop the boundary so
+      // this turn's assistant stays with that user.
+      pendingTurnBoundary = false;
+      visible.push(current);
+    } else if (pendingTurnBoundary && canCarryProjectedTurnBoundary(currentRoleContent)) {
       visible.push(attachProjectedTurnBoundary(current));
       pendingTurnBoundary = false;
       changed = true;
@@ -594,13 +686,6 @@ export function readForwardedCronJobIds(messages: readonly unknown[]) {
     const jobId = readForwardedSender(message).jobId;
     return jobId ? [jobId] : [];
   });
-}
-
-export async function prepareForwardedMessageCronJobNameResolver(
-  messages: readonly unknown[],
-  storePath?: string,
-) {
-  return await prepareCronJobNameResolver(readForwardedCronJobIds(messages), storePath);
 }
 
 export function projectForwardedMessages(

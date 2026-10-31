@@ -1,8 +1,15 @@
 import { asRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareCronRunAdmission } from "../../cron/run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "../../cron/scheduled-occurrence.test-support.js";
+import { restartHandlers } from "../../gateway/server-methods/restart.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import {
+  resetGatewayRestartStateForInProcessRestart,
+  setPreRestartDeferralCheck,
+} from "../../infra/restart.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -27,6 +34,11 @@ vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
   getInProcessGatewayRequestContext: (resolve?: () => GatewayRequestContext | undefined) =>
     resolve ? resolve() : host.context,
 }));
+const ownerTool = () => createGatewayTool({ senderIsOwner: true, allowConfigReads: false });
+const expectNoGatewayCall = () => {
+  expect(callGatewayToolMock).not.toHaveBeenCalled();
+  expect(dispatchMock).not.toHaveBeenCalled();
+};
 
 describe("gateway tool", () => {
   beforeEach(() => {
@@ -43,35 +55,92 @@ describe("gateway tool", () => {
       await expect(tool.execute("denied-config", { action, path: "channels" })).rejects.toThrow(
         `Action not available: ${action}`,
       );
-      expect(callGatewayToolMock).not.toHaveBeenCalled();
-      expect(dispatchMock).not.toHaveBeenCalled();
+      expectNoGatewayCall();
     },
   );
 
-  it.each(["restart"])("rejects removed action %s", async (action) => {
-    const tool = createGatewayTool();
-
-    await expect(tool.execute?.("tool-call", { action })).rejects.toThrow(
-      `Unknown action: ${action}`,
-    );
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  it("hands an owner restart to the real runtime scheduler and waits for active work", async () => {
+    vi.useFakeTimers();
+    resetGatewayRestartStateForInProcessRestart();
+    resetGatewayWorkAdmission();
+    let pending = 1;
+    setPreRestartDeferralCheck(() => pending);
+    const restarted = vi.fn();
+    process.on("SIGUSR2", restarted);
+    dispatchMock.mockImplementation(async (method, params, options) => {
+      const handler = restartHandlers[String(method)];
+      if (!handler) {
+        throw new Error("Unexpected maintenance method");
+      }
+      let result: unknown;
+      await handler({
+        params,
+        sessionMutationCommitGuard: (options as { sessionMutationCommitGuard?: () => void })
+          .sessionMutationCommitGuard,
+        respond: (ok, payload, error) => {
+          if (!ok) {
+            throw new Error(error?.message);
+          }
+          result = payload;
+        },
+      } as Parameters<typeof handler>[0]);
+      return result;
+    });
+    try {
+      const result = await ownerTool().execute("maintenance", {
+        action: "restart",
+        note: "update.run",
+        skipDeferral: true,
+        target: { pid: 1 },
+        gatewayUrl: "wss://wrong.invalid",
+      });
+      expect(result.details).toMatchObject({
+        ok: true,
+        restart: { mode: "emit", reason: "gateway.restart.agent" },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(restarted).not.toHaveBeenCalled();
+      pending = 0;
+      await vi.advanceTimersByTimeAsync(500);
+      expect(restarted).toHaveBeenCalledOnce();
+      expect(callGatewayToolMock).not.toHaveBeenCalled();
+    } finally {
+      process.off("SIGUSR2", restarted);
+      resetGatewayRestartStateForInProcessRestart();
+      setPreRestartDeferralCheck(() => 0);
+      resetGatewayWorkAdmission();
+      vi.useRealTimers();
+    }
   });
 
-  it.each([["config.get", { action: "config.get" }]])(
-    "forwards the abort signal for %s",
-    async (method, params) => {
-      const controller = new AbortController();
+  it.each(["restart", "update.cleanup"])(
+    "refuses non-owner %s before any effect",
+    async (action) => {
+      const result = await createGatewayTool({ senderIsOwner: false }).execute("maintenance", {
+        action,
+        senderIsOwner: true,
+      });
+      expect(result.details).toMatchObject({ ok: false, code: "owner_required" });
+      expectNoGatewayCall();
+    },
+  );
+});
 
-      await createGatewayTool().execute("tool-call", params, controller.signal);
-
-      expect(callGatewayToolMock).toHaveBeenCalledWith(
-        method,
-        expect.anything(),
-        expect.anything(),
-        {
-          signal: controller.signal,
-        },
-      );
+describe("gateway maintenance authority", () => {
+  it.each(["restart", "update.cleanup"])(
+    "does not redirect %s to a remote Gateway",
+    async (action) => {
+      host.context = undefined;
+      dispatchMock.mockReset();
+      callGatewayToolMock.mockClear();
+      await expect(
+        createGatewayTool({ senderIsOwner: true }).execute("maintenance", {
+          action,
+          gatewayUrl: "wss://other.invalid",
+          gatewayToken: "synthetic-token",
+        }),
+      ).rejects.toThrow("Gateway instance unavailable");
+      expectNoGatewayCall();
     },
   );
 });
@@ -122,6 +191,7 @@ describe("gateway update action", () => {
     async (admissionSource) => {
       const sessionKey = "agent:main:synthetic-update";
       const admission = prepareCronRunAdmission({
+        scheduledExecution: TEST_SCHEDULED_EXECUTION,
         deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
         cfg: {},
         agentId: "main",
@@ -182,7 +252,7 @@ describe("gateway update action", () => {
     },
   );
 
-  it.each([undefined])("requires an explicit owner identity (%s)", async (senderIsOwner) => {
+  it("requires an explicit owner identity", async () => {
     const result = await withGatewayToolCallerIdentity(
       {
         agentId: "main",
@@ -190,7 +260,7 @@ describe("gateway update action", () => {
         turnSourceChannel: "telegram",
       },
       () =>
-        createGatewayTool({ senderIsOwner, requesterSenderId: "123456789" }).execute("update", {
+        createGatewayTool({ requesterSenderId: "123456789" }).execute("update", {
           action: "update.run",
           requesterSenderId: "spoofed",
           channel: "discord",
@@ -203,8 +273,7 @@ describe("gateway update action", () => {
       message:
         "No authenticated owner chat principal or operator-scheduled admission authorizes this update. Ask the operator to add `telegram:123456789` to `commands.ownerAllowFrom`.",
     });
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-    expect(dispatchMock).not.toHaveBeenCalled();
+    expectNoGatewayCall();
   });
 
   it.each([0])(
@@ -289,10 +358,7 @@ describe("gateway update action", () => {
 
   it("still calls without a caller session", async () => {
     dispatchMock.mockResolvedValue({ ok: true, result: { status: "ok", steps: [] } });
-    const result = await createGatewayTool({
-      senderIsOwner: true,
-      allowConfigReads: false,
-    }).execute("update", {
+    const result = await ownerTool().execute("update", {
       action: "update.run",
     });
     expect(dispatchMock).toHaveBeenCalledOnce();
@@ -305,8 +371,7 @@ describe("gateway update action", () => {
     await expect(
       createGatewayTool({ senderIsOwner: true }).execute("update", { action: "update.run" }),
     ).rejects.toThrow("Gateway instance unavailable for update.run");
-    expect(dispatchMock).not.toHaveBeenCalled();
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
+    expectNoGatewayCall();
   });
 
   it("preserves update diagnostic Unicode in tool results", async () => {

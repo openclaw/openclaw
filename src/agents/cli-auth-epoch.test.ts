@@ -1,11 +1,17 @@
-/** Tests CLI auth epoch stability across token refreshes and identity changes. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAuthProfileStoreFixture } from "./auth-profiles/credential-fixtures.test-support.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import { updateAuthProfileStoreWithLock } from "./auth-profiles/store-runtime.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  OAuthCredential,
+} from "./auth-profiles/types.js";
 import {
   resolveCliAuthBindingFingerprint,
   resolveCliAuthEpoch,
@@ -16,23 +22,66 @@ import {
   setCliAuthEpochTestDeps,
 } from "./cli-auth-epoch.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
-import { resolveCliExecutableIdentity } from "./cli-executable-identity.js";
+
+function oauth<Provider extends string>(
+  provider: Provider,
+  overrides: Partial<Omit<OAuthCredential, "provider">> = {},
+): OAuthCredential & { provider: Provider } {
+  return {
+    type: "oauth",
+    access: "access-a",
+    refresh: "refresh-a",
+    expires: 1,
+    ...overrides,
+    provider,
+  };
+}
+
+function profileEpoch(authProfileId: string) {
+  return resolveCliAuthEpoch({ provider: "google-gemini-cli", authProfileId });
+}
+
+function useProfileStore(store: AuthProfileStore) {
+  setCliAuthEpochTestDeps({
+    readGeminiCliCredentialsCached: () => null,
+    loadAuthProfileStoreForRuntime: () => store,
+  });
+}
+
+function ownerFingerprint(
+  config: OpenClawConfig,
+  overrides: Partial<Parameters<typeof resolveCliRuntimeOwnerFingerprint>[0]> = {},
+) {
+  return resolveCliRuntimeOwnerFingerprint({
+    provider: "claude-cli",
+    config,
+    agentId: "openclaw",
+    ...overrides,
+  });
+}
+
+function expectEpochs(...epochs: Array<string | undefined>) {
+  for (const epoch of epochs) {
+    expect(typeof epoch).toBe("string");
+    expect(epoch).toMatch(/^[a-f0-9]{64}$/);
+  }
+}
+
+const tempDirs: string[] = [];
+function tempDir(label: string) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), label));
+  tempDirs.push(dir);
+  return dir;
+}
 
 describe("resolveCliAuthEpoch", () => {
   afterEach(() => {
     resetCliAuthEpochTestDeps();
     cliBackendsTesting.resetDepsForTest();
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
-
-  function expectCliAuthEpoch(
-    epoch: Awaited<ReturnType<typeof resolveCliAuthEpoch>>,
-    label = "auth epoch",
-  ): asserts epoch is string {
-    // Epochs are cache/session keys, so tests assert hash shape without caring
-    // about the exact digest value.
-    expect(typeof epoch, label).toBe("string");
-    expect(epoch, label).toMatch(/^[a-f0-9]{64}$/);
-  }
 
   it("returns undefined when no local or auth-profile credentials exist", async () => {
     setCliAuthEpochTestDeps({
@@ -42,167 +91,96 @@ describe("resolveCliAuthEpoch", () => {
     });
 
     await expect(
-      resolveCliAuthEpoch({
-        provider: "claude-cli",
-        authProfileId: "anthropic:work",
-      }),
+      resolveCliAuthEpoch({ provider: "claude-cli", authProfileId: "anthropic:work" }),
     ).resolves.toBeUndefined();
-    await expect(
-      resolveCliAuthEpoch({
-        provider: "google-gemini-cli",
-        authProfileId: "google:work",
-      }),
-    ).resolves.toBeUndefined();
+    await expect(profileEpoch("google:work")).resolves.toBeUndefined();
   });
 
   it("loads auth-profile epochs from the selected agent directory", async () => {
-    const stores: Record<string, AuthProfileStore> = {
-      "/agents/work/agent": createAuthProfileStoreFixture({
-        "google-gemini-cli:default": {
-          type: "oauth",
-          provider: "google-gemini-cli",
-          access: "work-access",
-          refresh: "work-refresh",
-          expires: 1,
-          email: "work@example.test",
-          projectId: "work-project",
-        },
-      }),
-      "/agents/personal/agent": createAuthProfileStoreFixture({
-        "google-gemini-cli:default": {
-          type: "oauth",
-          provider: "google-gemini-cli",
-          access: "personal-access",
-          refresh: "personal-refresh",
-          expires: 1,
-          email: "personal@example.test",
-          projectId: "personal-project",
-        },
-      }),
-    };
-    const loadAuthProfileStoreForRuntime = vi.fn((agentDir?: string) => {
-      return stores[agentDir ?? ""] ?? { version: 1, profiles: {} };
-    });
+    const agentDirs = ["/agents/work/agent", "/agents/personal/agent"];
+    const stores: Record<string, AuthProfileStore> = Object.fromEntries(
+      agentDirs.map((agentDir) => [
+        agentDir,
+        createAuthProfileStoreFixture({
+          "google-gemini-cli:default": oauth("google-gemini-cli", {
+            email: `${agentDir}@example.test`,
+            projectId: agentDir,
+          }),
+        }),
+      ]),
+    );
+    const loadAuthProfileStoreForRuntime = vi.fn(
+      (agentDir?: string) => stores[agentDir ?? ""] ?? { version: 1, profiles: {} },
+    );
     setCliAuthEpochTestDeps({
       readGeminiCliCredentialsCached: () => null,
       loadAuthProfileStoreForRuntime,
     });
 
-    const work = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      agentDir: "/agents/work/agent",
-      authProfileId: "google-gemini-cli:default",
-      skipLocalCredential: true,
-    });
-    const personal = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      agentDir: "/agents/personal/agent",
-      authProfileId: "google-gemini-cli:default",
-      skipLocalCredential: true,
-    });
-
-    expectCliAuthEpoch(work);
-    expectCliAuthEpoch(personal);
+    const [work, personal] = await Promise.all(
+      agentDirs.map((agentDir) =>
+        resolveCliAuthEpoch({
+          provider: "google-gemini-cli",
+          agentDir,
+          authProfileId: "google-gemini-cli:default",
+          skipLocalCredential: true,
+        }),
+      ),
+    );
+    expectEpochs(work, personal);
     expect(work).not.toBe(personal);
-    expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/agents/work/agent", {
-      readOnly: true,
-      allowKeychainPrompt: false,
-    });
-    expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/agents/personal/agent", {
-      readOnly: true,
-      allowKeychainPrompt: false,
-    });
+    for (const agentDir of agentDirs) {
+      expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(agentDir, {
+        readOnly: true,
+        allowKeychainPrompt: false,
+      });
+    }
   });
 
   it("separates Gemini CLI OAuth profile epochs by profile id", async () => {
-    let access = "access-a";
-    let refresh = "refresh-a";
-    const store: AuthProfileStore = createAuthProfileStoreFixture({
-      "google-gemini-cli:primary": {
-        type: "oauth",
-        provider: "google-gemini-cli",
-        access,
-        refresh,
-        expires: 1,
-        email: "user@example.test",
-        accountId: "google-account-1",
-        projectId: "project-1",
-      },
-      "google-gemini-cli:renamed": {
-        type: "oauth",
-        provider: "google-gemini-cli",
-        access,
-        refresh,
-        expires: 1,
-        email: "user@example.test",
-        accountId: "google-account-1",
-        projectId: "project-1",
-      },
-    });
-    setCliAuthEpochTestDeps({
-      readGeminiCliCredentialsCached: () => null,
-      loadAuthProfileStoreForRuntime: () => store,
-    });
-
-    const primary = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      agentDir: "/agents/main/agent",
-      authProfileId: "google-gemini-cli:primary",
-      skipLocalCredential: true,
-    });
-    access = "access-b";
-    refresh = "refresh-b";
-    store.profiles["google-gemini-cli:primary"] = {
-      type: "oauth",
-      provider: "google-gemini-cli",
-      access,
-      refresh,
-      expires: 2,
+    const identity = {
       email: "user@example.test",
       accountId: "google-account-1",
       projectId: "project-1",
     };
-    const primaryAfterRefresh = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      agentDir: "/agents/main/agent",
-      authProfileId: "google-gemini-cli:primary",
-      skipLocalCredential: true,
+    const store: AuthProfileStore = createAuthProfileStoreFixture({
+      "google-gemini-cli:primary": oauth("google-gemini-cli", identity),
+      "google-gemini-cli:renamed": oauth("google-gemini-cli", identity),
     });
-    const renamed = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      agentDir: "/agents/main/agent",
-      authProfileId: "google-gemini-cli:renamed",
-      skipLocalCredential: true,
+    useProfileStore(store);
+    const epoch = (name: string) =>
+      resolveCliAuthEpoch({
+        provider: "google-gemini-cli",
+        agentDir: "/agents/main/agent",
+        authProfileId: `google-gemini-cli:${name}`,
+        skipLocalCredential: true,
+      });
+    const primary = await epoch("primary");
+    store.profiles["google-gemini-cli:primary"] = oauth("google-gemini-cli", {
+      ...identity,
+      access: "access-b",
+      refresh: "refresh-b",
+      expires: 2,
     });
-
-    expectCliAuthEpoch(primary);
-    expect(primaryAfterRefresh).toBe(primary);
-    expect(renamed).not.toBe(primary);
+    expectEpochs(primary);
+    expect(await epoch("primary")).toBe(primary);
+    expect(await epoch("renamed")).not.toBe(primary);
   });
 
-  it("keeps strict CLI bindings stable for a known OAuth principal", () => {
-    let access = "access-a";
-    let refresh = "refresh-a";
+  it("keeps strict CLI bindings stable for a known OAuth principal", async () => {
+    const credential = oauth("codex-cli", { accountId: "account-1" });
     setCliAuthEpochTestDeps({
-      readCodexCliCredentialsCached: () => ({
-        type: "oauth",
-        provider: "codex-cli",
-        access,
-        refresh,
-        expires: 1,
-        accountId: "account-1",
-      }),
+      readCodexCliCredentialsCached: () => credential,
     });
 
-    const first = resolveCliAuthBindingFingerprint({ provider: "codex-cli", config: {} });
-    access = "access-b";
-    refresh = "refresh-b";
-    const second = resolveCliAuthBindingFingerprint({ provider: "codex-cli", config: {} });
+    const first = await resolveCliAuthBindingFingerprint({ provider: "codex-cli", config: {} });
+    Object.assign(credential, { access: "access-b", refresh: "refresh-b" });
+    const second = await resolveCliAuthBindingFingerprint({ provider: "codex-cli", config: {} });
 
     expect(second).toBe(first);
   });
 
-  it("fingerprints the materialized value selected for a profile SecretRef", () => {
+  it("fingerprints the materialized value selected for a profile SecretRef", async () => {
     const profileId = "google-gemini-cli:work";
     const credential = {
       type: "api_key" as const,
@@ -212,281 +190,208 @@ describe("resolveCliAuthEpoch", () => {
     setCliAuthEpochTestDeps({
       ensureAuthProfileStore: () => createAuthProfileStoreFixture({ [profileId]: credential }),
     });
-
-    expect(
+    const params = {
+      provider: "google-gemini-cli",
+      config: {},
+      authProfileId: profileId,
+      skipLocalCredential: true,
+    };
+    await expect(resolveCliAuthBindingFingerprint(params)).resolves.toBeUndefined();
+    const bindingFor = (apiKey: string) =>
       resolveCliAuthBindingFingerprint({
-        provider: "google-gemini-cli",
-        config: {},
-        authProfileId: profileId,
-        skipLocalCredential: true,
-      }),
-    ).toBeUndefined();
-    const first = resolveCliAuthBindingFingerprint({
-      provider: "google-gemini-cli",
-      config: {},
-      authProfileId: profileId,
-      resolvedAuth: {
-        apiKey: "materialized-a",
-        profileId,
-        source: `profile:${profileId}`,
-        mode: "api-key",
-      },
-      skipLocalCredential: true,
-    });
-    const second = resolveCliAuthBindingFingerprint({
-      provider: "google-gemini-cli",
-      config: {},
-      authProfileId: profileId,
-      resolvedAuth: {
-        apiKey: "materialized-b",
-        profileId,
-        source: `profile:${profileId}`,
-        mode: "api-key",
-      },
-      skipLocalCredential: true,
-    });
+        ...params,
+        resolvedAuth: { apiKey, profileId, source: `profile:${profileId}`, mode: "api-key" },
+      });
+    const first = await bindingFor("materialized-a");
+    const second = await bindingFor("materialized-b");
 
-    expectCliAuthEpoch(first);
-    expectCliAuthEpoch(second);
+    expectEpochs(first, second);
     expect(second).not.toBe(first);
   });
 
-  it("excludes unused ambient CLI auth from profile-owned bindings", () => {
+  it("excludes unused ambient CLI auth from profile-owned bindings", async () => {
     let localAccess = "local-access-a";
     const profileStore: AuthProfileStore = createAuthProfileStoreFixture({
-      "google-gemini-cli:work": {
-        type: "oauth",
-        provider: "google-gemini-cli",
+      "google-gemini-cli:work": oauth("google-gemini-cli", {
         access: "profile-access",
         refresh: "profile-refresh",
-        expires: 1,
         accountId: "profile-account",
-      },
+      }),
     });
     setCliAuthEpochTestDeps({
-      readGeminiCliCredentialsCached: () => ({
-        type: "oauth",
-        provider: "google-gemini-cli",
-        access: localAccess,
-        refresh: `refresh-${localAccess}`,
-        expires: 1,
-      }),
+      readGeminiCliCredentialsCached: () =>
+        oauth("google-gemini-cli", {
+          access: localAccess,
+          refresh: `refresh-${localAccess}`,
+        }),
       ensureAuthProfileStore: () => profileStore,
     });
 
-    const first = resolveCliAuthBindingFingerprint({
+    const params = {
       provider: "google-gemini-cli",
       config: {},
       authProfileId: "google-gemini-cli:work",
       skipLocalCredential: true,
-    });
+    };
+    const first = await resolveCliAuthBindingFingerprint(params);
     localAccess = "local-access-b";
-    const second = resolveCliAuthBindingFingerprint({
-      provider: "google-gemini-cli",
-      config: {},
-      authProfileId: "google-gemini-cli:work",
-      skipLocalCredential: true,
-    });
+    const second = await resolveCliAuthBindingFingerprint(params);
 
     expect(second).toBe(first);
+  });
+
+  it("reads strict credential bindings off-thread and observes an in-process replacement", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const profileId = "fixture:binding";
+      await state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          [profileId]: { type: "api_key", provider: "fixture", key: "synthetic-first" },
+        },
+      });
+      const params = {
+        provider: "fixture",
+        config: {},
+        agentDir: state.agentDir(),
+        authProfileId: profileId,
+        skipLocalCredential: true,
+      };
+      const observation = observeHostDataSql();
+      let first: string | undefined;
+      try {
+        first = await resolveCliAuthBindingFingerprint(params);
+        expect(
+          observation.queries.filter((sql) => /\bauth_profile_(?:store|state)\b/iu.test(sql)),
+        ).toEqual([]);
+      } finally {
+        observation.restore();
+      }
+      expectEpochs(first);
+      const updated = await updateAuthProfileStoreWithLock({
+        agentDir: state.agentDir(),
+        saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
+        updater(store) {
+          store.profiles[profileId] = {
+            type: "api_key",
+            provider: "fixture",
+            key: "synthetic-replacement",
+          };
+          return true;
+        },
+      });
+      expect(updated).not.toBeNull();
+      const second = await resolveCliAuthBindingFingerprint(params);
+      expectEpochs(second);
+      expect(second).not.toBe(first);
+    });
   });
 
   it("keeps identity-less oauth auth-profile epochs scoped to the profile id", async () => {
     const store: AuthProfileStore = createAuthProfileStoreFixture({
-      "anthropic:work": {
-        type: "oauth",
-        provider: "anthropic",
-        access: "access-a",
-        refresh: "refresh-a",
-        expires: 1,
-      },
-      "anthropic:personal": {
-        type: "oauth",
-        provider: "anthropic",
+      "anthropic:work": oauth("anthropic", {}),
+      "anthropic:personal": oauth("anthropic", {
         access: "access-b",
         refresh: "refresh-b",
         expires: 2,
+      }),
+    });
+    useProfileStore(store);
+
+    const first = await profileEpoch("anthropic:work");
+    const second = await profileEpoch("anthropic:personal");
+
+    expectEpochs(first, second);
+    expect(second).not.toBe(first);
+  });
+
+  it.each([
+    {
+      label: "keeps ref-backed token epochs stable on rotation",
+      profileId: "anthropic:work",
+      credential: {
+        token: "token-a",
+        displayName: "Work",
+        email: "user@example.com",
+        tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
       },
-    });
-    setCliAuthEpochTestDeps({
-      readGeminiCliCredentialsCached: () => null,
-      loadAuthProfileStoreForRuntime: () => store,
-    });
-
-    const first = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      authProfileId: "anthropic:work",
-    });
-    const second = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      authProfileId: "anthropic:personal",
-    });
-
-    expectCliAuthEpoch(first);
-    expectCliAuthEpoch(second);
-    expect(second).not.toBe(first);
-  });
-
-  it("keeps token auth-profile epochs stable across credential.token rotation when identity is present", async () => {
+      replacement: { token: "token-b" },
+      changes: false,
+    },
+    {
+      label: "changes token-only epochs on replacement",
+      profileId: "anthropic:token-only",
+      credential: { token: "token-a", displayName: "Manual token" },
+      replacement: { token: "token-b" },
+      changes: true,
+    },
+    {
+      label: "changes token epochs when email identity changes",
+      profileId: "anthropic:work",
+      credential: { token: "token", displayName: "Work", email: "user-a@example.com" },
+      replacement: { email: "user-b@example.com" },
+      changes: true,
+    },
+  ] satisfies Array<{
+    label: string;
+    profileId: string;
+    credential: Omit<Extract<AuthProfileCredential, { type: "token" }>, "type" | "provider">;
+    replacement: Partial<Extract<AuthProfileCredential, { type: "token" }>>;
+    changes: boolean;
+  }>)("$label", async ({ profileId, credential: fields, replacement, changes }) => {
     const credential: Extract<AuthProfileCredential, { type: "token" }> = {
       type: "token",
       provider: "anthropic",
-      token: "token-a",
-      tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
-      email: "user@example.com",
-      displayName: "Work",
+      ...fields,
     };
-    const store: AuthProfileStore = createAuthProfileStoreFixture({ "anthropic:work": credential });
-    setCliAuthEpochTestDeps({
-      readGeminiCliCredentialsCached: () => null,
-      loadAuthProfileStoreForRuntime: () => store,
-    });
-
-    const first = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      authProfileId: "anthropic:work",
-    });
-    credential.token = "token-b";
-    const second = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      authProfileId: "anthropic:work",
-    });
-
-    expectCliAuthEpoch(first);
-    // Ref-backed token rotation must not flip the epoch; the token material is
-    // only a refreshable secret when the profile has a stable secret owner.
-    expect(second).toBe(first);
-  });
-
-  it("changes token auth-profile epochs when token-only credentials change", async () => {
-    const credential: Extract<AuthProfileCredential, { type: "token" }> = {
-      type: "token",
-      provider: "anthropic",
-      token: "token-a",
-      displayName: "Manual token",
-    };
-    const store: AuthProfileStore = createAuthProfileStoreFixture({
-      "anthropic:token-only": credential,
-    });
-    setCliAuthEpochTestDeps({
-      readGeminiCliCredentialsCached: () => null,
-      loadAuthProfileStoreForRuntime: () => store,
-    });
-
-    const first = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      authProfileId: "anthropic:token-only",
-    });
-    credential.token = "token-b";
-    const second = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      authProfileId: "anthropic:token-only",
-    });
-
-    expectCliAuthEpoch(first);
-    expectCliAuthEpoch(second);
-    // Token-only profiles have no stable account/ref identity, so the token
-    // remains the session owner and manual replacement still invalidates.
-    expect(second).not.toBe(first);
-  });
-
-  it("changes token auth-profile epochs when the email identity changes", async () => {
-    const credential: Extract<AuthProfileCredential, { type: "token" }> = {
-      type: "token",
-      provider: "anthropic",
-      token: "token",
-      email: "user-a@example.com",
-      displayName: "Work",
-    };
-    const store: AuthProfileStore = createAuthProfileStoreFixture({ "anthropic:work": credential });
-    setCliAuthEpochTestDeps({
-      readGeminiCliCredentialsCached: () => null,
-      loadAuthProfileStoreForRuntime: () => store,
-    });
-
-    const first = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      authProfileId: "anthropic:work",
-    });
-    credential.email = "user-b@example.com";
-    const second = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      authProfileId: "anthropic:work",
-    });
-
-    expectCliAuthEpoch(first);
-    expectCliAuthEpoch(second);
-    // A real account switch on a static-token profile must still invalidate
-    // the epoch so reusable CLI sessions don't outlive the identity change.
-    expect(second).not.toBe(first);
+    useProfileStore(createAuthProfileStoreFixture({ [profileId]: credential }));
+    const first = await profileEpoch(profileId);
+    Object.assign(credential, replacement);
+    const second = await profileEpoch(profileId);
+    expectEpochs(first, second);
+    if (changes) {
+      expect(second).not.toBe(first);
+    } else {
+      expect(second).toBe(first);
+    }
   });
 
   it("mixes local codex and auth-profile state", async () => {
-    let access = "local-access-a";
-    let localRefresh = "local-refresh-a";
-    let refresh = "profile-refresh-a";
-    let accountId = "acct-1";
-    let email = "user-a@example.com";
+    const local = oauth("openai", {
+      access: "local-access-a",
+      refresh: "local-refresh-a",
+      accountId: "acct-1",
+    });
+    const profile = oauth("openai", {
+      access: "profile-access",
+      refresh: "profile-refresh-a",
+      email: "user-a@example.com",
+    });
     setCliAuthEpochTestDeps({
-      readCodexCliCredentialsCached: () => ({
-        type: "oauth",
-        provider: "openai",
-        access,
-        refresh: localRefresh,
-        expires: 1,
-        accountId,
-      }),
+      readCodexCliCredentialsCached: () => local,
       loadAuthProfileStoreForRuntime: () =>
-        createAuthProfileStoreFixture({
-          "openai:work": {
-            type: "oauth",
-            provider: "openai",
-            access: "profile-access",
-            refresh,
-            expires: 1,
-            email,
-          },
-        }),
+        createAuthProfileStoreFixture({ "openai:work": profile }),
     });
 
-    const first = await resolveCliAuthEpoch({
-      provider: "codex-cli",
-      authProfileId: "openai:work",
-    });
-    access = "local-access-b";
-    const second = await resolveCliAuthEpoch({
-      provider: "codex-cli",
-      authProfileId: "openai:work",
-    });
-    localRefresh = "local-refresh-b";
-    const third = await resolveCliAuthEpoch({
-      provider: "codex-cli",
-      authProfileId: "openai:work",
-    });
-    refresh = "profile-refresh-b";
-    const fourth = await resolveCliAuthEpoch({
-      provider: "codex-cli",
-      authProfileId: "openai:work",
-    });
-    accountId = "acct-2";
-    const fifth = await resolveCliAuthEpoch({
-      provider: "codex-cli",
-      authProfileId: "openai:work",
-    });
-    email = "user-b@example.com";
-    const sixth = await resolveCliAuthEpoch({
-      provider: "codex-cli",
-      authProfileId: "openai:work",
-    });
-
-    expectCliAuthEpoch(first);
-    expect(second).toBe(first);
-    expect(third).toBe(second);
-    expect(fourth).toBe(third);
-    expectCliAuthEpoch(fifth);
-    expectCliAuthEpoch(sixth);
-    expect(fifth).not.toBe(fourth);
-    expect(sixth).not.toBe(fifth);
+    const resolve = () =>
+      resolveCliAuthEpoch({
+        provider: "codex-cli",
+        authProfileId: "openai:work",
+      });
+    let previous = await resolve();
+    expectEpochs(previous);
+    for (const [credential, replacement, changes] of [
+      [local, { access: "local-access-b" }, false],
+      [local, { refresh: "local-refresh-b" }, false],
+      [profile, { refresh: "profile-refresh-b" }, false],
+      [local, { accountId: "acct-2" }, true],
+      [profile, { email: "user-b@example.com" }, true],
+    ] satisfies Array<[OAuthCredential, Partial<OAuthCredential>, boolean]>) {
+      Object.assign(credential, replacement);
+      const next = await resolve();
+      expectEpochs(next);
+      expect(next === previous).toBe(!changes);
+      previous = next;
+    }
   });
 
   function cliConfig(command: string): OpenClawConfig {
@@ -529,130 +434,52 @@ describe("resolveCliAuthEpoch", () => {
       ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
     });
 
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-owner-native-"));
+    const dir = tempDir("openclaw-cli-owner-native-");
     const executable = path.join(dir, "claude");
     copyNativeExecutable(executable);
-    try {
-      const config = cliConfig(executable);
-      const fingerprint = await resolveCliRuntimeOwnerFingerprint({
-        provider: "claude-cli",
-        config,
-        agentId: "openclaw",
-      });
+    const config = cliConfig(executable);
+    const fingerprint = await ownerFingerprint(config);
 
-      expectCliAuthEpoch(fingerprint);
-      await expect(
-        resolveCliRuntimeOwnerFingerprint({
-          provider: "claude-cli",
-          config,
-          agentId: "openclaw",
-          runtimeOwnerId: "replacement-backend",
-        }),
-      ).resolves.toBeUndefined();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expectEpochs(fingerprint);
+    await expect(
+      ownerFingerprint(config, { runtimeOwnerId: "replacement-backend" }),
+    ).resolves.toBeUndefined();
   });
 
   it("changes an opaque owner when PATH selects a different executable", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-owner-path-"));
+    const dir = tempDir("openclaw-cli-owner-path-");
     const firstBin = path.join(dir, "first");
     const secondBin = path.join(dir, "second");
     copyNativeExecutable(path.join(firstBin, "claude"), nativeUtility("true"));
     copyNativeExecutable(path.join(secondBin, "claude"), nativeUtility("false"));
-    try {
-      const config = cliConfig("claude");
-      const first = await resolveCliRuntimeOwnerFingerprint({
-        provider: "claude-cli",
-        config,
-        agentId: "openclaw",
-        env: { PATH: firstBin },
-      });
-      const second = await resolveCliRuntimeOwnerFingerprint({
-        provider: "claude-cli",
-        config,
-        agentId: "openclaw",
-        env: { PATH: secondBin },
-      });
+    const config = cliConfig("claude");
+    const first = await ownerFingerprint(config, { env: { PATH: firstBin } });
+    const second = await ownerFingerprint(config, { env: { PATH: secondBin } });
 
-      expectCliAuthEpoch(first);
-      expectCliAuthEpoch(second);
-      expect(second).not.toBe(first);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expectEpochs(first, second);
+    expect(second).not.toBe(first);
   });
 
   it("changes an opaque owner when the executable is replaced in place", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-owner-replace-"));
+    const dir = tempDir("openclaw-cli-owner-replace-");
     const executable = path.join(dir, "claude");
     copyNativeExecutable(executable, nativeUtility("true"));
-    try {
-      const config = cliConfig(executable);
-      const first = await resolveCliRuntimeOwnerFingerprint({
-        provider: "claude-cli",
-        config,
-        agentId: "openclaw",
-      });
-      copyNativeExecutable(executable, nativeUtility("false"));
-      if (nativeUtility("true") === nativeUtility("false")) {
-        fs.appendFileSync(executable, "replacement");
-      }
-      const second = await resolveCliRuntimeOwnerFingerprint({
-        provider: "claude-cli",
-        config,
-        agentId: "openclaw",
-      });
+    const config = cliConfig(executable);
+    const first = await ownerFingerprint(config);
+    copyNativeExecutable(executable, nativeUtility("false"));
+    if (nativeUtility("true") === nativeUtility("false")) {
+      fs.appendFileSync(executable, "replacement");
+    }
+    const second = await ownerFingerprint(config);
 
-      expectCliAuthEpoch(first);
-      expectCliAuthEpoch(second);
-      expect(second).not.toBe(first);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("pins a symlinked CLI invocation to the canonical file that was hashed", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-owner-symlink-"));
-    const target = nativeUtility("true");
-    const link = path.join(dir, "bin", "claude");
-    fs.mkdirSync(path.dirname(link), { recursive: true });
-    fs.symlinkSync(target, link);
-    try {
-      const identity = await resolveCliExecutableIdentity({
-        command: link,
-        runtimeArtifact: {
-          kind: "bundled-package-tree",
-          packageName: "@fixture/native-cli",
-          entrypoint: "command",
-          nativeExecutableNames: [path.basename(fs.realpathSync(target))],
-        },
-      });
-      expect(identity?.resolvedPath).toBe(fs.realpathSync(target));
-      expect(identity?.invocation.command).toBe(fs.realpathSync(target));
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expectEpochs(first, second);
+    expect(second).not.toBe(first);
   });
 
   it("refuses a cwd-relative executable as a persistent opaque owner", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-owner-relative-"));
+    const dir = tempDir("openclaw-cli-owner-relative-");
     copyNativeExecutable(path.join(dir, "claude"), nativeUtility("true"));
-    try {
-      await expect(
-        resolveCliRuntimeOwnerFingerprint({
-          provider: "claude-cli",
-          config: cliConfig("./claude"),
-          agentId: "openclaw",
-          cwd: dir,
-        }),
-      ).resolves.toBeUndefined();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    await expect(ownerFingerprint(cliConfig("./claude"), { cwd: dir })).resolves.toBeUndefined();
   });
 
   it("does not collapse a missing explicit CLI profile to ambient authority", async () => {
@@ -661,12 +488,7 @@ describe("resolveCliAuthEpoch", () => {
     });
 
     await expect(
-      resolveCliRuntimeOwnerFingerprint({
-        provider: "claude-cli",
-        config: cliConfig(process.execPath),
-        agentId: "openclaw",
-        authProfileId: "anthropic:missing",
-      }),
+      ownerFingerprint(cliConfig(process.execPath), { authProfileId: "anthropic:missing" }),
     ).resolves.toBeUndefined();
   });
 });

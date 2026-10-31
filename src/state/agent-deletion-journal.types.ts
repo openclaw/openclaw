@@ -5,10 +5,10 @@ export type RetainedAgentDeletion = {
   agentDir: string;
   databasePaths: string[];
   cleanupCompleted: boolean;
-  manualClawRemoval?: true;
+  manualTemplateRemoval?: true;
 };
 export type HeldAgentDatabase = { agentId: string; path: string };
-export type AgentDeletionJournalPurpose = "runtime" | "maintenance";
+export type AgentDeletionJournalPurpose = "runtime" | "runtime-discovery" | "maintenance";
 type AgentDeletionJournalPhase = "draining" | "retiring";
 
 type KnownAgentDeletionFacts = {
@@ -48,8 +48,9 @@ export type AgentDeletionJournalCleanupPath = {
   parentPath: string;
   kind: "target" | "symlink";
   sourcePaths: string[];
-  dev: number | null;
-  ino: number | null;
+  // Numbers are legacy, possibly rounded IDs; current writes use exact decimal strings.
+  dev: string | number | null;
+  ino: string | number | null;
   coversDescendants: boolean;
   done: boolean;
   note?: string;

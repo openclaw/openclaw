@@ -1,7 +1,14 @@
-import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
-import { For, Show, createEffect, untrack } from "solid-js";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { reclaimHubTabFocus, rememberHubTabFocus } from "../../components/hub-tabs-focus.ts";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  Errored,
+  For,
+  latest,
+  Loading,
+  Show,
+} from "solid-js";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
@@ -10,61 +17,84 @@ import {
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { syncTabGroupLabel } from "../../components/web-awesome-tabs.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
 import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { sessionHubTabs } from "../sessions/session-hub-tabs.ts";
 import { WorktreesModel } from "./worktrees-model.ts";
 import "../../styles/settings.css";
 import "../../styles/hub-tabs.css";
 
 const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees";
 
-function WorktreesContent() {
+export function WorktreesPage() {
   const context = useApplication();
-  return <WorktreesView model={new WorktreesModel(() => context)} />;
+  const { owner, view } = projectCallbackOwner(
+    (notify) => new WorktreesModel(() => context, notify),
+    (model) => model,
+  );
+  return <openclaw-worktrees-page>{renderWorktreesView(owner, view.read)}</openclaw-worktrees-page>;
 }
 
-export function WorktreesView(props: { model: WorktreesModel }) {
-  const model = untrack(() => props.model);
+export function renderWorktreesView(model: WorktreesModel, view: () => WorktreesModel) {
   model.gateway = useGatewayPage({
     getGateway: () => model.context.gateway,
-    onIdentityChange: () => model.update({ records: [], error: null }),
+    onIdentityChange: () => model.update({ records: [], listLoaded: false, error: null }),
     invalidateRequests: () => model.invalidateRequests(),
     ensureInitialData: () => void model.load(),
     onSnapshot: () => model.update(model.operatorAccess.canAdmin ? {} : { createOpen: false }),
   });
-  const projection = projectSource(model, {
-    read: (source) => source,
-    subscribe: (source, notify) => source.subscribe(notify),
-    equality: "revision",
-  });
-  const view = projection.read;
-  let tabGroup: WaTabGroup | undefined;
-  createEffect(
-    () => t("sessionsPage.hubTablistLabel"),
-    (label) => syncTabGroupLabel(tabGroup, label),
+
+  const receipt = createMemo(() => view().listRead);
+  const listRead = createMemo(() =>
+    receipt().result.then(() => {
+      if (!model.listLoaded && model.error) {
+        throw new Error(model.error);
+      }
+    }),
   );
-  const navigateSessions = (event: Event, keyboard = false) => {
-    if (!(event.currentTarget instanceof HTMLElement)) {
-      return;
+  const scope = createMemo(() => model.gateway.epoch);
+  const pending = createMemo(() => {
+    const epoch = scope();
+    const [operation, setOperation] = createOptimistic<WorktreesModel["operation"]>(null);
+    return { epoch, operation, setOperation };
+  });
+  const present = action(function* (
+    captured: ReturnType<typeof pending>,
+    operation: WorktreesModel["operation"],
+    result: Promise<void>,
+    retired: Promise<void>,
+  ) {
+    try {
+      if (captured.epoch === model.gateway.readEpoch()) {
+        captured.setOperation(operation);
+      }
+      yield Promise.race([result, retired]);
+    } catch (error) {
+      if (captured.epoch === model.gateway.readEpoch()) {
+        model.update({ error: formatUiError(error) });
+      }
     }
-    if (keyboard) {
-      event.preventDefault();
-      rememberHubTabFocus("sessions", "sessions", event.currentTarget);
-    }
-    model.context.navigate("sessions");
-  };
+  });
+  async function mutate(operation: WorktreesModel["operation"], task: () => Promise<void>) {
+    const captured = pending();
+    const retired = model.retired;
+    const result = task();
+    // Admission publishes synchronously before the optimistic presentation joins.
+    await Promise.resolve();
+    return present(captured, operation, result, retired);
+  }
+  const operation = () => pending().operation() ?? view().operation;
+  const busy = () => operation() !== null || view().operationPending;
 
   const owner = (record: WorktreesModel["records"][number]) => {
     if (record.ownerKind === "session" && record.ownerId) {
@@ -79,13 +109,9 @@ export function WorktreesView(props: { model: WorktreesModel }) {
         <a
           href={target.href}
           title={record.ownerId}
-          onClick={(event) => {
-            if (!shouldHandleNavigationClick(event)) {
-              return;
-            }
-            event.preventDefault();
-            model.context.navigate(face, target.options);
-          }}
+          onClick={(event) =>
+            handleNavigationClick(event, () => model.context.navigate(face, target.options))
+          }
         >
           {t("worktrees.ownerSession")}
         </a>
@@ -100,74 +126,12 @@ export function WorktreesView(props: { model: WorktreesModel }) {
 
   return (
     <>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header content-header--settings content-header--page hub-page-header sessions-hub-header">
-          <div class="hub-page-header__title">
-            <div class="page-title">{t("tabs.sessions")}</div>
-            <div class="page-subtitle">
-              {t("subtitles.worktrees")}{" "}
-              <a
-                class="learn-more-link"
-                href={WORKTREES_DOCS_URL}
-                target={EXTERNAL_LINK_TARGET}
-                rel={buildExternalLinkRel()}
-              >
-                {t("common.learnMore")}
-              </a>
-            </div>
-          </div>
-          <div class="hub-page-header__tabs">
-            <wa-tab-group
-              class="hub-tabs hub-tabs--primary sessions-hub-tabs"
-              prop:active="worktrees"
-              aria-label={t("sessionsPage.hubTablistLabel")}
-              activation="manual"
-              without-scroll-controls
-              ref={(element) => {
-                tabGroup = element;
-                syncTabGroupLabel(
-                  element,
-                  untrack(() => t("sessionsPage.hubTablistLabel")),
-                );
-              }}
-            >
-              <wa-tab
-                id="sessions-tab-sessions"
-                panel="sessions"
-                aria-controls="sessions-hub-panel"
-                class="hub-tab"
-                prop:tabIndex={-1}
-                aria-selected="false"
-                onClick={(event) => {
-                  if (event.detail > 0 || event.isTrusted) {
-                    navigateSessions(event);
-                  }
-                }}
-                onKeyDown={(event) => {
-                  if (!event.repeat && (event.key === "Enter" || event.key === " ")) {
-                    navigateSessions(event, true);
-                  }
-                }}
-              >
-                {t("tabs.sessions")}
-              </wa-tab>
-              <wa-tab
-                id="sessions-tab-worktrees"
-                panel="worktrees"
-                aria-controls="sessions-hub-panel"
-                class="hub-tab"
-                prop:active={true}
-                prop:tabIndex={0}
-                aria-selected="true"
-                ref={(element) => reclaimHubTabFocus("sessions", "worktrees", element)}
-              >
-                {t("tabs.worktrees")}
-              </wa-tab>
-            </wa-tab-group>
-          </div>
-          <div class="hub-page-header__actions" />
-        </section>
-      </ShellLayoutBoundary>
+      <HubPageHeader<"sessions" | "worktrees">
+        active="worktrees"
+        tabs={sessionHubTabs("worktrees", (tab) => model.context.navigate(tab))}
+        docsUrl={WORKTREES_DOCS_URL}
+        class="sessions-hub-header"
+      />
       <SettingsWorkspace id="sessions-hub-panel">
         <SettingsPage wide>
           <Show when={!view().operatorAccess.canAdmin}>
@@ -189,7 +153,7 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                   class="btn"
                   title={view().operatorAccess.canAdmin ? "" : t("worktrees.adminRequired")}
                   aria-expanded={view().createOpen ? "true" : "false"}
-                  disabled={!view().operatorAccess.canAdmin || view().operation === "create"}
+                  disabled={!view().operatorAccess.canAdmin || operation() === "create"}
                   onClick={() => model.toggleCreate()}
                 >
                   {t("worktrees.newWorktree")}
@@ -197,10 +161,12 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                 <button
                   class="btn"
                   title={view().operatorAccess.canAdmin ? "" : t("worktrees.adminRequired")}
-                  disabled={!view().operatorAccess.canAdmin || view().operationPending}
-                  onClick={() => void model.gc()}
+                  disabled={!model.gateway.connected || !view().operatorAccess.canAdmin || busy()}
+                  onClick={() => void mutate("gc", () => model.gc())}
                 >
-                  {view().loading ? t("common.loading") : t("worktrees.cleanNow")}
+                  {operation() === "gc" || view().loading
+                    ? t("common.loading")
+                    : t("worktrees.cleanNow")}
                 </button>
               </>
             }
@@ -213,7 +179,7 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                     class="settings-input"
                     type="text"
                     aria-label={t("worktrees.repo")}
-                    disabled={view().operation === "create"}
+                    disabled={operation() === "create"}
                     value={view().createRepoRoot}
                     onInput={(event) => model.update({ createRepoRoot: event.currentTarget.value })}
                     onChange={(event) => {
@@ -233,7 +199,7 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                     class="settings-input"
                     type="text"
                     aria-label={t("worktrees.name")}
-                    disabled={view().operation === "create"}
+                    disabled={operation() === "create"}
                     placeholder={t("worktrees.namePlaceholder")}
                     value={view().createName}
                     onInput={(event) => model.update({ createName: event.currentTarget.value })}
@@ -248,7 +214,7 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                       class="settings-input"
                       type="text"
                       aria-label={t("worktrees.baseBranch")}
-                      disabled={view().operation === "create"}
+                      disabled={operation() === "create"}
                       placeholder={t("worktrees.baseBranchPlaceholder")}
                       list="worktrees-create-branches"
                       value={view().createBaseRef}
@@ -267,66 +233,93 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                 control={
                   <button
                     class="btn btn--sm"
-                    disabled={view().operationPending || !view().createRepoRoot.trim()}
-                    onClick={() => void model.createWorktree()}
+                    disabled={!model.gateway.connected || busy() || !view().createRepoRoot.trim()}
+                    onClick={() => void mutate("create", () => model.createWorktree())}
                   >
-                    {view().operation === "create" ? t("common.loading") : t("common.create")}
+                    {operation() === "create" ? t("common.loading") : t("common.create")}
                   </button>
                 }
               />
             </Show>
-            <Show
-              when={view().records.length > 0}
-              fallback={<SettingsEmpty message={t("worktrees.empty")} />}
+            <Errored
+              fallback={(_error, reset) => (
+                <button
+                  class="btn"
+                  onClick={() => {
+                    void model.load();
+                    reset();
+                  }}
+                >
+                  {t("common.retry")}
+                </button>
+              )}
             >
-              <For each={view().records} keyed={(record) => record.id}>
-                {(record) => (
-                  <SettingsRow
-                    title={record().name}
-                    description={
-                      <>
-                        <span title={record().repoRoot}>{pathDisplayName(record().repoRoot)}</span>
-                        {" · "}
-                        {record().branch}
-                        {" · "}
-                        {owner(record())}
-                        {" · "}
-                        {formatRelativeTimestamp(record().lastActiveAt)}
-                      </>
-                    }
-                    control={
-                      <>
-                        <SettingsStatus
-                          kind={record().removedAt ? "muted" : "ok"}
-                          label={
-                            record().removedAt ? t("worktrees.restorable") : t("common.active")
-                          }
-                        />
-                        <button
-                          class={record().removedAt ? "btn btn--sm" : "btn btn--sm danger"}
-                          title={view().operatorAccess.canAdmin ? "" : t("worktrees.adminRequired")}
-                          disabled={!view().operatorAccess.canAdmin || view().operationPending}
-                          onClick={() =>
-                            void (record().removedAt
-                              ? model.restore(record())
-                              : model.removeWorktree(record()))
-                          }
-                        >
-                          {record().removedAt ? t("worktrees.restore") : t("common.delete")}
-                        </button>
-                      </>
-                    }
-                  />
-                )}
-              </For>
-            </Show>
+              <Loading
+                on={latest(scope)}
+                fallback={<SettingsEmpty message={t("common.loading")} />}
+              >
+                {(latest(listRead), null)}
+                <Show
+                  when={view().records.length > 0}
+                  fallback={<SettingsEmpty message={t("worktrees.empty")} />}
+                >
+                  <For each={view().records} keyed={(record) => record.id}>
+                    {(record) => (
+                      <SettingsRow
+                        title={record().name}
+                        description={
+                          <>
+                            <span title={record().repoRoot}>
+                              {pathDisplayName(record().repoRoot)}
+                            </span>
+                            {" · "}
+                            {record().branch}
+                            {" · "}
+                            {owner(record())}
+                            {" · "}
+                            {formatRelativeTimestamp(record().lastActiveAt)}
+                          </>
+                        }
+                        control={
+                          <>
+                            <SettingsStatus
+                              kind={record().removedAt ? "muted" : "ok"}
+                              label={
+                                record().removedAt ? t("worktrees.restorable") : t("common.active")
+                              }
+                            />
+                            <button
+                              class={["btn btn--sm", { danger: !record().removedAt }]}
+                              title={
+                                view().operatorAccess.canAdmin ? "" : t("worktrees.adminRequired")
+                              }
+                              aria-label={`${record().removedAt ? t("worktrees.restore") : t("common.delete")}: ${record().name}`}
+                              disabled={
+                                !model.gateway.connected ||
+                                !view().operatorAccess.canAdmin ||
+                                busy()
+                              }
+                              onClick={() =>
+                                void mutate("row", () =>
+                                  record().removedAt
+                                    ? model.restore(record())
+                                    : model.removeWorktree(record()),
+                                )
+                              }
+                            >
+                              {record().removedAt ? t("worktrees.restore") : t("common.delete")}
+                            </button>
+                          </>
+                        }
+                      />
+                    )}
+                  </For>
+                </Show>
+              </Loading>
+            </Errored>
           </SettingsSection>
         </SettingsPage>
       </SettingsWorkspace>
     </>
   );
 }
-
-export const WorktreesPage = defineSolidBridge("openclaw-worktrees-page", WorktreesContent, {
-  properties: {},
-});

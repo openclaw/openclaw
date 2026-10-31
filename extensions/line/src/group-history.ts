@@ -1,11 +1,5 @@
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 
-type LineGroupHistoryReservation = {
-  inboundHistory?: HistoryEntry[];
-  commit: () => void;
-  release: () => void;
-};
-
 // Entries stay in the bounded history map while a turn owns them so failed
 // turns need no reinsertion or ordering repair. Other overlapping turns skip
 // these exact objects until the owner commits or releases the reservation.
@@ -20,7 +14,11 @@ export function reserveLineGroupHistory(
   historyMap: Map<string, HistoryEntry[]> | undefined,
   historyKey: string | undefined,
   limit: number,
-): LineGroupHistoryReservation {
+): {
+  inboundHistory?: HistoryEntry[];
+  commit: () => void;
+  release: () => void;
+} {
   if (!historyMap || !historyKey || limit <= 0) {
     return { commit: () => {}, release: () => {} };
   }

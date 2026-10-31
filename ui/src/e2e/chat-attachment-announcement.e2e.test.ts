@@ -1,39 +1,29 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Attachment failure announcements" });
-const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let proofDir: string;
-beforeEach(() => {
-  if (captureProof) {
-    proofDir = createControlUiE2eArtifactDir("attachment-announcement");
-  }
-});
 
 suite.define(() => {
   it.each(["ordinary", "completed"])(
     "announces a long %s reply's named failure without announcing initial history",
-    async (flow) => {
-      await suite.withPage(
+    (flow) =>
+      suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
-          const content = (label: string) => [
-            { type: "text", text: "Here is the requested summary. ".repeat(25) },
-            {
-              type: "attachment_error",
-              attachment: { code: "file-not-found", kind: "document", label },
-            },
-          ];
-          const existing = {
+          const message = (label: string, id: string, seq: number, timestamp: number) => ({
             role: "assistant",
-            content: content("previous.pdf"),
-            timestamp: 1,
-            __openclaw: { id: "existing-reply", seq: 1 },
-          };
+            timestamp,
+            __openclaw: { id, seq },
+            content: [
+              { type: "text", text: "Here is the requested summary. ".repeat(25) },
+              {
+                type: "attachment_error",
+                attachment: { code: "file-not-found", kind: "document", label },
+              },
+            ],
+          });
+          const existing = message("previous.pdf", "existing-reply", 1, 1);
           const gateway = await installMockGateway(page, { historyMessages: [existing] });
           await page.goto(`${suite.server.baseUrl}chat`);
           await page
@@ -44,10 +34,6 @@ suite.define(() => {
           expect(await announcement.getAttribute("aria-live")).toBe("polite");
           expect(await announcement.getAttribute("aria-atomic")).toBe("true");
           expect(await announcement.textContent()).toBe("");
-          if (captureProof) {
-            await page.screenshot({ path: path.join(proofDir, `${flow}-initial.png`) });
-          }
-
           let runId: string | undefined;
           if (flow === "completed") {
             await page
@@ -64,30 +50,22 @@ suite.define(() => {
             runId = (request.params as { idempotencyKey: string }).idempotencyKey;
           }
           const reply = {
-            role: "assistant",
-            content: content("missing.pdf"),
-            timestamp: Date.now(),
+            ...message("missing.pdf", "appended-reply", 3, Date.now()),
             ...(runId ? { runId, phase: "final_answer" } : {}),
-            __openclaw: { id: "appended-reply", seq: 3 },
           };
           await gateway.setHistoryMessages([existing, reply]);
-          if (runId) {
-            await gateway.emitGatewayEvent("chat", {
-              message: reply,
-              runId,
-              sessionKey: "agent:main:main",
-              state: "final",
-            });
-          } else {
-            await gateway.emitGatewayEvent("session.message", {
-              message: reply,
-              messageId: "appended-reply",
-              messageSeq: 3,
-              sessionKey: "agent:main:main",
-              activeRunIds: [],
-              hasActiveRun: false,
-            });
-          }
+          await gateway.emitGatewayEvent(runId ? "chat" : "session.message", {
+            message: reply,
+            sessionKey: "agent:main:main",
+            ...(runId
+              ? { runId, state: "final" }
+              : {
+                  messageId: "appended-reply",
+                  messageSeq: 3,
+                  activeRunIds: [],
+                  hasActiveRun: false,
+                }),
+          });
           const card = page.locator(".chat-assistant-attachment-card", { hasText: "missing.pdf" });
           await card.waitFor();
           await card.scrollIntoViewIfNeeded();
@@ -96,21 +74,12 @@ suite.define(() => {
           expect(cardText).toContain("File not found. Check the path and try again.");
           await expect.poll(() => announcement.textContent()).not.toBe("");
           const text = (await announcement.textContent()) ?? "";
-          if (captureProof) {
-            const stage = text.includes("missing.pdf") ? "after" : "before";
-            await page.screenshot({ path: path.join(proofDir, `${flow}-${stage}.png`) });
-            await writeFile(
-              path.join(proofDir, `${flow}-${stage}.json`),
-              JSON.stringify({ flow, text, length: text.length, card: cardText }, null, 2),
-            );
-          }
           expect(text).toContain(
             "missing.pdf: Not sent. File not found. Check the path and try again.",
           );
           expect(text).toContain("Here is the requested summary.");
           expect(text.length).toBe(500);
         },
-      );
-    },
+      ),
   );
 });

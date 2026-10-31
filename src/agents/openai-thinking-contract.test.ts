@@ -15,6 +15,7 @@ import {
 } from "../auto-reply/thinking.js";
 import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const openaiModel = {
   api: "openai-responses",
@@ -25,11 +26,8 @@ const openaiModel = {
 } as Model<"openai-responses">;
 
 const codexModel = {
+  ...openaiModel,
   api: "openai-chatgpt-responses",
-  provider: "openai",
-  id: "gpt-5.5",
-  input: ["text"],
-  reasoning: true,
   baseUrl: "https://chatgpt.com/backend-api",
 } as Model<"openai-chatgpt-responses">;
 
@@ -44,19 +42,17 @@ describe("OpenAI thinking contract", () => {
     { name: "disabled scalar effort", scalar: { supportsReasoningEffort: false } },
     { name: "empty scalar efforts", scalar: { supportedReasoningEfforts: [] } },
   ])("keeps registered binary controls with $name", async ({ scalar }) => {
-    const model: Model<"openai-completions"> = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "binary-model",
       name: "Binary model",
       provider: "openai",
       api: "openai-completions",
       baseUrl: "https://reasoning.example/v1",
       reasoning: true,
-      input: ["text"],
       contextWindow: 32000,
       maxTokens: 1024,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       compat: { thinkingFormat: "qwen-chat-template", ...scalar },
-    };
+    });
     const profile = resolveThinkingProfile({
       provider: "openai",
       model: model.id,
@@ -82,6 +78,7 @@ describe("OpenAI thinking contract", () => {
 
     expect(result.errorMessage).toBe("captured binary payload");
     expect(payload).toMatchObject({ chat_template_kwargs: { enable_thinking: true } });
+    expect(payload).not.toHaveProperty("chat_template_kwargs.reasoning_effort");
     expect(profile.levels.map(({ id }) => id)).toContain("high");
   });
 
@@ -163,6 +160,127 @@ describe("OpenAI thinking contract", () => {
     },
   );
 
+  // Qwen 3.8 templates accept low, medium, and xhigh; the map keeps high at the deepest tier.
+  const qwen38ChatTemplateEfforts = {
+    supportedReasoningEfforts: ["low", "medium", "xhigh"],
+    reasoningEffortMap: { high: "xhigh" },
+  };
+
+  it.each(
+    (["managed", "direct"] as const).flatMap((transport) =>
+      (
+        [
+          ["minimal", "low"],
+          ["low", "low"],
+          ["medium", "medium"],
+          ["high", "xhigh"],
+          ["xhigh", "xhigh"],
+          ["max", "xhigh"],
+        ] as const
+      ).map(([thinkingLevel, reasoningEffort]) => ({ transport, thinkingLevel, reasoningEffort })),
+    ),
+  )(
+    "maps Agent $thinkingLevel to declared chat-template effort $reasoningEffort over $transport HTTP",
+    async ({ transport, thinkingLevel, reasoningEffort }) => {
+      const payload = await captureQwenPayload({
+        transport,
+        thinkingLevel,
+      });
+      expect(payload.chat_template_kwargs).toMatchObject({
+        enable_thinking: true,
+        reasoning_effort: reasoningEffort,
+      });
+      expect(payload).not.toHaveProperty("reasoning_effort");
+    },
+  );
+
+  it.each(
+    (["managed", "direct"] as const).flatMap((transport) =>
+      (
+        [
+          ["known unselected thinking", false, "high", undefined, true],
+          ["explicit configured default", true, "high", "xhigh", true],
+          ["unknown provenance", undefined, "high", "xhigh", true],
+          ["thinking off", true, "off", undefined, false],
+        ] as const
+      ).map(([caseName, thinkingExplicit, thinkingLevel, expectedEffort, enabled]) => ({
+        transport,
+        caseName,
+        thinkingExplicit,
+        thinkingLevel,
+        expectedEffort,
+        enabled,
+      })),
+    ),
+  )(
+    "applies Qwen template provenance for $caseName over $transport HTTP",
+    async ({ transport, thinkingExplicit, thinkingLevel, expectedEffort, enabled }) => {
+      const payload = await captureQwenPayload({
+        transport,
+        thinkingLevel,
+        thinkingExplicit,
+      });
+      expect(payload).not.toHaveProperty("openclawThinkingExplicit");
+      expect(payload.chat_template_kwargs).toMatchObject({ enable_thinking: enabled });
+      if (expectedEffort) {
+        expect(payload.chat_template_kwargs).toMatchObject({ reasoning_effort: expectedEffort });
+      } else {
+        expect(payload).not.toHaveProperty("chat_template_kwargs.reasoning_effort");
+      }
+    },
+  );
+
+  it.each(["managed", "direct"] as const)(
+    "keeps non-Qwen scalar effort when provenance is false over %s HTTP",
+    async (transport) => {
+      const payload = await captureHttpProviderPayload({
+        api: "openai-completions",
+        reasoningCompat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+        },
+        transport,
+        thinkingLevel: "high",
+        thinkingExplicit: false,
+        mode: "agent",
+      });
+      expect(payload.reasoning_effort).toBe("high");
+      expect(payload).not.toHaveProperty("chat_template_kwargs");
+    },
+  );
+
+  it.each(["managed", "direct"] as const)(
+    "omits declared chat-template effort when Agent thinking is off over %s HTTP",
+    async (transport) => {
+      const payload = await captureQwenPayload({
+        transport,
+        thinkingLevel: "off",
+      });
+      expect(payload.chat_template_kwargs).toMatchObject({ enable_thinking: false });
+      expect(payload).not.toHaveProperty("chat_template_kwargs.reasoning_effort");
+    },
+  );
+
+  // GPT-family ids infer scalar effort lists; only an explicit declaration enables tiers.
+  it.each(
+    (["managed", "direct"] as const).flatMap((transport) =>
+      ["qwen3.6-27b", "gpt-5.5"].map((modelId) => ({ transport, modelId })),
+    ),
+  )(
+    "keeps undeclared chat-template thinking binary for $modelId over $transport HTTP",
+    async ({ transport, modelId }) => {
+      const payload = await captureQwenPayload({
+        reasoningCompat: {},
+        modelId,
+        transport,
+        thinkingLevel: "high",
+      });
+      expect(payload.chat_template_kwargs).toMatchObject({ enable_thinking: true });
+      expect(payload).not.toHaveProperty("chat_template_kwargs.reasoning_effort");
+      expect(payload).not.toHaveProperty("reasoning_effort");
+    },
+  );
+
   it("preserves explicit Agent off when a managed Responses request asks for a summary", async () => {
     for (const thinkingLevel of ["off", "high"] as const) {
       const payload = await captureHttpProviderPayload({
@@ -176,6 +294,28 @@ describe("OpenAI thinking contract", () => {
       );
     }
   });
+
+  it.each(["managed", "direct"] as const)(
+    "omits declared chat-template effort without a standalone selection over %s HTTP",
+    async (transport) => {
+      const completions = await captureQwenPayload({
+        transport,
+        mode: "standalone",
+      });
+      expect(completions).not.toHaveProperty("chat_template_kwargs.reasoning_effort");
+      expect(completions).not.toHaveProperty("openclawThinkingExplicit");
+    },
+  );
+
+  function captureQwenPayload(params: Partial<Parameters<typeof captureHttpProviderPayload>[0]>) {
+    return captureHttpProviderPayload({
+      api: "openai-completions",
+      thinkingFormat: "qwen-chat-template",
+      reasoningCompat: qwen38ChatTemplateEfforts,
+      mode: "agent",
+      ...params,
+    });
+  }
 
   it("retains standalone managed defaults when no reasoning option is supplied", async () => {
     const completions = await captureHttpProviderPayload({
@@ -196,25 +336,21 @@ describe("OpenAI thinking contract", () => {
     }
   });
 
-  it("serializes OpenAI Responses reasoning effort from shared model runtime simple options", async () => {
-    const payload = await captureProviderPayload({
-      model: openaiModel,
-      streamFn: streamSimple,
-      options: { reasoning: "high" },
-    });
+  it.each([openaiModel, codexModel])(
+    "serializes $api reasoning from shared simple options",
+    async (model) => {
+      const payload = await captureProviderPayload({
+        model,
+        streamFn: streamSimple,
+        options: {
+          reasoning: "high",
+          ...(model.api === "openai-chatgpt-responses" ? { transport: "sse" as const } : {}),
+        },
+      });
 
-    expect(payload.reasoning).toEqual({ effort: "high", summary: "auto" });
-  });
-
-  it("serializes Codex Responses reasoning effort from shared model runtime simple options", async () => {
-    const payload = await captureProviderPayload({
-      model: codexModel,
-      streamFn: streamSimple,
-      options: { reasoning: "high", transport: "sse" },
-    });
-
-    expect(payload.reasoning).toEqual({ effort: "high", summary: "auto" });
-  });
+      expect(payload.reasoning).toEqual({ effort: "high", summary: "auto" });
+    },
+  );
 
   it.each([undefined, "off"] as const)(
     "leaves direct Codex Responses reasoning absent for %s",
@@ -254,9 +390,16 @@ function openAIThinkingPolicyRegistry() {
 async function captureHttpProviderPayload(params: {
   api: "openai-completions" | "openai-responses";
   thinkingFormat?: "qwen" | "qwen-chat-template";
+  reasoningCompat?: {
+    supportsReasoningEffort?: boolean;
+    supportedReasoningEfforts?: string[];
+    reasoningEffortMap?: Record<string, string>;
+  };
+  modelId?: string;
   transport?: "managed" | "direct";
   thinkingLevelMap?: Model["thinkingLevelMap"];
-  thinkingLevel?: "off" | "high";
+  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  thinkingExplicit?: boolean;
   reasoningSummary?: "auto";
   mode: "agent" | "standalone";
 }): Promise<Record<string, unknown>> {
@@ -287,22 +430,25 @@ async function captureHttpProviderPayload(params: {
       });
     },
     async (baseUrl) => {
-      const model: Model = {
-        id: params.api === "openai-completions" ? "qwen3.6-27b" : "gpt-5.5",
+      const model = makeProviderModelFixture<"openai-completions" | "openai-responses">({
+        id: params.modelId ?? (params.api === "openai-completions" ? "qwen3.6-27b" : "gpt-5.5"),
         name: "Thinking contract model",
         api: params.api,
         provider: "local-thinking",
         baseUrl: `${baseUrl}/v1`,
         reasoning: true,
         thinkingLevelMap: params.thinkingLevelMap,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 128_000,
-        maxTokens: 4_096,
-        ...(params.thinkingFormat
-          ? { compat: { thinkingFormat: params.thinkingFormat, supportsReasoningEffort: false } }
+        ...(params.thinkingFormat || params.reasoningCompat
+          ? {
+              compat: {
+                ...(params.thinkingFormat ? { thinkingFormat: params.thinkingFormat } : {}),
+                ...(params.reasoningCompat ??
+                  (params.thinkingFormat ? { supportsReasoningEffort: false } : {})),
+              },
+            }
           : {}),
-      };
+      });
       const providerStream =
         params.transport === "direct"
           ? streamSimple
@@ -316,9 +462,12 @@ async function captureHttpProviderPayload(params: {
       const streamFn: StreamFn = (requestModel, context, options) =>
         providerStream(requestModel, context, {
           ...options,
+          ...(params.thinkingExplicit !== undefined
+            ? { openclawThinkingExplicit: params.thinkingExplicit }
+            : {}),
           apiKey: "synthetic-test-key",
           ...(params.reasoningSummary ? { reasoningSummary: params.reasoningSummary } : {}),
-        });
+        } as SimpleStreamOptions & { openclawThinkingExplicit?: boolean });
       if (params.mode === "agent") {
         const agent = new Agent({
           initialState: { model, thinkingLevel: params.thinkingLevel },
@@ -351,39 +500,27 @@ async function captureProviderPayload<
   ) => ReturnType<StreamFn>;
   options: SimpleStreamOptions;
 }): Promise<Record<string, unknown>> {
-  // Stop at onPayload so transport serialization can be asserted without HTTP.
-  const payloadPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
-    let payloadCaptured = false;
-    const abortController = new AbortController();
-    abortController.abort(new Error("payload capture must not reach provider egress"));
-    const stream = params.streamFn(
-      params.model,
-      {
-        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+  let payload: Record<string, unknown> | undefined;
+  const stream = await params.streamFn(
+    params.model,
+    {
+      messages: [{ role: "user", content: "hello", timestamp: 0 }],
+    },
+    {
+      apiKey: params.model.api === "openai-chatgpt-responses" ? codexTestToken : "test-api-key",
+      cacheRetention: "none",
+      ...params.options,
+      onPayload: (value) => {
+        payload = structuredClone(value as Record<string, unknown>);
+        throw new Error("stop after payload capture");
       },
-      {
-        apiKey: params.model.api === "openai-chatgpt-responses" ? codexTestToken : "test-api-key",
-        cacheRetention: "none",
-        ...params.options,
-        signal: abortController.signal,
-        onPayload: (payload) => {
-          payloadCaptured = true;
-          resolve(structuredClone(payload as Record<string, unknown>));
-          throw new Error("stop after payload capture");
-        },
-      },
+    },
+  );
+  const result = await stream.result();
+  if (!payload) {
+    throw new Error(
+      `Provider payload callback was not invoked for ${params.model.api}: ${result.stopReason}: ${result.errorMessage ?? "no error"}`,
     );
-    void Promise.resolve(stream).then(async (resolvedStream) => {
-      const result = await resolvedStream.result();
-      if (!payloadCaptured) {
-        reject(
-          new Error(
-            `provider payload callback was not invoked for ${params.model.api}; stream ended with ${result.stopReason}: ${result.errorMessage ?? "no error"}`,
-          ),
-        );
-      }
-    }, reject);
-  });
-
-  return payloadPromise;
+  }
+  return payload;
 }

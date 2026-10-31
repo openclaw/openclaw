@@ -17,11 +17,8 @@ export const FOLDED_SINGLETON_STATE_TABLES_V12 = [
   "web_push_vapid_keys",
 ] as const;
 
-export function migrateSingletonStateFoldInV12(db: DatabaseSync, previousVersion: number): boolean {
-  if (previousVersion >= 12) {
-    return false;
-  }
-  // Older schemas can reach this migration before canonical schema creation.
+/** Preserve the table's original catalog SQL for fresh creation and historical migration. */
+export function createStateConfigMachineTable(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS config_machine_state (
       state_key TEXT NOT NULL PRIMARY KEY,
@@ -29,6 +26,14 @@ export function migrateSingletonStateFoldInV12(db: DatabaseSync, previousVersion
       updated_at_ms INTEGER NOT NULL
     ) STRICT;
   `);
+}
+
+export function migrateSingletonStateFoldInV12(db: DatabaseSync, previousVersion: number): boolean {
+  if (previousVersion >= 12) {
+    return false;
+  }
+  // Older schemas can reach this migration before canonical schema creation.
+  createStateConfigMachineTable(db);
   const importState = db.prepare(
     "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?) ON CONFLICT(state_key) DO NOTHING",
   );

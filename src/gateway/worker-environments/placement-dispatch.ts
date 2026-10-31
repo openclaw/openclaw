@@ -4,6 +4,8 @@ import {
   RequiredWorkerProfileError,
 } from "../../config/required-worker-profile.js";
 import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import { sessionLog } from "../session-log.js";
+import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
 import type { WorkerNodePlacementAuthority } from "./device-placement-eligibility.js";
 import { composePlacementAuthorization } from "./placement-authorization.js";
 import {
@@ -17,7 +19,6 @@ import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js
 import {
   createWorkerPlacementDispatchStartup,
   type WorkerDevicePlacementRequirementResolver,
-  type WorkerPlacementRecoveryBarrier,
 } from "./placement-dispatch-startup.js";
 import { createWorkerPlacementMoveAbandonment } from "./placement-move-abandon.js";
 import {
@@ -77,7 +78,6 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
     isShuttingDown?: () => boolean;
     runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
     runLocalBarrier: WorkerLocalDispatchBarrier;
-    runRecoveryBarrier: WorkerPlacementRecoveryBarrier;
     runActivationBarrier: WorkerActivationBarrier;
     runMoveBarrier: WorkerPlacementMoveBarrier;
     resolveMoveDestination: (
@@ -97,10 +97,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   const { environments, placements } = options;
   const failure = createPlacementFailureActions({ environments, placements });
 
-  const startup = createWorkerPlacementDispatchStartup({
-    ...options,
-    failure,
-  });
+  const startup = createWorkerPlacementDispatchStartup(options);
 
   // Background recovery observes previously requested cleanup; explicit Stop and
   // Move retain their retry contract. Pending-result recovery must inherit this too.
@@ -121,7 +118,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     onTransition?: (placement: WorkerDispatchPlacement) => void,
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
+    awaitRequestedHandoff?: (signal?: AbortSignal) => Promise<void>,
   ): Promise<WorkerActiveDispatchPlacement> => {
+    using diagnostics = startSlowRequestDiagnostics<string>(
+      sessionLog,
+      "slow placement dispatch",
+      "sessions.dispatch",
+      "admission",
+    );
     const assertCurrent = composePlacementAuthorization(authorize, () => {
       signal?.throwIfAborted();
       assertRequiredWorkerDispatch(getRuntimeConfig(), request);
@@ -155,6 +159,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           return placement;
         },
       });
+      await awaitRequestedHandoff?.(signal);
       // The requested transition can acknowledge a detached caller while setup continues.
       // Revalidate that retained caller before any node or provider-side preparation.
       assertCurrent();
@@ -176,7 +181,16 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           );
         }
       }
+      diagnostics?.mark("workspacePreparation");
       const workspace = await options.resolveWorkspace(request);
+      if (
+        workspace.kind === "device-folder" &&
+        (request.deviceId !== workspace.deviceId || request.executionMode !== "worker-turn")
+      ) {
+        throw new Error(
+          "Device folders require an explicit dispatch to their original paired device using the OpenClaw harness.",
+        );
+      }
       if (
         workspace.kind === "repository" &&
         !request.deviceId &&
@@ -219,6 +233,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           })
         : undefined;
       assertCurrent();
+      diagnostics?.mark("reserveClaim");
       const prepared = preparedIntent
         ? await startup.bindPreparedPlacement({
             request,
@@ -248,6 +263,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         ));
       reportPlacementTransition(onTransition, placement);
       assertCurrent();
+      if (!prepared) {
+        diagnostics?.mark("provision");
+      }
       const environment = prepared
         ? prepared.environment
         : await environments.createWithRequest({
@@ -261,8 +279,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             runSetupScript: request.runSetupScript,
             admittedIntent: preparedIntent,
             inheritedProfile: request.inheritedProfile,
+            beforeProvision: assertCurrent,
           });
       return await startup.continueProvisionedDispatch({
+        markPhase: diagnostics?.mark,
         request,
         placement,
         environment,
@@ -274,13 +294,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         ...(prepared ? { admittedNode: prepared.admittedNode } : {}),
       });
     } catch (error) {
+      diagnostics?.mark("cleanup");
       if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
         throw error;
       }
       try {
-        if (placement && (await startup.retainInterruptedProvisioning(placement, error))) {
-          throw error;
-        }
         const current = placement ? await placements.getAsync(request.sessionId) : undefined;
         if (current && current.state !== "local" && current.state !== "reclaimed") {
           if (current.state === "active") {
@@ -546,9 +564,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     },
     move: moveService.move,
     reclaim,
+    subscribeOrphanWorkspaceChanges: recovery.subscribeOrphanWorkspaceChanges,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,
-    resumeProvisioning: startup.resumeProvisioning,
   };
 }
 

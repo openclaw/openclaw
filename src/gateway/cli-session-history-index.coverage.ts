@@ -26,26 +26,13 @@ type CoverageDatabase = {
   coverage_segments: { import_id: number; turn: number };
 };
 
-// The index stores comparable text as a JSON string, or as [null, text] so a
-// cleaned body can share a key with an ordinary quotation. Coverage compares
-// the inner text only.
+// Comparable text is a JSON string produced by the shared history matcher.
 export function decodeIndexedHistoryText(value: string | null): string | null {
   if (value === null) {
     return null;
   }
-  const parsed = JSON.parse(value) as unknown;
-  if (typeof parsed === "string") {
-    return parsed;
-  }
-  if (
-    Array.isArray(parsed) &&
-    parsed.length === 2 &&
-    parsed[0] === null &&
-    typeof parsed[1] === "string"
-  ) {
-    return parsed[1];
-  }
-  return null;
+  const parsed: unknown = JSON.parse(value);
+  return typeof parsed === "string" ? parsed : null;
 }
 
 function greatestUserIdAtMost(userIds: readonly number[], aggregateId: number): number | undefined {

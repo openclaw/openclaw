@@ -232,10 +232,6 @@ describe("captured plugin registration", () => {
             tracks: [],
           }),
         });
-        api.registerTextTransforms({
-          input: [{ from: /red basket/g, to: "blue basket" }],
-          output: [{ from: /blue basket/g, to: "red basket" }],
-        });
         api.registerChannel({
           plugin: {
             id: "captured-channel",
@@ -280,8 +276,6 @@ describe("captured plugin registration", () => {
     expect(captured.musicGenerationProviders.map((provider) => provider.id)).toEqual([
       "captured-music",
     ]);
-    expect(captured.textTransforms).toHaveLength(1);
-    expect(captured.textTransforms[0]?.input).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares[0]?.runtimes).toEqual(["codex"]);
     expect(captured.api.runtime.version).toEqual(expect.any(String));
@@ -316,7 +310,9 @@ describe("captured plugin registration", () => {
   });
 
   it("returns synthetic scheduled-turn ids independent of human-readable names", async () => {
-    let scheduleSessionTurn: OpenClawPluginApi["scheduleSessionTurn"] | undefined;
+    let scheduleSessionTurn:
+      | OpenClawPluginApi["session"]["workflow"]["scheduleSessionTurn"]
+      | undefined;
     let registerSessionSchedulerJob: OpenClawPluginApi["registerSessionSchedulerJob"] | undefined;
     const captured = capturePluginRegistration({
       id: "captured-custom-plugin",

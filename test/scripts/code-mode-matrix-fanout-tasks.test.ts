@@ -31,7 +31,6 @@ it("scores child submissions and rejects incorrect, missing, excessive, and prem
   const workspace = tempDirs.make("openclaw-fanout-fixture-");
   const receiptsPath = path.join(workspace, "receipts.jsonl");
   const entry = path.join(workspace, "fixture.mjs");
-  await fs.writeFile(receiptsPath, "");
   await fs.writeFile(entry, fixture.pluginSource!);
   const factories: ToolFactory[] = [];
   const plugin = (await import(pathToFileURL(entry).href)) as {
@@ -104,8 +103,7 @@ it("scores child submissions and rejects incorrect, missing, excessive, and prem
     reconciliation.totalCents += report.totalCents;
     reconciliation.excludedIds.push(...report.excludedIds);
   }
-  expect(reconciliation.rowCount).toBe(68);
-  expect(reconciliation.eligibleCount).toBe(44);
+  expect(reconciliation).toMatchObject({ rowCount: 68, eligibleCount: 44 });
   const audit = {
     ...reconciliation,
     stage: "G",
@@ -140,6 +138,12 @@ it("scores child submissions and rejects incorrect, missing, excessive, and prem
     startedAt: starts[index],
     endedAt: ends[index],
   }));
+  const launch = (label: string, runId: string) => ({
+    name: "sessions_spawn",
+    input: { label, collect: true, outputSchema: { type: "object" } },
+    result: { status: "accepted", runId },
+    isError: false,
+  });
   const evidence: MatrixPerformanceEvaluation = {
     workspace,
     taskResponseAt,
@@ -153,12 +157,7 @@ it("scores child submissions and rejects incorrect, missing, excessive, and prem
       outcomes: [],
       assistantTurns: 8,
       models: [],
-      activities: taskRecords.map((task) => ({
-        name: "sessions_spawn",
-        input: { label: task.label, collect: true, outputSchema: { type: "object" } },
-        result: { status: "accepted", runId: task.runId },
-        isError: false,
-      })),
+      activities: taskRecords.map((task) => launch(task.label, task.runId)),
     },
   };
   expect(Object.values(await fixture.evaluate(evidence)).every(Boolean)).toBe(true);
@@ -168,131 +167,51 @@ it("scores child submissions and rejects incorrect, missing, excessive, and prem
     result: { status: "error", error: "task is required" },
     isError: true,
   };
-  const recoveredEvidence = {
-    ...evidence,
-    trace: {
-      ...evidence.trace,
-      activities: [rejectedSpawn, ...evidence.trace.activities],
-    },
-  };
-  expect(Object.values(await fixture.evaluate(recoveredEvidence)).every(Boolean)).toBe(true);
-  const cases: {
-    name: string;
-    check: string;
-    patch: Partial<MatrixPerformanceEvaluation>;
-  }[] = [
-    { name: "missing child", check: "exactChildren", patch: { taskRecords: taskRecords.slice(1) } },
-    {
-      name: "eighth accepted child",
-      check: "collectorLaunches",
-      patch: {
-        trace: {
-          ...evidence.trace,
-          activities: [
-            ...evidence.trace.activities,
-            {
-              name: "sessions_spawn",
-              input: {
-                label: "fanout-r2-v1-H",
-                collect: true,
-                outputSchema: { type: "object" },
-              },
-              result: { status: "accepted", runId: "run-H" },
-              isError: false,
-            },
-          ],
-        },
-      },
-    },
-    {
-      name: "child completes after parent response",
-      check: "completedByResponse",
-      patch: {
-        taskRecords: taskRecords.map((task, index) =>
-          index === 6 ? Object.assign({}, task, { endedAt: taskResponseAt + 1 }) : task,
+  const withActivities = (activities: MatrixPerformanceEvaluation["trace"]["activities"]) => ({
+    trace: { ...evidence.trace, activities },
+  });
+  const evaluate = (patch: Partial<MatrixPerformanceEvaluation>) =>
+    fixture.evaluate({ ...evidence, ...patch });
+  const recovered = await evaluate(withActivities([rejectedSpawn, ...evidence.trace.activities]));
+  expect(Object.values(recovered).every(Boolean)).toBe(true);
+  const changeTask = (index: number, patch: Partial<(typeof taskRecords)[number]>) => ({
+    taskRecords: taskRecords.map((task, i) => (i === index ? { ...task, ...patch } : task)),
+  });
+  const changeReceipt = (kind: string, stage: string, patch: Record<string, unknown>) => ({
+    receipts: evidence.receipts.map((row) =>
+      isRecord(row) && row.kind === kind && row.stage === stage ? { ...row, ...patch } : row,
+    ),
+  });
+  const invalid: Array<[string, Partial<MatrixPerformanceEvaluation>]> = [
+    ["exactChildren", { taskRecords: taskRecords.slice(1) }],
+    [
+      "collectorLaunches",
+      withActivities([...evidence.trace.activities, launch("fanout-r2-v1-H", "run-H")]),
+    ],
+    ["completedByResponse", changeTask(6, { endedAt: taskResponseAt + 1 })],
+    ["completedByResponse", { taskResponseAt: undefined }],
+    ["exactSubmissions", changeReceipt("fanout-submit", "G", { at: taskResponseAt + 1 })],
+    [
+      "completeSourceReads",
+      changeReceipt("fanout-read", "A", { sessionKey: "agent:qa:subagent:B" }),
+    ],
+    ["exactSubmissions", changeTask(0, { childSessionKey: "agent:qa:subagent:invented" })],
+    ["dependencyOrder", changeTask(5, { createdAt: 19 })],
+    ["boundedConcurrency", changeTask(3, { startedAt: 5 })],
+    ["settledChildren", changeTask(6, { status: "running", endedAt: undefined })],
+    [
+      "collectorLaunches",
+      withActivities(
+        evidence.trace.activities.map((activity, index) =>
+          index === 0 ? { ...activity, input: { ...activity.input, collect: false } } : activity,
         ),
-      },
-    },
-    {
-      name: "response cutoff missing",
-      check: "completedByResponse",
-      patch: { taskResponseAt: undefined },
-    },
-    {
-      name: "submission arrives after parent response",
-      check: "exactSubmissions",
-      patch: {
-        receipts: evidence.receipts.map((row) =>
-          isRecord(row) && row.kind === "fanout-submit" && row.stage === "G"
-            ? Object.assign({}, row, { at: taskResponseAt + 1 })
-            : row,
-        ),
-      },
-    },
-    {
-      name: "source read by a different child",
-      check: "completeSourceReads",
-      patch: {
-        receipts: evidence.receipts.map((row) =>
-          isRecord(row) && row.kind === "fanout-read" && row.stage === "A"
-            ? { ...row, sessionKey: "agent:qa:subagent:B" }
-            : row,
-        ),
-      },
-    },
-    {
-      name: "invented child identity",
-      check: "exactSubmissions",
-      patch: {
-        taskRecords: taskRecords.map((task, index) =>
-          index === 0 ? { ...task, childSessionKey: "agent:qa:subagent:invented" } : task,
-        ),
-      },
-    },
-    {
-      name: "premature reconciliation",
-      check: "dependencyOrder",
-      patch: {
-        taskRecords: taskRecords.map((task, index) =>
-          index === 5 ? { ...task, createdAt: 19 } : task,
-        ),
-      },
-    },
-    {
-      name: "excessive concurrency",
-      check: "boundedConcurrency",
-      patch: {
-        taskRecords: taskRecords.map((task, index) =>
-          index === 3 ? Object.assign({}, task, { startedAt: 5 }) : task,
-        ),
-      },
-    },
-    {
-      name: "child still running",
-      check: "settledChildren",
-      patch: {
-        taskRecords: taskRecords.map((task, index) =>
-          index === 6 ? Object.assign({}, task, { status: "running", endedAt: undefined }) : task,
-        ),
-      },
-    },
-    {
-      name: "announcing child",
-      check: "collectorLaunches",
-      patch: {
-        trace: {
-          ...evidence.trace,
-          activities: evidence.trace.activities.map((activity, index) =>
-            index === 0 ? { ...activity, input: { ...activity.input, collect: false } } : activity,
-          ),
-        },
-      },
-    },
+      ),
+    ],
   ];
-  for (const testCase of cases) {
-    const checks = await fixture.evaluate({ ...evidence, ...testCase.patch });
-    expect(Object.values(checks).every(Boolean), testCase.name).toBe(false);
-    expect(checks[testCase.check], testCase.name).toBe(false);
+  for (const [check, patch] of invalid) {
+    const checks = await evaluate(patch);
+    expect(Object.values(checks).every(Boolean), check).toBe(false);
+    expect(checks[check], check).toBe(false);
   }
   await fs.writeFile(
     path.join(workspace, "fanout-result.json"),

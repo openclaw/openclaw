@@ -20,8 +20,9 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { FsSafeError, openLocalFileSafely, type OpenResult } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { buildRandomTempFilePath } from "../infra/temp-download.js";
+import { logWarn } from "../logger.js";
 import {
-  readRemoteMediaBuffer,
+  readRemoteMediaBufferWithHeaders,
   type MediaFetchRetryOptions,
   MediaFetchError,
 } from "../media/fetch.js";
@@ -143,14 +144,12 @@ export type MediaAttachmentCacheOptions = {
 export class MediaAttachmentCache {
   private readonly entries = new Map<number, AttachmentCacheEntry>();
   private readonly stagedPaths = new Set<string>();
-  private readonly attachments: MediaAttachment[];
   private readonly localPathRoots: readonly string[];
   private readonly ssrfPolicy: SsrFPolicy | undefined;
   private readonly fallbackWorkspaceDir?: string;
   private canonicalLocalPathRoots?: Promise<readonly string[]>;
 
   constructor(attachments: MediaAttachment[], options?: MediaAttachmentCacheOptions) {
-    this.attachments = attachments;
     this.ssrfPolicy = options?.ssrfPolicy;
     this.localPathRoots =
       options?.includeDefaultLocalPathRoots === false
@@ -193,7 +192,7 @@ export class MediaAttachmentCache {
     }
 
     try {
-      const fetched = await readRemoteMediaBuffer({
+      const fetched = await readRemoteMediaBufferWithHeaders({
         url,
         timeoutMs: params.timeoutMs,
         maxBytes: params.maxBytes,
@@ -206,7 +205,7 @@ export class MediaAttachmentCache {
         // Channel-declared MIME leads; the transport Content-Type stays a
         // secondary hint so byte detection can refine stale declarations.
         declaredMime: concreteMime(entry.attachment.mime),
-        additionalMimeHints: [fetched.contentType],
+        additionalMimeHints: [fetched.contentType, fetched.headerContentType],
       });
       entry.bufferResult = {
         buffer: fetched.buffer,
@@ -395,6 +394,9 @@ export class MediaAttachmentCache {
       await fs.unlink(tmpPath);
     } catch (error) {
       if (!hasErrnoCode(error, "ENOENT")) {
+        logWarn(
+          `media-understanding: could not remove staged attachment ${tmpPath}; remove it manually if it remains: ${String(error)}`,
+        );
         return;
       }
     }
@@ -411,9 +413,7 @@ export class MediaAttachmentCache {
 
   private async ensureEntry(attachmentIndex: number): Promise<AttachmentCacheEntry> {
     const entry: AttachmentCacheEntry = this.entries.get(attachmentIndex) ?? {
-      attachment: this.attachments.find((item) => item.index === attachmentIndex) ?? {
-        index: attachmentIndex,
-      },
+      attachment: { index: attachmentIndex },
     };
     if (!entry.localResolutionAttempted) {
       entry.resolvedPath = await this.resolveLocalPath(entry.attachment);

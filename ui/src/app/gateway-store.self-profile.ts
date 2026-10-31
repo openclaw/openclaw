@@ -1,5 +1,5 @@
 import type { UserProfile, UsersSelfResult } from "../../../packages/gateway-protocol/src/index.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { userProfileAvatarUrl } from "../pages/profile/profile-avatar-url.ts";
 import type { ApplicationGatewayConnection, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { hasOperatorReadAccess, hasOperatorSelfReadAccess } from "./operator-access.ts";

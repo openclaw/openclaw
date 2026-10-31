@@ -3,10 +3,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   upsertSessionEntryCore,
   loadSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import {
   listSkillCommandsForWorkspace,
   resolveSkillCommandInvocation,
@@ -55,6 +60,7 @@ const temps = useAutoCleanupTempDirTracker((cleanup) =>
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     expect(
       hasOpenClawAgentDatabaseAsyncResources(),
@@ -134,6 +140,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
           exec: { applyPatch: { enabled: true, workspaceOnly: true } },
         },
       };
+      setRuntimeConfigSnapshot(config);
       const actor = (email: string): SkillLibraryAuthority => ({
         profileId: ensureProfileForEmail(email).id,
         scopes: ["operator.read", "operator.write"],
@@ -347,6 +354,12 @@ describe("manual library resources through embedded and host-bound reads", () =>
           childSessionKey: childKey,
           incognito: false,
           requesterInternalKey: parentKey,
+          parentTarget: await resolveGatewaySessionStoreTargetInWorker({
+            cfg: config,
+            key: parentKey,
+            agentId: "main",
+            projection: "full",
+          }),
           completionOwnerSessionKey: parentKey,
           creationPolicy: { actor: { type: "agent", id: "main" } },
           modelPatch: {},
@@ -417,9 +430,9 @@ describe("manual library resources through embedded and host-bound reads", () =>
           await expect(read.execute("symlink-escape", { path: escapeLink })).rejects.toThrow(
             /symlink|sandbox|outside|escape/i,
           );
-          // The existing regular-file reader rejects final symlinks, even within an allowed root.
+          // Both symlink validation and regular-file admission reject links within an allowed root.
           await expect(read.execute("contained-link", { path: containedLink })).rejects.toThrow(
-            /regular file/i,
+            /symlink|regular file/i,
           );
         }
         if (toolOwner !== "embedded") {

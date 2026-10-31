@@ -34,7 +34,7 @@ function getSubagentLaneSnapshot(): CommandLaneSnapshot {
     if (!state.lane.startsWith(SUBAGENT_LANE_PREFIX) || state.lane.startsWith(SWARM_LANE_PREFIX)) {
       continue;
     }
-    const activeCount = state.activeTaskIds.size;
+    const activeCount = state.activeTasks.size;
     snapshot.activeCount += activeCount;
     snapshot.queuedCount += state.queue.length;
     snapshot.draining ||= state.draining;
@@ -51,8 +51,7 @@ export function getCommandLaneDiagnostics(): {
   lanes: CommandLaneSnapshot[];
   dynamic: DynamicCommandLaneSummary | null;
 } {
-  const lanes = [...STATIC_COMMAND_LANES]
-    .toSorted()
+  const lanes = STATIC_COMMAND_LANES.toSorted()
     .map((lane) => {
       if (lane === CommandLane.Background) {
         return getBackgroundWorkSnapshot();

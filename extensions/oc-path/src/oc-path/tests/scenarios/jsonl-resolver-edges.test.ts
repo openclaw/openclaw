@@ -6,7 +6,7 @@ import { resolveJsonlOcPath } from "../../jsonl/resolve.js";
 import { parseOcPath } from "../../oc-path.js";
 
 function rs(raw: string, ocPath: string) {
-  return resolveJsonlOcPath(parseJsonl(raw).ast, parseOcPath(ocPath));
+  return resolveJsonlOcPath(parseJsonl(raw), parseOcPath(ocPath));
 }
 
 function expectNumberValue(node: JsoncValue, value: number) {

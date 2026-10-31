@@ -1,5 +1,6 @@
 import { redactSensitiveUrl } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   validatePluginUiCapabilities,
   type PluginUiCapability,
@@ -82,8 +83,8 @@ export function parseClawHubPluginMcpServer(
   }
   const name = readRequiredClawHubStringField(entry, "name", context);
   const rawUrl = readClawHubStringField(entry, "url", context);
-  const scope = readClawHubStringField(entry, "scope", context)?.slice(0, 1000);
-  const setup = readClawHubStringField(entry, "setup", context)?.slice(0, 2000);
+  const scope = readClawHubStringField(entry, "scope", context);
+  const setup = readClawHubStringField(entry, "setup", context);
   let url: string | undefined;
   let endpointRedacted = entry.endpointRedacted === true;
   if (rawUrl && !endpointRedacted) {
@@ -123,8 +124,8 @@ export function parseClawHubPluginMcpServer(
     ...(entry.auth === "oauth" || entry.auth === "api-key" || entry.auth === "none"
       ? { auth: entry.auth }
       : {}),
-    ...(scope ? { scope } : {}),
-    ...(setup ? { setup } : {}),
+    ...(scope ? { scope: truncateUtf16Safe(scope, 1000) } : {}),
+    ...(setup ? { setup: truncateUtf16Safe(setup, 2000) } : {}),
     ...(endpointRedacted ? { endpointRedacted } : {}),
   };
 }

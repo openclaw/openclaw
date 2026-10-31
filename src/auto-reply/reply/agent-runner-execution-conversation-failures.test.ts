@@ -1,11 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
-import type { TemplateContext } from "../templating.js";
+import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import {
-  createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
-  createMockTypingSignaler,
   createFollowupRun,
   createMinimalRunAgentTurnParams,
   GENERIC_RUN_FAILURE_TEXT,
@@ -14,117 +12,95 @@ import {
 } from "./agent-runner-execution.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
+const executeAgentTurn = await getExecuteAgentTurnForTest();
 
-describe("executeAgentTurn: conversation failures", () => {
-  it.each([NON_DIRECT_FAILURE_SURFACE_CASES[0]])(
-    "surfaces a safe failure for an accepted request in $label chats",
-    async (testCase) => {
-      state.runEmbeddedAgentMock.mockRejectedValueOnce(
-        new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
-      );
-
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(
-        createMinimalRunAgentTurnParams({
-          sessionCtx: createNonDirectFailureSessionCtx(testCase),
-        }),
-      );
-
-      expect(result.kind).toBe("final");
-      if (result.kind === "final") {
-        expect(result.payload).toMatchObject({ text: GENERIC_RUN_FAILURE_TEXT, isError: true });
-        expect(result.payload.text).not.toContain("openai/gpt-5.5");
-      }
-    },
-  );
-
-  it("does not auto-reset role-ordering provider conversation-state errors", async () => {
-    const followupRun = createFollowupRun();
-    const sessionEntry = {
-      sessionId: followupRun.run.sessionId,
-      lifecycleRevision: "original-generation",
-      updatedAt: 1,
-    };
-    const sessionSnapshot = { ...sessionEntry };
-    const sessionStore = { main: sessionEntry };
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("400 Incorrect role information"));
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "telegram",
-        ChatId: "chat-1",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      ...createAgentTurnExecutionDefaults(),
-      getActiveSessionEntry: () => sessionStore.main,
-      activeSessionStore: sessionStore,
-    });
-
-    expect(followupRun.run.sessionId).toBe(sessionSnapshot.sessionId);
-    expect(sessionStore.main).toEqual(sessionSnapshot);
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE);
-    }
+async function internalFailure(error: Error) {
+  state.isInternalMessageChannelMock.mockReturnValue(true);
+  state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
+  return (await getExecuteAgentTurnForTest())({
+    ...createMinimalRunAgentTurnParams({
+      sessionCtx: { Provider: "chat", Surface: "chat", MessageSid: "msg" },
+    }),
+    commandBody: "hello",
   });
+}
 
-  it("shows recovery guidance without provider diagnostics on internal control surfaces", async () => {
-    state.isInternalMessageChannelMock.mockReturnValue(true);
-    const providerError = "provider failed with actionable details";
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error(providerError));
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "chat",
-        Surface: "chat",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      ...createAgentTurnExecutionDefaults(),
-    });
-
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toContain("OpenClaw couldn't finish this reply.");
-      expect(result.payload.text).not.toContain(providerError);
-      expect(result.payload.text).toContain("openclaw logs --follow");
-      expect(result.payload.text).toMatch(/terminal/i);
-    }
+it("preserves typed node-loss guidance on internal control surfaces", async () => {
+  state.isInternalMessageChannelMock.mockReturnValue(true);
+  const failure = new WorkerNodeLostError();
+  state.runEmbeddedAgentMock.mockRejectedValueOnce(failure);
+  const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+  expect(result).toMatchObject({
+    kind: "final",
+    payload: { text: `${failure.message} This turn will not be continued automatically.` },
   });
+  expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+});
 
-  it("preserves curated execution-node recovery on internal control surfaces", async () => {
-    state.isInternalMessageChannelMock.mockReturnValue(true);
+it.each([NON_DIRECT_FAILURE_SURFACE_CASES[0]])(
+  "surfaces a safe failure for an accepted request in $label chats",
+  async (testCase) => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error(
-        "Codex execution node disconnected; start a fresh attempt. (execution node failed: node disconnected (codex.exec-server.stdio.v1))",
-      ),
+      new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "chat",
-        Surface: "chat",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      ...createAgentTurnExecutionDefaults(),
-    });
+    const result = await executeAgentTurn(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: createNonDirectFailureSessionCtx(testCase),
+      }),
+    );
 
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toMatch(/Codex execution node disconnected.*fresh attempt/iu);
-    }
+    assert(result.kind === "final");
+    expect(result.payload).toMatchObject({ text: GENERIC_RUN_FAILURE_TEXT, isError: true });
+    expect(result.payload.text).not.toContain("openai/gpt-5.5");
+  },
+);
+
+it("does not auto-reset role-ordering provider conversation-state errors", async () => {
+  const followupRun = createFollowupRun();
+  const sessionEntry = {
+    sessionId: followupRun.run.sessionId,
+    lifecycleRevision: "original-generation",
+    updatedAt: 1,
+  };
+  const sessionSnapshot = { ...sessionEntry };
+  const sessionStore = { main: sessionEntry };
+  state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("400 Incorrect role information"));
+
+  const result = await executeAgentTurn({
+    ...createMinimalRunAgentTurnParams({
+      followupRun,
+      sessionCtx: { Provider: "telegram", ChatId: "chat-1" },
+    }),
+    commandBody: "hello",
+    getActiveSessionEntry: () => sessionStore.main,
+    activeSessionStore: sessionStore,
   });
+
+  expect(followupRun.run.sessionId).toBe(sessionSnapshot.sessionId);
+  expect(sessionStore.main).toEqual(sessionSnapshot);
+  assert(result.kind === "final");
+  expect(result.payload.text).toBe(PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE);
+});
+
+it("shows recovery guidance without provider diagnostics on internal control surfaces", async () => {
+  const providerError = "provider failed with actionable details";
+  const result = await internalFailure(new Error(providerError));
+
+  assert(result.kind === "final");
+  expect(result.payload.text).toContain("OpenClaw couldn't finish this reply.");
+  expect(result.payload.text).not.toContain(providerError);
+  expect(result.payload.text).toContain("openclaw logs --follow");
+  expect(result.payload.text).toMatch(/terminal/i);
+});
+
+it("preserves curated execution-node recovery on internal control surfaces", async () => {
+  const result = await internalFailure(
+    new Error(
+      "Codex execution node disconnected; start a fresh attempt. (execution node failed: node disconnected (codex.exec-server.stdio.v1))",
+    ),
+  );
+
+  assert(result.kind === "final");
+  expect(result.payload.text).toMatch(/Codex execution node disconnected.*fresh attempt/iu);
 });

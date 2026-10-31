@@ -1,3 +1,4 @@
+import type { WorkerEnvironmentStartStatus } from "../../../packages/gateway-protocol/src/schema/environments.js";
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -13,7 +14,7 @@ import { workerEnvironmentServiceError as serviceError } from "./environment-err
 import { workerInferenceMetadata } from "./inference-placement.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
@@ -29,20 +30,24 @@ import type { WorkerTunnelHandle, WorkerTunnelManager } from "./tunnel.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 const TUNNEL_START_TIMEOUT_MS = 3 * 60_000;
+// Allow one normal 30-second node command to settle, then one native close command.
+const COMPUTER_CLEANUP_TIMEOUT_MS = 2 * 30_000;
 
 export type WorkerEnvironmentNodeTunnel = Pick<
   NodeWorkerTunnelManager,
-  "status" | "start" | "stop" | "stopAll" | "observeProcesses"
+  "status" | "start" | "stop" | "stopAll" | "beginClose" | "observeProcesses"
 >;
 
 /** Lease teardown joins every transport sharing that environment owner. */
 export function createWorkerEnvironmentTransportLifecycle(options: {
+  store: Pick<WorkerEnvironmentStore, "get">;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: Pick<NodeWorkerTunnelManager, "stop">;
   nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
   nodePortalCarrier?: import("./portal-node-carrier.js").WorkerNodePortalCarrier;
   closeWorkerPortals?: (environmentId: string, ownerEpoch?: number) => Promise<void>;
   closeEnvironmentComputers?: (environmentId: string, ownerEpoch?: number) => Promise<void>;
+  logger?: { warn: (message: string) => void };
 }) {
   if (
     !options.tunnelManager &&
@@ -52,6 +57,33 @@ export function createWorkerEnvironmentTransportLifecycle(options: {
   ) {
     return undefined;
   }
+  const closeComputers = async (
+    environmentId: string,
+    ownerEpoch?: number,
+    reason?: WorkerTunnelStopReason,
+  ) => {
+    if (!options.closeEnvironmentComputers) {
+      return;
+    }
+    try {
+      await withTimeout(
+        options.closeEnvironmentComputers(environmentId, ownerEpoch),
+        COMPUTER_CLEANUP_TIMEOUT_MS,
+        "Worker computer cleanup",
+      );
+    } catch (error) {
+      const record = options.store.get(environmentId);
+      const providerOwnsMachine = record?.sharedHost === false && record.nodeDeviceId !== null;
+      // A teardown reason does not establish host isolation. Shared or unknown
+      // hosts still need cleanup acknowledgement before their worker can retire.
+      if (reason === undefined || !providerOwnsMachine) {
+        throw error;
+      }
+      options.logger?.warn(
+        `Worker computer cleanup failed (${environmentId}): ${boundedError(error)}; continuing provider teardown. Check the provider lease status and retry Stop if it is still running.`,
+      );
+    }
+  };
   return {
     stop: async (environmentId: string, ownerEpoch?: number, reason?: WorkerTunnelStopReason) => {
       await joinWorkerTunnelStops([
@@ -60,13 +92,14 @@ export function createWorkerEnvironmentTransportLifecycle(options: {
         options.nodeDesktopCarrier?.stop(environmentId, ownerEpoch),
         options.nodePortalCarrier?.stop(environmentId, ownerEpoch),
         options.closeWorkerPortals?.(environmentId, ownerEpoch),
-        options.closeEnvironmentComputers?.(environmentId, ownerEpoch),
+        closeComputers(environmentId, ownerEpoch, reason),
       ]);
     },
   };
 }
 
 type WorkerEnvironmentAccessOptions = {
+  readStartStatus: (record: WorkerEnvironmentRecord) => WorkerEnvironmentStartStatus | undefined;
   store: WorkerEnvironmentStore;
   getCleanupError: (record: WorkerEnvironmentRecord) => string | undefined;
   getConfig: () => OpenClawConfig;
@@ -175,8 +208,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         ? normalizeCloudRepo(preparedProject.source.url)
         : preparedProject.label
       : undefined;
+    const startStatus = options.readStartStatus(record);
     return {
       ...record,
+      ...(startStatus ? { startStatus } : {}),
       ...workerInferenceMetadata(record),
       ...(record.preparation && preparedProject
         ? {
@@ -274,7 +309,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         getConfig: options.getConfig,
         assertCurrent,
         signal: request.signal,
-        knownRecipe: () => ({ project: projectSnapshot, setupRecipe: preparation.setupRecipe }),
+        knownRecipe: () => ({
+          setupRecipe: preparation.setupRecipe,
+          recipe: preparation.recipe,
+        }),
       });
     }
     const assertBindingCurrent = () => {
@@ -285,8 +323,8 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     const prepared = await bind({ ...request, assertCurrent: assertBindingCurrent });
     assertBindingCurrent();
     await repository?.revalidate(request.signal);
-    assertCurrent();
-    return prepared;
+    assertBindingCurrent();
+    return { ...prepared, assertCurrent: assertBindingCurrent };
   };
 
   const startTunnel = async (request: WorkerTunnelRequest): Promise<WorkerTunnelHandle> => {

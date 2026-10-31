@@ -1,7 +1,8 @@
-import type {
-  AgentHarnessSessionDeletionMutation,
-  AgentHarnessSessionDeletionParams,
-  AgentHarness,
+import {
+  AgentHarnessPreflightError,
+  type AgentHarnessSessionDeletionMutation,
+  type AgentHarnessSessionDeletionParams,
+  type AgentHarness,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   wrapNativeSessionDeletionMutation,
@@ -121,7 +122,7 @@ export async function withCodexAppServerSessionDeletion<T>(
           binding &&
           isCodexAppServerLiveThreadClaimed(clientLease.client, binding.threadId)
         ) {
-          throw new Error(
+          throw new AgentHarnessPreflightError(
             "Cannot delete a session while its Codex thread is claimed by active work",
           );
         }
@@ -200,7 +201,7 @@ export async function retireCodexAppServerSessionGeneration(params: {
   }
   return await withCodexAppServerThreadMutation(expectedBinding.threadId, () =>
     params.bindingStore.withLease(params.identity, async () => {
-      const binding = params.bindingStore.read(params.identity);
+      const binding = await params.bindingStore.readAsync(params.identity);
       if (!binding || !isSameCodexAppServerThreadOwner(binding, expectedBinding)) {
         return "conflict";
       }

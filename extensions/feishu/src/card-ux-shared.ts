@@ -16,7 +16,18 @@ export function buildFeishuActionCard(params: {
     body: {
       elements: [
         { tag: "markdown", content: params.content },
-        { tag: "action", actions: params.actions },
+        // Card JSON 2.0 rejects the legacy "action" container.
+        {
+          tag: "column_set",
+          flex_mode: "none",
+          horizontal_spacing: "default",
+          columns: params.actions.map((button) => ({
+            tag: "column",
+            width: "auto",
+            vertical_align: "center",
+            elements: [button],
+          })),
+        },
       ],
     },
   };

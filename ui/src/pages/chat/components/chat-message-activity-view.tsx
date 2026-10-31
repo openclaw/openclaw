@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
-import { type ToolCallGroup, groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
+import { groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MessageGroup as MessageGroupData, ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
@@ -15,64 +15,18 @@ import {
 } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
-import {
-  emptyLegacyContent as litNothing,
-  LitContent,
-  solidContent,
-} from "../../../lit/solid-content.tsx";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { selectActivityHeadline } from "./chat-activity-headline-selection.ts";
 import { ChatActivityHeadline } from "./chat-activity-headline.solid.tsx";
+import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
+import { descendantCards } from "./chat-message-activity-operation.tsx";
+import type { ActivityOperationProps } from "./chat-message-bubble-options.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
-import {
-  renderBrowserTabPreviews,
-  renderToolCard,
-  syncToolDisclosureOverflow,
-} from "./chat-tool-cards.ts";
-import { renderToolOutcomeSummary, renderToolReviewOutcome } from "./chat-tool-outcome-summary.ts";
-
-type ToolContexts = ReadonlyMap<ToolCard, { messageKey: string; disclosureId: string }>;
-
-function descendantCards(group: ToolCallGroup<ToolCard>) {
-  const cards: ToolCard[] = [];
-  const pending = [...group.children];
-  for (const child of pending) {
-    cards.push(child.card);
-    pending.push(...child.children);
-  }
-  return cards;
-}
-
-function renderActivityOperation(
-  group: ToolCallGroup<ToolCard>,
-  options: NativeMessageGroupOptions,
-  contexts: ToolContexts,
-): unknown {
-  const context = contexts.get(group.card)!;
-  const expanded = options.isToolExpanded?.(context.disclosureId) ?? false;
-  return renderToolCard(group.card, {
-    ...options,
-    messageKey: context.messageKey,
-    expanded,
-    onToggleExpanded: () => options.onToggleToolExpanded?.(context.disclosureId, expanded),
-    activityCards: [group.card, ...descendantCards(group)],
-    // The card bridge owns this deferred range; nested Solid roots can be retired while it parks.
-    children: group.children.length
-      ? expanded
-        ? group.children.map((child) => renderActivityOperation(child, options, contexts))
-        : []
-      : undefined,
-  });
-}
-
-function ActivityOperation(props: {
-  group: ToolCallGroup<ToolCard>;
-  options: NativeMessageGroupOptions;
-  contexts: ToolContexts;
-}) {
-  return <LitContent value={renderActivityOperation(props.group, props.options, props.contexts)} />;
-}
+import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
+import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
+import { ToolReviewOutcome } from "./chat-tool-outcome-summary.solid.tsx";
 
 function prepareActivityGroup(
   groups: readonly MessageGroupData[],
@@ -128,19 +82,18 @@ function prepareActivityGroup(
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
   const groupSummaryLabel = summarizeToolGroup(visibleActivity, {
-    includeInlineOutcomes: activityExpanded,
     ownSessionLaunches: ownSessionLaunchCalls(cards),
   });
-  const toolCardOverrides = new Map<ToolCard, unknown>();
+  const toolCardOverrides = new Map<ToolCard, ActivityOperationProps | null>();
   const approvalReviews = cards.flatMap((card) => readToolApprovalReviews(card.details));
   const recordedReviewOutcomes = cards.flatMap((card) => {
     const outcome = readToolApprovalReviewOutcome(card.details);
     return outcome ? [outcome] : [];
   });
   const reviewOutcome = resolveToolApprovalReviewOutcome(approvalReviews, recordedReviewOutcomes);
-  // A settled step that completed with only routine nested calls is one operation:
-  // its own row names it and keeps those calls underneath, where a count hides both.
-  // Other outcomes and reviewed steps keep the counted row that carries their status.
+  // A settled step with only routine nested calls is one operation: its own row
+  // names it, carries its outcome, and keeps those calls underneath, where a count
+  // hides all three. Blocked, skipped, and reviewed steps keep the counted row.
   const [step] = cardGroups;
   const stepActivity = step ? preparedByCard.get(step.card) : undefined;
   const soleStep =
@@ -151,18 +104,15 @@ function prepareActivityGroup(
     cardGroups.length === 1 &&
     step.children.length > 0 &&
     visibleCalls.size === 1 &&
-    stepActivity?.status === "completed" &&
+    (stepActivity?.status === "completed" || stepActivity?.status === "failed") &&
     visibleCalls.has(stepActivity.toolCallId ?? stepActivity.itemId);
   if (activityExpanded || soleStep) {
     for (const group of cardGroups) {
       if (group.children.length > 0) {
         for (const card of descendantCards(group)) {
-          toolCardOverrides.set(card, litNothing);
+          toolCardOverrides.set(card, null);
         }
-        toolCardOverrides.set(
-          group.card,
-          solidContent(ActivityOperation, { group, options: opts, contexts: toolContexts }),
-        );
+        toolCardOverrides.set(group.card, { group, options: opts, contexts: toolContexts });
       }
     }
   }
@@ -175,8 +125,6 @@ function prepareActivityGroup(
     visibleActivity,
     reviewOutcome,
     approvalReviews,
-    cards,
-    visibleCalls,
     activityDisclosureId,
     activityBodyId,
     activityExpanded,
@@ -186,7 +134,9 @@ function prepareActivityGroup(
 }
 
 type ActivityState = NonNullable<ReturnType<typeof prepareActivityGroup>>;
-type ActivityEntries = (overrides: () => ReadonlyMap<ToolCard, unknown>) => JSX.Element;
+type ActivityEntries = (
+  overrides: () => ReadonlyMap<ToolCard, ActivityOperationProps | null>,
+) => JSX.Element;
 
 function ActivityGroupBody(props: {
   state: ActivityState;
@@ -194,10 +144,14 @@ function ActivityGroupBody(props: {
   options: NativeMessageGroupOptions;
   renderEntries: ActivityEntries;
 }) {
+  let disclosureContent: HTMLSpanElement | undefined;
+  const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
   const state = () => props.state;
-  const overrides = createMemo(() => props.state.toolCardOverrides);
+  const overrides = () => props.state.toolCardOverrides;
   const soleStep = () => state().soleStep && !props.options.bubbleMode;
   const compact = () => Boolean(props.options.bubbleMode);
+  const liveBubble = () =>
+    compact() && props.groups.some((group) => group.key === props.options.bubbleActivityGroupKey);
   return (
     <div
       class={[
@@ -205,6 +159,7 @@ function ActivityGroupBody(props: {
         {
           "chat-activity-group--step": soleStep(),
           "chat-activity-group--bubble": compact(),
+          "chat-activity-group--working": liveBubble(),
           "is-open": !soleStep() && state().activityExpanded,
         },
       ]}
@@ -216,8 +171,11 @@ function ActivityGroupBody(props: {
           type="button"
           aria-expanded={state().activityExpanded ? "true" : "false"}
           aria-controls={state().activityBodyId}
-          onPointerEnter={syncToolDisclosureOverflow}
-          onFocus={syncToolDisclosureOverflow}
+          aria-label={
+            liveBubble() && !state().headline?.title ? t("chat.view.workingDetails") : undefined
+          }
+          onPointerEnter={syncOverflow}
+          onFocus={syncOverflow}
           onClick={() =>
             props.options.onToggleToolMessageExpanded?.(
               state().activityDisclosureId,
@@ -226,6 +184,8 @@ function ActivityGroupBody(props: {
           }
         >
           <ChatActivityHeadline
+            bubbleMode={liveBubble()}
+            contentRef={(element) => (disclosureContent = element)}
             scope={JSON.stringify([
               props.options.sessionKey,
               props.options.connectionEpoch,
@@ -239,23 +199,12 @@ function ActivityGroupBody(props: {
               .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
               .map(({ label }) => label)}
           />{" "}
-          <LitContent
-            value={renderToolReviewOutcome(
-              state().reviewOutcome,
-              state().approvalReviews[0]?.label,
-            )}
-          />
-          <Show when={!state().activityExpanded}>
-            <LitContent
-              value={renderToolOutcomeSummary(
-                state().cards.filter(
-                  (card) => card.callId && state().visibleCalls.has(card.callId),
-                ),
-                true,
-                state().visibleActivity,
-              )}
+          <openclaw-chat-tool-review-outcome style={{ display: "contents" }}>
+            <ToolReviewOutcome
+              outcome={state().reviewOutcome}
+              reviewer={state().approvalReviews[0]?.label}
             />
-          </Show>
+          </openclaw-chat-tool-review-outcome>
           <span class="chat-tool-row__chevron" aria-hidden="true">
             <Icon name="chevronRight" />
           </span>
@@ -271,7 +220,7 @@ function ActivityGroupBody(props: {
         </Show>
       </div>
       <Show when={!props.options.bubbleMode || state().activityExpanded}>
-        <LitContent value={renderBrowserTabPreviews(props.groups, props.options)} />
+        <BrowserTabPreviews previews={selectBrowserTabPreviews(props.groups, props.options)} />
       </Show>
     </div>
   );
@@ -289,26 +238,14 @@ export function ActivityGroupContent(props: {
       {(activity) => (
         <Show
           when={props.presentation === "standalone"}
-          fallback={
-            <ActivityGroupBody
-              state={activity()}
-              groups={props.groups}
-              options={props.options}
-              renderEntries={props.renderEntries}
-            />
-          }
+          fallback={<ActivityGroupBody {...props} state={activity()} />}
         >
           <div
             class="chat-group tool chat-group--turn-block chat-group--activity chat-group--with-footer"
             data-chat-row-key={activity().firstGroup.key}
           >
             <div class="chat-group-messages">
-              <ActivityGroupBody
-                state={activity()}
-                groups={props.groups}
-                options={props.options}
-                renderEntries={props.renderEntries}
-              />
+              <ActivityGroupBody {...props} state={activity()} />
             </div>
           </div>
         </Show>

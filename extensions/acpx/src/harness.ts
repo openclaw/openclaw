@@ -1,6 +1,4 @@
-import { inspectAgentModels } from "acpx/runtime";
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionCommitFinalizer } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi, OpenClawPluginServiceContext } from "../runtime-api.js";
 import { resolveAcpxPluginConfig } from "./config.js";
@@ -156,10 +154,13 @@ export function createAcpAgentHarness(params: {
         workspaceDir: input.workspaceDir,
       });
       try {
+        const { inspectAgentModels } = await import("acpx/runtime");
         const models = await inspectAgentModels({
           agentCommand: inspection.launch.argv,
           cwd: input.workspaceDir ?? config.cwd,
           signal: generation.signal,
+          agentProcessEnvAllow: config.agentProcessEnvAllow,
+          agentProcessEnvBlock: config.agentProcessEnvBlock,
           timeoutMs:
             config.timeoutSeconds === undefined
               ? undefined
@@ -232,6 +233,8 @@ export function createAcpAgentHarness(params: {
       }
     },
     async withSessionDeletion(input, run) {
+      const { createNativeSessionCommitFinalizer } =
+        await import("openclaw/plugin-sdk/agent-harness-session-runtime");
       let committed = false;
       try {
         const mutation = {

@@ -12,6 +12,7 @@ import type {
   SessionTranscriptCurrentTurnEntryRead,
   SessionTranscriptCurrentTurnEntryRequest,
 } from "./session-transcript-worker.types.js";
+import { SessionWorkStartChangedError } from "./work-start-error.js";
 
 /** Pair one active entry with the exact hydrated view without traversing transcript history. */
 export function readSessionTranscriptCurrentTurnEntry(
@@ -32,7 +33,9 @@ export function readSessionTranscriptCurrentTurnEntry(
         version.rawSeq !== options.version.rawSeq ||
         version.updatedAt !== options.version.updatedAt
       ) {
-        throw new Error("Persisted user turn changed before replay admission");
+        throw new SessionWorkStartChangedError(
+          "Persisted user turn changed before replay admission. Retry the turn.",
+        );
       }
       const anchor = readActiveTranscriptEntryAnchorFromProjection(projection, options.entryId);
       if (fence && anchor && anchor.rawSeq >= fence.beforeRawSeq) {

@@ -1,85 +1,60 @@
 import { describe, expect, it } from "vitest";
-import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { CronJob } from "../api/types.ts";
 import {
   buildScopeUpgradeInboxEntry,
   buildSidebarInboxEntries,
   sidebarInboxTabCounts,
-  type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
-import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
+import { buildSidebarAttentionEntries, type CronAttentionJob } from "./sidebar-attention-items.ts";
+import { inboxMention } from "./sidebar-inbox.test-support.ts";
 
-function cronJob(id: string): CronJob {
-  return {
-    id,
-    name: id,
-    enabled: true,
-    createdAtMs: 0,
-    updatedAtMs: 0,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    payload: { kind: "agentTurn", message: "test" },
-    state: { lastRunStatus: "error" },
-  };
+function cronJob(
+  id: string,
+  state: CronJob["state"] = { lastRunStatus: "error" },
+  name = id,
+): CronAttentionJob {
+  return { id, name, enabled: true, updatedAtMs: 0, state };
 }
 
-function mentionItem(id: string, createdAt = 1_000): MentionInboxItem {
-  return {
-    id,
-    senderProfileId: "alice",
-    senderLabel: "Alice",
-    sessionKey: "agent:writer:review",
-    agentId: "writer",
-    sessionTitle: "Review",
-    messageId: `message-${id}`,
-    createdAt,
-    expiresAt: 10_000,
-  };
-}
-
-function cronItems(cronJobs: readonly CronJob[], now = 0, cronSchedulerEnabled = true) {
+function cronItems(
+  cronJobs: readonly CronAttentionJob[],
+  now = 0,
+  cronOwnerByJobId?: ReadonlyMap<string, string>,
+  cronSchedulerEnabled = true,
+) {
   return buildSidebarAttentionEntries({
     cronJobs,
     cronSchedulerEnabled,
+    cronOwnerByJobId,
     modelAuthStatus: null,
     now,
   });
 }
 
-describe("automation attention", () => {
-  it("lists each failed job as direct automation navigation", () => {
-    const primary = cronJob("primary");
-    primary.name = "Nightly backup";
-    primary.state = { lastRunStatus: "error", lastError: "  disk full  " };
-    const reason = cronJob("reason-id");
-    reason.name = "";
-    reason.state = {
-      lastRunStatus: "error",
-      lastError: "   ",
-      lastErrorReason: "timeout",
-    };
-    const unknown = cronJob("unknown-id");
-
-    const failed = cronItems([primary, reason, unknown]).filter(
-      (item) => item.kind === "cronFailed",
-    );
-
-    expect(failed.map((item) => item.label)).toEqual(["Nightly backup", "reason-id", "unknown-id"]);
-    expect(failed.every((item) => item.action.kind === "navigate")).toBe(true);
-    expect(
-      failed.every((item) => item.action.kind !== "navigate" || item.action.routeId === "cron"),
-    ).toBe(true);
+function inbox(
+  requiresAction: boolean,
+  overrides: Partial<Parameters<typeof buildSidebarInboxEntries>[0]> = {},
+) {
+  return buildSidebarInboxEntries({
+    approvals: [],
+    attention: [],
+    mentions: [],
+    scopeUpgrade: null,
+    update: {
+      type: "update",
+      category: "system",
+      dismissal: null,
+      requiresAction,
+      severity: "warning",
+    },
+    ...overrides,
   });
+}
 
+describe("sidebar attention projection", () => {
   it("does not flag an actively running job as overdue", () => {
-    // The gateway leaves nextRunAtMs past-due during execution; runningAtMs is
-    // the recorded fact that a run is in flight (agentTurn runs may take up to
-    // an hour, far beyond the 5-minute overdue grace).
-    const running = cronJob("running-id");
-    running.state = { lastRunStatus: "ok", nextRunAtMs: 1, runningAtMs: 2 };
-    const stalled = cronJob("stalled-id");
-    stalled.state = { lastRunStatus: "ok", nextRunAtMs: 2 };
+    const running = cronJob("running-id", { lastRunStatus: "ok", nextRunAtMs: 1, runningAtMs: 2 });
+    const stalled = cronJob("stalled-id", { lastRunStatus: "ok", nextRunAtMs: 2 });
 
     const overdue = cronItems([running, stalled], 300_003).find(
       (item) => item.kind === "cronOverdue",
@@ -88,71 +63,31 @@ describe("automation attention", () => {
     expect(overdue?.label).toBe("stalled-id");
   });
 
-  it("does not flag an enabled overdue job while the scheduler is disabled", () => {
-    const overdue = cronJob("overdue-id");
-    overdue.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
-
-    expect(cronItems([overdue], 300_002, false)).not.toContainEqual(
-      expect.objectContaining({ kind: "cronOverdue" }),
-    );
-  });
-
-  it("shows automation owners only when the caller supplies an all-agent owner map", () => {
-    const item = buildSidebarAttentionEntries({
-      cronJobs: [cronJob("writer-job")],
-      cronSchedulerEnabled: true,
-      cronOwnerByJobId: new Map([["writer-job", "Writer"]]),
-      modelAuthStatus: null,
-      now: 0,
-    })[0];
-
-    expect(item?.meta?.context).toBe("Writer");
-  });
-
-  it("orders failed before overdue and newest first within each group", () => {
-    const failedJob = cronJob("failed");
-    failedJob.state = { lastRunStatus: "error", lastRunAtMs: 200 };
-    const olderFailedJob = cronJob("older-failed");
-    olderFailedJob.state = { lastRunStatus: "error", lastRunAtMs: 100 };
-    const overdueJob = cronJob("overdue");
-    overdueJob.state = { lastRunStatus: "ok", nextRunAtMs: 2 };
-    const olderOverdueJob = cronJob("older-overdue");
-    olderOverdueJob.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
-
+  it("labels and links automation alerts, ordered by failure then recency", () => {
     const items = cronItems(
-      [olderOverdueJob, olderFailedJob, overdueJob, failedJob],
+      [
+        cronJob("older-overdue", { lastRunStatus: "ok", nextRunAtMs: 1 }),
+        cronJob("older-failed", { lastRunStatus: "error", lastRunAtMs: 100 }, ""),
+        cronJob("overdue", { lastRunStatus: "ok", nextRunAtMs: 2 }),
+        cronJob("failed", { lastRunStatus: "error", lastRunAtMs: 200 }, "Nightly backup"),
+      ],
       300_003,
-    ).filter((item) => item.kind === "cronFailed" || item.kind === "cronOverdue");
+      new Map([["failed", "Writer"]]),
+    );
 
     expect(items.map((item) => item.label)).toEqual([
-      "failed",
+      "Nightly backup",
       "older-failed",
       "overdue",
       "older-overdue",
     ]);
+    expect(items.map((item) => item.action)).toEqual(
+      Array.from({ length: 4 }, () => ({ kind: "navigate", routeId: "cron" })),
+    );
+    expect(items[0]?.meta?.context).toBe("Writer");
   });
-});
-
-describe("sidebar Inbox projection", () => {
   it("derives every tab count and dismiss control from one entry list", () => {
-    const attention = buildSidebarAttentionEntries({
-      cronJobs: [cronJob("failed-job")],
-      cronSchedulerEnabled: true,
-      modelAuthStatus: null,
-      now: 0,
-    });
-    const scopeUpgrade = buildScopeUpgradeInboxEntry({
-      scopes: ["operator.read"],
-      state: { phase: "available" },
-    });
-    const update: Extract<SidebarInboxEntry, { type: "update" }> = {
-      type: "update",
-      category: "system",
-      dismissal: null,
-      requiresAction: true,
-      severity: "warning",
-    };
-    const entries = buildSidebarInboxEntries({
+    const entries = inbox(true, {
       approvals: [
         {
           id: "approval-1",
@@ -162,10 +97,15 @@ describe("sidebar Inbox projection", () => {
           expiresAtMs: 60_000,
         },
       ],
-      attention,
-      mentions: [mentionItem("older", 1_000), mentionItem("newer", 2_000)],
-      scopeUpgrade,
-      update,
+      attention: cronItems([cronJob("failed-job")]),
+      mentions: [
+        { ...inboxMention("older"), createdAt: 1_000 },
+        { ...inboxMention("newer"), createdAt: 2_000 },
+      ],
+      scopeUpgrade: buildScopeUpgradeInboxEntry({
+        scopes: ["operator.read"],
+        state: { phase: "available" },
+      }),
     });
 
     expect(sidebarInboxTabCounts(entries)).toEqual({
@@ -186,20 +126,7 @@ describe("sidebar Inbox projection", () => {
   });
 
   it("keeps informational updates visible without adding them to attention counts", () => {
-    const update: Extract<SidebarInboxEntry, { type: "update" }> = {
-      type: "update",
-      category: "system",
-      dismissal: null,
-      requiresAction: false,
-      severity: "warning",
-    };
-    const entries = buildSidebarInboxEntries({
-      approvals: [],
-      attention: [],
-      mentions: [],
-      scopeUpgrade: null,
-      update,
-    });
+    const entries = inbox(false);
 
     expect(entries).toHaveLength(1);
     expect(sidebarInboxTabCounts(entries)).toEqual({

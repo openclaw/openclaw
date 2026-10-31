@@ -7,12 +7,12 @@ import {
   resolveOpenAIResponsesCompactEndpointPlan,
 } from "@openclaw/ai/transports";
 import type { Message } from "@openclaw/llm-core";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { sanitizeTranscriptMessage } from "../transcript-sanitize.js";
+import type { UsageLike } from "../usage.js";
 import { compactWithSafetyTimeout } from "./compaction-safety-timeout.js";
 import { log } from "./logger.js";
 import {
@@ -40,8 +40,7 @@ export async function attemptServerEndpointCompaction(params: {
   requestOptions: Parameters<typeof requestPreparedOpenAIResponsesCompaction>[3];
   requestBudget?: CompactionRequestBudget;
   customInstructions?: string;
-  config?: OpenClawConfig;
-  onUsage?: (usage: ServerEndpointCompactionResult["usage"]) => void;
+  onUsage?: (usage: UsageLike) => void;
   onCompactionCommitted?: (tokensBefore: number) => void;
   assertActive?: () => void;
 }): Promise<ServerEndpointCompactionResult | undefined> {
@@ -101,7 +100,7 @@ export async function attemptServerEndpointCompaction(params: {
       params.requestOptions.timeoutMs,
       params.requestOptions.signal ? { abortSignal: params.requestOptions.signal } : undefined,
     );
-    params.onUsage?.(compacted.usage);
+    params.onUsage?.(compacted.modelUsage ?? compacted.usage);
     params.assertActive?.();
     const replacement = structuredClone(owner.message);
     captureOpenAIResponsesCompaction(
@@ -182,7 +181,6 @@ export async function attemptServerEndpointCompaction(params: {
 function findEndpointWindowNormalizationSource(params: {
   model: Parameters<typeof supportsNativeOpenAIResponsesEndpoint>[0];
   context: { systemPrompt: string; messages: readonly AgentMessage[] };
-  config?: OpenClawConfig;
 }): "system prompt" | "user message" | undefined {
   // Public OpenAI receives the prompt as `instructions`; other compact routes put it in input.
   if (params.context.systemPrompt && !supportsNativeOpenAIResponsesEndpoint(params.model)) {

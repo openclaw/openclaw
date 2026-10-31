@@ -81,7 +81,6 @@ export function buildVerbatimGreetingInstructions(
 export function createOutboundGreetingController(params: {
   enabled: boolean;
   instructions?: string;
-  fallbackMs?: number;
   holdOpeningMaxMs?: number;
   call?: Pick<CallRecord, "direction" | "metadata">;
   acknowledge?: (instructions: string) => void;
@@ -102,10 +101,8 @@ export function createOutboundGreetingController(params: {
   let readySession: RealtimeVoiceBridgeSession | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const clearTimer = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    clearTimeout(timer);
+    timer = undefined;
   };
   const triggerOpening = () => {
     if (!closed && readySession && params.instructions && claim()) {
@@ -187,7 +184,7 @@ export function createOutboundGreetingController(params: {
               triggerOpening();
             }
           }, params.holdOpeningMaxMs ?? DEFAULT_VOICEMAIL_HOLD_OPENING_MAX_MS);
-          timer.unref?.();
+          timer.unref();
         }
         return;
       }
@@ -199,16 +196,14 @@ export function createOutboundGreetingController(params: {
         if (claim()) {
           session.triggerGreeting(params.instructions);
         }
-      }, params.fallbackMs ?? OUTBOUND_GREETING_FALLBACK_MS);
-      timer.unref?.();
+      }, OUTBOUND_GREETING_FALLBACK_MS);
+      timer.unref();
     },
   };
 }
 
 export function createRealtimeCallActivityController(params: {
   idleHangupMs?: number;
-  mediaInactivityMs?: number;
-  mediaGraceMs?: number;
   /** While true (for example an answering-machine hold), speech idle is not timed. */
   isPaused?: () => boolean;
   onIdle: () => void;
@@ -221,16 +216,12 @@ export function createRealtimeCallActivityController(params: {
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let mediaTimer: ReturnType<typeof setTimeout> | undefined;
   const clearIdle = () => {
-    if (idleTimer) {
-      clearTimeout(idleTimer);
-      idleTimer = undefined;
-    }
+    clearTimeout(idleTimer);
+    idleTimer = undefined;
   };
   const clearMedia = () => {
-    if (mediaTimer) {
-      clearTimeout(mediaTimer);
-      mediaTimer = undefined;
-    }
+    clearTimeout(mediaTimer);
+    mediaTimer = undefined;
   };
   const resetIdle = () => {
     clearIdle();
@@ -243,8 +234,7 @@ export function createRealtimeCallActivityController(params: {
     ) {
       return;
     }
-    idleTimer = setTimeout(params.onIdle, params.idleHangupMs);
-    idleTimer.unref?.();
+    idleTimer = setTimeout(params.onIdle, params.idleHangupMs).unref();
   };
   return {
     beginConsult(this: void) {
@@ -270,13 +260,9 @@ export function createRealtimeCallActivityController(params: {
       clearMedia();
       mediaTimer = setTimeout(() => {
         params.onMediaWarning();
-        mediaTimer = setTimeout(
-          params.onMediaTimeout,
-          params.mediaGraceMs ?? REALTIME_DISCONNECT_HANGUP_GRACE_MS,
-        );
-        mediaTimer.unref?.();
-      }, params.mediaInactivityMs ?? REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS);
-      mediaTimer.unref?.();
+        mediaTimer = setTimeout(params.onMediaTimeout, REALTIME_DISCONNECT_HANGUP_GRACE_MS).unref();
+      }, REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS);
+      mediaTimer.unref();
     },
     noteSpeech: resetIdle,
     start() {

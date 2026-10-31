@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
+import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import type { PageCacheProgress } from "../infra/sqlite-page-cache.worker.js";
 import {
   runSqliteReadOnlyOperation,
@@ -25,20 +26,29 @@ export async function warmGatewayDatabasePageCache(params: {
     return;
   }
   const statePath = resolveOpenClawStateSqlitePath();
-  const state = captureOpenClawStateReadContext(statePath);
+  // PostgreSQL paths are identity anchors, not local application data.
+  const state = getDatabaseEngineInput("state")
+    ? undefined
+    : captureOpenClawStateReadContext(statePath);
   const targets = [
-    {
-      path: statePath,
-      kind: "state" as const,
-      assertCurrent: () => state.admission.assertCurrent(),
-      env: process.env,
-    },
-    ...params.databases.map(({ database, assertCurrent }) => ({
-      path: database.path,
-      kind: "agent" as const,
-      assertCurrent,
-      env: database.env ?? process.env,
-    })),
+    ...(state
+      ? [
+          {
+            path: statePath,
+            kind: "state" as const,
+            assertCurrent: () => state.admission.assertCurrent(),
+            env: process.env,
+          },
+        ]
+      : []),
+    ...(getDatabaseEngineInput("agent")
+      ? []
+      : params.databases.map(({ database, assertCurrent }) => ({
+          path: database.path,
+          kind: "agent" as const,
+          assertCurrent,
+          env: database.env ?? process.env,
+        }))),
   ];
   let remaining = MAX_PASS_BYTES;
   for (const target of targets) {

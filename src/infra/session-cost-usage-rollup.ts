@@ -264,7 +264,7 @@ export function mergeSessionUsageRollupBucket(
   );
 }
 
-function computeLatencyStats(
+export function computeLatencyStats(
   aggregate: SessionUsageLatencyAggregate,
 ): SessionLatencyStats | undefined {
   if (aggregate.count === 0) {
@@ -648,7 +648,7 @@ export function addRollupToCostUsageSummary(params: {
   totals: CostUsageTotals;
 }): void {
   for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
-    const dayKey = params.formatDay(new Date(bucket.timestampMs));
+    const dayKey = params.formatDay(new Date(bucket.firstTimestampMs ?? bucket.timestampMs));
     const daily = params.daily.get(dayKey) ?? createEmptyCostUsageTotals();
     addCostUsageTotals(daily, bucket.totals);
     params.daily.set(dayKey, daily);

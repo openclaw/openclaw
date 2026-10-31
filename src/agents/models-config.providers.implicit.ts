@@ -14,8 +14,8 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
-  recordProviderCatalogModels,
   withProviderCatalogExpiry,
+  withProviderCatalogDiscoveryBudget,
 } from "../plugins/provider-catalog-expiry.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
@@ -79,6 +79,8 @@ type ImplicitProviderParams = {
   providerDiscoveryEntriesOnly?: boolean;
   onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
   sourceModelFields?: SourceModelFields;
+  /** Filled with the plugin whose discovery produced each provider id, hook aliases included. */
+  discoveredProviderPluginIds?: Map<string, string>;
 };
 
 type ImplicitProviderContext = ImplicitProviderParams & {
@@ -160,19 +162,30 @@ async function resolvePluginImplicitProviders(
         const manifest = ctx.pluginMetadataSnapshot?.manifestRegistry.plugins.find(
           (plugin) => plugin.id === pluginId,
         );
-        const includeProvider = (providerId: string) =>
+        const useRuntimeCatalog =
+          ctx.providerDiscoveryEntriesOnly !== true && hasRuntimeProviderCatalog(provider);
+        const useStaticCatalog = Boolean(provider.staticCatalog) && !useRuntimeCatalog;
+        const includeProvider = (providerId: string, sourceBaseUrl?: unknown) =>
           isProviderCatalogSourceAllowed({
             provider: providerId,
             config: ctx.config,
             plugin: manifest,
+            sourceBaseUrl,
           });
+        const canDiscoverProvider = (providerId: string) =>
+          includeProvider(
+            providerId,
+            useRuntimeCatalog
+              ? findNormalizedProviderValue(ctx.config?.models?.providers, providerId)?.baseUrl
+              : undefined,
+          );
         const scopedProviderIds =
           ctx.providerDiscoveryScope === undefined
             ? undefined
             : catalogCountsByPluginId.get(pluginId) === 1
               ? (ownerProviderIds ?? [])
               : (ownerProviderIds ?? []).filter((id) => matchesProviderPluginRef(provider, id));
-        const providerIds = scopedProviderIds?.filter(includeProvider);
+        const providerIds = scopedProviderIds?.filter(canDiscoverProvider);
         const catalogProviderRefs = [
           provider.id,
           ...(provider.aliases ?? []),
@@ -181,7 +194,7 @@ async function resolvePluginImplicitProviders(
         ];
         if (
           providerIds?.length === 0 ||
-          (providerIds === undefined && !catalogProviderRefs.some(includeProvider))
+          (providerIds === undefined && !catalogProviderRefs.some(canDiscoverProvider))
         ) {
           return undefined;
         }
@@ -219,16 +232,12 @@ async function resolvePluginImplicitProviders(
           // Mandatory startup accepts only provider facts that do not execute live discovery.
           return undefined;
         }
-        const useStaticCatalog =
-          Boolean(provider.staticCatalog) &&
-          (ctx.providerDiscoveryEntriesOnly === true || !hasRuntimeProviderCatalog(provider));
         // Static catalogs are preferred for entries-only discovery and as a fallback
         // when runtime discovery produces no usable provider config.
         const preparedStatic = preparedStaticConfigs?.get(
           `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
         );
         const outcomes: ProviderCatalogOutcome[] = [];
-        let acceptedRuntimeCatalog = false;
         const normalizedResult = await withProviderCatalogExpiry(
           async () => {
             let result;
@@ -249,7 +258,6 @@ async function resolvePluginImplicitProviders(
                 timeoutMs:
                   ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
               });
-              acceptedRuntimeCatalog = Boolean(result);
             }
             if (useStaticCatalog || (!result && provider.staticCatalog)) {
               if (preparedStatic) {
@@ -261,7 +269,7 @@ async function resolvePluginImplicitProviders(
           },
           (acceptedProviders) => Object.keys(acceptedProviders ?? {}),
         );
-        return { provider, normalizedResult, acceptedRuntimeCatalog, includeProvider, outcomes };
+        return { provider, normalizedResult, includeProvider, outcomes };
       }),
     });
     // Settle admitted hooks before propagating failure; completion order must not change
@@ -273,8 +281,7 @@ async function resolvePluginImplicitProviders(
       if (!result) {
         continue;
       }
-      const { provider, normalizedResult, acceptedRuntimeCatalog, includeProvider, outcomes } =
-        result;
+      const { provider, normalizedResult, includeProvider, outcomes } = result;
       for (const outcome of outcomes) {
         ctx.onProviderCatalogOutcome?.(outcome);
       }
@@ -283,16 +290,10 @@ async function resolvePluginImplicitProviders(
       }
       for (const [providerId, implicitProvider] of Object.entries(normalizedResult)) {
         if (
-          !includeProvider(providerId) ||
+          !includeProvider(providerId, implicitProvider.baseUrl) ||
           (selectedProviderIds && !selectedProviderIds.has(normalizeProviderId(providerId)))
         ) {
           continue;
-        }
-        if (acceptedRuntimeCatalog) {
-          recordProviderCatalogModels(
-            providerId,
-            implicitProvider.models.map(({ id }) => id),
-          );
         }
         const existing =
           discovered[providerId] ??
@@ -318,6 +319,9 @@ async function resolvePluginImplicitProviders(
           env: ctx.env,
           profileApiKey: undefined,
         });
+        if (provider.pluginId) {
+          ctx.discoveredProviderPluginIds?.set(normalizeProviderId(providerId), provider.pluginId);
+        }
       }
     }
     Object.assign(merged, discovered);
@@ -332,7 +336,7 @@ export async function runProviderCatalogWithTimeout(
     timeoutMs: number | null;
   },
 ): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
-  const timeoutMs = params.timeoutMs ?? undefined;
+  const timeoutMs = params.timeoutMs;
   let active = true;
   const catalogParams = {
     ...params,
@@ -355,10 +359,23 @@ export async function runProviderCatalogWithTimeout(
     return prepared.finalizeCatalogResult ? prepared.finalizeCatalogResult(result) : result;
   };
   try {
+    const providerTimeouts = Object.fromEntries(
+      Object.entries(params.config?.models?.providers ?? {})
+        .flatMap(([id, config]): [string, number][] =>
+          config.timeoutSeconds === undefined
+            ? []
+            : [[normalizeProviderId(id), config.timeoutSeconds * 1_000]],
+        )
+        .toSorted(([left], [right]) => left.localeCompare(right)),
+    );
+    const catalogRun = withProviderCatalogDiscoveryBudget(
+      timeoutMs || null,
+      runCatalog,
+      providerTimeouts,
+    );
     if (!timeoutMs) {
-      return await runCatalog();
+      return await catalogRun;
     }
-    const catalogRun = runCatalog();
     // Live discovery should not hang startup; a timeout skips this provider while
     // preserving the rest of the prepared catalog.
     return await raceWithTimeout(

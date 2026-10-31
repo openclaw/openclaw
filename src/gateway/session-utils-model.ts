@@ -8,12 +8,9 @@ import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { findModelCatalogEntry, modelSupportsInput } from "../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
-import {
-  findModelCatalogEntry,
-  type ModelCatalogEntry,
-  modelSupportsInput,
-} from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { normalizeCatalogRouteBaseUrl } from "../agents/model-compat-catalog.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
@@ -126,7 +123,8 @@ function resolveGatewayModelThinkingFacts(
   const thinkingPolicyProvider = params.thinkingPolicyProvider ?? params.provider;
   const policySource =
     typeof params.providerPolicySource === "object" ? "prepared" : params.providerPolicySource;
-  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${String(params.configuredReasoning)}\0${policySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
+  // Config and catalog publications replace the context; partial rows reuse its model facts.
+  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${policySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
     params.provider,
     params.model,
   )}`;
@@ -226,6 +224,10 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     provider: params.provider,
     model: params.model,
     agentRuntime: thinkingRuntime,
+    configuredReasoning:
+      catalogEntry !== logicalEntry
+        ? (logicalEntry?.configuredReasoning ?? logicalEntry?.reasoning)
+        : undefined,
     modelCatalog: runtimeCatalog,
     rowContext: params.rowContext,
     providerPolicySource: params.providerPolicySource,
@@ -612,7 +614,7 @@ export function projectSessionPatchResult(params: {
     model: resolved.model,
   });
   const modelCatalog = params.modelCatalog;
-  const thinking = resolveGatewaySessionThinkingProjectionInternal({
+  const projection = {
     cfg: params.cfg,
     agentId,
     provider: resolved.provider,
@@ -622,11 +624,18 @@ export function projectSessionPatchResult(params: {
     preparedAcpMeta: params.preparedAcpMeta,
     modelCatalog,
     modelCatalogRouteVariants: params.modelCatalogRouteVariants,
-  });
-  const contextWindow = resolveModelContextWindowProfile({
-    catalogEntry: thinking.catalogEntry,
-    selected: params.entry.contextWindow,
-  });
+  };
+  // Metadata-only receipts omit thinking/context fields; resolve only their runtime facts.
+  const thinking = modelCatalog
+    ? resolveGatewaySessionThinkingProjectionInternal(projection)
+    : undefined;
+  const runtime = thinking ?? resolveGatewaySessionRuntimeProjection(projection);
+  const contextWindow = thinking
+    ? resolveModelContextWindowProfile({
+        catalogEntry: thinking.catalogEntry,
+        selected: params.entry.contextWindow,
+      })
+    : undefined;
   const entry = projectPublicSessionEntry(params.entry);
   delete entry.skillsSnapshot;
   delete entry.systemPromptReport;
@@ -640,9 +649,9 @@ export function projectSessionPatchResult(params: {
     resolved: {
       modelProvider: displayModel.provider,
       model: displayModel.model,
-      agentRuntime: thinking.agentRuntime,
-      runtimeSelectionLocked: thinking.runtimeSelectionLocked,
-      ...(modelCatalog
+      agentRuntime: runtime.agentRuntime,
+      runtimeSelectionLocked: runtime.runtimeSelectionLocked,
+      ...(thinking && contextWindow
         ? {
             contextWindow: contextWindow.contextWindow,
             contextWindows: contextWindow.contextWindows,

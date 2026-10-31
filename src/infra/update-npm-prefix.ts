@@ -1,9 +1,11 @@
 // npm owns effective prefix resolution; callers consume its layout and launcher facts.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveExecutablePath } from "./executable-path.js";
 import { pathExists } from "./fs-safe.js";
 import { applyPathPrepend } from "./path-prepend.js";
+import { resolveRuntimeDependencyEntrypointUrlFromDirectory } from "./runtime-process-dependency-url.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 
 /** npm prefix layout paths needed to install, stage, and expose global bins. */
@@ -81,10 +83,13 @@ export async function probeNpmGlobalPrefix(
     : null;
   // npm owns npmrc precedence and expansion. Use the Node running this launcher,
   // even when PATH's npm belongs to a different Node installation.
-  const argv =
+  const cliUrl =
     cli && path.basename(cli) === "npm-cli.js" && (await pathExists(cli))
-      ? [process.execPath, cli, "prefix", "-g"]
-      : [command, "prefix", "-g"];
+      ? resolveRuntimeDependencyEntrypointUrlFromDirectory("npm", path.dirname(cli))
+      : undefined;
+  const argv = cliUrl
+    ? [process.execPath, fileURLToPath(cliUrl), "prefix", "-g"]
+    : [command, "prefix", "-g"];
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) {

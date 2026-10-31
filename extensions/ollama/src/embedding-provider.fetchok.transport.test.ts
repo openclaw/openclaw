@@ -2,10 +2,13 @@
 // Drives the production embedding path through the real SSRF guard and loopback
 // sockets, without mocking global fetch, SSRF runtime, or logging redaction.
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
+import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createOllamaEmbeddingProvider } from "./embedding-provider.js";
+import { ollamaMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
 type OllamaRequest = {
   method: string | undefined;
@@ -35,10 +38,7 @@ async function startOllamaServer(
   const requests: OllamaRequest[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) {
-        chunks.push(Buffer.from(chunk));
-      }
+      const bodyBuffer = await consumeBuffer(req);
       const request: OllamaRequest = {
         method: req.method,
         url: req.url,
@@ -46,7 +46,7 @@ async function startOllamaServer(
         proxyAuthorization: req.headers["proxy-authorization"],
         proxyAuth:
           typeof req.headers["x-proxy-auth"] === "string" ? req.headers["x-proxy-auth"] : undefined,
-        body: Buffer.concat(chunks).toString("utf8"),
+        body: bodyBuffer.toString("utf8"),
       };
       requests.push(request);
       const response = respond(request);
@@ -55,13 +55,7 @@ async function startOllamaServer(
     })();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  const port = await listenOnLoopback(server);
 
   servers.push({
     close: () =>
@@ -70,23 +64,21 @@ async function startOllamaServer(
       }),
   });
 
-  const address = server.address() as AddressInfo;
-  return { baseUrl: `http://127.0.0.1:${address.port}`, requests };
+  return { baseUrl: `http://127.0.0.1:${port}`, requests };
 }
 
-function createOptions(baseUrl: string, apiKey: string) {
+type EmbeddingOptions = Parameters<typeof createOllamaEmbeddingProvider>[0];
+function createOptions(baseUrl: string, remote: EmbeddingOptions["remote"] = {}): EmbeddingOptions {
   return {
     config: {},
     provider: "ollama",
     model: "test-embedding",
     fallback: "none",
-    remote: { baseUrl, apiKey },
-  } as Parameters<typeof createOllamaEmbeddingProvider>[0];
+    remote: { baseUrl, ...remote },
+  };
 }
 
-async function captureEmbeddingError(
-  options: Parameters<typeof createOllamaEmbeddingProvider>[0],
-): Promise<Error | undefined> {
+async function captureEmbeddingError(options: EmbeddingOptions): Promise<Error | undefined> {
   const { provider } = await createOllamaEmbeddingProvider(options);
   try {
     await provider.embed("hello", { inputType: "query" });
@@ -96,11 +88,90 @@ async function captureEmbeddingError(
   return undefined;
 }
 
+function expectRequest(server: OllamaServer, headers: Partial<OllamaRequest>) {
+  expect(server.requests).toEqual([
+    {
+      method: "POST",
+      url: "/api/embed",
+      authorization: undefined,
+      proxyAuthorization: undefined,
+      proxyAuth: undefined,
+      body: JSON.stringify({ model: "test-embedding", input: "hello" }),
+      ...headers,
+    },
+  ]);
+}
+
 describe("Ollama embedding provider real transport", () => {
   afterEach(async () => {
     vi.unstubAllEnvs();
     const pending = servers.splice(0);
     await Promise.all(pending.map((server) => server.close()));
+  });
+
+  it("separates alias caches by model digest while preserving embedding-only endpoints", async () => {
+    let digest: string | undefined = "first-model-digest";
+    const server = await startOllamaServer((request) =>
+      request.url === "/api/tags"
+        ? {
+            status: digest ? 200 : 404,
+            body: JSON.stringify({ models: [{ name: "alias:latest", digest }] }),
+          }
+        : { status: 200, body: JSON.stringify({ embeddings: [[1, 0]] }) },
+    );
+    const create = () =>
+      ollamaMemoryEmbeddingProviderAdapter.create({
+        config: {},
+        provider: "ollama",
+        model: "alias",
+        fallback: "none",
+        remote: { baseUrl: server.baseUrl, headers: { "X-Proxy-Auth": "fixture-proxy-key" } },
+      });
+    const first = await create();
+    const legacyIdentity = {
+      provider: "ollama",
+      baseUrl: server.baseUrl,
+      model: "alias",
+      outputDimensionality: undefined,
+      headersHash: createHash("sha256")
+        .update(JSON.stringify([["X-Proxy-Auth", "fixture-proxy-key"]]))
+        .digest("hex"),
+    };
+    expect(first.runtime?.cacheKeyData).toMatchObject({
+      model: "alias",
+      modelDigest: "first-model-digest",
+    });
+    expect(first.runtime?.indexIdentityAliases).toEqual([
+      { model: "alias", cacheKeyData: legacyIdentity },
+    ]);
+    digest = "second-model-digest";
+    const second = await create();
+    expect(second.runtime?.cacheKeyData).toEqual({
+      ...first.runtime?.cacheKeyData,
+      modelDigest: "second-model-digest",
+    });
+    expect(second.runtime?.indexIdentityAliases).toEqual(first.runtime?.indexIdentityAliases);
+    digest = undefined;
+    const embeddingOnly = await create();
+    expect(embeddingOnly.runtime?.cacheKeyData).not.toHaveProperty("modelDigest");
+    expect(embeddingOnly.runtime?.cacheKeyData).toEqual(legacyIdentity);
+    expect(embeddingOnly.runtime?.indexIdentityAliases).toBeUndefined();
+    if (!embeddingOnly.provider) {
+      throw new Error("Expected fixture embedding provider");
+    }
+    await expect(embeddingOnly.provider.embed("hello", { inputType: "query" })).resolves.toEqual([
+      1, 0,
+    ]);
+    expect(server.requests.filter((request) => request.url === "/api/tags")).toEqual(
+      Array.from({ length: 3 }, () => ({
+        method: "GET",
+        url: "/api/tags",
+        authorization: undefined,
+        proxyAuthorization: undefined,
+        proxyAuth: "fixture-proxy-key",
+        body: "",
+      })),
+    );
   });
 
   it("redacts bare authorization credentials reflected under unknown fields", async () => {
@@ -115,30 +186,18 @@ describe("Ollama embedding provider real transport", () => {
       }),
     }));
 
-    const error = await captureEmbeddingError({
-      config: {},
-      provider: "ollama",
-      model: "test-embedding",
-      fallback: "none",
-      remote: {
-        baseUrl: server.baseUrl,
+    const error = await captureEmbeddingError(
+      createOptions(server.baseUrl, {
         headers: {
           Authorization: `Bearer ${authorizationCredential}`,
           "Proxy-Authorization": `Basic ${proxyAuthorizationCredential}`,
         },
-      },
+      }),
+    );
+    expectRequest(server, {
+      authorization: `Bearer ${authorizationCredential}`,
+      proxyAuthorization: `Basic ${proxyAuthorizationCredential}`,
     });
-
-    expect(server.requests).toEqual([
-      {
-        method: "POST",
-        url: "/api/embed",
-        authorization: `Bearer ${authorizationCredential}`,
-        proxyAuthorization: `Basic ${proxyAuthorizationCredential}`,
-        proxyAuth: undefined,
-        body: JSON.stringify({ model: "test-embedding", input: "hello" }),
-      },
-    ]);
     expect(error?.message).toContain("Ollama embed HTTP 429");
     expect(error?.message).toContain("rate limit exceeded");
     expect(error?.message).not.toContain(authorizationCredential);
@@ -164,39 +223,20 @@ describe("Ollama embedding provider real transport", () => {
       }),
     }));
 
+    const ollama = {
+      baseUrl: server.baseUrl,
+      models: [],
+      headers: {
+        "X-Proxy-Auth": { source: "env" as const, provider: "default", id: "OLLAMA_PROXY_AUTH" },
+      },
+    };
     const error = await captureEmbeddingError({
-      config: {
-        models: {
-          providers: {
-            ollama: {
-              baseUrl: server.baseUrl,
-              models: [],
-              headers: {
-                "X-Proxy-Auth": {
-                  source: "env",
-                  provider: "default",
-                  id: "OLLAMA_PROXY_AUTH",
-                },
-              },
-            },
-          },
-        },
-      },
-      provider: "ollama",
-      model: "test-embedding",
-      fallback: "none",
-    } as Parameters<typeof createOllamaEmbeddingProvider>[0]);
+      ...createOptions(server.baseUrl),
+      remote: undefined,
+      config: { models: { providers: { ollama } } },
+    });
 
-    expect(server.requests).toEqual([
-      {
-        method: "POST",
-        url: "/api/embed",
-        authorization: undefined,
-        proxyAuthorization: undefined,
-        proxyAuth,
-        body: JSON.stringify({ model: "test-embedding", input: "hello" }),
-      },
-    ]);
+    expectRequest(server, { proxyAuth });
     expect(error?.message).toContain("Ollama embed HTTP 403");
     expect(error?.message).toContain("forbidden");
     expect(error?.message).not.toContain(proxyAuth);
@@ -212,13 +252,11 @@ describe("Ollama embedding provider real transport", () => {
     const body = `${safeMarker}${"x".repeat(8 * 1024 - safeMarker.length - retainedPrefix.length)}${proxyAuth} trailing text`;
     const server = await startOllamaServer(() => ({ status: 429, body }));
 
-    const error = await captureEmbeddingError({
-      config: {},
-      provider: "ollama",
-      model: "test-embedding",
-      fallback: "none",
-      remote: { baseUrl: server.baseUrl, headers: { "X-Proxy-Auth": proxyAuth } },
-    });
+    const error = await captureEmbeddingError(
+      createOptions(server.baseUrl, {
+        headers: { "X-Proxy-Auth": proxyAuth },
+      }),
+    );
 
     expect(error?.message).toContain(safeMarker);
     expect(error?.message).not.toContain(retainedPrefix);
@@ -232,25 +270,15 @@ describe("Ollama embedding provider real transport", () => {
       status: 200,
       body: JSON.stringify({ embeddings: [[3, 4]] }),
     }));
-    const options = createOptions(server.baseUrl, apiKey);
-    if (!options.remote) {
-      throw new Error("expected remote embedding options");
-    }
-    options.remote.headers = { "X-Proxy-Auth": proxyAuth };
+    const options = createOptions(server.baseUrl, {
+      apiKey,
+      headers: { "X-Proxy-Auth": proxyAuth },
+    });
     const { provider } = await createOllamaEmbeddingProvider(options);
 
     const vector = await provider.embed("hello", { inputType: "query" });
 
-    expect(server.requests).toEqual([
-      {
-        method: "POST",
-        url: "/api/embed",
-        authorization: `Bearer ${apiKey}`,
-        proxyAuthorization: undefined,
-        proxyAuth,
-        body: JSON.stringify({ model: "test-embedding", input: "hello" }),
-      },
-    ]);
+    expectRequest(server, { authorization: `Bearer ${apiKey}`, proxyAuth });
     expect(vector[0]).toBeCloseTo(0.6, 5);
     expect(vector[1]).toBeCloseTo(0.8, 5);
   });

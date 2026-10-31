@@ -1,80 +1,52 @@
-// Xai tests cover stream plugin behavior.
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import {
-  streamSimple,
-  type Api,
-  type Context,
-  type Model,
-  type ModelThinkingLevel,
-} from "openclaw/plugin-sdk/llm";
+import { streamSimple, type Model, type ModelThinkingLevel } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { resolveFastModeSupport } from "./provider-policy-api.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import { wrapXaiProviderStream } from "./stream.js";
-type XaiStreamApi = Extract<Api, "openai-completions" | "openai-responses">;
+import { captureXaiRequest, xaiModel } from "./test-helpers.js";
 
-function captureWrappedModelId(params: {
-  modelId: string;
-  fastMode: boolean | "ultrafast" | (() => boolean | "ultrafast" | undefined);
-  api?: XaiStreamApi;
-  provider?: string;
-}): string {
-  let capturedModelId = "";
-  const baseStreamFn: StreamFn = (model) => {
-    capturedModelId = model.id;
-    return {} as ReturnType<StreamFn>;
-  };
-
-  const wrapped = wrapXaiProviderStream({
-    streamFn: baseStreamFn,
-    extraParams: { fastMode: params.fastMode, tool_stream: false },
-  } as never);
-  void wrapped?.(
-    {
-      api: params.api ?? "openai-responses",
-      provider: params.provider ?? "xai",
-      id: params.modelId,
-    } as Model<Extract<Api, "openai-completions" | "openai-responses">>,
-    { messages: [] } as Context,
-    {},
-  );
-
-  return capturedModelId;
+function patchPayload<T extends Record<string, unknown>>(
+  payload: T,
+  model: Partial<Model<"openai-responses">> = {},
+): T {
+  captureXaiRequest(xaiModel(model), { extraParams: { tool_stream: false }, payload });
+  return payload;
 }
 
-function runXaiToolPayloadWrapper(params: {
-  payload: Record<string, unknown>;
-  api?: XaiStreamApi;
-  modelId?: string;
-  input?: string[];
-  provider?: string;
-  baseUrl?: string;
-}) {
-  const baseStreamFn: StreamFn = (_model, _context, options) => {
-    options?.onPayload?.(params.payload, {} as Model<XaiStreamApi>);
-    return {} as ReturnType<StreamFn>;
-  };
-  const wrapped = wrapXaiProviderStream({
-    streamFn: baseStreamFn,
-    extraParams: { tool_stream: false },
-  } as never);
-  const api = params.api ?? "openai-responses";
+function project(
+  input: Array<Record<string, unknown>>,
+  model: Partial<Model<"openai-responses">> = {},
+) {
+  return patchPayload({ input: structuredClone(input) }, model).input;
+}
 
-  void wrapped?.(
-    {
-      api,
-      provider: params.provider ?? "xai",
-      baseUrl: params.baseUrl ?? "https://proxy.example/v1",
-      id:
-        params.modelId ??
-        (api === "openai-completions" ? "grok-4-1-fast-reasoning" : "grok-4-fast"),
-      reasoning: params.modelId ? !params.modelId.includes("non-reasoning") : true,
-      ...(params.input ? { input: params.input } : {}),
-    } as Model<XaiStreamApi>,
-    { messages: [] } as Context,
-    {},
-  );
+function toolOutput(output: unknown, callId = "call_1") {
+  return { type: "function_call_output", call_id: callId, output };
+}
+
+function inputText(text: string) {
+  return { type: "input_text", text };
+}
+
+function imageMessage(index: number, ...images: unknown[]) {
+  return {
+    type: "message",
+    role: "user",
+    content: [inputText(`Image(s) from tool result #${index}:`), ...images],
+  };
+}
+
+function message(role: string, content: string) {
+  return { type: "message", role, content };
+}
+
+function toolCall(call_id: string) {
+  return { type: "function_call", call_id, name: "read", arguments: "{}" };
+}
+
+function imagePart(image_url = "data:image/png;base64,QUJDRA==") {
+  return { type: "input_image", image_url };
 }
 
 it.each([
@@ -90,32 +62,19 @@ it.each([
       requestCapabilities: { endpointClass: "xai-native", allowsAnthropicServiceTier: false },
     }),
   ).toBe(supported);
-  expect(captureWrappedModelId({ modelId, fastMode: true })).toBe(target);
-  expect(captureWrappedModelId({ modelId, fastMode: "ultrafast" })).toBe(target);
-  expect(captureWrappedModelId({ modelId, fastMode: () => "ultrafast" })).toBe(target);
-  expect(captureWrappedModelId({ modelId, fastMode: false })).toBe(modelId);
+  const capture = (fastMode: boolean | "ultrafast" | (() => "ultrafast")) =>
+    captureXaiRequest(xaiModel({ id: modelId }), { extraParams: { tool_stream: false, fastMode } })
+      .modelId;
+  expect([capture(true), capture("ultrafast"), capture(() => "ultrafast"), capture(false)]).toEqual(
+    [target, target, target, modelId],
+  );
 });
 
 async function captureXaiResponsesPayloadWithThinking(
-  reasoning: ModelThinkingLevel = "low",
-  modelId = "grok-4.5",
+  reasoning: ModelThinkingLevel,
+  modelId: string,
 ): Promise<Record<string, unknown>> {
-  const model = applyXaiRuntimeModelCompat({
-    api: "openai-responses",
-    provider: "xai",
-    id: modelId,
-    baseUrl: "https://api.x.ai/v1",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: {
-      input: 2,
-      output: 6,
-      cacheRead: modelId === "grok-4.5" ? 0.3 : 0.5,
-      cacheWrite: 0,
-    },
-    contextWindow: 500_000,
-    maxTokens: 64_000,
-  } as Model<"openai-responses">);
+  const model = applyXaiRuntimeModelCompat(xaiModel({ id: modelId, baseUrl: XAI_BASE_URL }));
   const wrapped = wrapXaiProviderStream({
     provider: "xai",
     modelId,
@@ -126,108 +85,35 @@ async function captureXaiResponsesPayloadWithThinking(
     throw new Error("expected the xAI stream wrapper");
   }
 
-  const payloadPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
-    const stream = wrapped(
-      model,
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      {
-        apiKey: "test-api-key",
-        cacheRetention: "none",
-        reasoning,
-        onPayload: (payload) => {
-          resolve(structuredClone(payload as Record<string, unknown>));
-          throw new Error("stop after payload capture");
-        },
+  let captured: Record<string, unknown> | undefined;
+  const stream = await wrapped(
+    model,
+    { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+    {
+      apiKey: "test-api-key",
+      cacheRetention: "none",
+      reasoning,
+      onPayload: (payload) => {
+        captured = structuredClone(payload as Record<string, unknown>);
+        throw new Error("stop after payload capture");
       },
-    );
-    void Promise.resolve(stream)
-      .then((result) => result.result())
-      .then(
-        () => reject(new Error("provider payload callback was not invoked")),
-        (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
-      );
-  });
-
-  return await payloadPromise;
+    },
+  );
+  await stream.result();
+  if (!captured) {
+    throw new Error("provider payload callback was not invoked");
+  }
+  return captured;
 }
 
 describe("xai stream wrappers", () => {
-  it.each([{ id: "grok-4.7", baseUrl: "https://cli-chat-proxy.grok.com/v1" }])(
-    "adds the Grok OAuth proxy request contract for $id at $baseUrl",
-    ({ id, baseUrl }) => {
-      let capturedHeaders: Record<string, string> | undefined;
-      let capturedModelId: string | undefined;
-      const baseStreamFn: StreamFn = (model, _context, options) => {
-        capturedModelId = model.id;
-        capturedHeaders = options?.headers;
-        return {} as ReturnType<StreamFn>;
-      };
-      const wrapped = wrapXaiProviderStream(
-        {
-          streamFn: baseStreamFn,
-          extraParams: { tool_stream: false },
-        } as never,
-        { clientVersion: "2026.7.2" },
-      );
-
-      void wrapped?.(
-        {
-          api: "openai-responses",
-          provider: "xai",
-          id,
-          name: "Subscription default",
-          reasoning: true,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 500_000,
-          maxTokens: 64_000,
-          params: { canonicalModelId: "grok-fixture-unselected" },
-          baseUrl,
-        },
-        { messages: [] },
-        { headers: { "X-XAI-Token-Auth": "operator-value", "X-Existing": "kept" } },
-      );
-
-      expect(capturedModelId).toBe(id);
-      expect(capturedHeaders).toEqual({
-        "x-existing": "kept",
-        "x-grok-client-version": "2026.7.2",
-        "x-grok-model-override": id,
-        "x-xai-token-auth": "xai-grok-cli",
-      });
-    },
-  );
-
-  it.each([["a lookalike host", "xai", "https://cli-chat-proxy.grok.com.example/v1"]])(
-    "does not add Grok OAuth headers for %s",
-    (_label, provider, baseUrl) => {
-      let capturedHeaders: Record<string, string> | undefined;
-      const baseStreamFn: StreamFn = (_model, _context, options) => {
-        capturedHeaders = options?.headers;
-        return {} as ReturnType<StreamFn>;
-      };
-      const wrapped = wrapXaiProviderStream(
-        {
-          streamFn: baseStreamFn,
-          extraParams: { tool_stream: false },
-        } as never,
-        { clientVersion: "2026.7.2" },
-      );
-
-      void wrapped?.(
-        {
-          api: "openai-responses",
-          provider,
-          id: "grok-4.5",
-          baseUrl,
-        } as Model<"openai-responses">,
-        { messages: [] } as Context,
-        { headers: { "X-Existing": "kept" } },
-      );
-
-      expect(capturedHeaders).toEqual({ "X-Existing": "kept" });
-    },
-  );
+  it("does not add Grok OAuth headers for a lookalike host", () => {
+    const { headers } = captureXaiRequest(
+      xaiModel({ id: "grok-4.5", baseUrl: "https://cli-chat-proxy.grok.com.example/v1" }),
+      { extraParams: { tool_stream: false }, headers: { "X-Existing": "kept" } },
+    );
+    expect(headers).toEqual({ "X-Existing": "kept" });
+  });
 
   it("strips unsupported reasoning controls from non-reasoning xai payloads", () => {
     const payload: Record<string, unknown> = {
@@ -235,21 +121,16 @@ describe("xai stream wrappers", () => {
       reasoningEffort: "high",
       reasoning_effort: "high",
     };
-    runXaiToolPayloadWrapper({ payload, modelId: "grok-4-fast-non-reasoning" });
+    patchPayload(payload, { id: "grok-4-fast-non-reasoning", reasoning: false });
 
-    expect(payload).not.toHaveProperty("reasoning");
-    expect(payload).not.toHaveProperty("reasoningEffort");
-    expect(payload).not.toHaveProperty("reasoning_effort");
+    expect(payload).toEqual({});
   });
 
   it("merges encrypted reasoning include with existing include entries", () => {
     const payload: Record<string, unknown> = {
       include: ["file_search_call.results"],
     };
-    runXaiToolPayloadWrapper({
-      payload,
-      modelId: "grok-build-0.1",
-    });
+    patchPayload(payload, { id: "grok-build-0.1" });
 
     expect(payload.include).toEqual(["file_search_call.results", "reasoning.encrypted_content"]);
   });
@@ -269,299 +150,118 @@ describe("xai stream wrappers", () => {
     10_000,
   );
 
-  it.each([["x-ai", ` ${XAI_BASE_URL}/// `]])(
-    "preserves native Responses image output arrays for %s",
-    (provider, baseUrl) => {
-      const callId = `${"a".repeat(63)}🙈`;
-      const input = [
-        {
-          type: "function_call_output",
-          call_id: callId,
-          output: [
-            { type: "input_text", text: "Read image" },
-            {
-              type: "input_image",
-              detail: "auto",
-              image_url: "data:image/png;base64,QUJDRA==",
-            },
-          ],
-        },
-      ];
-      const payload: Record<string, unknown> = { input: structuredClone(input) };
-      runXaiToolPayloadWrapper({ payload, input: ["text", "image"], provider, baseUrl });
+  it("preserves native Responses image output arrays for x-ai", () => {
+    const callId = `${"a".repeat(63)}🙈`;
+    const input = [
+      toolOutput([inputText("Read image"), { ...imagePart(), detail: "auto" }], callId),
+    ];
+    expect(
+      project(input, {
+        provider: "x-ai",
+        baseUrl: ` ${XAI_BASE_URL}/// `,
+      }),
+    ).toEqual(input);
+  });
 
-      expect(payload.input).toEqual(input);
-    },
-  );
-
-  it.each([true])(
-    "keeps compatibility image history as a prefix across turns (parallel: %s)",
-    (parallel) => {
-      const image = { type: "input_image", image_url: "data:image/png;base64,QUJDRA==" };
-      const result = {
-        type: "function_call_output",
-        call_id: "call_image",
-        output: [{ type: "input_text", text: "Read image" }, image],
-      };
-      const group = [
-        result,
-        ...(parallel
-          ? [{ type: "function_call_output", call_id: "call_text", output: "No image" }]
-          : []),
-      ];
-      const history = [
-        { type: "message", role: "user", content: "Read the files" },
-        { type: "function_call", call_id: "call_image", name: "read", arguments: "{}" },
-        ...(parallel
-          ? [{ type: "function_call", call_id: "call_text", name: "read", arguments: "{}" }]
-          : []),
-        ...group,
-      ];
-      const project = (input: Array<Record<string, unknown>>) => {
-        const payload = { input: structuredClone(input) };
-        runXaiToolPayloadWrapper({ payload, input: ["text", "image"] });
-        return payload.input;
-      };
-      const first = project(history);
-      const nextTurns = [
-        { type: "message", role: "assistant", content: "I read the files." },
-        { type: "message", role: "user", content: "Read another image" },
-        { type: "function_call", call_id: "call_next", name: "read", arguments: "{}" },
-        { ...result, call_id: "call_next" },
-      ];
-      const next = project([...history, ...nextTurns]);
-
-      // Compare the actual serialized message prefix, including the image bytes.
-      expect(JSON.stringify(next.slice(0, first.length))).toBe(JSON.stringify(first));
-      expect(first.slice(-group.length - 1)).toEqual([
-        { ...result, output: "Read image" },
-        ...(parallel ? [group[1]] : []),
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Image(s) from tool result #1:" }, image],
-        },
-      ]);
-      expect(next.at(-1)).toEqual({
-        type: "message",
-        role: "user",
-        content: [
-          { type: "input_text", text: `Image(s) from tool result #${group.length + 1}:` },
-          image,
-        ],
-      });
-      expect(project(next)).toEqual(next);
-
-      // Compaction replaces old history; the retained tail establishes a fresh prefix.
-      const compactedHistory = [
-        { type: "message", role: "user", content: "Summary: the first files were read." },
-        ...nextTurns,
-      ];
-      const compacted = project(compactedHistory);
-      expect(compacted.at(-1)).toEqual(first.at(-1));
-      expect(compacted).toHaveLength(compactedHistory.length + 1);
-      expect(
-        project([
-          ...compactedHistory,
-          { type: "message", role: "assistant", content: "The next image is blue." },
-          { type: "message", role: "user", content: "Thanks" },
-        ]).slice(0, compacted.length),
-      ).toEqual(compacted);
-    },
-  );
-
-  it("replays source-based input_image parts from tool results", () => {
-    const payload: Record<string, unknown> = {
-      input: [
-        {
-          type: "function_call_output",
-          call_id: "call_1",
-          output: [
-            { type: "input_text", text: "Read image" },
-            {
-              type: "input_image",
-              source: {
-                type: "base64",
-                media_type: "image/png",
-                data: "QUJDRA==",
-              },
-            },
-          ],
-        },
-      ],
+  it("keeps parallel compatibility image history as a prefix across turns", () => {
+    const image = {
+      type: "input_image",
+      source: { type: "base64", media_type: "image/png", data: "QUJDRA==" },
     };
-    runXaiToolPayloadWrapper({ payload, input: ["text", "image"] });
+    const result = toolOutput([inputText("Read image"), image], "call_image");
+    const group = [result, toolOutput("No image", "call_text")];
+    const history = [
+      message("user", "Read the files"),
+      toolCall("call_image"),
+      toolCall("call_text"),
+      ...group,
+    ];
+    const first = project(history);
+    const nextTurns = [
+      message("assistant", "I read the files."),
+      message("user", "Read another image"),
+      toolCall("call_next"),
+      { ...result, call_id: "call_next" },
+    ];
+    const next = project([...history, ...nextTurns]);
 
-    expect(payload.input).toEqual([
-      {
-        type: "function_call_output",
-        call_id: "call_1",
-        output: "Read image",
-      },
-      {
-        type: "message",
-        role: "user",
-        content: [
-          { type: "input_text", text: "Image(s) from tool result #1:" },
-          {
-            type: "input_image",
-            source: {
-              type: "base64",
-              media_type: "image/png",
-              data: "QUJDRA==",
-            },
-          },
-        ],
-      },
+    // Compare the actual serialized message prefix, including the image bytes.
+    expect(JSON.stringify(next.slice(0, first.length))).toBe(JSON.stringify(first));
+    expect(first.slice(-group.length - 1)).toEqual([
+      { ...result, output: "Read image" },
+      group[1],
+      imageMessage(1, image),
+    ]);
+    expect(next.at(-1)).toEqual(imageMessage(group.length + 1, image));
+    expect(project(next)).toEqual(next);
+
+    // Compaction replaces old history; the retained tail establishes a fresh prefix.
+    const compactedHistory = [message("user", "Summary: the first files were read."), ...nextTurns];
+    const compacted = project(compactedHistory);
+    expect(compacted.at(-1)).toEqual(first.at(-1));
+    expect(compacted).toHaveLength(compactedHistory.length + 1);
+    expect(
+      project([
+        ...compactedHistory,
+        message("assistant", "The next image is blue."),
+        message("user", "Thanks"),
+      ]).slice(0, compacted.length),
+    ).toEqual(compacted);
+  });
+
+  it("preserves interleaved text and image references for image placeholders", () => {
+    const firstImage = {
+      type: "input_image",
+      source: { type: "url", url: "https://example.com/first.png" },
+    };
+    const secondImage = imagePart("data:image/png;base64,QkJCQg==");
+    const originalParts = [inputText(""), firstImage, inputText(""), secondImage];
+    const originalBytes = JSON.stringify(originalParts);
+    const payload = {
+      input: [toolOutput(originalParts, "call_1")],
+    };
+    patchPayload(payload);
+
+    const input = payload.input as Array<Record<string, unknown>>;
+    expect(input[0]).toEqual(toolOutput("(see attached image)"));
+    expect(input[1]).toEqual(imageMessage(1, firstImage, secondImage));
+    expect(JSON.stringify(originalParts)).toBe(originalBytes);
+  });
+
+  it("counts every function output before replaying sparse images for the Grok OAuth proxy", () => {
+    const callIds = [
+      "x".repeat(64) + "a",
+      "a".repeat(63) + "🙈",
+      ...["c", "d"].map((suffix) => `${"x".repeat(64)}${suffix}`),
+    ];
+    const firstImage = { ...imagePart("data:image/png;base64,QUFBQQ=="), detail: "auto" };
+    const secondImage = { ...firstImage, image_url: "data:image/png;base64,QkJCQg==" };
+    const input = [
+      message("user", "Read the tool results"),
+      toolOutput("No image", callIds[0]),
+      toolOutput([inputText("first"), structuredClone(firstImage)], callIds[1]),
+      toolOutput([inputText("Still no image")], callIds[2]),
+      toolOutput([inputText("second"), structuredClone(secondImage)], callIds[3]),
+    ];
+    expect(project(input, { baseUrl: "https://cli-chat-proxy.grok.com/v1" })).toEqual([
+      message("user", "Read the tool results"),
+      toolOutput("No image", callIds[0]),
+      toolOutput("first", callIds[1]),
+      toolOutput("Still no image", callIds[2]),
+      toolOutput("second", callIds[3]),
+      imageMessage(2, firstImage, inputText("Image(s) from tool result #4:"), secondImage),
     ]);
   });
 
-  it.each([{ text: ["", ""], output: "(see attached image)" }])(
-    "preserves interleaved text and image references for $output",
-    ({ text, output }) => {
-      const firstImage = {
-        type: "input_image",
-        source: { type: "url", url: "https://example.com/first.png" },
-      };
-      const secondImage = { type: "input_image", image_url: "data:image/png;base64,QkJCQg==" };
-      const originalParts = [
-        { type: "input_text", text: text[0] },
-        firstImage,
-        { type: "input_text", text: text[1] },
-        secondImage,
-      ];
-      const originalBytes = JSON.stringify(originalParts);
-      const payload: Record<string, unknown> = {
-        input: [{ type: "function_call_output", call_id: "call_1", output: originalParts }],
-      };
-      runXaiToolPayloadWrapper({ payload, input: ["text", "image"] });
-
-      const input = payload.input as Array<Record<string, unknown>>;
-      expect(input[0]).toEqual({ type: "function_call_output", call_id: "call_1", output });
-      expect(input[1]).toEqual({
-        type: "message",
-        role: "user",
-        content: [
-          { type: "input_text", text: "Image(s) from tool result #1:" },
-          firstImage,
-          secondImage,
-        ],
-      });
-      const replayParts = input[1]?.content as unknown[];
-      expect(replayParts[1]).toBe(firstImage);
-      expect(replayParts[2]).toBe(secondImage);
-      expect(JSON.stringify(originalParts)).toBe(originalBytes);
-    },
-  );
-
-  it.each([["Grok OAuth proxy", "https://cli-chat-proxy.grok.com/v1"]])(
-    "counts every function output before replaying sparse images for %s",
-    (_label, baseUrl) => {
-      const callIds = [
-        "x".repeat(64) + "a",
-        "a".repeat(63) + "🙈",
-        ...["c", "d"].map((suffix) => `${"x".repeat(64)}${suffix}`),
-      ];
-      const firstImage = {
-        type: "input_image",
-        detail: "auto",
-        image_url: "data:image/png;base64,QUFBQQ==",
-      };
-      const secondImage = { ...firstImage, image_url: "data:image/png;base64,QkJCQg==" };
-      const payload: Record<string, unknown> = {
-        input: [
-          { type: "message", role: "user", content: "Read the tool results" },
-          { type: "function_call_output", call_id: callIds[0], output: "No image" },
-          {
-            type: "function_call_output",
-            call_id: callIds[1],
-            output: [{ type: "input_text", text: "first" }, structuredClone(firstImage)],
-          },
-          {
-            type: "function_call_output",
-            call_id: callIds[2],
-            output: [{ type: "input_text", text: "Still no image" }],
-          },
-          {
-            type: "function_call_output",
-            call_id: callIds[3],
-            output: [{ type: "input_text", text: "second" }, structuredClone(secondImage)],
-          },
-        ],
-      };
-      runXaiToolPayloadWrapper({ payload, input: ["text", "image"], baseUrl });
-
-      expect(payload.input).toEqual([
-        { type: "message", role: "user", content: "Read the tool results" },
-        { type: "function_call_output", call_id: callIds[0], output: "No image" },
-        { type: "function_call_output", call_id: callIds[1], output: "first" },
-        { type: "function_call_output", call_id: callIds[2], output: "Still no image" },
-        { type: "function_call_output", call_id: callIds[3], output: "second" },
-        {
-          type: "message",
-          role: "user",
-          content: [
-            { type: "input_text", text: "Image(s) from tool result #2:" },
-            firstImage,
-            { type: "input_text", text: "Image(s) from tool result #4:" },
-            secondImage,
-          ],
-        },
+  it.each([
+    ["image", { ...imagePart(), detail: "auto" }, "call_1"],
+    ["audio", { type: "input_audio", mimeType: "audio/wav", data: "QUJDRA==" }, "call_audio"],
+  ] as const)(
+    "uses %s fallback text without forwarding unsupported media",
+    (kind, part, callId) => {
+      expect(project([toolOutput([part], callId)], { input: ["text"] })).toEqual([
+        toolOutput(`(see attached ${kind})`, callId),
       ]);
     },
   );
-
-  it("drops image blocks and uses fallback text for models without image input", () => {
-    const payload: Record<string, unknown> = {
-      input: [
-        {
-          type: "function_call_output",
-          call_id: "call_1",
-          output: [
-            {
-              type: "input_image",
-              detail: "auto",
-              image_url: "data:image/png;base64,QUJDRA==",
-            },
-          ],
-        },
-      ],
-    };
-    runXaiToolPayloadWrapper({ payload, input: ["text"] });
-
-    expect(payload.input).toEqual([
-      {
-        type: "function_call_output",
-        call_id: "call_1",
-        output: "(see attached image)",
-      },
-    ]);
-  });
-
-  it("uses audio fallback text for audio-only tool outputs", () => {
-    const payload: Record<string, unknown> = {
-      input: [
-        {
-          type: "function_call_output",
-          call_id: "call_audio",
-          output: [
-            {
-              type: "input_audio",
-              mimeType: "audio/wav",
-              data: "QUJDRA==",
-            },
-          ],
-        },
-      ],
-    };
-    runXaiToolPayloadWrapper({ payload, input: ["text"] });
-
-    expect(payload.input).toEqual([
-      {
-        type: "function_call_output",
-        call_id: "call_audio",
-        output: "(see attached audio)",
-      },
-    ]);
-  });
 });

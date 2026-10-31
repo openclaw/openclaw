@@ -5,12 +5,15 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
 import { readSessionEntryCount } from "./session-accessor.sqlite-entry-inventory.js";
 
+afterAll(clearRuntimeConfigSnapshot);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-entry-count-");
 
 it("counts mixed validated and raw entries with the same archive filter", async () => {
+  setRuntimeConfigSnapshot({});
   const scope = {
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: sessionDirs.make() },

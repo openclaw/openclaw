@@ -10,14 +10,11 @@ import { isTerminalSessionStatus, type SessionEntry, type SessionScope } from ".
 export {
   createSessionWorkStartChangedError,
   isSessionWorkStartInvalidatedError,
-  SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
-  SessionRestartRecoveryTombstoneError,
   SessionWorkStartChangedError,
   SessionWorkStartInvalidatedError,
 } from "./work-start-error.js";
 
 export {
-  isRestartRecoveryTombstone,
   resolveSessionWorkStartError,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
 } from "./session-work-start.js";
@@ -95,7 +92,7 @@ export function resolveTerminalMainSessionTranscriptRegistryCheck(
   if (registryTimestampMs === undefined) {
     return undefined;
   }
-  const sessionId = typeof params.entry.sessionId === "string" ? params.entry.sessionId.trim() : "";
+  const sessionId = params.entry.sessionId.trim();
   if (!sessionId) {
     return undefined;
   }

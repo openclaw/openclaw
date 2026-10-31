@@ -147,6 +147,7 @@ export async function resolveSlackSessionEventRoutingContext(
   SlackRoutingContext & {
     isCurrentSession: Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsync>>["isCurrent"];
     sessionSource: Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsync>>["source"];
+    release: Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsync>>["release"];
   }
 > {
   const { ctx, message, eventScope } = params;
@@ -211,7 +212,6 @@ export async function resolveSlackSessionEventRoutingContext(
             client: eventScope?.client ?? ctx.app.client,
             channelId: message.channel,
             threadTs,
-            userId: message.user,
           }));
     allowDirectParent = !assistantThread && !managedThread;
     owner = await readOwner();
@@ -267,5 +267,6 @@ export async function resolveSlackSessionEventRoutingContext(
     sessionKey: route.sessionKey,
     isCurrentSession: current.isCurrent,
     sessionSource: current.source,
+    release: current.release,
   };
 }

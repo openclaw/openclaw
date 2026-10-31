@@ -1,19 +1,25 @@
 // Shared fixtures for Vydra provider tests.
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { vi } from "vitest";
+import plugin from "./index.js";
+
+export function registerVydraProviders() {
+  const captured = createCapturedPluginRegistration({ id: "test-plugin" });
+  plugin.register(captured.api);
+  const imageProvider = captured.imageGenerationProviders[0];
+  const videoProvider = captured.videoGenerationProviders[0];
+  if (!imageProvider || !videoProvider) {
+    throw new Error("Vydra image and video providers not registered");
+  }
+  return { imageProvider, videoProvider };
+}
 
 export function stubVydraApiKey(): void {
   vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
     apiKey: "vydra-test-key",
     source: "env",
     mode: "api-key",
-  });
-}
-
-export function jsonResponse(payload: Record<string, unknown>): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
   });
 }
 

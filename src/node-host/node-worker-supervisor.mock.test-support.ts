@@ -1,8 +1,10 @@
 import { vi } from "vitest";
+import type { NodeWorkerContainerLifecycle as ContainerLifecycle } from "./node-worker-container-lifecycle.js";
 import type { NodeWorkerJournalWorker as JournalWorker } from "./node-worker-journal-worker.js";
 import type { NodeWorkerLaunchStore as LaunchStore } from "./node-worker-launch-store.js";
 import type { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 import type { NodeWorkerWorkspaceQuiescence } from "./node-worker-workspace-quiescence.js";
+import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const mocks = vi.hoisted(() => ({
   launchClaim: vi.fn<LaunchStore["claim"]>(),
@@ -20,21 +22,12 @@ const mocks = vi.hoisted(() => ({
   turnFinish: vi.fn<NodeWorkerTurnStore["finish"]>(),
   drain: vi.fn<JournalWorker["drain"]>(async () => {}),
   quiescenceClose: vi.fn<NodeWorkerWorkspaceQuiescence["close"]>(async () => {}),
-  acquirePreparedWorkspace:
-    vi.fn<
-      typeof import("./node-worker-workspace.js").NodeWorkerWorkspaceRuntime.prototype.acquirePreparedWorkspace
-    >(),
-  retain:
-    vi.fn<
-      typeof import("./node-worker-workspace.js").NodeWorkerWorkspaceRuntime.prototype.applyRetainSnapshot
-    >(),
+  acquirePreparedWorkspace: vi.fn<NodeWorkerWorkspaceRuntime["acquirePreparedWorkspace"]>(),
+  retain: vi.fn<NodeWorkerWorkspaceRuntime["applyRetainSnapshot"]>(),
   inspectIdentity:
     vi.fn<typeof import("./node-worker-process-identity.js").inspectNodeWorkerProcessIdentity>(),
   inspectTree: vi.fn<typeof import("./node-worker-tree-control.js").inspectOwnedNodeWorkerTree>(),
-  remove:
-    vi.fn<
-      typeof import("./node-worker-container-lifecycle.js").NodeWorkerContainerLifecycle.prototype.remove
-    >(),
+  remove: vi.fn<ContainerLifecycle["remove"]>(),
   observe: vi.fn<typeof import("./node-worker-launch-observation.js").observeNodeWorkerChild>(),
   prepare:
     vi.fn<typeof import("./node-worker-launch-transport.js").prepareNodeWorkerLaunchTransport>(),
@@ -82,10 +75,7 @@ vi.mock("./node-worker-workspace.js", async (importOriginal) => {
     NodeWorkerWorkspaceRuntime: class {
       acquirePreparedWorkspace = mocks.acquirePreparedWorkspace;
       applyRetainSnapshot = mocks.retain;
-      quiescence = {
-        hasActiveWork: () => false,
-        close: mocks.quiescenceClose,
-      };
+      quiescence = { hasActiveWork: () => false, close: mocks.quiescenceClose };
       processes = new NodeWorkerWorkspaceProcesses();
     },
   };
@@ -118,19 +108,12 @@ vi.mock("./node-worker-launch-transport.js", () => ({
 }));
 
 // Re-exports evaluate dependencies before Vitest installs these mocks.
-const { NodeWorkerCapacity } = await import("./node-worker-capacity.js");
-const { NodeWorkerContainerLifecycle } = await import("./node-worker-container-lifecycle.js");
-const { NodeWorkerJournalWorker } = await import("./node-worker-journal-worker.js");
-const { NodeWorkerLaunchStore } = await import("./node-worker-launch-store.js");
-const { createNodeWorkerLaunchRecovery } = await import("./node-worker-supervisor-recovery.js");
-const { createNodeWorkerSupervisor } = await import("./node-worker-supervisor.js");
-
-export {
-  NodeWorkerCapacity,
-  NodeWorkerContainerLifecycle,
-  NodeWorkerJournalWorker,
-  NodeWorkerLaunchStore,
-  createNodeWorkerLaunchRecovery,
-  createNodeWorkerSupervisor,
-  mocks,
-};
+export const { NodeWorkerCapacity } = await import("./node-worker-capacity.js");
+export const { NodeWorkerContainerLifecycle } =
+  await import("./node-worker-container-lifecycle.js");
+export const { NodeWorkerJournalWorker } = await import("./node-worker-journal-worker.js");
+export const { NodeWorkerLaunchStore } = await import("./node-worker-launch-store.js");
+export const { createNodeWorkerLaunchRecovery } =
+  await import("./node-worker-supervisor-recovery.js");
+export const { createNodeWorkerSupervisor } = await import("./node-worker-supervisor.js");
+export { mocks };

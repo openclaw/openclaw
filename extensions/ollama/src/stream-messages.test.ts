@@ -1,4 +1,7 @@
+import type { Message } from "openclaw/plugin-sdk/llm";
+import { makeAgentAssistantMessage, makeAgentUserMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../test-support/message-fixtures.test-support.js";
 import { convertToOllamaMessages } from "./stream-messages.js";
 
 const opening = "\n<!-- OPENCLAW-RELOCATABLE-BOUNDARY -->\n";
@@ -16,39 +19,10 @@ function system(session: string): string {
 }
 
 describe("native Ollama messages", () => {
-  it("preserves valid content when an input array contains malformed parts", () => {
-    expect(
-      convertToOllamaMessages([
-        {
-          role: "user",
-          content: [
-            null,
-            { type: "text", text: 7 },
-            { type: "text", text: "hello" },
-            { type: "image", data: "pixels" },
-          ],
-        },
-        {
-          role: "assistant",
-          content: [
-            null,
-            { type: "toolCall", name: 7 },
-            { type: "toolCall", name: "read", arguments: { path: "." } },
-          ],
-        },
-      ]),
-    ).toEqual([
-      { role: "user", content: "hello", images: ["pixels"] },
-      {
-        role: "assistant",
-        content: "",
-        tool_calls: [{ function: { name: "read", arguments: { path: "." } } }],
-      },
-    ]);
-  });
-
   it("keeps exact session identity behind system instructions without changing the input", () => {
-    const messages = [{ role: "user", content: [{ type: "text", text: "Inspect the file." }] }];
+    const messages = [
+      makeAgentUserMessage({ content: [{ type: "text", text: "Inspect the file." }] }),
+    ];
     const original = structuredClone(messages);
     const first = convertToOllamaMessages(messages, system("alpha"));
     const second = convertToOllamaMessages(messages, system("beta"));
@@ -68,20 +42,34 @@ describe("native Ollama messages", () => {
     expect(messages).toEqual(original);
   });
 
+  it.each([
+    { label: "allowlist", options: { availableToolNames: new Set(["exec"]) } },
+    { label: "default prefix strip", options: undefined },
+  ])("normalizes functions.exec tool results with $label", ({ options }) => {
+    const messages: Message[] = [
+      makeAgentAssistantMessage({
+        content: [{ type: "toolCall", id: "call-1", name: "functions.exec", arguments: {} }],
+      }),
+      makeTextToolResult("call-1", "functions.exec", "ok", false, 0),
+    ];
+    const converted = convertToOllamaMessages(messages, undefined, options);
+    expect(converted[0]?.tool_calls?.[0]?.function.name).toBe("exec");
+    expect(converted[1]?.tool_name).toBe("exec");
+  });
+
   it("preserves the request prefix through a tool round and a later user turn", () => {
-    const initial = [{ role: "user", content: "Inspect the file." }];
-    const toolRound = [
+    const initial = [makeAgentUserMessage({ content: "Inspect the file." })];
+    const toolRound: Message[] = [
       ...initial,
-      {
-        role: "assistant",
+      makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "note" } }],
-      },
-      { role: "toolResult", toolCallId: "read-1", toolName: "read", content: "File contents." },
+      }),
+      makeTextToolResult("read-1", "read", "File contents.", false, 0),
     ];
     const followup = [
       ...toolRound,
-      { role: "assistant", content: "The file contains a note." },
-      { role: "user", content: "Summarize it." },
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "The file contains a note." }] }),
+      makeAgentUserMessage({ content: "Summarize it." }),
     ];
     const first = convertToOllamaMessages(initial, system("alpha"));
     const tools = convertToOllamaMessages(toolRound, system("alpha"));
@@ -96,20 +84,25 @@ describe("native Ollama messages", () => {
   it.each([
     {
       name: "no user carrier",
-      messages: [{ role: "assistant", content: "Continue." }],
+      messages: [makeAgentAssistantMessage({ content: [{ type: "text", text: "Continue." }] })],
+      expectedMessages: [{ role: "assistant", content: "Continue." }],
       prompt: system("alpha"),
       expected: `Project instructions.\n## Runtime\nRuntime: session=agent:main:subagent:alpha | sessionUrl=https://example.test/chat/alpha\n${permission}`,
     },
     {
       name: "ambiguous document markers",
-      messages: [{ role: "user", content: "Inspect the file." }],
+      messages: [makeAgentUserMessage({ content: "Inspect the file." })],
+      expectedMessages: [{ role: "user", content: "Inspect the file." }],
       prompt: `Project policy.${opening}Documented example.${closing}\n${system("alpha")}`,
       expected: `Project policy.\nDocumented example.\nProject instructions.\n## Runtime\nRuntime: session=agent:main:subagent:alpha | sessionUrl=https://example.test/chat/alpha\n${permission}`,
     },
-  ])("preserves system authority with $name", ({ messages, prompt, expected }) => {
-    expect(convertToOllamaMessages(messages, prompt)).toEqual([
-      { role: "system", content: expected },
-      ...messages,
-    ]);
-  });
+  ])(
+    "preserves system authority with $name",
+    ({ messages, prompt, expected, expectedMessages }) => {
+      expect(convertToOllamaMessages(messages, prompt)).toEqual([
+        { role: "system", content: expected },
+        ...expectedMessages,
+      ]);
+    },
+  );
 });

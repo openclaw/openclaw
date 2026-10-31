@@ -10,6 +10,12 @@ on:
     types: [completed]
   schedule:
     - cron: "4-59/10 * * * *" # reconcile CI completions whose workflow_run delivery was lost
+  workflow_dispatch:
+    inputs:
+      completed_ci_run_id:
+        description: Completed CI run whose security review needs reconciliation
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -34,11 +40,14 @@ jobs:
       (github.event_name != 'issue_comment' || (github.event.issue.pull_request &&
       (contains(github.event.comment.body, '/allow-security-sensitive-change') ||
       contains(github.event.comment.body, '/allow-dependencies-change') ||
+      (github.event.action == 'created' && contains(github.event.comment.body, '/refresh-security-review ')) ||
       (github.event.action == 'edited' &&
       (contains(github.event.changes.body.from, '/allow-security-sensitive-change') ||
       contains(github.event.changes.body.from, '/allow-dependencies-change')))))) &&
       (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request' ||
-      github.event.workflow_run.event == 'workflow_dispatch') }}
+      github.event.workflow_run.event == 'workflow_dispatch') &&
+      (github.event_name != 'workflow_dispatch' ||
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
     # Rate-limit recovery can hold a scheduled resolver for an hour. GitHub keeps one
     # pending pass; the next pass still starts from the last successful window.
     concurrency:
@@ -93,9 +102,9 @@ jobs:
 
       - name: Setup supported Node runtime
         timeout-minutes: 3
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Resolve current pull requests
@@ -138,6 +147,8 @@ jobs:
     env:
       OPENCLAW_SECURITY_REVIEW_PR_NUMBER: ${{ matrix.pr }}
       OPENCLAW_SECURITY_REVIEW_HEAD_SHA: ${{ matrix.head }}
+      OPENCLAW_SECURITY_REVIEW_CI_RUN_ID: ${{ matrix.ciRunId }}
+      OPENCLAW_SECURITY_REVIEW_CI_RUN_ATTEMPT: ${{ matrix.ciRunAttempt }}
     steps:
       - name: Check out trusted workflow scripts
         id: checkout
@@ -202,19 +213,21 @@ jobs:
         timeout-minutes: 3
         uses: ./.github/actions/setup-security-review
 
-      - name: Detect dependency changes
+      # Preparation is limited to direct PR events. CI-completion, scheduled,
+      # and command reviews retain their own fresh enforcement/publication step.
+      - name: Prepare security review
         id: detect
         if: github.event_name == 'pull_request_target' && github.event.action != 'closed' && matrix.pr == github.event.pull_request.number
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          OPENCLAW_SECURITY_REVIEW_MODE: detect
+          OPENCLAW_SECURITY_REVIEW_MODE: prepare
         run: node scripts/github/security-review.mjs
 
       - name: Create autoscrub app token
         id: app-token
         if: github.event_name == 'pull_request_target' && github.event.action != 'closed' && matrix.pr == github.event.pull_request.number && steps.detect.outputs.autoscrub == 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -226,7 +239,7 @@ jobs:
         id: app-token-fallback
         if: github.event_name == 'pull_request_target' && github.event.action != 'closed' && matrix.pr == github.event.pull_request.number && steps.detect.outputs.autoscrub == 'true' && steps.app-token.outcome == 'failure'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
@@ -247,7 +260,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENCLAW_SECURITY_REVIEW_MODE: enforce
-        run: node scripts/github/security-review.mjs
+        run: |
+          if [ "${{ steps.detect.outputs.completed }}" = "true" ]; then
+            echo "Security review completed during preparation."
+          else
+            node scripts/github/security-review.mjs
+          fi
 
       # Bootstrap failures cannot load the repository's normal status publisher.
       # This checkout-independent path can only fail the scheduled head closed.

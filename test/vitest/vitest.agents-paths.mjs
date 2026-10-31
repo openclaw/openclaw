@@ -21,12 +21,11 @@ const coreIsolatedFiles = [
   "src/agents/mcp-transport.test.ts",
   "src/agents/model-catalog-visibility.test.ts",
   "src/agents/model-auth-env.provider-aliases.test.ts",
+  "src/agents/model-auth.plugin-scope.test.ts",
   "src/agents/model-selection.plugin-runtime.test.ts",
-  "src/agents/openai-transport-stream.streaming.test.ts",
   "src/agents/subagents/announce/subagent-announce.test.ts",
   "src/agents/subagents/registry/subagent-registry.announce-loop-guard.test.ts",
   "src/agents/subagents/registry/subagent-registry-requester-wake-commit.test.ts",
-  "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
 ];
 const incompleteTurnFiles = [`${embeddedRoot}/run.incomplete-turn.classification.test.ts`];
 const overflowCompactionFiles = [`${embeddedRoot}/run.overflow-compaction.test.ts`];

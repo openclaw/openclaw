@@ -4,6 +4,7 @@ import {
   missingScopeErrorShape,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import {
   resolveSessionMethodScope,
   type SessionOperatorScope,
@@ -14,14 +15,16 @@ import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
   authorizeOperatorScopesForRequiredScope,
+  resolveAgentRuntimeCronScope,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "../method-scopes.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
+import { isHostPluginApprovalCall } from "../operator-approval-authorization.js";
 import {
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
 } from "../operator-role-policy.js";
-import { isOperatorScope } from "../operator-scopes.js";
+import { APPROVALS_SCOPE, isOperatorScope } from "../operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./shared-types.js";
 
@@ -70,6 +73,9 @@ export function authorizeGatewayMethod(
     return { error: null };
   }
   const registeredScope = methodRegistry.getScope(method);
+  if (registeredScope === APPROVALS_SCOPE && isHostPluginApprovalCall(method, client)) {
+    return { error: null };
+  }
   let scopeAuth = isOperatorScope(registeredScope)
     ? authorizeOperatorScopesForRequiredScope(
         registeredScope,
@@ -96,6 +102,12 @@ export function authorizeGatewayMethod(
       runtimeIdentity?.cronManagementGrant &&
       holdsCronManagementGrant(runtimeIdentity.cronManagementGrant, runtimeIdentity, method)
     ) {
+      return { error: null };
+    }
+    // Only an authenticated agent runtime supplies the conversation/account boundary
+    // enforced by the cron handlers. Direct/global scheduler APIs remain admin-only.
+    const cronScope = runtimeIdentity && resolveAgentRuntimeCronScope(method);
+    if (cronScope && operatorScopeSatisfied(cronScope, scopes)) {
       return { error: null };
     }
     const resolvedRequiredScopes = isOperatorScope(registeredScope)

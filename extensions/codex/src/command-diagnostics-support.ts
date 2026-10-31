@@ -55,7 +55,7 @@ export function parseDiagnosticsArgs(args: string): ParsedDiagnosticsArgs {
 }
 
 export function createCodexDiagnosticsConfirmation(
-  params: Omit<PendingCodexDiagnosticsConfirmation, "token" | "createdAt"> & { now: number },
+  params: Omit<PendingCodexDiagnosticsConfirmation, "createdAt"> & { now: number },
 ): string {
   prunePendingCodexDiagnosticsConfirmations(params.now);
   if (
@@ -63,13 +63,13 @@ export function createCodexDiagnosticsConfirmation(
     pendingCodexDiagnosticsConfirmationTokensByScope.size >=
       CODEX_DIAGNOSTICS_CONFIRMATION_MAX_SCOPES
   ) {
-    const oldestScopeKey = pendingCodexDiagnosticsConfirmationTokensByScope.keys().next().value;
-    if (typeof oldestScopeKey === "string") {
+    for (const oldestScopeKey of pendingCodexDiagnosticsConfirmationTokensByScope.keys()) {
       for (const token of pendingCodexDiagnosticsConfirmationTokensByScope.get(oldestScopeKey) ??
         []) {
         pendingCodexDiagnosticsConfirmations.delete(token);
       }
       pendingCodexDiagnosticsConfirmationTokensByScope.delete(oldestScopeKey);
+      break;
     }
   }
   const scopeTokens = pendingCodexDiagnosticsConfirmationTokensByScope.get(params.scopeKey) ?? [];
@@ -86,7 +86,6 @@ export function createCodexDiagnosticsConfirmation(
   const { now, ...confirmation } = params;
   pendingCodexDiagnosticsConfirmations.set(token, {
     ...confirmation,
-    token,
     createdAt: now,
   });
   return token;

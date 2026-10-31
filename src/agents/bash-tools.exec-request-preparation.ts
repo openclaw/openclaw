@@ -25,6 +25,7 @@ import {
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
@@ -44,6 +45,7 @@ export type ExecToolArgs = Record<string, unknown> & {
   env?: Record<string, string>;
   yieldMs?: number;
   background?: boolean;
+  durable?: boolean;
   awaitResults?: boolean;
   timeoutSeconds?: number;
   pty?: boolean;
@@ -71,15 +73,52 @@ const resolvedExecWorkdirPreparedStates = new WeakMap<
 >();
 const XML_ARG_VALUE_EXEC_PARAM_KEYS = ["command", "workdir", "host", "ask", "node"] as const;
 
+export function assertDurableExecAvailable(
+  args: ExecToolArgs,
+  host: ExecHost,
+  allowBackground: boolean,
+): void {
+  if (!args.durable) {
+    return;
+  }
+  if (host !== "gateway" || !allowBackground) {
+    throw new Error(
+      "Durable exec requires Gateway-host background execution on Linux with systemd 250 or newer, a reachable user manager, and the process tool enabled. Sandbox, node, and worker execution are unsupported.",
+    );
+  }
+}
+
 export function assertSupportedExecParams(args: unknown): void {
   if (!isRecord(args)) {
     return;
+  }
+  if (typeof args.command === "string" && args.command.includes("\0")) {
+    throw new ToolInputError(
+      "Execution command must not contain NUL bytes. Remove them and retry.",
+    );
   }
   if (args.awaitResults !== undefined && typeof args.awaitResults !== "boolean") {
     throw new ToolInputError("exec awaitResults must be a boolean");
   }
   if (args.awaitResults === true && args.background === true) {
     throw new ToolInputError("exec with awaitResults=true cannot be detached with background=true");
+  }
+  if (args.durable !== undefined && typeof args.durable !== "boolean") {
+    throw new ToolInputError("exec durable must be a boolean");
+  }
+  if (args.durable === true) {
+    if (
+      args.background !== true &&
+      !(typeof args.yieldMs === "number" && Number.isFinite(args.yieldMs))
+    ) {
+      throw new ToolInputError("Durable exec requires background=true or yieldMs");
+    }
+    if (args.awaitResults === true) {
+      throw new ToolInputError("Durable exec cannot use awaitResults");
+    }
+    if (args.pty === true) {
+      throw new ToolInputError("Durable exec does not support interactive input or PTY");
+    }
   }
   if (Object.hasOwn(args, "timeout")) {
     throw new ToolInputError(
@@ -176,9 +215,6 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
     notifySessionKey,
     resolveSubagentSession,
     notifyDeliveryContext,
-    // Preserve conversation provenance for passive subagent completion notices.
-    notifyFromConversationTurn:
-      defaults?.trigger === "user" || defaults?.continuesConversation === true,
   };
 }
 
@@ -187,7 +223,8 @@ export function resolveExecPreparedRunEnvironment(defaults?: ExecToolDefaults) {
     ...(defaults?.preparedRunEnvironment ??
       prepareGitHubToolEnvironment({
         config: defaults?.config ?? {},
-        agentId: defaults?.agentId ?? "main",
+        sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
+        agentId: defaults?.executionAgentId ?? defaults?.agentId ?? "main",
       })),
     localProcessEnv: installationTargetEnv(getInstallationTarget()),
   };

@@ -23,7 +23,7 @@ type GithubCopilotTestProvider = RegisteredProvider & {
   prepareDynamicModel: NonNullable<RegisteredProvider["prepareDynamicModel"]>;
   resolveDynamicModel: NonNullable<RegisteredProvider["resolveDynamicModel"]>;
   preferRuntimeResolvedModel: NonNullable<RegisteredProvider["preferRuntimeResolvedModel"]>;
-  prepareRuntimeAuth: NonNullable<RegisteredProvider["prepareRuntimeAuth"]>;
+  prepareRuntimeAuthV2: NonNullable<RegisteredProvider["prepareRuntimeAuthV2"]>;
   resolveThinkingProfile: NonNullable<RegisteredProvider["resolveThinkingProfile"]>;
 };
 

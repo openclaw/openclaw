@@ -49,11 +49,6 @@ main.content:where(.content--activity-page) .content-header {
   max-height: none;
 }
 
-.activity-mode-tabs + #activity-mode-panel {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
 .activity-current-work {
   display: flex;
   flex: 0 0 auto;
@@ -82,7 +77,7 @@ main.content:where(.content--activity-page) .content-header {
 }
 
 a.activity-current-work__row:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .activity-current-work__copy {
@@ -125,6 +120,7 @@ a.activity-current-work__row:hover {
 .activity-live-toolbar {
   display: flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
@@ -218,16 +214,6 @@ a.activity-current-work__row:hover {
   box-shadow: var(--focus-ring);
 }
 
-.activity-feed__selected-person,
-.activity-feed__git-label,
-.activity-feed__session-headline,
-.activity-feed__session-owner {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .activity-feed__facepile {
   display: inline-flex;
   align-items: center;
@@ -277,11 +263,8 @@ a.activity-current-work__row:hover {
 }
 
 .activity-feed__people-popover {
-  --max-width: min(360px, calc(100vw - 32px));
-}
-
-.activity-feed__people-popover::part(body) {
-  padding: 0;
+  --oc-overlay-max-width: min(360px, calc(100vw - 32px));
+  --oc-popover-padding: 0;
 }
 
 .activity-feed__people-panel {
@@ -599,7 +582,7 @@ a.activity-current-work__row:hover {
 .activity-feed__pr:hover,
 .activity-feed__pr:focus-visible {
   border-color: var(--border-strong);
-  background: var(--bg-hover);
+  background: var(--surface-hover);
   text-decoration: none;
 }
 
@@ -628,6 +611,11 @@ a.activity-current-work__row:hover {
 .activity-feed__pr[data-state="closed"] .activity-feed__git-icon,
 .activity-feed__deletions {
   color: var(--danger);
+}
+
+.activity-feed__diff {
+  display: inline-flex;
+  gap: 6px;
 }
 
 .activity-feed__additions,
@@ -688,7 +676,7 @@ a.activity-current-work__row:hover {
    together with the header link. Rows without a navigation target stay flat. */
 .activity-feed__session-row--link:hover,
 .activity-feed__session-row:focus-within {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .activity-feed__session-row:has(.activity-feed__inspect-run) .activity-feed__session {
@@ -953,11 +941,8 @@ a.activity-current-work__row:hover {
 }
 
 .activity-live-filter-popover {
-  --max-width: min(280px, calc(100vw - 32px));
-}
-
-.activity-live-filter-popover::part(body) {
-  padding: 0;
+  --oc-overlay-max-width: min(280px, calc(100vw - 32px));
+  --oc-popover-padding: 0;
 }
 
 .activity-live-filter-popover__panel {
@@ -1040,7 +1025,7 @@ a.activity-current-work__row:hover {
 }
 
 .activity-entry__summary:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .activity-entry__chevron {
@@ -1135,11 +1120,6 @@ a.activity-current-work__row:hover {
   .activity-feed {
     height: auto;
     overflow: visible;
-  }
-
-  .activity-feed__toolbar,
-  .activity-live-toolbar {
-    flex-wrap: wrap;
   }
 
   .activity-feed__search,

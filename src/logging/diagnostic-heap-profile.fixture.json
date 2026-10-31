@@ -1,0 +1,377 @@
+{
+  "raw": {
+    "head": {
+      "callFrame": {
+        "functionName": "(root)",
+        "scriptId": "0",
+        "url": "",
+        "lineNumber": -1,
+        "columnNumber": -1
+      },
+      "selfSize": 0,
+      "id": 1,
+      "children": [
+        {
+          "callFrame": {
+            "functionName": "",
+            "scriptId": "0",
+            "url": "",
+            "lineNumber": -1,
+            "columnNumber": -1
+          },
+          "selfSize": 0,
+          "id": 2,
+          "children": [
+            {
+              "callFrame": {
+                "functionName": "",
+                "scriptId": "158",
+                "url": "file:///fixture/openclaw/diagnostic-profile-measure.ts",
+                "lineNumber": 0,
+                "columnNumber": 0
+              },
+              "selfSize": 0,
+              "id": 3,
+              "children": [
+                {
+                  "callFrame": {
+                    "functionName": "from",
+                    "scriptId": "0",
+                    "url": "",
+                    "lineNumber": -1,
+                    "columnNumber": -1
+                  },
+                  "selfSize": 0,
+                  "id": 4,
+                  "children": [
+                    {
+                      "callFrame": {
+                        "functionName": "",
+                        "scriptId": "158",
+                        "url": "file:///fixture/openclaw/diagnostic-profile-measure.ts",
+                        "lineNumber": 268,
+                        "columnNumber": 43
+                      },
+                      "selfSize": 262400,
+                      "id": 5,
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "callFrame": {
+                    "functionName": "fn",
+                    "scriptId": "13",
+                    "url": "node:internal/util",
+                    "lineNumber": 476,
+                    "columnNumber": 13
+                  },
+                  "selfSize": 4128,
+                  "id": 6,
+                  "children": [
+                    {
+                      "callFrame": {
+                        "functionName": "Promise",
+                        "scriptId": "0",
+                        "url": "",
+                        "lineNumber": -1,
+                        "columnNumber": -1
+                      },
+                      "selfSize": 0,
+                      "id": 7,
+                      "children": [
+                        {
+                          "callFrame": {
+                            "functionName": "",
+                            "scriptId": "13",
+                            "url": "node:internal/util",
+                            "lineNumber": 477,
+                            "columnNumber": 23
+                          },
+                          "selfSize": 0,
+                          "id": 8,
+                          "children": [
+                            {
+                              "callFrame": {
+                                "functionName": "post",
+                                "scriptId": "164",
+                                "url": "node:inspector",
+                                "lineNumber": 114,
+                                "columnNumber": 6
+                              },
+                              "selfSize": 7984,
+                              "id": 9,
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "samples": [
+      {
+        "size": 7984,
+        "nodeId": 9,
+        "ordinal": 10
+      },
+      {
+        "size": 4128,
+        "nodeId": 6,
+        "ordinal": 9
+      },
+      {
+        "size": 32784,
+        "nodeId": 5,
+        "ordinal": 8
+      },
+      {
+        "size": 32816,
+        "nodeId": 5,
+        "ordinal": 7
+      },
+      {
+        "size": 32816,
+        "nodeId": 5,
+        "ordinal": 3
+      },
+      {
+        "size": 32816,
+        "nodeId": 5,
+        "ordinal": 5
+      },
+      {
+        "size": 32784,
+        "nodeId": 5,
+        "ordinal": 4
+      },
+      {
+        "size": 32784,
+        "nodeId": 5,
+        "ordinal": 2
+      },
+      {
+        "size": 32784,
+        "nodeId": 5,
+        "ordinal": 6
+      },
+      {
+        "size": 32816,
+        "nodeId": 5,
+        "ordinal": 1
+      }
+    ]
+  },
+  "packageRoot": "/fixture/openclaw",
+  "metadata": {
+    "durationMs": 30000,
+    "requestedDurationMs": 600000,
+    "effectiveDurationMs": 30000,
+    "actualDurationMs": 30000,
+    "durationLimitReason": "collected-samples",
+    "samplingIntervalBytes": 32768,
+    "includeObjectsCollectedByMajorGC": true,
+    "includeObjectsCollectedByMinorGC": true,
+    "heapUsedBefore": 0,
+    "heapUsedAfter": 0,
+    "heapSpacesBefore": [],
+    "heapSpacesAfter": [],
+    "rssBefore": 0,
+    "rssAfter": 0
+  },
+  "sanitized": {
+    "durationMs": 30000,
+    "requestedDurationMs": 600000,
+    "effectiveDurationMs": 30000,
+    "actualDurationMs": 30000,
+    "durationLimitReason": "collected-samples",
+    "samplingIntervalBytes": 32768,
+    "includeObjectsCollectedByMajorGC": true,
+    "includeObjectsCollectedByMinorGC": true,
+    "heapUsedBefore": 0,
+    "heapUsedAfter": 0,
+    "heapSpacesBefore": [],
+    "heapSpacesAfter": [],
+    "rssBefore": 0,
+    "rssAfter": 0,
+    "redactedNodeCount": 2,
+    "unattributedSampleCount": 0,
+    "unattributedSampleBytes": 0,
+    "truncated": false,
+    "profile": {
+      "head": {
+        "id": 1,
+        "callFrame": {
+          "functionName": "(root)",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "selfSize": 0,
+        "children": [
+          {
+            "id": 2,
+            "callFrame": {
+              "functionName": "[native]",
+              "scriptId": "0",
+              "url": "",
+              "lineNumber": -1,
+              "columnNumber": -1
+            },
+            "selfSize": 0,
+            "children": [
+              {
+                "id": 3,
+                "callFrame": {
+                  "functionName": "[redacted]",
+                  "scriptId": "158",
+                  "url": "",
+                  "lineNumber": 0,
+                  "columnNumber": 0
+                },
+                "selfSize": 0,
+                "children": [
+                  {
+                    "id": 4,
+                    "callFrame": {
+                      "functionName": "[native]",
+                      "scriptId": "0",
+                      "url": "",
+                      "lineNumber": -1,
+                      "columnNumber": -1
+                    },
+                    "selfSize": 0,
+                    "children": [
+                      {
+                        "id": 5,
+                        "callFrame": {
+                          "functionName": "[redacted]",
+                          "scriptId": "158",
+                          "url": "",
+                          "lineNumber": 268,
+                          "columnNumber": 43
+                        },
+                        "selfSize": 262400,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "id": 6,
+                    "callFrame": {
+                      "functionName": "fn",
+                      "scriptId": "13",
+                      "url": "node:internal/util",
+                      "lineNumber": 476,
+                      "columnNumber": 13
+                    },
+                    "selfSize": 4128,
+                    "children": [
+                      {
+                        "id": 7,
+                        "callFrame": {
+                          "functionName": "[native]",
+                          "scriptId": "0",
+                          "url": "",
+                          "lineNumber": -1,
+                          "columnNumber": -1
+                        },
+                        "selfSize": 0,
+                        "children": [
+                          {
+                            "id": 8,
+                            "callFrame": {
+                              "functionName": "",
+                              "scriptId": "13",
+                              "url": "node:internal/util",
+                              "lineNumber": 477,
+                              "columnNumber": 23
+                            },
+                            "selfSize": 0,
+                            "children": [
+                              {
+                                "id": 9,
+                                "callFrame": {
+                                  "functionName": "post",
+                                  "scriptId": "164",
+                                  "url": "node:inspector",
+                                  "lineNumber": 114,
+                                  "columnNumber": 6
+                                },
+                                "selfSize": 7984,
+                                "children": []
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "samples": [
+        {
+          "size": 7984,
+          "nodeId": 9,
+          "ordinal": 10
+        },
+        {
+          "size": 4128,
+          "nodeId": 6,
+          "ordinal": 9
+        },
+        {
+          "size": 32784,
+          "nodeId": 5,
+          "ordinal": 8
+        },
+        {
+          "size": 32816,
+          "nodeId": 5,
+          "ordinal": 7
+        },
+        {
+          "size": 32816,
+          "nodeId": 5,
+          "ordinal": 3
+        },
+        {
+          "size": 32816,
+          "nodeId": 5,
+          "ordinal": 5
+        },
+        {
+          "size": 32784,
+          "nodeId": 5,
+          "ordinal": 4
+        },
+        {
+          "size": 32784,
+          "nodeId": 5,
+          "ordinal": 2
+        },
+        {
+          "size": 32784,
+          "nodeId": 5,
+          "ordinal": 6
+        },
+        {
+          "size": 32816,
+          "nodeId": 5,
+          "ordinal": 1
+        }
+      ]
+    }
+  }
+}

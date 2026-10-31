@@ -1,3 +1,4 @@
+import { HttpError } from "grammy";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -6,19 +7,16 @@ import {
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-type TelegramApiLogger = (message: string) => void;
-
 type TelegramApiLoggingParams<T> = {
   operation: string;
   fn: () => Promise<T>;
   runtime?: Pick<RuntimeEnv, "error">;
-  logger?: TelegramApiLogger;
   shouldLog?: (err: unknown) => boolean;
 };
 
 const fallbackLogger = createSubsystemLogger("telegram/api");
 
-function formatTransportDiagnostics(error: unknown): string {
+export function formatTelegramTransportDiagnostics(error: unknown): string {
   const fields: { code?: string; syscall?: string } = {};
   for (const candidate of collectErrorGraphCandidates(error, (current) => [
     current.cause,
@@ -45,14 +43,17 @@ function formatTransportDiagnostics(error: unknown): string {
 export async function withTelegramApiErrorLogging<T>(
   params: TelegramApiLoggingParams<T>,
 ): Promise<T> {
-  const { operation, fn, runtime, logger, shouldLog } = params;
+  const { operation, fn, runtime, shouldLog } = params;
   try {
     return await fn();
   } catch (err) {
     if (!shouldLog || shouldLog(err)) {
-      const transport = formatTransportDiagnostics(err);
-      const errText = transport ? `network request failed${transport}` : formatErrorMessage(err);
-      const log = logger ?? runtime?.error ?? ((message: string) => fallbackLogger.error(message));
+      const transport = formatTelegramTransportDiagnostics(err);
+      const errText =
+        err instanceof HttpError || transport
+          ? `network request failed${transport}`
+          : formatErrorMessage(err);
+      const log = runtime?.error ?? ((message: string) => fallbackLogger.error(message));
       log(`telegram ${operation} failed: ${errText}`);
     }
     throw err;

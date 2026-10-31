@@ -4,13 +4,15 @@ import {
   resolveAgentWorkspaceDir,
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { getDatabaseEngineSelection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { defaultRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createClackPrompter } from "openclaw/plugin-sdk/setup-runtime";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
   resolveOpenClawAgentSqlitePath,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import { terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
 import { emitMemoryCoreSidecarNotice, resolveMemoryAgentIds } from "./cli-runtime-common.js";
 import type { MemoryResetCommandOptions } from "./cli.types.js";
@@ -18,11 +20,12 @@ import {
   closeMemoryDatabase,
   openMemoryDatabaseAtPath,
   resetMemoryDatabase,
+  resetPostgresMemoryDatabase,
 } from "./memory/manager-db.js";
 
 export async function runMemoryReset(opts: MemoryResetCommandOptions): Promise<void> {
   // Reset needs no embedding provider or credentials, including when search is disabled.
-  const cfg = getRuntimeConfig({ skipPluginValidation: true });
+  const cfg = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   const agentIds = resolveMemoryAgentIds(cfg, opts.agent);
   const slotOwner = resolveForeignMemorySlotOwner(cfg);
   if (slotOwner) {
@@ -35,7 +38,7 @@ export async function runMemoryReset(opts: MemoryResetCommandOptions): Promise<v
       );
     }
     const confirmed = await createClackPrompter().confirm({
-      message: `Reset the derived memory index and embedding cache for ${agentIds.join(", ")}? Sessions and memory files will be preserved.`,
+      message: terminalText`Reset the derived memory index and embedding cache for ${agentIds.join(", ")}? Sessions and memory files will be preserved.`,
       initialValue: false,
     });
     if (!confirmed) {
@@ -45,8 +48,21 @@ export async function runMemoryReset(opts: MemoryResetCommandOptions): Promise<v
   }
   for (const agentId of agentIds) {
     const dbPath = resolveOpenClawAgentSqlitePath({ agentId });
+    if (getDatabaseEngineSelection()?.effectiveEngines.agent === "postgres") {
+      const changed = await resetPostgresMemoryDatabase({
+        agentId,
+        dbPath,
+        workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+      });
+      defaultRuntime.log(
+        changed
+          ? terminalText`Memory index reset (${agentId}). Sessions preserved. Rebuild with: openclaw memory index --agent ${agentId}`
+          : terminalText`No memory index to reset (${agentId}).`,
+      );
+      continue;
+    }
     if (!fs.existsSync(dbPath)) {
-      defaultRuntime.log(`No memory index to reset (${agentId}).`);
+      defaultRuntime.log(terminalText`No memory index to reset (${agentId}).`);
       continue;
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
@@ -65,11 +81,11 @@ export async function runMemoryReset(opts: MemoryResetCommandOptions): Promise<v
       });
       defaultRuntime.log(
         changed
-          ? `Memory index reset (${agentId}). Sessions preserved. Rebuild with: openclaw memory index --agent ${agentId}`
-          : `No memory index to reset (${agentId}).`,
+          ? terminalText`Memory index reset (${agentId}). Sessions preserved. Rebuild with: openclaw memory index --agent ${agentId}`
+          : terminalText`No memory index to reset (${agentId}).`,
       );
       defaultRuntime.log(
-        `Reset does not shrink the database file. To reclaim space, back up data and stop the Gateway and other writers, then run: openclaw doctor --session-sqlite compact --session-sqlite-agent ${agentId}`,
+        terminalText`Reset does not shrink the database file. To reclaim space, back up data and stop the Gateway and other writers, then run: openclaw doctor --session-sqlite compact --session-sqlite-agent ${agentId}`,
       );
     } finally {
       closeMemoryDatabase(db);

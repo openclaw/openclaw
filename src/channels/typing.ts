@@ -89,15 +89,12 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
         console.warn(`[typing] TTL exceeded (${maxDurationMs}ms), auto-stopping typing indicator`);
         fireStop();
       }
-    }, maxDurationMs);
-    ttlTimer.unref?.();
+    }, maxDurationMs).unref();
   };
 
   const clearTtlTimer = () => {
-    if (ttlTimer) {
-      clearTimeout(ttlTimer);
-      ttlTimer = undefined;
-    }
+    clearTimeout(ttlTimer);
+    ttlTimer = undefined;
   };
 
   const onReplyStart = async () => {

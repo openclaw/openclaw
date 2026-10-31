@@ -1,4 +1,3 @@
-// Telegram-private ask_user callback envelope.
 const TELEGRAM_QUESTION_CALLBACK_PREFIXES = ["tgq1:", "tgqo1:"] as const;
 // Fixed question IDs and option indices keep both envelopes below Telegram's 64-byte limit.
 const QUESTION_RECORD_ID_PATTERN = /^ask_[a-f0-9]{32}$/u;

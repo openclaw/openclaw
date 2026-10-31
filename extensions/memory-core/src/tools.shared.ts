@@ -1,23 +1,18 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type {
-  AnyAgentTool,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveMemoryToolContext,
   type MemoryToolContract,
   type MemoryToolOptions,
 } from "./memory-tool-contract.js";
-import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
-import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import { DEFAULT_MEMORY_SEARCH_TIMEOUT_MS } from "./memory/search-deadline.js";
 
 // Core owns this session-store error; Memory Core must preserve its exact code
 // without importing a core-internal module across the plugin boundary.
 const SESSION_CANONICAL_KEY_MIGRATION_REQUIRED = "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED";
 const SESSION_CANONICAL_KEY_MIGRATION_WARNING =
-  "Memory search is unavailable because the session catalog requires canonical-key migration.";
+  "Memory search is unavailable because the session catalog requires session-key migration.";
 const SESSION_CANONICAL_KEY_MIGRATION_ACTION =
   "Stop the Gateway and run openclaw doctor --fix, then restart the Gateway and retry memory_search.";
 
@@ -26,30 +21,18 @@ type MemorySearchManagerResult = Awaited<
 >;
 export const loadMemoryToolRuntime = createLazyRuntimeModule(() => import("./tools.runtime.js"));
 
-export async function getMemoryManagerContextWithPurpose(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  purpose?: "default" | "status" | "cli";
-  acquireLocalService?: MemoryCoreAcquireLocalService;
-  runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
-}): Promise<
+export async function getMemoryManagerContextWithPurpose(
+  params: Parameters<(typeof import("./memory/index.js"))["getMemorySearchManager"]>[0],
+): Promise<
   | {
       manager: NonNullable<MemorySearchManagerResult["manager"]>;
       debug: MemorySearchManagerResult["debug"];
     }
-  | {
-      error: string | undefined;
-    }
+  | { error: string | undefined; code?: string }
 > {
   const { getMemorySearchManager } = await loadMemoryToolRuntime();
-  const { manager, debug, error } = await getMemorySearchManager({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    purpose: params.purpose,
-    ...(params.acquireLocalService ? { acquireLocalService: params.acquireLocalService } : {}),
-    runInBackgroundContext: params.runInBackgroundContext,
-  });
-  return manager ? { manager, debug } : { error };
+  const { manager, debug, error, code } = await getMemorySearchManager(params);
+  return manager ? { manager, debug } : { error, code };
 }
 
 export function createMemoryTool(params: {
@@ -108,22 +91,27 @@ export function buildMemorySearchUnavailableResult(
   const [defaultWarning, defaultAction]: [string, string] =
     overrides?.code === SESSION_CANONICAL_KEY_MIGRATION_REQUIRED
       ? [SESSION_CANONICAL_KEY_MIGRATION_WARNING, SESSION_CANONICAL_KEY_MIGRATION_ACTION]
-      : isQuotaError
+      : overrides?.code === "SQLITE_READONLY_WORKER_SCOPE_CLOSED"
         ? [
-            "Memory search is unavailable because the embedding provider quota is exhausted.",
-            "Top up or switch embedding provider, then retry memory_search.",
+            "Memory search is unavailable because its storage scope closed.",
+            "Run openclaw plugins reload memory-core, or restart the Gateway, then retry memory_search.",
           ]
-        : isMissingNodeSqlite
+        : isQuotaError
           ? [
-              "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support.",
-              "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search.",
+              "Memory search is unavailable because the embedding provider quota is exhausted.",
+              "Top up or switch embedding provider, then retry memory_search.",
             ]
-          : isSearchDeadline
-            ? ["Memory search did not finish within its time limit.", deadlineAction]
-            : [
-                "Memory search is unavailable due to an embedding/provider error.",
-                "Check embedding provider configuration and retry memory_search.",
-              ];
+          : isMissingNodeSqlite
+            ? [
+                "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support.",
+                "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search.",
+              ]
+            : isSearchDeadline
+              ? ["Memory search did not finish within its time limit.", deadlineAction]
+              : [
+                  "Memory search is unavailable due to an embedding/provider error.",
+                  "Check embedding provider configuration and retry memory_search.",
+                ];
   const warning = overrides?.warning ?? defaultWarning;
   const action = overrides?.action ?? defaultAction;
   return {

@@ -106,22 +106,24 @@ export function createDurableInboundReceiveJournalFromQueue<
       return await options.queue.listPending({ limit: "all" });
     },
     complete: async (id, completeOptions) => {
-      await options.queue.complete(normalizeDurableInboundReceiveId(id), {
+      const eventId = normalizeDurableInboundReceiveId(id);
+      await options.queue.complete(eventId, {
         ...(completeOptions?.metadata === undefined ? {} : { metadata: completeOptions.metadata }),
         ...(completeOptions?.completedAt === undefined
           ? {}
           : { completedAt: completeOptions.completedAt }),
       });
-      await prune(normalizeDurableInboundReceiveId(id));
+      await prune(eventId);
     },
     release: async (id, releaseOptions) => {
-      const released = await options.queue.release(normalizeDurableInboundReceiveId(id), {
+      const eventId = normalizeDurableInboundReceiveId(id);
+      const released = await options.queue.release(eventId, {
         ...(releaseOptions?.lastError === undefined ? {} : { lastError: releaseOptions.lastError }),
         ...(releaseOptions?.releasedAt === undefined
           ? {}
           : { releasedAt: releaseOptions.releasedAt }),
       });
-      await prune(normalizeDurableInboundReceiveId(id));
+      await prune(eventId);
       return released;
     },
     deletePending: async (id) => {

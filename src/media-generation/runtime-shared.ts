@@ -21,6 +21,7 @@ import {
   isProviderApiKeyConfigured,
   isProviderApiKeyConfiguredAsync,
 } from "../plugins/provider-auth-availability.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 
 function buildCapabilityCandidateFailure(
@@ -153,22 +154,9 @@ export function resolveMediaProviderRequestTimeoutMs(params: {
 }
 
 type CapabilityProviderCandidate = CapabilityModelProviderCandidate & {
-  /** @deprecated Implement isConfiguredAsync so credential reads use the worker. */
+  /** @deprecated Implement isConfiguredAsync so credential reads use the worker. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
   isConfiguredAsync?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => Promise<boolean>;
-};
-
-type ParsedAspectRatio = {
-  width: number;
-  height: number;
-  value: number;
-};
-
-type ParsedSize = {
-  width: number;
-  height: number;
-  aspectRatio: number;
-  area: number;
 };
 
 function resolveCurrentDefaultProviderId(cfg?: OpenClawConfig): string {
@@ -281,10 +269,14 @@ function prepareCapabilityModelCandidates(params: CapabilityModelCandidatesParam
     // auto provider fallback candidates.
     return { candidates: [override], add };
   }
+  if (normalizeOptionalString(params.modelOverride)) {
+    throw new Error(
+      `Unknown model override: ${params.modelOverride}. Use a provider/model reference or a model listed by a provider.`,
+    );
+  }
 
   // Cross-provider fallback is a fixed product policy; Doctor removes the retired opt-out.
   const autoProviderFallbackEnabled = params.autoProviderFallback ?? true;
-  add(params.modelOverride, true);
   add(resolveAgentModelPrimaryValue(params.modelConfig), autoProviderFallbackEnabled);
   for (const fallback of resolveAgentModelFallbackValues(params.modelConfig)) {
     add(fallback, autoProviderFallbackEnabled);
@@ -299,10 +291,15 @@ function prepareCapabilityModelCandidates(params: CapabilityModelCandidatesParam
   };
 }
 
-/** @deprecated Use resolveCapabilityModelCandidatesAsync for worker-backed credential reads. */
+/** @deprecated Use resolveCapabilityModelCandidatesAsync for worker-backed credential reads. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveCapabilityModelCandidates(
   params: CapabilityModelCandidatesParams,
 ): ParsedProviderModelRef[] {
+  warnPluginSdkDeprecation({
+    family: "provider-selection",
+    method: "resolveCapabilityModelCandidates",
+    replacement: "await resolveCapabilityModelCandidatesAsync()",
+  });
   const prepared = prepareCapabilityModelCandidates(params);
   const fallbackParams = prepared.fallbackParams;
   if (fallbackParams) {
@@ -353,6 +350,13 @@ export async function resolveCapabilityModelCandidatesAsync(
         continue;
       }
       const ctx = { cfg: params.cfg, agentDir: params.agentDir };
+      if (!provider.isConfiguredAsync && provider.isConfigured) {
+        warnPluginSdkDeprecation({
+          family: "provider-sync-configuration",
+          method: "media provider isConfigured",
+          replacement: "isConfiguredAsync",
+        });
+      }
       const configured = provider.isConfiguredAsync
         ? await provider.isConfiguredAsync(ctx)
         : provider.isConfigured
@@ -415,7 +419,11 @@ function parsePositiveDimensionPair(
   return { width, height };
 }
 
-function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
+export function parseAspectRatioValue(raw?: string | null): {
+  width: number;
+  height: number;
+  value: number;
+} | null {
   const pair = parsePositiveDimensionPair(raw, /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
   if (!pair) {
     return null;
@@ -427,7 +435,12 @@ function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
   };
 }
 
-function parseSizeValue(raw?: string | null): ParsedSize | null {
+function parseSizeValue(raw?: string | null): {
+  width: number;
+  height: number;
+  aspectRatio: number;
+  area: number;
+} | null {
   const pair = parsePositiveDimensionPair(raw, /^(\d+)\s*x\s*(\d+)$/i);
   if (!pair) {
     return null;

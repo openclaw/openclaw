@@ -1,5 +1,4 @@
 import type { AssistantMessageEvent } from "../../../llm/types.js";
-import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 
@@ -79,33 +78,38 @@ export function wrapStreamObjectEvents(
   const iterator = function () {
     // An already opened iterator keeps the transforms installed when it opened.
     const activeTransforms = transforms.slice();
-    return createStreamIteratorWrapper({
-      iterator: originalAsyncIterator(),
-      next: async (streamIterator) => {
-        const result = await streamIterator.next();
-        if (!result.done && result.value && typeof result.value === "object") {
-          for (const transform of activeTransforms) {
-            const pending = transform(result.value as Record<string, unknown>);
-            if (pending) {
-              await pending;
-            }
+    function transformNext(
+      result: IteratorResult<AssistantMessageEvent>,
+      start = 0,
+    ): IteratorResult<AssistantMessageEvent> | Promise<IteratorResult<AssistantMessageEvent>> {
+      if (!result.done && result.value && typeof result.value === "object") {
+        for (
+          let index = start, transform = activeTransforms[index];
+          transform;
+          transform = activeTransforms[++index]
+        ) {
+          const pending = transform(result.value as Record<string, unknown>);
+          if (pending) {
+            return Promise.resolve(pending).then(() => transformNext(result, index + 1));
           }
         }
-        return result;
+      }
+      return result;
+    }
+    return createStreamIteratorWrapper({
+      iterator: originalAsyncIterator(),
+      next: (streamIterator) => {
+        try {
+          return Promise.resolve(streamIterator.next()).then(transformNext);
+        } catch (error) {
+          // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve the source iterator's rejection value.
+          return Promise.reject(error);
+        }
       },
     });
   };
   stream[Symbol.asyncIterator] = iterator;
-  eventTransforms.set(stream, { iterator, transforms });
+  // Plugin streams expose a managed callback rather than the function assigned above.
+  eventTransforms.set(stream, { iterator: stream[Symbol.asyncIterator], transforms });
   return stream;
-}
-
-/** Preserve synchronous streams while adapting promise-returning provider implementations. */
-export function mapAssistantMessageStream(
-  stream: ReturnType<StreamFn>,
-  wrap: (resolved: Awaited<ReturnType<StreamFn>>) => Awaited<ReturnType<StreamFn>>,
-): ReturnType<StreamFn> {
-  return stream && typeof stream === "object" && "then" in stream
-    ? Promise.resolve(stream).then(wrap)
-    : wrap(stream);
 }

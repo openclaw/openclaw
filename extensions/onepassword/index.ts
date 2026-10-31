@@ -23,12 +23,7 @@ export default definePluginEntry({
   register(api) {
     const startupConfig = parseOnePasswordConfig(api.pluginConfig);
     const resolveCurrentConfig = () => {
-      const liveConfig = api.runtime.config?.current
-        ? (api.runtime.config.current() as OpenClawConfig)
-        : undefined;
-      if (!liveConfig) {
-        return startupConfig;
-      }
+      const liveConfig = api.runtime.config.current() as OpenClawConfig;
       const livePluginConfig = resolveLivePluginConfigObject(
         () => liveConfig,
         "onepassword",
@@ -43,7 +38,7 @@ export default definePluginEntry({
       }).enabled;
       return enabled ? parseOnePasswordConfig(livePluginConfig) : undefined;
     };
-    const grants = api.runtime.state.openKeyedStore<StandingGrant>({
+    const grants = api.runtime.state.openKeyedStoreV2<StandingGrant>({
       namespace: "grants",
       // Evicting the oldest grant is fail-closed: that agent must approve again.
       // Keep enough room for 32 agents holding every registered slug.

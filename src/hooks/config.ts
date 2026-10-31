@@ -5,7 +5,7 @@ import {
   isConfigPathTruthyWithDefaults,
 } from "../shared/config-eval.js";
 import { resolveHookConfig, resolveHookEnableState } from "./policy.js";
-import type { HookEligibilityContext, HookPolicyEntry } from "./types.js";
+import type { HookPolicyEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,
@@ -32,24 +32,19 @@ export function isHookEnvSatisfied(envName: string, hookConfig?: HookConfig): bo
 export function shouldIncludeHook(params: {
   entry: HookPolicyEntry;
   config?: OpenClawConfig;
-  eligibility?: HookEligibilityContext;
 }): boolean {
-  const { entry, config, eligibility } = params;
+  const { entry, config } = params;
   const hookConfig = resolveHookConfig(config, entry.metadata?.hookKey ?? entry.hook.name);
-  if (!resolveHookEnableState({ entry, config, hookConfig }).enabled) {
+  if (!resolveHookEnableState({ entry, hookConfig }).enabled) {
     return false;
   }
 
-  const remote = eligibility?.remote;
   // Hook metadata uses the same requirement language as plugins, but hook env
   // can also come from the per-hook config block.
   return evaluateRuntimeEligibility({
     os: entry.metadata?.os,
-    remotePlatforms: remote?.platforms,
     always: entry.metadata?.always,
     requires: entry.metadata?.requires,
-    hasRemoteBin: remote?.hasBin,
-    hasAnyRemoteBin: remote?.hasAnyBin,
     hasBin: hasBinary,
     hasEnv: (envName) => isHookEnvSatisfied(envName, hookConfig),
     isConfigPathTruthy: (configPath) => isHookConfigPathTruthy(config, configPath),

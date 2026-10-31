@@ -1,16 +1,11 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage, redirect } from "@openclaw/uirouter";
-import { html, nothing } from "lit";
 import { pathForRoute, routePageSpec, type RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
-import { CONFIG_PAGE_IDS, type ConfigPageId } from "./config-sections.ts";
-import {
-  configRouteData,
-  configTargetIdFromHash,
-  SETTINGS_ROUTE_TARGETS,
-  type ConfigRouteData,
-} from "./route-data.ts";
+import { hasConfigPageDisplay, isAppearanceDataTarget } from "./config-page-reads.ts";
+import { CONFIG_PAGE_IDS, normalizeConfigSelection, type ConfigPageId } from "./config-sections.ts";
+import { configRouteData, configTargetIdFromHash, SETTINGS_ROUTE_TARGETS } from "./route-data.ts";
 
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
 // Kept so pre-restructure bookmarks and generated links still land somewhere
@@ -35,41 +30,6 @@ const MOVED_SECTION_ROUTES: Record<
   "ai-agents:models": { routeId: "model-providers", keepSection: false },
 };
 
-function loadConfigRoute(
-  context: ApplicationContext,
-  location: RouteLocation,
-  pageId: ConfigPageId,
-) {
-  const route = configRouteData(location);
-  const movedRoute = route.section ? MOVED_SECTION_ROUTES[`${pageId}:${route.section}`] : undefined;
-  if (route.section && movedRoute) {
-    return redirect({
-      pathname: pathForRoute(movedRoute.routeId, context.basePath),
-      search:
-        movedRoute.search ??
-        (movedRoute.keepSection
-          ? `?section=${encodeURIComponent(route.section)}${movedRoute.advanced ? "&advanced=1" : ""}`
-          : ""),
-      hash: route.hash,
-    });
-  }
-  const agentSelectionIntent =
-    pageId === "memory"
-      ? {
-          owner: context.settingsAgentSelection,
-          revision: context.settingsAgentSelection.intentRevision,
-        }
-      : undefined;
-  const primaryLoad = context.runtimeConfig.ensureLoaded();
-  if (pageId !== "updates") {
-    void primaryLoad.then(() => context.runtimeConfig.ensureSchemaLoaded()).catch(() => undefined);
-  }
-  return {
-    ...route,
-    ...(agentSelectionIntent ? { agentSelectionIntent } : {}),
-  };
-}
-
 function configPage(id: ConfigPageId) {
   return definePage({
     ...routePageSpec(id),
@@ -80,14 +40,59 @@ function configPage(id: ConfigPageId) {
         ? `${locationKey}\u0000${context.settingsAgentSelection.intentRevision}`
         : locationKey;
     },
-    loader: (context: ApplicationContext, { location }) => loadConfigRoute(context, location, id),
-    component: () =>
-      import("./config-page.ts").then(() => ({
-        header: true,
-        render: (data: ConfigRouteData | undefined) => html`
-          <openclaw-config-page .pageId=${id} .routeData=${data ?? null}></openclaw-config-page>
-        `,
-      })),
+    loader: (context: ApplicationContext, { location }) => {
+      const pageId = id;
+      const route = configRouteData(location);
+      const movedRoute = route.section
+        ? MOVED_SECTION_ROUTES[`${pageId}:${route.section}`]
+        : undefined;
+      if (route.section && movedRoute) {
+        return redirect({
+          pathname: pathForRoute(movedRoute.routeId, context.basePath),
+          search:
+            movedRoute.search ??
+            (movedRoute.keepSection
+              ? `?section=${encodeURIComponent(route.section)}${movedRoute.advanced ? "&advanced=1" : ""}`
+              : ""),
+          hash: route.hash,
+        });
+      }
+      const agentSelectionIntent =
+        pageId === "memory"
+          ? {
+              owner: context.settingsAgentSelection,
+              revision: context.settingsAgentSelection.intentRevision,
+            }
+          : undefined;
+      const appearanceDisplay =
+        hasConfigPageDisplay(
+          context.runtimeConfig,
+          pageId,
+          normalizeConfigSelection(pageId, route.section, null).activeSection,
+        ) && !isAppearanceDataTarget(route.targetBlockId);
+      if (!appearanceDisplay) {
+        void context.runtimeConfig.ensureLoaded().catch(() => undefined);
+        if (pageId !== "updates") {
+          void context.runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
+        }
+      }
+      return {
+        ...route,
+        pageId,
+        ...(agentSelectionIntent ? { agentSelectionIntent } : {}),
+      };
+    },
+    component: async () => {
+      // The sidebar is an independent lazy sibling; start it alongside the page.
+      void import("../../components/settings-sidebar-shell.tsx").catch(() => undefined);
+      const module = await import("./config-page.tsx");
+      await module.preloadConfigPage(id);
+      return {
+        // Keep the current owner while another Settings subpage loads its data.
+        renderOwnerKey: () => "settings-config",
+        renderSolid: module.ConfigRoute,
+      };
+    },
   });
 }
 
@@ -107,7 +112,7 @@ const removedGeneralRedirectPage = definePage({
     });
   },
   // Redirect routes still require a module by contract, but never render page content.
-  component: async () => ({ header: true, render: () => nothing }),
+  component: async () => ({ renderSolid: () => null }),
 });
 
 export const pages = [
@@ -118,7 +123,7 @@ export const pages = [
         ? undefined
         : redirect({ ...location, pathname: pathForRoute("chat", context.basePath) }),
     // The shell reuses its lazy settings navigation as the embedded list page.
-    component: async () => ({ render: () => nothing }),
+    component: async () => ({ renderSolid: () => null }),
   }),
   removedGeneralRedirectPage,
   ...CONFIG_PAGE_IDS.map(configPage),

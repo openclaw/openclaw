@@ -134,3 +134,28 @@ export function formatGatewayRestartFailure(params: {
     failMessage: `Gateway restart timed out after ${timeoutSeconds}s waiting for health checks.`,
   };
 }
+
+export function getGatewayChannelWarnings(
+  health: Pick<
+    GatewayRestartSnapshot,
+    "channelProbeErrors" | "channelProbeTimeouts" | "channelRuntimeWarnings"
+  >,
+  http?: { failingChannels?: string[] },
+): Array<{ id: string; error: string }> {
+  const warnings = new Map<string, { id: string; error: string }>();
+  for (const warning of [
+    ...(health.channelProbeErrors ?? []),
+    ...(health.channelProbeTimeouts ?? []),
+    ...(health.channelRuntimeWarnings ?? []),
+  ]) {
+    if (!warnings.has(warning.id)) {
+      warnings.set(warning.id, warning);
+    }
+  }
+  for (const id of http?.failingChannels ?? []) {
+    if (![...warnings.keys()].some((key) => key === id || key.startsWith(`${id}/`))) {
+      warnings.set(id, { id, error: "channel readiness unavailable" });
+    }
+  }
+  return [...warnings.values()];
+}

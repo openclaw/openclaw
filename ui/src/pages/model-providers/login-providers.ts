@@ -1,13 +1,21 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type {
   ModelAuthStatusResult,
   ProviderLoginOption,
   SystemAgentSetupDetectResult,
 } from "../../api/types.ts";
-import { providerDisplayLabel } from "../../components/provider-icon.ts";
+import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { t } from "../../i18n/index.ts";
+import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
+import { resolveAgentConfig, resolveModelPrimary } from "../../lib/agents/display.ts";
+import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
+
+registerModelSetupEnglish();
 
 type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
   kind: ProviderLoginOption["kind"] | "setup-secret";
+  authProvider: string;
 };
 
 type LoginProvider = {
@@ -48,19 +56,20 @@ export function buildLoginProviders({
     if (providers && !providers.includes(capability.provider)) {
       continue;
     }
-    for (const option of capability.loginOptions ?? []) {
+    const loginOptions = capability.loginOptions ?? [];
+    for (const option of loginOptions) {
       const group = ensureGroup(option.brandId, capability.provider);
       group.label ||= option.groupLabel?.trim() ?? "";
       if (!choices.has(option.id)) {
         choices.add(option.id);
-        group.choices.push(option);
+        group.choices.push({ ...option, authProvider: capability.provider });
       }
     }
     // Quick-key support is independent of wizard choices. Keep the exact
     // capability owner for the key form even when its login brand is an alias.
     if (capability.quickApiKeySetup && allowQuickApiKey) {
-      const brands = capability.loginOptions?.length
-        ? capability.loginOptions.map((option) => option.brandId)
+      const brands = loginOptions.length
+        ? loginOptions.map((option) => option.brandId)
         : [capability.provider];
       for (const id of new Set(brands)) {
         const group = ensureGroup(id, capability.provider);
@@ -79,6 +88,7 @@ export function buildLoginProviders({
     group.choices.push({
       ...option,
       brandId: id,
+      authProvider: id,
       kind: "setup-secret",
       featured: false,
       ...(duplicateLabel
@@ -96,4 +106,36 @@ export function buildLoginProviders({
   return [...groups.values()].toSorted(
     (a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id),
   );
+}
+
+export function resolveLoginSelection(
+  config: Record<string, unknown> | null,
+  agentId: string | null,
+  authStatus?: ModelAuthStatusResult | null,
+) {
+  const { entry, defaults } = resolveAgentConfig(config, agentId ?? "");
+  const modelRef = resolveModelPrimary(entry?.model) ?? resolveModelPrimary(defaults?.model);
+  if (!modelRef || !authStatus?.ts || authStatus.unavailable) {
+    return { modelRef, missing: null };
+  }
+  const { model, profile } = splitTrailingAuthProfile(modelRef);
+  const slash = model.indexOf("/");
+  if (
+    !profile ||
+    slash < 1 ||
+    authStatus.providers.some((provider) =>
+      provider.profiles.some((candidate) => candidate.profileId === profile),
+    )
+  ) {
+    return { modelRef, missing: null };
+  }
+  const modelProvider = normalizeProviderId(model.slice(0, slash));
+  const authProvider =
+    authStatus.providers.find(
+      (provider) => normalizeProviderId(provider.provider) === modelProvider,
+    )?.authProvider ?? modelProvider;
+  return {
+    modelRef,
+    missing: { model, provider: canonicalModelAuthProviderId(modelProvider), authProvider },
+  };
 }

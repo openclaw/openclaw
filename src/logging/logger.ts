@@ -21,6 +21,7 @@ import {
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { DEFAULT_POSIX_TMP_ROOT } from "../infra/tmp-openclaw-dir.js";
+import { readParsedField } from "../utils/string-readers.js";
 import { invalidateLoggingConfigCache, readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, isLogLevelEnabled, levelToMinLevel, normalizeLogLevel } from "./levels.js";
@@ -30,15 +31,9 @@ import {
   resolveDefaultRollingLogFile,
 } from "./log-file-path.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
-import { buildFileLogMessage, type FileLogMessagePart } from "./logger-file-message.js";
-import { fileLogTransport } from "./logger-file-transport.js";
-import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
-import {
-  redactSecrets,
-  redactSensitiveText,
-  resolveFileLogRedactOptions,
-  serializeRedactedFileLogRecord,
-} from "./redact.js";
+import { serializeFileLogRecord, type FileLogMessagePart } from "./logger-file-message.js";
+import { ensureLogDirectorySync, fileLogTransport } from "./logger-file-transport.js";
+import { redactSecrets, redactSensitiveText } from "./redact.js";
 import { APPLIED_LOGGING_CONFIG_UNOWNED, loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
@@ -61,11 +56,6 @@ type ResolvedSettings = {
 type ResolvedRuntimeSettings = ResolvedSettings & { rolling: boolean };
 export type LoggerResolvedSettings = ResolvedSettings;
 type TsLogRecord = Record<string, unknown>;
-
-type DiagnosticLogCode = {
-  line?: number;
-  functionName?: string;
-};
 
 const MAX_DIAGNOSTIC_LOG_BINDINGS_JSON_CHARS = 8 * 1024;
 const MAX_DIAGNOSTIC_LOG_MESSAGE_CHARS = 4 * 1024;
@@ -213,14 +203,9 @@ function readFirstContextString(
   keys: readonly string[],
 ): string | undefined {
   for (const source of sources) {
-    if (!source) {
-      continue;
-    }
-    for (const key of keys) {
-      const value = normalizeFileLogContextValue(source[key]);
-      if (value) {
-        return value;
-      }
+    const value = source ? readParsedField(source, keys, normalizeFileLogContextValue) : undefined;
+    if (value) {
+      return value;
     }
   }
   return undefined;
@@ -371,7 +356,10 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
   addDiagnosticLogAttributesFrom(attributes, attributeState, bindings);
   addDiagnosticLogAttributesFrom(attributes, attributeState, structuredBindings);
 
-  const code: DiagnosticLogCode = {};
+  const code: {
+    line?: number;
+    functionName?: string;
+  } = {};
   if (meta?.path?.fileLine) {
     const line = Number(meta.path.fileLine);
     if (Number.isFinite(line)) {
@@ -477,10 +465,10 @@ function resolveSettings(): ResolvedRuntimeSettings {
   return { level, file, maxFileBytes, rolling };
 }
 
-setLoggerFileTargetResolver(() => {
+export function getResolvedLoggerFileTarget(): { file: string; rolling: boolean } {
   const { file, rolling } = resolveSettings();
   return { file, rolling };
-});
+}
 
 function getRuntimeSettings(): ResolvedRuntimeSettings {
   const settings =
@@ -537,7 +525,7 @@ function buildLogger(): TsLogger<LogObj> {
   inheritLogLevel(logger, () => levelToMinLevel(getRuntimeSettings().level));
   let activeFile: string | undefined;
   logger.attachTransport({
-    // OpenClaw owns redacted serialization; tslog's formatted line is unused.
+    // OpenClaw owns JSON serialization; tslog's formatted line is unused.
     format: () => "",
     write: (logObj: LogObj) => {
       try {
@@ -548,24 +536,25 @@ function buildLogger(): TsLogger<LogObj> {
         const nextActiveFile = resolveActiveLogFileWithMode(settings.file, settings.rolling);
         if (nextActiveFile !== activeFile) {
           activeFile = nextActiveFile;
-          fs.mkdirSync(path.dirname(activeFile), { recursive: true });
-          if (settings.rolling) {
-            pruneOldRollingLogs(path.dirname(activeFile));
+          try {
+            ensureLogDirectorySync(path.dirname(activeFile));
+            if (settings.rolling) {
+              pruneOldRollingLogs(path.dirname(activeFile));
+            }
+          } catch {
+            // Still enqueue: the failed append reports this record through the transport warning.
           }
         }
         const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
         const { fields, messageParts } = prepareFileLogRecord(logObj as TsLogRecord);
-        const line = serializeRedactedFileLogRecord(
+        const line = serializeFileLogRecord(
           {
             ...logObj,
             _meta: withResolvedLogMetaHostname(logObj["_meta"], fields.hostname),
             time,
             ...fields,
           },
-          {
-            deriveMessage: (materialized) => buildFileLogMessage(materialized, messageParts),
-            decodedOptions: resolveFileLogRedactOptions(),
-          },
+          messageParts,
         );
         fileLogTransport.enqueue({
           file: activeFile,

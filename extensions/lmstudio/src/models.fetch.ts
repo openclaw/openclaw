@@ -56,22 +56,6 @@ export class LmstudioModelLoadError extends Error {
   }
 }
 
-type FetchLmstudioModelsResult = {
-  reachable: boolean;
-  status?: number;
-  models: LmstudioModelWire[];
-  error?: unknown;
-};
-
-type DiscoverLmstudioModelsParams = {
-  baseUrl: string;
-  apiKey: string;
-  headers?: Record<string, string>;
-  quiet: boolean;
-  discoveryMode?: "strict";
-  fetchImpl?: typeof fetch;
-};
-
 async function fetchLmstudioEndpoint(params: {
   url: string;
   init?: RequestInit;
@@ -128,7 +112,12 @@ export async function fetchLmstudioModels(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
-}): Promise<FetchLmstudioModelsResult> {
+}): Promise<{
+  reachable: boolean;
+  status?: number;
+  models: LmstudioModelWire[];
+  error?: unknown;
+}> {
   const baseUrl = resolveLmstudioServerBase(params.baseUrl);
   const timeoutMs = params.timeoutMs ?? 5000;
   try {
@@ -180,9 +169,15 @@ export async function fetchLmstudioModels(params: {
   }
 }
 
-export async function discoverLmstudioModels(
-  params: DiscoverLmstudioModelsParams,
-): Promise<ModelDefinitionConfig[]> {
+export async function discoverLmstudioModels(params: {
+  onListedModels?: (models: LmstudioModelWire[]) => void;
+  baseUrl: string;
+  apiKey: string;
+  headers?: Record<string, string>;
+  quiet: boolean;
+  discoveryMode?: "strict";
+  fetchImpl?: typeof fetch;
+}): Promise<ModelDefinitionConfig[]> {
   const fetched = await fetchLmstudioModels({
     baseUrl: params.baseUrl,
     apiKey: params.apiKey,
@@ -204,6 +199,7 @@ export async function discoverLmstudioModels(
     return [];
   }
 
+  params.onListedModels?.(fetched.models);
   return mapLmstudioWireModels(fetched.models, "runtime");
 }
 

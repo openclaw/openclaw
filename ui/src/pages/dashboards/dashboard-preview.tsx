@@ -1,48 +1,33 @@
 import { createErrorBoundary } from "@solidjs/signals";
 import { createSignal, lazy, Loading, onSettled, Show } from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { NearViewportObserver } from "../../components/near-viewport-observer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { observeIntersection } from "../../lib/reactive/observers.ts";
 
 const BoardDocument = lazy(() => import("../../components/board/board-document.tsx"), {
   export: "OpenClawBoardDocument",
 });
 
-export type DashboardPreviewProps = {
+export function DashboardPreview(props: {
   gatewaySnapshot?: ApplicationGatewaySnapshot;
   sessionKey?: string;
   agentId?: string;
-  error?: string | null;
-};
-
-export function DashboardPreviewContent(props: DashboardPreviewProps, host: HTMLElement) {
+}) {
+  let host!: HTMLElement;
   const [nearVisible, setNearVisible] = createSignal(false);
-  onSettled(() => {
-    let active = true;
-    const visibility = new NearViewportObserver(200, () => {
-      if (active) {
-        setNearVisible(visibility.nearVisible);
-      }
-    });
-    // Bounds before the first paint would activate every gallery preview at once.
-    const frame = window.requestAnimationFrame(() => visibility.observe(host));
-    return () => {
-      active = false;
-      window.cancelAnimationFrame(frame);
-      visibility.disconnect();
-    };
-  });
+  onSettled(() =>
+    observeIntersection([host], (entries) => setNearVisible(entries.at(-1)!.isIntersecting), {
+      rootMargin: "200px 0px",
+    }),
+  );
   return (
-    <Show when={nearVisible()}>
-      <Show
-        when={!props.error}
-        fallback={
-          <div class="dashboard-preview__error">
-            {t("dashboardDocument.loadFailed", { error: props.error ?? "" })}
-          </div>
-        }
-      >
+    <openclaw-dashboard-preview
+      ref={(element) => {
+        host = element;
+      }}
+    >
+      <Show when={nearVisible()}>
         <>
           {createErrorBoundary(
             () => (
@@ -62,6 +47,14 @@ export function DashboardPreviewContent(props: DashboardPreviewProps, host: HTML
           )}
         </>
       </Show>
-    </Show>
+    </openclaw-dashboard-preview>
   );
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-dashboard-preview": HTMLAttributes<HTMLElement>;
+    }
+  }
 }

@@ -77,7 +77,6 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
         references: number[];
         subject: string;
       }>;
-      coauthorsByReference: Map<number, Set<string>>;
       pullRequests: Set<number>;
       target: string;
     };
@@ -143,6 +142,7 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
     nodes: Map<number, unknown>,
     mainCommit: string,
     isMainAncestor?: (ancestor: string, descendant: string) => boolean,
+    resolveNodes?: (numbers: number[]) => Map<number, unknown>,
   ): void;
   export function ledgerFor(...args: unknown[]): {
     entries: unknown[];

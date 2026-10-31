@@ -1,30 +1,30 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { attemptMemoryCorpus, runMemoryCorpusDeadline } from "./memory-corpus.js";
 
+beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
+const search = <T>(
+  run: Parameters<typeof runMemoryCorpusDeadline<T>>[0]["run"],
+  parentSignal?: AbortSignal,
+) => runMemoryCorpusDeadline({ operation: "memory_search", parentSignal, run });
+const partial = ["keyword match"];
+const attempt = (signal: AbortSignal, run: () => Promise<string[]>) =>
+  attemptMemoryCorpus({ signal, getPartialValue: () => partial, run });
+
 it.each(["timer", "event-loop"] as const)(
   "retains completed results when the %s reaches the corpus deadline",
   async (clock) => {
-    vi.useFakeTimers();
     const pending = createDeferred<string[]>();
-    const partial = ["permitted keyword match"];
     const startedAt = performance.now();
     let signal: AbortSignal | undefined;
-    const result = runMemoryCorpusDeadline({
-      operation: "memory_search",
-      run: async (currentSignal) => {
-        signal = currentSignal;
-        return await attemptMemoryCorpus({
-          signal: currentSignal,
-          getPartialValue: () => partial,
-          run: () => pending.promise,
-        });
-      },
+    const result = search((current) => {
+      signal = current;
+      return attempt(current, () => pending.promise);
     });
     if (clock === "timer") {
       await vi.advanceTimersByTimeAsync(30_000);
@@ -46,95 +46,48 @@ it.each(["timer", "event-loop"] as const)(
 it("does not replace a caller failure with partial results", async () => {
   const parent = new AbortController();
   const failure = new Error("memory_search timed out after 30s");
-  const result = runMemoryCorpusDeadline({
-    operation: "memory_search",
-    parentSignal: parent.signal,
-    run: async (signal) =>
-      await attemptMemoryCorpus({
-        signal,
-        getPartialValue: () => ["keyword match"],
-        run: async () => {
-          parent.abort(failure);
-          throw failure;
-        },
+  const result = search(
+    (signal) =>
+      attempt(signal, async () => {
+        parent.abort(failure);
+        throw failure;
       }),
-  });
+    parent.signal,
+  );
   await expect(result).rejects.toBe(failure);
 });
 
-it("exempts a paused owned phase from the corpus deadline", async () => {
-  vi.useFakeTimers();
-  const result = await runMemoryCorpusDeadline({
-    operation: "memory_search",
-    run: async (signal, control) => {
-      control.report("pause");
-      // A managed local service may take longer than the whole-search budget to
-      // become ready; that wait is owned by localService.readyTimeoutMs.
-      await vi.advanceTimersByTimeAsync(60_000);
-      control.report("resume");
-      expect(signal.aborted).toBe(false);
-      return "ok";
-    },
-  });
-  expect(result).toBe("ok");
-});
-
-it("re-arms the banked budget when an owned phase completes", async () => {
-  vi.useFakeTimers();
-  let signal: AbortSignal | undefined;
-  const result = runMemoryCorpusDeadline({
-    operation: "memory_search",
-    run: async (currentSignal, control) => {
-      signal = currentSignal;
-      await vi.advanceTimersByTimeAsync(5_000);
-      control.report("pause");
-      await vi.advanceTimersByTimeAsync(60_000);
-      control.report("resume");
-      // Only the 25s banked before the pause remains for post-readiness work.
-      await vi.advanceTimersByTimeAsync(24_999);
-      expect(currentSignal.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(2);
-      currentSignal.throwIfAborted();
-      return "late";
-    },
-  });
-  await expect(result).rejects.toThrow("memory_search timed out after 30s");
-  expect(signal?.aborted).toBe(true);
-});
-
-it("expires immediately when the budget is already consumed at pause time", async () => {
-  vi.useFakeTimers();
+it.each(["banked", "consumed"])("preserves the %s budget across a pause", async (budget) => {
   const startedAt = performance.now();
-  let signal: AbortSignal | undefined;
-  const result = runMemoryCorpusDeadline({
-    operation: "memory_search",
-    run: async (currentSignal, control) => {
-      signal = currentSignal;
-      // The overdue timer may not be serviced yet when the owned phase starts.
+  const result = search(async (signal, control) => {
+    if (budget === "consumed") {
+      // The overdue timer has not been serviced when the owned phase starts.
       vi.spyOn(performance, "now").mockReturnValue(startedAt + 30_000);
-      control.report("pause");
-      currentSignal.throwIfAborted();
-      return "unreachable";
-    },
+    } else {
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    control.report("pause");
+    if (budget === "banked") {
+      await vi.advanceTimersByTimeAsync(60_000);
+      control.report("resume");
+      await vi.advanceTimersByTimeAsync(24_999);
+      expect(signal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(2);
+    }
+    expect(signal.aborted).toBe(true);
+    signal.throwIfAborted();
   });
   await expect(result).rejects.toThrow("memory_search timed out after 30s");
-  expect(signal?.aborted).toBe(true);
 });
 
 it("keeps caller cancellation immediate while the deadline is paused", async () => {
-  vi.useFakeTimers();
   const parent = new AbortController();
   const callerError = new Error("caller cancelled");
-  const result = runMemoryCorpusDeadline({
-    operation: "memory_search",
-    parentSignal: parent.signal,
-    run: async (signal, control) => {
-      control.report("pause");
-      await vi.advanceTimersByTimeAsync(60_000);
-      parent.abort(callerError);
-      signal.throwIfAborted();
-      return "unreachable";
-    },
-  });
+  const result = search(async (signal, control) => {
+    control.report("pause");
+    await vi.advanceTimersByTimeAsync(60_000);
+    parent.abort(callerError);
+    signal.throwIfAborted();
+  }, parent.signal);
   await expect(result).rejects.toBe(callerError);
 });

@@ -73,7 +73,7 @@ export async function findDeliveryIntentOwner(
 }
 
 /** Resolve one ordered batch without reopening the store for each intent. */
-export async function findDeliveryIntentOwners(
+async function findDeliveryIntentOwners(
   ids: readonly string[],
   stateDir?: string,
   context?: DeliveryQueueStateContext,
@@ -267,8 +267,6 @@ export async function enqueuePreparedDeliveryOnce(
   return { id: normalizedId, created: true };
 }
 
-export { hasActiveDeliveryOwner } from "./delivery-queue-types.js";
-
 /** Update retry evidence on the queue worker's exact namespace and claim. */
 function deliveryFailureRecorder(kind: "fail" | "fail-before-send" | "fail-after-send") {
   return async (
@@ -388,9 +386,6 @@ async function readOutboundDeliveries(
   );
   if (!reply) {
     return [];
-  }
-  if (!reply.ok || reply.type !== "deliveryQueue.outbound") {
-    throw new Error("Unexpected outbound queue read result");
   }
   return reply.entries.map(({ queueName, entry }) => projectOutboundDelivery(queueName, entry));
 }

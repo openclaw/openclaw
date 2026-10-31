@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { MessagePort } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
@@ -12,6 +16,8 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import * as stateWorkerStore from "../state/openclaw-state-worker-store.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { ExecApprovalManager, type ExecApprovalRecord } from "./exec-approval-manager.js";
 import { installTestApprovalClock } from "./exec-approval-manager.test-support.js";
@@ -31,7 +37,6 @@ import {
 import * as operatorApprovalStore from "./operator-approval-store.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
-import type { GatewayClient } from "./server-methods/types.js";
 
 const SIBLING_SESSION_KEY = "agent:main:parent:sibling";
 const tempDirs: string[] = [];
@@ -41,34 +46,24 @@ type NewOperatorApproval = Parameters<typeof insertOperatorApproval>[0]["approva
 function createDatabaseOptions(): OpenClawStateDatabaseOptions {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-events-"));
   tempDirs.push(stateDir);
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
 
-function createRuntime(params: {
-  clients: GatewayClient[];
-  databaseOptions?: OpenClawStateDatabaseOptions;
-  now?: () => number;
-  controlUiBasePath?: string;
-  reconcileTerminal?: Parameters<
-    typeof createOperatorApprovalSessionEventRuntime
-  >[0]["reconcileTerminal"];
-  getLiveManager?: Parameters<
-    typeof createOperatorApprovalSessionEventRuntime
-  >[0]["getLiveManager"];
-  isCurrent?: () => boolean;
-}) {
+function createRuntime(
+  params: Omit<
+    Parameters<typeof createOperatorApprovalSessionEventRuntime>[0],
+    "sessionMessageSubscribers" | "broadcastToConnIds"
+  > & { now?: () => number },
+) {
+  const { now = Date.now, ...runtimeParams } = params;
+  vi.spyOn(Date, "now").mockImplementation(now);
   const subscribers = createSessionMessageSubscriberRegistry();
   const broadcastToConnIds = vi.fn<GatewayBroadcastToConnIdsFn>();
   const runtime = createOperatorApprovalSessionEventRuntime({
-    clients: params.clients,
+    ...runtimeParams,
     sessionMessageSubscribers: subscribers,
     broadcastToConnIds,
-    databaseOptions: params.databaseOptions,
-    controlUiBasePath: params.controlUiBasePath,
-    now: params.now,
-    reconcileTerminal: params.reconcileTerminal,
-    getLiveManager: params.getLiveManager,
-    isCurrent: params.isCurrent,
   });
   return {
     broadcastToConnIds,
@@ -87,12 +82,17 @@ function createRuntime(params: {
 async function insertPendingApproval(params: {
   databaseOptions: OpenClawStateDatabaseOptions;
   id: string;
-  audienceSessionKeys: string[];
-  createdAtMs: number;
-  expiresAtMs: number;
+  audienceSessionKeys?: string[];
+  createdAtMs?: number;
+  expiresAtMs?: number;
   reviewerDeviceIds?: string[];
 }): Promise<OperatorApprovalRecord> {
-  const record = createPendingRecord(params);
+  const record = createPendingRecord({
+    audienceSessionKeys: [SOURCE_SESSION_KEY],
+    createdAtMs: 1_000,
+    expiresAtMs: 10_000,
+    ...params,
+  });
   const approval: NewOperatorApproval = {
     id: record.id,
     kind: record.kind,
@@ -115,6 +115,25 @@ async function insertPendingApproval(params: {
   return inserted.record;
 }
 
+function createReviewer(connId = "reviewer", deviceId = "reviewer-device") {
+  return createClient({ connId, scopes: ["operator.approvals"], deviceId });
+}
+
+function holdReplay() {
+  const selected = createDeferredCore();
+  const reply = createDeferredCore();
+  const prepare = operatorApprovalStore.prepareOperatorApprovalReplay;
+  const spy = vi
+    .spyOn(operatorApprovalStore, "prepareOperatorApprovalReplay")
+    .mockImplementationOnce(async (params) => {
+      const records = await prepare(params);
+      selected.resolve();
+      await reply.promise;
+      return records;
+    });
+  return { selected, reply, spy };
+}
+
 describe("operator approval session events", () => {
   afterEach(async () => {
     for (const unsubscribe of subscriptions.splice(0)) {
@@ -124,6 +143,7 @@ describe("operator approval session events", () => {
     vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { force: true, recursive: true });
     }
@@ -134,22 +154,10 @@ describe("operator approval session events", () => {
     (phase) => {
       const clients = [
         createClient({ connId: "source-admin", scopes: ["operator.admin"] }),
-        createClient({
-          connId: "source-device",
-          scopes: ["operator.approvals"],
-          deviceId: "source-reviewer",
-        }),
+        createReviewer("source-device", "source-reviewer"),
         createClient({ connId: "source-no-device", scopes: ["operator.approvals"] }),
-        createClient({
-          connId: "source-unrelated-device",
-          scopes: ["operator.approvals"],
-          deviceId: "unrelated-device",
-        }),
-        createClient({
-          connId: "source-requester-device",
-          scopes: ["operator.approvals"],
-          deviceId: "requester-device",
-        }),
+        createReviewer("source-unrelated-device", "unrelated-device"),
+        createReviewer("source-requester-device", "requester-device"),
         createClient({
           connId: "source-no-scope",
           scopes: ["operator.read"],
@@ -161,11 +169,7 @@ describe("operator approval session events", () => {
           scopes: ["operator.admin"],
           invalidated: true,
         }),
-        createClient({
-          connId: "parent-device",
-          scopes: ["operator.approvals"],
-          deviceId: "parent-reviewer",
-        }),
+        createReviewer("parent-device", "parent-reviewer"),
         createClient({ connId: "sibling-admin", scopes: ["operator.admin"] }),
       ];
       const { broadcastToConnIds, runtime, subscribers } = createRuntime({
@@ -188,6 +192,7 @@ describe("operator approval session events", () => {
       subscribers.subscribe("sibling-admin", SIBLING_SESSION_KEY, { includeApprovals: true });
 
       const pending = createPendingRecord({
+        sourceSessionKey: "child",
         reviewerDeviceIds: ["source-reviewer", "parent-reviewer"],
       });
       const terminal = createTerminalRecord(pending);
@@ -245,36 +250,6 @@ describe("operator approval session events", () => {
     },
   );
 
-  it.each([
-    ["global", ["agent:main:global"], ["pending", "terminal"]],
-    ["child", ["agent:work:child", "agent:work:parent"], ["pending"]],
-  ] as const)(
-    "publishes the canonical audience source key for %s",
-    (sourceSessionKey, audience, phases) => {
-      const client = createClient({ connId: "admin", scopes: ["operator.admin"] });
-      const { broadcastToConnIds, runtime, subscribers } = createRuntime({ clients: [client] });
-      subscribers.subscribe("admin", audience[0], { includeApprovals: true });
-      const pending = createPendingRecord({ sourceSessionKey, audienceSessionKeys: [...audience] });
-      for (const phase of phases) {
-        runtime.publish({
-          phase,
-          record: phase === "pending" ? pending : createTerminalRecord(pending),
-        });
-      }
-      expect(broadcastToConnIds.mock.calls).toEqual(
-        phases.map((phase) => [
-          "session.approval",
-          expect.objectContaining({
-            sessionKey: audience[0],
-            sourceSessionKey: audience[0],
-            phase,
-          }),
-          new Set(["admin"]),
-        ]),
-      );
-    },
-  );
-
   it.each(["padded binding", "exact audience"] as const)(
     "replays the authorized pending set for %s",
     async (variant) => {
@@ -297,7 +272,6 @@ describe("operator approval session events", () => {
           databaseOptions,
           ...record,
           createdAtMs: 1_000 + index,
-          expiresAtMs: 10_000,
         });
       }
       if (padded) {
@@ -320,24 +294,15 @@ describe("operator approval session events", () => {
           }),
         ).toMatchObject({ outcome: "resolved" });
       }
-      const reviewer = createClient({
-        connId: "reviewer",
-        scopes: ["operator.approvals"],
-        deviceId: "reviewer-device",
-      });
-      const other = createClient({
-        connId: "other",
-        scopes: ["operator.approvals"],
-        deviceId: "unrelated-device",
-      });
+      const reviewerClient = createReviewer();
+      const other = createReviewer("other", "unrelated-device");
       const nowMs = padded ? 2_000 : 5_000;
       const { runtime } = createRuntime({
-        clients: padded ? [reviewer, other] : [],
-        databaseOptions,
+        clients: padded ? [reviewerClient, other] : [],
         controlUiBasePath: padded ? undefined : "/operator",
         now: () => nowMs,
       });
-      const { replay } = await runtime.replay(audience, reviewer);
+      const { replay } = await runtime.replay(audience, reviewerClient);
       if (padded) {
         expect(replay.approvals.map(({ id }) => id)).toEqual(["padded-reviewer"]);
         expect(
@@ -383,14 +348,134 @@ describe("operator approval session events", () => {
     },
   );
 
+  it("replays committed approvals while an unrelated shared-state writer is held", async ({
+    signal,
+  }) => {
+    const databaseOptions = createDatabaseOptions();
+    await insertPendingApproval({ databaseOptions, id: "committed-before-writer" });
+    const reviewer = createClient({ connId: "reviewer", scopes: ["operator.admin"] });
+    const { runtime } = createRuntime({ clients: [reviewer], now: () => 5_000 });
+    // Warm read admission before holding a real transaction on the same physical database.
+    (await runtime.replay(SOURCE_SESSION_KEY, reviewer)).release();
+    const held = createDeferredCore();
+    let releaseWriter: (() => void) | undefined;
+    // oxlint-disable-next-line typescript/unbound-method -- call below preserves the intercepted port receiver.
+    const onMessage = MessagePort.prototype.on;
+    // Hold delivery, not the grant callback: admission deliberately refuses an ungranted request.
+    const probe = vi.spyOn(MessagePort.prototype, "on").mockImplementation(function (
+      this: MessagePort,
+      event,
+      listener,
+    ) {
+      if (event !== "message") {
+        return onMessage.call(this, event, listener);
+      }
+      return onMessage.call(this, event, (message: unknown) => {
+        if (
+          isRecord(message) &&
+          message.stage === "transaction" &&
+          message.decision instanceof SharedArrayBuffer &&
+          !releaseWriter
+        ) {
+          releaseWriter = () => listener(message);
+          held.resolve();
+        } else {
+          listener(message);
+        }
+      });
+    });
+    const writerContext = captureOpenClawStateWorkerContext(databaseOptions);
+    // Use the physical writer independently of the approval API's logical FIFO.
+    const writing = stateWorkerStore.runOpenClawStateWorkerOperation(
+      writerContext,
+      (scope) =>
+        scope.execute({ type: "operatorApprovals.prepareReplay", input: { nowMs: 5_000 } }),
+      {
+        createAdmission: createSqliteWorkerWriteAdmission(writerContext.admission.assertCurrent, [
+          writerContext.admission.databasePath,
+        ]),
+      },
+    );
+    let replay: ReturnType<typeof runtime.replay> | undefined;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(held.promise, writing, "Writer did not reach its transaction"),
+        signal,
+      );
+      replay = runtime.replay(SOURCE_SESSION_KEY, reviewer);
+      const prepared = await withinTest(replay, signal);
+      expect(prepared.replay.approvals.map(({ id }) => id)).toEqual(["committed-before-writer"]);
+      expect(prepared.isCurrent()).toBe(true);
+    } finally {
+      releaseWriter?.();
+      probe.mockRestore();
+      await Promise.allSettled([writing, replay]);
+    }
+  });
+
+  it("reuses completed replay across a reconnect burst with interleaved audiences and reviewers", async () => {
+    const databaseOptions = createDatabaseOptions();
+    await insertPendingApproval({ databaseOptions, id: "reconnect-approval" });
+    const reviewer = createReviewer();
+    const other = createReviewer("other", "other-device");
+    let nowMs = 5_000;
+    const { runtime } = createRuntime({ clients: [reviewer, other], now: () => nowMs });
+    const prepare = vi.spyOn(operatorApprovalStore, "prepareOperatorApprovalReplay");
+    for (let index = 0; index < 40; index += 1) {
+      for (const [sessionKey, client, expectedIds] of [
+        [SOURCE_SESSION_KEY, reviewer, ["reconnect-approval"]],
+        [SIBLING_SESSION_KEY, reviewer, []],
+        [SOURCE_SESSION_KEY, other, []],
+      ] as const) {
+        const prepared = await runtime.replay(sessionKey, client);
+        expect(prepared.replay.approvals.map(({ id }) => id)).toEqual(expectedIds);
+        expect(prepared.isCurrent()).toBe(true);
+        prepared.release();
+      }
+    }
+    expect(prepare).toHaveBeenCalledTimes(3);
+    nowMs = 10_000;
+    const expired = await runtime.replay(SOURCE_SESSION_KEY, reviewer);
+    expect(expired.replay.approvals).toEqual([]);
+    expect(expired.isCurrent()).toBe(true);
+    expect(prepare).toHaveBeenCalledTimes(4);
+    expired.release();
+  });
+
+  it("bounds idle replay retention without evicting active replies and retries failures", async () => {
+    const databaseOptions = createDatabaseOptions();
+    await insertPendingApproval({ databaseOptions, id: "active-replay" });
+    const reviewer = createReviewer();
+    const { runtime } = createRuntime({ clients: [reviewer], now: () => 5_000 });
+    const prepare = vi.spyOn(operatorApprovalStore, "prepareOperatorApprovalReplay");
+    const active = await runtime.replay(SOURCE_SESSION_KEY, reviewer);
+    const idleKeys = Array.from({ length: 65 }, (_, index) => `agent:main:idle-${index}`);
+    for (const key of idleKeys) {
+      (await runtime.replay(key, reviewer)).release();
+    }
+    prepare.mockClear();
+    const joined = await runtime.replay(SOURCE_SESSION_KEY, reviewer);
+    expect(joined.replay.approvals.map(({ id }) => id)).toEqual(["active-replay"]);
+    expect(active.isCurrent()).toBe(true);
+    expect(prepare).not.toHaveBeenCalled();
+    prepare.mockRejectedValueOnce(new Error("approval store unavailable"));
+    await expect(runtime.replay(idleKeys[0]!, reviewer)).rejects.toThrow(
+      "approval store unavailable",
+    );
+    const retried = await runtime.replay(idleKeys[0]!, reviewer);
+    expect(retried.replay.approvals).toEqual([]);
+    expect(retried.isCurrent()).toBe(true);
+    expect(prepare).toHaveBeenCalledTimes(2);
+    active.release();
+    joined.release();
+    retried.release();
+  });
+
   it("shares only matching audiences and reviewers while checking each waiting client", async () => {
     const databaseOptions = createDatabaseOptions();
     await insertPendingApproval({
       databaseOptions,
       id: "shared-replay",
-      audienceSessionKeys: [SOURCE_SESSION_KEY],
-      createdAtMs: 1_000,
-      expiresAtMs: 10_000,
     });
     const clients = ["revoked", "retained", "other-reviewer"].map((connId) =>
       createClient({
@@ -399,18 +484,8 @@ describe("operator approval session events", () => {
         deviceId: connId === "other-reviewer" ? "other-device" : "reviewer-device",
       }),
     );
-    const { runtime } = createRuntime({ clients, databaseOptions, now: () => 5_000 });
-    const selected = createDeferredCore();
-    const reply = createDeferredCore();
-    const list = operatorApprovalStore.listPendingOperatorApprovals;
-    const delayed = vi
-      .spyOn(operatorApprovalStore, "listPendingOperatorApprovals")
-      .mockImplementationOnce(async (params) => {
-        const records = await list(params);
-        selected.resolve();
-        await reply.promise;
-        return records;
-      });
+    const { runtime } = createRuntime({ clients, now: () => 5_000 });
+    const { selected, reply, spy: delayed } = holdReplay();
     const revoked = runtime.replay(SOURCE_SESSION_KEY, clients[0]!);
     const rejected = expect(revoked).rejects.toThrow("replay authority is no longer current");
     const retained = runtime.replay(SOURCE_SESSION_KEY, clients[1]!);
@@ -432,15 +507,20 @@ describe("operator approval session events", () => {
       retainedReplay.release();
       retainedReplay.release();
       expect(retainedReplay.isCurrent()).toBe(false);
-      // Completed work is not cached: storage truth can change without a lifecycle publication.
-      const terminal = await resolveOperatorApproval({
+      // Store currency fences completed work even without a runtime lifecycle publication.
+      const decision = resolveOperatorApproval({
         id: "shared-replay",
         decision: "deny",
         resolver: { kind: "device", id: "reviewer-device" },
         nowMs: 5_001,
         databaseOptions,
       });
-      expect((await runtime.replay(SOURCE_SESSION_KEY, clients[1]!)).replay.approvals).toEqual([]);
+      expect(secondReplay.isCurrent()).toBe(false);
+      const reconnect = runtime.replay(SOURCE_SESSION_KEY, clients[1]!);
+      const [terminal, refreshed] = await Promise.all([decision, reconnect]);
+      expect(refreshed.replay.approvals).toEqual([]);
+      expect(refreshed.isCurrent()).toBe(true);
+      refreshed.release();
       if (terminal.outcome !== "resolved") {
         throw new Error("Expected terminal approval decision");
       }
@@ -454,38 +534,17 @@ describe("operator approval session events", () => {
     }
   });
 
-  it("invalidates a pending replay when a terminal event precedes the worker reply", async () => {
+  it("invalidates pending replay when a decision precedes the worker reply", async () => {
     const databaseOptions = createDatabaseOptions();
-    const pending = await insertPendingApproval({
-      databaseOptions,
-      id: "terminal-during-replay",
-      audienceSessionKeys: [SOURCE_SESSION_KEY],
-      createdAtMs: 1_000,
-      expiresAtMs: 10_000,
-    });
-    const reviewer = createClient({
-      connId: "reviewer",
-      scopes: ["operator.approvals"],
-      deviceId: "reviewer-device",
-    });
+    const pending = await insertPendingApproval({ databaseOptions, id: "terminal-during-replay" });
+    const reviewerClient = createReviewer();
     const { runtime, subscribers, broadcastToConnIds } = createRuntime({
-      clients: [reviewer],
-      databaseOptions,
+      clients: [reviewerClient],
       now: () => 5_000,
     });
     subscribers.subscribe("reviewer", SOURCE_SESSION_KEY, { includeApprovals: true });
-    const selected = createDeferredCore();
-    const reply = createDeferredCore();
-    const list = operatorApprovalStore.listPendingOperatorApprovals;
-    const delayedReply = vi
-      .spyOn(operatorApprovalStore, "listPendingOperatorApprovals")
-      .mockImplementationOnce(async (params) => {
-        const records = await list(params);
-        selected.resolve();
-        await reply.promise;
-        return records;
-      });
-    const preparation = runtime.replay(SOURCE_SESSION_KEY, reviewer);
+    const { selected, reply, spy: delayedReply } = holdReplay();
+    const preparation = runtime.replay(SOURCE_SESSION_KEY, reviewerClient);
     try {
       await selected.promise;
       const terminal = await resolveOperatorApproval({
@@ -506,7 +565,7 @@ describe("operator approval session events", () => {
       );
       reply.resolve();
       expect((await preparation).isCurrent()).toBe(false);
-      const prepared = await runtime.replay(SOURCE_SESSION_KEY, reviewer);
+      const prepared = await runtime.replay(SOURCE_SESSION_KEY, reviewerClient);
       expect(prepared.isCurrent()).toBe(true);
       expect(prepared.replay.approvals).toEqual([]);
       expect(delayedReply.mock.calls.length).toBe(2);
@@ -527,46 +586,26 @@ describe("operator approval session events", () => {
         databaseOptions,
         id,
         audienceSessionKeys: [SOURCE_SESSION_KEY, PARENT_SESSION_KEY],
-        createdAtMs: 1_000,
         expiresAtMs: 4_000,
         reviewerDeviceIds: [deviceId],
       });
-      const observer = createClient({
-        connId: "observer",
-        scopes: ["operator.approvals"],
-        deviceId,
-      });
-      const requester = revoked
-        ? createClient({ connId: "requester", scopes: ["operator.approvals"], deviceId })
-        : observer;
+      const observer = createReviewer("observer", deviceId);
+      const requester = revoked ? createReviewer("requester", deviceId) : observer;
       const { runtime, subscribers, broadcastToConnIds } = createRuntime({
         clients: revoked ? [requester, observer] : [observer],
-        databaseOptions,
         now: () => 5_000,
       });
       subscribers.subscribe("observer", PARENT_SESSION_KEY, { includeApprovals: true });
-      const committed = createDeferredCore();
-      const reply = createDeferredCore();
-      const expire = operatorApprovalStore.expireDueOperatorApprovals;
-      const delayedReply = revoked
-        ? vi
-            .spyOn(operatorApprovalStore, "expireDueOperatorApprovals")
-            .mockImplementationOnce(async (params) => {
-              const result = await expire(params);
-              committed.resolve();
-              await reply.promise;
-              return result;
-            })
-        : undefined;
+      const held = revoked ? holdReplay() : undefined;
       const preparation = runtime.replay(SOURCE_SESSION_KEY, requester);
       const rejected = revoked
         ? expect(preparation).rejects.toThrow("replay authority is no longer current")
         : undefined;
       try {
         if (revoked) {
-          await committed.promise;
+          await held?.selected.promise;
           requester.connect.scopes = [];
-          reply.resolve();
+          held?.reply.resolve();
           await rejected;
         } else {
           expect((await preparation).replay).toEqual({
@@ -593,26 +632,21 @@ describe("operator approval session events", () => {
           new Set(["observer"]),
         );
       } finally {
-        reply.resolve();
+        held?.reply.resolve();
         await preparation.catch(() => {});
-        delayedReply?.mockRestore();
+        held?.spy.mockRestore();
       }
     },
   );
 
   it("publishes expiry once when replay reconciliation joins a held manager mutation", async () => {
     const databaseOptions = createDatabaseOptions();
-    const reviewer = createClient({
-      connId: "reviewer",
-      scopes: ["operator.approvals"],
-      deviceId: "reviewer-device",
-    });
+    const reviewerClient = createReviewer();
     const managerHolder: { current?: ExecApprovalManager } = {};
     const reconciling = createDeferredCore();
     let replayAtMs = Date.now();
     const { runtime, subscribers, broadcastToConnIds } = createRuntime({
-      clients: [reviewer],
-      databaseOptions,
+      clients: [reviewerClient],
       now: () => replayAtMs,
       reconcileTerminal: (record) => {
         reconciling.resolve();
@@ -633,20 +667,10 @@ describe("operator approval session events", () => {
     const { decision } = await manager.register(record, 60_000);
     subscribers.subscribe("reviewer", SOURCE_SESSION_KEY, { includeApprovals: true });
     replayAtMs = record.expiresAtMs;
-    const sweepCommitted = createDeferredCore();
-    const releaseSweep = createDeferredCore();
+    const { selected: sweepCommitted, reply: releaseSweep, spy: delayedSweep } = holdReplay();
     const mutationCommitted = createDeferredCore();
     const releaseMutation = createDeferredCore();
-    const sweep = operatorApprovalStore.expireDueOperatorApprovals;
     const forceDeny = operatorApprovalStore.forceDenyOperatorApproval;
-    const delayedSweep = vi
-      .spyOn(operatorApprovalStore, "expireDueOperatorApprovals")
-      .mockImplementationOnce(async (params) => {
-        const result = await sweep(params);
-        sweepCommitted.resolve();
-        await releaseSweep.promise;
-        return result;
-      });
     const delayedMutation = vi
       .spyOn(operatorApprovalStore, "forceDenyOperatorApproval")
       .mockImplementationOnce(async (params) => {
@@ -655,7 +679,7 @@ describe("operator approval session events", () => {
         await releaseMutation.promise;
         return result;
       });
-    const replay = runtime.replay(SOURCE_SESSION_KEY, reviewer);
+    const replay = runtime.replay(SOURCE_SESSION_KEY, reviewerClient);
     let expiry: Promise<boolean> | undefined;
     try {
       await sweepCommitted.promise;
@@ -707,15 +731,9 @@ describe("operator approval session events", () => {
         }
       }),
     );
-    const parent = createClient({
-      connId: "parent-reviewer",
-      scopes: ["operator.approvals"],
-      deviceId: "parent-device",
-    });
+    const parent = createReviewer("parent-reviewer", "parent-device");
     const harness = createRuntime({
       clients: [parent],
-      databaseOptions,
-      now: () => Date.now(),
       reconcileTerminal: (record) =>
         managerHolder.current?.reconcileDurableTerminal(record) ?? false,
       getLiveManager: () => managerHolder.current,
@@ -738,6 +756,7 @@ describe("operator approval session events", () => {
     const record = manager.create(
       {
         command: "printf replay-expiry",
+        streamProposal: { jobId: "stream-attention", name: "Log watcher", operation: "add" },
         sessionKey: SOURCE_SESSION_KEY,
         sessionId: "approval-owner-session",
         runId: "approval-owner-run",

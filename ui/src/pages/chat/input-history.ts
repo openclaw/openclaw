@@ -41,34 +41,6 @@ export type ChatInputHistoryKeyResult = {
   restoreCaret: "up" | "down" | null;
 };
 
-function collectUserInputHistory(
-  messages: unknown[],
-  localEntries: ChatLocalInputHistoryEntry[],
-): string[] {
-  // Bound input recall independently from the transcript's loaded rendering depth.
-  const start = Math.max(0, messages.length - CHAT_INPUT_HISTORY_LIMIT);
-  const candidates: Array<{ text: string; ts: number }> = [...localEntries];
-  for (let i = messages.length - 1; i >= start; i--) {
-    const message = messages[i];
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    const entry = message as { role?: unknown; timestamp?: unknown };
-    const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
-    if (role !== "user") {
-      continue;
-    }
-    const text = extractText(message);
-    if (!text || !text.trim()) {
-      continue;
-    }
-    candidates.push({ text, ts: typeof entry.timestamp === "number" ? entry.timestamp : 0 });
-  }
-
-  candidates.sort((a, b) => b.ts - a.ts);
-  return [...new Set(candidates.map(({ text }) => text))];
-}
-
 export function recordNonTranscriptInputHistory(state: ChatInputHistoryState, text: string) {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -104,16 +76,37 @@ export function handleChatDraftChange(
 
 function ensureChatInputHistorySnapshot(state: ChatInputHistoryState): string[] {
   if (
+    state.chatInputHistoryIndex !== -1 &&
     state.chatInputHistoryItems !== null &&
     state.chatInputHistorySessionKey === state.sessionKey
   ) {
     return state.chatInputHistoryItems;
   }
   // Snapshot once per navigation round so incoming chat events don't shift arrow-key traversal order.
-  const items = collectUserInputHistory(
-    state.chatMessages,
-    state.chatLocalInputHistoryBySession[state.sessionKey] ?? [],
-  );
+  const messages = state.chatMessages;
+  const localEntries = state.chatLocalInputHistoryBySession[state.sessionKey] ?? [];
+  // Bound input recall independently from the transcript's loaded rendering depth.
+  const start = Math.max(0, messages.length - CHAT_INPUT_HISTORY_LIMIT);
+  const candidates: Array<{ text: string; ts: number }> = [...localEntries];
+  for (let i = messages.length - 1; i >= start; i--) {
+    const message = messages[i];
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const entry = message as { role?: unknown; timestamp?: unknown };
+    const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+    if (role !== "user") {
+      continue;
+    }
+    const text = extractText(message);
+    if (!text || !text.trim()) {
+      continue;
+    }
+    candidates.push({ text, ts: typeof entry.timestamp === "number" ? entry.timestamp : 0 });
+  }
+
+  candidates.sort((a, b) => b.ts - a.ts);
+  const items = [...new Set(candidates.map(({ text }) => text))];
   state.chatInputHistoryItems = items;
   state.chatInputHistorySessionKey = state.sessionKey;
   state.chatInputHistoryIndex = -1;

@@ -1,3 +1,4 @@
+import { generateMessageIDV2 } from "baileys";
 import type {
   AnyMessageContent,
   ConnectionState,
@@ -109,6 +110,8 @@ function shouldClearSocketRefAfterSendFailure(error: unknown): boolean {
 export async function createWhatsAppAttachedSocketSession(options: SocketSessionOptions) {
   const { sock } = options;
   const connectedAtMs = Date.now();
+  // Preserve the first-link history floor if sync finishes during attachment.
+  const hasSyncedHistory = sock.authState.creds.accountSyncCounter > 0;
   if (options.socketRef) {
     options.socketRef.current = sock;
   }
@@ -130,7 +133,6 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       sock,
       sendOperationTimeoutMs,
     ).sendPresenceUpdate(presence);
-    options.logVerbose(`Sent global '${presence}' presence on connect`);
   } catch (error) {
     options.logVerbose(`Failed to send '${presence}' presence on connect: ${String(error)}`);
   }
@@ -241,9 +243,6 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
   const fetchReachoutTimeLock = async (
     currentSock: WASocket,
   ): Promise<ReachoutTimelockState | undefined> => {
-    if (typeof currentSock.fetchAccountReachoutTimelock !== "function") {
-      return undefined;
-    }
     if (!reachoutTimeLockFetch) {
       reachoutTimeLockFetch = currentSock
         .fetchAccountReachoutTimelock()
@@ -313,6 +312,12 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     content: AnyMessageContent,
     sendOptions?: MiscMessageGenerationOptions,
   ) => {
+    // One logical send keeps its identity even if an ambiguous failure changes sockets.
+    // Baileys treats an empty caller ID as missing, so pin that fallback before retrying.
+    const trackedOptions: MiscMessageGenerationOptions = {
+      ...sendOptions,
+      messageId: sendOptions?.messageId || generateMessageIDV2(getCurrentSock()?.user?.id),
+    };
     let lastError: unknown = new Error(RECONNECT_IN_PROGRESS_ERROR);
     for (let attempt = 1; ; attempt += 1) {
       const currentSock = getCurrentSock();
@@ -322,7 +327,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
           const result = await currentSocketOperations(currentSock).sendMessage(
             jid,
             content,
-            sendOptions,
+            trackedOptions,
           );
           rememberOutboundMessage(jid, result);
           return result;
@@ -420,6 +425,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
 
   return {
     connectedAtMs,
+    hasSyncedHistory,
     self,
     onClose,
     signalClose: (reason?: WebListenerCloseReason) => {

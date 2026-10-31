@@ -55,7 +55,7 @@ export function validateSessionPatchAdmission(params: {
     return invalid(MODEL_SELECTION_LOCKED_MESSAGE);
   }
   if (typeof patch.agentRuntime === "string" && typeof patch.model !== "string") {
-    return invalid("agentRuntime requires an explicit canonical provider/model selection");
+    return invalid("agentRuntime requires an explicit provider/model selection using full IDs");
   }
   return undefined;
 }

@@ -13,11 +13,12 @@ import type {
 export function sameWorktree(
   row: PublicationRow,
   worktree: Awaited<ReturnType<typeof readGitHubPublicationWorktreeOwner>>["worktree"],
+  publicationBranch = worktree.branch,
 ): boolean {
   return (
     row.worktree_id === worktree.id &&
     row.repository_fingerprint === worktree.repoFingerprint &&
-    row.branch === worktree.branch
+    row.branch === publicationBranch
   );
 }
 
@@ -32,7 +33,8 @@ export async function prepareGitHubPublicationClaimWorkspace(
   }
   await params.placements.prepareWorkspaceResultClaim(claim);
   const first = rows[0]!;
-  const worktreeOwner = await readGitHubPublicationWorktreeOwner({
+  using worktreeOwner = await readGitHubPublicationWorktreeOwner({
+    allowExistingPullRequest: true,
     sessionId: first.session_id,
     sessionKey: first.session_key,
     agentId: first.agent_id,
@@ -42,12 +44,13 @@ export async function prepareGitHubPublicationClaimWorkspace(
       branch: first.branch,
     },
   });
+
   const { worktree } = worktreeOwner;
   if (!params.placements.validateWorkspaceResultClaim(claim)) {
     throw new Error("GitHub publication lost its workspace result claim before snapshot.");
   }
   for (const row of rows) {
-    if (!sameWorktree(row, worktree)) {
+    if (!sameWorktree(row, worktree, worktreeOwner.publicationBranch)) {
       throw new Error("GitHub publication worktree changed before accepted snapshot.");
     }
   }

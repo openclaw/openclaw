@@ -28,6 +28,9 @@ mode="${1:-}"
 script_dir="$(cd "$(dirname "$(shell_path "${BASH_SOURCE[0]}")")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 invocation_root="$(pwd)"
+# Release workflows run trusted tooling from the candidate checkout. tsx would
+# otherwise resolve tooling workspace imports through the candidate's tsconfig paths.
+export TSX_TSCONFIG_PATH="${repo_root}/tsconfig.json"
 
 if [[ "${mode}" != "--dry-run" && "${mode}" != "--publish" && "${mode}" != "--pack" &&
   "${mode}" != "--validate-packed" && "${mode}" != "--publish-packed" ]]; then
@@ -130,8 +133,8 @@ source_ref="${SOURCE_REF:-$(git -C "${invocation_root}" symbolic-ref -q HEAD || 
 clawhub_workdir="${CLAWDHUB_WORKDIR:-${CLAWHUB_WORKDIR:-${invocation_root}}}"
 manual_override_reason="${OPENCLAW_CLAWHUB_MANUAL_OVERRIDE_REASON:-}"
 package_family="${OPENCLAW_CLAWHUB_PACKAGE_FAMILY:-}"
-if [[ -n "${package_family}" && "${package_family}" != "bundle-plugin" ]]; then
-  echo "OPENCLAW_CLAWHUB_PACKAGE_FAMILY must be bundle-plugin when set." >&2
+if [[ -n "${package_family}" && "${package_family}" != "bundle-plugin" && "${package_family}" != "code-plugin" ]]; then
+  echo "OPENCLAW_CLAWHUB_PACKAGE_FAMILY must be code-plugin or bundle-plugin when set." >&2
   exit 2
 fi
 release_git_dir="${OPENCLAW_CLAWHUB_RELEASE_GIT_DIR:-}"

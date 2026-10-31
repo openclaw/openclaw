@@ -13,11 +13,31 @@ import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsConfig, TtsMode, TtsProvider } from "../config/types.tts.js";
 import { mergeDeep } from "../infra/deep-merge.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 import type { PreparedTtsPreferences } from "./tts-preferences.js";
 export { normalizeTtsAutoMode } from "./tts-auto-mode.js";
+
+const TTS_CONFIG_RESERVED_KEYS = new Set([
+  "auto",
+  "enabled",
+  "maxTextLength",
+  "mode",
+  "modelOverrides",
+  "persona",
+  "personas",
+  "prefsPath",
+  "provider",
+  "providers",
+  "summaryModel",
+  "timeoutMs",
+]);
+
+export function isTtsConfigReservedKey(key: string): boolean {
+  return TTS_CONFIG_RESERVED_KEYS.has(key);
+}
 
 /** Routing context used to layer global, agent, channel, and account TTS config. */
 export type TtsConfigResolutionContext = {
@@ -109,10 +129,22 @@ export type TtsUserPrefs = {
   };
 };
 
-export function readTtsPrefs(prefsPath: string): TtsUserPrefs {
+export function readTtsPrefs(prefsPath: string, options?: { forUpdate?: boolean }): TtsUserPrefs {
   try {
     return asNonArrayRecord(JSON.parse(readFileSync(prefsPath, "utf8"))) as TtsUserPrefs;
-  } catch {
+  } catch (cause) {
+    if (hasErrnoCode(cause, "ENOENT")) {
+      // Missing preferences are a normal first-run state.
+      return {};
+    }
+    const error = new Error(
+      `Unable to read TTS preferences at ${prefsPath}. Repair the file or its permissions.`,
+      { cause },
+    );
+    if (options?.forUpdate) {
+      throw error;
+    }
+    console.warn(`[tts] ${error.message} Using configured defaults.`);
     return {};
   }
 }
@@ -138,11 +170,15 @@ export function shouldAttemptTtsPayload(params: {
   accountId?: string;
 }): boolean {
   const sessionAuto = normalizeTtsAutoMode(params.ttsAuto);
-  if (sessionAuto) {
-    return sessionAuto !== "off";
-  }
+  return sessionAuto
+    ? sessionAuto !== "off"
+    : shouldAttemptConfiguredTtsPayload(params, resolveEffectiveTtsConfig(params.cfg, params));
+}
 
-  const raw = resolveEffectiveTtsConfig(params.cfg, params);
+function shouldAttemptConfiguredTtsPayload(
+  params: Parameters<typeof shouldAttemptTtsPayload>[0],
+  raw: TtsConfig,
+): boolean {
   const scopedPrefsPath = (raw as TtsConfig & { prefsPath?: string }).prefsPath;
   const prefsAuto = resolveTtsAutoModeFromPrefs(
     readTtsPrefs(
@@ -152,23 +188,20 @@ export function shouldAttemptTtsPayload(params: {
       ),
     ),
   );
-  if (prefsAuto) {
-    return prefsAuto !== "off";
-  }
-
-  const configuredAuto = normalizeTtsAutoMode(raw?.auto);
-  if (configuredAuto) {
-    return configuredAuto !== "off";
-  }
-  return raw?.enabled === true;
+  return (prefsAuto ?? resolveTtsAutoModeFromPrefs({ tts: raw }) ?? "off") !== "off";
 }
 
 /** Return whether TTS directive markup should be stripped from user-visible text. */
 export function shouldCleanTtsDirectiveText(
   params: Parameters<typeof shouldAttemptTtsPayload>[0],
 ): boolean {
-  if (!shouldAttemptTtsPayload(params)) {
+  const sessionAuto = normalizeTtsAutoMode(params.ttsAuto);
+  if (sessionAuto === "off") {
     return false;
   }
-  return resolveEffectiveTtsConfig(params.cfg, params).modelOverrides?.enabled !== false;
+  const raw = resolveEffectiveTtsConfig(params.cfg, params);
+  return (
+    (sessionAuto !== undefined || shouldAttemptConfiguredTtsPayload(params, raw)) &&
+    raw.modelOverrides?.enabled !== false
+  );
 }

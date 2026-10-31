@@ -6,6 +6,8 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { OutputRuntimeEnv } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { formatCliCommand } from "../command-format.js";
 import type { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
 
@@ -16,47 +18,9 @@ type SuspendRpcCall = (method: string, opts: SuspendRpcOpts, params?: unknown) =
 type SuspendCliDeps = {
   callGateway: SuspendRpcCall;
   runtime: OutputRuntimeEnv;
-  nowMs?: () => number;
-  sleep?: (delayMs: number) => Promise<void>;
 };
 
 const MIN_SUSPEND_POLL_DELAY_MS = 50;
-
-function parseWaitMs(value: string | number | undefined): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const seconds = typeof value === "number" ? value : Number(value.trim() || Number.NaN);
-  if (!Number.isFinite(seconds) || seconds < 0) {
-    throw new Error("--wait must be a non-negative number of seconds");
-  }
-  const milliseconds = Math.floor(seconds * 1_000);
-  if (!Number.isSafeInteger(milliseconds)) {
-    throw new Error("--wait is too large");
-  }
-  return milliseconds;
-}
-
-function resolveRequestId(value: string | undefined): string {
-  if (value === undefined) {
-    return `cli-${randomBytes(4).toString("hex")}`;
-  }
-  const requestId = value.trim();
-  if (!requestId || requestId.length > 128) {
-    throw new Error("--request-id must contain 1 to 128 characters");
-  }
-  return requestId;
-}
-
-function formatBusyResult(
-  result: Extract<GatewaySuspendPrepareResult, { status: "busy" }>,
-): string {
-  const blockers = result.blockers.map((blocker) => `- ${blocker.message}`);
-  return [
-    `Gateway suspension is busy (${result.reason}; ${result.activeCount} active).`,
-    ...(blockers.length > 0 ? ["Blockers:", ...blockers] : []),
-  ].join("\n");
-}
 
 export async function runGatewaySuspend(
   options: {
@@ -67,24 +31,48 @@ export async function runGatewaySuspend(
   },
   deps: SuspendCliDeps,
 ): Promise<void> {
-  const nowMs = deps.nowMs ?? Date.now;
-  const wait = deps.sleep ?? sleep;
-  const requestId = resolveRequestId(options.requestId);
-  const waitMs = parseWaitMs(options.waitSeconds);
-  const deadlineMs = waitMs === undefined ? undefined : nowMs() + waitMs;
+  const requestedId = options.requestId;
+  const requestId =
+    requestedId === undefined ? `cli-${randomBytes(4).toString("hex")}` : requestedId.trim();
+  if (requestedId !== undefined && (!requestId || requestId.length > 128)) {
+    throw new Error("--request-id must contain 1 to 128 characters");
+  }
+  let waitMs: number | undefined;
+  const waitSeconds = options.waitSeconds;
+  if (waitSeconds !== undefined) {
+    const seconds =
+      typeof waitSeconds === "number" ? waitSeconds : Number(waitSeconds.trim() || Number.NaN);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      throw new Error("--wait must be a non-negative number of seconds");
+    }
+    waitMs = Math.floor(seconds * 1_000);
+    if (!Number.isSafeInteger(waitMs)) {
+      throw new Error("--wait is too large");
+    }
+  }
+  // The wait window is consumed by sleeps on the monotonic clock; the
+  // deadline must live there too, or a wall-clock step (NTP correction, VM
+  // resume) keeps issuing prepares past the operator-advertised --wait.
+  const deadlineMs = waitMs === undefined ? undefined : monotonicNow() + waitMs;
   const maxAttempts = waitMs === undefined ? 1 : Math.ceil(waitMs / MIN_SUSPEND_POLL_DELAY_MS) + 1;
   let latest: GatewaySuspendPrepareResult | undefined;
+  const signal = getAsyncWorkSignal();
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (signal?.aborted) {
+      return;
+    }
     // A sleep can overshoot the deadline; never issue a prepare that could
     // suspend the Gateway after the operator's advertised --wait window.
-    if (attempt > 0 && deadlineMs !== undefined && nowMs() >= deadlineMs) {
+    if (attempt > 0 && deadlineMs !== undefined && monotonicNow() >= deadlineMs) {
       break;
     }
     latest = (await deps.callGateway("gateway.suspend.prepare", options.rpcOpts, {
       requestId,
     })) as GatewaySuspendPrepareResult;
     if (latest.status === "ready") {
+      // A dispatched prepare may acquire a lease; retain its receipt even if
+      // interruption was accepted while the mutating request was in flight.
       if (options.json) {
         deps.runtime.writeJson({ ...latest, requestId });
         return;
@@ -102,6 +90,9 @@ export async function runGatewaySuspend(
       );
       return;
     }
+    if (signal?.aborted) {
+      return;
+    }
     if (latest.status === "draining") {
       throw new Error("Gateway suspension unexpectedly entered drain mode");
     }
@@ -110,12 +101,19 @@ export async function runGatewaySuspend(
       break;
     }
 
-    const remainingMs = deadlineMs - nowMs();
+    const remainingMs = deadlineMs - monotonicNow();
     if (remainingMs <= 0) {
       break;
     }
     const delayMs = Math.min(remainingMs, Math.max(MIN_SUSPEND_POLL_DELAY_MS, latest.retryAfterMs));
-    await wait(delayMs);
+    try {
+      await sleep(delayMs, undefined, { signal });
+    } catch (error) {
+      if (!signal?.aborted) {
+        throw error;
+      }
+      return;
+    }
   }
 
   if (!latest || latest.status !== "busy") {
@@ -130,12 +128,17 @@ export async function runGatewaySuspend(
     deadlineMs === undefined
       ? "Retry later or use --wait <seconds>."
       : "Timed out waiting for the Gateway to become idle.";
-  throw new Error(`${formatBusyResult(latest)}\n${hint}`);
+  const blockers = latest.blockers.map((blocker) => `- ${blocker.message}`);
+  const message = [
+    `Gateway suspension is busy (${latest.reason}; ${latest.activeCount} active).`,
+    ...(blockers.length > 0 ? ["Blockers:", ...blockers] : []),
+  ].join("\n");
+  throw new Error(`${message}\n${hint}`);
 }
 
 export async function runGatewayResume(
   options: { rpcOpts: SuspendRpcOpts; suspensionId: string; json?: boolean },
-  deps: Pick<SuspendCliDeps, "callGateway" | "runtime">,
+  deps: SuspendCliDeps,
 ): Promise<void> {
   const result = (await deps.callGateway("gateway.suspend.resume", options.rpcOpts, {
     suspensionId: options.suspensionId,

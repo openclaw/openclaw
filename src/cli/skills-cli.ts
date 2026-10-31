@@ -12,12 +12,13 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
+  listAgentIds,
   resolveConfiguredAgentId,
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import { CLAWHUB_TRUST_ERROR_CODE } from "../infra/clawhub-install-trust.js";
 import {
@@ -26,6 +27,7 @@ import {
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
 import {
@@ -89,9 +91,10 @@ type ResolveSkillsWorkspaceOptions = {
   skipPluginValidation?: boolean;
 };
 
-type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspace>;
+type ResolvedSkillsWorkspace = Awaited<ReturnType<typeof resolveSkillsWorkspace>>;
 
 const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
+const GATEWAY_SKILLS_REFRESH_TIMEOUT_MS = 120_000;
 const GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS = 250;
 const GATEWAY_SKILLS_WORKSHOP_MUTATION_TIMEOUT_MS = 30_000;
 
@@ -110,19 +113,48 @@ async function callSkillsGateway<T>(params: {
   });
 }
 
+async function refreshLocalGatewaySkills(
+  target: Pick<ResolvedSkillsWorkspace, "config"> & { agentId?: string },
+): Promise<void> {
+  try {
+    const { isImplicitLocalGatewayTarget } = await import("../gateway/call.js");
+    if (!(await isImplicitLocalGatewayTarget({ config: target.config }))) {
+      return;
+    }
+    const agentId = target.agentId ?? listAgentIds(target.config)[0];
+    if (!agentId) {
+      return;
+    }
+    await callSkillsGateway({
+      config: target.config,
+      method: "skills.status",
+      params: { agentId, refresh: true },
+      timeoutMs: GATEWAY_SKILLS_REFRESH_TIMEOUT_MS,
+    });
+  } catch (error) {
+    skillInstallLogger.warn(
+      `Skill files changed, but local Gateway refresh failed: ${formatErrorMessage(error)}. Restart the Gateway to refresh skills.`,
+    );
+  }
+}
+
 function normalizeExplicitAgentId(agentId?: string): string | undefined {
   const normalizedAgentId = agentId?.trim();
   if (agentId !== undefined && !normalizedAgentId) {
     throw new Error("--agent must not be blank");
   }
-  return normalizedAgentId;
+  if (!normalizedAgentId) {
+    return undefined;
+  }
+  const canonical = normalizeAgentIdStrict(normalizedAgentId);
+  return canonical.ok ? canonical.value : normalizedAgentId;
 }
 
-function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
+async function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
   // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
-  const config = getRuntimeConfig(
+  const config = await captureRuntimeConfigAsyncReader(
     options?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
-  );
+  )();
   const explicitAgentId = normalizeExplicitAgentId(options?.agentId);
   const inferredAgentId = explicitAgentId
     ? undefined
@@ -139,7 +171,7 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
 }
 
 async function loadSkillsStatusReport(agentId: string | undefined): Promise<SkillStatusReport> {
-  const resolved = resolveSkillsWorkspace({ agentId, skipPluginValidation: true });
+  const resolved = await resolveSkillsWorkspace({ agentId, skipPluginValidation: true });
   try {
     return await callSkillsGateway<SkillStatusReport>({
       config: resolved.config,
@@ -175,11 +207,13 @@ async function runSkillsAction(
   });
 }
 
-function resolveClawHubTargetWorkspace(
+async function resolveClawHubTargetWorkspace(
   command: Command,
   opts: { global?: boolean },
   reportError: (message: string) => void = defaultRuntime.error,
-): Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> | undefined {
+): Promise<
+  (Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> & { agentId?: string }) | undefined
+> {
   const agentId = normalizeExplicitAgentId(resolveOptionFromCommand<string>(command, "agent"));
   if (opts.global && agentId) {
     reportError("Use either --global or --agent, not both.");
@@ -187,7 +221,7 @@ function resolveClawHubTargetWorkspace(
     return undefined;
   }
   if (opts.global) {
-    return { config: getRuntimeConfig(), workspaceDir: CONFIG_DIR };
+    return { config: await captureRuntimeConfigAsyncReader()(), workspaceDir: CONFIG_DIR };
   }
   return resolveSkillsWorkspace({ agentId });
 }
@@ -323,7 +357,7 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         try {
-          const target = resolveClawHubTargetWorkspace(command, opts);
+          const target = await resolveClawHubTargetWorkspace(command, opts);
           if (!target) {
             return;
           }
@@ -356,11 +390,7 @@ export function registerSkillsCli(program: Command) {
               }),
               logger: skillInstallLogger,
             });
-            if (!result.ok) {
-              defaultRuntime.error(result.error);
-              defaultRuntime.exit(1);
-              return;
-            }
+            await refreshLocalGatewaySkills(target);
             defaultRuntime.log(
               `Installed ${result.slug} from ${result.source} -> ${result.targetDir}`,
             );
@@ -398,6 +428,7 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.exit(1);
             return;
           }
+          await refreshLocalGatewaySkills(target);
           defaultRuntime.log(`Installed ${result.slug}@${result.version} -> ${result.targetDir}`);
         } catch (err) {
           if (err instanceof ExitError) {
@@ -451,7 +482,7 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.exit(1);
             return;
           }
-          const target = resolveClawHubTargetWorkspace(command, opts);
+          const target = await resolveClawHubTargetWorkspace(command, opts);
           if (!target) {
             return;
           }
@@ -471,6 +502,9 @@ export function registerSkillsCli(program: Command) {
             logger: skillInstallLogger,
             config: target.config,
           });
+          if (results.some((result) => result.ok && result.changed)) {
+            await refreshLocalGatewaySkills(target);
+          }
           let failed = false;
           for (const result of results) {
             if (!result.ok) {
@@ -537,7 +571,7 @@ export function registerSkillsCli(program: Command) {
             ? (message: string) => defaultRuntime.writeJson(formatCliJsonFailure(message))
             : defaultRuntime.error;
         try {
-          const workspace = resolveClawHubTargetWorkspace(command, opts, reportError);
+          const workspace = await resolveClawHubTargetWorkspace(command, opts, reportError);
           if (!workspace) {
             return;
           }
@@ -610,7 +644,9 @@ export function registerSkillsCli(program: Command) {
   ): Promise<void> => {
     await runCommandWithRuntime(defaultRuntime, async () => {
       const result = await action(
-        resolveSkillsWorkspace({ agentId: resolveOptionFromCommand<string>(command, "agent") }),
+        await resolveSkillsWorkspace({
+          agentId: resolveOptionFromCommand<string>(command, "agent"),
+        }),
       );
       if (hasJsonOutput(opts)) {
         defaultRuntime.writeJson(result);
@@ -690,64 +726,56 @@ export function registerSkillsCli(program: Command) {
         ),
     );
 
-  workshop
-    .command("archive")
-    .description("Archive a learned skill so its agent no longer sees it")
-    .argument("<name>", "Skill name")
-    .option("--reason <text>", "Why the skill is archived")
-    .option("--json", "Output as JSON", false)
-    .action(
-      (name: string, opts: { reason?: string; json?: boolean; agent?: string }, command: Command) =>
-        runWorkshopAction(
-          opts,
-          command,
-          (resolved) =>
-            callSkillsWorkshop<SkillsWorkshopChangeResult>(
-              resolved,
-              "archive",
-              { name, ...(opts.reason ? { reason: opts.reason } : {}) },
-              async () => ({
-                change: await archiveWorkshopSkill(
-                  { config: resolved.config, agentId: resolved.agentId, actor: "user" },
-                  { name, reason: opts.reason },
-                ),
-              }),
-            ),
-          ({ change }) =>
-            `Archived ${change.skillName}. Undo with: ${formatCliCommand(`openclaw skills workshop restore ${change.skillName}`)}\n`,
-        ),
-    );
-
-  workshop
-    .command("restore")
-    .description("Restore an archived skill or a saved version")
-    .argument("<name>", "Skill name")
-    .option("--version <id>", "Version to restore (default newest)")
-    .option("--json", "Output as JSON", false)
-    .action(
-      (
-        name: string,
-        opts: { version?: string; json?: boolean; agent?: string },
-        command: Command,
-      ) =>
-        runWorkshopAction(
-          opts,
-          command,
-          (resolved) =>
-            callSkillsWorkshop<SkillsWorkshopChangeResult>(
-              resolved,
-              "restore",
-              { name, ...(opts.version ? { versionId: opts.version } : {}) },
-              async () => ({
-                change: await restoreWorkshopSkill(
-                  { config: resolved.config, agentId: resolved.agentId, actor: "user" },
-                  { name, versionId: opts.version },
-                ),
-              }),
-            ),
-          ({ change }) => `Restored ${change.skillName}.\n`,
-        ),
-    );
+  for (const method of ["archive", "restore"] as const) {
+    const archive = method === "archive";
+    const field = archive ? "reason" : "versionId";
+    const mutate = archive ? archiveWorkshopSkill : restoreWorkshopSkill;
+    workshop
+      .command(method)
+      .description(
+        archive
+          ? "Archive a learned skill so its agent no longer sees it"
+          : "Restore an archived skill or a saved version",
+      )
+      .argument("<name>", "Skill name")
+      .option(
+        archive ? "--reason <text>" : "--version <id>",
+        archive ? "Why the skill is archived" : "Version to restore (default newest)",
+      )
+      .option("--json", "Output as JSON", false)
+      .action(
+        (
+          name: string,
+          opts: { reason?: string; version?: string; json?: boolean; agent?: string },
+          command: Command,
+        ) =>
+          runWorkshopAction(
+            opts,
+            command,
+            (resolved) => {
+              const value = archive ? opts.reason : opts.version;
+              if (!archive && value === "") {
+                throw new Error("--version must not be blank");
+              }
+              return callSkillsWorkshop<SkillsWorkshopChangeResult>(
+                resolved,
+                method,
+                { name, ...(value ? { [field]: value } : {}) },
+                async () => ({
+                  change: await mutate(
+                    { config: resolved.config, agentId: resolved.agentId, actor: "user" },
+                    { name, [field]: value },
+                  ),
+                }),
+              );
+            },
+            ({ change }) =>
+              archive
+                ? `Archived ${change.skillName}. Undo with: ${formatCliCommand(`openclaw skills workshop restore ${change.skillName} --agent ${change.agentId}`)}\n`
+                : `Restored ${change.skillName}.\n`,
+          ),
+      );
+  }
 
   for (const command of workshop.commands) {
     command.option("--agent <id>", "Target agent (defaults to cwd-inferred, then default agent)");

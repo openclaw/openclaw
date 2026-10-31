@@ -5,7 +5,7 @@ const logger = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => logger }));
-import { logDecisionEvaluation } from "./diagnostics.js";
+import { logDecisionEvaluation, logDecisionToolPrefilter } from "./diagnostics.js";
 import type { DecisionOutcome } from "./types.js";
 
 beforeEach(() => {
@@ -89,6 +89,7 @@ describe("Decision diagnostics", () => {
       emit({ status: "unavailable", reason: "disabled" });
       expect(logger.warn).not.toHaveBeenCalled();
     }
+    logDecisionToolPrefilter({ effect: "skipped" });
     expect(logger.debug).not.toHaveBeenCalled();
   });
 });

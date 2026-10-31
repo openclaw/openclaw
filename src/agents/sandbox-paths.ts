@@ -3,6 +3,7 @@
  *
  * Handles host paths, file URLs, temporary media paths, and workspace root assertions.
  */
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { URL } from "node:url";
@@ -10,6 +11,7 @@ import {
   assertNoPathAliasEscape,
   assertNoWindowsNetworkPath,
   hasEncodedFileUrlSeparator,
+  resolveAbsolutePathForRead,
   resolvePathPrefixSync,
   safeFileURLToPath,
   type PathAliasPolicy,
@@ -19,6 +21,7 @@ import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-sourc
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
+import { resolveHostRootAsync } from "./workspace-write-scope.js";
 
 const DATA_URL_RE = /^data:/i;
 const SANDBOX_CONTAINER_WORKDIR = "/workspace";
@@ -132,6 +135,15 @@ export function isPathBoundaryEscapeError(
 }
 
 async function resolveRawPathViaExistingAncestor(rawPath: string): Promise<string> {
+  try {
+    // Kernel traversal checks search permissions even inside symlink targets;
+    // native realpath alone can erase a denied directory followed by '..'.
+    if (fs.existsSync(rawPath)) {
+      return (await resolveAbsolutePathForRead(rawPath, { symlinks: "follow" })).canonicalPath;
+    }
+  } catch {
+    // The prefix resolver owns missing paths and the original error contract.
+  }
   const { existingPath, unresolvedSegments } = resolvePathPrefixSync(rawPath);
   return path.resolve(existingPath, ...unresolvedSegments);
 }
@@ -140,10 +152,13 @@ export async function assertSandboxPath(params: {
   filePath: string;
   cwd: string;
   root: string;
+  allowLinkedWorktrees?: boolean;
   allowFinalSymlinkForUnlink?: boolean;
   allowFinalHardlinkForUnlink?: boolean;
 }) {
-  const root = path.resolve(params.root);
+  const root = params.allowLinkedWorktrees
+    ? await resolveHostRootAsync(params.root, resolveSandboxInputPath(params.filePath, params.cwd))
+    : path.resolve(params.root);
   const cwd = path.resolve(params.cwd);
   let resolutionCwd = cwd;
   let filePath = params.filePath;

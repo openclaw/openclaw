@@ -78,6 +78,7 @@ export function recordSkippedCronRunsInWorker(
               deps: {
                 nowMs: () => policy.nowMs,
                 cronConfig: policy.cronConfig,
+                failureRepairTimeoutMs: policy.failureRepairTimeoutMs,
                 log: createCronMutationLogger(outcome.logs),
               },
               preparedFailureAlert: {
@@ -90,6 +91,7 @@ export function recordSkippedCronRunsInWorker(
               job,
               {
                 status: "skipped",
+                errorReason: undefined,
                 completionStatus: "failed",
                 error:
                   change.kind === "ownerless"

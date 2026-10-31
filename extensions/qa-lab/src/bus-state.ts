@@ -1,19 +1,21 @@
 import { randomUUID } from "node:crypto";
-import type {
-  QaBusConversation,
-  QaBusCreateThreadInput,
-  QaBusDeleteMessageInput,
-  QaBusEditMessageInput,
-  QaBusEvent,
-  QaBusInboundMessageInput,
-  QaBusMessage,
-  QaBusOutboundMessageInput,
-  QaBusPollInput,
-  QaBusReadMessageInput,
-  QaBusReactToMessageInput,
-  QaBusSearchMessagesInput,
-  QaBusSnapshotConversation,
-  QaBusThread,
+import {
+  parseQaTarget,
+  sanitizeQaBusToolCalls,
+  type QaBusConversation,
+  type QaBusCreateThreadInput,
+  type QaBusDeleteMessageInput,
+  type QaBusEditMessageInput,
+  type QaBusEvent,
+  type QaBusInboundMessageInput,
+  type QaBusMessage,
+  type QaBusOutboundMessageInput,
+  type QaBusPollInput,
+  type QaBusReadMessageInput,
+  type QaBusReactToMessageInput,
+  type QaBusSearchMessagesInput,
+  type QaBusSnapshotConversation,
+  type QaBusThread,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
 import {
   buildQaBusSnapshot,
@@ -24,7 +26,6 @@ import {
   searchQaBusMessages,
 } from "./bus-queries.js";
 import { createQaBusWaiterStore, throwQaBusClosed } from "./bus-waiters.js";
-import { parseQaTarget, sanitizeQaBusToolCalls } from "./qa-bus-protocol.js";
 
 const DEFAULT_BOT_ID = "openclaw";
 const DEFAULT_BOT_NAME = "OpenClaw QA";
@@ -47,7 +48,10 @@ export function createQaBusState() {
   const threads = new Map<string, QaBusThread>();
   const messages = new Map<string, QaBusMessage>();
   const events: QaBusEvent[] = [];
-  const acknowledgedPollCursors = new Map<string, number>();
+  const inboundReceipts = new Map<
+    number,
+    { accountId: string; adopted: boolean; completed: boolean }
+  >();
   let cursor = 0;
   let assertWritable = () => {};
   const getSnapshot = () =>
@@ -60,12 +64,17 @@ export function createQaBusState() {
     });
   const waiters = createQaBusWaiterStore(getSnapshot);
 
-  const pushEvent = (event: QaBusEventSeed): QaBusEvent => {
+  const pushEvent = (event: QaBusEventSeed): void => {
     cursor += 1;
-    const finalized = { cursor, ...event };
-    events.push(finalized);
+    events.push({ cursor, ...event });
+    if (event.kind === "inbound-message") {
+      inboundReceipts.set(cursor, {
+        accountId: event.accountId,
+        adopted: false,
+        completed: false,
+      });
+    }
     waiters.settle();
-    return finalized;
   };
 
   const publishMessage = (
@@ -162,6 +171,7 @@ export function createQaBusState() {
       threads.clear();
       messages.clear();
       events.length = 0;
+      inboundReceipts.clear();
       // Keep the cursor monotonic across resets so long-poll clients do not
       // miss events; terminal reset also fences late waiter timers.
       waiters.reset(undefined, terminal);
@@ -275,26 +285,44 @@ export function createQaBusState() {
     searchMessages(input: QaBusSearchMessagesInput) {
       return searchQaBusMessages({ messages, input });
     },
-    resolvePollCursor(input: QaBusPollInput = {}) {
+    recordPollReceipts(input: QaBusPollInput = {}) {
       assertWritable();
       const accountId = normalizeAccountId(input.accountId);
-      const requestedCursor = input.cursor ?? 0;
-      const acknowledgedCursor = acknowledgedPollCursors.get(accountId) ?? 0;
-      // Fetch progress and completed work are separate facts. Missing
-      // acknowledgement means the consumer has not recorded new completion.
-      const completedCursor = input.acknowledgedCursor ?? 0;
-      if (completedCursor > acknowledgedCursor && completedCursor <= cursor) {
-        acknowledgedPollCursors.set(accountId, completedCursor);
+      // A confirmed adoption permits execution. Validate the entire batch first
+      // so a reset or foreign input cannot produce a false custody confirmation.
+      const adopted = (input.adoptedEventCursors ?? []).map((eventCursor) => {
+        const receipt = inboundReceipts.get(eventCursor);
+        if (receipt?.accountId !== accountId) {
+          throw new Error(
+            "adopted event must be a retained inbound input for the selected account",
+          );
+        }
+        return receipt;
+      });
+      for (const receipt of adopted) {
+        receipt.adopted = true;
       }
-      // A restarted channel consumer begins at zero. Resume its account cursor
-      // so retained events are not replayed, while still returning unacked work.
-      return requestedCursor === 0 ? acknowledgedCursor : requestedCursor;
+      // Completion is exact, including terminal no-turn outcomes. Late duplicate
+      // receipts after reset and claims outside this account are harmless.
+      for (const completedCursor of input.completedEventCursors ?? []) {
+        const receipt = inboundReceipts.get(completedCursor);
+        if (receipt?.accountId === accountId) {
+          receipt.adopted = true;
+          receipt.completed = true;
+        }
+      }
     },
-    getAcknowledgedPollCursor(accountId?: string) {
-      return acknowledgedPollCursors.get(normalizeAccountId(accountId)) ?? 0;
+    hasCompletedInboundEvent(accountId: string | undefined, eventCursor: number) {
+      const completion = inboundReceipts.get(eventCursor);
+      return completion?.accountId === normalizeAccountId(accountId) && completion.completed;
     },
     poll(input: QaBusPollInput = {}) {
-      return pollQaBusEvents({ events, cursor, input });
+      return pollQaBusEvents({
+        events,
+        cursor,
+        input,
+        isAdoptedInbound: (eventCursor) => inboundReceipts.get(eventCursor)?.adopted === true,
+      });
     },
     waitFor: waiters.waitFor.bind(waiters),
     waitForCursorAdvance: waiters.waitForCursorAdvance.bind(waiters),

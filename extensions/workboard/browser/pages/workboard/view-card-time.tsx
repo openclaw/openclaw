@@ -3,20 +3,40 @@ import { createEffect, createSignal, untrack } from "solid-js";
 import { workboardLocale } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
+import { listen } from "../../lib/listener.ts";
 const subscribers = new Map<() => void, number>();
 let timer: ReturnType<typeof setTimeout> | undefined;
+let stopVisibility: (() => void) | undefined;
+let scheduleQueued = false;
 function schedule() {
-  clearTimeout(timer);
-  timer = undefined;
   if (!subscribers.size || document.visibilityState === "hidden") {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
     return;
   }
-  const now = Date.now();
-  let delay = 60_000;
-  for (const timestamp of subscribers.values()) {
-    delay = Math.min(delay, 60_000 - (Math.max(0, now - timestamp) % 60_000));
+  if (scheduleQueued) {
+    return;
   }
-  timer = setTimeout(tick, delay);
+  scheduleQueued = true;
+  // A render can add or remove hundreds of clocks; reconcile their timer once.
+  queueMicrotask(() => {
+    scheduleQueued = false;
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    if (!subscribers.size || document.visibilityState === "hidden") {
+      return;
+    }
+    const now = Date.now();
+    let delay = 60_000;
+    for (const timestamp of subscribers.values()) {
+      delay = Math.min(delay, 60_000 - (Math.max(0, now - timestamp) % 60_000));
+    }
+    timer = setTimeout(tick, delay);
+  });
 }
 function tick() {
   for (const update of subscribers.keys()) {
@@ -61,7 +81,7 @@ export function RelativeTime(props: { timestamp: number; now: number; automation
     () => props.timestamp,
     (timestamp) => {
       if (!subscribers.size) {
-        document.addEventListener("visibilitychange", onVisibilityChange);
+        stopVisibility = listen(document, "visibilitychange", onVisibilityChange);
       }
       subscribers.set(update, timestamp);
       update();
@@ -69,7 +89,8 @@ export function RelativeTime(props: { timestamp: number; now: number; automation
       return () => {
         subscribers.delete(update);
         if (!subscribers.size) {
-          document.removeEventListener("visibilitychange", onVisibilityChange);
+          stopVisibility?.();
+          stopVisibility = undefined;
         }
         schedule();
       };

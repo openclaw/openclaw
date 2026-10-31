@@ -14,15 +14,12 @@ const INSTALLED_PLUGIN_STATUS = {
   error: ["pluginsPage.needsAttention", "danger"],
 } as const satisfies Record<InstalledPluginState, readonly [string, string]>;
 
-export function renderPluginStateStatus(
-  state: InstalledPluginState,
-  className: string,
-): JSX.Element {
+export function renderPluginStateStatus(state: InstalledPluginState, className: string) {
   const [labelKey, tone] = INSTALLED_PLUGIN_STATUS[state];
   const label = t(labelKey);
   return (
     <span
-      class={`${className} settings-status settings-status--${tone}`}
+      class={[className, "settings-status", `settings-status--${tone}`]}
       data-plugin-state={state}
       role="img"
       aria-label={label}
@@ -46,16 +43,13 @@ export function renderPluginOfficialBadge(): JSX.Element {
   );
 }
 
-export function renderPluginAuthor(
-  author: string | undefined,
-  options: { linked?: boolean } = {},
-): JSX.Element | undefined {
+export function renderPluginAuthor(author: string | undefined): JSX.Element | undefined {
   if (!author) {
     return undefined;
   }
   const handle = author.replace(/^@+/, "");
   const label = `@${handle}`;
-  return options.linked ? (
+  return (
     <a
       class="plugin-card-author plugin-card-author--linked"
       href={`https://clawhub.ai/${encodeURIComponent(handle)}`}
@@ -64,13 +58,7 @@ export function renderPluginAuthor(
     >
       {label}
     </a>
-  ) : (
-    <span class="plugin-card-author">{label}</span>
   );
-}
-
-export function renderPluginCardSummary(summary: string): JSX.Element {
-  return <PluginCardSummary summary={summary} />;
 }
 
 export function PluginCardSummary(props: { summary: string }): JSX.Element {

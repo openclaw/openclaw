@@ -2,22 +2,22 @@ import { expectDefined } from "@openclaw/normalization-core";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
+  loadAuthProfileStoreForRuntime,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type {
+  MemoryEmbeddingProvider,
+  registerRuntimeAuthProfileStoreMutationListener,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { MemoryConfig } from "./config.js";
 
 const providerMocks = vi.hoisted(() => ({
   getMemoryEmbeddingProvider: vi.fn(),
   authMutationListeners: new Set<
-    (event: {
-      agentDir?: string;
-      affectsInheritedStores: boolean;
-      profileSetChanged: boolean;
-    }) => void
+    Parameters<typeof registerRuntimeAuthProfileStoreMutationListener>[0]
   >(),
 }));
 
@@ -42,14 +42,15 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importO
 
 import { createEmbeddings, type Embeddings } from "./embeddings.js";
 
-function createApi(): OpenClawPluginApi {
-  const config = {};
+function createApi(
+  config: unknown = {},
+  resolveAgentDir = (_config: unknown, _agentId: string) => "/tmp/openclaw-agent",
+  current = () => config,
+): OpenClawPluginApi {
   return {
     config,
-    runtime: {
-      config: { current: () => config },
-      agent: { resolveAgentDir: () => "/tmp/openclaw-agent" },
-    },
+    logger: { warn: vi.fn() },
+    runtime: { config: { current }, agent: { resolveAgentDir } },
   } as unknown as OpenClawPluginApi;
 }
 
@@ -65,6 +66,38 @@ function embed(
   embedding: MemoryConfig["embedding"] = embeddingConfig,
 ) {
   return embeddings.embed(agentId, text, embedding);
+}
+
+function useProvider(create: ReturnType<typeof vi.fn>, id = "openai") {
+  providerMocks.getMemoryEmbeddingProvider.mockReturnValue({ id, create });
+}
+
+function credentialStore(profileId: string, credential?: string) {
+  return {
+    version: 1,
+    profiles: credential
+      ? { [profileId]: { type: "api_key" as const, provider: "openai", key: credential } }
+      : {},
+  };
+}
+
+function publishPrivateCredential(agentDir: string, profileId: string, credential?: string) {
+  replaceRuntimeAuthProfileStoreSnapshots([
+    { store: credentialStore(profileId) },
+    { agentDir, store: credentialStore(profileId, credential) },
+  ]);
+}
+
+function readCredential(agentDir: string | undefined, profileId: string) {
+  const profile = ensureAuthProfileStore(agentDir, {
+    externalCli: { mode: "none" },
+    readOnly: true,
+    syncExternalCli: false,
+  }).profiles[profileId];
+  if (profile?.type !== "api_key" || !profile.key) {
+    throw new Error("Private agent credentials were revoked");
+  }
+  return profile.key;
 }
 
 function providerResult(
@@ -91,623 +124,391 @@ function providerResult(
   };
 }
 
-describe("memory-lancedb provider lifecycle", () => {
-  it("isolates concurrent agent providers and retires every account exactly once", async () => {
-    const config = {};
-    const requests: Array<{ agentDir: string; text: string }> = [];
-    const closedAgentDirs: string[] = [];
-    const createProvider = vi.fn(async (options: { agentDir?: string }) => {
-      const agentDir = options.agentDir ?? "unscoped";
-      return providerResult({
-        embedQuery: vi.fn(async (text: string) => {
-          requests.push({ agentDir, text });
-          return [0.1, 0.2, 0.3];
-        }),
-        close: vi.fn(async () => {
-          closedAgentDirs.push(agentDir);
-        }),
-      });
-    });
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
-    const api = {
-      config,
-      runtime: {
-        config: { current: () => config },
-        agent: { resolveAgentDir: (_config: unknown, agentId: string) => `/tmp/agent-${agentId}` },
+function scopedProviderHarness() {
+  const requests: Array<{ agentDir: string; text: string }> = [];
+  const closedAgentDirs: string[] = [];
+  const createProvider = vi.fn(async (options: { agentDir?: string }) => {
+    const agentDir = options.agentDir ?? "unscoped";
+    return providerResult({
+      embedQuery: async (text) => {
+        requests.push({ agentDir, text });
+        return [0.1, 0.2, 0.3];
       },
-    } as unknown as OpenClawPluginApi;
-    const embeddings = createEmbeddings(api);
+      close: async () => {
+        closedAgentDirs.push(agentDir);
+      },
+    });
+  });
+  useProvider(createProvider);
+  const api = createApi({}, (_config, agentId) => "/tmp/agent-" + agentId);
+  return { requests, closedAgentDirs, createProvider, embeddings: createEmbeddings(api) };
+}
 
-    await Promise.all([
-      embed(embeddings, "private", "private first"),
-      embed(embeddings, "main", "main first"),
-      embed(embeddings, " PRIVATE ", "private second"),
-      embed(embeddings, "main", "main second"),
+it("isolates concurrent agent providers and retires every account exactly once", async () => {
+  const { requests, closedAgentDirs, createProvider, embeddings } = scopedProviderHarness();
+  await Promise.all([
+    embed(embeddings, "private", "private first"),
+    embed(embeddings, "main", "main first"),
+    embed(embeddings, " PRIVATE ", "private second"),
+    embed(embeddings, "main", "main second"),
+  ]);
+  expect(createProvider).toHaveBeenCalledTimes(2);
+  expect(requests).toEqual(
+    expect.arrayContaining([
+      { agentDir: "/tmp/agent-private", text: "private first" },
+      { agentDir: "/tmp/agent-private", text: "private second" },
+      { agentDir: "/tmp/agent-main", text: "main first" },
+      { agentDir: "/tmp/agent-main", text: "main second" },
+    ]),
+  );
+  await embeddings.close?.();
+  expect(closedAgentDirs.toSorted()).toEqual(["/tmp/agent-main", "/tmp/agent-private"]);
+});
+
+it("invalidates only the matching normalized auth owner and unregisters on close", async () => {
+  const { closedAgentDirs, createProvider, embeddings } = scopedProviderHarness();
+  await Promise.all([
+    embed(embeddings, "private", "private before rotation"),
+    embed(embeddings, "other", "other before rotation"),
+  ]);
+  const listener = Array.from(providerMocks.authMutationListeners).at(-1);
+  expect(listener).toBeTypeOf("function");
+  listener?.({
+    agentDir: "/tmp/agent-private/../agent-private",
+    affectsInheritedStores: false,
+    profileSetChanged: false,
+    availabilityOnly: false,
+  });
+  await embed(embeddings, "other", "other warm provider");
+  expect(createProvider).toHaveBeenCalledTimes(2);
+  await embed(embeddings, "private", "private rotated provider");
+  expect(createProvider).toHaveBeenCalledTimes(3);
+  expect(closedAgentDirs).toEqual(["/tmp/agent-private"]);
+  await embeddings.close?.();
+  expect(providerMocks.authMutationListeners.has(expectDefined(listener, "auth listener"))).toBe(
+    false,
+  );
+  expect(closedAgentDirs.toSorted()).toEqual([
+    "/tmp/agent-other",
+    "/tmp/agent-private",
+    "/tmp/agent-private",
+  ]);
+});
+
+function credentialProviderHarness(
+  profileId: string,
+  resolveAgentDir: Parameters<typeof createApi>[1],
+) {
+  loadAuthProfileStoreForRuntime(undefined, { readOnly: true, externalCli: { mode: "none" } });
+  const requests: Array<{ agentDir: string; credential: string; text: string }> = [];
+  const closeProvider = vi.fn(async (_agentDir: string, _credential: string) => {});
+  const createProvider = vi.fn(async (options: { agentDir?: string }) => {
+    const agentDir = expectDefined(options.agentDir, "credential owner");
+    const credential = readCredential(agentDir, profileId);
+    return providerResult({
+      embedQuery: async (text) => {
+        requests.push({ agentDir, credential, text });
+        return [0.1, 0.2, 0.3];
+      },
+      close: async () => closeProvider(agentDir, credential),
+    });
+  });
+  useProvider(createProvider);
+  return {
+    requests,
+    closeProvider,
+    createProvider,
+    embeddings: createEmbeddings(createApi({}, resolveAgentDir)),
+  };
+}
+
+it("rotates actual private auth snapshots without replacing the runtime config", async () => {
+  const agentDir = "/tmp/openclaw-lancedb-private-auth-rotation";
+  const profileId = "openai:private";
+  const publishCredential = (credential?: string) =>
+    publishPrivateCredential(agentDir, profileId, credential);
+  const { requests, closeProvider, createProvider, embeddings } = credentialProviderHarness(
+    profileId,
+    () => agentDir,
+  );
+  try {
+    publishCredential("fixture-old-account");
+    await embed(embeddings, "private", "before-account-rotation");
+    publishCredential("fixture-new-account");
+    await embed(embeddings, "private", "private-secret-after-account-rotation");
+    expect(requests.map(({ text, credential }) => ({ text, credential }))).toEqual([
+      { text: "before-account-rotation", credential: "fixture-old-account" },
+      { text: "private-secret-after-account-rotation", credential: "fixture-new-account" },
     ]);
-
     expect(createProvider).toHaveBeenCalledTimes(2);
+    expect(closeProvider).toHaveBeenCalledOnce();
+    publishCredential(undefined);
+    await expect(embed(embeddings, "private", "private-secret-after-revocation")).rejects.toThrow(
+      "Private agent credentials were revoked",
+    );
+    expect(requests).toHaveLength(2);
+    expect(closeProvider).toHaveBeenCalledTimes(2);
+  } finally {
+    await embeddings.close?.();
+    clearRuntimeAuthProfileStoreSnapshots();
+  }
+});
+
+it("invalidates every inheriting agent when the actual main auth snapshot rotates", async () => {
+  const agentDirs = {
+    private: "/tmp/openclaw-lancedb-inherited-private",
+    secondary: "/tmp/openclaw-lancedb-inherited-secondary",
+  };
+  const profileId = "openai:inherited";
+  const publishMainCredential = (credential: string) => {
+    replaceRuntimeAuthProfileStoreSnapshots([
+      { store: credentialStore(profileId, credential) },
+      ...Object.values(agentDirs).map((agentDir) => ({
+        agentDir,
+        store: credentialStore(profileId),
+      })),
+    ]);
+  };
+  const { requests, closeProvider, createProvider, embeddings } = credentialProviderHarness(
+    profileId,
+    (_config, agentId) => agentDirs[agentId as keyof typeof agentDirs],
+  );
+  const expected = [
+    [agentDirs.private, "fixture-inherited-old", "private old inherited credential"],
+    [agentDirs.secondary, "fixture-inherited-old", "secondary old inherited credential"],
+    [agentDirs.private, "fixture-inherited-new", "private new inherited credential"],
+    [agentDirs.secondary, "fixture-inherited-new", "secondary new inherited credential"],
+  ];
+  const expectedCloses = expected.map(([agentDir, credential]) => [agentDir, credential]);
+  try {
+    publishMainCredential("fixture-inherited-old");
+    await Promise.all([
+      embed(embeddings, "private", "private old inherited credential"),
+      embed(embeddings, "secondary", "secondary old inherited credential"),
+    ]);
+    publishMainCredential("fixture-inherited-new");
+    await Promise.all([
+      embed(embeddings, "private", "private new inherited credential"),
+      embed(embeddings, "secondary", "secondary new inherited credential"),
+    ]);
+    expect(createProvider).toHaveBeenCalledTimes(4);
+    expect(closeProvider.mock.calls).toEqual(expect.arrayContaining(expectedCloses.slice(0, 2)));
     expect(requests).toEqual(
-      expect.arrayContaining([
-        { agentDir: "/tmp/agent-private", text: "private first" },
-        { agentDir: "/tmp/agent-private", text: "private second" },
-        { agentDir: "/tmp/agent-main", text: "main first" },
-        { agentDir: "/tmp/agent-main", text: "main second" },
-      ]),
-    );
-
-    await embeddings.close?.();
-    expect(closedAgentDirs.toSorted()).toEqual(["/tmp/agent-main", "/tmp/agent-private"]);
-  });
-
-  it("invalidates only the matching normalized auth owner and unregisters on close", async () => {
-    const config = {};
-    const closedAgentDirs: string[] = [];
-    const createProvider = vi.fn(async (options: { agentDir?: string }) => {
-      const agentDir = options.agentDir ?? "unscoped";
-      return providerResult({
-        close: vi.fn(async () => {
-          closedAgentDirs.push(agentDir);
-        }),
-      });
-    });
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
-    const api = {
-      config,
-      runtime: {
-        config: { current: () => config },
-        agent: { resolveAgentDir: (_config: unknown, agentId: string) => `/tmp/agent-${agentId}` },
-      },
-    } as unknown as OpenClawPluginApi;
-    const embeddings = createEmbeddings(api);
-
-    await Promise.all([
-      embed(embeddings, "private", "private before rotation"),
-      embed(embeddings, "other", "other before rotation"),
-    ]);
-    const listener = Array.from(providerMocks.authMutationListeners).at(-1);
-    expect(listener).toBeTypeOf("function");
-    listener?.({
-      agentDir: "/tmp/agent-private/../agent-private",
-      affectsInheritedStores: false,
-      profileSetChanged: false,
-    });
-
-    await embed(embeddings, "other", "other warm provider");
-    expect(createProvider).toHaveBeenCalledTimes(2);
-    await embed(embeddings, "private", "private rotated provider");
-    expect(createProvider).toHaveBeenCalledTimes(3);
-    expect(closedAgentDirs).toEqual(["/tmp/agent-private"]);
-
-    await embeddings.close?.();
-    expect(providerMocks.authMutationListeners.has(expectDefined(listener, "auth listener"))).toBe(
-      false,
-    );
-    expect(closedAgentDirs.toSorted()).toEqual([
-      "/tmp/agent-other",
-      "/tmp/agent-private",
-      "/tmp/agent-private",
-    ]);
-  });
-
-  it("rotates actual private auth snapshots without replacing the runtime config", async () => {
-    const config = {};
-    const agentDir = "/tmp/openclaw-lancedb-private-auth-rotation";
-    const profileId = "openai:private";
-    const requests: Array<{ text: string; credential: string }> = [];
-    const publishCredential = (credential: string | undefined) => {
-      replaceRuntimeAuthProfileStoreSnapshots([
-        { store: { version: 1, profiles: {} } },
-        {
+      expect.arrayContaining(
+        expected.map(([agentDir, credential, text]) => ({
           agentDir,
-          store: {
-            version: 1,
-            profiles: credential
-              ? {
-                  [profileId]: { type: "api_key", provider: "openai", key: credential },
-                }
-              : {},
-          },
-        },
-      ]);
-    };
-    const closeProvider = vi.fn(async () => {});
-    const createProvider = vi.fn(async (options: { agentDir?: string }) => {
-      const profile = ensureAuthProfileStore(options.agentDir, {
-        externalCli: { mode: "none" },
-        readOnly: true,
-        syncExternalCli: false,
-      }).profiles[profileId];
-      if (profile?.type !== "api_key" || !profile.key) {
-        throw new Error("Private agent credentials were revoked");
-      }
-      const credential = profile.key;
+          credential,
+          text,
+        })),
+      ),
+    );
+  } finally {
+    await embeddings.close?.();
+    clearRuntimeAuthProfileStoreSnapshots();
+  }
+  expect(closeProvider.mock.calls).toHaveLength(4);
+  expect(closeProvider.mock.calls).toEqual(expect.arrayContaining(expectedCloses));
+});
+
+it("retires cached agent providers and fails closed after runtime config replacement", async () => {
+  const initialConfig = { authGeneration: "valid" };
+  const revokedConfig = { authGeneration: "revoked" };
+  let currentConfig = initialConfig;
+  const oldEmbedQuery = vi.fn(async () => [0.1, 0.2, 0.3]);
+  const closeOldProvider = vi.fn(async () => {});
+  const createProvider = vi.fn(async (options: { config: unknown; agentDir?: string }) => {
+    if (options.config === revokedConfig) {
+      throw new Error("Private agent credentials were revoked");
+    }
+    return providerResult({ embedQuery: oldEmbedQuery, close: closeOldProvider });
+  });
+  useProvider(createProvider, "openai");
+  const api = createApi(
+    initialConfig,
+    (_config: unknown, agentId: string) => `/tmp/agent-${agentId}`,
+    () => currentConfig,
+  );
+  const embeddings = createEmbeddings(api);
+  await embed(embeddings, "private", "before revocation");
+  currentConfig = revokedConfig;
+  await expect(embed(embeddings, "private", "after revocation")).rejects.toThrow(
+    "Private agent credentials were revoked",
+  );
+  expect(oldEmbedQuery).toHaveBeenCalledOnce();
+  expect(oldEmbedQuery).toHaveBeenCalledWith("before revocation");
+  expect(closeOldProvider).toHaveBeenCalledOnce();
+  expect(createProvider).toHaveBeenCalledTimes(2);
+  await embeddings.close?.();
+});
+
+it.each(["config", "auth"] as const)("drains admitted work when %s rotates", async (kind) => {
+  const started = createDeferred<void>();
+  const release = createDeferred<void>();
+  const closeOld = vi.fn(async () => {});
+  const closeNew = vi.fn(async () => {});
+  const agentDir = "/tmp/openclaw-lancedb-inflight-auth-rotation";
+  const profileId = "openai:inflight";
+  const auth = kind === "auth";
+  const oldKey = auth ? "fixture-inflight-old" : "fixture-old-key";
+  const newKey = auth ? "fixture-inflight-new" : "fixture-new-key";
+  if (auth) {
+    loadAuthProfileStoreForRuntime(undefined, { readOnly: true, externalCli: { mode: "none" } });
+  }
+  const identity = { provider: "fixture-provider", model: "fixture-model", dimensions: 3 };
+  const oldConfig = auth
+    ? embeddingConfig
+    : { ...identity, apiKey: oldKey, baseUrl: "https://old.example.test/v1" };
+  const newConfig = auth
+    ? embeddingConfig
+    : { ...identity, apiKey: newKey, baseUrl: "https://new.example.test/v1" };
+  const oldVector = auth ? [0.1, 0.2, 0.3] : [0.1];
+  const newVector = auth ? [0.1, 0.2, 0.3] : [0.2];
+  const createProvider = vi.fn(
+    async (options: {
+      provider: string;
+      model: string;
+      agentDir?: string;
+      remote?: { apiKey?: string };
+    }) => {
+      const key = auth ? readCredential(options.agentDir, profileId) : options.remote?.apiKey;
+      const old = key === oldKey;
       return providerResult({
-        embedQuery: vi.fn(async (text: string) => {
-          requests.push({ text, credential });
+        id: options.provider,
+        model: options.model,
+        embedQuery: async () => {
+          if (old) {
+            started.resolve();
+            await release.promise;
+          }
+          return old ? oldVector : newVector;
+        },
+        close: old ? closeOld : closeNew,
+      });
+    },
+  );
+  useProvider(createProvider, auth ? "openai" : identity.provider);
+  const embeddings = createEmbeddings(auth ? createApi({}, () => agentDir) : createApi());
+  try {
+    if (auth) {
+      publishPrivateCredential(agentDir, profileId, oldKey);
+    }
+    const first = embed(embeddings, auth ? "private" : "main", "old account request", oldConfig);
+    await started.promise;
+    if (auth) {
+      publishPrivateCredential(agentDir, profileId, newKey);
+    }
+    const second = embed(embeddings, auth ? "private" : "main", "new account request", newConfig);
+    await expect(second).resolves.toEqual(newVector);
+    expect(createProvider).toHaveBeenCalledTimes(2);
+    expect(closeOld).not.toHaveBeenCalled();
+    release.resolve();
+    await expect(Promise.all([first, second])).resolves.toEqual([oldVector, newVector]);
+    expect(createProvider).toHaveBeenCalledTimes(2);
+    if (!auth) {
+      expect(createProvider.mock.calls.map(([options]) => options)).toEqual(
+        [oldConfig, newConfig].map(({ provider, model, apiKey, baseUrl, dimensions }) =>
+          expect.objectContaining({
+            provider,
+            model,
+            remote: { apiKey, baseUrl },
+            dimensions,
+            fallback: "none",
+          }),
+        ),
+      );
+    }
+    expect(closeOld).toHaveBeenCalledOnce();
+  } finally {
+    release.resolve();
+    await embeddings.close?.();
+    if (auth) {
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  }
+  expect(closeNew).toHaveBeenCalledOnce();
+});
+
+function failedCloseProviders() {
+  const closeOlder = vi
+    .fn<() => Promise<void>>()
+    .mockRejectedValue(new Error("older close failed"));
+  const closeCurrent = vi.fn(async () => {});
+  useProvider(
+    vi
+      .fn()
+      .mockResolvedValueOnce(providerResult({ close: closeOlder }))
+      .mockResolvedValueOnce(providerResult({ close: closeCurrent })),
+  );
+  return { closeOlder, closeCurrent };
+}
+
+it("does not retry failed closes or block independent provider instances", async () => {
+  const { closeOlder, closeCurrent } = failedCloseProviders();
+  const older = createEmbeddings(createApi());
+  const current = createEmbeddings(createApi());
+  await embed(older, "main", "older");
+  await embed(current, "main", "current");
+  await expect(older.close?.()).rejects.toThrow("older close failed");
+  await expect(older.close?.()).rejects.toThrow("older close failed");
+  await expect(current.close?.()).resolves.toBeUndefined();
+  expect(closeOlder).toHaveBeenCalledTimes(1);
+  expect(closeCurrent).toHaveBeenCalledTimes(1);
+});
+
+it("warns on failed rotation cleanup and still closes the replacement", async () => {
+  const { closeOlder, closeCurrent } = failedCloseProviders();
+  const api = createApi();
+  const embeddings = createEmbeddings(api);
+  await embed(embeddings, "main", "before rotation");
+  await embed(embeddings, "main", "after rotation", {
+    ...embeddingConfig,
+    baseUrl: "https://rotated.example.test/v1",
+  });
+  await expect(embeddings.close?.()).rejects.toThrow("older close failed");
+  expect(api.logger.warn).toHaveBeenCalledWith(
+    "memory-lancedb: embedding provider cleanup failed; restart the Gateway to reclaim resources",
+  );
+  expect(closeOlder).toHaveBeenCalledOnce();
+  expect(closeCurrent).toHaveBeenCalledOnce();
+});
+
+it.each(["creation", "embedding"] as const)(
+  "drains admitted %s work before close",
+  async (phase) => {
+    const started = createDeferred<void>();
+    const release = createDeferred<void>();
+    const closeProvider = vi.fn(async () => {});
+    const hold = async () => {
+      started.resolve();
+      await release.promise;
+    };
+    const createProvider = vi.fn(async () => {
+      if (phase === "creation" && createProvider.mock.calls.length === 1) {
+        await hold();
+      }
+      return providerResult({
+        embedQuery: async () => {
+          if (phase === "embedding") {
+            await hold();
+          }
           return [0.1, 0.2, 0.3];
-        }),
+        },
         close: closeProvider,
       });
     });
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
-    const api = {
-      config,
-      runtime: {
-        config: { current: () => config },
-        agent: { resolveAgentDir: () => agentDir },
-      },
-    } as unknown as OpenClawPluginApi;
-    const embeddings = createEmbeddings(api);
-
-    try {
-      publishCredential("fixture-old-account");
-      await embed(embeddings, "private", "before-account-rotation");
-      publishCredential("fixture-new-account");
-      await embed(embeddings, "private", "private-secret-after-account-rotation");
-
-      expect(requests).toEqual([
-        { text: "before-account-rotation", credential: "fixture-old-account" },
-        { text: "private-secret-after-account-rotation", credential: "fixture-new-account" },
-      ]);
-      expect(createProvider).toHaveBeenCalledTimes(2);
-      expect(closeProvider).toHaveBeenCalledOnce();
-
-      publishCredential(undefined);
-      await expect(embed(embeddings, "private", "private-secret-after-revocation")).rejects.toThrow(
-        "Private agent credentials were revoked",
-      );
-      expect(requests).toHaveLength(2);
-      expect(closeProvider).toHaveBeenCalledTimes(2);
-    } finally {
-      await embeddings.close?.();
-      clearRuntimeAuthProfileStoreSnapshots();
-    }
-  });
-
-  it("invalidates every inheriting agent when the actual main auth snapshot rotates", async () => {
-    const config = {};
-    const agentDirs = {
-      private: "/tmp/openclaw-lancedb-inherited-private",
-      secondary: "/tmp/openclaw-lancedb-inherited-secondary",
-    };
-    const profileId = "openai:inherited";
-    const requests: Array<{ agentDir: string; credential: string; text: string }> = [];
-    const publishMainCredential = (credential: string) => {
-      replaceRuntimeAuthProfileStoreSnapshots([
-        {
-          store: {
-            version: 1,
-            profiles: {
-              [profileId]: { type: "api_key", provider: "openai", key: credential },
-            },
-          },
-        },
-        ...Object.values(agentDirs).map((agentDir) => ({
-          agentDir,
-          store: { version: 1, profiles: {} },
-        })),
-      ]);
-    };
-    const closeProvider = vi.fn(async (_agentDir: string, _credential: string) => {});
-    const createProvider = vi.fn(async (options: { agentDir?: string }) => {
-      const agentDir = expectDefined(options.agentDir, "inherited agent owner");
-      const profile = ensureAuthProfileStore(agentDir, {
-        externalCli: { mode: "none" },
-        readOnly: true,
-        syncExternalCli: false,
-      }).profiles[profileId];
-      if (profile?.type !== "api_key" || !profile.key) {
-        throw new Error("Inherited main credential is unavailable");
-      }
-      const credential = profile.key;
-      return providerResult({
-        embedQuery: vi.fn(async (text: string) => {
-          requests.push({ agentDir, credential, text });
-          return [0.1, 0.2, 0.3];
-        }),
-        close: async () => closeProvider(agentDir, credential),
-      });
-    });
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
-    const api = {
-      config,
-      runtime: {
-        config: { current: () => config },
-        agent: {
-          resolveAgentDir: (_config: unknown, agentId: string) =>
-            agentDirs[agentId as keyof typeof agentDirs],
-        },
-      },
-    } as unknown as OpenClawPluginApi;
-    const embeddings = createEmbeddings(api);
-
-    try {
-      publishMainCredential("fixture-inherited-old");
-      await Promise.all([
-        embed(embeddings, "private", "private old inherited credential"),
-        embed(embeddings, "secondary", "secondary old inherited credential"),
-      ]);
-      publishMainCredential("fixture-inherited-new");
-      await Promise.all([
-        embed(embeddings, "private", "private new inherited credential"),
-        embed(embeddings, "secondary", "secondary new inherited credential"),
-      ]);
-
-      expect(createProvider).toHaveBeenCalledTimes(4);
-      expect(closeProvider.mock.calls).toEqual(
-        expect.arrayContaining([
-          [agentDirs.private, "fixture-inherited-old"],
-          [agentDirs.secondary, "fixture-inherited-old"],
-        ]),
-      );
-      expect(requests).toEqual(
-        expect.arrayContaining([
-          {
-            agentDir: agentDirs.private,
-            credential: "fixture-inherited-old",
-            text: "private old inherited credential",
-          },
-          {
-            agentDir: agentDirs.secondary,
-            credential: "fixture-inherited-old",
-            text: "secondary old inherited credential",
-          },
-          {
-            agentDir: agentDirs.private,
-            credential: "fixture-inherited-new",
-            text: "private new inherited credential",
-          },
-          {
-            agentDir: agentDirs.secondary,
-            credential: "fixture-inherited-new",
-            text: "secondary new inherited credential",
-          },
-        ]),
-      );
-    } finally {
-      await embeddings.close?.();
-      clearRuntimeAuthProfileStoreSnapshots();
-    }
-
-    expect(closeProvider.mock.calls).toHaveLength(4);
-    expect(closeProvider.mock.calls).toEqual(
-      expect.arrayContaining([
-        [agentDirs.private, "fixture-inherited-old"],
-        [agentDirs.secondary, "fixture-inherited-old"],
-        [agentDirs.private, "fixture-inherited-new"],
-        [agentDirs.secondary, "fixture-inherited-new"],
-      ]),
-    );
-  });
-
-  it("retires cached agent providers and fails closed after runtime config replacement", async () => {
-    const initialConfig = { authGeneration: "valid" };
-    const revokedConfig = { authGeneration: "revoked" };
-    let currentConfig = initialConfig;
-    const oldEmbedQuery = vi.fn(async () => [0.1, 0.2, 0.3]);
-    const closeOldProvider = vi.fn(async () => {});
-    const createProvider = vi.fn(async (options: { config: unknown; agentDir?: string }) => {
-      if (options.config === revokedConfig) {
-        throw new Error("Private agent credentials were revoked");
-      }
-      return providerResult({ embedQuery: oldEmbedQuery, close: closeOldProvider });
-    });
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
-    const api = {
-      config: initialConfig,
-      runtime: {
-        config: { current: () => currentConfig },
-        agent: { resolveAgentDir: (_config: unknown, agentId: string) => `/tmp/agent-${agentId}` },
-      },
-    } as unknown as OpenClawPluginApi;
-    const embeddings = createEmbeddings(api);
-
-    await embed(embeddings, "private", "before revocation");
-    currentConfig = revokedConfig;
-
-    await expect(embed(embeddings, "private", "after revocation")).rejects.toThrow(
-      "Private agent credentials were revoked",
-    );
-    expect(oldEmbedQuery).toHaveBeenCalledOnce();
-    expect(oldEmbedQuery).toHaveBeenCalledWith("before revocation");
-    expect(closeOldProvider).toHaveBeenCalledOnce();
-    expect(createProvider).toHaveBeenCalledTimes(2);
-
-    await embeddings.close?.();
-  });
-
-  it("rotates live embedding overrides after admitted work drains", async () => {
-    const oldEmbeddingGate = createDeferred<void>();
-    const oldEmbeddingStart = createDeferred<void>();
-    const closeOldProvider = vi.fn(async () => {});
-    const closeReplacementProvider = vi.fn(async () => {});
-    const createProvider = vi.fn(
-      async (options: { provider: string; model: string; remote?: { apiKey?: string } }) => {
-        const isOld = options.remote?.apiKey === "fixture-old-key";
-        return providerResult({
-          id: options.provider,
-          model: options.model,
-          embedQuery: vi.fn(async () => {
-            if (isOld) {
-              oldEmbeddingStart.resolve();
-              await oldEmbeddingGate.promise;
-            }
-            return isOld ? [0.1] : [0.2];
-          }),
-          close: isOld ? closeOldProvider : closeReplacementProvider,
-        });
-      },
-    );
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "fixture-provider",
-      create: createProvider,
-    });
-    const embeddingIdentity = {
-      provider: "fixture-provider",
-      model: "fixture-model",
-      dimensions: 3,
-    } as const;
-    const oldConfig = {
-      ...embeddingIdentity,
-      apiKey: "fixture-old-key",
-      baseUrl: "https://old.example.test/v1",
-    } satisfies MemoryConfig["embedding"];
-    const newConfig = {
-      ...embeddingIdentity,
-      apiKey: "fixture-new-key",
-      baseUrl: "https://new.example.test/v1",
-    } satisfies MemoryConfig["embedding"];
+    useProvider(createProvider);
     const embeddings = createEmbeddings(createApi());
-
-    try {
-      const oldEmbedding = embed(embeddings, "main", "old config request", oldConfig);
-      await oldEmbeddingStart.promise;
-      const replacementEmbedding = embed(embeddings, "main", "new config request", newConfig);
-      await Promise.resolve();
-      expect(createProvider).toHaveBeenCalledOnce();
-      expect(closeOldProvider).not.toHaveBeenCalled();
-
-      oldEmbeddingGate.resolve();
-      await expect(Promise.all([oldEmbedding, replacementEmbedding])).resolves.toEqual([
-        [0.1],
-        [0.2],
-      ]);
-      expect(createProvider.mock.calls.map(([options]) => options)).toEqual([
-        expect.objectContaining({
-          provider: oldConfig.provider,
-          model: oldConfig.model,
-          remote: { apiKey: oldConfig.apiKey, baseUrl: oldConfig.baseUrl },
-          dimensions: oldConfig.dimensions,
-          fallback: "none",
-        }),
-        expect.objectContaining({
-          provider: newConfig.provider,
-          model: newConfig.model,
-          remote: { apiKey: newConfig.apiKey, baseUrl: newConfig.baseUrl },
-          dimensions: newConfig.dimensions,
-          fallback: "none",
-        }),
-      ]);
-      expect(closeOldProvider).toHaveBeenCalledOnce();
-      expect(
-        expectDefined(closeOldProvider.mock.invocationCallOrder[0], "old config close order"),
-      ).toBeLessThan(
-        expectDefined(createProvider.mock.invocationCallOrder[1], "new config create order"),
-      );
-    } finally {
-      oldEmbeddingGate.resolve();
-      await embeddings.close?.();
-    }
-
-    expect(closeReplacementProvider).toHaveBeenCalledOnce();
-  });
-
-  it("drains an admitted embedding before retiring a rotated actual auth snapshot", async () => {
-    const config = {};
-    const agentDir = "/tmp/openclaw-lancedb-inflight-auth-rotation";
-    const profileId = "openai:inflight";
-    const publishCredential = (credential: string) => {
-      replaceRuntimeAuthProfileStoreSnapshots([
-        { store: { version: 1, profiles: {} } },
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles: {
-              [profileId]: { type: "api_key", provider: "openai", key: credential },
-            },
-          },
-        },
-      ]);
-    };
-    const oldEmbeddingGate = createDeferred<void>();
-    const oldEmbeddingStart = createDeferred<void>();
-    const closeOldProvider = vi.fn(async () => {});
-    const closeReplacementProvider = vi.fn(async () => {});
-    const createProvider = vi.fn(async (options: { agentDir?: string }) => {
-      const profile = ensureAuthProfileStore(options.agentDir, {
-        externalCli: { mode: "none" },
-        readOnly: true,
-        syncExternalCli: false,
-      }).profiles[profileId];
-      if (profile?.type !== "api_key" || !profile.key) {
-        throw new Error("in-flight agent credential unavailable");
-      }
-      const oldAccount = profile.key === "fixture-inflight-old";
-      return providerResult({
-        embedQuery: vi.fn(async () => {
-          if (oldAccount) {
-            oldEmbeddingStart.resolve();
-            await oldEmbeddingGate.promise;
-          }
-          return [0.1, 0.2, 0.3];
-        }),
-        close: oldAccount ? closeOldProvider : closeReplacementProvider,
-      });
-    });
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
-    const api = {
-      config,
-      runtime: {
-        config: { current: () => config },
-        agent: { resolveAgentDir: () => agentDir },
-      },
-    } as unknown as OpenClawPluginApi;
-    const embeddings = createEmbeddings(api);
-
-    try {
-      publishCredential("fixture-inflight-old");
-      const firstEmbedding = embed(embeddings, "private", "old account request");
-      await oldEmbeddingStart.promise;
-
-      publishCredential("fixture-inflight-new");
-      const replacementEmbedding = embed(embeddings, "private", "new account request");
-      await Promise.resolve();
-      expect(createProvider).toHaveBeenCalledOnce();
-      expect(closeOldProvider).not.toHaveBeenCalled();
-
-      oldEmbeddingGate.resolve();
-      await expect(Promise.all([firstEmbedding, replacementEmbedding])).resolves.toEqual([
-        [0.1, 0.2, 0.3],
-        [0.1, 0.2, 0.3],
-      ]);
-      expect(closeOldProvider).toHaveBeenCalledOnce();
-      expect(createProvider).toHaveBeenCalledTimes(2);
-      expect(
-        expectDefined(closeOldProvider.mock.invocationCallOrder[0], "old account close order"),
-      ).toBeLessThan(
-        expectDefined(createProvider.mock.invocationCallOrder[1], "new account create order"),
-      );
-    } finally {
-      oldEmbeddingGate.resolve();
-      await embeddings.close?.();
-      clearRuntimeAuthProfileStoreSnapshots();
-    }
-
-    expect(closeReplacementProvider).toHaveBeenCalledOnce();
-  });
-
-  it("queues replacement behind close intent while provider creation is pending", async () => {
-    const firstCreateGate = createDeferred<void>();
-    const closeProvider = vi.fn(async () => {});
-    const createProvider = vi.fn(async () => {
-      if (createProvider.mock.calls.length === 1) {
-        await firstCreateGate.promise;
-      }
-      return providerResult({ close: closeProvider });
-    });
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
-
-    const first = createEmbeddings(createApi());
-    const firstEmbed = embed(first, "main", "first");
-    await vi.waitFor(() => expect(createProvider).toHaveBeenCalledTimes(1));
-
-    const closePromise = first.close?.();
-    const replacement = createEmbeddings(createApi());
-    const replacementEmbed = embed(replacement, "main", "replacement");
+    const pending = embed(embeddings, "main", "active");
+    await started.promise;
+    const closing = embeddings.close?.();
     await Promise.resolve();
-    expect(createProvider).toHaveBeenCalledTimes(1);
-
-    firstCreateGate.resolve();
-    await firstEmbed;
-    await closePromise;
-    await replacementEmbed;
-
-    expect(closeProvider).toHaveBeenCalledTimes(1);
-    expect(createProvider).toHaveBeenCalledTimes(2);
-    expect(
-      expectDefined(closeProvider.mock.invocationCallOrder[0], "pending provider close order"),
-    ).toBeLessThan(
-      expectDefined(createProvider.mock.invocationCallOrder[1], "replacement create order"),
-    );
-    await replacement.close?.();
-  });
-
-  it("does not re-close a provider retired while an older provider still fails", async () => {
-    const closeOlder = vi
-      .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(new Error("older close failed once"))
-      .mockRejectedValueOnce(new Error("older close failed twice"))
-      .mockResolvedValue(undefined);
-    const closeCurrent = vi.fn(async () => {});
-    const createProvider = vi
-      .fn()
-      .mockResolvedValueOnce(providerResult({ model: "older", vector: [0.1], close: closeOlder }))
-      .mockResolvedValueOnce(
-        providerResult({ model: "current", vector: [0.2], close: closeCurrent }),
-      );
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
-
-    const older = createEmbeddings(createApi());
-    const current = createEmbeddings(createApi());
-    await embed(older, "main", "older");
-    await embed(current, "main", "current");
-
-    await expect(older.close?.()).rejects.toThrow("older close failed once");
-    await expect(current.close?.()).rejects.toThrow("older close failed twice");
-    expect(closeCurrent).toHaveBeenCalledTimes(1);
-
-    await expect(current.close?.()).resolves.toBeUndefined();
-    expect(closeOlder).toHaveBeenCalledTimes(3);
-    expect(closeCurrent).toHaveBeenCalledTimes(1);
-  });
-
-  it("drains an admitted embedding before provider close", async () => {
-    const embedStarted = createDeferred<void>();
-    const embedGate = createDeferred<void>();
-    const closeProvider = vi.fn(async () => {});
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: vi.fn(async () =>
-        providerResult({
-          embedQuery: vi.fn(async () => {
-            embedStarted.resolve();
-            await embedGate.promise;
-            return [0.1, 0.2, 0.3];
-          }),
-          close: closeProvider,
-        }),
-      ),
-    });
-
-    const embeddings = createEmbeddings(createApi());
-    const embedPromise = embed(embeddings, "main", "active");
-    await embedStarted.promise;
-    const closePromise = embeddings.close?.();
-    await Promise.resolve();
-
     expect(closeProvider).not.toHaveBeenCalled();
     await expect(embed(embeddings, "main", "late")).rejects.toThrow(
       "memory-lancedb embeddings are closed",
     );
-
-    embedGate.resolve();
-    await expect(embedPromise).resolves.toEqual([0.1, 0.2, 0.3]);
-    await closePromise;
+    release.resolve();
+    await expect(pending).resolves.toEqual([0.1, 0.2, 0.3]);
+    await closing;
     expect(closeProvider).toHaveBeenCalledTimes(1);
-  });
-});
+  },
+);

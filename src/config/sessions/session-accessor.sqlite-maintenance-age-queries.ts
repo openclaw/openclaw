@@ -1,12 +1,18 @@
 import { sql } from "kysely";
+import { engineIndexHint } from "../../infra/database-engine/index-hint.js";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
   prepareSqliteQueryIterator,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 
 export const readSessionMaintenanceAgeQueries = createSqliteQueryCache((database) => {
+  const position =
+    /* kysely-allow-raw: Closed engine choice of equivalent substring-position functions. */ sql.raw(
+      isPostgresSqlConnection(database) ? "strpos" : "instr",
+    );
   const db =
     getNodeSqliteKysely<Pick<DB, "session_nodes" | "session_canonical_validation_pending">>(
       database,
@@ -24,10 +30,7 @@ export const readSessionMaintenanceAgeQueries = createSqliteQueryCache((database
   const ordered = db
     .selectFrom(
       projection
-        .modifyEnd(
-          /* kysely-allow-raw: ordered age probes must not sort the entire active store. */
-          sql`INDEXED BY idx_agent_session_nodes_updated_at`,
-        )
+        .modifyEnd(engineIndexHint(database, "idx_agent_session_nodes_updated_at"))
         .as("age_rows"),
     )
     .where("archived_at", "is", null)
@@ -55,8 +58,8 @@ export const readSessionMaintenanceAgeQueries = createSqliteQueryCache((database
                   ">",
                   /* kysely-allow-raw: skip a complete namespace or only the malformed key, preserving later indexed ranges. */
                   sql<string>`CASE
-                    WHEN instr(substr(${eb.ref("age_namespaces.first_key")}, 7), ':') > 0
-                    THEN substr(${eb.ref("age_namespaces.first_key")}, 1, 5 + instr(substr(${eb.ref("age_namespaces.first_key")}, 7), ':')) || ';'
+                    WHEN ${position}(substr(${eb.ref("age_namespaces.first_key")}, 7), ':') > 0
+                    THEN substr(${eb.ref("age_namespaces.first_key")}, 1, 5 + ${position}(substr(${eb.ref("age_namespaces.first_key")}, 7), ':')) || ';'
                     ELSE ${eb.ref("age_namespaces.first_key")}
                   END`,
                 )
@@ -73,13 +76,13 @@ export const readSessionMaintenanceAgeQueries = createSqliteQueryCache((database
       "age_rows.session_key",
       ">=",
       /* kysely-allow-raw: this range is a coarse selector; the canonical key decoder still decides dashboard eligibility. */
-      sql<string>`substr(first_key, 1, 6 + instr(substr(first_key, 7), ':')) || 'dashboard:'`,
+      sql<string>`substr(first_key, 1, 6 + ${position}(substr(first_key, 7), ':')) || 'dashboard:'`,
     )
     .where(
       "age_rows.session_key",
       "<",
       /* kysely-allow-raw: exclusive upper bound for the same dashboard namespace. */
-      sql<string>`substr(first_key, 1, 6 + instr(substr(first_key, 7), ':')) || 'dashboard;'`,
+      sql<string>`substr(first_key, 1, 6 + ${position}(substr(first_key, 7), ':')) || 'dashboard;'`,
     )
     .where("archived_at", "is", null)
     .selectAll("age_rows");
@@ -101,8 +104,7 @@ export const readSessionMaintenanceAgeQueries = createSqliteQueryCache((database
         ),
     ),
     activity: prepareSqliteQueryIterator(database, () => ordered.selectAll("age_rows")),
-    dashboards: prepareSqliteQueryIterator(database, () => dashboards),
     // Raw edits remain marked until the canonical owner validates their key/row shape.
-    uncertified: prepareSqliteQueryIterator(database, () => uncertified),
+    dashboards: prepareSqliteQueryIterator(database, () => dashboards.unionAll(uncertified)),
   };
 });

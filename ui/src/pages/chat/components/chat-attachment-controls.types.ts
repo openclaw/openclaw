@@ -22,10 +22,10 @@ export type ChatAttachmentControlsProps = {
   getDraft?: () => string;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => boolean | void;
   onRemoveAttachment?: (attachment: ChatAttachment) => void;
+  registerBrowserAnnotationFocus?: (attachmentId: string, element: HTMLButtonElement) => () => void;
   onDraftChange?: (next: string) => void;
   onPendingReadsChange?: (delta: 1 | -1) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
-  onRequestUpdate?: () => void;
   readSignal?: AbortSignal;
 };

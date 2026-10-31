@@ -1,6 +1,4 @@
 /**
- * Realtime voice output activity counters and playback-state tracking.
- *
  * Providers use this to decide whether assistant output is active,
  * interruptible, or overdue relative to the audio duration already emitted.
  */

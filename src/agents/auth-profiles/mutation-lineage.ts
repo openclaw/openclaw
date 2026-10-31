@@ -89,14 +89,8 @@ function setProfileMutationRevision(
 }
 
 /** All persisted rows, including usage state, follow their exact owner's write generation. */
-export function getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(
-  ownerKey: string,
-  scope: "rows" | "credentials" = "rows",
-): number {
+export function getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(ownerKey: string): number {
   const record = persistedMutationRecords.get(ownerKey);
-  if (record && scope === "credentials") {
-    return Math.max(record.credentialRevision, record.profileSetRevision, record.mutationFloor);
-  }
   return record ? maxMutationRevision(record) : evictedOwnerMutationFloor;
 }
 

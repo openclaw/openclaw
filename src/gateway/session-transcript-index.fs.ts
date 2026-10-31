@@ -17,6 +17,7 @@ import {
   type TranscriptRecord,
 } from "./session-transcript-record-parser.js";
 import {
+  SessionTranscriptSourceMessageTooLargeError,
   SOURCE_PAGE_MAX_BYTES,
   SOURCE_PAGE_MAX_MESSAGES,
 } from "./session-transcript-source-pages.js";
@@ -40,20 +41,18 @@ export type SessionTranscriptIndex = {
   displaySource: string;
 };
 
-type ArchiveNavigationEntry = TranscriptRecord & {
-  rawSeq: number;
-  offset: number;
-  length: number;
-  activity?: TranscriptDisplayActivity;
-};
-
 type TranscriptIndexPreparation = {
   offset: number;
   lineOffset: number;
   length: number;
   afterCr: boolean;
   fragments: Buffer[];
-  records: ArchiveNavigationEntry[];
+  records: (TranscriptRecord & {
+    rawSeq: number;
+    offset: number;
+    length: number;
+    activity?: TranscriptDisplayActivity;
+  })[];
   rawSeqById: Map<string, number>;
 };
 
@@ -204,9 +203,7 @@ function finishSessionTranscriptIndex(
 
 function assertSourceLineBound(length: number) {
   if (length > SOURCE_PAGE_MAX_BYTES) {
-    throw new Error(
-      `Transcript source message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
-    );
+    throw new SessionTranscriptSourceMessageTooLargeError();
   }
 }
 

@@ -1,3 +1,5 @@
+import "../../snapshot/database-backup.js";
+import "../../infra/backup-sqlite-snapshot.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
@@ -5,40 +7,116 @@ import * as bindings from "../../daemon/managed-gateway-bindings.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import * as services from "../../daemon/service.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
-import { bindExecutionGuards } from "./update-command-execution.test-support.js";
+import {
+  bindExecutionGuards,
+  executionParams,
+  mocks,
+  schemaContext,
+  successfulUpdate,
+} from "./update-command-execution.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import type { updateGitInstall } from "./update-command-git.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
 import * as verification from "./update-command-verification.js";
 
-type Fixtures = Pick<
-  typeof import("./update-command-execution.test-support.js"),
-  "executionParams" | "mocks" | "successfulUpdate"
->;
+type Candidate = { validateCandidate: (root: string) => Promise<unknown> };
 
-export function registerNativeAdmissionTests({
-  executionParams,
-  mocks,
-  successfulUpdate,
-}: Fixtures) {
+async function executeOwned(
+  dir: string,
+  params: ReturnType<typeof executionParams>,
+  env: NodeJS.ProcessEnv,
+) {
+  const control = path.join(dir, "leases");
+  await fs.mkdir(control);
+  vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+  const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+  params.opts.run = { runId, env };
+  return withUpdateCommandExecutor(runId, async (executor) => {
+    mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
+      admitExecutor(await executor.enter(params.root));
+    });
+    return executeMutableUpdate(await bindExecutionGuards(params));
+  });
+}
+
+function expectBeforeActivation() {
+  expect(mocks.serviceStopped).toBe(false);
+  expect(mocks.validateCanary).not.toHaveBeenCalled();
+}
+
+export function registerNativeAdmissionTests() {
+  it.each(["auto", "installed", "git-to-package"] as const)(
+    "refuses an engine-incompatible package before publication with %s admission",
+    async (route) =>
+      withTestDir({ prefix: "engine-before-activation-" }, async (dir) => {
+        const anchor = path.join(dir, "plugins", "workboard", "workboard.sqlite");
+        const candidate = path.join(dir, "candidate");
+        await fs.mkdir(path.dirname(anchor), { recursive: true });
+        await fs.mkdir(candidate);
+        await fs.writeFile(path.join(candidate, "package.json"), '{"name":"openclaw"}');
+        const runtime = path.join(dir, "entry.js");
+        await fs.writeFile(runtime, "original runtime");
+        {
+          using db = openNodeSqliteDatabase(anchor);
+          db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
+          db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, ?, ?)").run(
+            "e3b4e990-c0f1-4ec7-a5d1-4e1c6824f80f",
+            "postgres",
+            "retained_workboard",
+          );
+        }
+        const before = await fs.readFile(anchor);
+        const context = schemaContext("default");
+        const env = { OPENCLAW_STATE_DIR: dir };
+        mocks.captureSchemaContext.mockResolvedValue({
+          ...context,
+          env,
+          readEnv: env,
+          config: { plugins: { entries: { workboard: { enabled: true } } } },
+        });
+        mocks.captureManagedPreflight.mockResolvedValue(undefined);
+        const params = executionParams("package");
+        params.root = dir;
+        if (route === "git-to-package") {
+          params.installKind = "git";
+        } else if (route === "installed") {
+          params.opts.admission = "installed";
+        }
+        const events: string[] = [];
+        mocks.runPackageUpdate.mockImplementation(async ({ validateCandidate }: Candidate) => {
+          await validateCandidate(candidate);
+          events.push("publish");
+          return successfulUpdate;
+        });
+        const result = await executeMutableUpdate(await bindExecutionGuards(params));
+        expect(result?.result).toMatchObject({
+          status: "error",
+          reason: "database-engine-preflight",
+        });
+        expect(events).toEqual([]);
+        expectBeforeActivation();
+        expect(await fs.readFile(anchor)).toEqual(before);
+        expect(await fs.readdir(path.dirname(anchor))).toEqual(["workboard.sqlite"]);
+        expect(await fs.readFile(runtime, "utf8")).toBe("original runtime");
+      }),
+  );
+
   it.each(["package", "staged", "git"] as const)(
     "refuses an unsupported native receiver before activation: %s",
     async (route) =>
       withTestDir({ prefix: "native-before-activation-" }, async (dir) => {
-        const control = path.join(dir, "leases");
-        await fs.mkdir(control);
-        vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
         const env = { OPENCLAW_STATE_DIR: dir };
-        const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
         const params = executionParams(route === "git" ? "git" : "package");
         params.root = dir;
         params.updateStepTimeoutMs = 600_000;
-        params.opts.run = { runId, env };
         if (route === "staged") {
           params.packageInstallSpec = path.join(dir, "candidate.tgz");
         }
@@ -48,11 +126,7 @@ export function registerNativeAdmissionTests({
           events.push("native-admission");
           return false;
         });
-        const candidate = async ({
-          validateCandidate,
-        }: {
-          validateCandidate: (root: string) => Promise<unknown>;
-        }) => {
+        const candidate = async ({ validateCandidate }: Candidate) => {
           await validateCandidate(dir);
           // Models the package/Git publisher which follows successful validation.
           events.push("publish");
@@ -60,9 +134,7 @@ export function registerNativeAdmissionTests({
         };
         mocks.runPackageUpdate.mockImplementation(candidate);
         mocks.runGitUpdate.mockImplementation(
-          async (
-            options: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
-          ) => {
+          async (options: Parameters<typeof updateGitInstall>[0]) => {
             if (!options.inspectGitTarget || !options.validateCandidate) {
               throw new Error("Missing actual Git admission callbacks");
             }
@@ -70,12 +142,7 @@ export function registerNativeAdmissionTests({
             return candidate({ validateCandidate: options.validateCandidate });
           },
         );
-        const result = await withUpdateCommandExecutor(runId, async (executor) => {
-          mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
-            admitExecutor(await executor.enter(dir));
-          });
-          return executeMutableUpdate(await bindExecutionGuards(params));
-        });
+        const result = await executeOwned(dir, params, env);
         expect(result?.result).toMatchObject({
           status: "error",
           reason: "target-native-unsupported",
@@ -84,111 +151,41 @@ export function registerNativeAdmissionTests({
         expect(mocks.nativeSupport.mock.calls[0]?.[0]).toMatchObject({
           timeoutMs: params.updateStepTimeoutMs,
         });
-        expect(mocks.serviceStopped).toBe(false);
-        expect(mocks.validateCanary).not.toHaveBeenCalled();
+        expectBeforeActivation();
       }),
   );
 
-  const consumerCases: Array<{
-    name: string;
-    shared: boolean;
+  type ConsumerCase = {
+    shared?: boolean;
     linkedDist?: boolean;
-    running: boolean;
-    late: boolean;
-    refused: boolean;
+    running?: boolean;
+    late?: boolean;
+    refused?: boolean;
     route?: "git";
     consumer?: "selected" | "same-profile-other-service";
     unreadableFirst?: boolean;
     selectedRunning?: boolean;
     startsDuringStop?: boolean;
-  }> = [
-    { name: "live shared root", shared: true, running: true, late: false, refused: true },
-    { name: "stopped shared root", shared: true, running: false, late: false, refused: false },
-    { name: "live disjoint root", shared: false, running: true, late: false, refused: false },
-    {
-      name: "live selected service with shared sibling",
-      shared: true,
-      running: true,
-      late: false,
-      refused: true,
-      selectedRunning: true,
-    },
-    {
-      name: "live selected service with disjoint sibling",
-      shared: false,
-      running: true,
-      late: false,
-      refused: false,
-      selectedRunning: true,
-    },
-    {
-      name: "sibling starts during selected stop",
-      shared: true,
-      running: true,
-      late: false,
-      refused: true,
-      selectedRunning: true,
-      startsDuringStop: true,
-    },
-    {
-      name: "disjoint package with shared resolved entrypoint",
-      shared: false,
-      linkedDist: true,
-      running: true,
-      late: false,
-      refused: true,
-    },
-    {
-      name: "sibling starts during staging",
-      shared: true,
-      running: true,
-      late: true,
-      refused: true,
-    },
-    {
-      name: "Git shared publication",
-      route: "git",
-      shared: true,
-      running: true,
-      late: false,
-      refused: true,
-    },
-    {
-      name: "selected package no-restart",
-      consumer: "selected",
-      shared: true,
-      running: true,
-      late: false,
-      refused: false,
-    },
-    {
-      name: "same-profile other service",
-      consumer: "same-profile-other-service",
-      shared: true,
-      running: true,
-      late: false,
-      refused: true,
-    },
-    {
-      name: "unreadable unrelated definition",
-      unreadableFirst: true,
-      shared: false,
-      running: true,
-      late: false,
-      refused: false,
-    },
-    {
-      name: "live sibling after unreadable definition",
-      unreadableFirst: true,
-      shared: true,
-      running: true,
-      late: false,
-      refused: true,
-    },
+  };
+  const consumerCases: [string, ConsumerCase][] = [
+    ["live shared root", {}],
+    ["stopped shared root", { running: false, refused: false }],
+    ["live disjoint root", { shared: false, refused: false }],
+    ["selected live + shared sibling", { selectedRunning: true }],
+    ["selected live + disjoint sibling", { shared: false, refused: false, selectedRunning: true }],
+    ["sibling starts during selected stop", { selectedRunning: true, startsDuringStop: true }],
+    ["disjoint roots, shared entrypoint", { shared: false, linkedDist: true }],
+    ["sibling starts during staging", { late: true }],
+    ["Git shared publication", { route: "git" }],
+    ["selected package no-restart", { consumer: "selected", refused: false }],
+    ["same-profile other service", { consumer: "same-profile-other-service" }],
+    ["unreadable unrelated definition", { unreadableFirst: true, shared: false, refused: false }],
+    ["live sibling after unreadable definition", { unreadableFirst: true }],
   ];
   it.each(consumerCases)(
-    "protects managed consumers before publication: $name",
-    async (scenario) => {
+    "protects managed consumers before publication: %s",
+    async (_name, overrides) => {
+      const scenario = { shared: true, running: true, late: false, refused: true, ...overrides };
       if (process.platform === "darwin") {
         // Model the Linux service reader, while retaining the real host self
         // identity used by the executor's POSIX lease and SQLite lifecycle.
@@ -201,13 +198,10 @@ export function registerNativeAdmissionTests({
         const candidate = path.join(dir, "candidate");
         for (const location of new Set([root, otherRoot, candidate])) {
           await fs.mkdir(path.join(location, "dist"), { recursive: true });
-          await fs.writeFile(
-            path.join(location, "package.json"),
-            JSON.stringify({
-              name: "openclaw",
-              version: location === candidate ? "1.0.1" : "1.0.0",
-            }),
-          );
+          await writeFixtureJson(path.join(location, "package.json"), {
+            name: "openclaw",
+            version: location === candidate ? "1.0.1" : "1.0.0",
+          });
           await fs.writeFile(path.join(location, "dist", "entry.js"), "original runtime");
         }
         if (scenario.linkedDist) {
@@ -215,9 +209,6 @@ export function registerNativeAdmissionTests({
           await fs.symlink(path.join(root, "dist"), path.join(otherRoot, "dist"), "junction");
         }
         const artifact = path.join(root, "dist", "entry.js");
-        const control = path.join(dir, "leases");
-        await fs.mkdir(control);
-        vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
         const selectedEnv = {
           OPENCLAW_PROFILE: "selected",
           OPENCLAW_STATE_DIR: path.join(dir, "selected"),
@@ -296,11 +287,11 @@ export function registerNativeAdmissionTests({
           if (args?.env?.OPENCLAW_PROFILE === "unreadable") {
             throw new ServiceInspectionError("windows-task-inspection-failed");
           }
-          const consumer = args?.env === consumerEnv;
+          const isConsumer = args?.env === consumerEnv;
           return observedState(
-            consumer ? consumerEnv : selectedEnv,
-            consumer ? running : selectedRunning,
-            consumer ? otherRoot : root,
+            isConsumer ? consumerEnv : selectedEnv,
+            isConsumer ? running : selectedRunning,
+            isConsumer ? otherRoot : root,
           );
         });
         const selectedVerdict = await inspectManagedGatewayServiceBeforeUpdate({
@@ -338,9 +329,7 @@ export function registerNativeAdmissionTests({
           return successfulUpdate;
         });
         mocks.runGitUpdate.mockImplementation(
-          async (
-            options: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
-          ) => {
+          async (options: Parameters<typeof updateGitInstall>[0]) => {
             const target = { schemaVersions: { state: 15, agent: 19 } };
             await options.inspectGitTarget?.(target);
             await options.beforeGitMutation?.(target);
@@ -353,14 +342,7 @@ export function registerNativeAdmissionTests({
           root,
           ...(scenario.consumer ? { shouldRestart: false } : {}),
         };
-        const runId = createUpdateRun({ trigger: "cli" }, { env: selectedEnv }).runId;
-        params.opts.run = { runId, env: selectedEnv };
-        const execution = await withUpdateCommandExecutor(runId, async (executor) => {
-          mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
-            admitExecutor(await executor.enter(root));
-          });
-          return executeMutableUpdate(await bindExecutionGuards(params));
-        });
+        const execution = await executeOwned(dir, params, selectedEnv);
         expect(execution?.result.status).toBe(scenario.refused ? "error" : "ok");
         expect(await fs.readFile(artifact, "utf8")).toBe(
           scenario.refused ? "original runtime" : "replacement runtime",
@@ -376,18 +358,16 @@ export function registerNativeAdmissionTests({
         }
         if (scenario.refused) {
           expect(execution?.mutationStarted).toBe(false);
-          expect(execution?.result.steps).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                stderrTail: expect.stringContaining(
-                  scenario.consumer === "same-profile-other-service"
-                    ? process.platform === "win32"
-                      ? "OpenClaw Other"
-                      : "openclaw-other"
-                    : consumerEnv.OPENCLAW_PROFILE,
-                ),
-              }),
-            ]),
+          expect(execution?.result.steps).toContainEqual(
+            expect.objectContaining({
+              stderrTail: expect.stringContaining(
+                scenario.consumer === "same-profile-other-service"
+                  ? process.platform === "win32"
+                    ? "OpenClaw Other"
+                    : "openclaw-other"
+                  : consumerEnv.OPENCLAW_PROFILE,
+              ),
+            }),
           );
         }
       });

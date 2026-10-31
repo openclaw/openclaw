@@ -1,18 +1,36 @@
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
+import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.ts";
+import { managedHandoffRuntimeEntrypoint } from "../../src/infra/update-managed-service-handoff-runtime-assets.ts";
+import { bundledModuleRegions } from "./bundled-module-regions.mjs";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
+import { controlUiBuildSiblingPid } from "./output-root-guard.mjs";
 import { isRecord as object } from "./record-shared.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
+import {
+  getStandaloneRuntimeProcessOutputOptions,
+  standaloneRuntimeProcessBuildEntries,
+} from "./runtime-process-core-build-entries.mts";
 import {
   isUpdateCompatibilityChunk,
   UPDATE_COMPATIBILITY_CHUNK_HEADER,
 } from "./update-compat-contract.mjs";
-import { ModuleGraph, type UpdateCompatibilityOrigin } from "./update-compat-module-graph.mts";
+import {
+  ModuleGraph,
+  moduleSourceRegions,
+  type UpdateCompatibilityOrigin,
+} from "./update-compat-module-graph.mts";
 
 export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
 const HASHED_CHUNK = /-[A-Za-z0-9_-]{8}\.m?js$/;
 const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$)/;
+const STANDALONE_CHUNK_PREFIXES = Object.keys(standaloneRuntimeProcessBuildEntries).flatMap(
+  (name) => {
+    const { chunkFileNames } = getStandaloneRuntimeProcessOutputOptions(name);
+    return chunkFileNames ? [chunkFileNames.split("[name]", 1)[0]!] : [];
+  },
+);
 
 // These verified releases coalesced lifecycle declarations under the cache module's region.
 // Keep this provenance correction only while those releases remain in the supported upgrade window.
@@ -74,11 +92,39 @@ function portable(value: string): string {
 }
 
 function moduleFiles(root: string): string[] {
+  const standaloneEntries = Object.keys(standaloneRuntimeProcessBuildEntries);
+  const standaloneFiles = new Set([
+    ...standaloneEntries.map((name) => `${name}.js`),
+    managedHandoffRuntimeEntrypoint.distWorkerPath,
+    packageActivationRuntimeEntrypoint.distWorkerPath,
+  ]);
+  const independentDirectories = new Set([
+    "config-doctor",
+    "state-retention",
+    "native-hook-relay",
+    ...standaloneEntries,
+  ]);
   const files: string[] = [];
   const visit = (directory: string) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const file = path.join(directory, entry.name);
+      const relative = portable(path.relative(root, file));
+      // Independent graphs cannot supply updater bridges or record copied updater imports.
+      if (
+        standaloneFiles.has(relative) ||
+        independentDirectories.has(relative) ||
+        STANDALONE_CHUNK_PREFIXES.some((prefix) => relative.startsWith(prefix))
+      ) {
+        continue;
+      }
       if (entry.isDirectory()) {
+        // The UI publishes its independent browser graph by renaming these trees.
+        if (
+          directory === root &&
+          (entry.name === "control-ui" || controlUiBuildSiblingPid(entry.name) !== null)
+        ) {
+          continue;
+        }
         // Plugin outputs and installed dependencies are independent runtime graphs.
         if (!["node_modules", "extensions", "plugin-sdk"].includes(entry.name)) {
           visit(file);
@@ -92,13 +138,16 @@ function moduleFiles(root: string): string[] {
   return files.toSorted();
 }
 
-function ownerAt(source: string, offset: number): string | undefined {
+function ownerAt(
+  regions: ReturnType<typeof moduleSourceRegions>,
+  offset: number,
+): string | undefined {
   let owner: string | undefined;
-  for (const match of source.matchAll(/^\/\/#region (.+)$/gm)) {
+  for (const match of regions) {
     if (match.index > offset) {
       break;
     }
-    owner = match[1];
+    owner = match.owner;
   }
   return owner;
 }
@@ -266,15 +315,17 @@ export function recordUpdateCompatibilityRelease(params: {
     const source = fs.readFileSync(file, "utf8");
     if (
       !source.includes("import(") ||
-      ![...source.matchAll(/^\/\/#region (.+)$/gm)].some(
+      ![...bundledModuleRegions(source)].some(
         ([, owner]) => owner !== undefined && POST_SWAP_OWNER.test(owner),
       )
     ) {
       continue;
     }
+    const sourceFile = parser.parseSourceFile(file, source);
+    const regions = moduleSourceRegions(sourceFile);
     const visit = (node: ts.Node) => {
       if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-        const owner = ownerAt(source, node.getStart());
+        const owner = ownerAt(regions, node.getStart());
         if (owner && POST_SWAP_OWNER.test(owner) && isPostSwapImport(owner, node)) {
           const specifier = node.arguments[0];
           if (!specifier || !ts.isStringLiteralLikeNode(specifier)) {
@@ -321,7 +372,7 @@ export function recordUpdateCompatibilityRelease(params: {
       }
       node.forEachChild(visit);
     };
-    visit(parser.parseSourceFile(file, source));
+    visit(sourceFile);
   }
   return {
     version: packageJson.version,
@@ -547,22 +598,10 @@ export function writeUpdateCompatibilityChunks(params: {
   const candidates = new Map<string, Map<string, { file: string; exported: string }>>();
   for (const file of moduleFiles(distDir)) {
     const relative = portable(path.relative(distDir, file));
-    // Retained config repairs and the one-shot native hook relay are built
-    // separately from the updater's runtime graph; their copies of shared
-    // modules are not bridge candidates.
-    if (
-      relative.startsWith("extensions/") ||
-      relative.startsWith("plugin-sdk/") ||
-      relative.startsWith("config-doctor/") ||
-      relative.startsWith("state-retention/") ||
-      relative.startsWith("native-hook-relay/")
-    ) {
-      continue;
-    }
     const source = fs.readFileSync(file, "utf8");
     if (
       isUpdateCompatibilityChunk(source) ||
-      ![...source.matchAll(/^\/\/#region (.+)$/gm)].some(
+      ![...bundledModuleRegions(source)].some(
         ([, owner]) => owner !== undefined && ownerModules.has(owner),
       )
     ) {

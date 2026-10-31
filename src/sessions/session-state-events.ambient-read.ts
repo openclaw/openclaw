@@ -66,10 +66,7 @@ export function prepareAmbientGroupWatchTargetsRead(
           { context, current: true },
         );
         context.admission.assertCurrent();
-        if (result && !result.ok) {
-          throw new Error(result.message);
-        }
-        return result?.type === "sessionState.ambientTargets" ? result.targets : [];
+        return result?.targets ?? [];
       } catch (error) {
         log.warn(`failed to list ambient group watch targets: ${String(error)}`);
         return [];

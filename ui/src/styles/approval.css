@@ -41,10 +41,6 @@
   box-shadow: var(--shadow-xl);
 }
 
-.approval-page__card--severity-info {
-  --approval-page-accent: var(--border);
-}
-
 .approval-page__card--severity-warning {
   --approval-page-accent: var(--warn);
 }
@@ -298,17 +294,6 @@
   min-height: 48px;
   justify-content: center;
   font-weight: 700;
-}
-
-.approval-page__action--allow-once {
-  border-color: var(--accent);
-  background: var(--primary);
-  color: var(--primary-foreground);
-}
-
-.approval-page__action--allow-once:hover:not(:disabled) {
-  border-color: var(--primary-hover);
-  background: var(--primary-hover);
 }
 
 .approval-page__action--deny {

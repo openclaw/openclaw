@@ -16,7 +16,7 @@ type Report = {
   failed: boolean;
   callbackFailure: boolean;
   retainedFailure: boolean;
-  acquisitionFailure: { pluginIds: string[]; message: string } | null;
+  acquisitionFailure: { message: string } | null;
 };
 
 let reports: Report[] = [];
@@ -54,10 +54,14 @@ it.for(["success", "callback-failure", "retained-release", "retained-acquire"])(
       acquisitionFailure:
         mode === "retained-acquire"
           ? {
-              pluginIds: ["doctor-custody-fixture-retained-acquire"],
               message: expect.stringContaining("registration failed after resource acquisition"),
             }
           : null,
     });
+    if (mode === "retained-acquire") {
+      expect(report?.acquisitionFailure?.message).toContain(
+        "doctor-custody-fixture-retained-acquire",
+      );
+    }
   },
 );

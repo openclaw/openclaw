@@ -1,5 +1,4 @@
 import path from "node:path";
-import Anthropic from "@anthropic-ai/sdk";
 import { APIError as AnthropicAPIError } from "@anthropic-ai/sdk/core/error.js";
 import type { AssistantMessageEventStreamLike, Model } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
@@ -11,6 +10,7 @@ import {
   createAnthropicResponse,
   registerParityHostLifecycle,
 } from "./provider-transport-parity.test-support.js";
+import { makeProviderModel } from "./providers/provider-model.test-support.js";
 
 type OpenAIChunk = Record<string, unknown>;
 
@@ -32,8 +32,8 @@ vi.mock("openai", () => ({
           }
           const createIterable = () => ({
             async *[Symbol.asyncIterator]() {
-              for (const chunk of openAiMockState.chunks) {
-                yield chunk;
+              for (const item of openAiMockState.chunks) {
+                yield item;
               }
               if (openAiMockState.streamError) {
                 throw openAiMockState.streamError;
@@ -64,19 +64,12 @@ type ParityFixture = {
   snapshot?: string;
 };
 
-const openAiModel = {
-  id: "gpt-5.5",
+const openAiModel = makeProviderModel("openai-completions", "openai", "gpt-5.5", {
   name: "GPT-5.5",
-  api: "openai-completions",
-  provider: "openai",
   // Managed official OpenAI reasoning tool turns use Responses; this covers the Chat wire.
   baseUrl: "https://chat-proxy.example/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
   maxTokens: 4096,
-} satisfies Model<"openai-completions">;
+});
 
 const openRouterModel = {
   ...openAiModel,
@@ -91,21 +84,35 @@ const openRouterModelWithoutBaseUrl = {
   baseUrl: undefined,
 } as unknown as Model<"openai-completions">;
 
+function chunk(delta: Record<string, unknown>, finishReason: string | null = null): OpenAIChunk {
+  return {
+    id: "chatcmpl-parity",
+    model: "gpt-5.5-response",
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
+  };
+}
+
+function thinking(value: string, thinkingSignature?: string) {
+  return { type: "thinking", thinking: value, ...(thinkingSignature ? { thinkingSignature } : {}) };
+}
+
+const text = (value: string) => ({ type: "text", text: value });
+const nativeThought = (value: string) => thinking(value, "reasoning_content");
+const interleavedContent = (signature?: string) => [
+  thinking("First thought.", signature),
+  text("Interim."),
+  thinking("Second thought.", signature),
+  text("Final."),
+];
+const stopped = (...deltas: Record<string, unknown>[]) => [
+  ...deltas.map((delta) => chunk(delta)),
+  chunk({}, "stop"),
+];
 const openAiChunks = [
+  chunk({ reasoning_content: "Think." }),
+  chunk({ content: "Answer." }),
   {
-    id: "chatcmpl-parity",
-    model: "gpt-5.5-response",
-    choices: [{ index: 0, delta: { reasoning_content: "Think." }, finish_reason: null }],
-  },
-  {
-    id: "chatcmpl-parity",
-    model: "gpt-5.5-response",
-    choices: [{ index: 0, delta: { content: "Answer." }, finish_reason: null }],
-  },
-  {
-    id: "chatcmpl-parity",
-    model: "gpt-5.5-response",
-    choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+    ...chunk({}, "stop"),
     usage: {
       prompt_tokens: 8,
       completion_tokens: 4,
@@ -114,117 +121,53 @@ const openAiChunks = [
       completion_tokens_details: { reasoning_tokens: 1 },
     },
   },
-] satisfies OpenAIChunk[];
-
-function makeOpenAiChunk(
-  delta: Record<string, unknown>,
-  finishReason: string | null = null,
-): OpenAIChunk {
-  return {
-    id: "chatcmpl-parity",
-    model: "gpt-5.5-response",
-    choices: [{ index: 0, delta, finish_reason: finishReason }],
-  };
-}
-
-function expectedThinking(thinking: string, thinkingSignature: string) {
-  return { type: "thinking", thinking, thinkingSignature };
-}
-
-const openAiInterleavedReasoningChunks = [
-  makeOpenAiChunk({ reasoning_content: "First thought." }),
-  makeOpenAiChunk({ content: "Interim." }),
-  makeOpenAiChunk({ reasoning_content: "Second thought." }),
-  makeOpenAiChunk({ content: "Final." }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiCoalescedReasoningChunks = [
-  makeOpenAiChunk({ reasoning_content: "First thought." }),
-  makeOpenAiChunk({ content: "Interim." }),
-  makeOpenAiChunk({ content: "Final.", reasoning_content: "Second thought." }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiTypedReasoningChunks = [
-  makeOpenAiChunk({ content: { type: "reasoning", text: "First thought." } }),
-  makeOpenAiChunk({ content: "Interim." }),
-  makeOpenAiChunk({ content: { type: "reasoning", text: "Second thought." } }),
-  makeOpenAiChunk({ content: "Final." }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiStructuredReasoningChunks = [
-  makeOpenAiChunk({
-    reasoning_details: [{ type: "reasoning.text", text: "First thought." }],
-  }),
-  makeOpenAiChunk({ content: "Interim." }),
-  makeOpenAiChunk({
-    reasoning_details: [{ type: "reasoning.text", text: "Second thought." }],
-  }),
-  makeOpenAiChunk({ content: "Final." }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiOrderedVisibleReasoningDetailsChunks = [
-  makeOpenAiChunk({
-    reasoning_details: [
-      { type: "response.output_text", text: "Visible first." },
-      { type: "reasoning.text", text: " Hidden second." },
-      { type: "response.text", text: " Visible third." },
-    ],
-  }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiSplitVisibleReasoningDetailsChunks = [
-  makeOpenAiChunk({
-    reasoning_details: [{ type: "response.output_text", text: "Visible first." }],
-  }),
-  makeOpenAiChunk({
-    reasoning_details: [{ type: "reasoning.text", text: " Hidden second." }],
-  }),
-  makeOpenAiChunk({
-    reasoning_details: [{ type: "response.text", text: " Visible third." }],
-  }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiVisibleDetailBeforeInterruptedContentChunks = [
-  makeOpenAiChunk({
-    reasoning_details: [{ type: "response.output_text", text: "Visible first." }],
-  }),
-  makeOpenAiChunk({
-    reasoning_details: [{ type: "reasoning.text", text: " Hidden second." }],
-  }),
-  makeOpenAiChunk({ content: "Interim." }),
-  makeOpenAiChunk({ reasoning_content: "Hidden fourth." }),
-  makeOpenAiChunk({ content: "Final." }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiTrailingReasoningChunks = [
-  makeOpenAiChunk({ reasoning_content: "First thought." }),
-  makeOpenAiChunk({ content: "Answer." }),
-  makeOpenAiChunk({ reasoning_content: "Trailing thought." }),
-  makeOpenAiChunk({ content: " " }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiInterleavedThenTrailingReasoningChunks = [
-  makeOpenAiChunk({ reasoning_content: "First thought." }),
-  makeOpenAiChunk({ content: "Interim." }),
-  makeOpenAiChunk({ reasoning_content: "Second thought." }),
-  makeOpenAiChunk({ content: "Final." }),
-  makeOpenAiChunk({ reasoning_content: "Trailing thought." }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiInterruptedErrorChunks = [
-  makeOpenAiChunk({ reasoning_content: "First thought." }),
-  makeOpenAiChunk({ content: "Interim." }),
-  makeOpenAiChunk({ reasoning_content: "Second thought." }),
-] satisfies OpenAIChunk[];
+];
+const interleaved = [
+  { reasoning_content: "First thought." },
+  { content: "Interim." },
+  { reasoning_content: "Second thought." },
+  { content: "Final." },
+];
+const visibleDetails = [
+  { type: "response.output_text", text: "Visible first." },
+  { type: "reasoning.text", text: " Hidden second." },
+  { type: "response.text", text: " Visible third." },
+];
+const nativeChunks = stopped(...interleaved);
+const coalescedChunks = stopped(...interleaved.slice(0, 2), {
+  content: "Final.",
+  reasoning_content: "Second thought.",
+});
+const typedChunks = stopped(
+  { content: { type: "reasoning", text: "First thought." } },
+  { content: "Interim." },
+  { content: { type: "reasoning", text: "Second thought." } },
+  { content: "Final." },
+);
+const structuredChunks = stopped(
+  { reasoning_details: [{ type: "reasoning.text", text: "First thought." }] },
+  { content: "Interim." },
+  { reasoning_details: [{ type: "reasoning.text", text: "Second thought." }] },
+  { content: "Final." },
+);
+const orderedChunks = stopped({ reasoning_details: visibleDetails });
+const splitChunks = stopped(...visibleDetails.map((detail) => ({ reasoning_details: [detail] })));
+const interruptedChunks = stopped(
+  ...visibleDetails.slice(0, 2).map((detail) => ({ reasoning_details: [detail] })),
+  { content: "Interim." },
+  { reasoning_content: "Hidden fourth." },
+  { content: "Final." },
+);
+const trailingChunks = stopped(
+  { reasoning_content: "First thought." },
+  { content: "Answer." },
+  { reasoning_content: "Trailing thought." },
+  { content: " " },
+);
+const nativeTrailingChunks = stopped(...interleaved, {
+  reasoning_content: "Trailing thought.",
+});
+const errorChunks = interleaved.slice(0, 3).map((delta) => chunk(delta));
 
 const anthropicFailure = {
   status: 429,
@@ -235,17 +178,26 @@ const anthropicFailure = {
   headers: { "content-type": "application/json", "retry-after": "2" },
 } as const;
 
+function usage(input_tokens: number, output_tokens: number, cacheRead = 0, cacheWrite = 0) {
+  return {
+    input_tokens,
+    output_tokens,
+    cache_read_input_tokens: cacheRead,
+    cache_creation_input_tokens: cacheWrite,
+  };
+}
+
+function messageStart(id: string, tokens: Record<string, unknown>) {
+  return { type: "message_start", message: { id, model: anthropicModel.id, usage: tokens } };
+}
+
 function normalizeRecord(value: Record<string, unknown>, keys: readonly string[]) {
   return Object.fromEntries(
     keys.flatMap((key) => (value[key] === undefined ? [] : [[key, value[key]]])),
   );
 }
 
-async function observeStream(stream: AssistantMessageEventStreamLike): Promise<{
-  eventTrace: unknown[];
-  terminal: Record<string, unknown>;
-  errorFields: Record<string, unknown>;
-}> {
+async function observeStream(stream: AssistantMessageEventStreamLike): Promise<ParityOutput> {
   const eventTrace: unknown[] = [];
   for await (const rawEvent of stream) {
     const event = rawEvent as unknown as Record<string, unknown>;
@@ -254,19 +206,12 @@ async function observeStream(stream: AssistantMessageEventStreamLike): Promise<{
   const result = (await stream.result()) as unknown as Record<string, unknown>;
   return {
     eventTrace,
-    terminal: normalizeRecord(result, [
-      "role",
-      "content",
-      "api",
-      "provider",
-      "model",
-      "responseId",
-      "responseModel",
-      "openclawDelivery",
-      "usage",
-      "stopReason",
-      "diagnostics",
-    ]),
+    terminal: normalizeRecord(
+      result,
+      "role content api provider model responseId responseModel openclawDelivery usage stopReason diagnostics".split(
+        " ",
+      ),
+    ),
     errorFields: normalizeRecord(result, ["errorMessage", "errorCode", "errorType", "errorBody"]),
   };
 }
@@ -301,23 +246,18 @@ async function runOpenAi(
   openAiMockState.streamError = streamError;
   const baseModel = modelOverride ?? openAiModel;
   const model = emitReasoning ? baseModel : { ...baseModel, reasoning: false };
-  const [{ streamOpenAICompletions }, { createOpenAICompletionsTransportStreamFn }] =
-    await Promise.all([
-      import("./providers/openai-completions.js"),
-      import("./transports/openai-completions-transport.js"),
-    ]);
+  const [
+    { streamOpenAICompletions: providerStream },
+    { createOpenAICompletionsTransportStreamFn: createTransport },
+  ] = await Promise.all([
+    import("./providers/openai-completions.js"),
+    import("./transports/openai-completions-transport.js"),
+  ]);
+  const options = { apiKey: "sk-test", reasoningEffort: "medium" } as const;
   const stream =
     implementation === "provider"
-      ? streamOpenAICompletions(model, context, {
-          apiKey: "sk-test",
-          reasoningEffort: "medium",
-        })
-      : await Promise.resolve(
-          createOpenAICompletionsTransportStreamFn()(model, context, {
-            apiKey: "sk-test",
-            reasoningEffort: "medium",
-          } as never),
-        );
+      ? providerStream(model, context, options)
+      : await createTransport()(model, context, options as never);
   const observed = await observeStream(stream);
   return {
     ...(outcome === "success" ? { payload: openAiMockState.payloads[0] } : {}),
@@ -332,10 +272,17 @@ async function runAnthropic(
 ): Promise<ParityOutput> {
   let payload: unknown;
   let stream: AssistantMessageEventStreamLike;
-  const [{ streamAnthropic }, { createAnthropicMessagesTransportStreamFn }] = await Promise.all([
-    import("./providers/anthropic.js"),
-    import("./transports/anthropic-transport-stream.js"),
-  ]);
+  const [{ streamAnthropic }, { createAnthropicMessagesTransportStreamFn: createTransport }] =
+    await Promise.all([
+      import("./providers/anthropic.js"),
+      import("./transports/anthropic-transport-stream.js"),
+    ]);
+  const options = {
+    apiKey: "sk-test",
+    thinkingEnabled: true,
+    thinkingBudgetTokens: 1024,
+    effort: "low",
+  } as const;
   if (implementation === "provider") {
     const client = {
       messages: {
@@ -358,11 +305,8 @@ async function runAnthropic(
       },
     };
     stream = streamAnthropic(anthropicModel, context, {
-      apiKey: "sk-test",
+      ...options,
       client: client as never,
-      thinkingEnabled: true,
-      thinkingBudgetTokens: 1024,
-      effort: "low",
     });
   } else {
     const fetchMock: typeof fetch = async (_input, init) => {
@@ -376,14 +320,7 @@ async function runAnthropic(
       return createAnthropicResponse(events);
     };
     configureAiTransportHost({ ...getAiTransportHost(), buildModelFetch: () => fetchMock });
-    stream = await Promise.resolve(
-      createAnthropicMessagesTransportStreamFn()(anthropicModel, context, {
-        apiKey: "sk-test",
-        thinkingEnabled: true,
-        thinkingBudgetTokens: 1024,
-        effort: "low",
-      } as never),
-    );
+    stream = await createTransport()(anthropicModel, context, options as never);
   }
   const observed = await observeStream(stream);
   return {
@@ -392,30 +329,34 @@ async function runAnthropic(
   };
 }
 
-const fixtures: ParityFixture[] = [
-  {
-    name: "Anthropic successful request and event trace",
-    provider: "anthropic",
-    outcome: "success",
-    snapshot: "anthropic-success.snap.txt",
-  },
-  {
-    name: "Anthropic structured request failure",
-    provider: "anthropic",
-    outcome: "error",
-  },
-  {
-    name: "OpenAI successful request and event trace",
-    provider: "openai",
-    outcome: "success",
-    snapshot: "openai-success.snap.txt",
-  },
-  {
-    name: "OpenAI structured request failure",
-    provider: "openai",
-    outcome: "error",
-  },
+type ContentCase = [
+  name: string,
+  chunks: OpenAIChunk[],
+  content: unknown[],
+  emitReasoning?: boolean,
+  model?: Model<"openai-completions">,
 ];
+const visibleContent = [text("Visible first."), thinking(" Hidden second.", "reasoning_details")];
+const routerCase = (name: string, chunks: OpenAIChunk[], content: unknown[]): ContentCase => [
+  name,
+  chunks,
+  content,
+  true,
+  openRouterModel,
+];
+
+const fixtures = (["anthropic", "openai"] as const).flatMap<ParityFixture>((provider) => {
+  const label = provider === "anthropic" ? "Anthropic" : "OpenAI";
+  return [
+    {
+      name: `${label} successful request and event trace`,
+      provider,
+      outcome: "success",
+      snapshot: `${provider}-success.snap.txt`,
+    },
+    { name: `${label} structured request failure`, provider, outcome: "error" },
+  ];
+});
 
 describe("provider and transport observable parity fixtures", () => {
   registerParityHostLifecycle();
@@ -424,21 +365,10 @@ describe("provider and transport observable parity fixtures", () => {
     { name: "seeded starts followed by deltas", seeded: true, deltas: true },
     { name: "seed-only blocks", seeded: true, deltas: false },
     { name: "empty starts followed by deltas", seeded: false, deltas: true },
-  ])("preserves Anthropic $name like the native SDK", async ({ seeded, deltas }) => {
+  ])("preserves Anthropic $name", async ({ seeded, deltas }) => {
     const events = anthropicEvents
       .filter((event) => deltas || event.type !== "content_block_delta")
       .map((event) => {
-        if (event.type === "message_start") {
-          return Object.assign({}, event, {
-            message: Object.assign({}, event.message, {
-              type: "message",
-              role: "assistant",
-              content: [],
-              stop_reason: null,
-              stop_sequence: null,
-            }),
-          });
-        }
         if (!seeded && event.type === "content_block_start" && event.content_block) {
           return Object.assign({}, event, {
             content_block:
@@ -449,42 +379,24 @@ describe("provider and transport observable parity fixtures", () => {
         }
         return event;
       });
-    const sdk = new Anthropic({
-      apiKey: "synthetic-key",
-      fetch: async () => createAnthropicResponse(events),
-    });
-    const sdkResult = await sdk.messages
-      .stream({
-        model: anthropicModel.id,
-        max_tokens: 4096,
-        messages: [{ role: "user", content: "Find the answer." }],
-      })
-      .finalMessage();
-    const thinking = `${seeded ? "seed" : ""}${deltas ? " + thought" : ""}`;
-    const text = `${seeded ? "Hello" : ""}${deltas ? " world" : ""}`;
+    const thought = `${seeded ? "seed" : ""}${deltas ? " + thought" : ""}`;
+    const answer = `${seeded ? "Hello" : ""}${deltas ? " world" : ""}`;
     const signature = deltas ? "final-signature" : "seed-signature";
-    expect(sdkResult.content).toEqual([
-      { type: "thinking", thinking, signature },
-      { type: "text", text },
-    ]);
     for (const implementation of ["provider", "transport"] as const) {
       const result = await runAnthropic(implementation, "success", events);
       expect(result.terminal).toMatchObject({
         stopReason: "stop",
-        content: [
-          { type: "thinking", thinking, thinkingSignature: signature },
-          { type: "text", text },
-        ],
+        content: [thinking(thought, signature), text(answer)],
       });
       expect(result.eventTrace).toContainEqual({
         type: "thinking_end",
         contentIndex: 0,
-        content: thinking,
+        content: thought,
       });
       expect(result.eventTrace).toContainEqual({
         type: "text_end",
         contentIndex: 1,
-        content: text,
+        content: answer,
       });
     }
   });
@@ -535,17 +447,11 @@ describe("provider and transport observable parity fixtures", () => {
           iterations: [
             {
               type: "compaction",
-              input_tokens: 10,
-              output_tokens: 3,
-              cache_read_input_tokens: 2,
-              cache_creation_input_tokens: 1,
+              ...usage(10, 3, 2, 1),
             },
             {
               type: "message",
-              input_tokens: 4,
-              output_tokens: 5,
-              cache_read_input_tokens: 6,
-              cache_creation_input_tokens: 7,
+              ...usage(4, 5, 6, 7),
             },
           ],
         },
@@ -565,23 +471,11 @@ describe("provider and transport observable parity fixtures", () => {
     "preserves Anthropic accounting for $name",
     async ({ updates, final, billing, contextUsage }) => {
       const events = [
-        {
-          type: "message_start",
-          message: {
-            id: "msg_usage_parity",
-            model: anthropicModel.id,
-            usage: {
-              input_tokens: 37,
-              output_tokens: 2,
-              cache_read_input_tokens: 11,
-              cache_creation_input_tokens: 5,
-            },
-          },
-        },
+        messageStart("msg_usage_parity", usage(37, 2, 11, 5)),
         { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
         { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Done." } },
         { type: "content_block_stop", index: 0 },
-        ...updates.map((usage) => ({ type: "message_delta", delta: {}, usage })),
+        ...updates.map((tokens) => ({ type: "message_delta", delta: {}, usage: tokens })),
         { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: final },
         { type: "message_stop" },
       ];
@@ -613,14 +507,7 @@ describe("provider and transport observable parity fixtures", () => {
     },
   ])("preserves Anthropic terminal tool validation for $name", async (fixture) => {
     const events = [
-      {
-        type: "message_start",
-        message: {
-          id: "msg_seeded",
-          model: anthropicModel.id,
-          usage: { input_tokens: 1, output_tokens: 0 },
-        },
-      },
+      messageStart("msg_seeded", { input_tokens: 1, output_tokens: 0 }),
       {
         type: "content_block_start",
         index: 0,
@@ -664,79 +551,45 @@ describe("provider and transport observable parity fixtures", () => {
     }
   });
 
-  it("preserves unphased content when native reasoning resumes", async () => {
+  it.each<ContentCase>([
+    ["interleaved reasoning", nativeChunks, interleavedContent("reasoning_content")],
+    ["coalesced reasoning", coalescedChunks, interleavedContent("reasoning_content")],
+    ["typed reasoning", typedChunks, interleavedContent()],
+    ["structured reasoning", structuredChunks, interleavedContent("reasoning_details")],
+    ["hidden reasoning", nativeChunks, [text("Interim."), text("Final.")], false],
+    [
+      "trailing reasoning",
+      trailingChunks,
+      [
+        nativeThought("First thought."),
+        text("Answer."),
+        nativeThought("Trailing thought."),
+        text(" "),
+      ],
+    ],
+    [
+      "interleaved then trailing reasoning",
+      nativeTrailingChunks,
+      [...interleavedContent("reasoning_content"), nativeThought("Trailing thought.")],
+    ],
+    routerCase("ordered visible details", orderedChunks, [
+      ...visibleContent,
+      text(" Visible third."),
+    ]),
+    routerCase("split visible details", splitChunks, [...visibleContent, text(" Visible third.")]),
+    routerCase("visible details before interrupted content", interruptedChunks, [
+      ...visibleContent,
+      text("Interim."),
+      nativeThought("Hidden fourth."),
+      text("Final."),
+    ]),
+  ])("preserves %s", async (_name, chunks, content, emitReasoning, model) => {
     for (const implementation of ["provider", "transport"] as const) {
-      for (const chunks of [openAiInterleavedReasoningChunks, openAiCoalescedReasoningChunks]) {
-        const result = await runOpenAi(implementation, "success", chunks);
-
-        expect(result.terminal.content).toEqual([
-          expectedThinking("First thought.", "reasoning_content"),
-          { type: "text", text: "Interim." },
-          expectedThinking("Second thought.", "reasoning_content"),
-          { type: "text", text: "Final." },
-        ]);
+      const result = await runOpenAi(implementation, "success", chunks, emitReasoning, model);
+      expect(result.terminal.content).toEqual(content);
+      if (emitReasoning === false) {
+        expect(result.terminal.openclawDelivery).toBeUndefined();
       }
-
-      const typedReasoningResult = await runOpenAi(
-        implementation,
-        "success",
-        openAiTypedReasoningChunks,
-      );
-      expect(typedReasoningResult.terminal.content).toEqual([
-        { type: "thinking", thinking: "First thought." },
-        { type: "text", text: "Interim." },
-        { type: "thinking", thinking: "Second thought." },
-        { type: "text", text: "Final." },
-      ]);
-
-      const structuredReasoningResult = await runOpenAi(
-        implementation,
-        "success",
-        openAiStructuredReasoningChunks,
-      );
-      expect(structuredReasoningResult.terminal.content).toEqual([
-        expectedThinking("First thought.", "reasoning_details"),
-        { type: "text", text: "Interim." },
-        expectedThinking("Second thought.", "reasoning_details"),
-        { type: "text", text: "Final." },
-      ]);
-
-      const hiddenReasoningResult = await runOpenAi(
-        implementation,
-        "success",
-        openAiInterleavedReasoningChunks,
-        false,
-      );
-      expect(hiddenReasoningResult.terminal.content).toEqual([
-        { type: "text", text: "Interim." },
-        { type: "text", text: "Final." },
-      ]);
-      expect(hiddenReasoningResult.terminal.openclawDelivery).toBeUndefined();
-
-      const trailingReasoningResult = await runOpenAi(
-        implementation,
-        "success",
-        openAiTrailingReasoningChunks,
-      );
-      expect(trailingReasoningResult.terminal.content).toEqual([
-        expectedThinking("First thought.", "reasoning_content"),
-        { type: "text", text: "Answer." },
-        expectedThinking("Trailing thought.", "reasoning_content"),
-        { type: "text", text: " " },
-      ]);
-
-      const interleavedThenTrailingReasoningResult = await runOpenAi(
-        implementation,
-        "success",
-        openAiInterleavedThenTrailingReasoningChunks,
-      );
-      expect(interleavedThenTrailingReasoningResult.terminal.content).toEqual([
-        expectedThinking("First thought.", "reasoning_content"),
-        { type: "text", text: "Interim." },
-        expectedThinking("Second thought.", "reasoning_content"),
-        { type: "text", text: "Final." },
-        expectedThinking("Trailing thought.", "reasoning_content"),
-      ]);
     }
   });
 
@@ -745,7 +598,7 @@ describe("provider and transport observable parity fixtures", () => {
       const result = await runOpenAi(
         implementation,
         "success",
-        openAiInterruptedErrorChunks,
+        errorChunks,
         true,
         undefined,
         new Error("synthetic interrupted stream"),
@@ -753,27 +606,10 @@ describe("provider and transport observable parity fixtures", () => {
 
       expect(result.terminal.stopReason).toBe("error");
       expect(result.terminal.content).toEqual([
-        expectedThinking("First thought.", "reasoning_content"),
-        { type: "text", text: "Interim." },
-        expectedThinking("Second thought.", "reasoning_content"),
+        nativeThought("First thought."),
+        text("Interim."),
+        nativeThought("Second thought."),
       ]);
-    }
-  });
-
-  it("preserves ordered visible OpenRouter reasoning details across both producers", async () => {
-    for (const implementation of ["provider", "transport"] as const) {
-      for (const chunks of [
-        openAiOrderedVisibleReasoningDetailsChunks,
-        openAiSplitVisibleReasoningDetailsChunks,
-      ]) {
-        const result = await runOpenAi(implementation, "success", chunks, true, openRouterModel);
-
-        expect(result.terminal.content).toEqual([
-          { type: "text", text: "Visible first." },
-          expectedThinking(" Hidden second.", "reasoning_details"),
-          { type: "text", text: " Visible third." },
-        ]);
-      }
     }
   });
 
@@ -792,26 +628,6 @@ describe("provider and transport observable parity fixtures", () => {
         'Provider "openrouter" requires an explicit base URL',
       );
       expect(openAiMockState.payloads).toEqual([]);
-    }
-  });
-
-  it("preserves earlier visible details when later ordinary content is interrupted", async () => {
-    for (const implementation of ["provider", "transport"] as const) {
-      const result = await runOpenAi(
-        implementation,
-        "success",
-        openAiVisibleDetailBeforeInterruptedContentChunks,
-        true,
-        openRouterModel,
-      );
-
-      expect(result.terminal.content).toEqual([
-        { type: "text", text: "Visible first." },
-        expectedThinking(" Hidden second.", "reasoning_details"),
-        { type: "text", text: "Interim." },
-        expectedThinking("Hidden fourth.", "reasoning_content"),
-        { type: "text", text: "Final." },
-      ]);
     }
   });
 });

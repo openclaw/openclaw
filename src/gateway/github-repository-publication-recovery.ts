@@ -6,12 +6,12 @@ import { decodeGitHubPublicationRequester } from "../state/github-publication-re
 import { readGitHubPublicationInWorker } from "../state/github-publication-worker.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
-import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createGitHubPublicationExecutionIdentity } from "./github-publication-execution-identity.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { reconcileGitHubPublicationPullRequest } from "./github-publication-pull-requests.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
+import type { GitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
 import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
 import {
   listRepositoryGitHubPublicationsAsync,
@@ -24,6 +24,7 @@ import {
 import {
   assertReceiptOwner,
   captureCheckpoint,
+  prepareReceiptOwner,
   resolveReceiptOwner,
 } from "./github-repository-publication-workspace.js";
 import { matchesRepositoryGitHubPublicationClaim } from "./github-repository-publication.kernel.js";
@@ -33,12 +34,12 @@ import type {
 } from "./worker-environments/placement-store.js";
 import { SessionWorkspaceReservationBusyError } from "./worker-environments/placement-workspace-reservation.kernel.js";
 
-export async function settleDeniedRepositoryGitHubPublication(params: {
+export async function observeRepositoryGitHubPublication(params: {
   execution: RepositoryGitHubPublicationExecutionAsync;
   assertCustody: () => void;
-  error: GitHubPublicationRequesterUnavailableError;
-}): Promise<SessionGitHubPublicationResult> {
-  const { execution, assertCustody, error } = params;
+  beforeRetry?: boolean;
+}): Promise<SessionGitHubPublicationResult | undefined> {
+  const { execution, assertCustody } = params;
   assertCustody();
   if (!execution.ownsExecution()) {
     throw new GitHubPublicationRecoveryPendingError(
@@ -74,7 +75,9 @@ export async function settleDeniedRepositoryGitHubPublication(params: {
         "GitHub publication's recorded effects lack the facts needed for recovery; inspect the original target before requesting another publication.",
       );
     }
-    const preparedOwner = await getSessionRepositoryWorkspaceStore().prepare(row.workspace_id);
+    const preparedOwner = await prepareReceiptOwner(row);
+    using _ = { [Symbol.dispose]: () => preparedOwner.release() };
+
     assertCustody();
     const { assertCurrent, refreshIdentity } = createGitHubPublicationExecutionIdentity({
       row,
@@ -103,6 +106,7 @@ export async function settleDeniedRepositoryGitHubPublication(params: {
         parentCommit: row.previous_head_commit ?? row.source_head_commit,
         marker: `<!-- openclaw-publication:${row.request_id} -->`,
         knownPullRequestUrls,
+        beforeRetry: params.beforeRetry,
         refreshIdentity,
         assertCurrent,
         // Older writers could overwrite a prior PR phase with a ref observation.
@@ -123,36 +127,47 @@ export async function settleDeniedRepositoryGitHubPublication(params: {
       );
     }
     if (url) {
-      return projectGitHubPublicationResult(
-        await execution.complete({
-          requestId: row.request_id,
-          status: "published",
-          url,
-          repository: row.repository,
-          branch: row.branch,
-          headCommit: row.head_commit,
-        }),
-      );
+      return {
+        requestId: row.request_id,
+        status: "published",
+        url,
+        repository: row.repository,
+        branch: row.branch,
+        headCommit: row.head_commit,
+      };
     }
   }
+  return undefined;
+}
+
+export async function settleDeniedRepositoryGitHubPublication(params: {
+  execution: RepositoryGitHubPublicationExecutionAsync;
+  assertCustody: () => void;
+  error: GitHubPublicationRequesterUnavailableError;
+}): Promise<SessionGitHubPublicationResult> {
+  const observed = await observeRepositoryGitHubPublication(params);
   return projectGitHubPublicationResult(
-    await execution.complete({
-      requestId: row.request_id,
-      status: "failed",
-      ...error.failure,
-      message: error.message,
-    }),
+    await params.execution.complete(
+      observed ?? {
+        requestId: params.execution.row.request_id,
+        status: "failed",
+        ...params.error.failure,
+        message: params.error.message,
+      },
+    ),
   );
 }
 
 export function createRepositoryGitHubPublicationRecovery(params: {
   placements: WorkerSessionPlacementStore;
+  recovery?: GitHubPublicationRecoveryBackoff;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   isExecuting: (requestId: string) => boolean;
   assertCurrent: () => void;
   execute: (
     row: RepositoryGitHubPublicationRow,
     assertCustody: () => void,
+    recoveryResult?: SessionGitHubPublicationResult,
   ) => Promise<SessionGitHubPublicationResult>;
 }) {
   const { placements } = params;
@@ -231,14 +246,24 @@ export function createRepositoryGitHubPublicationRecovery(params: {
         }
       }
     },
-    async resumeSessionRequests(): Promise<void> {
+    async resumeSessionRequests(isStopping?: () => boolean): Promise<void> {
+      if (isStopping?.()) {
+        return;
+      }
       const failures: Error[] = [];
       const rows = await listRepositoryGitHubPublicationsAsync({
         ownerProfileId: null,
         pending: true,
       });
+      params.recovery?.retain(rows.map((row) => row.request_id));
+      if (isStopping?.()) {
+        return;
+      }
       const currentPlacements = await placements.getManyAsync(rows.map((row) => row.session_id));
       for (const row of rows) {
+        if (isStopping?.()) {
+          break;
+        }
         try {
           if (
             currentPlacements.get(row.session_id)?.turnClaim ||
@@ -249,17 +274,35 @@ export function createRepositoryGitHubPublicationRecovery(params: {
           await placements.withRepositoryWorkspaceReservation(
             { sessionId: row.session_id, sessionKey: row.session_key, agentId: row.agent_id },
             async (assertCurrent) => {
-              const preparedOwner = await getSessionRepositoryWorkspaceStore().prepare(
-                row.workspace_id,
-              );
-              assertCurrent();
-              const owner = resolveReceiptOwner(row, preparedOwner);
-              if (!owner) {
-                // Keep the reservation through settlement; retirement needs only owner custody.
-                await failStaleRepositoryGitHubPublicationAsync(row, params.assertCurrent);
-                return;
-              }
-              await params.execute(row, assertCurrent);
+              const execute = async () => {
+                const preparedOwner = await prepareReceiptOwner(row);
+                using _ = { [Symbol.dispose]: () => preparedOwner.release() };
+                assertCurrent();
+                const owner = resolveReceiptOwner(row, preparedOwner);
+                if (!owner) {
+                  // Keep the reservation through settlement; retirement needs only owner custody.
+                  await failStaleRepositoryGitHubPublicationAsync(row, params.assertCurrent);
+                  return undefined;
+                }
+                const result = await params.execute(row, assertCurrent);
+                // Execution validates the requester before returning an ordinary checkpoint wait.
+                return result.status === "requested" &&
+                  !row.checkpoint_ref &&
+                  !owner.workspace.checkpointRef
+                  ? undefined
+                  : result;
+              };
+              return params.recovery
+                ? await params.recovery.run(row, execute, async (result) => {
+                    // The failed attempt can replace the execution claim before settlement.
+                    const current = await readRepositoryGitHubPublicationInWorker(row.request_id);
+                    assertCurrent();
+                    if (!current) {
+                      throw new Error("GitHub repository publication receipt is unavailable.");
+                    }
+                    return params.execute(current, assertCurrent, result);
+                  })
+                : await execute();
             },
           );
         } catch (error) {
@@ -336,7 +379,7 @@ async function readKnownRepositoryGitHubPublicationPullRequestUrls(
     },
     { current: true },
   );
-  if (!result?.ok || result.type !== "githubRepository.knownPullRequestUrls") {
+  if (!result) {
     throw new Error("GitHub repository publication receipt history is unavailable.");
   }
   return result.urls;

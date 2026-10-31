@@ -4,6 +4,7 @@ import {
   WorkerProviderError,
   type WorkerMachineOption,
   type WorkerProfile,
+  type WorkerProvider,
 } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { hashWorkerCredential } from "./credential.js";
@@ -12,12 +13,54 @@ import {
   readWorkerPlacementIdentity,
   projectWorkerSessionPlacement,
 } from "./placement-projector.js";
+import { localPlacement } from "./placement-suite.test-support.js";
 import * as support from "./service.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("projects live provisioning status and closes retained reports after settlement", async () => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let report:
+      | NonNullable<NonNullable<Parameters<WorkerProvider["provision"]>[2]>["reportStartStatus"]>
+      | undefined;
+    const provider = support.createProvider({
+      provision: async (_profile, _operation, options) => {
+        report = options?.reportStartStatus;
+        report?.({ mode: "cold", reason: "no-snapshot-yet", phase: "preparing" });
+        entered.resolve();
+        await release.promise;
+        return { leaseId: "lease-status", ssh: support.SSH_ENDPOINT };
+      },
+    });
+    const service = support.createService(provider);
+    const creating = service.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "status",
+    });
+    try {
+      await entered.promise;
+      const environmentId = support.testState.store.list()[0]!.environmentId;
+      expect(service.get(environmentId)?.startStatus).toEqual({
+        mode: "cold",
+        reason: "no-snapshot-yet",
+        phase: "preparing",
+      });
+      report?.({ mode: "cold", reason: "no-snapshot-yet", phase: "saving" });
+      expect(service.get(environmentId)?.startStatus?.phase).toBe("saving");
+      release.resolve();
+      await creating;
+      expect(service.get(environmentId)?.startStatus).toBeUndefined();
+      expect(() => report?.({ mode: "snapshot" })).toThrow("closed");
+    } finally {
+      release.resolve();
+      await creating;
+      await service.stop();
+    }
+  });
 
   it.each(["abort", "timeout"])(
     "never allocates from preparation closed by %s",
@@ -100,6 +143,8 @@ describe("worker environment service", () => {
           machineClass: "beast",
           os: "os-a",
           assertCurrent: expect.any(Function),
+          reportStartStatus: expect.any(Function),
+          signal: expect.any(AbortSignal),
         });
         return { leaseId: "lease-1", ssh: support.SSH_ENDPOINT };
       },
@@ -200,7 +245,12 @@ describe("worker environment service", () => {
     expect(provision).toHaveBeenCalledWith(
       { region: "test" },
       expect.stringMatching(/^provision:v2:[a-f0-9]{64}$/u),
-      { profileId: "development", assertCurrent: expect.any(Function) },
+      {
+        profileId: "development",
+        assertCurrent: expect.any(Function),
+        reportStartStatus: expect.any(Function),
+        signal: expect.any(AbortSignal),
+      },
     );
   });
 
@@ -225,7 +275,11 @@ describe("worker environment service", () => {
       message: expect.stringContaining("worker-turn providers must return a node lease"),
     });
 
-    expect(destroy).toHaveBeenCalledWith({ leaseId: lease.leaseId, profile: { region: "test" } });
+    expect(destroy).toHaveBeenCalledWith({
+      leaseId: lease.leaseId,
+      profile: { region: "test" },
+      signal: expect.any(AbortSignal),
+    });
     expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
     expect(support.testState.store.list()).toEqual([
       expect.objectContaining({
@@ -272,26 +326,9 @@ describe("worker environment service", () => {
     );
     const project = (record: (typeof records)[number]) => {
       const placement = {
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        agentId: "main",
-        executionMode: "worker-turn" as const,
+        ...localPlacement(),
         state: "provisioning" as const,
         environmentId: record.environmentId,
-        activeOwnerEpoch: null,
-        generation: 1,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        stateChangedAtMs: 1,
-        workspaceBaseManifestRef: null,
-        remoteWorkspaceDir: null,
-        workerBundleHash: null,
-        lastTranscriptAckCursor: null,
-        lastLiveEventAckCursor: null,
-        recoveryError: null,
-        terminalReason: null,
-        terminalAtMs: null,
-        turnClaim: null,
       };
       return projectWorkerSessionPlacement(
         placement,
@@ -392,9 +429,9 @@ describe("worker environment service", () => {
       }),
       { logger: { warn } },
     );
-    service.subscribeMachineShapeChanged(() => {
+    service.machineShapeNotifications.onChanged = () => {
       throw new Error("observer unavailable");
-    });
+    };
     const environment = await service.createWithRequest({
       profileId: "development",
       idempotencyKey: "catalog-failure",

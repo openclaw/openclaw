@@ -1,14 +1,17 @@
-// E2E Helper Env Limits tests cover e2e helper env limits script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import fs from "node:fs";
-import { createServer, type Server } from "node:http";
-import os from "node:os";
+import { createServer } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { getFreePort } from "../../src/test-utils/ports.js";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
+import { createDeferred } from "../helpers/promise.js";
+import { stopChildProcess } from "../helpers/stop-child-process.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const clickclackFixturePath = "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs";
 const clickclackPluginWritePath =
   "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs";
@@ -23,74 +26,10 @@ type ClickClackFixturePlugin = {
   };
 };
 
-function runScript(scriptPath: string, args: string[] = [], env: Record<string, string> = {}) {
-  return spawnSync(process.execPath, [scriptPath, ...args], {
-    encoding: "utf8",
-    env: { ...process.env, ...env },
-  });
-}
-
-async function listen(server: Server): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("test server did not expose a TCP port");
-  }
-  return `http://127.0.0.1:${address.port}`;
-}
-
-async function allocatePort(): Promise<number> {
-  const server = createServer();
-  const url = await listen(server);
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-  return Number(new URL(url).port);
-}
-
-async function waitForOutput(
-  matches: (text: string) => boolean,
-  getOutput: () => string,
-): Promise<void> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < 3_000) {
-    if (matches(getOutput())) {
-      return;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
-  }
-  throw new Error(`timed out waiting for fixture output. Output: ${getOutput()}`);
-}
-
-async function stopChild(child: ReturnType<typeof spawn>): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-    }, 1_000);
-    child.once("exit", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    // Escalation requests termination; only this child's exit completes cleanup.
-    child.kill("SIGTERM");
-  });
-}
-
 describe("e2e helper numeric env limits", () => {
   it("rejects oversized ClickClack fixture request bodies", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-clickclack-fixture-"));
-    const port = await allocatePort();
+    const tempDir = tempDirs.make("openclaw-clickclack-fixture-");
+    const port = await getFreePort();
     const child = spawn(process.execPath, [clickclackFixturePath], {
       env: {
         ...process.env,
@@ -101,19 +40,14 @@ describe("e2e helper numeric env limits", () => {
       stdio: ["ignore", "pipe", "pipe"],
     });
     const output = createBoundedChildOutput();
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      output.append(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      output.append(chunk);
-    });
+    for (const stream of [child.stdout, child.stderr]) {
+      stream.setEncoding("utf8");
+      stream.on("data", output.append);
+    }
     try {
-      await waitForOutput(
-        (text) => text.includes(`clickclack fixture listening on ${port}`),
-        () => output.text(),
-      );
+      await expect
+        .poll(() => output.text(), { timeout: 3_000, interval: 20 })
+        .toContain(`clickclack fixture listening on ${port}`);
 
       const response = await fetch(`http://127.0.0.1:${port}/fixture/inbound`, {
         body: JSON.stringify({ body: "x".repeat(64) }),
@@ -125,79 +59,73 @@ describe("e2e helper numeric env limits", () => {
       expect(response.status).toBe(413);
       expect(body).toEqual({ error: "ClickClack fixture request body exceeded 16 bytes" });
     } finally {
-      await stopChild(child);
-      fs.rmSync(tempDir, { force: true, recursive: true });
+      await stopChildProcess(child, 1_000);
     }
   });
 
-  it("cancels Open WebUI HTTP probe response bodies", async () => {
+  it.each([
+    { name: "cancels response bodies", cancelBody: true, timeoutMs: 500 },
+    {
+      name: "clamps oversized timers before scheduling",
+      cancelBody: false,
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+    },
+  ])("Open WebUI HTTP probe $name", async ({ cancelBody, timeoutMs }) => {
     const { probeHttpStatus } = await import("../../scripts/e2e/lib/openwebui/http-probe.mjs");
     let canceled = false;
     const fetchImpl = (async (_url: string, init: RequestInit) => {
-      expect(init.headers).toEqual({ authorization: "Bearer token-123" });
+      if (cancelBody) {
+        expect(init.headers).toEqual({ authorization: "Bearer token-123" });
+      } else {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 25);
+          init.signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+      }
       return new Response(
-        new ReadableStream<Uint8Array>({
-          cancel() {
-            canceled = true;
-          },
-        }),
+        cancelBody
+          ? new ReadableStream<Uint8Array>({
+              cancel() {
+                canceled = true;
+              },
+            })
+          : null,
         { status: 200 },
       );
     }) as typeof fetch;
-
     await expect(
       probeHttpStatus({
-        bearer: "token-123",
+        ...(cancelBody ? { bearer: "token-123" } : {}),
         fetchImpl,
-        timeoutMs: 500,
+        timeoutMs,
         url: "http://127.0.0.1/probe",
       }),
     ).resolves.toBe(true);
-    expect(canceled).toBe(true);
-  });
-
-  it("clamps oversized Open WebUI HTTP probe timers before scheduling", async () => {
-    const { probeHttpStatus } = await import("../../scripts/e2e/lib/openwebui/http-probe.mjs");
-    const fetchImpl = (async (_url: string, init: RequestInit) => {
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, 25);
-        init.signal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            reject(new Error("aborted"));
-          },
-          { once: true },
-        );
-      });
-      return new Response(null, { status: 200 });
-    }) as typeof fetch;
-
-    await expect(
-      probeHttpStatus({
-        fetchImpl,
-        timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
-        url: "http://127.0.0.1/probe",
-      }),
-    ).resolves.toBe(true);
+    expect(canceled).toBe(cancelBody);
   });
 
   it("bounds generated ClickClack plugin response bodies", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-clickclack-plugin-"));
-    let headersSentResolve: (() => void) | undefined;
-    const headersSent = new Promise<void>((resolve) => {
-      headersSentResolve = resolve;
-    });
+    const tempDir = tempDirs.make("openclaw-clickclack-plugin-");
+    const headersSent = createDeferred();
     const server = createServer((_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });
       response.flushHeaders();
-      headersSentResolve?.();
+      headersSent.resolve();
     });
-    const baseUrl = await listen(server);
+    const baseUrl = await listenLoopback(server);
     const realTimeout = AbortSignal.timeout.bind(AbortSignal);
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => realTimeout(200));
     try {
-      const result = runScript(clickclackPluginWritePath, [tempDir]);
+      const result = spawnSync(process.execPath, [clickclackPluginWritePath, tempDir], {
+        encoding: "utf8",
+      });
       expect(result.status).toBe(0);
       const generated = (await import(pathToFileURL(path.join(tempDir, "index.mjs")).href)) as {
         default: {
@@ -223,18 +151,14 @@ describe("e2e helper numeric env limits", () => {
         to: "channel:general",
       });
       const rejection = expect(request).rejects.toMatchObject({ name: "TimeoutError" });
-      await headersSent;
+      await headersSent.promise;
       await rejection;
 
       expect(timeoutSpy).toHaveBeenCalledWith(30_000);
       expect(Date.now() - startedAt).toBeLessThan(2_000);
     } finally {
       timeoutSpy.mockRestore();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-      fs.rmSync(tempDir, { force: true, recursive: true });
+      await closeHttpServer(server);
     }
   });
 });

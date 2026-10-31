@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createMigrationItem,
@@ -9,6 +8,7 @@ import {
   resolveMigrationConfigRuntime,
 } from "openclaw/plugin-sdk/migration";
 import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
@@ -78,9 +78,7 @@ function sourceCredentialFingerprint(credential: CodexAuthCredential): string {
           credential.credential.accountId,
           credential.credential.idToken,
         ];
-  return createHash("sha256")
-    .update(JSON.stringify([credential.kind, source]))
-    .digest("hex");
+  return sha256Hex(JSON.stringify([credential.kind, source]));
 }
 
 async function readModelRefs(source: CodexAuthSource): Promise<string[]> {

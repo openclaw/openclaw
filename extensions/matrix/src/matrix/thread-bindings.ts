@@ -1,7 +1,8 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { hasSqliteWorkerOutcomeUnknown } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -39,11 +40,12 @@ const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 60_000;
 const TOUCH_PERSIST_DELAY_MS = 30_000;
 
 function createThreadBindingStore(params: {
+  runtime: PluginRuntime;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   assertCurrent?: () => void;
 }) {
-  return getMatrixRuntime().state.openKeyedStoreV2<MatrixThreadBindingRecord>(
+  return params.runtime.state.openKeyedStoreV2<MatrixThreadBindingRecord>(
     {
       namespace: THREAD_BINDINGS_NAMESPACE,
       maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
@@ -58,13 +60,9 @@ function buildThreadBindingStoreKey(record: {
   conversationId: string;
   parentConversationId?: string;
 }): string {
-  const digest = createHash("sha256")
-    .update(record.accountId)
-    .update("\0")
-    .update(record.parentConversationId ?? "")
-    .update("\0")
-    .update(record.conversationId)
-    .digest("hex");
+  const digest = sha256Hex(
+    `${record.accountId}\0${record.parentConversationId ?? ""}\0${record.conversationId}`,
+  );
   return `${record.accountId}:${digest}`;
 }
 
@@ -104,6 +102,7 @@ function normalizeBindingRecord(
 }
 
 async function loadBindingsFromPluginState(params: {
+  runtime: PluginRuntime;
   accountId: string;
   assertCurrent?: () => void;
   env?: NodeJS.ProcessEnv;
@@ -126,6 +125,7 @@ function toPluginJsonValue<T>(value: T): T {
 }
 
 async function persistBindingsSnapshot(params: {
+  runtime: PluginRuntime;
   accountId: string;
   bindings: MatrixThreadBindingRecord[];
   assertCurrent?: () => void;
@@ -134,29 +134,18 @@ async function persistBindingsSnapshot(params: {
 }): Promise<MatrixThreadBindingRecord[]> {
   const store = createThreadBindingStore(params);
   const liveKeys = new Set(params.bindings.map((record) => buildThreadBindingStoreKey(record)));
-  const stored = new Map<string, MatrixThreadBindingRecord>();
   for (const entry of await store.entries()) {
     const record = normalizeBindingRecord(entry.value, params.accountId);
-    if (record) {
-      stored.set(entry.key, record);
-    }
     if (record && !liveKeys.has(entry.key)) {
       await store.delete(entry.key);
     }
   }
-  const committed: MatrixThreadBindingRecord[] = [];
+  // The persistence queue captures these records after earlier touches have settled.
   for (const record of params.bindings) {
     const key = buildThreadBindingStoreKey(record);
-    const previous = stored.get(key);
-    // A snapshot accepted behind a targeted touch must not restore its older activity time.
-    const next =
-      previous && sameBindingIncarnation(previous, record)
-        ? { ...record, lastActivityAt: Math.max(record.lastActivityAt, previous.lastActivityAt) }
-        : record;
-    await store.register(key, toPluginJsonValue(next));
-    committed.push(next);
+    await store.register(key, toPluginJsonValue(record));
   }
-  return committed;
+  return params.bindings;
 }
 
 export async function createMatrixThreadBindingManager(params: {
@@ -193,7 +182,10 @@ export async function createMatrixThreadBindingManager(params: {
     }
     await existingEntry.manager.stop();
   }
+  // Adapter calls can run outside the Matrix plugin instance, so keep this instance's runtime.
+  const runtime = getMatrixRuntime();
   const loaded = await loadBindingsFromPluginState({
+    runtime,
     accountId: params.accountId,
     env: params.env,
     stateDir: sqliteStateDir,
@@ -234,6 +226,7 @@ export async function createMatrixThreadBindingManager(params: {
   ) => {
     try {
       const committed = await persistBindingsSnapshot({
+        runtime,
         accountId: params.accountId,
         bindings,
         env: params.env,
@@ -253,6 +246,7 @@ export async function createMatrixThreadBindingManager(params: {
       try {
         // Individual snapshot writes can commit before a later write fails or loses authority.
         const committed = await loadBindingsFromPluginState({
+          runtime,
           accountId: params.accountId,
           env: params.env,
           stateDir: sqliteStateDir,
@@ -480,6 +474,7 @@ export async function createMatrixThreadBindingManager(params: {
         };
         // This queue owns every binding write; foreign writers are unsupported.
         const store = createThreadBindingStore({
+          runtime,
           env: params.env,
           stateDir: sqliteStateDir,
           assertCurrent,

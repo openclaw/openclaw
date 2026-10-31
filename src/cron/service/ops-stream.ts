@@ -1,15 +1,12 @@
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
+import { createCronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import { noteCronJobsStoreCommit } from "../store.js";
-import { loadCronJobsStoreWithConfigJobsReadOnly } from "../store/read-only.js";
+import { loadCronJobsStoreWithConfigJobsReadOnlyByKey } from "../store/read-only.js";
 import type {
   CronRuntimeMutationContracts,
   CronExternalStateChange,
 } from "../store/runtime-worker.types.js";
-import {
-  CronStreamSourceRetirementError,
-  createCronStreamSourceIdentity,
-  ownsStreamSource,
-} from "../stream-schedule.js";
+import { CronStreamSourceRetirementError } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
@@ -17,7 +14,7 @@ import { locked } from "./locked.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { refreshCronScheduler } from "./scheduler-actor.js";
-import type { CronServiceState } from "./state.js";
+import { prepareCronServiceStore, type CronServiceState } from "./state.js";
 import {
   captureCronJobMutationSource,
   ensureLoaded,
@@ -32,6 +29,10 @@ async function mutateExternalState(
   jobId: string,
   requested: CronExternalStateChange,
 ): Promise<CronJob | undefined> {
+  const preparation = prepareCronServiceStore(state);
+  if (preparation) {
+    await preparation;
+  }
   const source = captureCronJobMutationSource(state);
   const change = structuredClone(requested);
   return await locked(state, async () => {
@@ -42,7 +43,7 @@ async function mutateExternalState(
       const job = findJobOrThrow(state, jobId);
       if (
         change.source &&
-        !ownsStreamSource(job, change.source.scheduleKey, change.source.identity)
+        !ownsCronSource(job, change.source.scheduleKey, change.source.identity)
       ) {
         return undefined;
       }
@@ -62,8 +63,7 @@ async function mutateExternalState(
         // A config reload may race this submitted mutation; the worker uses this snapshot.
         snapshot: {
           nowMs: state.deps.nowMs(),
-          cronConfig:
-            change.kind === "failure" ? structuredClone(state.deps.cronConfig) : undefined,
+          cronConfig: change.kind === "failure" ? state.deps.cronConfig : undefined,
         },
         publish(outcome) {
           committed = outcome;
@@ -127,16 +127,13 @@ async function mutateExternalState(
       if (change.kind === "retire" && retiredIdentity === undefined) {
         try {
           // A lost reply can hide a committed retirement; read its chosen identity once.
-          const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(
-            state.deps.storePath,
+          const loaded = await loadCronJobsStoreWithConfigJobsReadOnlyByKey(
+            state.deps.storeKey,
             source.context.environment,
           );
           source.assertStorageCurrent();
           const current = loaded.store.jobs.find((job) => job.id === jobId);
-          if (
-            current &&
-            ownsStreamSource(current, change.source.scheduleKey, change.nextIdentity)
-          ) {
+          if (current && ownsCronSource(current, change.source.scheduleKey, change.nextIdentity)) {
             retiredIdentity = change.nextIdentity;
             applyCronRuntimeRowsToState(state, [current]);
           }
@@ -197,7 +194,7 @@ export async function retireExternalStreamSource(
   const job = await mutateExternalState(state, id, {
     kind: "retire",
     source: { scheduleKey, identity },
-    nextIdentity: createCronStreamSourceIdentity(),
+    nextIdentity: createCronSourceIdentity(),
   });
   return job?.state.streamSourceIdentity;
 }

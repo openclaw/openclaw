@@ -104,7 +104,7 @@ function validateOwnedKeychain(root, requestedPath, candidate, requireExisting) 
 
 function fastlaneCommand(action, parameters) {
   return [
-    "_4.0.22_",
+    "_4.0.23_",
     "exec",
     "fastlane",
     "run",

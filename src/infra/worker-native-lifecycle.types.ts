@@ -17,9 +17,9 @@ export type NativeWorkerRuntime = {
   handles: { delete(id: number): boolean };
   failure?: Error;
   service(): void;
-  post(message: NativeWorkerRequest, transfers?: readonly Transferable[]): void;
+  post(message: NativeWorkerRequest, transfers?: Transferable[]): void;
   refreshReference(): void;
-  resourceBroker(): SpawnBrokerHost;
+  resourceBroker(): Pick<SpawnBrokerHost, "captureNativeResource" | "sealNativeResources">;
 };
 
 type NativeWorkerOptions = Omit<WorkerOptions, "env" | "transferList"> & {
@@ -86,7 +86,6 @@ export type NativeWorkerRequest =
   | { type: "post"; id: number; value: unknown; transferList: Transferable[] }
   | { type: "resource-owner"; id: number; sequence: number; value: unknown }
   | { type: "stop" | "release"; id: number }
-  | { type: "ref"; id: number; referenced: boolean }
   | { type: "cpu"; id: number; requestId: number; previous?: NodeJS.CpuUsage }
   | { type: "heap"; id: number; requestId: number };
 
