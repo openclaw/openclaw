@@ -54,7 +54,11 @@ type InputDependencies = {
   admissions: ReadonlyMap<string, NativeChildAdmissionEvidence[]>;
   canPrepareReceiver: (state: ParentState, threadId: string) => boolean;
   prepareReceiver: (state: ParentState, threadId: string, nativeParentThreadId?: string) => boolean;
-  registerChildThread: AdmissionDrainDependencies["registerChildThread"];
+  restoreReceiver: (
+    state: ParentState,
+    threadId: string,
+    options: { agentPath?: string; nativeParentThreadId?: string },
+  ) => void;
   admit: (
     state: ParentState,
     owner: ParentOwner,
@@ -344,7 +348,7 @@ export async function prepareNativeModelToolInput(
       throw new Error("Codex native input receiver cannot retain this sender's admitted source");
     }
     if (!dependencies.knownChildren.has(thread.id) && !dependencies.parents.has(thread.id)) {
-      dependencies.registerChildThread(state, thread.id, {
+      dependencies.restoreReceiver(state, thread.id, {
         nativeParentThreadId,
         agentPath: readString(readThreadSpawnSource(thread), "agent_path"),
       });

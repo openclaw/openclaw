@@ -27,6 +27,7 @@ type NotificationRoutingDependencies = {
     childThreadId: string,
     options?: Pick<DirectSpawnEvidence, "agentPath" | "nativeParentThreadId">,
   ) => ChildState | undefined;
+  restoreReceiver: (state: ParentState, childThreadId: string) => void;
   registerDirectSpawnChild: (
     state: ParentState,
     turnId: string | undefined,
@@ -181,6 +182,15 @@ export function createCodexNativeSubagentNotificationRouter(
         }
         if (parentThreadId !== state.parentThreadId && !isCompletedSpawnAgentTool) {
           // Nested waits observe receivers; only accepted spawn/input paths claim them.
+          return state;
+        }
+        if (
+          notification.method === "item/started" &&
+          normalizeIdentifier(readString(item, "tool")) === "sendinput"
+        ) {
+          for (const childThreadId of readNativeSubagentThreadIds(item?.receiverThreadIds)) {
+            deps.restoreReceiver(state, childThreadId);
+          }
           return state;
         }
         // Pinned Codex derives both fields from the spawn ID, but agentsStates is
