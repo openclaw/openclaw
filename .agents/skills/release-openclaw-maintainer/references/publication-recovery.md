@@ -154,12 +154,25 @@ packages recorded as `npm-token-bootstrap` on the approved
 [first-package route](first-package.md); their recovery does not wait on this
 exchange. If no recovered package uses `npm-oidc`, skip this check.
 
-Do not use this protected-tag command for extended-stable: that track's
-nonpublishing preflight admission accepts its canonical branch, trusted `main`,
-or a main-pinned `release-ci/*` ref, not `release-publish/*`. Follow
-[trusted-main npm recovery](extended-stable-publish.md#trusted-main-npm-recovery)
-without claiming an OIDC recovery preflight until that admission owner supports
-one.
+For extended-stable recovery, use the same read-only exchange from protected
+tooling, but preserve that track's full-roster and frozen-source boundaries:
+
+```bash
+gh workflow run plugin-npm-release.yml --repo openclaw/openclaw \
+  --ref release-publish/<trusted-current-main-tooling-sha12>-<epoch> \
+  -f preflight_only=true \
+  -f trusted_publisher_preflight=true \
+  -f publish_scope=all-publishable \
+  -f ref=<exact-canonical-extended-stable-branch-tip-sha> \
+  -f npm_dist_tag=extended-stable
+```
+
+Leave `plugins`, parent publication run IDs, and `release_candidate_branch`
+empty. The source must equal the canonical `extended-stable/YYYY.M.33` branch
+tip and retain its final `YYYY.M.PATCH` version with `PATCH >= 33`. The protected
+tooling tag must resolve to a workflow revision reachable from current `main`.
+Require the `Trusted publisher OIDC exchange` job to succeed before following
+[trusted-main npm recovery](extended-stable-publish.md#trusted-main-npm-recovery).
 
 Publication records distinguish `unknown` (no confirmed publisher), `unverified`
 (a returned ID without an observed attempt), and `acknowledged` (verified original
