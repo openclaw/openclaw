@@ -37,6 +37,25 @@ child directory and retains failed attempts. Output must therefore be under
 For a small smoke run, use `--route chat --reloads 1`. `--route dashboard` selects
 the other route. Default coverage is **one cold navigation and eleven warm
 reloads per route**, each route in an independent initially empty browser context.
+
+For transcript late-paint attribution, add `--transcript-late-paint`. Both targets
+are archived and pinned, and the transcript includes extended nested lists, bold
+text, code, tables, and links. The synthetic operator uses Involving me, category
+grouping, Created sorting, five collapsed categories, always-visible empty groups,
+and no previews; the catalog has 97 groups and 102 section-order entries. This
+mode records read-only IndexedDB request start/completion times and whether an
+exact snapshot read found a record, without recording cache keys or contents.
+`firstTranscriptDomMs` records visible text on either transcript placement,
+independently of a dashboard occupying the main region. These are DOM and I/O
+milestones; filmstrip inspection still owns paint claims.
+
+Run this mode twice for the two visit sequences. The default repeats reloads.
+Adding `--reload-after-navigation` navigates internally through `/new` back to the
+target before each warm capture, then reloads four seconds after that navigation
+started. The fixed visit duration is workload, not a cache-readiness condition.
+Both modes retain the initial cold capture and persistence preparation, so the
+navigation variant exercises a short return visit to a previously loaded
+transcript, not the first uncached visit. The report records this distinction.
 The default `--admission signed-in` installs a random HttpOnly session cookie in
 Chromium for the owned loopback proxy. The proxy checks that cookie for HTTP and
 WebSocket requests, strips client-supplied identity/forwarding/scope headers, and
