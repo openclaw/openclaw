@@ -4,9 +4,8 @@ import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import { EMPTY_LINK_READERS } from "../../components/link-reader-target.ts";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
-import { registerChatSessionOptionalEnglish } from "../../i18n/locales/en-chat-session-optional.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
 import { buildChatBoardPanel } from "./chat-pane-board-panel.ts";
@@ -34,8 +33,6 @@ import type {
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 import { sidebarMainPanel } from "./sidebar-layout.ts";
-
-registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 type PanelHostProps = { registerPanelHost?: SidebarPanelHostRegistration };
 type Props = SidebarPanelDefinitionParams & PanelHostProps;
@@ -362,7 +359,12 @@ function DetailPanel(props: SidebarPanelData) {
 }
 
 function DashboardPanel(props: SidebarPanelData) {
-  return <ChatBoardPanel {...buildChatBoardPanel(props.dashboard!)} />;
+  const provider = createMemo(() => props.dashboard!.board.provider);
+  const widgetFrameUrl = createMemo(() => {
+    const current = provider();
+    return current.widgetFrameUrl.bind(current);
+  });
+  return <ChatBoardPanel {...buildChatBoardPanel(props.dashboard!, widgetFrameUrl())} />;
 }
 
 const embeddedPanels: Partial<

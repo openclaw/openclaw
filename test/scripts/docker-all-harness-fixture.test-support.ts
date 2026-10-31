@@ -34,6 +34,7 @@ export function setupFixture(
   missingTargetScript = false,
   corepack = false,
   makeTempDir: typeof tempDirs.make = (prefix, root) => tempDirs.make(prefix, root),
+  registryPackages: readonly string[] = ["@openclaw/codex"],
 ) {
   const artifactRoot = path.resolve(".artifacts");
   mkdirSync(artifactRoot, { recursive: true });
@@ -122,22 +123,19 @@ fs.appendFileSync(${JSON.stringify(fixture.marker)}, JSON.stringify({
   git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "candidate");
   const selectedSha = git("rev-parse", "HEAD");
   mkdirSync(fixture.registry);
-  const pluginTarball = path.join(fixture.registry, "codex.tgz");
-  writePackageArchive(packageDir, pluginTarball, { name: "@openclaw/codex", version });
+  const registryEntries = registryPackages.map((name) => {
+    const tarball = `${name.split("/").at(-1)}.tgz`;
+    const pluginTarball = path.join(fixture.registry, tarball);
+    writePackageArchive(packageDir, pluginTarball, { name, version });
+    return { name, version, tarball, sha256: sha256File(pluginTarball) };
+  });
   const registryManifest = path.join(fixture.registry, "prepublish-plugin-registry.json");
   fixtureFiles(fixture.registry).json("prepublish-plugin-registry.json", {
     schema: "openclaw.prepublish-plugin-registry/v1",
     schemaVersion: 1,
     sourceSha: selectedSha,
     candidateVersion: version,
-    packages: [
-      {
-        name: "@openclaw/codex",
-        version,
-        tarball: "codex.tgz",
-        sha256: sha256File(pluginTarball),
-      },
-    ],
+    packages: registryEntries,
   });
   const registrySha256 = sha256File(registryManifest);
   const pnpm = (fixturePnpm ??= execFileSync("bash", ["-c", "command -v pnpm"], {

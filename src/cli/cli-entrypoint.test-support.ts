@@ -150,6 +150,10 @@ export const updateFinalizationOutputEntrypoint = legacy({
 
 // Direct-stop children use the invocation's prepared graph before readiness starts.
 export const gatewayDirectStopEntrypoints = {
+  brokerCleanupFixture: worker({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "gateway-cli/run-loop.broker-cleanup.test-support",
+  }),
   forcedCronFixture: worker({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "gateway-cli/run-loop.forced-cron.test-support",

@@ -73,14 +73,17 @@ directly, without looking up or disclosing a transcript. Serving the shell grant
 no Gateway or session access.
 
 The public renderer includes user and assistant text, including progress updates,
-tool-call summaries, and shared images. Tool result text, reasoning, executable
-widgets, hidden messages, and internal metadata stay private. Images use a public
-media route bound to the current publication and transcript entry; other
-attachments appear as filename chips without download links. Included text
+tool-call summaries, shared images, and eligible saved inline widgets. Tool-result
+text, reasoning, pinned dashboard widgets, hidden messages, and internal metadata
+stay private. Images use a public media route bound to the current publication
+and transcript entry; other attachments appear as filename chips without download links. Included text
 preserves credentials; review it before publishing. A restrictive content
-security policy permits only the fixed reader script; transcript HTML cannot
-execute. Responses retain `Cache-Control: no-store` and
-`Referrer-Policy: no-referrer`. Server-side representation reuse never substitutes
+security policy permits only the fixed reader script in the parent document;
+transcript HTML cannot execute there. Eligible saved inline widgets render in
+separate sandboxed frames with scripts allowed, restricted network access, and no
+Gateway access. Their document links remain subject to the current publication
+and visible inline-widget result checks. Responses retain `Cache-Control: no-store`
+and `Referrer-Policy: no-referrer`. Server-side representation reuse never substitutes
 for a current publication check, including before a `304` response.
 
 Public transcript documents, preview cards, shared images, and the share namespace

@@ -63,6 +63,7 @@ import { sessionModelRevision } from "./session-model-revision.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { projectSessionRowProviderReview } from "./session-row-provider-review.js";
+import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import type {
@@ -107,6 +108,7 @@ export function readSessionRowInputs(params: {
   entry?: InternalSessionEntry;
   preparedAcpMeta?: SessionEntry["acp"] | null;
   preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
+  runtimeResolution?: SessionRuntimeResolution;
   preparedModelMetadata?: PluginMetadataSnapshot | null;
   preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
@@ -139,6 +141,7 @@ export function readSessionRowInputs(params: {
       entry,
       preparedAcpMeta: params.preparedAcpMeta,
       preparedRuntimeOwnership: params.preparedRuntimeOwnership,
+      runtimeResolution: params.runtimeResolution,
       preparedModelMetadata: params.preparedModelMetadata,
       source: params.modelSource ?? { entry, readSourceEntry: (parentKey) => store[parentKey] },
       agentId,

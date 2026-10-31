@@ -5,6 +5,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
+import { withSqliteWritableSchema } from "../infra/sqlite-schema-catalog.js";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
@@ -39,7 +40,6 @@ import * as cronIdentity from "./openclaw-state-db-cron-identity-migration.js";
 import {
   hasDanglingSkillWorkshopCollectionReviewIndex,
   LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX,
-  withSqliteWritableSchema,
 } from "./openclaw-state-db-doctor-schema.js";
 import { migrateHistoricalStateImports } from "./openclaw-state-db-historical-imports.js";
 import { stateIndexOrderingMigrations } from "./openclaw-state-db-index-ordering-migrations.js";

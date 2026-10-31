@@ -20,7 +20,7 @@ import {
 import { createWorkerReconcileTrace } from "./environment-operation.js";
 import { readWorkerPreparation } from "./preparation-identity.schema.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
-import { createWorkerProviderIntent } from "./provider-intent.js";
+import { createWorkerProviderIntent, failUnallocatedImageIntent } from "./provider-intent.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import { createWorkerMachineCatalog } from "./provider-machine-catalog.js";
 import { createWorkerNodeProvisioning } from "./provider-node-provisioning.js";
@@ -46,8 +46,7 @@ const ORPHANED_LEASE_ERROR = "Worker provider no longer recognizes the lease";
 export function createWorkerProviderLifecycle(
   options: WorkerProviderLifecycleOptions & { ownerSignal: AbortSignal },
 ) {
-  const { store, callBootstrap, callProvider, move, saveError } = options;
-  const now = options.now ?? Date.now;
+  const { store, callBootstrap, callProvider, move, saveError, now = Date.now } = options;
   const startStatuses = new Map<
     string,
     { ownerEpoch: number; status: WorkerEnvironmentStartStatus }
@@ -485,6 +484,8 @@ export function createWorkerProviderLifecycle(
         beforeProvision,
         repositorySource,
       );
+    } catch (error) {
+      return await failUnallocatedImageIntent(options, record, error, workSignal);
     } finally {
       await cancellation?.close();
     }

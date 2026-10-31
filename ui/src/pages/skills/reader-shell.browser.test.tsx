@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import "../../styles.css";
+import { finishElementAnimations } from "../../test-helpers/animations.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { resolveRenderedColors } from "../../test-helpers/rendered-colors.ts";
 import { ConnectMachineDialog } from "../new-session/connect-machine-dialog-view.tsx";
 import { ConnectMachineSetupState } from "../new-session/connect-machine-dialog.ts";
 import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
@@ -30,7 +32,7 @@ function showInstalled(skill: Parameters<typeof createSkill>[0], messages = {}) 
 
 async function settledDialog() {
   const result = await getRenderedModalDialog(container!);
-  await Promise.all(result.dialog.getAnimations().map((animation) => animation.finished));
+  finishElementAnimations(result.dialog);
   return result;
 }
 
@@ -59,12 +61,16 @@ describe.runIf(browserMode)("skill reader shell", () => {
       const close = panel.querySelector<HTMLButtonElement>("button")!;
       const button = getComputedStyle(close);
       const icon = getComputedStyle(close.querySelector("svg")!);
-      return {
+      const colors = resolveRenderedColors({
         surface: style.backgroundColor,
+        button: button.backgroundColor,
+      });
+      return {
+        surface: colors.surface,
         image: style.backgroundImage,
         border: style.border,
         radius: style.borderRadius,
-        button: [button.background, button.border, button.boxShadow],
+        button: [colors.button, button.backgroundImage, button.border, button.boxShadow],
         icon: [icon.width, icon.height, icon.strokeWidth],
       };
     };

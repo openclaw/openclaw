@@ -210,6 +210,7 @@ it("rolls rejected initial and controlled visibility back", async () => {
   });
   expect(untrack(open)).toBe(false);
   expect(surface().matches(":popover-open")).toBe(false);
+  expect(trigger().getAttribute("aria-expanded")).toBe("false");
   expect(received).toEqual([false]);
   update(() => setOpen(true));
   expect(untrack(open)).toBe(false);
@@ -217,14 +218,17 @@ it("rolls rejected initial and controlled visibility back", async () => {
   vetoShow = false;
   update(() => setOpen(true));
   await phase(surface(), "open");
+  expect(trigger().getAttribute("aria-expanded")).toBe("true");
   expect(received).toEqual([false, false, true]);
   update(() => setOpen(false));
   expect(untrack(open)).toBe(true);
   expect(surface().matches(":popover-open")).toBe(true);
+  expect(trigger().getAttribute("aria-expanded")).toBe("true");
   expect(received).toEqual([false, false, true, true]);
   vetoHide = false;
   update(() => setOpen(false));
   await phase(surface(), "hidden");
+  expect(trigger().getAttribute("aria-expanded")).toBe("false");
   expect(received).toEqual([false, false, true, true, false]);
 });
 

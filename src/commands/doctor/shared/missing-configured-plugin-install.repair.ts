@@ -22,6 +22,7 @@ import {
 import {
   attachPluginInstallTransaction,
   copyPluginInstallTransactionRequest,
+  resolvePluginInstallTransactionRequest,
   retainPluginInstallTransaction,
   withPluginInstallTransactions,
 } from "../../../plugins/install-transaction.js";
@@ -623,10 +624,14 @@ async function repairMissingPluginInstallsWithLease(
     }
   }
 
-  const persistedIndexOptions = { config: params.cfg, env, filePath: lease.databasePath, lease };
   // An explicit baseline may include earlier unpersisted sync/npm changes;
-  // commit it even when this repair made no further changes.
-  if (nextRecords !== persistedRecords || params.baselineRecords) {
+  // ordinary Doctor commits it even when repair made no further changes. An
+  // explicit updater request publishes its matching record/config plan through the outer owner.
+  if (
+    resolvePluginInstallTransactionRequest(params)?.cohort?.deferRecordPublication !== true &&
+    (nextRecords !== persistedRecords || params.baselineRecords)
+  ) {
+    const persistedIndexOptions = { config: params.cfg, env, filePath: lease.databasePath, lease };
     if (params.beforePersistentEffect) {
       const persistedIndex = await readPersistedInstalledPluginIndex(persistedIndexOptions);
       // Republishing an unchanged baseline preserves the index contract without

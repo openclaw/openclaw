@@ -573,7 +573,6 @@ async function executeAgentRun(
               context: params.context,
               isIncognito: diagnostics.incognito,
               followupCompletion: prepared.followupCompletion,
-              canonicalSkillWorkspaceDir: params.sessionEntry?.worktree?.canonicalWorkspaceDir,
             },
             executionIdentitySpawnFacts,
           ),

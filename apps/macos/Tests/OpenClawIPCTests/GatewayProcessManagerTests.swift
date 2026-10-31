@@ -1279,6 +1279,29 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    func `stale service replacement keeps the custody captured at detection`(operatorReplaced: Bool) async throws {
+        try await self.withLaunchAgentEnvironment {
+            try self.writeManagedLaunchAgent()
+            let previous = try #require(GatewayLaunchAgentManager.installedServiceCLI())
+            let runtime = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/current-build"))
+            let replacement = try #require(StaleGatewayServiceReplacement.replacing(previous, with: runtime))
+            if operatorReplaced {
+                // The operator reassigns the service while this build seeds its runtime.
+                let plist = try #require(previous.serviceAuthority?.plist)
+                try Data("operator-owned replacement".utf8).write(to: plist)
+            }
+            let error = await replacement.stop()
+            if operatorReplaced {
+                #expect(error == "The Gateway service changed before dispatch; retry.")
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            } else {
+                #expect(error == nil)
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [["stop", "--force"]])
+            }
+        }
+    }
+
     @Test(arguments: ["healthy", "operator-replacement", "install-failure"])
     func `terminal child failure permits captured service rollback without reviving failed recovery`(
         outcome: String) async throws

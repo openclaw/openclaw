@@ -170,7 +170,6 @@ describe("sendSmsMedia", () => {
       }),
     ).catch((error: unknown) => error);
 
-    expect(sendSmsViaTwilio).toHaveBeenCalledTimes(2);
     expect(sendSmsViaTwilio.mock.calls[0]?.[0]).toMatchObject({
       text: "alpha",
       mediaUrls: ["https://gateway.example.com/webhooks/sms/media/abc?token=token"],

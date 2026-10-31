@@ -15,7 +15,9 @@ const nextTag = "v2026.9.4";
 const channel = "linux-stable";
 const publicKey = Buffer.from("fixture public key\n").toString("base64");
 const signature = Buffer.from("fixture signature\n").toString("base64");
-const toolingSha = "b".repeat(40);
+const requestSha = "a".repeat(40);
+const builderSha = "b".repeat(40);
+const toolingSha = builderSha;
 const toolingRef = `release-publish/${toolingSha.slice(0, 12)}-42`;
 const mutationActions = new Set(["upload", "DELETE", "PATCH", "create", "edit"]);
 const appimageName = "OpenClaw-2026.9.3-amd64.AppImage";
@@ -227,7 +229,7 @@ const releaseResponse = (owner) => {
 };
 const workflowRun = (id, prefix, fields) => ({
   id, run_attempt: state.authority[prefix + "Attempt"],
-  repository: { full_name: "openclaw/openclaw" }, head_sha: "b".repeat(40),
+  repository: { full_name: "openclaw/openclaw" }, head_sha: state.authority[prefix + "Sha"],
   status: state.authority[prefix + "Status"], conclusion: state.authority[prefix + "Conclusion"],
   ...fields,
 });
@@ -300,7 +302,7 @@ try {
       take("authorityAfterDelete", changeAuthority);
       if (owner.tag_name === "desktop-test") take("authorityAfterDesktopDelete", changeAuthority);
     } else if (route.startsWith("compare/") && route.endsWith("...main")) {
-      assert.equal(route, "compare/" + "b".repeat(40) + "...main");
+      assert.equal(route, "compare/" + state.authority.toolingSha + "...main");
       answer({ status: "identical" });
     } else if (route === "actions/runs/42") {
       answer(workflowRun(42, "parent", {
@@ -464,12 +466,15 @@ function makeAuthority(workflowRef: string, desktop: boolean, conclusion: string
     toolingRef: workflowRef,
     toolingFullRef: fullRef,
     parentAttempt: 1,
+    parentSha: toolingSha,
     parentStatus: "in_progress",
     parentConclusion: conclusion,
     requestTag: tag,
     requestAttempt: 1,
+    requestSha,
     desktop,
     writerAttempt: 1,
+    writerSha: toolingSha,
     writerStatus: "in_progress",
     writerConclusion: conclusion,
     writerRef: workflowRef,
@@ -594,6 +599,8 @@ function fixture(
       "finalize-core": "openclaw-release-publish",
     }[mode];
     Object.assign(current.authority, {
+      toolingSha: publishing ? requestSha : toolingSha,
+      writerSha: publishing ? builderSha : toolingSha,
       writerRef: ref,
       writerFullRef: fullRef,
       writerPath: `.github/workflows/${workflowName}.yml`,
@@ -603,7 +610,8 @@ function fixture(
       current.authority.requestTag = releaseTag;
     }
     flags({
-      "tooling-sha": toolingSha,
+      "tooling-sha": current.authority.toolingSha,
+      ...(publishing ? { "builder-sha": builderSha } : {}),
       "workflow-ref": ref,
       "workflow-full-ref": fullRef,
       ...(publishing
@@ -710,6 +718,43 @@ function failed(run: () => unknown, message?: string) {
   }
   throw new Error("Expected publication to fail");
 }
+
+it("publishes with request SHA tooling under an independently authorized later builder SHA", () => {
+  const f = fixture();
+  expect(f.run("publish")).toMatchObject({ state: "published" });
+  expect(JSON.parse(f.bytes(tag, linuxName(tag)).toString()).linuxPublication.toolingSha).toBe(
+    requestSha,
+  );
+  expect(requestSha).not.toBe(builderSha);
+  expect(f.mutations().length).toBeGreaterThan(0);
+});
+
+it.each([
+  [
+    "unauthorized request",
+    (state: State) => {
+      state.authority.requestSha = "c".repeat(40);
+    },
+  ],
+  [
+    "superseded request attempt",
+    (state: State) => {
+      state.authority.requestAttempt = 2;
+    },
+  ],
+  [
+    "cancelled builder",
+    (state: State) => {
+      state.authority.writerStatus = "completed";
+      state.authority.writerConclusion = "cancelled";
+    },
+  ],
+] as const)("rejects %s before release mutations", (_name, revoke) => {
+  const f = fixture();
+  f.update(revoke);
+  failed(() => f.run("publish"));
+  expect(f.mutations()).toEqual([]);
+});
 
 it("reuses complete public Linux assets without local build inputs", () => {
   const f = fixture({ publicDownloadCache: {} });

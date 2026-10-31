@@ -2064,10 +2064,39 @@ button.chat-reply-attribution__target:disabled {
     display: none;
   }
 
+  .chat-reply-attribution--reply {
+    align-items: center;
+    min-height: var(--chat-reply-attribution-line-height);
+  }
+
   .chat-reply-attribution--reply .chat-reply-attribution__label {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+  }
+
+  /* The icon carries the cue on screen; assistive tech still hears the label. */
+  .chat-reply-attribution--reply .chat-reply-attribution__label-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .chat-reply-attribution--reply .chat-reply-attribution__name-rest {
+    display: none;
+  }
+
+  .chat-reply-attribution--reply button.chat-reply-attribution__target {
+    position: relative;
+  }
+
+  /* A larger hit area without changing the line's height. */
+  .chat-reply-attribution--reply button.chat-reply-attribution__target::after {
+    content: "";
+    position: absolute;
+    inset: -8px -4px;
   }
 
   .chat-reply-attribution__mobile-icon {

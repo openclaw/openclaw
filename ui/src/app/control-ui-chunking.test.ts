@@ -371,6 +371,8 @@ describe("Control UI build chunking", () => {
     const tabState = modulePath("../lib/tabs.ts");
     const pendingFocus = modulePath("../lib/reactive/pending-focus.ts");
     const shadowStyles = modulePath("../lib/reactive/shadow-styles.ts");
+    const tabsStyle = modulePath("../styles/tabs.css");
+    const inlineTabsStyle = `${tabsStyle}?inline`;
     const settingsWorkspace = modulePath("../components/solid/settings-workspace.tsx");
     const settingsUi = modulePath("../components/solid/settings-ui.tsx");
     const settingsSelect = modulePath("../components/solid/settings-select.tsx");
@@ -437,8 +439,10 @@ describe("Control UI build chunking", () => {
       ],
       [
         tabs,
-        `import { tabState } from ${JSON.stringify(tabState)}; import { pendingFocus } from ${JSON.stringify(pendingFocus)}; import { shadowStyles } from ${JSON.stringify(shadowStyles)}; export const tabs = tabState + pendingFocus + shadowStyles;`,
+        `import ${JSON.stringify(tabsStyle)}; import css from ${JSON.stringify(inlineTabsStyle)}; import { tabState } from ${JSON.stringify(tabState)}; import { pendingFocus } from ${JSON.stringify(pendingFocus)}; import { shadowStyles } from ${JSON.stringify(shadowStyles)}; export const tabs = tabState + pendingFocus + shadowStyles + css;`,
       ],
+      [tabsStyle, ".tabs-fixture { color: teal; }"],
+      [inlineTabsStyle, ".tabs-fixture { color: teal; }"],
       [tabState, 'export const tabState = "state";'],
       [pendingFocus, 'export const pendingFocus = "focus";'],
       [shadowStyles, 'export const shadowStyles = "styles";'],
@@ -515,11 +519,12 @@ describe("Control UI build chunking", () => {
     const styles = result.output
       .filter((asset) => asset.type === "asset")
       .filter((asset) => asset.fileName.endsWith(".css"));
-    expect(styles).toHaveLength(2);
+    expect(styles).toHaveLength(3);
     const sharedStyles = styles.find((style) => String(style.source).includes(".shared-fixture"));
     expect(sharedStyles).toMatchObject({ source: expect.stringContaining(".sidebar-fixture") });
     expect(sharedStyles).toMatchObject({ source: expect.stringContaining(".transcript-fixture") });
     expect(sharedStyles?.source).not.toContain(".optional-fixture");
+    expect(sharedStyles?.source).not.toContain(".tabs-fixture");
     const chunks = result.output.filter((asset) => asset.type === "chunk");
     const chatChunk = chunks.find((chunk) => chat in chunk.modules)!;
     const newSessionChunk = chunks.find((chunk) => newSession in chunk.modules)!;
@@ -563,6 +568,14 @@ describe("Control UI build chunking", () => {
     expect(staticImports(chatChunk.fileName)).not.toContain(cronChunk.fileName);
     const chromeChunk = chunks.find((chunk) => hubHeader in chunk.modules)!;
     expect([settingsWorkspace, settingsSelect].every((id) => id in chromeChunk.modules)).toBe(true);
+    const tabsChunk = chunks.find((chunk) => tabs in chunk.modules)!;
+    expect([tabState, shadowStyles, inlineTabsStyle].every((id) => id in tabsChunk.modules)).toBe(
+      true,
+    );
+    expect([hubTabs, pendingFocus].some((id) => id in tabsChunk.modules)).toBe(false);
+    for (const initial of [entryChunk, chatChunk, newSessionChunk]) {
+      expect(staticImports(initial.fileName)).not.toContain(tabsChunk.fileName);
+    }
     for (const route of [sessions, cron]) {
       const routeChunk = chunks.find((chunk) => route in chunk.modules)!;
       expect(staticImports(routeChunk.fileName)).toContain(chromeChunk.fileName);

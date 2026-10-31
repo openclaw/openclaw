@@ -9,6 +9,7 @@ import {
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
 import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { resolveSessionModelOverrideSource } from "../../config/sessions/model-override-provenance.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
@@ -37,7 +38,7 @@ import {
 } from "./model-selection.js";
 import { prepareCronAutomationPrompt } from "./run-automation-context.js";
 import { resolveCronCommandPromptPreflight } from "./run-command-preflight.js";
-import { resolveCronActiveRuntimeConfig, resolveCronAgentConfig } from "./run-config.js";
+import { resolveCronAgentConfig } from "./run-config.js";
 import {
   createCronToolsAllowPreflightDiagnostics,
   resolveCronDeliveryContext,
@@ -140,7 +141,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
   if (commandPromptPreflight) {
     return { ok: false as const, result: commandPromptPreflight };
   }
-  const requestedRuntimeCfg = resolveCronActiveRuntimeConfig(input.cfg);
+  const requestedRuntimeCfg = selectLiveRuntimeConfig(input.cfg);
   const requestedAgentId = input.agentId?.trim() || input.job.agentId?.trim();
   const normalizedRequested = requestedAgentId ? normalizeAgentId(requestedAgentId) : undefined;
   const requiredAgentId =

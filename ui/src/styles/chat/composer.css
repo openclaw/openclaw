@@ -3306,9 +3306,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .chat-controls__effort-zap--ultrafast {
-  --icon-secondary: color-mix(in oklab, var(--accent) 75%, white);
-  --icon-primary: var(--accent);
-
   width: 16px;
   height: 18px;
   flex-basis: 16px;
@@ -3956,8 +3953,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   stroke: currentColor;
 }
 
+/* Reset the muted overrides so zapDouble uses its own accent colors. */
 .chat-controls__speed-option[aria-checked="true"] .chat-controls__speed-option-icon {
-  --icon-secondary: color-mix(in oklab, var(--accent) 75%, white);
+  --icon-primary: initial;
+  --icon-secondary: initial;
   color: var(--accent);
 }
 

@@ -213,7 +213,13 @@ async function scenario(
     });
   }
   const run: NonNullable<UpdateCommandOptions["run"]> = {
-    runId: createUpdateRun({ trigger: "cli" }, { env: process.env }).runId,
+    runId: createUpdateRun(
+      {
+        trigger: "cli",
+        ...(preparedRecovery ? { origin: { sessionKey: "agent:main:terminal-recovery" } } : {}),
+      },
+      { env: process.env },
+    ).runId,
     env: { ...process.env },
   };
   const retainedState = async () => ({
@@ -256,14 +262,13 @@ async function scenario(
   };
   let injected = setupInjected;
   let failNextLeaseRead = false;
-  let failNextStateRead = false;
+  let stateReadUnavailable = false;
   const lstat = syncFs.lstatSync.bind(syncFs);
   vi.spyOn(syncFs, "lstatSync").mockImplementation((...args) => {
     if (
-      failNextStateRead &&
+      stateReadUnavailable &&
       String(args[0]) === path.join(base, "state", "state", "openclaw.sqlite")
     ) {
-      failNextStateRead = false;
       injected = true;
       throw Object.assign(new Error("fixture update reporting identity read failed"), {
         code: "EIO",
@@ -358,7 +363,9 @@ async function scenario(
           recordUpdateRunVerification(run.runId, verification, { env: run.env });
           result.verification = verification;
           closeOpenClawStateDatabaseForTest();
-          failNextStateRead = true;
+          // State stays unavailable through reporting; cohort settlement can read
+          // it before the terminal row, so a single failing metadata call is insufficient.
+          stateReadUnavailable = true;
           return "ok";
         });
       }
@@ -459,6 +466,7 @@ async function scenario(
   } finally {
     cleanup?.release.resolve();
     reportSnapshotFailure?.mockRestore();
+    stateReadUnavailable = false;
   }
   if (
     (kind === "revoked" || kind === "foreign-revoked") &&

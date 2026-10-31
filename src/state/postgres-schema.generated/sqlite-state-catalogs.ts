@@ -337,6 +337,7 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
   ["github_publication_requests", []],
   ["skill_workshop_changes", []],
   ["state_leases", []],
+  ["migration_runs", []],
   [
     "commitments",
     [
@@ -1068,6 +1069,13 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [3, 84, 165],
     [],
   ],
+  // state-existing-migration_runs
+  cc6464642f0f115776287e4d0966e2fc564b8e62db519c2bfad7a25c9e67de51: [
+    "state-existing-migration_runs",
+    "c8d7a60b14124212b817fab783e7e9e97253d27ae97c14dd6107ba9f1ad727f1",
+    [166, 84],
+    [],
+  ],
   // state-node-worker-lineage
   "789bdcc904f4b35b57f9cb829909f2c9cda541c86179beb6904977146665c0c9": [
     "state-node-worker-lineage",
@@ -1086,14 +1094,14 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "72c354791974ce88794c96c16135a89f07b48b9b03542f968beadf05b76aae1e": [
     "state-retired-commitments",
     "19bef9367d336bb367e75740610741cb67deeef86a7f54065758609d67ae8a38",
-    [166],
+    [167],
     [],
   ],
   // state-retired-commitments-shipped
   "2309aff06f4bac77072697764926a0042e6b6069c9504d5bb8c6a0601e9d1314": [
     "state-retired-commitments-shipped",
     "f4d088664f133eea8b1e83fd342d1effaa86d836f8593e02778531468372a303",
-    [167],
+    [168],
     [],
   ],
 };

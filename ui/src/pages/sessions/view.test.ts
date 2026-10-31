@@ -222,7 +222,7 @@ describe("sessions view", () => {
       "Older",
       "older",
     ]);
-    expect(queryAll("tbody > tr")).toHaveLength(9);
+    expect(queryAll("tbody > tr:not([aria-hidden]):not(.session-window-spacer)")).toHaveLength(9);
   });
 
   it("retains the focused sort button across direction changes", async () => {

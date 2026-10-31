@@ -653,7 +653,7 @@ it.each([
   ["two-leases", 0],
   ["two-leases-missing-metadata", 0],
   ["two-leases-stale", 1],
-  ["two-leases-unknown-owner", 0],
+  ["two-leases-unknown-owner", 1],
   ["two-leases-unclean", 1],
   ["prepared-existing", 0],
   ["invalidated", 1],
@@ -665,9 +665,9 @@ it.each([
   ["closed-host-blocked", 0],
   ["closed-host-blocked-last", 0],
   ["closed-host-revoked", 1],
-  ["closed-host-replaced", 1],
-  ["closed-host-no-receipt", 1],
-  ["closed-host-no-receipt-rollback", 1],
+  ["closed-host-replaced", 0],
+  ["closed-host-no-receipt", 0],
+  ["closed-host-no-receipt-rollback", 0],
 ] as const)(
   "native execution borrows only current host integrity proof (%s)",
   async (proof, expectedChecks) => {
@@ -795,7 +795,7 @@ it.each([
 );
 
 it.runIf(process.platform === "linux")(
-  "quickly admits matching killed owners while fully checking untrusted recovery",
+  "keeps lease-less crash verification owed while fully checking untrusted killed-owner recovery",
   async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-process-death-") };
     const cases = [
@@ -804,7 +804,7 @@ it.runIf(process.platform === "linux")(
       "foreign-boot",
       "legacy-lease",
       "pid-reused",
-      "dirty-receipt",
+      "lease-less-unclean",
       "corrupt-page",
       "interrupted-admission",
     ];
@@ -864,7 +864,7 @@ it.runIf(process.platform === "linux")(
         shared.db
           .prepare("UPDATE agent_database_leases SET owner_pid=?, owner_start_time=-1 WHERE path=?")
           .run(process.pid, pathname);
-      } else if (agentId === "dirty-receipt") {
+      } else if (agentId === "lease-less-unclean") {
         shared.db.prepare("DELETE FROM agent_database_leases WHERE path=?").run(pathname);
       }
       if (agentId === "corrupt-page") {
@@ -895,23 +895,30 @@ it.runIf(process.platform === "linux")(
         expect(Atomics.load(new Int32Array(counter.checks), 0)).toBeGreaterThan(0);
         continue;
       }
-      const full = !["same-boot", "checkpointed-wal", "interrupted-admission"].includes(agentId);
+      const bounded = agentId === "lease-less-unclean";
+      const full =
+        !bounded && !["same-boot", "checkpointed-wal", "interrupted-admission"].includes(agentId);
+      const expectedChecks = [Number(full), Number(!bounded)];
       const sessionKey = `agent:${agentId}:after-crash`;
       await expect(
         generation.run(source, (scope) => {
-          expect(checks(), agentId).toEqual([Number(full), 1]);
+          expect(checks(), agentId).toEqual(expectedChecks);
           return initialized(scope, "after-crash", agentId);
         }),
       ).resolves.toMatchObject({ kind: "session-transcript-initialized", sessionKey });
       await generation.close();
+      if (bounded) {
+        expect(readSqliteDatabaseIntegrityVerification(pathname)?.verifiedAt).toBeUndefined();
+        expect(fs.existsSync(`${pathname}.seal`)).toBe(false);
+      }
       clearOpenClawAgentDatabaseValidationCache(pathname);
       retireSqliteDatabaseAdmissionForPath(pathname);
       await using restart = nativeGeneration(fixture, context, assertCurrent);
       await expect(restart.run(source, async () => "reopened")).resolves.toBe("reopened");
-      expect(checks(), agentId).toEqual([Number(full), 1]);
+      expect(checks(), agentId).toEqual(expectedChecks);
       await restart.close();
       expect(Boolean(readSqliteDatabaseIntegrityVerification(pathname))).toBe(full);
-      expect(readSqliteDatabaseCleanClose(pathname)).toBe(true);
+      expect(readSqliteDatabaseCleanClose(pathname)).toBe(!bounded);
       using reopened = openNodeSqliteDatabase(pathname, { readOnly: true });
       expect(reopened.prepare("SELECT store_json FROM auth_profile_store").all()).toEqual([
         { store_json: '{"ok":true}' },
