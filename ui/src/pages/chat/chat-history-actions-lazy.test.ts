@@ -27,6 +27,7 @@ async function heldActions(takeoverAtEntry?: "route" | "physical") {
       }
     };
     return {
+      ...runtime,
       clearChatHistory: (operation: Parameters<typeof runtime.clearChatHistory>[0]) => {
         takeOver(operation.state);
         return runtime.clearChatHistory(operation);

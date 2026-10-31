@@ -19,8 +19,8 @@ import {
 
 // Counts admitted message entries, before renderer grouping. Source groups and
 // lifecycle-owned pins are indivisible exceptions, not a whole-pane heap bound.
-export const CHAT_RESIDENT_ENTRY_TARGET = 400;
-export const CHAT_RESIDENT_WEIGHT_TARGET = 3 * 1024 * 1024;
+const CHAT_RESIDENT_ENTRY_TARGET = 400;
+const CHAT_RESIDENT_WEIGHT_TARGET = 3 * 1024 * 1024;
 export const MAX_RESIDENT_SEGMENTS = 8;
 const messageWeights = new WeakMap<object, number>();
 

@@ -5,7 +5,7 @@ import { t } from "../../i18n/index.ts";
 import { dispatchChatSlashCommand } from "./chat-commands.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { beginHistoryRequest, getChatHistoryLoadState } from "./chat-history-state.ts";
-import { CHAT_RESIDENT_WEIGHT_TARGET, prepareChatHistoryPacket } from "./chat-history-window.ts";
+import { prepareChatHistoryPacket } from "./chat-history-window.ts";
 import {
   createState,
   historyMessage as message,
@@ -19,6 +19,8 @@ import {
   reduceChatSessionProjection,
 } from "./history-merge.ts";
 import { beginChatScrollIntent, cancelChatScroll } from "./scroll.ts";
+
+const CHAT_RESIDENT_WEIGHT_TARGET = 3 * 1024 * 1024;
 
 describe("full tail after a long live turn", () => {
   const prompt = message("user", "opening prompt", { id: "prompt", seq: 1 });

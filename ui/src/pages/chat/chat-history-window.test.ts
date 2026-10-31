@@ -11,7 +11,6 @@ import {
   projectResidentChatHistory,
   selectChatHistoryResidency,
   boundChatLocalOutput,
-  CHAT_RESIDENT_WEIGHT_TARGET,
 } from "./chat-history-window.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import {
@@ -19,6 +18,8 @@ import {
   publishChatSessionProjection,
   reduceChatSessionProjection,
 } from "./history-merge.ts";
+
+const CHAT_RESIDENT_WEIGHT_TARGET = 3 * 1024 * 1024;
 
 it("keeps an indivisible source group above the entry target", () => {
   const messages = Array.from({ length: 401 }, (_, index) => ({

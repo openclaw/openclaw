@@ -17,7 +17,7 @@ export function resolveChatTranscriptInteractionAnchor(
   return row ? { row, top: row.getBoundingClientRect().top } : null;
 }
 
-export function reconcileChatTranscriptInteractionResize(
+function reconcileChatTranscriptInteractionResize(
   anchor: ChatTranscriptInteractionAnchor | null,
   sidebarCommitTarget: EventTarget | null | undefined,
   scrollElement: HTMLDivElement | null,
