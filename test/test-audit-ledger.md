@@ -36,10 +36,23 @@ Completed read-only package lanes (no runtime baseline claimed):
 | `markdown-core`                                       | 11              | Exact bytes/offsets, independent parser parity, metadata isolation, rendered budgets, and avoided parse work.                        |
 | `gateway-client`                                      | 20              | Node/browser transport boundaries, credential persistence, FIFO/retry identity, projection, subscription, and retirement contracts.  |
 | `agent-core`                                          | 25              | Actual tool execution, FIFO/cancellation, exact prompt bytes, retention, and separate transcript/request/persisted-summary bounds.   |
+| `gateway-protocol`                                    | 88              | Wire/schema, generated-language, diagnostic, type, and native fixture contracts; deeper domain-owner closure remains partial.        |
+| `ai` provider suites                                  | 57              | Provider request bytes, schema publication, authentication, replay, billing, cancellation, and stream-terminal integrity.            |
+
+Routing and pairing: all 19 suites retained after reading the tests, local support,
+owners, relevant callers, history, and CI routing. Inbound routing, outbound
+account selection, diagnostics, read-worker refusal, and write settlement remain distinct.
+
+Package batch starting at `a63bba630e2`: the memory host's 48 suites have been read.
+One repeated surrogate-pair block is covered by the stronger `chunk-budget.test.ts`
+matrix; a separate large-delete test silently returns when FTS admission fails.
+Independent preservation review supports removing the repeated block and requiring
+FTS admission. Baseline execution is pending; neither candidate is applied yet.
 
 SDK: all 11 suites and support read. One unmodified replay candidate in `index.test.ts`
 may be covered by the real Gateway superseded-writer test in `terminal-outcome.e2e.test.ts`.
-Keeper runtime proof and final preservation review remain pending; all other declarations retained.
+Independent preservation review supports the removal; keeper runtime proof remains
+pending. All other declarations retained.
 
 The full CI planning suite and its manifest/workflow/Git-owner support were read.
 Other routing, admission, frozen-target, and gate layers retain distinct contracts.
