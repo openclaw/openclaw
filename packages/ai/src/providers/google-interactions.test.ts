@@ -122,7 +122,7 @@ describe("google-interactions provider", () => {
       };
       const options = {
         apiKey: "test-key",
-        cacheRetention: "long",
+        cacheRetention: "long" as const,
         [cacheOption]: "cachedContents/operator-cache",
       };
       const stream = streamGoogleInteractions(makeInteractionsModel(), context, options);
