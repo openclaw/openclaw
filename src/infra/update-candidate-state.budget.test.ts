@@ -984,3 +984,8 @@ it("refuses a grown WAL family at the post-inventory capacity gate", async () =>
     db.close();
   }
 });
+
+// Claimed for #188897 by scripts/claim-window.sh; replaced by the real regression.
+it.todo(
+  "Update capture marks large state dirs incomplete because the metadata inventory exceeds the 1 MiB child stdout cap",
+);
