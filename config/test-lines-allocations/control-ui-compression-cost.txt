@@ -1,0 +1,2 @@
+# Existing precompression regression now distinguishes boot and deferred encodings.
+5

@@ -331,7 +331,7 @@ export class ShellOwner
     }
     this.shellLayout.dispose();
     this.shellChrome.disconnect();
-    syncControlUiSystemChrome(false, false);
+    syncControlUiSystemChrome(false, { contentCanvas: false, navScrim: false });
     this.outboxStoreImport.dispose();
     this.outboxStoreUnsubscribe?.();
     this.outboxStoreUnsubscribe = null;
@@ -492,14 +492,17 @@ export class ShellOwner
     }
     this.syncDocumentTitle();
     // Theme and breakpoint owners sync their changes; route/runtime changes
-    // can change whether the committed shell exposes its content canvas. The
-    // mounted session workbench covers it with the --bg chat surface.
-    syncControlUiSystemChrome(
-      false,
-      this.shellElement?.isConnected === true &&
-        this.shellElement.classList.contains("shell--chat") &&
+    // can change whether the committed shell exposes its content canvas (the
+    // mounted session workbench covers it with the --bg chat surface) and
+    // whether the mobile drawer's backdrop dims it.
+    const shell = this.shellElement?.isConnected === true ? this.shellElement.classList : undefined;
+    syncControlUiSystemChrome(false, {
+      contentCanvas:
+        shell?.contains("shell--chat") === true &&
         this.contentElement?.classList.contains("content--workbench") !== true,
-    );
+      navScrim:
+        shell?.contains("shell--mobile-nav") === true && shell.contains("shell--nav-drawer-open"),
+    });
     // Render-gated pending lazy actions replay on the update that first
     // renders their element, independent of further context updates.
     this.restorePendingLazyAction();
