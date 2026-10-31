@@ -16,7 +16,7 @@ import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
-import { runPluginSharedStateWork } from "../plugins/legacy-sdk-resource-host.js";
+import { runPluginSharedStateWork } from "../plugins/plugin-shared-state-admission.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";

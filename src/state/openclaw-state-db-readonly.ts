@@ -10,7 +10,7 @@ import {
   prepareSqliteReadOnlyLocationSync,
 } from "../infra/sqlite-snapshot-source.js";
 import { isUpdateRehearsalPrivateDatabase } from "../infra/update-rehearsal-paths.js";
-import { runPluginSharedStateWork } from "../plugins/legacy-sdk-resource-host.js";
+import { runPluginSharedStateWork } from "../plugins/plugin-shared-state-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {

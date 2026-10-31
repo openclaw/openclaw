@@ -1,6 +1,6 @@
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
-import { runPluginSharedStateWork } from "../plugins/legacy-sdk-resource-host.js";
+import { runPluginSharedStateWork } from "../plugins/plugin-shared-state-admission.js";
 import {
   getOpenClawStateDatabaseTerminalFailureAsync,
   recordOpenClawStateDatabaseOpenFailure,

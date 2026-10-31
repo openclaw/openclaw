@@ -1,7 +1,7 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { SqliteWorkerError, isSqliteWorkerStoreAvailable } from "../infra/sqlite-worker-store.js";
-import { getPluginSharedStateResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { getPluginSharedStateResourceHost } from "../plugins/plugin-shared-state-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
 import { getOpenClawStateDatabaseTerminalFailureAsync } from "./openclaw-state-db-cache.js";

@@ -7,6 +7,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import type { PluginInstanceHandle } from "./plugin-instance-scope.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
+import { bindPluginSharedStateAdmission } from "./plugin-shared-state-admission.js";
 import { hasRetainedPluginRuntimeCloseError } from "./runtime-close-error.js";
 import {
   getCanonicalGatewayContextResolver,
@@ -246,12 +247,7 @@ export function getLegacyPluginSdkResourceHost(): LegacyPluginSdkResourceHost {
   );
 }
 
-/** Core shutdown persistence shares the host but is not a new plugin invocation. */
-export function getPluginSharedStateResourceHost(): LegacyPluginSdkResourceHost | undefined {
-  return pluginInstanceInvocation.getStore() ? getBoundLegacyPluginSdkResourceHost() : undefined;
-}
-
-export function runPluginSharedStateWork<T>(run: () => Promise<T>): Promise<T> {
-  const host = getPluginSharedStateResourceHost();
-  return host ? host.trackSharedStateWork(run) : run();
-}
+// Core shutdown persistence shares the host but is not a new plugin invocation.
+bindPluginSharedStateAdmission(() =>
+  pluginInstanceInvocation.getStore() ? getBoundLegacyPluginSdkResourceHost() : undefined,
+);
