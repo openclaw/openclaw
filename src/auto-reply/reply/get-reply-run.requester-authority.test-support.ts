@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import {
   createCronCreatorAuthorityCapability,
@@ -19,6 +19,8 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { prepareTurn } from "../../gateway/server-methods/chat-send-user-turn-family.test-support.js";
+import { createSessionMutationTestClient } from "../../gateway/server-methods/sessions-mutations.owner.test-support.js";
 import {
   claimAgentRunDelegatedAuthority,
   registerAgentRunContext,
@@ -28,6 +30,7 @@ import {
 import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
 import { bindRequesterProfile } from "../requester-profile.js";
 import { runReplyAgent } from "./agent-runner-run.js";
+import { buildModelResolveContext } from "./agent-runner-utils.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import {
   baseParams,
@@ -63,6 +66,30 @@ export function registerPendingRequesterAuthorityCases({
     const run = requireRunReplyAgentCall().followupRun;
     expect(run.operatorAuthority).toBeUndefined();
     expect(run.run.requesterOrigin).toMatchObject({ delegatedCreatorProfileId: "linked-human" });
+  });
+
+  it("retains original UI hook identity across session routing without transport authority", async () => {
+    for (const profileId of ["profile-ada", "profile-grace"]) {
+      const client = createSessionMutationTestClient(profileId);
+      const { ctx } = prepareTurn({ client, request: { clientInfo: client.connect.client } });
+      vi.mocked(runReplyAgent).mockClear();
+      const input = turn("hello", ctx, { AccountId: "routed-account" });
+      await runPrepared(input);
+      const run = requireRunReplyAgentCall().followupRun.run;
+      expect(run.senderId).toBeUndefined();
+      const modelHook = () =>
+        buildModelResolveContext({
+          run,
+          sessionCtx: input.sessionCtx,
+          hasRepliedRef: undefined,
+          trigger: "user",
+        });
+      expect(run.getHookSenderId?.()).toBe(profileId);
+      expect(modelHook().senderId).toBe(profileId);
+      client.invalidated = true;
+      expect(run.getHookSenderId?.()).toBeUndefined();
+      expect(modelHook().senderId).toBeUndefined();
+    }
   });
 
   it.each([false, true])(

@@ -4,6 +4,8 @@ import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js
 import type { PluginHookChannelContext } from "./hook-channel-context.types.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
 
+const HOOK_SENDER_ID = Symbol("openclaw.hookSenderId");
+
 const TARGET_PREFIXES = new Set(["channel", "chat", "direct", "dm", "group", "thread", "user"]);
 
 function normalizeKey(value: string | undefined): string {
@@ -116,6 +118,8 @@ export function buildAgentHookContextChannelFields(params: {
 
 export function buildAgentHookContextIdentityFields(params: {
   trigger?: string | null;
+  /** Core-owned current profile observation; never forwarded to plugin or tool inputs. */
+  getHookSenderId?: () => string | undefined;
   senderId?: string | null;
   chatId?: string | null;
   channelContext?: PluginHookChannelContext;
@@ -125,7 +129,16 @@ export function buildAgentHookContextIdentityFields(params: {
     return {};
   }
 
-  const senderId = normalizeOptionalString(params.senderId);
+  const transportSenderId = normalizeOptionalString(params.senderId);
+  // SAFETY: Only this host projection can attach the module-private resolver symbol.
+  const inheritedGetter = (params as { [HOOK_SENDER_ID]?: () => string | undefined })[
+    HOOK_SENDER_ID
+  ];
+  const getHookSenderId =
+    trigger === "user"
+      ? (inheritedGetter ?? (!transportSenderId ? params.getHookSenderId : undefined))
+      : undefined;
+  const senderId = getHookSenderId ? normalizeOptionalString(getHookSenderId()) : transportSenderId;
   const chatId = normalizeOptionalString(params.chatId);
   const sender = senderId
     ? { ...params.channelContext?.sender, id: senderId }
@@ -143,8 +156,31 @@ export function buildAgentHookContextIdentityFields(params: {
       : undefined;
 
   return {
+    ...(getHookSenderId ? { [HOOK_SENDER_ID]: getHookSenderId } : {}),
     ...(senderId ? { senderId } : {}),
     ...(chatId ? { chatId } : {}),
     ...(channelContext ? { channelContext } : {}),
   };
+}
+
+/** Refresh personal observations at dispatch; an expired source must not become an owner turn. */
+export function resolveCurrentAgentHookSenderContext<T extends object>(context: T): T | undefined {
+  // SAFETY: The private symbol is created only by the typed host identity projection above.
+  const getSenderId = (context as { [HOOK_SENDER_ID]?: () => string | undefined })[HOOK_SENDER_ID];
+  if (!getSenderId) {
+    return context;
+  }
+  const senderId = normalizeOptionalString(getSenderId());
+  if (!senderId) {
+    return undefined;
+  }
+  // SAFETY: A context carrying this resolver came from the agent context projection.
+  const channelContext = (context as { channelContext?: PluginHookChannelContext }).channelContext;
+  const current = {
+    ...context,
+    senderId,
+    channelContext: { ...channelContext, sender: { ...channelContext?.sender, id: senderId } },
+  };
+  Reflect.deleteProperty(current, HOOK_SENDER_ID);
+  return current;
 }

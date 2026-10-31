@@ -44,7 +44,11 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { isConfiguredCommandOwner } from "../command-auth.js";
 import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
-import { getRequesterProfile, transferRequesterProfile } from "../requester-profile.js";
+import {
+  captureRequesterProfileId,
+  getRequesterProfile,
+  transferRequesterProfile,
+} from "../requester-profile.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { resolveReplyScheduledToolPolicy } from "./agent-runner-run-params.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
@@ -540,6 +544,7 @@ export async function executePreparedReplyRun(
       // Parent lineage authenticates inherited group policy for queued CLI/MCP runs.
       spawnedBy: normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedBy),
       senderId: normalizeOptionalString(sessionCtx.SenderId),
+      getHookSenderId: captureRequesterProfileId(ctx),
       channelContext: ctx.ChannelContext ?? sessionCtx.ChannelContext,
       senderName: normalizeOptionalString(sessionCtx.SenderName),
       senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),

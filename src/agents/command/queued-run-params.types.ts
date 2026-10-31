@@ -39,6 +39,8 @@ export type QueuedAgentRunParams = {
   agentAccountId?: string;
   /** Channel-specific identity metadata surfaced to plugin hooks. */
   channelContext?: PluginHookChannelContext;
+  /** Live UI speaker observation for hooks only; never transport or tool authority. */
+  getHookSenderId?: () => string | undefined;
   /** Trusted sender identity bit for command/channel-action auth. */
   senderIsOwner?: boolean;
   /** Verified current requester for Git credit only; grants no tool authority. */

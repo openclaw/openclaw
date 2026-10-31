@@ -1,5 +1,5 @@
 /** Verifies hook callbacks receive agent context and scoped plugin metadata. */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
@@ -73,6 +73,15 @@ describe("buildAgentHookContextIdentityFields", () => {
       },
     });
   });
+
+  it.each([undefined, "cron", "subagent", "memory"])(
+    "never resolves a UI profile for a non-user trigger: %s",
+    (trigger) => {
+      const getHookSenderId = vi.fn(() => "profile-ada");
+      expect(buildAgentHookContextIdentityFields({ trigger, getHookSenderId })).toEqual({});
+      expect(getHookSenderId).not.toHaveBeenCalled();
+    },
+  );
 
   it("omits identity fields for system-originated triggers", () => {
     expect(

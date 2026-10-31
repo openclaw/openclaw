@@ -91,7 +91,7 @@ export type AgentRunMessageContext = Pick<
 
 export type AgentRunChannelContext = Pick<
   QueuedAgentRunParams,
-  "messageProvider" | "chatType" | "channelContext" | "approvalReviewerDeviceId"
+  "messageProvider" | "chatType" | "channelContext" | "approvalReviewerDeviceId" | "getHookSenderId"
 > & {
   requesterOrigin?: RequesterOrigin;
   operatorProfileId?: string;

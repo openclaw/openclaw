@@ -40,6 +40,7 @@ import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { readUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import { captureRequesterProfileId } from "../requester-profile.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
@@ -301,6 +302,7 @@ function buildEmbeddedContextFromTemplate(params: {
 function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   return {
     senderId: normalizeOptionalString(sessionCtx.SenderId),
+    getHookSenderId: captureRequesterProfileId(sessionCtx),
     channelContext: sessionCtx.ChannelContext,
     senderName: normalizeOptionalString(sessionCtx.SenderName),
     senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),

@@ -15,6 +15,8 @@ import { finalizeGroupThreadToolReply } from "../auto-reply/group-thread-context
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
+import { resolveCurrentAgentHookSenderContext } from "./hook-agent-context.js";
+import { mergeBeforeAgentFinalize } from "./hook-agent-finalize.js";
 import {
   projectAgentEndEvent,
   withAgentRunId,
@@ -38,7 +40,6 @@ import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-regist
 import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-payload.js";
 import type {
   BeforeAgentFinalizeResultWithRetryCandidates,
-  BeforeAgentFinalizeRetry,
   HookFailurePolicy,
   HookRunnerOptions,
   HookContext,
@@ -53,7 +54,6 @@ import { isPluginHookReplyDispatchKind, PLUGIN_HOOK_METADATA } from "./hook-type
 import type {
   PluginHookAgentContext,
   PluginHookAgentTrigger,
-  PluginHookBeforeAgentFinalizeResult,
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
@@ -360,63 +360,6 @@ export function createHookRunner(
     };
   };
 
-  const mergeBeforeAgentFinalize = (
-    acc: BeforeAgentFinalizeResultWithRetryCandidates | undefined,
-    next: PluginHookBeforeAgentFinalizeResult,
-  ): BeforeAgentFinalizeResultWithRetryCandidates => {
-    const normalizeRetry = (
-      retry: PluginHookBeforeAgentFinalizeResult["retry"] | undefined,
-    ): BeforeAgentFinalizeRetry | undefined => {
-      const instruction = typeof retry?.instruction === "string" ? retry.instruction.trim() : "";
-      if (!instruction) {
-        return undefined;
-      }
-      return {
-        ...retry,
-        instruction,
-      };
-    };
-    if (acc?.action === "finalize") {
-      return acc;
-    }
-    if (next.action === "finalize") {
-      return { action: "finalize", reason: next.reason };
-    }
-    if (acc?.action === "revise" && next.action === "revise") {
-      const nextRetry = normalizeRetry(next.retry);
-      const retryCandidates = [
-        ...(acc.retryCandidates ?? (acc.retry ? [acc.retry] : [])),
-        ...(nextRetry ? [nextRetry] : []),
-      ];
-      const retry = retryCandidates[0];
-      const result: BeforeAgentFinalizeResultWithRetryCandidates = {
-        action: "revise",
-        reason: concatOptionalTextSegments({ left: acc.reason, right: next.reason }),
-        ...(retry ? { retry } : {}),
-      };
-      if (retryCandidates.length > 1) {
-        Object.defineProperty(result, "retryCandidates", {
-          configurable: true,
-          enumerable: false,
-          value: retryCandidates,
-        });
-      }
-      return result;
-    }
-    if (acc?.action === "revise") {
-      return acc;
-    }
-    if (next.action === "revise") {
-      const retry = normalizeRetry(next.retry);
-      return {
-        action: "revise",
-        reason: next.reason,
-        ...(retry ? { retry } : {}),
-      };
-    }
-    return next.action === "continue" ? { action: "continue", reason: next.reason } : (acc ?? next);
-  };
-
   const handleHookError = (params: {
     hookName: PluginHookName;
     pluginId: string;
@@ -459,7 +402,11 @@ export function createHookRunner(
         event: HookEvent<K>,
         ctx: HookContext<K>,
       ) => { message?: SyncHookMessage; block?: boolean } | PromiseLike<unknown> | void;
-      const result = handler({ ...event, message }, ctx);
+      const handlerContext = resolveCurrentAgentHookSenderContext(ctx);
+      if (!handlerContext) {
+        return undefined;
+      }
+      const result = handler({ ...event, message }, handlerContext);
       if (isPromiseLike(result)) {
         // Sync-only hooks ignore async results; observe rejections so the global fatal handler cannot crash.
         void Promise.resolve(result).catch(() => undefined);
@@ -472,7 +419,7 @@ export function createHookRunner(
         logger?.warn?.(msg);
         return undefined;
       }
-      if (!result) {
+      if (!result || !resolveCurrentAgentHookSenderContext(ctx)) {
         return undefined;
       }
       if (hookName === "before_message_write" && result.block) {
@@ -510,6 +457,9 @@ export function createHookRunner(
     let current = event.message;
     for (const hook of hooks) {
       const result = runSyncMessageHookStep(hook, hookName, event, current, ctx);
+      if (!resolveCurrentAgentHookSenderContext(ctx)) {
+        return undefined;
+      }
       if (result?.block) {
         return { message: current, block: true };
       }
@@ -549,10 +499,14 @@ export function createHookRunner(
         registration = undefined;
         const projected = projectContext?.(current, ctx);
         try {
+          const handlerContext = resolveCurrentAgentHookSenderContext(projected?.context ?? ctx);
+          if (!handlerContext) {
+            return;
+          }
           const invoke = () =>
             (current.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(
               event,
-              projected?.context ?? ctx,
+              handlerContext,
             );
           const handlerPromise =
             hookName === "gateway_stop"
@@ -649,9 +603,13 @@ export function createHookRunner(
               ? cloneHookIsolationValue(hookName, dispatchEvent)
               : dispatchEvent;
           const invocation = hookName === "before_prompt_build" ? { active: true } : undefined;
+          const currentContext = resolveCurrentAgentHookSenderContext(ctx);
+          if (!currentContext) {
+            return undefined;
+          }
           const handlerContext = invocation
             ? {
-                ...ctx,
+                ...currentContext,
                 hookInvocation: Object.freeze({
                   assertActive() {
                     if (!invocation.active) {
@@ -660,7 +618,7 @@ export function createHookRunner(
                   },
                 }),
               }
-            : ctx;
+            : currentContext;
           let outcome: HookResult<K> | typeof HOOK_REPLACED | undefined;
           try {
             const promise = selection.invoke(current, () =>
@@ -679,6 +637,9 @@ export function createHookRunner(
           if (outcome === HOOK_REPLACED) {
             registration = selection.current(hook);
             continue;
+          }
+          if (!resolveCurrentAgentHookSenderContext(ctx)) {
+            return undefined;
           }
           const handlerResult = outcome;
 
@@ -706,6 +667,9 @@ export function createHookRunner(
             throw err;
           }
           handleHookError({ hookName, pluginId: current.pluginId, error: err });
+        }
+        if (!resolveCurrentAgentHookSenderContext(ctx)) {
+          return undefined;
         }
         policy.assertHandlerBoundaryActive?.();
         readClaimingHookAdmission(ctx)?.assertCurrent?.();
@@ -772,10 +736,14 @@ export function createHookRunner(
         let replaced = false;
         try {
           const invokeHandler = async (): Promise<TResult | void> => {
+            const handlerContext = resolveCurrentAgentHookSenderContext(ctx);
+            if (!handlerContext) {
+              return undefined;
+            }
             const promise = selection.invoke(current, () =>
               (current.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(
                 event,
-                ctx,
+                handlerContext,
               ),
             );
             const outcome = await awaitHook(current, promise);
@@ -792,6 +760,9 @@ export function createHookRunner(
           continue;
         }
         admission?.assertCurrent?.();
+        if (!resolveCurrentAgentHookSenderContext(ctx)) {
+          return { status: "declined" };
+        }
         if (handlerResult?.handled) {
           return { status: "handled", result: handlerResult };
         }

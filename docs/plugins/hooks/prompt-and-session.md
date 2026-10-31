@@ -260,7 +260,12 @@ When sender identity is available, agent hook contexts also include:
 
 - `ctx.senderId` - channel-scoped sender ID (e.g. Feishu `open_id`, Discord
   user ID). Populated when the run originates from a user message with known
-  sender metadata.
+  sender metadata. For authenticated Control UI user turns without a channel sender,
+  this is the verified initiating user's profile ID, independent of the session creator.
+  It identifies the accepted turn, not every coauthor whose messages may be merged by steering.
+  This observation does not grant command, tool, or MCP authority. Core rechecks
+  the bound profile before dispatching each hook and skips hooks whose personal
+  source is no longer current; JSON copies do not retain that host binding.
 - `ctx.chatId` - transport-native conversation identifier (e.g. Feishu
   `chat_id`, Telegram `chat_id`). Populated when the originating channel
   provides a native conversation ID.

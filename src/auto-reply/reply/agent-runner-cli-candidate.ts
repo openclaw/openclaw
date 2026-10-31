@@ -508,6 +508,7 @@ export async function runCliFallbackCandidate(
             currentChannelId:
               turn.followupRun.originatingTo ?? turn.sessionCtx.OriginatingTo ?? turn.sessionCtx.To,
             senderId: turn.followupRun.run.senderId,
+            getHookSenderId: turn.followupRun.run.getHookSenderId,
             senderName: turn.followupRun.run.senderName,
             senderUsername: turn.followupRun.run.senderUsername,
             senderE164: turn.followupRun.run.senderE164,

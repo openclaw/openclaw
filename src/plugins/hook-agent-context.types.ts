@@ -48,7 +48,7 @@ export type PluginHookAgentContext = PluginHookContextWindow & {
   accountId?: string;
   /** Conversation target id for channel-originated runs. Mirrors `channelId` for compatibility. */
   chatId?: string;
-  /** Sender identity for channel-originated runs when available. */
+  /** Channel sender ID, or a verified current profile ID for Control UI user turns. Observation only. */
   senderId?: string;
   trigger?: string;
   channelId?: string;

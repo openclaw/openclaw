@@ -1,5 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildEmbeddedAgentHookContext } from "../../agents/embedded-agent-runner/run/agent-hook-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../agents/tools/gateway-caller-context.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
+import { createRemoteControlUiIngressTestContext } from "../../gateway/remote-control-ui.test-support.js";
+import { prepareTurn } from "../../gateway/server-methods/chat-send-user-turn-family.test-support.js";
+import { createSessionMutationTestClient } from "../../gateway/server-methods/sessions-mutations.owner.test-support.js";
+import type { GatewayClient } from "../../gateway/server-methods/shared-types.js";
+import { createHookRunner } from "../../plugins/hooks.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { getRequesterProfile } from "../requester-profile.js";
 import type { FollowupRun } from "./queue.js";
 
 type ThreadingParams = Parameters<NonNullable<ChannelThreadingAdapter["buildToolContext"]>>[0];
@@ -27,6 +40,7 @@ vi.mock("../../utils/provider-utils.js", () => ({
 const {
   buildThreadingToolContext,
   buildEmbeddedRunExecutionParams,
+  buildModelResolveContext,
   mintReplyMessageActionTurnCapability,
 } = await import("./agent-runner-utils.js");
 const {
@@ -180,6 +194,304 @@ describe("agent-runner-utils", () => {
         revokeMessageActionTurnCapability(token);
       }
     });
+  });
+
+  describe("verified UI sender in agent hooks", () => {
+    function prepareUiTurn(client: GatewayClient, assertCurrent?: () => void) {
+      return prepareTurn({
+        client,
+        request: { clientInfo: client.connect.client },
+        session: { sessionKey: "agent:agent-1:shared" },
+        admission: {
+          originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
+          assertWorkAdmissionCurrent: assertCurrent,
+        },
+      }).ctx;
+    }
+
+    async function hookContexts(sessionCtx: ReturnType<typeof prepareUiTurn>) {
+      const run = makeRun({ sessionKey: "agent:agent-1:shared" });
+      const execution = await buildExecution({ run, sessionCtx });
+      return [
+        buildModelResolveContext({ run, sessionCtx, hasRepliedRef: undefined, trigger: "user" }),
+        buildEmbeddedAgentHookContext({ ...execution, trigger: "user" }, run.agentId!, undefined),
+      ];
+    }
+
+    it("keeps the current speaker distinct when people share a session", async () => {
+      for (const profileId of ["profile-ada", "profile-grace", "profile-ada"]) {
+        const ctx = prepareUiTurn(createSessionMutationTestClient(profileId));
+        expect(ctx).not.toHaveProperty("SenderId");
+        for (const hook of await hookContexts(ctx)) {
+          expect(hook.senderId).toBe(profileId);
+          expect(hook.channelContext?.sender?.id).toBe(profileId);
+        }
+      }
+    });
+
+    it("observes an admitted UI speaker inside agent execution without granting its authority", async () => {
+      const client = createSessionMutationTestClient("profile-ada");
+      const ctx = prepareUiTurn(client);
+      await withGatewayToolCallerIdentity(
+        { agentId: "agent-1", sessionKey: "agent:agent-1:shared" },
+        async () => {
+          const caller = getGatewayToolCallerIdentity();
+          expect(getRequesterProfile(ctx)).toBeUndefined();
+          for (const hook of await hookContexts(ctx)) {
+            expect(hook.senderId).toBe("profile-ada");
+          }
+          expect(getGatewayToolCallerIdentity()).toBe(caller);
+          client.invalidated = true;
+          for (const hook of await hookContexts(ctx)) {
+            expect(hook.senderId).toBeUndefined();
+          }
+          expect(getGatewayToolCallerIdentity()).toBe(caller);
+        },
+      );
+      expect(getGatewayToolCallerIdentity()).toBeUndefined();
+    });
+
+    it("does not acquire a UI speaker from an agent-originated ingress", async () => {
+      await withGatewayToolCallerIdentity(
+        { agentId: "agent-1", sessionKey: "agent:agent-1:shared" },
+        async () => {
+          const ctx = prepareUiTurn(createSessionMutationTestClient("profile-ada"));
+          for (const hook of await hookContexts(ctx)) {
+            expect(hook.senderId).toBeUndefined();
+          }
+        },
+      );
+    });
+
+    it("does not turn a retired cached hook context into an owner memory write", async () => {
+      const client = createSessionMutationTestClient("profile-ada");
+      const contexts = await hookContexts(prepareUiTurn(client));
+      const memoryRead = vi.fn((...args: unknown[]) => {
+        const ctx = args[1];
+        if (!ctx || typeof ctx !== "object") {
+          throw new Error("Missing hook context");
+        }
+        expect(Object.getOwnPropertySymbols(ctx)).toHaveLength(0);
+      });
+      const claim = vi.fn(() => ({ handled: true }));
+      const messageWrite = vi.fn();
+      const memoryWrite = vi.fn((...args: unknown[]) => {
+        const ctx = args[1];
+        return ctx && typeof ctx === "object" && "senderId" in ctx
+          ? (ctx.senderId ?? "owner")
+          : "owner";
+      });
+      const runner = createHookRunner(
+        createMockPluginRegistry([
+          { hookName: "before_prompt_build", pluginId: "personal-memory", handler: memoryRead },
+          { hookName: "agent_end", pluginId: "personal-memory", handler: memoryWrite },
+          { hookName: "before_agent_reply", pluginId: "personal-memory", handler: claim },
+          { hookName: "before_message_write", pluginId: "personal-memory", handler: messageWrite },
+        ]),
+      );
+      for (const ctx of contexts) {
+        await runner.runBeforePromptBuild({ prompt: "hello", messages: [] }, ctx);
+        await runner.runAgentEnd({ success: true, messages: [] }, ctx);
+        await runner.runBeforeAgentReply({ cleanedBody: "hello" }, ctx);
+        runner.runBeforeMessageWrite(
+          { message: { role: "user", content: "hello", timestamp: 1 } },
+          { ...ctx, agentId: "agent-1", sessionKey: "agent:agent-1:shared" },
+        );
+      }
+      expect(memoryRead).toHaveBeenCalledTimes(2);
+      expect(memoryWrite.mock.results.map((result) => result.value)).toEqual([
+        "profile-ada",
+        "profile-ada",
+      ]);
+      client.invalidated = true;
+      for (const ctx of contexts) {
+        await runner.runBeforePromptBuild({ prompt: "hello", messages: [] }, ctx);
+        await runner.runAgentEnd({ success: false, messages: [] }, ctx);
+        await runner.runBeforeAgentReply({ cleanedBody: "hello" }, ctx);
+        runner.runBeforeMessageWrite(
+          { message: { role: "user", content: "hello", timestamp: 1 } },
+          { ...ctx, agentId: "agent-1", sessionKey: "agent:agent-1:shared" },
+        );
+      }
+      expect(memoryRead).toHaveBeenCalledTimes(2);
+      expect(memoryWrite).toHaveBeenCalledTimes(2);
+      expect(claim).toHaveBeenCalledTimes(2);
+      expect(messageWrite).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      { heldIndex: 0, rejected: false },
+      { heldIndex: 1, rejected: false },
+      { heldIndex: 0, rejected: true },
+      { heldIndex: 1, rejected: true },
+    ])(
+      "discards personal enrichment revoked during handler $heldIndex (rejected=$rejected)",
+      async ({ heldIndex, rejected }) => {
+        const client = createSessionMutationTestClient("profile-ada");
+        const [ctx] = await hookContexts(prepareUiTurn(client));
+        const entered = createDeferredCore();
+        const finish = createDeferredCore();
+        const handlers = [0, 1].map((index) =>
+          vi.fn(async () => {
+            if (index === heldIndex) {
+              entered.resolve();
+              await finish.promise;
+              if (rejected) {
+                throw new Error("Provider unavailable");
+              }
+            }
+            return { prependContext: "personal memory" };
+          }),
+        );
+        const runner = createHookRunner(
+          createMockPluginRegistry(
+            handlers.map((handler, index) => ({
+              hookName: "before_prompt_build",
+              pluginId: `memory-${index}`,
+              priority: 2 - index,
+              handler,
+            })),
+          ),
+        );
+        const pending = runner.runBeforePromptBuild({ prompt: "hello", messages: [] }, ctx!);
+        await entered.promise;
+        client.invalidated = true;
+        finish.resolve();
+        expect(await pending).toBeUndefined();
+        expect(handlers[0]).toHaveBeenCalledOnce();
+        expect(handlers[1]).toHaveBeenCalledTimes(heldIndex === 0 ? 0 : 1);
+      },
+    );
+
+    it.each([false, true])("discards a revoked awaited claim (rejected=%s)", async (rejected) => {
+      const client = createSessionMutationTestClient("profile-ada");
+      const [ctx] = await hookContexts(prepareUiTurn(client));
+      const entered = createDeferredCore();
+      const finish = createDeferredCore();
+      const next = vi.fn();
+      const runner = createHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_agent_reply",
+            pluginId: "memory",
+            priority: 2,
+            handler: async () => {
+              entered.resolve();
+              await finish.promise;
+              if (rejected) {
+                throw new Error("Provider unavailable");
+              }
+              return { handled: true, reply: { text: "personal memory" } };
+            },
+          },
+          { hookName: "before_agent_reply", pluginId: "next", priority: 1, handler: next },
+        ]),
+      );
+      const pending = runner.runBeforeAgentReply({ cleanedBody: "hello" }, ctx!);
+      await entered.promise;
+      client.invalidated = true;
+      finish.resolve();
+      expect(await pending).toBeUndefined();
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it.each(["revoked", "aborted", "actor"])(
+      "rechecks delegated UI profile authority: %s",
+      async (change) => {
+        const client = createSessionMutationTestClient("profile-ada");
+        client.authenticatedUserId = undefined;
+        const lifetime = new AbortController();
+        let current = true;
+        const principal = createRemoteControlUiIngressTestContext({
+          principal: { kind: "person", profileId: "profile-ada" },
+          signal: lifetime.signal,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("Grant revoked");
+            }
+          },
+        }).resolvePrincipal();
+        client.internal = {
+          authenticatedOperator: true,
+          operatorRoleActor: principal.operatorRoleActor,
+          remoteIngressPrincipal: principal,
+        };
+        const ctx = prepareUiTurn(client);
+        expect((await hookContexts(ctx))[0]?.senderId).toBe("profile-ada");
+        if (change === "revoked") {
+          current = false;
+        } else if (change === "aborted") {
+          lifetime.abort();
+        } else {
+          client.internal.operatorRoleActor = { kind: "operator", profileId: "profile-grace" };
+        }
+        for (const hook of await hookContexts(ctx)) {
+          expect(hook.senderId).toBeUndefined();
+        }
+      },
+    );
+
+    it.each([
+      "profile",
+      "identity",
+      "binding",
+      "json",
+      "invalidated",
+      "disconnect",
+      "synthetic",
+      "admission",
+    ])("does not expose a retired UI requester after %s changes", async (change) => {
+      const client = createSessionMutationTestClient("profile-ada");
+      const lifetime = new AbortController();
+      client.connectionSignal = lifetime.signal;
+      let current = true;
+      let ctx = prepareUiTurn(client, () => {
+        if (!current) {
+          throw new Error("Retired admission");
+        }
+      });
+      if (change === "profile") {
+        client.authenticatedUserProfile =
+          createSessionMutationTestClient("profile-grace").authenticatedUserProfile;
+      } else if (change === "identity") {
+        client.authenticatedUserId = "another@example.test";
+      } else if (change === "binding") {
+        ctx.AccountId = "another-account";
+      } else if (change === "json") {
+        // Exercise transport serialization, not cloning: host capabilities must not survive JSON.
+        // eslint-disable-next-line unicorn/prefer-structured-clone
+        ctx = JSON.parse(JSON.stringify(ctx));
+      } else if (change === "invalidated") {
+        client.invalidated = true;
+      } else if (change === "disconnect") {
+        lifetime.abort();
+      } else if (change === "synthetic") {
+        client.internal = { syntheticClient: true };
+      } else {
+        current = false;
+      }
+      for (const hook of await hookContexts(ctx)) {
+        expect(hook.senderId).toBeUndefined();
+        expect(hook.channelContext?.sender).toBeUndefined();
+      }
+    });
+
+    it.each(["unverified", "owner", "synthetic"])(
+      "does not invent a sender for %s UI input",
+      async (kind) => {
+        const client = createSessionMutationTestClient("profile-ada");
+        if (kind === "unverified") {
+          client.authenticatedUserProfile = undefined;
+        } else if (kind === "owner") {
+          client.authenticatedUserId = undefined;
+        } else {
+          client.internal = { syntheticClient: true };
+        }
+        for (const hook of await hookContexts(prepareUiTurn(client))) {
+          expect(hook.senderId).toBeUndefined();
+        }
+      },
+    );
   });
 
   it("uses the queued conversation policy snapshot", async () => {
