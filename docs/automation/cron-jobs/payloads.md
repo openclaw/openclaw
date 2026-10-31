@@ -186,7 +186,12 @@ preserve the recorded source. Changes to model-facing names, prompts, tools, sch
 or other executable behavior need fresh source authorization and clear the old source
 when none is present. Remote management alone cannot supply local-source authorization,
 and older jobs without a provable origin remain blocked until reauthorized or recreated
-from a fresh authorized source.
+from a fresh authorized source. Blocked jobs are discoverable: `openclaw automations status`
+reports a `reauthorizationRequired` count, and each affected job's details and list entries
+carry a `reauthorizationRequired` flag. Re-saving the job's tool cap from the creator's
+authenticated turn records a fresh origin and unblocks the job without changing its
+account-scoped authority; recreating it from the intended account is the fallback when the
+creator turn is unavailable.
 
 Scheduled turns can also `edit`, `delete`, `pin`, and `unpin` Discord messages.
 Agent-created jobs use their recorded creator account and Discord's delegated

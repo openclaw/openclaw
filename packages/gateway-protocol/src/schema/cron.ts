@@ -507,6 +507,8 @@ export const CronJobSchema = closedObject({
   updatedAtMs: CronDateTimestampMsSchema,
   /** Opaque Gateway-computed token for the job definition, excluding scheduler state. */
   configRevision: Type.Optional(CronConfigRevisionSchema),
+  /** Gateway-computed: the account-scoped tool cap cannot resolve its creator channel. */
+  reauthorizationRequired: Type.Optional(Type.Boolean()),
   schedule: CronScheduleSchema,
   pacing: Type.Optional(CronPacingSchema),
   activeHours: Type.Optional(CronActiveHoursSchema),
