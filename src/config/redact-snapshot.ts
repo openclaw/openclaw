@@ -204,7 +204,10 @@ function redactValue(
     if (candidate) {
       result[key] = value;
       if (typeof value === "string") {
-        if (!isConcreteSensitiveString(value)) {
+        if (
+          !isConcreteSensitiveString(value) ||
+          !(context.hints?.[candidate]?.sensitive === true || isSensitivePath(path))
+        ) {
           continue;
         }
         result[key] = REDACTED_SENTINEL;
