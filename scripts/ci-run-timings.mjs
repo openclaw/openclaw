@@ -85,22 +85,15 @@ function formatSeconds(value) {
   return value === null ? "" : `${value}s`;
 }
 
-function percentile(values, percentileValue) {
-  if (values.length === 0) {
-    return null;
-  }
-  const sorted = [...values].toSorted((left, right) => left - right);
-  const index = Math.min(sorted.length - 1, Math.ceil(sorted.length * percentileValue) - 1);
-  return sorted[index];
-}
-
 function summarizeDistribution(values) {
+  const sorted = values.toSorted((left, right) => left - right);
+  const percentile = (fraction) => sorted[Math.ceil(sorted.length * fraction) - 1] ?? null;
   return {
     count: values.length,
     max: values.length === 0 ? null : Math.max(...values),
-    p50: percentile(values, 0.5),
-    p90: percentile(values, 0.9),
-    p95: percentile(values, 0.95),
+    p50: percentile(0.5),
+    p90: percentile(0.9),
+    p95: percentile(0.95),
   };
 }
 
@@ -362,6 +355,7 @@ function summarizeJobs(run) {
     .filter((job) => job.status === "completed" && job.conclusion === "success")
     .map((job) => job.durationSeconds)
     .filter((duration) => duration !== null);
+  const distribution = summarizeDistribution(successfulDurations);
   const firstStart = Math.min(...completedJobs.map((job) => job.started));
   const lastComplete = Math.max(...completedJobs.map((job) => job.completed));
 
@@ -380,10 +374,10 @@ function summarizeJobs(run) {
     firstStartDelaySeconds: Number.isFinite(firstStart)
       ? secondsBetween(created, firstStart)
       : null,
-    jobCount: successfulDurations.length,
-    maxDurationSeconds: successfulDurations.length === 0 ? null : Math.max(...successfulDurations),
-    p90DurationSeconds: percentile(successfulDurations, 0.9),
-    p95DurationSeconds: percentile(successfulDurations, 0.95),
+    jobCount: distribution.count,
+    maxDurationSeconds: distribution.max,
+    p90DurationSeconds: distribution.p90,
+    p95DurationSeconds: distribution.p95,
     wallSeconds: secondsBetween(created, updated),
   };
 }
