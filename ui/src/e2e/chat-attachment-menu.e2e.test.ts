@@ -68,6 +68,12 @@ function withChat(
           }
         }, options.preview);
       }
+      await page.addInitScript(() => {
+        Object.defineProperty(window, "showOpenFilePicker", {
+          configurable: true,
+          value: undefined,
+        });
+      });
       await installMockGateway(page);
       let chooserCount = 0;
       page.on("filechooser", () => {

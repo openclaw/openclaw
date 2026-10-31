@@ -23,6 +23,12 @@ suite.define(() => {
         },
         async ({ page }) => {
           await installAttachmentBrowserIdentity(page, fixture);
+          await page.addInitScript(() => {
+            Object.defineProperty(window, "showOpenFilePicker", {
+              configurable: true,
+              value: undefined,
+            });
+          });
           await installMockGateway(page);
           // Arm interception before raw keyboard input can open a chooser.
           page.on("filechooser", () => {});
