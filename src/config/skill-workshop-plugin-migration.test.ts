@@ -60,6 +60,32 @@ describe("materializeSkillWorkshopPlugin", () => {
     expect(materializeSkillWorkshopPlugin(written).config).toBe(written);
   });
 
+  it("keeps an explicitly written value that equals the older policy", () => {
+    const previous: OpenClawConfig = {
+      plugins: { deny: ["skill-workshop"], entries: { "skill-workshop": { enabled: false } } },
+    };
+    const paths = [["plugins", "entries", "skill-workshop", "enabled"]];
+
+    const written = stampSkillWorkshopPluginMigration(structuredClone(previous), previous, paths);
+
+    expect(written.plugins).toEqual({
+      deny: [],
+      entries: { "skill-workshop": { enabled: false } },
+    });
+    expect(written.meta?.migrations?.skillWorkshopPlugin).toBe(true);
+  });
+
+  it("keeps only the settings a write names inside an older entry", () => {
+    const previous: OpenClawConfig = {
+      plugins: { entries: { "skill-workshop": { enabled: false, config: { maxSkillBytes: 1 } } } },
+    };
+    const paths = [["plugins", "entries", "skill-workshop", "enabled"]];
+
+    const written = stampSkillWorkshopPluginMigration(structuredClone(previous), previous, paths);
+
+    expect(written.plugins?.entries).toEqual({ "skill-workshop": { enabled: false } });
+  });
+
   it("lets ordinary writes record the marker only when no older policy needs repair", () => {
     const stale = builtInEraConfig();
     const written = stampConfigWriteMetadata(stale, "2026.10.9", stale);

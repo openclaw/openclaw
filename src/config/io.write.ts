@@ -290,6 +290,7 @@ export async function writeConfigFileFromContext(
     options.lastTouchedVersionOverride,
     snapshot.exists ? previousSource : null,
     deps.env,
+    [...explicitSetPaths, ...(options.unsetPaths ?? [])],
   );
   // Resolve policy from included facts, but persist only its delta beside authored directives.
   persistCandidate = applyMergePatch(

@@ -127,20 +127,95 @@ function readWorkshopPolicy(value: unknown) {
   };
 }
 
+/** Workshop policy the writer set or unset on request; an equal older value is not stale. */
+function withoutExplicitWorkshopPolicy(
+  previousConfig: unknown,
+  explicitPaths: readonly (readonly string[])[],
+): unknown {
+  if (!isRecord(previousConfig) || !isRecord(previousConfig.plugins)) {
+    return previousConfig;
+  }
+  const plugins = { ...previousConfig.plugins };
+  for (const [root, key, id] of explicitPaths) {
+    if (root !== "plugins") {
+      continue;
+    }
+    if (key === "entries" && isWorkshopId(id) && isRecord(plugins.entries)) {
+      plugins.entries = Object.fromEntries(
+        Object.entries(plugins.entries).filter(([entryId]) => !isWorkshopId(entryId)),
+      );
+    } else if ((key === "allow" || key === "deny") && Array.isArray(plugins[key])) {
+      plugins[key] = plugins[key].filter((entry: unknown) => !isWorkshopId(entry));
+    }
+  }
+  return { ...previousConfig, plugins };
+}
+
+/**
+ * A write into an older entry keeps only the settings it names; the entry's other older
+ * settings were ignored and stay part of the repair. A write of the whole entry keeps it all.
+ */
+function keepExplicitEntryLeaves(
+  cfg: OpenClawConfig,
+  explicitPaths: readonly (readonly string[])[],
+): OpenClawConfig {
+  const entries = cfg.plugins?.entries;
+  if (!entries) {
+    return cfg;
+  }
+  let changed = false;
+  const next = { ...entries };
+  for (const id of Object.keys(entries).filter(isWorkshopId)) {
+    const leaves = explicitPaths
+      .filter(([root, key, entryId]) => root === "plugins" && key === "entries" && entryId === id)
+      .map((segments) => segments.slice(3));
+    if (leaves.length === 0 || leaves.some((leaf) => leaf.length === 0)) {
+      continue;
+    }
+    const kept: Record<string, unknown> = {};
+    for (const leaf of leaves) {
+      let source: unknown = entries[id];
+      let target = kept;
+      for (const [index, segment] of leaf.entries()) {
+        source = isRecord(source) ? source[segment] : undefined;
+        if (source === undefined) {
+          break;
+        }
+        if (index === leaf.length - 1) {
+          target[segment] = source;
+        } else {
+          target = (target[segment] ??= {}) as Record<string, unknown>;
+        }
+      }
+    }
+    next[id] = kept;
+    changed = true;
+  }
+  return changed ? { ...cfg, plugins: { ...cfg.plugins, entries: next } } : cfg;
+}
+
 /**
  * A config write records the migration when nothing older needs repair, or when the write
- * itself changes `skill-workshop` policy. Then the older policy is repaired with it, so the new
+ * itself sets `skill-workshop` policy. Then the older policy is repaired with it, so the new
  * policy is never ignored or later removed. Other writes leave the repair to Doctor and never
  * rewrite policy lists they did not touch.
  */
 export function stampSkillWorkshopPluginMigration(
   cfg: OpenClawConfig,
   previousConfig: unknown,
+  explicitPaths: readonly (readonly string[])[] = [],
 ): OpenClawConfig {
-  const migrated = materializeSkillWorkshopPlugin(cfg, previousConfig);
+  if (hasSkillWorkshopPluginMigrationMarker(previousConfig)) {
+    return cfg;
+  }
+  const previous = withoutExplicitWorkshopPolicy(previousConfig, explicitPaths);
+  const migrated = materializeSkillWorkshopPlugin(
+    keepExplicitEntryLeaves(cfg, explicitPaths),
+    previous,
+  );
   const writesWorkshopPolicy = !isDeepStrictEqual(
     readWorkshopPolicy(cfg),
-    readWorkshopPolicy(previousConfig),
+    readWorkshopPolicy(previous),
   );
   return migrated.changes.length === 0 || writesWorkshopPolicy ? migrated.config : cfg;
 }

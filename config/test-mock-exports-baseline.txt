@@ -2869,7 +2869,6 @@
 ["src/cli/plugins-cli-test-helpers.ts","../runtime.js","2be6cbb08066064cac00ee2ab34cc1747dcec2c710a5e50115a86c4a888c966d",1]
 ["src/cli/plugins-cli-test-helpers.ts","./plugins-lifecycle-client.js","3d409bd5808070cbc41b36cf6bbffcc19b1514b18f8b09a490574aa3a7452a2d",1]
 ["src/cli/plugins-cli-test-helpers.ts","./prompt.js","3115b5b7d1d449d8a28603a2c7baaa043acaf0db019d74f89766cb2a4a5d711d",1]
-["src/cli/plugins-cli.inspect.test.ts","../skills/workshop/tool-policy-diagnostic.js","5b557b01bc7aabc94cc5ef06eea2ecac4fde0b05dce3341b8013705b02f980c7",1]
 ["src/cli/plugins-cli.lazy.test.ts","./plugins-authoring-command.js","6b4f6234e63e03e12342285ba469c28f173feda03ef64d847b91de6f6eed1ca1",1]
 ["src/cli/plugins-cli.lazy.test.ts","./plugins-cli.runtime.js","9ddd4ea61927c7c37bd3ce75490dcf5d304b207cda262de36216611238d1dc5b",1]
 ["src/cli/plugins-cli.lazy.test.ts","./plugins-marketplace-list-command.js","b80fddf044f33730993acf00743652ae88a5a14be4ad89b42106e980da62263a",1]
