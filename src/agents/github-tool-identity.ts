@@ -63,7 +63,10 @@ import type {
   PreparedGitHubToolEnvironment,
   SharedGitHubIdentityPreparation,
 } from "./github-tool-identity.types.js";
-import { writeManagedGitHubProfileFiles } from "./github-tool-profile-files.js";
+import {
+  isPrivateManagedGitHubProfile,
+  writeManagedGitHubProfileFiles,
+} from "./github-tool-profile-files.js";
 import { resolveManagedGitHubProfileDir } from "./github-tool-profile-path.js";
 
 export {
@@ -235,28 +238,6 @@ async function readManagedGitHubToken(profileDir: string): Promise<string | unde
       : undefined;
   } catch {
     return undefined;
-  }
-}
-
-async function isPrivateManagedGitHubProfile(profileDir: string): Promise<boolean> {
-  try {
-    const [profile, hosts] = await Promise.all([
-      fs.lstat(profileDir),
-      fs.lstat(path.join(profileDir, "hosts.yml")),
-    ]);
-    if (
-      !profile.isDirectory() ||
-      profile.isSymbolicLink() ||
-      !hosts.isFile() ||
-      hosts.isSymbolicLink()
-    ) {
-      return false;
-    }
-    return (
-      process.platform === "win32" || ((profile.mode & 0o077) === 0 && (hosts.mode & 0o077) === 0)
-    );
-  } catch {
-    return false;
   }
 }
 
@@ -577,7 +558,7 @@ export function prepareGitHubReadIdentity(
 export function prepareGitHubReadIdentity(
   params: GitHubReadIdentityPreparation,
 ): Promise<PreparedGitHubReadIdentity>;
-/** Read authority tracks current selection and token rotation, without exporting a child environment. */
+/** Read authority keeps selection and credential policy live through later consuming effects. */
 export async function prepareGitHubReadIdentity(
   params: GitHubReadIdentityPreparation & { allowAnonymous?: boolean },
 ): Promise<PreparedGitHubSourceReadIdentity> {
@@ -586,6 +567,7 @@ export async function prepareGitHubReadIdentity(
   const assertSelected = composeSessionSourceAssertion([
     captureExternalSessionCommitGuard(params.assertActive),
     () => {
+      params.readNativeCredential?.assertCurrent?.();
       const current = resolveGitHubToolIdentity({
         config: params.getCurrentConfig(),
         agentId: params.agentId,
@@ -604,6 +586,14 @@ export async function prepareGitHubReadIdentity(
     },
   ]);
   const caller = { assertCurrent: assertSelected, startCurrent: params.startActive };
+  // Managed profiles bypass native bearer lookup, not the repository policy that owns it.
+  if (
+    selected.source !== "system-detected" &&
+    kind !== "app-installation" &&
+    params.readNativeCredential?.admit
+  ) {
+    await startGitHubIdentityOperation(params.readNativeCredential.admit, caller);
+  }
   await startGitHubIdentityOperation(params.refresh, caller);
   assertSelected();
   const { token, readToken, prepared, stale } = await prepareSharedGitHubIdentity(

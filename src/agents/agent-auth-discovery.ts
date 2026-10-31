@@ -21,6 +21,7 @@ import {
   resolveProviderEnvAuthLookupMaps,
 } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
+import { isProviderAuthError } from "./model-auth-runtime-shared.js";
 
 type AgentDiscoveryAuthLookupOptions = {
   config?: OpenClawConfig;
@@ -135,6 +136,14 @@ function syntheticAuthParams(options: AgentDiscoveryAuthLookupOptions, provider:
   };
 }
 
+/**
+ * A plugin-owned provider without a live credential is unavailable for discovery;
+ * catalog availability reports it per model, so it must not fail the other providers.
+ */
+function isUnavailablePluginOwnedAuth(error: unknown, provider: string): boolean {
+  return isProviderAuthError(error, "missing-provider-auth") && error.provider === provider;
+}
+
 function addSyntheticCredential(
   credentials: AgentCredentialMap,
   provider: string,
@@ -156,13 +165,18 @@ export function resolveAmbientAgentCredentialsForDiscovery(
 ): AgentCredentialMap {
   const { credentials, providers } = resolveAmbientCredentialInputs(options);
   for (const provider of providers) {
-    addSyntheticCredential(
-      credentials,
-      provider,
-      options.resolveSyntheticAuth
+    let resolved: SyntheticAuth;
+    try {
+      resolved = options.resolveSyntheticAuth
         ? options.resolveSyntheticAuth(provider)
-        : resolveProviderSyntheticAuthWithPlugin(syntheticAuthParams(options, provider)),
-    );
+        : resolveProviderSyntheticAuthWithPlugin(syntheticAuthParams(options, provider));
+    } catch (error) {
+      if (isUnavailablePluginOwnedAuth(error, provider)) {
+        continue;
+      }
+      throw error;
+    }
+    addSyntheticCredential(credentials, provider, resolved);
   }
   return credentials;
 }
@@ -178,13 +192,21 @@ export async function prepareAmbientAgentCredentialsForDiscovery(
   const { credentials, providers } = resolveAmbientCredentialInputs(options);
   for (const provider of providers) {
     options.signal?.throwIfAborted();
-    const resolved = options.resolveSyntheticAuth
-      ? await options.resolveSyntheticAuth(provider)
-      : await prepareProviderSyntheticAuthWithPlugin({
-          ...syntheticAuthParams(options, provider),
-          signal: options.signal,
-          preparationOwner: options.preparationOwner,
-        });
+    let resolved: SyntheticAuth;
+    try {
+      resolved = options.resolveSyntheticAuth
+        ? await options.resolveSyntheticAuth(provider)
+        : await prepareProviderSyntheticAuthWithPlugin({
+            ...syntheticAuthParams(options, provider),
+            signal: options.signal,
+            preparationOwner: options.preparationOwner,
+          });
+    } catch (error) {
+      if (isUnavailablePluginOwnedAuth(error, provider)) {
+        continue;
+      }
+      throw error;
+    }
     options.signal?.throwIfAborted();
     addSyntheticCredential(credentials, provider, resolved);
   }

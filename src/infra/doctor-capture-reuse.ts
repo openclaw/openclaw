@@ -200,6 +200,7 @@ async function compareCurrentSources(
         env: params.env,
         warnings,
         requireLocalResources: true,
+        signal: params.signal,
       }),
     { env: params.env, signal: params.signal },
   );

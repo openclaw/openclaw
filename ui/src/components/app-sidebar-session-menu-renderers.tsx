@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
@@ -39,6 +40,8 @@ import {
   SidebarOwnerFilter,
   SidebarOwnerOptions,
 } from "./solid/sidebar-owner-filter.tsx";
+
+registerSessionMenuEnglish();
 
 type SidebarSessionGroupMenuAction =
   | "group-defaults"

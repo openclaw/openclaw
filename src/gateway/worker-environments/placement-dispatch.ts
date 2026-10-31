@@ -126,12 +126,22 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       "sessions.dispatch",
       "admission",
     );
+    let dispatchActive = true;
     const assertCurrent = composePlacementAuthorization(authorize, () => {
+      if (!dispatchActive) {
+        throw new Error("Repository dispatch was released");
+      }
       signal?.throwIfAborted();
       assertRequiredWorkerDispatch(getRuntimeConfig(), request);
     });
     assertCurrent();
     let placement: WorkerDispatchPlacement | undefined;
+    const credentialCleanups = new Set<() => Promise<void>>();
+    const retainCredentialCleanup = (revoke: () => Promise<void>) => {
+      credentialCleanups.add(revoke);
+    };
+    // Source owners compose dispatch liveness with the original reader's admission and policy guard.
+    const readNativeCredential = request.readNativeCredential;
     try {
       signal?.throwIfAborted();
       placement = await options.runLocalBarrier({
@@ -212,6 +222,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             machineClass: request.machineClass,
             executionMode: request.executionMode,
             projectPath,
+            assertCurrent,
+            readNativeCredential,
+            retainCredentialCleanup,
             ...(workspace.kind === "repository"
               ? {
                   repository: {
@@ -283,7 +296,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           });
       return await startup.continueProvisionedDispatch({
         markPhase: diagnostics?.mark,
-        request,
+        request: { ...request, readNativeCredential },
+        retainCredentialCleanup,
         placement,
         environment,
         expectedEnvironmentId,
@@ -326,6 +340,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         }
       }
       throw error;
+    } finally {
+      dispatchActive = false;
+      const cleanup = await Promise.allSettled([...credentialCleanups].map((revoke) => revoke()));
+      if (cleanup.some((result) => result.status === "rejected")) {
+        sessionLog.warn(
+          "Repository dispatch credential cleanup failed; retry GitHub credential cleanup before reusing the worker.",
+        );
+      }
     }
   };
 

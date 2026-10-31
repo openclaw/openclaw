@@ -123,6 +123,7 @@ vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) 
     let closing: Promise<void> | undefined;
     return {
       run: <T>(operation: () => T) => operation(),
+      assertAdmission: () => boundary.ownerAssert(),
       close: () =>
         (closing ??= (async () => {
           await boundary.close();

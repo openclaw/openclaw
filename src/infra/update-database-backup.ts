@@ -291,6 +291,9 @@ export async function createUpdateDatabaseBackupInProcess(
   const { createStoppedSqliteSnapshot, createVerifiedSqliteSnapshot } =
     await import("./sqlite-snapshot.js");
   const { AGENT_FTS_SCHEMAS } = await import("../state/openclaw-agent-fts-schema.js");
+  const { openNodeSqliteDatabase } = await import("./node-sqlite.js");
+  const { assertSqliteIntegrity, SqliteForeignKeyIntegrityError, SqliteRepairableForeignKeyError } =
+    await import("./sqlite-integrity.js");
   const databases: UpdateDatabaseBackup["databases"] = [];
   const sourceGenerations: UpdateDatabaseBackup["sourceGenerations"] = Object.fromEntries(
     inventory.missing.map((file) => [file, null]),
@@ -398,29 +401,58 @@ export async function createUpdateDatabaseBackupInProcess(
             // Publication now owns cleanup, including refusal before its first write.
             heldImages.delete(preparedSource);
           }
-          const snapshot = stoppedSources.has(sourcePath)
-            ? await createStoppedSqliteSnapshot({
-                sourcePath,
-                targetPath: snapshotPath,
-                sourceIdentity: identities.get(sourcePath)!,
-              })
-            : await createVerifiedSqliteSnapshot({
-                sourcePath,
-                targetPath: snapshotPath,
-                sourceAcquisition: {
-                  mode: "isolated-process",
-                  stagingRoot: input.stagingRoot,
-                  preserveSourceArtifacts: input.stopped || input.preserveSourceArtifacts,
-                  preparedSource,
-                },
-                preserveRowIds: true,
-                requireNonEmptySource: true,
-                // Owned FTS indexes are derived; whichever runtime admits this copy rebuilds them.
-                integrity:
-                  engines.get(sourcePath)?.engine === "sqlite"
-                    ? { check: input.integrityCheck ?? "full", ftsSchemas: AGENT_FTS_SCHEMAS }
-                    : undefined,
+          // Original evidence must preserve rows Doctor may need to repair. Only
+          // its closed, checkpointed sources have custody for the existing raw copy.
+          const rawOriginal =
+            input.integrityCheck === "quick" &&
+            originalCaptureSources.has(sourcePath) &&
+            !identities.has(`${sourcePath}-journal`) &&
+            (identities.get(`${sourcePath}-wal`)?.size ?? 0n) === 0n;
+          const snapshot =
+            stoppedSources.has(sourcePath) || rawOriginal
+              ? await createStoppedSqliteSnapshot({
+                  sourcePath,
+                  targetPath: snapshotPath,
+                  sourceIdentity: identities.get(sourcePath)!,
+                })
+              : await createVerifiedSqliteSnapshot({
+                  sourcePath,
+                  targetPath: snapshotPath,
+                  sourceAcquisition: {
+                    mode: "isolated-process",
+                    stagingRoot: input.stagingRoot,
+                    preserveSourceArtifacts: input.stopped || input.preserveSourceArtifacts,
+                    preparedSource,
+                  },
+                  preserveRowIds: true,
+                  requireNonEmptySource: true,
+                  // Owned FTS indexes are derived; whichever runtime admits this copy rebuilds them.
+                  integrity:
+                    engines.get(sourcePath)?.engine === "sqlite"
+                      ? { check: input.integrityCheck ?? "full", ftsSchemas: AGENT_FTS_SCHEMAS }
+                      : undefined,
+                });
+          if (rawOriginal) {
+            using image = openNodeSqliteDatabase(snapshotPath, { readOnly: true });
+            try {
+              assertSqliteIntegrity(image, sourcePath, {
+                check: "quick",
+                ftsSchemas: AGENT_FTS_SCHEMAS,
               });
+            } catch (error) {
+              if (
+                !(error instanceof SqliteForeignKeyIntegrityError) &&
+                !(error instanceof SqliteRepairableForeignKeyError)
+              ) {
+                throw error;
+              }
+              // This is recovery evidence, never a clean integrity receipt or
+              // automatic rollback authority. Doctor still validates every repair.
+              warnings.push(
+                `Original recovery image retains foreign-key violations: ${sourcePath}`,
+              );
+            }
+          }
           // Checkpointed stopped stores already have a private image; classify that image
           // instead of copying and comparing the complete source again just for its anchor.
           const engine = engines.get(sourcePath) ?? readBackupEngineImage(snapshotPath, sourcePath);

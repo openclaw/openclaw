@@ -17,6 +17,7 @@ worker, storage, or embedding provider must satisfy. Part of the
 
 | Method                                           | What it registers                                                                 |
 | ------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `api.registerDecisionProvider(...)`              | Typed decision inference with V1 or prepared V2 execution                         |
 | `api.registerProvider(...)`                      | Text inference (LLM)                                                              |
 | `api.registerWorkerProvider(...)`                | Cloud-worker lifecycle leases                                                     |
 | `api.registerStorageProvider(...)`               | Opaque object storage for named locations                                         |
@@ -94,6 +95,39 @@ Providers store opaque bytes. Core owns location initialization, marker identity
 namespacing, encryption, and health classification; consumers own retention.
 Providers must not create or interpret location markers or expose credentials in
 `displayTarget` or errors. See [Storage locations](/concepts/storage-locations).
+
+### Repository preparation integrations
+
+A deployment can select an optional repository policy with
+`gateway.repositoryIntegration`. The plugin declares
+`contracts.repositoryIntegrations: ["repository"]` and calls
+`api.registerRepositoryIntegration(...)` with the version 1
+`RepositoryIntegration` contract from `openclaw/plugin-sdk/plugin-entry`.
+Registration alone does not select it. A selected owner that is missing,
+disabled, unloaded, or disposed blocks admission rather than falling back.
+
+The integration interprets authenticated connection metadata and admits source
+access for worker repository preparation with native, GitHub App, and managed
+OAuth or PAT credentials. Selecting a managed profile does not bypass policy:
+admission runs before refresh or profile lookup, while the native managed-profile
+owner retains credential reading and rotation. Policy admission does not request
+a native bearer for a managed profile. Its `withIdentity` callback
+receives the original caller, exact session and request binding, current profile
+reader, and a live `assertCurrent` guard. Check that guard after awaited policy
+work and immediately before effects. The native issuer retains signing keys;
+policy receives only public App selection facts. Returned credential callbacks
+remain bound to the plugin instance and stop working after its disposal.
+
+Dispatch carries this admission through cold provisioning, prepared-workspace
+binding, and repository checkout. A fresh authenticated chat can supply a new
+admission for redispatch; previous dispatch callbacks cannot be reused after the
+request finishes. Credentials and callbacks are never stored in environment
+snapshots or sent over RPC. The dispatch owner revokes temporary App credentials
+on success or failure. The `preparedCapacity` descriptor is `"image"` or
+`"repository"`; native preparation and capacity accounting remain host-owned.
+This contract does not replace publication policy or enable a standing reserve.
+Without a selected integration, native credential and trusted-proxy behavior is
+unchanged.
 
 ### Worker providers
 
@@ -285,6 +319,37 @@ sort/tag/box questions or other unrepresentable data return `unsupported-input`
 across the V1 boundary. They never become fabricated probabilities or labels.
 Existing V1 providers retain their documented execution contract. External
 plugins adopt V2 only after a host release exports the required V2 SDK surface.
+
+### Provider implementation boundaries
+
+Provider plugins own model eligibility, native input limits, answer semantics,
+and HTTP or worker execution. Keep these decisions in the plugin when separating
+its adapter, codec, and executor:
+
+| Responsibility                                                                       | Owner                   |
+| ------------------------------------------------------------------------------------ | ----------------------- |
+| Versioned evidence, questions, answers, validation, and lossless conversion          | Decision data contracts |
+| Consumer identity, model policy, selection, and accepted usage                       | Runtime coordination    |
+| Capacity, deadlines, circuit state, version bridging, and physical settlement        | Provider host           |
+| Selected route, capabilities, agent/profile credentials, and private transport facts | Prepared inference      |
+| Native protocol mappings, provider eligibility, and transport or worker execution    | Provider plugin         |
+
+Register through `api.registerDecisionProvider` and import contracts from
+`openclaw/plugin-sdk/decisions`. The prepared adapter projects the selected
+model, auth, request, and lifetime facts into plugin-local execution. Pure codecs
+encode requests and decode native responses without resolving credentials,
+selecting routes, performing I/O, or recording usage. Consumers continue to use
+`api.runtime.decisions.evaluateV2`; they do not construct provider contexts.
+Preserving V1 admission with `isDecisionBatchV1Representable` does not require
+converting native execution or results through V1.
+
+For HTTP adapters, retain complete prepared request metadata when checking
+responses for reflected credentials. The existing
+`createProviderCredentialMatcher` helper from `openclaw/plugin-sdk/provider-http`
+can account for replacement-auth headers and prefixes, plus configured header
+names. Structural result validation cannot detect leaked credentials. Preserve
+live admission checks after DNS or queue waits, and await response/transport
+release before settling the operation.
 
 ## Decision models (contract version 1)
 

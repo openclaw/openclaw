@@ -440,6 +440,12 @@ brings the selected agent into view.
 
 ## Download files
 
+When a reply file in the current session is too large to attach, its card offers **Find in Files**.
+This searches the current session's Files using the filename as a hint. Choose
+the intended file by its folder, then use **Download file**. The search does not
+select a same-named file automatically or grant access to a moved, deleted, or
+restricted file. Existing attachment limits stay in effect.
+
 Chat filename links first try the named path. If a bare filename is missing there,
 the preview opens a nested file only when a complete workspace search finds exactly
 one matching filename. Ambiguous or incomplete searches keep the missing-file error;

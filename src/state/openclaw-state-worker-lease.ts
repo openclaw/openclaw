@@ -1,6 +1,7 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { SqliteWorkerError, isSqliteWorkerStoreAvailable } from "../infra/sqlite-worker-store.js";
+import { getPluginSharedStateResourceHost } from "../plugins/plugin-shared-state-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
 import { getOpenClawStateDatabaseTerminalFailureAsync } from "./openclaw-state-db-cache.js";
@@ -27,6 +28,8 @@ export function retainOpenClawStateWorkerLease(
   },
   finalize?: (scope: DomainScope) => Promise<void>,
 ): OpenClawStateWorkerLease {
+  const host = getPluginSharedStateResourceHost();
+  host?.assertSharedStateAdmission();
   const maintenance = context.maintenanceScope;
   context.admission.assertCurrent();
   maintenance?.assertAdmission();
@@ -186,6 +189,8 @@ export function retainOpenClawStateWorkerLease(
     );
     return completion.promise;
   };
+  const runWithAdmission = async <T>(operation: (scope: DomainScope) => Promise<T>): Promise<T> =>
+    host ? host.trackSharedStateWork(() => runOperation(operation)) : runOperation(operation);
   const release = () => {
     if (invalidated) {
       return retireNative();
@@ -228,8 +233,8 @@ export function retainOpenClawStateWorkerLease(
   const lease: OpenClawStateWorkerLease = {
     ready: ready.promise,
     execute: (command, options) =>
-      runOperation((operationScope) => operationScope.execute(command, options)),
-    runOperation,
+      runWithAdmission((operationScope) => operationScope.execute(command, options)),
+    runOperation: runWithAdmission,
     release,
     retire,
   };
@@ -290,7 +295,8 @@ export function retainOpenClawStateWorkerLease(
       throw failure;
     }
   };
-  const acquisition = runWithCapturedWorkerContext(context, acquire);
+  const acquireInContext = () => runWithCapturedWorkerContext(context, acquire);
+  const acquisition = host ? host.trackSharedStateWork(acquireInContext) : acquireInContext();
   void acquisition.then(() => {
     acquisitionReady = true;
     ready.resolve();

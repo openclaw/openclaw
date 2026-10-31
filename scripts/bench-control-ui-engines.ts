@@ -30,6 +30,10 @@ import { createChatMessageScenarios } from "./lib/control-ui-chat-message-scenar
 import { createChatPanelScenarios } from "./lib/control-ui-chat-panel-scenarios.ts";
 import { createEngineActionScenarios } from "./lib/control-ui-engine-action-scenarios.ts";
 import {
+  createEngineActionTiming,
+  type EngineActionTiming,
+} from "./lib/control-ui-engine-action-timing.ts";
+import {
   createEngineBootScenarios,
   type EngineScenario,
 } from "./lib/control-ui-engine-boot-scenarios.ts";
@@ -207,6 +211,7 @@ type Observation = {
   wallMs?: number;
   scenarioMs?: number;
   settleWaitMs?: number;
+  actionTiming?: EngineActionTiming;
   prepareFrameIntervalMs?: number;
   settleFrameIntervalMs?: number;
   hostLoadAverage: number[];
@@ -326,6 +331,7 @@ try {
           "./lib/control-ui-chat-message-scenarios.ts",
           "./lib/control-ui-chat-panel-scenarios.ts",
           "./lib/control-ui-engine-action-scenarios.ts",
+          "./lib/control-ui-engine-action-timing.ts",
           "./lib/control-ui-interaction-scenarios.ts",
           "./lib/control-ui-interaction-navigation.ts",
           "./lib/control-ui-engine-streaming-scenarios.ts",
@@ -370,7 +376,7 @@ try {
     acceptance:
       "Census ranks >1.3x WebKit/Chromium. Fix proof: ten interleaved pairs plus A/A control; median regression <=5% and p95 no worse, otherwise ten more pairs. Profile/CPU and structural counts decide on a noisy host; >20% attributable regression blocks.",
     frameCadence:
-      "Prepare and settle frame intervals are consecutive requestAnimationFrame timestamp differences, not the full wait duration. scenarioMs includes driver input and scenario assertions; settleWaitMs measures the final two-frame wait. Their sum is wallMs. These are automation-to-assertion timings, not input-to-paint latency. Trace-only input and run marks locate native events without changing untraced runs.",
+      "Prepare and settle frame intervals are consecutive requestAnimationFrame timestamp differences, not the full wait duration. scenarioMs includes driver input and scenario assertions; settleWaitMs measures the final two-frame wait. Their sum is wallMs. These are automation-to-assertion timings, not input-to-paint latency. Browser-local actionTiming splits the driver prefix, application elapsed to the last observed DOM commit (or native value edit), and the assertion/settle tail. These three sum to browserSpanMs, not Node wallMs. Focus work can occur in the prefix; compound input spans retain intermediate driver delays. Trace-only marks expose the same boundaries. Missing native input/commit makes action timing unavailable.",
     boundary:
       "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request and every incoming mock Gateway frame (including the connect challenge); RPC replies thus include a simulated round trip, with no added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
     memoryContract:
@@ -458,17 +464,6 @@ try {
                 await page.addInitScript(installControlUiResourceCounts);
               }
               await page.addInitScript(() => performance.setResourceTimingBufferSize(2048));
-              if (traceAction) {
-                await page.addInitScript(() => {
-                  for (const type of ["keydown", "keyup", "input", "focusin", "click"]) {
-                    document.addEventListener(
-                      type,
-                      () => performance.mark(`engine:input:${type}`),
-                      true,
-                    );
-                  }
-                });
-              }
               if (values.trace) {
                 await page.addInitScript(() => {
                   const deliveries: unknown[] = [];
@@ -583,6 +578,10 @@ try {
               if (scenario.id.startsWith("chat-actions-")) {
                 await installChatActionObservation(page);
               }
+              const actionTiming =
+                !scenario.navigation && !scenario.memory
+                  ? await page.evaluateHandle(createEngineActionTiming, traceAction)
+                  : undefined;
               measurement = await startEngineMeasurement(page, engine, {
                 trace: values.trace,
                 cpuOnly: values["cpu-only"],
@@ -593,15 +592,9 @@ try {
                 memory = await createEngineMemoryCollector(page, engine);
                 observation.memory = [];
               }
-              const timeOrigin = await page.evaluate((trace) => {
-                if (trace) {
-                  for (const name of ["keydown", "keyup", "input", "focusin", "click"]) {
-                    performance.clearMarks(`engine:input:${name}`);
-                  }
-                  performance.mark("engine:run:start");
-                }
-                return performance.timeOrigin;
-              }, traceAction);
+              const timeOrigin = actionTiming
+                ? await actionTiming.evaluate((timing) => timing.start())
+                : await page.evaluate(() => performance.timeOrigin);
               if (memory) {
                 // Bind checkpoints to this document, independently of wall-clock adjustments.
                 await page.evaluate((identity) => {
@@ -652,19 +645,23 @@ try {
                       }
                     : undefined,
                 )) ?? undefined;
+              if (actionTiming) {
+                await actionTiming.evaluate((timing) => timing.endScenario());
+              }
               if (scenario.id.startsWith("chat-actions-")) {
                 observation.evidence = {
                   ...observation.evidence,
                   ...(await readChatActionObservation(page)),
                 };
               }
-              if (traceAction) {
-                await page.evaluate(() => performance.mark("engine:run:end"));
-              }
               observation.scenarioMs = performance.now() - start;
               observation.settleFrameIntervalMs = await frames(page);
               observation.wallMs = performance.now() - start;
               observation.settleWaitMs = observation.wallMs - observation.scenarioMs;
+              if (actionTiming) {
+                observation.actionTiming = await actionTiming.evaluate((timing) => timing.finish());
+                await actionTiming.dispose();
+              }
               const activeMeasurement = measurement;
               measurement = undefined;
               const captured = await activeMeasurement.stop();
@@ -829,6 +826,19 @@ const summary = [...cells.values()].map((cell) => {
     wallMs: distribution(measured.map((row) => row.wallMs!)),
     scenarioMs: distribution(measured.flatMap((row) => row.scenarioMs ?? [])),
     settleWaitMs: distribution(measured.flatMap((row) => row.settleWaitMs ?? [])),
+    actionTiming: Object.fromEntries(
+      (
+        [
+          "driverMs",
+          "applicationMs",
+          "settleMs",
+          "assertionTailMs",
+          "browserSpanMs",
+          "inputCount",
+          "mutationCount",
+        ] as const
+      ).map((key) => [key, distribution(measured.flatMap((row) => row.actionTiming?.[key] ?? []))]),
+    ),
     prepareFrameIntervalMs: distribution(rows.flatMap((row) => row.prepareFrameIntervalMs ?? [])),
     settleFrameIntervalMs: distribution(rows.flatMap((row) => row.settleFrameIntervalMs ?? [])),
     evidence: Object.fromEntries(
@@ -860,7 +870,43 @@ const summary = [...cells.values()].map((cell) => {
     ),
   };
 });
+const rows = summary
+  .filter(({ engine }) => engine === "chromium")
+  .map((chromium) => {
+    const webkit = summary.find(
+      (row) =>
+        row.engine === "webkit" &&
+        row.step === chromium.step &&
+        row.viewport === chromium.viewport &&
+        row.bundle === chromium.bundle &&
+        row.networkProfile === chromium.networkProfile,
+    );
+    const application = chromium.actionTiming.applicationMs;
+    const webkitApplication = webkit?.actionTiming.applicationMs;
+    const driver = chromium.actionTiming.driverMs;
+    const webkitDriver = webkit?.actionTiming.driverMs;
+    const ratio =
+      application && webkitApplication && application.median > 0
+        ? webkitApplication.median / application.median
+        : null;
+    const driverRatio =
+      driver && webkitDriver && driver.median > 0 ? webkitDriver.median / driver.median : null;
+    const wallRatio =
+      chromium.wallMs && webkit?.wallMs ? webkit.wallMs.median / chromium.wallMs.median : null;
+    return { chromium, webkit, ratio, driverRatio, wallRatio };
+  })
+  .toSorted((a, b) => (b.ratio ?? 0) - (a.ratio ?? 0));
 await writeJson("summary.json", {
+  headlineMetric: "applicationMs",
+  comparisons: rows.map(({ chromium, ratio, driverRatio, wallRatio }) => ({
+    viewport: chromium.viewport,
+    step: chromium.step,
+    bundle: chromium.bundle,
+    networkProfile: chromium.networkProfile,
+    applicationRatio: ratio,
+    driverRatio,
+    wallRatio,
+  })),
   planned,
   passed: observations.filter((row) => row.status === "passed").length,
   summary,
@@ -881,22 +927,6 @@ await writeJson("summary.json", {
     ),
   ),
 });
-const rows = summary
-  .filter(({ engine }) => engine === "chromium")
-  .map((chromium) => {
-    const webkit = summary.find(
-      (row) =>
-        row.engine === "webkit" &&
-        row.step === chromium.step &&
-        row.viewport === chromium.viewport &&
-        row.bundle === chromium.bundle &&
-        row.networkProfile === chromium.networkProfile,
-    );
-    const ratio =
-      chromium.wallMs && webkit?.wallMs ? webkit.wallMs.median / chromium.wallMs.median : null;
-    return { chromium, webkit, ratio };
-  })
-  .toSorted((a, b) => (b.ratio ?? 0) - (a.ratio ?? 0));
 await writeFile(
   path.join(artifactDir, "report.md"),
   [
@@ -908,16 +938,21 @@ await writeFile(
     "",
     `Network profiles: ${networkProfiles.map(({ name, httpLatencyMs, gatewayLatencyMs }) => `${name} (${httpLatencyMs} ms per HTTP request; ${gatewayLatencyMs} ms per incoming Gateway frame)`).join("; ")}. The Gateway probe retains event ordering and uses no extra frame gap or throughput cap.`,
     "",
-    "| Viewport | Scenario | Network | Bundle | Chromium wall median/p95 (ms) | WebKit wall median/p95 (ms) | WebKit/Chromium |",
-    "| --- | --- | --- | --- | --- | --- | --- |",
-    ...rows.map(({ chromium, webkit, ratio }) => {
-      const format = (cell: typeof chromium | undefined) =>
-        cell?.wallMs
-          ? `${cell.wallMs.median.toFixed(1)} / ${cell.wallMs.p95.toFixed(1)} (n=${cell.wallMs.n})`
+    "Application elapsed is first trusted action event to last observed DOM commit/native value edit before scenario return. It excludes the initial driver prefix and later assertion/settle tail, but includes intermediate driver gaps in compound actions; it is not CPU or paint latency. Navigation/memory and actions without both boundaries are unranked. The driver prefix may include application focus work. Browser-local phases do not include boundary RPC transport and do not sum to Node wall time.",
+    "",
+    "| Viewport | Scenario | Network | Bundle | Chromium application median/p95 (ms) | WebKit application median/p95 (ms) | Application W/C | Driver W/C | Chromium wall median/p95 (ms) | WebKit wall median/p95 (ms) | Wall W/C |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...rows.map(({ chromium, webkit, ratio, driverRatio, wallRatio }) => {
+      const format = (
+        value: ReturnType<typeof distribution> | undefined,
+        cell: typeof chromium | undefined,
+      ) =>
+        value
+          ? `${value.median.toFixed(1)} / ${value.p95.toFixed(1)} (n=${value.n})`
           : cell?.skipped
             ? "unsupported viewport"
             : "failed/absent";
-      return `| ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromium)} | ${format(webkit)} | ${ratio?.toFixed(2) ?? "—"} |`;
+      return `| ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromium.actionTiming.applicationMs, chromium)} | ${format(webkit?.actionTiming.applicationMs, webkit)} | ${ratio?.toFixed(2) ?? "—"} | ${driverRatio?.toFixed(2) ?? "—"} | ${format(chromium.wallMs, chromium)} | ${format(webkit?.wallMs, webkit)} | ${wallRatio?.toFixed(2) ?? "—"} |`;
     }),
     "",
     "Memory checkpoints follow two explicit GCs. WebKit snapshot self sizes omit some backing stores; engine categories and browser-tree RSS provide separate native/allocation evidence. RSS includes Inspector overhead and may exclude reparented platform services. Compare warm-to-late checkpoints within an engine, not absolute heap sizes between engines. Detached counts cover JSC wrappers versus V8 native DOM nodes; see per-checkpoint notes and unresolved counts. Memory scenario durations are excluded from the timing table.",
