@@ -635,6 +635,17 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
 
 Account values override top-level fields; `channels.mattermost.defaultAccount` picks which account is used when none is specified.
 
+## Configuration reference
+
+Beyond the options above, `channels.mattermost` reads several configuration keys from the shared channel schema:
+
+| Key                 | Description                                                                                                                                                                            | Default |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `markdown.tables`   | How tables in outbound messages are rendered: `off`, `bullets`, `code`, or `block`.                                                                                                    | `off`   |
+| `contextVisibility` | When to include surrounding channel context with replies: `all`, `allowlist`, or `allowlist_quote`.                                                                                    | `all`   |
+| `responsePrefix`    | Prefix outbound replies. `auto` uses the agent's `identity.name` (bracketed, e.g. `[Support]`); supports `{identity.name}`. When no agent identity name is set, `auto` adds no prefix. | -       |
+| `textChunkLimit`    | Maximum characters per outbound message chunk.                                                                                                                                         | `4000`  |
+
 ## Troubleshooting
 
 <AccordionGroup>
