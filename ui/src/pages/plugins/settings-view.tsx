@@ -40,9 +40,9 @@ import {
   type PluginSettingsEditorProps,
   type PluginSettingsField,
 } from "./settings-editor.tsx";
-import { PluginRetryError } from "./settings-inventory.tsx";
 import { PluginLifecycle } from "./settings-lifecycle.tsx";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
+import { PluginRetryError } from "./settings-retry-error.tsx";
 import type { PluginToolPreview } from "./tool-preview.tsx";
 export type PluginSettingsTab = "installed" | "advanced";
 type SharedProps = Omit<

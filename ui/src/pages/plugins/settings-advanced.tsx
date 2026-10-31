@@ -5,8 +5,8 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginManager } from "../../plugins/control-ui-manager.solid.tsx";
-import { PluginRetryError } from "./settings-inventory.tsx";
 import { PluginSettingsReadStatus } from "./settings-read-status.tsx";
+import { PluginRetryError } from "./settings-retry-error.tsx";
 import type { InventoryProps } from "./settings-view.tsx";
 
 function AdvancedSettingsFields(options: InventoryProps): JSX.Element {

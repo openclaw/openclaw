@@ -1,4 +1,4 @@
-import { createSignal, lazy } from "solid-js";
+import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -12,15 +12,10 @@ import "../../styles/settings.css";
 
 it("keeps a pending preview modal dismissible and localizes unavailable files when its code arrives", async () => {
   const moduleGate = Promise.withResolvers<void>();
-  vi.doMock("../../components/file-preview-modal.tsx", (original) => ({
-    FilePreviewModal: lazy(
-      async () => {
-        await moduleGate.promise;
-        return original<typeof import("../../components/file-preview-modal.tsx")>();
-      },
-      { export: "FilePreviewModal" },
-    ),
-  }));
+  vi.doMock("../../components/file-preview-modal.tsx", async (importOriginal) => {
+    await moduleGate.promise;
+    return importOriginal<typeof import("../../components/file-preview-modal.tsx")>();
+  });
   onTestFinished(() => vi.doUnmock("../../components/file-preview-modal.tsx"));
   const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
   vi.spyOn(client, "request").mockResolvedValue({
@@ -37,7 +32,9 @@ it("keeps a pending preview modal dismissible and localizes unavailable files wh
   binding.connect();
   onTestFinished(() => binding.dispose());
   onTestFinished(() => moduleGate.resolve());
-  onTestFinished(() => vi.restoreAllMocks());
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
   const view = mountSolid(() => {
     const [revision, setRevision] = createSignal(0);
     const preview = createPluginPreview(binding, () => setRevision((value) => value + 1));

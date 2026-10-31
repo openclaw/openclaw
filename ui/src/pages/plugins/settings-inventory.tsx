@@ -16,26 +16,13 @@ import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginCompatibilityNotices } from "./overview.tsx";
 import { renderPluginStateStatus } from "./plugin-card.tsx";
 import { pluginRowKey, renderPluginRowMessage } from "./plugin-row-message.tsx";
+import { PluginRetryError } from "./settings-retry-error.tsx";
 import type { InventoryProps } from "./settings-view.tsx";
 
 const AdvancedSettings = lazy(() => import("./settings-advanced.tsx"), {
   export: "AdvancedSettings",
 });
 
-export function PluginRetryError(props: { error: string; onRetry: () => void }): JSX.Element {
-  return (
-    <div class="callout danger plugins-settings-error oc-banner oc-banner-error" role="alert">
-      <span>{props.error}</span>
-      <button
-        type="button"
-        class="btn btn--sm oc-action oc-action-secondary"
-        onClick={() => props.onRetry()}
-      >
-        {t("pluginsPage.tryAgain")}
-      </button>
-    </div>
-  );
-}
 function InstalledInventory(props: InventoryProps): JSX.Element {
   const query = createMemo(() => props.query.trim().toLocaleLowerCase());
   const plugins = createMemo(() =>

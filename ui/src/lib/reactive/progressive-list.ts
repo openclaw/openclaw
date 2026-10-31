@@ -15,7 +15,7 @@ export function createProgressiveList<T>(
   onSettled(() => {
     if (!enabled() || !pending()) {
       setLimit(Infinity);
-      return;
+      return undefined;
     }
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -24,7 +24,7 @@ export function createProgressiveList<T>(
       scheduler?: { yield?: () => Promise<void> };
     };
     const append = async () => {
-      while (!disposed) {
+      while (true) {
         await (browser.scheduler?.yield?.() ??
           new Promise<void>((resolve) => {
             timer = setTimeout(resolve, 0);

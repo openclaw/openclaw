@@ -115,7 +115,7 @@ it("does not republish the page when an iconless tile joins the rendered invento
           get when() {
             return second();
           },
-          get children() {
+          children: (_visible) => {
             return createComponent(PluginArtTile, {
               slug: "second",
               name: "Second",

@@ -39,15 +39,13 @@ import { PluginsHubHeader } from "./plugins-hub-header.tsx";
 import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
 import { installRequestForDiscoveryDetail } from "./plugins-page-model.ts";
 import type { PluginsPageModel } from "./plugins-page.ts";
-import {
-  PluginRetryError,
-  renderPluginSettingsInventory as PluginSettingsInventory,
-} from "./settings-inventory.tsx";
+import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-inventory.tsx";
 import {
   pluginAdvancedSchema,
   pluginConfigSchema,
   pluginHostControlsSchema,
 } from "./settings-model.ts";
+import { PluginRetryError } from "./settings-retry-error.tsx";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { PluginSkillPreview, renderPluginSkillsSection } from "./skill-preview.tsx";
 
