@@ -42,6 +42,13 @@ export function projectTranscriptAttachments(
         ...options,
         sessionKey: source.sessionKey,
         connectionEpoch: source.connectionEpoch,
+        onFindWorkspaceFile:
+          normalized.senderSession &&
+          (normalized.senderSession.sessionKey !== source.sessionKey ||
+            (normalized.senderSession.agentId &&
+              normalized.senderSession.agentId !== options.agentId))
+            ? undefined
+            : options.onFindWorkspaceFile,
       },
       media,
     );

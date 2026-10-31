@@ -200,12 +200,12 @@ function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string
     }
 
     const spoken = tryParseSpokenJson(rawText) ?? sanitizePlainSpokenText(rawText);
-    if (spoken) {
+    if (spoken !== null) {
       spokenSegments.push(spoken);
     }
   }
 
-  return spokenSegments.join(" ") || null;
+  return spokenSegments.length > 0 ? spokenSegments.join(" ").trim() : null;
 }
 
 function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): string {
@@ -444,11 +444,15 @@ export async function generateVoiceResponse(params: VoiceResponseParams) {
           lastFlushedText ??
           extractSpokenTextFromPayloads(blockReplyPayloads);
 
-        if (!text && result.meta?.aborted) {
-          return { text: null, deliveredEarly: false, error: "Response generation was aborted" };
+        if (!text && (text === null || result.meta?.aborted)) {
+          return {
+            text: null,
+            deliveredEarly,
+            error: "Response generation produced no output",
+          };
         }
 
-        return { text, deliveredEarly };
+        return { text: text || null, deliveredEarly };
       },
     );
   } catch (err) {

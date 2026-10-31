@@ -14,6 +14,14 @@ Use `sandbox.backend: "podman"` to select the native `podman` CLI directly. This
 
 Podman reuses the existing `sandbox.docker.*` settings and the active native `podman` CLI context; it adds no separate connection configuration surface.
 
+On Linux, a rootless local Podman backend launched from a delegated Gateway
+service uses a transient systemd user scope for its container commands. This
+keeps Podman and its container processes in the same user-manager cgroup tree,
+including when restarting an existing sandbox or running `exec`. The user
+manager and its bus must be available to the Gateway. Keep `Delegate=yes`,
+`DelegateSubgroup=gateway`, and the sandbox's resource limits enabled; switching
+the cgroup manager or clearing `INVOCATION_ID` does not repair this boundary.
+
 Rootless Podman defaults to `--userns=keep-id` for writable workspace mounts. A long-lived sandbox can reserve subordinate IDs and block unrelated `--userns=auto` workloads; remove it before starting those workloads. Set `sandbox.docker.user` to a nonzero numeric UID or UID:GID to control the container user. Rootless Podman rejects UID or GID 0 because Podman 4.x cannot remap namespace root while preserving workspace bind ownership; bake root-required setup into the image or use rootful Podman. Rootful Podman otherwise uses the workspace owner when available.
 
 ```json5

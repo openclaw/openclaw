@@ -165,8 +165,8 @@ export async function preserveDoctorOriginalState(params: {
     const controller = new AbortController();
     const deadline = performance.now() + ORIGINAL_CAPTURE_TIMEOUT_MS;
     const timeout = new Error("Original-state capture timed out after 600 s");
+    // A pending inventory promise alone must not let Doctor exit with its service stopped.
     const timer = setTimeout(() => controller.abort(timeout), ORIGINAL_CAPTURE_TIMEOUT_MS);
-    timer.unref();
     let captured: Awaited<ReturnType<typeof captureUpdateRecoveryBaseline>>;
     let reused: Awaited<ReturnType<typeof findReusableDoctorCapture>>;
     let standaloneRunId: string;
@@ -274,7 +274,14 @@ export async function preserveDoctorOriginalState(params: {
     }
     const message = `Pre-repair recovery copy was unavailable: ${formatErrorMessage(error)}.`;
     const fixHint =
-      "Save a verified backup of your OpenClaw state and configured plugin data before further repairs. Check installation access and disk space, then rerun openclaw doctor --fix; inspect retained evidence before restoring state.";
+      "Save a verified backup of your OpenClaw state and configured plugin data before further repairs. Check installation access, disk space, and storage performance, then rerun openclaw doctor --fix; inspect retained evidence before restoring state.";
+    if (!updateInProgress) {
+      throw new DoctorMaintenanceRefusalError(
+        `${message} State repair has not started. ${fixHint}`,
+        { kind: "data-at-risk", reason: "unreadable-state" },
+        { cause: error },
+      );
+    }
     warnings.push(`${message} ${fixHint}`);
     findings.push({
       checkId: "core/doctor/recovery-capture",
