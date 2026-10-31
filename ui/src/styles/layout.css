@@ -2135,39 +2135,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   display: none;
 }
 
-.nav-collapse-toggle__icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  color: inherit;
-}
-
 .sidebar-online {
   gap: 4px;
-  padding-top: 12px;
-  padding-inline-start: 0;
-  margin: 12px 0 10px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
   border-radius: 0;
-}
-
-.sidebar-online__filter-toggle {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.sidebar-online:where(:hover, :has(:focus-visible)) .sidebar-online__filter-toggle {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-@media (hover: none), (pointer: coarse) {
-  .sidebar-online__filter-toggle {
-    opacity: 1;
-    pointer-events: auto;
-  }
 }
 
 /* Share the counter track so missing or shorter counts never move person actions. */
@@ -2225,6 +2195,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .sidebar-online__menu-trigger svg {
+  display: block;
   width: 14px;
   height: 14px;
 }
@@ -2255,17 +2226,13 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
     width: 32px;
     height: 40px;
   }
-
-  .sidebar-online__menu-trigger svg {
-    display: block;
-  }
 }
 
 .sidebar-online__person {
   grid-area: 1 / 1 / 2 / -1;
   display: grid;
   grid-template-columns: subgrid;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   width: auto;
   min-width: 0;
@@ -2342,11 +2309,19 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   font-weight: 600;
   line-height: calc(24px * var(--control-ui-text-scale));
   white-space: nowrap;
-  mask-image: linear-gradient(to right, black calc(100% - 12px), transparent);
+  mask-image: linear-gradient(
+    to right,
+    black calc(100% - var(--sidebar-online-fade-end, 0px) - 12px),
+    transparent calc(100% - var(--sidebar-online-fade-end, 0px))
+  );
 }
 
 .sidebar-online__person-name:dir(rtl) {
-  mask-image: linear-gradient(to left, black calc(100% - 12px), transparent);
+  mask-image: linear-gradient(
+    to left,
+    black calc(100% - var(--sidebar-online-fade-end, 0px) - 12px),
+    transparent calc(100% - var(--sidebar-online-fade-end, 0px))
+  );
 }
 
 /* Keep the group intrinsic and right-anchored; hover changes paint, not spacing. */
@@ -2357,17 +2332,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   align-items: baseline;
   gap: 10px;
   padding: 0 6px;
-  border-radius: var(--radius-full);
-  background: transparent;
   font-size: calc(12px * var(--control-ui-text-scale));
   line-height: calc(24px * var(--control-ui-text-scale));
   white-space: nowrap;
-  transition: background var(--duration-fast) ease;
-}
-
-.sidebar-online__person:hover .sidebar-online__counts,
-.sidebar-online__person:focus-visible .sidebar-online__counts {
-  background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
 .sidebar-online__count {
@@ -2423,162 +2390,105 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 @media (hover: none), (pointer: coarse) {
   .sidebar-online__person {
-    align-items: center;
     min-height: 44px;
   }
 }
 
 .sidebar-online__title {
+  margin-inline-end: auto;
+  padding-inline-start: 4px;
   color: var(--text-strong);
   font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 550;
-  letter-spacing: -0.005em;
-  padding-inline-start: 4px;
 }
 
-.shell:not(.shell--mobile-nav) .sidebar-online {
-  .sidebar-session-toolbar__button.sidebar-online__filter-toggle {
-    width: 28px;
-    margin-inline-start: auto;
-    opacity: var(--sidebar-toolbar-action-opacity, 0.55);
-    pointer-events: auto;
-  }
-
-  .sidebar-session-toolbar__button.sidebar-online__filter-toggle:is(
-      :hover,
-      :focus-visible,
-      [aria-expanded="true"],
-      .sidebar-session-sort--filtered
-    ) {
-    opacity: 1;
-  }
-
-  .sidebar-session-toolbar__collapse {
-    margin-inline-start: 0;
-  }
+.sidebar--rail .sidebar-online__title ~ .sidebar-session-toolbar__button.sidebar-session-sort {
+  width: 28px;
 }
 
-/* Desktop rows read as a table: each count owns a track, and the hover action trails the name. */
+.sidebar-online .sidebar-session-toolbar__collapse {
+  margin-inline-start: 0;
+}
+
+/* With a pointer, rows read as a table: each count owns a track and the action trails the name. */
 @media (hover: hover) and (pointer: fine) {
-  .shell:not(.shell--mobile-nav) .sidebar-online {
-    .sidebar-online__list {
-      /* Subgrid edges add row padding to the first track, so a fixed track eats the gap. */
-      grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
-    }
+  .sidebar-online__list {
+    /* Subgrid edges add row padding to the first track, so a fixed track eats the gap. */
+    grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
+    row-gap: 0;
+  }
 
-    .sidebar-online__row {
-      position: relative;
-      anchor-scope: --sidebar-online-name;
-    }
+  .sidebar-online__row {
+    position: relative;
+    anchor-scope: --sidebar-online-name;
+  }
 
-    /* Avatar and name share the session rows' axes; counts end on the header's icon edge. */
-    .sidebar-online__person {
-      align-items: center;
-      min-height: var(--sidebar-session-row-min-height);
-      padding-block: 3px;
-      padding-inline: 12px 15px;
-    }
+  /* Avatar and name share the session rows' axes; counts end on the header's icon edge. */
+  .sidebar-online__person {
+    padding-inline: 12px 15px;
+  }
 
-    .sidebar-online__list > .sidebar-session-empty-hint {
-      margin-inline-start: 4px;
-    }
+  .sidebar-online__list > .sidebar-session-empty-hint {
+    margin-inline-start: 4px;
+  }
 
-    .sidebar-online__person-name {
-      --sidebar-online-fade-end: 0px;
+  .sidebar-online__person-label {
+    display: block;
+    width: fit-content;
+    max-width: calc(100% - 26px);
+    anchor-name: --sidebar-online-name;
+  }
 
-      mask-image: linear-gradient(
-        to right,
-        black calc(100% - var(--sidebar-online-fade-end) - 12px),
-        transparent calc(100% - var(--sidebar-online-fade-end))
-      );
-    }
+  .sidebar-online__row:is(:hover, :focus-within, :has([aria-expanded="true"])) {
+    --sidebar-online-fade-end: 26px;
+  }
 
-    .sidebar-online__person-name:dir(rtl) {
-      mask-image: linear-gradient(
-        to left,
-        black calc(100% - var(--sidebar-online-fade-end) - 12px),
-        transparent calc(100% - var(--sidebar-online-fade-end))
-      );
-    }
+  .sidebar-online__person:not(:has(.sidebar-online__running)) .sidebar-online__person-name {
+    grid-column: 2 / 4;
+  }
 
-    .sidebar-online__person-label {
-      display: block;
-      width: fit-content;
-      max-width: calc(100% - 26px);
-      anchor-name: --sidebar-online-name;
-    }
+  .sidebar-online__person:not(:has(.sidebar-online__counts)) .sidebar-online__person-name {
+    grid-column: 2 / -1;
+  }
 
-    .sidebar-online__row:has(.sidebar-online__menu):is(
-        :hover,
-        :focus-within,
-        :has([aria-expanded="true"])
-      )
-      .sidebar-online__person-name {
-      --sidebar-online-fade-end: 26px;
-    }
+  .sidebar-online__menu {
+    position: absolute;
+    grid-area: auto;
+    inset-block: 0;
+    inset-inline-start: anchor(--sidebar-online-name end);
+    display: grid;
+    align-items: center;
+    margin-inline-start: 2px;
+  }
 
-    .sidebar-online__person:not(:has(.sidebar-online__running)) .sidebar-online__person-name {
-      grid-column: 2 / 4;
-    }
+  .sidebar-online__counts {
+    display: grid;
+    grid-column: 3 / -1;
+    grid-template-columns: subgrid;
+    gap: 8px;
+    padding: 0;
+    line-height: 1;
+  }
 
-    .sidebar-online__person:not(:has(.sidebar-online__counts)) .sidebar-online__person-name {
-      grid-column: 2 / -1;
-    }
+  .sidebar-online__person:not(:has(.sidebar-online__running)) .sidebar-online__counts {
+    grid-column: 4;
+  }
 
-    .sidebar-online__menu {
-      position: absolute;
-      grid-area: auto;
-      inset-block: 0;
-      inset-inline-start: anchor(--sidebar-online-name end);
-      display: grid;
-      align-items: center;
-      margin-inline-start: 2px;
-    }
+  .sidebar-online__open {
+    grid-column: -2;
+  }
 
-    .sidebar-online__menu-trigger svg {
-      display: block;
-    }
-
-    .sidebar-online__person .sidebar-online__counts {
-      display: grid;
-      grid-column: 3 / -1;
-      grid-template-columns: subgrid;
-      gap: 8px;
-      align-items: center;
-      padding: 0;
-      background: none;
-    }
-
-    .sidebar-online__person:not(:has(.sidebar-online__running)) .sidebar-online__counts {
-      grid-column: 4;
-    }
-
-    .sidebar-online__running {
-      grid-column: 1;
-    }
-
-    .sidebar-online__open {
-      grid-column: -2;
-    }
-
-    :is(.sidebar-online__running, .sidebar-online__open) {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 4px;
-    }
-
-    :is(.sidebar-online__running .session-run-spinner, .sidebar-online__open-icon) {
-      margin-inline-end: 0;
-    }
+  :is(.sidebar-online__running, .sidebar-online__open) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .sidebar-recent-sessions__head,
   .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text,
-  .sidebar-online__person,
-  .sidebar-online__counts {
+  .sidebar-online__person {
     transition: none;
   }
 }
@@ -2785,7 +2695,6 @@ a:is(
 }
 
 .settings-sidebar__item-icon svg,
-.nav-collapse-toggle__icon svg,
 .nav-item__icon svg {
   width: 16px;
   height: 16px;

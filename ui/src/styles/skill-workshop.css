@@ -162,17 +162,6 @@
   color: var(--muted);
 }
 
-.sw-row__change-who {
-  color: var(--text);
-}
-
-.sw-row__change-why::before,
-.sw-row__change-when::before {
-  content: "·";
-  margin-inline-end: 6px;
-  color: var(--muted);
-}
-
 .sw-badge {
   flex: none;
   border-radius: 999px;
@@ -530,11 +519,6 @@
 
 .sw-timeline__who {
   color: var(--text-strong);
-  font-size: var(--control-ui-text-sm);
-}
-
-.sw-timeline__why {
-  color: var(--text);
   font-size: var(--control-ui-text-sm);
 }
 
