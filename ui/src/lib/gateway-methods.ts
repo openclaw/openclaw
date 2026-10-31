@@ -8,6 +8,9 @@ import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 
 export type GatewayMethodOperatorScope = OperatorScope;
 
+// Hello and capability refreshes replace the catalog; retired connections need no cleanup.
+const advertisedMethodSets = new WeakMap<string[], ReadonlySet<string>>();
+
 export function isGatewayMethodAdvertised(
   host: {
     hello?: {
@@ -17,7 +20,15 @@ export function isGatewayMethodAdvertised(
   method: string,
 ): boolean | null {
   const methods = host.hello?.features?.methods;
-  return Array.isArray(methods) ? methods.includes(method) : null;
+  if (!Array.isArray(methods)) {
+    return null;
+  }
+  let advertised = advertisedMethodSets.get(methods);
+  if (!advertised) {
+    advertised = new Set(methods);
+    advertisedMethodSets.set(methods, advertised);
+  }
+  return advertised.has(method);
 }
 
 export function isGatewayCapabilityAdvertised(
