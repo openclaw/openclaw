@@ -613,11 +613,6 @@ a.activity-current-work__row:hover {
   color: var(--danger);
 }
 
-.activity-feed__diff {
-  display: inline-flex;
-  gap: 6px;
-}
-
 .activity-feed__additions,
 .activity-feed__deletions {
   flex: none;

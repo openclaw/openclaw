@@ -6,6 +6,15 @@ import {
   type StoreWriterTiming,
 } from "../shared/store-writer-queue.js";
 
+export type AgentDatabaseWriteTiming = StoreWriterTiming & {
+  operation?: "direct" | "worker" | "ordered-read";
+  operationLabel?: string;
+  caller?: string;
+  worker?: SqliteWorkerReservationObservation;
+  /** The active operation observed when this request entered the queue, not every intervening writer. */
+  holderAtEnqueue?: { operation: string; threadId?: number; heldMs: number };
+};
+
 // Native and SDK module graphs share the same queue and worker reservation.
 // A second queue would admit a foreground writer while reclamation owns SQLite.
 export const agentDatabaseWriteAdmissionState = resolveGlobalSingleton(
@@ -14,11 +23,7 @@ export const agentDatabaseWriteAdmissionState = resolveGlobalSingleton(
     queues: new Map<
       string,
       StoreWriterQueue & {
-        holder?: StoreWriterTiming & {
-          operation?: "direct" | "worker" | "ordered-read";
-          caller?: string;
-          worker?: SqliteWorkerReservationObservation;
-        };
+        holder?: AgentDatabaseWriteTiming;
       }
     >(),
   }),

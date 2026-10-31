@@ -375,7 +375,7 @@ openclaw models accounts list --timeout 45000 --json
 
 `models auth list` escapes control characters in terminal output. Its `--json` output preserves the original field values.
 
-These commands manage **System / agent** credentials, not personal Gateway accounts. Before provider sign-in, `models auth login` shows the selected agent and that it is operating on the machine running OpenClaw.
+These commands manage **System / agent** credentials, not personal Gateway accounts. On a shared Gateway, `models auth login` shows the selected agent and that it is operating on the machine running OpenClaw before provider sign-in. A Gateway counts as shared when it has two or more people's profiles, uses `gateway.auth.mode: "trusted-proxy"`, sets `gateway.roles` or `gateway.auth.identityScopes`, or runs with `gateway.mode: "remote"`. Otherwise the note is omitted, including for several agents or provider credentials that belong to one person, and on a Tailscale Serve Gateway until a second person connects.
 
 `models auth paste-api-key --provider <id>` can save a key while the local Gateway
 is running. The CLI sends the key to that state owner's authenticated Gateway;

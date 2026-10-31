@@ -39,6 +39,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import {
   configureAuthFixture,
   configureHarnessOwnedUnresolvedAuth,
@@ -735,28 +736,122 @@ describe("gateway chat metadata lifecycle composition", () => {
     },
   );
 
-  it("keeps the published owner across a display-only config publication", async () => {
-    const publishedConfig = {
+  it("announces retained-owner model projection changes but not display-only commits", async () => {
+    let currentConfig: OpenClawConfig = {
       ...config,
+      agents: {
+        ...config.agents,
+        defaults: {
+          ...config.agents?.defaults,
+          models: { "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } } },
+        },
+      },
       ui: { prefs: { chatShowThinking: true } },
-    } satisfies OpenClawConfig;
-    const currentConfig = {
-      ...config,
-      ui: { prefs: { chatShowThinking: false } },
-    } satisfies OpenClawConfig;
-    await publishOwner(publishedConfig);
-    const currentContext = createCatalogContext(() => currentConfig);
+    };
+    configureAuthFixture("unresolved-secret-ref");
+    await publishOwner(currentConfig);
+    const broadcast = vi.fn();
+    const currentContext = {
+      ...createCatalogContext(() => currentConfig),
+      getCommittedRuntimeConfig: () => currentConfig,
+      broadcast,
+    };
     const lifecycle = await attachLifecycle(currentContext);
+    const session = { sessionKey: "agent:main:main" };
+    expect((await lifecycle.readMain(session)).models).toMatchObject([
+      { available: false, unavailableReason: "auth-failed" },
+    ]);
+    const owner = readOwner(currentConfig);
+    assert(owner, "expected published owner");
+    broadcast.mockClear();
 
-    await expect(lifecycle.readMain()).resolves.toMatchObject({
-      models: [
-        expect.objectContaining({
-          available: true,
-          id: "gpt-5.4",
-          provider: "openai",
-        }),
-      ],
+    currentConfig = {
+      ...currentConfig,
+      ui: { prefs: { chatShowThinking: false } },
+    };
+    advancePreparedModelRuntimeConfig(currentConfig);
+    publishOperatorRoleConfigChange(currentContext);
+    await nextEventLoopTurn();
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(owner.isCurrent()).toBe(true);
+
+    currentConfig = {
+      ...currentConfig,
+      cloudWorkers: {
+        requiredProfile: "dedicated",
+        profiles: {
+          dedicated: { provider: "device", settings: { device: "paired", inference: "worker" } },
+        },
+      },
+    };
+    advancePreparedModelRuntimeConfig(currentConfig);
+    publishOperatorRoleConfigChange(currentContext);
+    await nextEventLoopTurn();
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+      "chat.metadata.changed",
+      expect.objectContaining({ modelCatalogChanged: true }),
+      { dropIfSlow: true },
+    );
+    expect(owner.isCurrent()).toBe(true);
+    const metadata = await lifecycle.readMain(session);
+    expect(metadata.requiredWorkerInferenceProfileId).toBe("dedicated");
+    expect(metadata.models).toMatchObject([{ id: "gpt-5.4", provider: "openai" }]);
+    expect(metadata.models?.[0]).not.toHaveProperty("available");
+    expect(metadata.models?.[0]).not.toHaveProperty("unavailableReason");
+    expect(broadcast).toHaveBeenCalledOnce();
+  });
+
+  it("defers config notifications to the pending model owner's publication", async () => {
+    let currentConfig = config;
+    await publishOwner(currentConfig);
+    const broadcast = vi.fn();
+    const currentContext = {
+      ...createCatalogContext(() => currentConfig),
+      getCommittedRuntimeConfig: () => currentConfig,
+      broadcast,
+    };
+    const lifecycle = await attachLifecycle(currentContext);
+    await lifecycle.readMain();
+    broadcast.mockClear();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    mocks.buildPreparedModelCatalogSnapshot.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return { entries: [model], routeVariants: [model] };
     });
+    currentConfig = {
+      ...config,
+      cloudWorkers: {
+        requiredProfile: "dedicated",
+        profiles: {
+          dedicated: { provider: "device", settings: { device: "paired", inference: "worker" } },
+        },
+      },
+    };
+    const publication = publishOwner(currentConfig);
+    try {
+      await entered.promise;
+      publishOperatorRoleConfigChange(currentContext);
+      await nextEventLoopTurn();
+      expect(broadcast).not.toHaveBeenCalled();
+      release.resolve();
+      await publication;
+      await nextEventLoopTurn();
+      expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+        "chat.metadata.changed",
+        expect.objectContaining({ modelCatalogChanged: true }),
+        { dropIfSlow: true },
+      );
+      await expect(lifecycle.readMain({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
+        requiredWorkerInferenceProfileId: "dedicated",
+        models: [expect.objectContaining({ id: "gpt-5.4", provider: "openai" })],
+      });
+      expect(broadcast).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await publication;
+    }
   });
 
   it.each(["harness", "api-key"] as const)(

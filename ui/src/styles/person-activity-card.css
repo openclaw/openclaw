@@ -31,7 +31,7 @@
   height: 34.5px;
   font-size: calc(12px * var(--control-ui-text-scale));
   /* The base ring color assumes the sidebar surface; blend with the popover. */
-  border-color: var(--session-hovercard-surface);
+  border-color: var(--popover);
 }
 
 .person-activity-card h2,

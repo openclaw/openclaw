@@ -416,3 +416,32 @@ The [provider contract](/plugins/sdk-overview/capabilities#decision-models-contr
 owns the full SDK rules; the [manifest reference](/plugins/manifest/capabilities#decision-models-reference)
 owns discovery fields. For existing integrations, use the [ONNX](/plugins/onnx)
 or [TypeSafe AI](/plugins/typesafe) setup pages.
+
+## Contract ownership
+
+The Decision SDK separates supplied evidence and typed answers from execution.
+Plugins continue to import `openclaw/plugin-sdk/decisions`; V1 and V2 provider
+interfaces and evaluation calls keep their existing shapes.
+
+| Responsibility                                                     | Owner                                            |
+| ------------------------------------------------------------------ | ------------------------------------------------ |
+| Evidence, question and answer shapes                               | Shared Decision contracts                        |
+| Declared answer semantics and route support                        | Canonical schemas in the model catalog workspace |
+| Native request/response translation and model restrictions         | Provider plugin                                  |
+| Credentials, network policy, admission, deadlines and cancellation | OpenClaw host and prepared provider context      |
+| Runtime provenance and accepted usage accounting                   | OpenClaw host                                    |
+
+Result validation accepts answer semantics without requiring a catalog route:
+
+```ts
+import { validateDecisionResultV2 } from "openclaw/plugin-sdk/decisions";
+
+const valid = validateDecisionResultV2(batch, response, { confidence: "none" });
+```
+
+An existing full route capability object remains accepted. This validates the
+supplied result against the batch; it does not dispatch a provider, establish
+host authority or record accepted usage. Providers still return provider outcomes.
+The host attaches provenance during evaluation. Accepted usage is recorded only
+after the consuming operation passes its final checks. Keep those host
+responsibilities out of codecs and application result handling.

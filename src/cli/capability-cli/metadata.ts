@@ -49,6 +49,7 @@ export const CAPABILITY_METADATA: {
     flags: [
       "--prompt",
       "--prompt-file",
+      "--prompt-stdin",
       "--file",
       "--model",
       "--thinking",

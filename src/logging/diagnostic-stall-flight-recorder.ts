@@ -92,7 +92,7 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
     warn("stall flight recorder unavailable: profiler-start-failed");
   }
   return {
-    sample(stall?: { startedAt: number; endedAt: number }): string | undefined {
+    sample(stall?: { startedAt: number; endedAt: number; task?: string }): string | undefined {
       if (disabled || !active || (!stall && performance.now() - startedAt < WINDOW_MS)) {
         return undefined;
       }
@@ -188,6 +188,14 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
               cursor = parents.get(cursor);
             }
             if (leaf) {
+              const asyncTask =
+                app === null && stall.task && stall.task !== "unattributed"
+                  ? `[async task:${stall.task.slice(0, 160)}]`
+                  : null;
+              if (asyncTask) {
+                frames.push(asyncTask);
+                app = asyncTask;
+              }
               const key = JSON.stringify([leaf, app]);
               const total = selfFrames.get(key) ?? { frame: leaf, app, samples: 0, timeUs: 0 };
               total.samples += cost.samples;

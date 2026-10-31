@@ -45,6 +45,8 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
   readonly mobilePresentation: {
     session: string;
     open: boolean | undefined;
+    /** Closed, but the sheet is still sliding out with its last content presented. */
+    exiting: boolean;
     suspended: boolean;
     mode: "dock" | "expanded";
     height: number | undefined;
@@ -60,6 +62,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
   } = {
     session: "",
     open: undefined,
+    exiting: false,
     suspended: false,
     mode: "dock",
     height: undefined,
@@ -98,6 +101,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
     }
     const session = `${gatewayPresentationScope(this.context.gateway).key}\0${resolveChatAgentId(state)}\0${state.sessionKey}`;
     if (session !== this.mobilePresentation.session) {
+      this.cancelMobileExit();
       this.mobilePresentation.session = session;
       this.mobilePresentation.open = undefined;
       this.mobilePresentation.suspended = false;
@@ -124,15 +128,17 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       return undefined;
     }
     this.syncMobilePresentationSession();
+    const open =
+      this.mobilePresentation.open ??
+      // Mobile enters each session on its conversation: the saved layout's open
+      // panels belong to desktop. Only a dashboard route reveals its saved board.
+      ((this.routeFace === "dashboard" || this.dashboardExpanded) &&
+        (layout.open === true ||
+          (sidebarMainPanel(layout)?.slot ?? "conversation") !== "conversation"));
     return {
       scopeKey: this.mobilePresentation.session,
-      open:
-        this.mobilePresentation.open ??
-        // Mobile enters each session on its conversation: the saved layout's open
-        // panels belong to desktop. Only a dashboard route reveals its saved board.
-        ((this.routeFace === "dashboard" || this.dashboardExpanded) &&
-          (layout.open === true ||
-            (sidebarMainPanel(layout)?.slot ?? "conversation") !== "conversation")),
+      open,
+      exiting: this.mobilePresentation.exiting,
       suspended: this.mobilePresentation.suspended,
       mode: this.mobilePresentation.mode,
       height:
@@ -146,14 +152,22 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       navigate: (destination, source) => this.navigateMobileHost(destination, source),
       reveal: (source) => this.navigateMobileHost(this.mobilePresentation.destination, source),
       close: () => {
+        // Host objects outlive renders: read the current state, not this render's snapshot.
+        const visible =
+          (this.mobilePresentation.open ?? open) && !this.mobilePresentation.suspended;
+        const exitMs = visible ? this.readMobileExitMs() : 0;
+        this.cancelMobileExit();
+        // Hidden, inert and the conversation's space change at once; the sheet keeps its
+        // last content while it slides out, and the rest of the close settles after.
         this.mobilePresentation.open = false;
-        this.mobilePresentation.sheetHeight = undefined;
-        if (this.mobilePresentation.destination.transient) {
-          this.mobilePresentation.destination = this.mobilePresentation.persistentDestination;
-        }
         this.mobilePresentation.reservedHeight = 0;
         this.mobilePresentation.source?.focus({ preventScroll: true });
-        this.syncMobileObserverVisibility();
+        if (exitMs > 0) {
+          this.mobilePresentation.exiting = true;
+          this.mobileExitTimer = setTimeout(this.finishMobileClose, exitMs);
+        } else {
+          this.finishMobileClose();
+        }
       },
       back: () => {
         if (this.mobilePresentation.destination.backTo) {
@@ -187,6 +201,35 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       onComposerEditingChange: this.onMobileComposerEditingChange,
     };
   }
+
+  private mobileExitTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** The sheet exit duration, including a gesture release's own spring; 0 skips the exit. */
+  private readMobileExitMs(): number {
+    const region = this.sidebarRegionElement;
+    if (!region || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      return 0;
+    }
+    // Minified builds may serialize the token in seconds (".441s").
+    const duration = getComputedStyle(region).getPropertyValue("--motion-sheet-duration").trim();
+    const value = Number.parseFloat(duration) || 0;
+    return duration.endsWith("ms") ? value : value * 1000;
+  }
+
+  private cancelMobileExit(): void {
+    clearTimeout(this.mobileExitTimer);
+    this.mobileExitTimer = undefined;
+    this.mobilePresentation.exiting = false;
+  }
+
+  private readonly finishMobileClose = (): void => {
+    this.cancelMobileExit();
+    this.mobilePresentation.sheetHeight = undefined;
+    if (this.mobilePresentation.destination.transient) {
+      this.mobilePresentation.destination = this.mobilePresentation.persistentDestination;
+    }
+    this.syncMobileObserverVisibility();
+  };
 
   // The renderer keys attachment cleanup by this pane's stable callback.
   private readonly setMobileDetailsMount = (element: HTMLElement | null): void => {
@@ -276,6 +319,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
     if (!destination.transient) {
       this.mobilePresentation.persistentDestination = destination;
     }
+    this.cancelMobileExit();
     this.mobilePresentation.open = true;
     this.mobilePresentation.suspended = false;
     // Explicit reveal wins until a new editing transition, not a repeated fact.
@@ -484,7 +528,10 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       }
       return {
         ...shown,
-        open: mobile.open && !mobile.suspended && mobile.destination.area === "panels",
+        open:
+          (mobile.open || mobile.exiting) &&
+          !mobile.suspended &&
+          mobile.destination.area === "panels",
         expanded: false,
         expandedSide: false,
       };

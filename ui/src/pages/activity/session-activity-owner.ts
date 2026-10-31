@@ -393,7 +393,9 @@ export function createSessionActivity(notify: () => void) {
           }
         }
         if (!requiresRefresh && !incomplete && !changesOverflowed) {
-          eventRefresh.scheduleFallback();
+          if (currentFilters !== "current") {
+            eventRefresh.scheduleFallback();
+          }
           return;
         }
       }

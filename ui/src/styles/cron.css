@@ -88,7 +88,6 @@
 .cron-toolbar .btn {
   height: var(--settings-control-height);
   padding-block: 0;
-  box-sizing: border-box;
 }
 
 .cron-search-box {
@@ -190,7 +189,6 @@
   padding: var(--space-3);
   display: grid;
   gap: var(--space-3);
-  box-shadow: var(--overlay-shadow);
 }
 
 .cron-error-banner {
@@ -935,7 +933,6 @@
   align-items: baseline;
   gap: var(--space-2);
   width: 100%;
-  box-sizing: border-box;
 }
 
 @media (min-width: 1400px) {
@@ -977,7 +974,6 @@
   line-height: 1.45;
   min-width: 0;
   width: 100%;
-  box-sizing: border-box;
 }
 
 .cron-run-entry__body pre,
@@ -994,7 +990,6 @@
 .cron-run-entry__body.chat-text :is(pre, blockquote) {
   width: 100%;
   max-width: 100%;
-  box-sizing: border-box;
 }
 
 .cron-run-entry__body.chat-text :is(pre, blockquote, table) + p,
@@ -1141,13 +1136,6 @@
 }
 
 /* Owned surfaces keep positioning and dismissal with the overlay lifecycle. */
-.cron-job-menu > .oc-menu,
-.cron-filter-dropdown__details > .oc-menu {
-  border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
-}
-
 .cron-job-menu > .oc-menu {
   min-width: 170px;
 }

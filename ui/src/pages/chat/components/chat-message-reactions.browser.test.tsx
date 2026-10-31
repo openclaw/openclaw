@@ -60,7 +60,7 @@ it("keeps the reaction picker beside its message after a virtualized transcript 
       await expect.poll(() => popup.dataset.phase).toBe("open");
       await expect
         .poll(() =>
-          Math.abs(popup.getBoundingClientRect().top - trigger.getBoundingClientRect().bottom - 6),
+          Math.abs(popup.getBoundingClientRect().top - trigger.getBoundingClientRect().bottom - 4),
         )
         .toBeLessThan(1);
     };
