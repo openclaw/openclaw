@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
+import {
+  CHAT_HISTORY_REQUEST_LIMIT,
+  CHAT_HISTORY_REQUEST_MAX_BYTES,
+} from "../pages/chat/chat-history-request-params.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import {
   sampleHistoryAnchor,
@@ -375,9 +379,13 @@ export async function detectNonInputHistoryShift(page: Page, bubble: Locator) {
 
 type HistoryPacketMetric = {
   requestId: string;
+  sentMs?: number;
   receivedMs?: number;
+  historyOk?: boolean;
+  historyKind?: "window" | "delta" | "reset";
   cursor?: string;
   limit?: number;
+  maxBytes?: number;
   olderCursor?: string;
   newerCursor?: string;
   sourceNumbers?: number[];
@@ -408,9 +416,26 @@ export function createHistoryAdmissionRecorder(read: () => HistoryPacketMetric[]
       if (!next || metric.cursor !== next.cursor) {
         return false;
       }
-      expect(metric.receivedMs).toBeDefined();
-      expect(next.limit).toBe(1);
-      expect(next.limit!).toBeLessThan(metric.limit!);
+      for (const reply of [metric, next]) {
+        expect(reply.historyOk).toBe(true);
+        expect(reply.historyKind).toBe("window");
+        expect(Number.isFinite(reply.sentMs)).toBe(true);
+        expect(Number.isFinite(reply.receivedMs)).toBe(true);
+        expect(reply.receivedMs!).toBeGreaterThanOrEqual(reply.sentMs!);
+      }
+      expect(next.sentMs!).toBeGreaterThanOrEqual(metric.receivedMs!);
+      expect(Number.isInteger(metric.limit)).toBe(true);
+      expect(Number.isInteger(metric.maxBytes)).toBe(true);
+      // Broad-issued replies can still be certified small packets and refine to
+      // one source. Broad rejection may first return to the canonical envelope.
+      const broad =
+        metric.limit! > CHAT_HISTORY_REQUEST_LIMIT ||
+        metric.maxBytes! > CHAT_HISTORY_REQUEST_MAX_BYTES;
+      expect(next.limit === 1 || (broad && next.limit === CHAT_HISTORY_REQUEST_LIMIT)).toBe(true);
+      expect(next.maxBytes).toBe(CHAT_HISTORY_REQUEST_MAX_BYTES);
+      expect(next.limit!).toBeLessThanOrEqual(metric.limit!);
+      expect(next.maxBytes!).toBeLessThanOrEqual(metric.maxBytes!);
+      expect(next.limit! < metric.limit! || next.maxBytes! < metric.maxBytes!).toBe(true);
       return true;
     });
     const admitted = chain.filter(
