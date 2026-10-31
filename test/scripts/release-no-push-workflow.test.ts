@@ -18,6 +18,7 @@ import { runInNewContext } from "node:vm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { runWorkflowCommand, runWorkflowShellScript } from "./ci-workflow.test-support.js";
 
 const FULL_RELEASE = ".github/workflows/full-release-validation.yml";
 const FULL_RELEASE_ARTIFACTS = ".github/workflows/full-release-artifacts.yml";
@@ -299,6 +300,7 @@ function executeReleaseGroupCapture(
   phase = "all",
   candidateArtifactJson = "",
   releaseProfile = "beta",
+  captureScript?: string,
 ) {
   const root = tempDirs.make("openclaw-release-groups-");
   const output = join(root, "github-output");
@@ -307,9 +309,11 @@ function executeReleaseGroupCapture(
     job(readWorkflow(RELEASE_CHECKS), "resolve_target"),
     "Capture selected inputs",
   );
-  const result = spawnSync("bash", ["-euo", "pipefail", "-c", capture.run ?? ""], {
+  // Preserve Linux Bash semantics while file-backing module stdin; Darwin's
+  // pipe-backed heredocs can stall before the selection reader starts.
+  const result = runWorkflowShellScript(captureScript ?? capture.run ?? "", {
+    linuxWorkflow: true,
     cwd: toolingRoot,
-    encoding: "utf8",
     env: {
       ...process.env,
       ADMISSION_TOOLING_ROOT: join(toolingRoot, "workflow"),
@@ -387,8 +391,8 @@ function executeParentFilterValidation(
     job(readWorkflow(FULL_RELEASE), "resolve_target"),
     "Validate suite filters",
   );
-  const result = spawnSync("bash", ["-euo", "pipefail", "-c", normalize.run ?? ""], {
-    encoding: "utf8",
+  const result = runWorkflowShellScript(normalize.run ?? "", {
+    linuxWorkflow: true,
     env: {
       ...process.env,
       GITHUB_OUTPUT: output,
@@ -629,9 +633,9 @@ describe("release validation no-push transport", () => {
       '#!/usr/bin/env bash\n[[ "$1" == exec ]] || exit 98\nshift\nexec "$@"\n',
     );
     chmodSync(join(bin, "pnpm"), 0o755);
-    const result = spawnSync("bash", ["-euo", "pipefail", "-c", validate.run ?? ""], {
+    const result = runWorkflowShellScript(validate.run ?? "", {
+      linuxWorkflow: true,
       cwd: root,
-      encoding: "utf8",
       env: {
         PATH: `${bin}:${process.env.PATH ?? ""}`,
         CHECK_EXIT: String(fixture.checkExit ?? 0),
@@ -741,7 +745,6 @@ describe("release validation no-push transport", () => {
     expect(capture.run).toContain(
       "import { createReleaseCheckSelection } from './workflow/scripts/plan-release-workflow-matrix.mjs'",
     );
-    expect(capture.run).toContain("JSON.stringify(createReleaseCheckSelection({");
     expect(job(release, "prepare_release_package").if).toBe(
       "needs.resolve_target.outputs.package_required == 'true'",
     );
@@ -757,6 +760,25 @@ describe("release validation no-push transport", () => {
     expect(job(release, "qa_live_release_checks").if).toContain(
       "needs.resolve_target.outputs.qa_live_scheduled == 'true'",
     );
+  });
+
+  it("does not publish selected resources when the selector fails after emitting them", () => {
+    const capture = step(
+      job(readWorkflow(RELEASE_CHECKS), "resolve_target"),
+      "Capture selected inputs",
+    );
+    const { result, outputs } = executeReleaseGroupCapture(
+      "install-smoke",
+      false,
+      "",
+      "",
+      "all",
+      "",
+      "beta",
+      capture.run?.replace("\nNODE\n", "\nprocess.exitCode = 23;\nNODE\n"),
+    );
+    expect(result.status).toBe(23);
+    expect(outputs).toEqual({});
   });
 
   it.each([
@@ -1091,9 +1113,9 @@ describe("release validation no-push transport", () => {
     chmodSync(join(bin, "zstd"), 0o755);
 
     // Run the checked-in pack step and artifact owner; only an invalid external Docker image ID is injected.
-    const result = spawnSync("bash", ["-c", pack.run ?? ""], {
+    const result = runWorkflowShellScript(pack.run ?? "", {
+      linuxWorkflow: true,
       cwd: root,
-      encoding: "utf8",
       env: {
         PATH: `${bin}:${process.env.PATH ?? ""}`,
         DOCKER_CALLS: calls,
@@ -2077,11 +2099,8 @@ describe("release validation no-push transport", () => {
       const calls = join(root, "calls");
       for (const finalizerExit of [0, 1]) {
         writeFileSync(calls, "");
-        const result = spawnSync(
-          "bash",
-          [
-            "-c",
-            `
+        const result = runWorkflowShellScript(
+          `
           gh() { printf '%s\\n' "$SOURCE_SHA"; }
           git() {
             printf '%s\\trefs/tags/%s\\n' "$SIGNED_RELEASE_TAG_OBJECT_SHA" "$RELEASE_TAG"
@@ -2095,9 +2114,8 @@ describe("release validation no-push transport", () => {
           }
           ${script}
         `,
-          ],
           {
-            encoding: "utf8",
+            linuxWorkflow: true,
             env: {
               PATH: process.env.PATH,
               CALLS: calls,
@@ -2211,8 +2229,7 @@ exit 2
       );
       chmodSync(docker, 0o755);
 
-      const result = spawnSync("bash", [resolve(LIVE_BUILD)], {
-        encoding: "utf8",
+      const result = runWorkflowCommand("bash", [resolve(LIVE_BUILD)], {
         env: {
           ...process.env,
           DOCKER_COMMAND_TIMEOUT: "5s",
@@ -2257,7 +2274,7 @@ exit 2
       );
       chmodSync(docker, 0o755);
 
-      const result = spawnSync(
+      const result = runWorkflowCommand(
         "bash",
         [
           "-c",
@@ -2267,7 +2284,6 @@ docker_e2e_build_or_reuse "openclaw-e2e:required-local" "required local image te
           resolve(DOCKER_E2E_IMAGE_HELPER),
         ],
         {
-          encoding: "utf8",
           env: {
             ...process.env,
             FAKE_DOCKER_LOG: calls,

@@ -11,6 +11,8 @@ it.each([
   ["profile binding", false],
   ["provider alias", false],
   ["model endpoint alias", false],
+  ["provider endpoint", false],
+  ["auth alias endpoint", false],
   ["auth source expression", false],
   ["unrelated source expression", true],
 ] as const)("keeps the captured %s authority", (scenario, retained) => {
@@ -41,7 +43,7 @@ it.each([
     },
   });
   const captured = captureRuntimeConfigWithSource(config, authored("AUTH_REALM"));
-  const next = sourceExpression
+  let next = sourceExpression
     ? captureRuntimeConfigWithSource(config, authored("NEXT_REALM"))
     : captureRuntimeConfigWithSource(
         {
@@ -53,12 +55,24 @@ it.each([
           auth: { profiles: { "upstream:manual": { provider: "upstream", mode: "token" } } },
         },
       );
+  if (scenario.endsWith("endpoint")) {
+    const provider = scenario === "provider endpoint" ? "route" : "upstream";
+    next = {
+      ...config,
+      models: {
+        providers: {
+          ...config.models?.providers,
+          [provider]: { baseUrl: "https://changed.example.test/v1", models: [] },
+        },
+      },
+    };
+  }
   const metadata = createPluginMetadataSnapshotFixture({
     plugins: [
       {
         id: "upstream",
         providerAuthAliases:
-          scenario === "provider alias"
+          scenario === "provider alias" || scenario === "auth alias endpoint"
             ? { route: "upstream" }
             : scenario === "model endpoint alias"
               ? { route: { provider: "upstream", baseUrls: [endpoint] } }

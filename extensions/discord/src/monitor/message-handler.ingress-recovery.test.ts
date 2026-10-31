@@ -197,6 +197,69 @@ it.each(["dispatch", "buffer", "preflight", "queued", "returns", "throws"] as co
 );
 
 describe("Discord durable ingress settlement", () => {
+  it("serves a live native mention before the remaining ambient recovery backlog", async () => {
+    await withQueue(async (queue) => {
+      const gate = barrier();
+      const processed = createDeferred<void>();
+      const preflights: string[] = [];
+      const handlerParams = createDiscordHandlerParams();
+      handlerParams.discordConfig = { ...handlerParams.discordConfig, groupPolicy: "open" };
+      handlerParams.cfg.channels = { discord: handlerParams.discordConfig };
+      handlerParams.guildEntries = { "guild-1": { requireMention: true } };
+      handlerParams.historyLimit = 10;
+      const old = Date.now() - 30 * 60_000;
+      for (const id of ["1000", "1001", "1002"]) {
+        const event = payload(id, old);
+        Object.assign(event.rawMessage, {
+          guild_id: "guild-1",
+          timestamp: new Date(old).toISOString(),
+        });
+        await queue.enqueue(id, event, { laneKey: "channel:lane-a", receivedAt: old });
+      }
+      preflightMock.mockImplementation(async (params: PreflightParams) => {
+        preflights.push(params.data.message.id);
+        return realPreflight(params);
+      });
+      processMessage.mockImplementation(async (ctx) => {
+        await ctx.turnAdoptionLifecycle.onAdopted();
+        processed.resolve();
+      });
+      const handler = createHandler({
+        queue,
+        handlerParams,
+        client: {
+          fetchChannel: async () => {
+            await gate.wait();
+            return { id: "lane-a", type: 0, name: "general" };
+          },
+          fetchGuild: async () => ({ id: "guild-1", name: "Synthetic Guild" }),
+        } as never,
+      });
+      try {
+        await gate.entered;
+        const live = payload("2000").rawMessage;
+        Object.assign(live, {
+          guild_id: "guild-1",
+          content: "<@bot-123> please help",
+          mentions: [{ ...live.author, id: "bot-123", bot: true }],
+        });
+        await handler(live, {} as never);
+        expect(preflights).toEqual(["1000"]);
+        gate.release();
+        await processed.promise;
+        expect(preflights.slice(0, 2)).toEqual(["1000", "2000"]);
+        await vi.waitFor(() => expectRecord(queue, "1002", { kind: "completed" }));
+        expect(processMessage).toHaveBeenCalledTimes(1);
+        expect(handlerParams.guildHistories.get("lane-a")?.map((entry) => entry.messageId)).toEqual(
+          ["1000", "1001", "1002"],
+        );
+      } finally {
+        gate.release();
+        await handler.deactivate();
+      }
+    });
+  });
+
   it.each(["preflight", "processing"] as const)(
     "adopts a retry while the timed-out %s is still blocked",
     async (phase) => {

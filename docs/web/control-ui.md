@@ -455,6 +455,11 @@ the preview opens a nested file only when a complete workspace search finds exac
 one matching filename. Ambiguous or incomplete searches keep the missing-file error;
 use an explicit path to select the intended file.
 
+Viewing a shared conversation does not grant access to its host workspace files.
+If your role requires a sandbox, those file links show a read-specific restriction.
+Ask the owner to download and share the file, then attach it to your own session.
+Creating a new session alone does not transfer the file or change access.
+
 Links to managed attachments already delivered in the current chat open the saved
 artifact in the file reader. Click the link or focus it and press **Enter** or
 **Space**. The reader uses your current session access and the original retained

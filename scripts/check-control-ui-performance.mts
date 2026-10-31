@@ -77,8 +77,10 @@ const controlUiPerformanceBudgets = {
   // Keep 64 B build variance above the measured 309,302 B.
   totalCssGzipBytes: 309_366,
   // Mobile focus keeps stable geometry at 1,599,219 B raw CSS, with fewer Chat bytes.
+  // Systems reserves telemetry/backup space and keeps mobile outlet geometry stable:
+  // 1,599,338 B measured, with unchanged startup CSS and +28 B total CSS gzip.
   // Keep the existing 64 B variance for the measured rendering and layout-stability wins.
-  totalCssRawBytes: 1_599_283,
+  totalCssRawBytes: 1_599_402,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
