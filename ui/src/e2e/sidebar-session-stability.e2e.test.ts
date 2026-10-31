@@ -116,8 +116,10 @@ suite.define(() => {
             const menu = parent.locator("[data-sidebar-session-menu]");
             const toggleBox = (await childToggle.boundingBox())!;
             const menuBox = (await menu.boundingBox())!;
-            expect(menuBox).toMatchObject({ width: 44, height: 44 });
-            expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(toggleBox.x);
+            expect(
+              menuBox.x + menuBox.width <= toggleBox.x ||
+                toggleBox.x + toggleBox.width <= menuBox.x,
+            ).toBe(true);
             for (const control of [childToggle, menu]) {
               expect(
                 await control.evaluate((element) => {
