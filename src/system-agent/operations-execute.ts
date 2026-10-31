@@ -19,6 +19,7 @@ import {
   getRegularAgentSetupNotice,
   isPluginBackingDefaultInferenceRoute,
   loadOverviewForOperation,
+  loadUsageForOperation,
   readConfigFileSnapshotLazy,
   readConfigValueAtPath,
   resolveChannelSetupState,
@@ -541,6 +542,25 @@ export async function executeSystemAgentOperation(
     case "health": {
       const { healthCommand } = await import("../commands/health.js");
       await healthCommand({ timeoutMs: 10_000 }, runtime);
+      return { applied: false };
+    }
+    case "usage": {
+      const agentId =
+        opts.requesterAgentId ?? (await loadOverviewForOperation(opts.deps)).defaultAgentId;
+      const summary = await loadUsageForOperation(opts.deps, agentId);
+      const totals = summary.totals;
+      runtime.log(
+        [
+          `Usage (last ${String(summary.days)} days, agent ${agentId}):`,
+          `  Tokens: ${totals.totalTokens.toLocaleString("en-US")} (input ${totals.input.toLocaleString("en-US")}, output ${totals.output.toLocaleString("en-US")}, cache read ${totals.cacheRead.toLocaleString("en-US")}, cache write ${totals.cacheWrite.toLocaleString("en-US")})`,
+          `  Cost: $${totals.totalCost.toFixed(4)} (input $${totals.inputCost.toFixed(4)}, output $${totals.outputCost.toFixed(4)}, cache read $${totals.cacheReadCost.toFixed(4)}, cache write $${totals.cacheWriteCost.toFixed(4)})`,
+          totals.missingCostEntries > 0
+            ? `  ${String(totals.missingCostEntries)} entries had no cost data; totals are a lower bound.`
+            : undefined,
+        ]
+          .filter((line): line is string => line !== undefined)
+          .join("\n"),
+      );
       return { applied: false };
     }
     case "gateway-status": {
