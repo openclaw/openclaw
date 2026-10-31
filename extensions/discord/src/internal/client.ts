@@ -467,7 +467,9 @@ export class Client {
   ): Promise<unknown> {
     const rest = this.rest;
     const timeoutMs = rest.options.timeout;
-    const startedAt = Date.now();
+    // Request duration annotates abort errors for diagnostics; the monotonic clock keeps
+    // it meaningful when the system clock steps mid-request.
+    const startedAt = performance.now();
     try {
       return method === "get" || body === undefined
         ? await rest[method](path)
@@ -484,7 +486,7 @@ export class Client {
         Object.assign(error, {
           deployRestMethod: method,
           deployRestPath: path,
-          deployRequestMs: Date.now() - startedAt,
+          deployRequestMs: performance.now() - startedAt,
           ...(Number.isFinite(timeoutMs) ? { deployTimeoutMs: timeoutMs } : {}),
         });
       }
