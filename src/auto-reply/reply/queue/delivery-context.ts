@@ -1,5 +1,6 @@
 import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { RuntimeContextFragment } from "../../../agents/internal-runtime-context.js";
 import { resolveRequesterPrincipalKey } from "../../../agents/requester-origin.js";
 import { withSandboxRuntimeStatusesInWorker } from "../../../agents/sandbox/runtime-status.js";
 import { withPreparedSessionCapabilityRead } from "../../../agents/subagents/spawn/subagent-session-store.js";
@@ -263,7 +264,8 @@ export function collectCurrentInboundContext(
   const contexts = items.flatMap((item, index) =>
     item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
   );
-  if (contexts.length <= 1) {
+  // With several sources, even a lone context is labeled with the source it belongs to.
+  if (items.length <= 1) {
     return contexts[0]?.context;
   }
   const renderField = (field: "text" | "resumableText") => {
@@ -284,10 +286,13 @@ export function collectCurrentInboundContext(
   return {
     text,
     ...(resumableText ? { resumableText } : {}),
-    fragments: contexts.flatMap(
-      ({ context }) =>
-        context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }],
-    ),
+    fragments: contexts.flatMap(({ context, index }) => {
+      const fragments: RuntimeContextFragment[] = [
+        { kind: "runtime-instruction", text: `Queued #${index + 1} context:` },
+      ];
+      fragments.push(...(context.fragments ?? [{ kind: "conversation-data", text: context.text }]));
+      return fragments;
+    }),
     promptJoiner: "\n\n",
     ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
   };
