@@ -283,7 +283,8 @@ describe("downloadGoogleChatMedia", () => {
 
   it("bounds chunked endpoint media downloads at the configured cap", async () => {
     const chunk = Buffer.alloc(1024 * 1024);
-    const totalBytes = 32 * chunk.length;
+    const maxBytes = 20 * chunk.length;
+    const overflowBytes = maxBytes + chunk.length;
     let bytesSent = 0;
     let responseClosed = false;
     const closed = Promise.withResolvers<void>();
@@ -299,18 +300,14 @@ describe("downloadGoogleChatMedia", () => {
           if (responseClosed) {
             return;
           }
-          if (bytesSent >= totalBytes) {
-            res.end();
-            return;
+          while (bytesSent < overflowBytes) {
+            bytesSent += chunk.byteLength;
+            if (!res.write(chunk)) {
+              res.once("drain", writeNext);
+              return;
+            }
           }
-          bytesSent += chunk.byteLength;
-          const canContinue = res.write(chunk);
-          const scheduleNext = () => setTimeout(writeNext, 1);
-          if (canContinue) {
-            scheduleNext();
-          } else {
-            res.once("drain", scheduleNext);
-          }
+          // No EOF: only the reader's overflow cancellation may close this response.
         };
         writeNext();
       },
@@ -319,7 +316,7 @@ describe("downloadGoogleChatMedia", () => {
           response: await fetch(`${baseUrl}/media`),
           release,
         }));
-        await expect(download(20 * 1024 * 1024)).rejects.toThrow(
+        await expect(download(maxBytes)).rejects.toThrow(
           "Google Chat media exceeds max bytes (20971520)",
         );
         await closed.promise;
@@ -327,7 +324,6 @@ describe("downloadGoogleChatMedia", () => {
     );
     expect(release).toHaveBeenCalledOnce();
     expect(responseClosed).toBe(true);
-    expect(bytesSent).toBeLessThan(totalBytes);
   });
 });
 
