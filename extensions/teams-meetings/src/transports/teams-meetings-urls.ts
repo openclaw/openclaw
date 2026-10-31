@@ -31,15 +31,31 @@ function parseTeamsMeetingIdentity(url: string | undefined): TeamsMeetingIdentit
     }
     const hostname = parsed.hostname.toLowerCase();
     if (hostname === "teams.microsoft.com") {
-      const shortMeeting = parsed.pathname.match(/^\/meet\/([0-9]+)\/?$/);
+      // Microsoft's short work invitation (teams.microsoft.com/meet/<id>?p=...) can be
+      // opened directly, or the server can 302 it to this same-host launcher page before
+      // the SPA renders the meeting; both must resolve to the identical owned meeting so
+      // browser reuse/recovery/status do not treat the redirect as a foreign session.
+      const launcherTarget =
+        parsed.pathname.toLowerCase() === "/dl/launcher/launcher.html"
+          ? parsed.searchParams.get("url")
+          : undefined;
+      const launcherMatch = launcherTarget?.match(/^\/_#\/meet\/([0-9]+)(?:\?(.+))?$/i);
+      const shortMeeting =
+        parsed.pathname.match(/^\/meet\/([0-9]+)\/?$/) ??
+        (launcherMatch ? ([undefined, launcherMatch[1]] as const) : undefined);
       if (shortMeeting) {
         // Microsoft calls p HashedPasscode, not the displayed meeting passcode.
         // Treat it as opaque: no decoding beyond URL query encoding, no assumed
         // alphabet/length, and no reconstruction of a legacy thread identifier.
-        const passcodes = parsed.searchParams.getAll("p");
+        const launcherParams = launcherMatch
+          ? new URLSearchParams(launcherMatch[2] ?? "")
+          : undefined;
+        const passcodes = launcherParams
+          ? launcherParams.getAll("p")
+          : parsed.searchParams.getAll("p");
         const passcode = passcodes[0];
-        const rawPasscode = parsed.search
-          .slice(1)
+        const rawSearch = launcherMatch ? (launcherMatch[2] ?? "") : parsed.search.slice(1);
+        const rawPasscode = rawSearch
           .split("&")
           .find((entry) => new URLSearchParams(entry).has("p"))
           ?.split("=")
