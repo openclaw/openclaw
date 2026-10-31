@@ -68,7 +68,7 @@ describe("ssh-config", () => {
     });
   });
 
-  it("adds non-default port and trimmed identity arguments", async () => {
+  it("adds non-default port and preserves identity whitespace in the -i argument", async () => {
     await expect(
       resolveSshConfig({ ...target, port: 2022 }, { identity: "  /tmp/custom_id  " }),
     ).resolves.toEqual({
@@ -77,7 +77,16 @@ describe("ssh-config", () => {
       port: 2222,
       identityFiles: ["/tmp/id_ed25519"],
     });
-    expect(command()).toEqual([ssh, "-G", "-p", "2022", "-i", "/tmp/custom_id", "--", "me@alias"]);
+    expect(command()).toEqual([
+      ssh,
+      "-G",
+      "-p",
+      "2022",
+      "-i",
+      "  /tmp/custom_id  ",
+      "--",
+      "me@alias",
+    ]);
     expect(runCommandMock.mock.calls[0]?.[1]).toMatchObject({
       maxOutputBytes: 64 * 1024,
       outputCapture: "head",

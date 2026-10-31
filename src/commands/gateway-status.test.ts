@@ -170,11 +170,16 @@ function requireSshForwardCall(index = 0): Record<string, unknown> {
   return call as Record<string, unknown>;
 }
 
-function makeRemoteGatewayConfig(url: string, token = "rtok", localToken = "ltok"): OpenClawConfig {
+function makeRemoteGatewayConfig(
+  url: string,
+  token = "rtok",
+  localToken = "ltok",
+  sshIdentity?: string,
+): OpenClawConfig {
   return {
     gateway: {
       mode: "remote",
-      remote: { url, token },
+      remote: { url, token, ...(sshIdentity ? { sshIdentity } : {}) },
       auth: { token: localToken },
     },
   };
@@ -671,6 +676,25 @@ describe("gateway-status command", () => {
       expect(requireSshForwardCall()).toMatchObject({
         target: `steipete@studio.example:${port}`,
         identity: sshIdentity ?? "/tmp/id_ed25519",
+      });
+    });
+  });
+
+  it("passes a configured ssh identity to the tunnel without trimming its whitespace", async () => {
+    await withEnvAsync({ USER: "steipete" }, async () => {
+      readBestEffortConfig.mockResolvedValueOnce(
+        makeRemoteGatewayConfig("ws://studio.example:18789", "rtok", "ltok", "/keys/id test "),
+      );
+      resolveSshConfig.mockResolvedValueOnce({
+        user: "steipete",
+        host: "studio.example",
+        port: 2222,
+        identityFiles: [],
+      });
+      await run();
+      expect(requireSshForwardCall()).toMatchObject({
+        target: "steipete@studio.example:2222",
+        identity: "/keys/id test ",
       });
     });
   });

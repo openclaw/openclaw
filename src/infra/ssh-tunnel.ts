@@ -169,8 +169,10 @@ export async function startSshPortForward(opts: {
     "-o",
     "ServerAliveCountMax=3",
   ];
-  if (opts.identity?.trim()) {
-    args.push("-i", opts.identity.trim());
+  // The selected identity is the exact file to load; trimming it would open a
+  // different key when the configured path ends in whitespace.
+  if (opts.identity) {
+    args.push("-i", opts.identity);
   }
   // Security: Use '--' to prevent userHost from being interpreted as an option
   args.push("--", userHost);
