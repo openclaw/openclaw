@@ -263,10 +263,16 @@ async function finishSettledUpdate(
           !rolledBack &&
           finalResult.status !== "ok" &&
           !isUpdateGatewayReadinessPending(finalResult) &&
-          finalResult.recovery?.serviceRestartSafe === false &&
-          finalResult.recovery.dataAtRisk
+          finalResult.recovery?.serviceRestartSafe !== true
         ) {
-          await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(false);
+          // Keep suspension recoverable until final recovery decides whether
+          // the installed runtime can start. Only a recorded data risk closes it.
+          if (
+            finalResult.recovery?.serviceRestartSafe === false &&
+            finalResult.recovery.dataAtRisk
+          ) {
+            await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(false);
+          }
         } else {
           await resumePostUpdateWindowsAutoStart(params, finalResult, currentServiceStop);
         }
