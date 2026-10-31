@@ -351,7 +351,7 @@ it.each([
   ["configured key", undefined],
   [
     "unadopted stored account",
-    "Automation has no recorded inference account. Runtime openclaw would run openai/gpt-4.1 with stored account openai:platform. Record the account with openclaw automations edit <jobId> --model openai/gpt-4.1@openai:platform, or with openclaw doctor --fix.",
+    "Automation has no recorded inference account. Runtime openclaw would run openai/gpt-4.1 with stored account openai:platform. Record the account with openclaw automations edit <jobId> --model openai/gpt-4.1@openai:platform. openclaw doctor --fix may record it instead, but never for a job that targets the main session, whose primary model uses a CLI runtime, whose runtime is explicitly set to something other than openclaw or auto (by a compatible session runtime override or agentRuntime config), or whose session is model-locked.",
   ],
   ["replacement", "inference account openai:platform on runtime openclaw was replaced"],
   ["revocation", "account openai:platform on runtime openclaw was removed or signed out"],
