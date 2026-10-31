@@ -151,3 +151,32 @@ test.each([true, false])("native tool paths (workspaceOnly=%s)", async (workspac
   expect(await readText(agentWorkspaceDir, "agent.txt")).toBe("agent-data");
   expect(await readText(skillsWorkspaceDir, materializedSkill)).toBe("skill-data");
 });
+
+test("resolves literal file paths without trimming whitespace", async () => {
+  await using workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-mxc-literal-",
+  });
+  const root = await fs.realpath(workspace.dir);
+  const workspaceDir = path.join(root, "sandbox");
+  await writeFile(workspaceDir, " x.txt", "literal-data");
+  await writeFile(workspaceDir, "x.txt", "decoy-data");
+  const sandbox = createSandboxTestContext({
+    overrides: {
+      backendId: "mxc",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      skillsWorkspaceDir: workspaceDir,
+      workspaceAccess: "rw",
+      containerWorkdir: workspaceDir,
+      tools: { allow: [], deny: [] },
+    },
+  });
+  const bridge = new MxcFsBridge(sandbox);
+
+  const read = async (filePath: string) =>
+    (await bridge.readFile({ filePath, cwd: workspaceDir })).toString("utf8");
+
+  await expect(read(" x.txt")).resolves.toBe("literal-data");
+  await expect(read("x.txt")).resolves.toBe("decoy-data");
+});
