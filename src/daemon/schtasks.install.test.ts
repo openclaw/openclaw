@@ -222,14 +222,14 @@ describe("installScheduledTask", () => {
     const script = decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) });
     expect(script).toContain('cd /d "C:\\temp\\poc&calc"');
     expect(script).toContain(
-      'node gateway.js --display-name "safe&whoami" --percent "%%TEMP%%" --bang "^!token^!"',
+      'node gateway.js --display-name "safe&whoami" --percent "%%TEMP%%" --bang "!token!"',
     );
     expect(script).toContain('set "OC_INJECT=safe & whoami | calc"');
-    expect(script).toContain('set "OC_CARET=a^^b"');
+    expect(script).toContain('set "OC_CARET=a^b"');
     expect(script).toContain('set "OC_PERCENT=%%TEMP%%"');
-    expect(script).toContain('set "OC_BANG=^!token^!"');
-    expect(script).toContain('set "OC_SOURCE_PATH=C:\\OpenClaw source & ^^ %%USERPROFILE%%^!"');
-    expect(script).toContain('set "OC_QUOTE=he said ^"hi^""');
+    expect(script).toContain('set "OC_BANG=!token!"');
+    expect(script).toContain('set "OC_SOURCE_PATH=C:\\OpenClaw source & ^ %%USERPROFILE%%!"');
+    expect(script).toContain('set "OC_QUOTE=he said "hi""');
     expect(script).not.toContain('set "OC_EMPTY=');
     expect(script).toContain('set "NODE_OPTIONS="');
     expect(script).not.toContain("set OC_INJECT=");

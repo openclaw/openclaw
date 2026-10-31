@@ -12,7 +12,12 @@ import {
   quoteCmdScriptArg,
   stripTrailingCmdRedirections,
 } from "./cmd-argv.js";
-import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
+import {
+  assertNoCmdLineBreak,
+  CMD_SET_LITERAL_PREAMBLE,
+  parseCmdSetAssignment,
+  renderCmdSetAssignment,
+} from "./cmd-set.js";
 import { normalizeWindowsTaskIdentity, resolveGatewayWindowsTaskName } from "./constants.js";
 import { resolveGatewayTaskScriptPath as resolveTaskScriptPath } from "./paths.js";
 import { assertTaskInspectionDeadline, readTaskFile } from "./schtasks-inspection-deadline.js";
@@ -421,6 +426,7 @@ async function readWindowsTaskCommand(
     let workingDirectory = "";
     let commandLine = "";
     const environment: Record<string, string> = {};
+    const context: { delayedExpansion?: boolean } = {};
     for (const [lineIndex, rawLine] of content.split(/\r?\n/).entries()) {
       const line = rawLine.trim();
       if (!line) {
@@ -439,11 +445,19 @@ async function readWindowsTaskCommand(
       if (lower === "@echo off") {
         continue;
       }
+      if (lower === CMD_SET_LITERAL_PREAMBLE.toLowerCase()) {
+        context.delayedExpansion = false;
+        continue;
+      }
       if (line === DIRECT_TASK_LAUNCHER_MARKER) {
         continue;
       }
       if (lower.startsWith("set ")) {
-        const assignment = parseCmdSetAssignment(rawLine.trimStart().slice(4), requireEffective);
+        const assignment = parseCmdSetAssignment(
+          rawLine.trimStart().slice(4),
+          requireEffective,
+          context,
+        );
         if (!assignment && requireEffective) {
           throw launcherParseError(lineIndex + 1, "invalid environment assignment");
         }
@@ -459,11 +473,15 @@ async function readWindowsTaskCommand(
       }
       const effectiveLine = parsedCommand ?? line;
       // Managed literals are encoded; unresolved CMD expansion cannot prove argv or cwd.
-      if (requireEffective && /[%!]/.test(effectiveLine.replace(/%%|\^!/g, ""))) {
+      const dynamic =
+        context.delayedExpansion === false
+          ? effectiveLine.replace(/%%/g, "").includes("%")
+          : /[%!]/.test(effectiveLine.replace(/%%|\^!/g, ""));
+      if (requireEffective && dynamic) {
         throw launcherParseError(lineIndex + 1, "dynamic command");
       }
       if (lower.startsWith("cd /d ")) {
-        const cdArguments = parseCmdScriptCommandLine(line);
+        const cdArguments = parseCmdScriptCommandLine(line, context);
         if (
           requireEffective &&
           (stripTrailingCmdRedirections(line) !== line || cdArguments.length !== 3)
@@ -478,7 +496,7 @@ async function readWindowsTaskCommand(
     if (!commandLine) {
       throw new Error("Missing Scheduled Task command");
     }
-    const programArguments = parseCmdScriptCommandLine(commandLine).filter(
+    const programArguments = parseCmdScriptCommandLine(commandLine, context).filter(
       (argument) => argument !== WINDOWS_TASK_SUPERVISOR_FLAG,
     );
     if (requireEffective && programArguments.length === 0) {
@@ -593,8 +611,10 @@ export function buildTaskScript({
   environment,
 }: GatewayServiceRenderArgs): string {
   const lines = createLauncherScriptLines(description, "Task");
+  lines.push(CMD_SET_LITERAL_PREAMBLE);
+  const context = { delayedExpansion: false };
   if (workingDirectory) {
-    lines.push(`cd /d ${quoteCmdScriptArg(workingDirectory)}`);
+    lines.push(`cd /d ${quoteCmdScriptArg(workingDirectory, context)}`);
   }
   if (environment) {
     for (const [key, value] of Object.entries(environment)) {
@@ -619,7 +639,7 @@ export function buildTaskScript({
     lines.push(DIRECT_TASK_LAUNCHER_MARKER);
   }
   lines.push(
-    `${commandArguments.map((argument) => quoteCmdScriptArg(argument)).join(" ")} ${STDIN_NUL_REDIRECT}`,
+    `${commandArguments.map((argument) => quoteCmdScriptArg(argument, context)).join(" ")} ${STDIN_NUL_REDIRECT}`,
   );
   return `${lines.join("\r\n")}\r\n`;
 }

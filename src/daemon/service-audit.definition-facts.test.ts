@@ -701,6 +701,10 @@ it.each(["legacy-wrapper", "malformed-args", "wrapper", "metadata"])(
 it.each([
   "released-waiting",
   "released-waiting-custom",
+  "legacy-script",
+  "legacy-script-custom",
+  "legacy-script-bangs",
+  "legacy-script-bangs-custom",
   "script",
   "metadata",
   "inactive-launcher",
@@ -721,8 +725,22 @@ it.each([
   if (kind === "path") {
     environment.PATH = "C:\\operator-private";
   }
+  const legacyBangs = kind.startsWith("legacy-script-bangs");
+  const customScript =
+    kind === "script" || (kind.endsWith("-custom") && kind.startsWith("legacy-script"));
   const command = {
-    programArguments: ["node", "C:\\openclaw\\index.js", "gateway"],
+    programArguments: legacyBangs
+      ? [
+          "node",
+          "C:\\openclaw!\\index.js",
+          "gateway",
+          "--bang",
+          "!token!",
+          "--caret-bang",
+          "^!token",
+        ]
+      : ["node", "C:\\openclaw\\index.js", "gateway"],
+    ...(legacyBangs ? { workingDirectory: "C:\\openclaw! cwd" } : {}),
     environment,
   };
   const scriptPath = resolveTaskScriptPath(env);
@@ -732,8 +750,20 @@ it.each([
   );
   const script =
     (kind === "path" ? 'set "PATH=C:\\operator-private"\r\n' : "") +
-    buildTaskScript(command) +
-    (kind === "script" ? "echo operator-private\r\n" : "");
+    (legacyBangs
+      ? [
+          "@echo off",
+          'cd /d "C:\\openclaw^! cwd"',
+          'set "OPENCLAW_SERVICE_MARKER=openclaw"',
+          'set "OPENCLAW_SERVICE_KIND=gateway"',
+          'set "OPENCLAW_SERVICE_VERSION=2026.7.1-2"',
+          'node "C:\\openclaw^!\\index.js" gateway --bang "^!token^!" --caret-bang "^^!token" --task-supervisor < NUL',
+          "",
+        ].join("\r\n")
+      : kind.startsWith("legacy-script")
+        ? buildTaskScript(command).replace("setlocal DisableDelayedExpansion\r\n", "")
+        : buildTaskScript(command)) +
+    (customScript ? "echo operator-private\r\n" : "");
   const launcher =
     (releasedWaiting
       ? `' OpenClaw Gateway (v2026.9.3)\r\nWScript.Quit CreateObject("WScript.Shell").Run("""${scriptPath.replaceAll('"', '""')}""", 0, True)\r\n`
@@ -765,11 +795,22 @@ it.each([
       environment: { ...environment, OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1" },
     },
   });
-  if (["released-waiting", "missing-launcher", "inactive-launcher", "script"].includes(kind)) {
+  if (
+    [
+      "released-waiting",
+      "missing-launcher",
+      "inactive-launcher",
+      "legacy-script",
+      "legacy-script-custom",
+      "legacy-script-bangs",
+      "legacy-script-bangs-custom",
+      "script",
+    ].includes(kind)
+  ) {
     expect(result.definitionDrift).toContainEqual(
       drift("outdated", "Principals.Principal.LogonType"),
     );
-    if (kind === "script") {
+    if (customScript) {
       expect(result.definitionDriftError).toBe(
         "Service definition inspection could not be completed.",
       );
@@ -789,7 +830,7 @@ it.each([
     );
     expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-private");
   }
-  if (kind !== "script") {
+  if (!customScript) {
     expect(result.definitionDriftError).toBeUndefined();
   }
   expect(await fs.readFile(scriptPath, "utf8")).toBe(script);

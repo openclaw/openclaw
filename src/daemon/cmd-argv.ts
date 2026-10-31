@@ -17,11 +17,17 @@ export function quoteCmdScriptArg(
   return `"${escaped}"`;
 }
 
-export function parseCmdScriptCommandLine(value: string): string[] {
+export function parseCmdScriptCommandLine(
+  value: string,
+  options: { delayedExpansion?: boolean } = {},
+): string[] {
   // Script renderer escapes quotes (`\"`) and cmd expansions (`%%`, `^!`).
   // Keep all other backslashes literal so Windows drive/UNC paths survive.
   return splitArgsPreservingQuotes(value, { escapeMode: "backslash-quote-only" }).map((argument) =>
-    argument.replace(/\^!/g, "!").replace(/%%/g, "%"),
+    (options.delayedExpansion === false ? argument : argument.replace(/\^!/g, "!")).replace(
+      /%%/g,
+      "%",
+    ),
   );
 }
 

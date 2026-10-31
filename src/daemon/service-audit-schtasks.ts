@@ -7,6 +7,7 @@ import {
   getWindowsSystem32ExePath,
 } from "../infra/windows-install-roots.js";
 import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
+import { CMD_SET_LITERAL_PREAMBLE } from "./cmd-set.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import {
@@ -339,7 +340,18 @@ export async function auditScheduledTaskDefinition(
         .replace(/(?: --task-supervisor)?(?:\s*<\s*NUL)?$/iu, "");
     const read = async (file: string) =>
       decodeWindowsLauncherScript({ buffer: await fs.readFile(file) });
-    if (!command || normalize(await read(sourcePath)) !== normalize(buildTaskScript(command))) {
+    const installedScript = normalize(await read(sourcePath));
+    const generatedScript = command ? buildTaskScript(command) : "";
+    // Older generated scripts lack the preamble and escape argv/cwd bangs.
+    // Strict readback above rejects legacy assignments with nonliteral bangs;
+    // only recreate the known generated form, never normalize installed lines.
+    const legacyScript = generatedScript
+      .replace(`${CMD_SET_LITERAL_PREAMBLE}\r\n`, "")
+      .replaceAll("!", "^!");
+    if (
+      !command ||
+      ![generatedScript, legacyScript].some((candidate) => normalize(candidate) === installedScript)
+    ) {
       unknown("TaskScript", "The generated task script contains unrecognized behavior.");
     }
     if (

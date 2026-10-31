@@ -14,7 +14,7 @@ import {
 } from "../infra/shell-inline-command.js";
 import { POSIX_SHELL_WRAPPERS } from "../infra/shell-wrapper-resolution.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
-import { parseCmdSetAssignment } from "./cmd-set.js";
+import { CMD_SET_LITERAL_PREAMBLE, parseCmdSetAssignment } from "./cmd-set.js";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
@@ -181,10 +181,15 @@ export function detectWindowsServiceExecutionMarker(args: string[], cwd?: string
 
 export function detectLauncherGatewayMarker(contents: string): Marker | null {
   const environment: Record<string, string> = {};
+  const context: { delayedExpansion?: boolean } = {};
   for (const line of contents.split(/\r?\n/)) {
     const command = normalizeLowercaseStringOrEmpty(line);
+    if (command === CMD_SET_LITERAL_PREAMBLE.toLowerCase()) {
+      context.delayedExpansion = false;
+      continue;
+    }
     if (command.startsWith("set ")) {
-      const assignment = parseCmdSetAssignment(line.trimStart().slice(4), true);
+      const assignment = parseCmdSetAssignment(line.trimStart().slice(4), true, context);
       if (assignment) {
         environment[assignment.key] = assignment.value;
       }

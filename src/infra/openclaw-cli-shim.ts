@@ -40,7 +40,7 @@ export async function prepareGatewayAgentCliShim(): Promise<void> {
   const context = { delayedExpansion: false };
   const environment = Object.entries(invocation.env ?? {}).map(([key, value]) =>
     platform === "win32"
-      ? renderCmdSetAssignment(key, value, context)
+      ? renderCmdSetAssignment(key, value)
       : `export ${key}=${quoteCliArg(value)}`,
   );
   const content =
