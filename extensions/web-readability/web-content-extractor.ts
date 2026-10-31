@@ -107,6 +107,21 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
   return false;
 }
 
+// linkedom uses the first <base>'s raw href (null for `<base target>`) as baseURI, so
+// Readability cannot absolutize links; browsers resolve the first <base href> against the page.
+function resolveDocumentBase(document: Document, pageUrl: string): void {
+  const bases = [...document.querySelectorAll("base")];
+  const base = bases.find((element) => element.hasAttribute("href"));
+  const href = base ? URL.parse(base.getAttribute("href") ?? "", pageUrl)?.href : undefined;
+  for (const element of bases) {
+    if (element === base && href) {
+      element.setAttribute("href", href);
+    } else {
+      element.remove();
+    }
+  }
+}
+
 export function createReadabilityWebContentExtractor(): WebContentExtractorPlugin {
   return {
     id: "readability",
@@ -123,6 +138,7 @@ export function createReadabilityWebContentExtractor(): WebContentExtractorPlugi
       try {
         const [{ Readability }, { parseHTML }] = await loadReadabilityDeps();
         const { document } = parseHTML(cleanHtml, { location: { href: request.url } });
+        resolveDocumentBase(document, request.url);
         const textMode = request.extractMode === "text";
         const reader = new Readability(document);
         const parsed = reader.parse();

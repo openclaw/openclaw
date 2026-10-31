@@ -26,10 +26,15 @@ async function extractArticle(html: string, extractMode: "text" | "markdown" = "
 }
 
 describe("web readability extractor", () => {
-  it("extracts readable markdown", async () => {
-    const extracted = await extractArticle(SAMPLE_HTML, "markdown");
+  it.each([
+    ["", "https://example.com/next"],
+    ['<base target="_blank" />', "https://example.com/next"],
+    ['<base href="/docs/guide/" />', "https://example.com/docs/next"],
+  ])("extracts readable markdown with absolute links (head %j)", async (base, link) => {
+    const html = SAMPLE_HTML.replace("</head>", `${base}</head>`);
+    const extracted = await extractArticle(html, "markdown");
     expect(extracted.text).toContain("Main content starts here");
-    expect(extracted.text).toContain("[Continue reading](https://example.com/next)");
+    expect(extracted.text).toContain(`[Continue reading](${link})`);
     expect(extracted.title).toBe("Example Article");
   });
 
