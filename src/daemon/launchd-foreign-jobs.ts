@@ -24,6 +24,16 @@ export type ForeignLaunchdJob = {
   diagnostic?: string;
 };
 
+/**
+ * Result of a foreign-job scan. Candidate labels beyond the inspection cap, or
+ * left uninspected when the time budget ran out, are reported explicitly
+ * instead of aborting the whole scan.
+ */
+export type ForeignLaunchdJobScan = {
+  jobs: ForeignLaunchdJob[];
+  skippedJobCount: number;
+};
+
 const MAX_JOBS = 64;
 const INSPECTION_TIMEOUT_MS = 2_000;
 const MAX_FILE_BYTES = 64 * 1024;
@@ -303,11 +313,19 @@ async function inspectJob(
   };
 }
 
+export function formatUninspectedForeignLaunchdJobs(skippedJobCount: number): string | undefined {
+  if (skippedJobCount <= 0) {
+    return undefined;
+  }
+  const jobs = skippedJobCount === 1 ? "job was" : "jobs were";
+  return `${skippedJobCount} candidate OpenClaw launchd ${jobs} not inspected; these results are partial. List candidate labels with launchctl list and inspect each with launchctl print gui/$UID/<label>.`;
+}
+
 export async function findForeignLaunchdJobs(
   env: NodeJS.ProcessEnv = process.env,
-): Promise<ForeignLaunchdJob[]> {
+): Promise<ForeignLaunchdJobScan> {
   if (process.platform !== "darwin") {
-    return [];
+    return { jobs: [], skippedJobCount: 0 };
   }
   const result = await execLaunchctl(["list"], INSPECTION_TIMEOUT_MS);
   if (result.code !== 0) {
@@ -321,23 +339,25 @@ export async function findForeignLaunchdJobs(
       }),
     ),
   ].toSorted();
-  if (labels.length > MAX_JOBS) {
-    throw new Error(
-      `Too many OpenClaw launchd jobs to inspect safely (${labels.length}; limit ${MAX_JOBS}).`,
-    );
-  }
+  // Degrade to a bounded partial scan instead of aborting: hosts may run many
+  // user-defined ai.openclaw.* LaunchAgents, and losing the whole diagnostic
+  // (status, Doctor, restart-storm attribution) is worse than a partial one.
+  // Inspect the first MAX_JOBS sorted labels and disclose the rest as skipped.
+  const inspected = labels.slice(0, MAX_JOBS);
+  let skippedJobCount = labels.length - inspected.length;
   const jobs: ForeignLaunchdJob[] = [];
   const deadline = Date.now() + 10_000;
-  for (const label of labels) {
+  for (const [index, label] of inspected.entries()) {
     if (Date.now() >= deadline) {
-      throw new Error("OpenClaw launchd job inspection exceeded its 10-second budget.");
+      skippedJobCount += inspected.length - index;
+      break;
     }
     const job = await inspectJob(label, env);
     if (job) {
       jobs.push(job);
     }
   }
-  return jobs;
+  return { jobs, skippedJobCount };
 }
 
 export function formatForeignLaunchdJobs(jobs: ForeignLaunchdJob[]): string {

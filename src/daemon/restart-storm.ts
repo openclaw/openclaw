@@ -85,18 +85,22 @@ export async function warnAboutGatewayRestartStorm(
   if (summary.count < RESTART_THRESHOLD || summary.lastWarningAt) {
     return;
   }
-  const { findForeignLaunchdJobs } = await import("./launchd-foreign-jobs.js");
-  const jobs = await findForeignLaunchdJobs(env).catch(() => []);
+  const { findForeignLaunchdJobs, formatUninspectedForeignLaunchdJobs } =
+    await import("./launchd-foreign-jobs.js");
+  const scan = await findForeignLaunchdJobs(env).catch(() => undefined);
+  const jobs = scan?.jobs ?? [];
   const likelyJobs = jobs
     .filter((job) => job.keepAlive && job.safeToRemove && job.gatewayActions.includes("restart"))
     .map((job) => job.label)
     .toSorted()
     .slice(0, 5);
+  const skippedNote = formatUninspectedForeignLaunchdJobs(scan?.skippedJobCount ?? 0);
   const message = [
     `Gateway restart storm: ${summary.count} external CLI restarts in 10 minutes.`,
     likelyJobs.length > 0
       ? `Likely stray launchd jobs: ${likelyJobs.join(", ")}.`
       : "Check for a stray keepalive launchd job invoking openclaw gateway restart.",
+    ...(skippedNote ? [skippedNote] : []),
     "Run openclaw gateway status to inspect jobs and openclaw doctor --fix to remove eligible stray jobs.",
   ].join(" ");
   try {

@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { execLaunchctl } from "./launchd-exec.js";
 import {
   findForeignLaunchdJobs,
+  formatUninspectedForeignLaunchdJobs,
   repairForeignLaunchdJob,
   type ForeignLaunchdJob,
 } from "./launchd-foreign-jobs.js";
@@ -62,13 +63,13 @@ async function addScript(contents: string, name = "validator.sh") {
 }
 
 async function expectActions(gatewayActions: string[], extra: Partial<ForeignLaunchdJob> = {}) {
-  expect(await findForeignLaunchdJobs({})).toEqual([
+  expect((await findForeignLaunchdJobs({})).jobs).toEqual([
     expect.objectContaining({ gatewayActions, safeToRemove: gatewayActions.length > 0, ...extra }),
   ]);
 }
 
 async function expectShellEnvironmentBlocked(message?: string) {
-  expect((await findForeignLaunchdJobs({}))[0], message).toMatchObject({
+  expect((await findForeignLaunchdJobs({})).jobs[0], message).toMatchObject({
     gatewayActions: [],
     safeToRemove: false,
     diagnostic: "Shell environment alters execution; left unchanged.",
@@ -84,7 +85,7 @@ async function addLifecycleJob(action = "restart", plist: boolean | "agent" = fa
       jobs.set(label, jobs.get(label)!.replace("type = Submitted", "type = LaunchAgent"));
     }
   }
-  return expectDefined((await findForeignLaunchdJobs({}))[0], "detected foreign job");
+  return expectDefined((await findForeignLaunchdJobs({})).jobs[0], "detected foreign job");
 }
 
 beforeEach(() => {
@@ -165,7 +166,7 @@ describe("foreign launchd command classification", () => {
       addJob(name, [cli, "gateway", "restart"]);
     }
     const env = { OPENCLAW_PROFILE: "work", OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.custom" };
-    expect(await findForeignLaunchdJobs(env)).toEqual([]);
+    expect((await findForeignLaunchdJobs(env)).jobs).toEqual([]);
     for (const name of protectedLabels) {
       expect(
         (await repairForeignLaunchdJob({ label: name } as ForeignLaunchdJob, env)).removed,
@@ -225,17 +226,62 @@ describe("foreign launchd command classification", () => {
       "gateway",
       "restart",
     ]);
-    expect(await findForeignLaunchdJobs({})).toEqual([]);
+    expect((await findForeignLaunchdJobs({})).jobs).toEqual([]);
   });
 
   it("leaves oversized and symlinked shell scripts unverified", async () => {
     const file = await addScript(`openclaw gateway restart\n${"#".repeat(65536)}`);
     addJob(label, ["/bin/sh", file]);
-    expect((await findForeignLaunchdJobs({}))[0]).toMatchObject({ safeToRemove: false });
+    expect((await findForeignLaunchdJobs({})).jobs[0]).toMatchObject({ safeToRemove: false });
     const link = path.join(dir, "link.sh");
     await fs.symlink(file, link);
     addJob(label, ["/bin/sh", link]);
-    expect((await findForeignLaunchdJobs({}))[0]).toMatchObject({ safeToRemove: false });
+    expect((await findForeignLaunchdJobs({})).jobs[0]).toMatchObject({ safeToRemove: false });
+  });
+});
+
+describe("foreign launchd scan bounds", () => {
+  it("keeps partial findings with an explicit skipped count above the 64-job cap", async () => {
+    for (let index = 0; index < 65; index += 1) {
+      addJob(`ai.openclaw.candidate.${String(index).padStart(3, "0")}`, [
+        cli,
+        "gateway",
+        "restart",
+      ]);
+    }
+    const scan = await findForeignLaunchdJobs({});
+    expect(scan.jobs).toHaveLength(64);
+    expect(scan.jobs.every((job) => job.gatewayActions.length > 0)).toBe(true);
+    expect(scan.jobs.some((job) => job.label === "ai.openclaw.candidate.064")).toBe(false);
+    expect(scan.skippedJobCount).toBe(1);
+    expect(formatUninspectedForeignLaunchdJobs(scan.skippedJobCount)).toContain(
+      "1 candidate OpenClaw launchd job was not inspected",
+    );
+  });
+
+  it("keeps partial findings when the inspection budget runs out", async () => {
+    for (let index = 0; index < 3; index += 1) {
+      addJob(`ai.openclaw.slow.${String(index).padStart(3, "0")}`, [cli, "gateway", "restart"]);
+    }
+    let now = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const execute = exec.getMockImplementation()!;
+      exec.mockImplementation(async (args, timeout) => {
+        if (args[0] === "print") {
+          now += 10_000;
+        }
+        return execute(args, timeout);
+      });
+      const scan = await findForeignLaunchdJobs({});
+      expect(scan.jobs.map((job) => job.label)).toEqual(["ai.openclaw.slow.000"]);
+      expect(scan.skippedJobCount).toBe(2);
+      expect(formatUninspectedForeignLaunchdJobs(scan.skippedJobCount)).toContain(
+        "2 candidate OpenClaw launchd jobs were not inspected",
+      );
+    } finally {
+      clock.mockRestore();
+    }
   });
 });
 

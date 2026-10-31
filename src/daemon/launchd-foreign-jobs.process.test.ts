@@ -110,7 +110,7 @@ it.skipIf(!hasGuiLaunchd).each(["interpreter", "direct"] as const)(
         const result = native(["submit", "-l", label, "--", ...command]);
         expect(result.code, "scratch launchctl submit must not require privileges").toBe(0);
       }
-      const found = await findForeignLaunchdJobs(env);
+      const found = (await findForeignLaunchdJobs(env)).jobs;
       expect(found.toSorted((a, b) => a.label.localeCompare(b.label))).toMatchObject([
         { label: observerLabel, gatewayActions: [], safeToRemove: false },
         {

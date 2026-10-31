@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtraGatewayService } from "../../daemon/inspect.js";
+import type { ForeignLaunchdJob } from "../../daemon/launchd-foreign-jobs.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
@@ -330,6 +331,28 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "Report only; left unchanged.");
     expect(runtime.error).not.toHaveBeenCalled();
     expect(output()).not.toContain("Listed lifecycle jobs may be responsible");
+  });
+
+  it("warns when the foreign launchd job inspection was partial", () => {
+    const partialJob = {
+      label: "ai.openclaw.test.w15.restart",
+      program: "/tmp/openclaw-test/restart.sh",
+      keepAlive: true,
+      gatewayActions: ["restart"],
+      safeToRemove: true,
+    } satisfies ForeignLaunchdJob;
+    printDaemonStatus({
+      service: {
+        runtime: { status: "running", pid: 8000 },
+        foreignLaunchdJobs: [partialJob],
+        foreignLaunchdInspectionSkipped:
+          "30 candidate OpenClaw launchd jobs were not inspected; these results are partial. List candidate labels with launchctl list and inspect each with launchctl print gui/$UID/<label>.",
+      },
+    });
+
+    expectMockLineContains(runtime.error, "Foreign launchd job inspection was partial");
+    expectMockLineContains(runtime.error, "30 candidate OpenClaw launchd jobs were not inspected");
+    expectMockLineContains(runtime.error, partialJob.label);
   });
 
   it("prints stale updater launchd job guidance", () => {

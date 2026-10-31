@@ -4227,7 +4227,6 @@
 ["src/daemon/launchd-foreign-jobs.process.test.ts","../commands/doctor-service-repair-policy.js","845844f93353c6a6246aa17d99bdbf1f9ebf1ee76d6fc185bcc6b719b5227711",1]
 ["src/daemon/launchd-foreign-jobs.process.test.ts","./restart-storm.js","4b5f843692a0d118d3365ff61b8e82afc727b43daf78bb451fd2f7b7ca4fd7d6",1]
 ["src/daemon/launchd-install-authority.test.ts","./launchd-current-service.js","b096d1599f1eaeea6084ea68691313d3f72be282932569238897815924dec0d9",1]
-["src/daemon/restart-storm.test.ts","./launchd-foreign-jobs.js","f9d5e83a5ad0ccb21c955c322d9acd50db0179792c9def09096da22b3a9af13a",1]
 ["src/daemon/runtime-pin-service.test.ts","../infra/gateway-supervision.js","fde840fc04c1acc144f92fe40cc90d91800000af9f66545c4030070424ea149e",1]
 ["src/daemon/runtime-pin-service.test.ts","../infra/tmp-openclaw-dir.js","6a9fb9bdd9716fe9f520a9404dbdbaf875010dc0d9806491a455451a6f9ff32c",1]
 ["src/daemon/runtime-pin-service.test.ts","./future-config-guard.js","a1a0bda47025261201b21ea7d3705ab8cc33a655c369cc83b725a6b552fba578",1]

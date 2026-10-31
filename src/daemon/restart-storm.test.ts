@@ -5,17 +5,23 @@ import { appendGatewayLifecycleAuditLog, resolveGatewayRestartLogPath } from "./
 import { readGatewayForcedRestartSummary, warnAboutGatewayRestartStorm } from "./restart-storm.js";
 
 const { findForeignLaunchdJobs } = vi.hoisted(() => ({
-  findForeignLaunchdJobs: vi.fn(async () => [
-    {
-      label: "ai.openclaw.test.storm",
-      keepAlive: true,
-      gatewayActions: ["restart"],
-      safeToRemove: true,
-    },
-  ]),
+  findForeignLaunchdJobs: vi.fn(async () => ({
+    jobs: [
+      {
+        label: "ai.openclaw.test.storm",
+        keepAlive: true,
+        gatewayActions: ["restart"],
+        safeToRemove: true,
+      },
+    ],
+    skippedJobCount: 0,
+  })),
 }));
 
-vi.mock("./launchd-foreign-jobs.js", () => ({ findForeignLaunchdJobs }));
+vi.mock("./launchd-foreign-jobs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./launchd-foreign-jobs.js")>()),
+  findForeignLaunchdJobs,
+}));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const warn = vi.fn();
@@ -84,6 +90,25 @@ it.each([
   if (!warnings) {
     expect(findForeignLaunchdJobs).not.toHaveBeenCalled();
   }
+});
+
+it("discloses uninspected jobs in the restart-storm warning", async () => {
+  restart(3);
+  findForeignLaunchdJobs.mockResolvedValueOnce({
+    jobs: [
+      {
+        label: "ai.openclaw.test.storm",
+        keepAlive: true,
+        gatewayActions: ["restart"],
+        safeToRemove: true,
+      },
+    ],
+    skippedJobCount: 30,
+  });
+  await warnAboutGatewayRestartStorm(env, warn);
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("30 candidate OpenClaw launchd jobs were not inspected"),
+  );
 });
 
 it("does not block startup when history is absent or job inspection fails", async () => {

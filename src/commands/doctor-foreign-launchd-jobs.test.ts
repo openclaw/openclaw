@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ForeignLaunchdJob } from "../daemon/launchd-foreign-jobs.js";
+import type { ForeignLaunchdJob, ForeignLaunchdJobScan } from "../daemon/launchd-foreign-jobs.js";
 import { noteMacForeignLaunchdJobs } from "./doctor-foreign-launchd-jobs.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 
 const mocks = vi.hoisted(() => ({
-  find: vi.fn<() => Promise<ForeignLaunchdJob[]>>(),
+  find: vi.fn<() => Promise<ForeignLaunchdJobScan>>(),
   repair: vi.fn<() => Promise<{ removed: boolean; detail: string }>>(),
   note: vi.fn(),
   defaultIdentity: vi.fn(() => true),
@@ -54,7 +54,7 @@ describe("Doctor foreign launchd jobs", () => {
   beforeEach(() => {
     Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
     vi.resetAllMocks();
-    mocks.find.mockResolvedValue([lifecycleJob, reportOnlyJob]);
+    mocks.find.mockResolvedValue({ jobs: [lifecycleJob, reportOnlyJob], skippedJobCount: 0 });
     mocks.defaultIdentity.mockReturnValue(true);
     mocks.manageService.mockResolvedValue(true);
   });
@@ -84,7 +84,7 @@ describe("Doctor foreign launchd jobs", () => {
 
   it("reports repair failure and continues to the next candidate", async () => {
     const secondJob = { ...lifecycleJob, label: "ai.openclaw.test.w15.second" };
-    mocks.find.mockResolvedValue([lifecycleJob, secondJob]);
+    mocks.find.mockResolvedValue({ jobs: [lifecycleJob, secondJob], skippedJobCount: 0 });
     mocks.repair.mockRejectedValueOnce(new Error("launchd job inspection failed"));
     mocks.repair.mockResolvedValueOnce({ removed: true, detail: removed(secondJob.label) });
     await run();
@@ -92,6 +92,27 @@ describe("Doctor foreign launchd jobs", () => {
       `Removal not confirmed for launchd job ${lifecycleJob.label}: launchd job inspection failed`,
     );
     expect(runtime.log).toHaveBeenCalledWith(removed(secondJob.label));
+  });
+
+  it("discloses uninspected jobs without removing them", async () => {
+    mocks.find.mockResolvedValue({ jobs: [lifecycleJob, reportOnlyJob], skippedJobCount: 31 });
+
+    await run({ repair: true, nonInteractive: true });
+
+    const report = mocks.note.mock.calls[0]?.[0];
+    expect(report).toContain("31 candidate OpenClaw launchd jobs were not inspected");
+    expect(report).toContain("these results are partial");
+    expect(mocks.repair).toHaveBeenCalledExactlyOnceWith(lifecycleJob, {});
+  });
+
+  it("reports the partial scan even when no inspected job is foreign", async () => {
+    mocks.find.mockResolvedValue({ jobs: [], skippedJobCount: 94 });
+
+    await run();
+
+    const report = mocks.note.mock.calls[0]?.[0];
+    expect(report).toContain("94 candidate OpenClaw launchd jobs were not inspected");
+    expect(mocks.repair).not.toHaveBeenCalled();
   });
 
   it("reports unavailable inspection without removing jobs or aborting Doctor", async () => {

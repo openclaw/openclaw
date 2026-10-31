@@ -1,6 +1,7 @@
 /** Live launchd job diagnostics shared by shallow and deep Gateway status. */
 import {
   findForeignLaunchdJobs,
+  formatUninspectedForeignLaunchdJobs,
   type ForeignLaunchdJob,
 } from "../../daemon/launchd-foreign-jobs.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
@@ -14,6 +15,7 @@ type LaunchdJobDiagnostics = {
   staleUpdateLaunchdJobs?: StaleOpenClawUpdateLaunchdJob[];
   foreignLaunchdJobs?: ForeignLaunchdJob[];
   foreignLaunchdInspectionError?: string;
+  foreignLaunchdInspectionSkipped?: string;
   forcedRestartSummary?: GatewayForcedRestartSummary;
 };
 
@@ -31,10 +33,14 @@ export async function gatherLaunchdJobDiagnostics(
     diagnostics.staleUpdateLaunchdJobs = stale;
   }
   try {
-    const jobs = await findForeignLaunchdJobs(env);
-    if (jobs.length) {
-      diagnostics.foreignLaunchdJobs = jobs;
+    const scan = await findForeignLaunchdJobs(env);
+    if (scan.jobs.length) {
+      diagnostics.foreignLaunchdJobs = scan.jobs;
       diagnostics.forcedRestartSummary = readGatewayForcedRestartSummary(env);
+    }
+    const skipped = formatUninspectedForeignLaunchdJobs(scan.skippedJobCount);
+    if (skipped) {
+      diagnostics.foreignLaunchdInspectionSkipped = skipped;
     }
   } catch (error: unknown) {
     diagnostics.foreignLaunchdInspectionError = formatErrorMessage(error);

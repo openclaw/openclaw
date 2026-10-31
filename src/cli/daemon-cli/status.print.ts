@@ -524,6 +524,12 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     );
     spacer();
   }
+  if (service.foreignLaunchdInspectionSkipped) {
+    printWarning(
+      `Foreign launchd job inspection was partial: ${sanitizeTerminalText(service.foreignLaunchdInspectionSkipped)}`,
+    );
+    spacer();
+  }
   if (service.foreignLaunchdJobs?.length) {
     const shouldWarn = service.foreignLaunchdJobs.some(
       (job) => job.keepAlive || job.gatewayActions.length > 0,
