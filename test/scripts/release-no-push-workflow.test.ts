@@ -300,6 +300,7 @@ function executeReleaseGroupCapture(
   phase = "all",
   candidateArtifactJson = "",
   releaseProfile = "beta",
+  captureScript?: string,
 ) {
   const root = tempDirs.make("openclaw-release-groups-");
   const output = join(root, "github-output");
@@ -310,7 +311,7 @@ function executeReleaseGroupCapture(
   );
   // Preserve Linux Bash semantics while file-backing module stdin; Darwin's
   // pipe-backed heredocs can stall before the selection reader starts.
-  const result = runWorkflowShellScript(capture.run ?? "", {
+  const result = runWorkflowShellScript(captureScript ?? capture.run ?? "", {
     linuxWorkflow: true,
     cwd: toolingRoot,
     env: {
@@ -744,7 +745,6 @@ describe("release validation no-push transport", () => {
     expect(capture.run).toContain(
       "import { createReleaseCheckSelection } from './workflow/scripts/plan-release-workflow-matrix.mjs'",
     );
-    expect(capture.run).toContain("JSON.stringify(createReleaseCheckSelection({");
     expect(job(release, "prepare_release_package").if).toBe(
       "needs.resolve_target.outputs.package_required == 'true'",
     );
@@ -760,6 +760,25 @@ describe("release validation no-push transport", () => {
     expect(job(release, "qa_live_release_checks").if).toContain(
       "needs.resolve_target.outputs.qa_live_scheduled == 'true'",
     );
+  });
+
+  it("does not publish selected resources when the selector fails after emitting them", () => {
+    const capture = step(
+      job(readWorkflow(RELEASE_CHECKS), "resolve_target"),
+      "Capture selected inputs",
+    );
+    const { result, outputs } = executeReleaseGroupCapture(
+      "install-smoke",
+      false,
+      "",
+      "",
+      "all",
+      "",
+      "beta",
+      capture.run?.replace("\nNODE\n", "\nprocess.exitCode = 23;\nNODE\n"),
+    );
+    expect(result.status).toBe(23);
+    expect(outputs).toEqual({});
   });
 
   it.each([
