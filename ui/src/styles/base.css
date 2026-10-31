@@ -948,6 +948,13 @@ summary,
   }
 }
 
+/* The open mobile navigation drawer dims the app canvas behind its backdrop; the
+   document canvas Safari shows around its browser chrome dims with it. */
+html.control-ui-nav-scrim,
+.control-ui-nav-scrim body {
+  background: var(--control-ui-system-chrome-background, var(--bg));
+}
+
 /* iOS Safari zooms the viewport when a focused text control is under 16px;
    important keeps feature-local typography from silently dropping this floor.
    Controls that manage their own touch size declare it via
