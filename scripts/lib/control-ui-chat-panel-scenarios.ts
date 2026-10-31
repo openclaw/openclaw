@@ -10,7 +10,8 @@ const composer = `${activePane} .agent-chat__composer-combobox textarea`;
 
 async function closePanels(page: Page) {
   const pane = page.locator(activePane);
-  const mobileHost = pane.locator(".chat-mobile-host:not([hidden])");
+  // Keep the exiting host matched until its visibility transition completes.
+  const mobileHost = pane.locator(".chat-mobile-host");
   if (await pane.locator(".agent-chat__header--mobile").isVisible()) {
     await mobileHost
       .locator(".chat-mobile-host__header")
