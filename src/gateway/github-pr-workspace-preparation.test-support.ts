@@ -205,7 +205,7 @@ export async function fixture(
         throw new Error("PR preparation attempted a GitHub write");
       }
       if (argv[0] === "gh") {
-        const endpoint = argv.find((arg) => arg.startsWith("repos/"))!;
+        const endpoint = argv.find((arg) => /^(repos|user)\//u.test(arg))!;
         const reference =
           /^repos\/((?:openclaw|contributor)\/openclaw)\/git\/ref\/heads\/(.+)$/u.exec(endpoint);
         if (reference) {
