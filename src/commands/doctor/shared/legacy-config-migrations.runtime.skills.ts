@@ -5,6 +5,15 @@ import { deleteRetiredPath } from "./legacy-config-record-shared.js";
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[] = [
   {
     id: "plugins.skill-workshop-policy-while-built-in",
+    legacyRules: [
+      {
+        path: ["plugins"],
+        message:
+          'skill-workshop plugin policy written while Skill Workshop was built in is ignored. Run "openclaw doctor --fix".',
+        match: (_value, root) =>
+          materializeSkillWorkshopPlugin(structuredClone(root)).changes.length > 0,
+      },
+    ],
     apply: (raw, changes) => {
       const migrated = materializeSkillWorkshopPlugin(raw);
       // Marker-only conversion is stamped by the config writer, not an unrelated Doctor repair.

@@ -3,7 +3,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
-import { materializeSkillWorkshopPlugin } from "./skill-workshop-plugin-migration.js";
+import {
+  materializeSkillWorkshopPlugin,
+  projectSkillWorkshopPluginPolicy,
+  stampSkillWorkshopPluginMigration,
+} from "./skill-workshop-plugin-migration.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const builtInEraConfig = (): OpenClawConfig => ({
@@ -38,6 +42,22 @@ describe("materializeSkillWorkshopPlugin", () => {
     expect(config.plugins).toEqual(next.plugins);
     expect(config.meta?.migrations?.skillWorkshopPlugin).toBe(true);
     expect(changes).toEqual([]);
+  });
+
+  it("keeps a newly written disable through reload and Doctor while older policy awaits repair", () => {
+    const previous: OpenClawConfig = { plugins: { deny: ["skill-workshop"] } };
+    const next: OpenClawConfig = {
+      plugins: { deny: ["skill-workshop"], entries: { "skill-workshop": { enabled: false } } },
+    };
+
+    const written = stampSkillWorkshopPluginMigration(next, previous);
+
+    expect(written.plugins).toEqual({
+      deny: [],
+      entries: { "skill-workshop": { enabled: false } },
+    });
+    expect(projectSkillWorkshopPluginPolicy(written).config).toBe(written);
+    expect(materializeSkillWorkshopPlugin(written).config).toBe(written);
   });
 
   it("lets ordinary writes record the marker only when no older policy needs repair", () => {

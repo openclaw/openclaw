@@ -115,3 +115,32 @@ export function projectSkillWorkshopPluginPolicy<T extends OpenClawConfig>(
     ignored: true,
   };
 }
+
+function readWorkshopPolicy(value: unknown) {
+  const plugins = isRecord(value) && isRecord(value.plugins) ? value.plugins : {};
+  const entries = isRecord(plugins.entries) ? plugins.entries : {};
+  const listed = (list: unknown) => Array.isArray(list) && list.some(isWorkshopId);
+  return {
+    entries: Object.entries(entries).filter(([id]) => isWorkshopId(id)),
+    allow: listed(plugins.allow),
+    deny: listed(plugins.deny),
+  };
+}
+
+/**
+ * A config write records the migration when nothing older needs repair, or when the write
+ * itself changes `skill-workshop` policy. Then the older policy is repaired with it, so the new
+ * policy is never ignored or later removed. Other writes leave the repair to Doctor and never
+ * rewrite policy lists they did not touch.
+ */
+export function stampSkillWorkshopPluginMigration(
+  cfg: OpenClawConfig,
+  previousConfig: unknown,
+): OpenClawConfig {
+  const migrated = materializeSkillWorkshopPlugin(cfg, previousConfig);
+  const writesWorkshopPolicy = !isDeepStrictEqual(
+    readWorkshopPolicy(cfg),
+    readWorkshopPolicy(previousConfig),
+  );
+  return migrated.changes.length === 0 || writesWorkshopPolicy ? migrated.config : cfg;
+}

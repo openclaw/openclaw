@@ -14,7 +14,7 @@ import { VERSION } from "../version.js";
 import { getConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
 import { materializeModelPolicyAllowlist } from "./model-policy-allowlist-migration.js";
 import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
-import { materializeSkillWorkshopPlugin } from "./skill-workshop-plugin-migration.js";
+import { stampSkillWorkshopPluginMigration } from "./skill-workshop-plugin-migration.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { materializeUtilityModelSeparation } from "./utility-model-separation-migration.js";
 
@@ -67,12 +67,6 @@ export function projectWebhookMigrationIncludeWrite(
     unsetConfigValueAtPath(config, field, previous);
   }
   return { config, paths };
-}
-
-/** Writes record the migration only when no older policy needs it; Doctor owns policy repair. */
-function stampSkillWorkshopPluginMigration(cfg: OpenClawConfig, previousConfig: unknown) {
-  const migrated = materializeSkillWorkshopPlugin(cfg, previousConfig);
-  return migrated.changes.length === 0 ? migrated.config : cfg;
 }
 
 export function stampConfigWriteMetadata(
