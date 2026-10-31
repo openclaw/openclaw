@@ -552,10 +552,17 @@ export function resolveGroupToolPolicy(params: {
   if (params.requireConfiguredAccount && accountId !== DEFAULT_ACCOUNT_ID) {
     let configured: boolean;
     try {
-      configured =
-        plugin?.config
-          .listAccountIds(params.config)
+      const config = plugin?.config;
+      const listed =
+        config
+          ?.listAccountIds(params.config)
           .some((candidate) => normalizeAccountId(candidate) === accountId) === true;
+      // A roster can still list an id that only a routing reference names; only true admits it.
+      const served: unknown =
+        listed && config?.hasAccountConfig
+          ? config.hasAccountConfig(params.config, accountId)
+          : true;
+      configured = listed && served === true;
     } catch {
       // An unreadable account roster cannot authorize a scheduled named account.
       configured = false;

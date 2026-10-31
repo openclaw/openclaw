@@ -51,6 +51,28 @@ export function hasTelegramAccountConfig(cfg: OpenClawConfig, accountId: string)
   );
 }
 
+/** Drops named-account bindings once a delete empties the account map. */
+export function removeTelegramBindingsWithoutAccounts(
+  previous: OpenClawConfig,
+  next: OpenClawConfig,
+): OpenClawConfig {
+  if (
+    Object.keys(previous.channels?.telegram?.accounts ?? {}).length === 0 ||
+    Object.keys(next.channels?.telegram?.accounts ?? {}).length > 0 ||
+    !Array.isArray(next.bindings)
+  ) {
+    return next;
+  }
+  const bindings = next.bindings.filter((binding) => {
+    const accountId = resolveTelegramBindingAccountId(binding);
+    return accountId === null || accountId === DEFAULT_ACCOUNT_ID;
+  });
+  if (bindings.length === next.bindings.length) {
+    return next;
+  }
+  return { ...next, bindings: bindings.length > 0 ? bindings : undefined };
+}
+
 const { listAccountIds: listTelegramAccountIds } = createAccountListHelpers("telegram", {
   normalizeAccountId,
   additionalAccountIds: (cfg) =>

@@ -205,6 +205,14 @@ when initialization must finish before the child runs.
     auto-selection requires `configured: true`; callers can still select the channel
     explicitly when configuration status is unknown.
 
+    `config.listAccountIds` may also return ids the channel keeps only for routing
+    or default selection, such as an id a routing binding still names after its
+    account was removed. Define the synchronous `config.hasAccountConfig(cfg, accountId)`
+    to return `true` only for named ids the channel still serves from its configuration
+    (an own account entry, or channel-level settings it intentionally serves the id
+    with). Scheduled and event-creator turns bound to a named account run only while
+    that account is listed and, when the hook exists, it returns `true`.
+
     Operational account reads can be asynchronous. Define
     `config.resolveAccountAsync(cfg, accountId)` when account resolution reads
     durable credentials, and `config.hasConfiguredStateAsync({ cfg, env })` for

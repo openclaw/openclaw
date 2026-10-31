@@ -1,4 +1,5 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { deleteChannelAccount } from "../channels/plugins/account-delete-follow-up.js";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { listActiveChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type {
@@ -607,9 +608,7 @@ export async function setupChannels(
       if (!confirmed) {
         return;
       }
-      if (plugin?.config.deleteAccount) {
-        next = plugin.config.deleteAccount({ cfg: next, accountId: resolvedAccountId });
-      }
+      next = deleteChannelAccount(next, plugin, resolvedAccountId, options);
       await refreshStatus(channel);
       return;
     }

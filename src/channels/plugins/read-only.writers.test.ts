@@ -75,3 +75,27 @@ Object.assign(module.exports.plugin.config, {
     expect(fs.existsSync(fullMarker)).toBe(false);
   },
 );
+
+it("answers account hooks for an aliased channel from that channel's config", () => {
+  const { pluginDir } = writeExternalSetupChannelPlugin({
+    pluginId: "sibling-plugin",
+    channelId: "alpha-chat",
+    manifestChannelIds: ["alpha-chat", "beta-chat"],
+    setupChannelId: "alpha-chat",
+  });
+  fs.appendFileSync(
+    path.join(pluginDir, "setup-entry.cjs"),
+    `
+module.exports.plugin.config.hasAccountConfig = (cfg) => Boolean(cfg.channels?.["alpha-chat"]);`,
+    "utf8",
+  );
+  const cfg: OpenClawConfig = {
+    channels: { "beta-chat": { token: "beta-token" } },
+    plugins: { load: { paths: [pluginDir] }, allow: ["sibling-plugin"] },
+  };
+  const plugin = listReadOnlyChannelPluginsForConfig(cfg, {
+    includePersistedAuthState: false,
+    includeSetupFallbackPlugins: true,
+  }).find((entry) => entry.id === "beta-chat");
+  expect(plugin?.config.hasAccountConfig?.(cfg, "ops")).toBe(true);
+});

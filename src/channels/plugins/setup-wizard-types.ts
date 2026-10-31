@@ -2,6 +2,7 @@ import type { DmPolicy } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
+import type { ChannelAccountDeleteFollowUp } from "./account-delete-follow-up.js";
 import type { ChannelOwnedSetupContract } from "./setup-contract.js";
 import type { ChannelAccessPolicy } from "./setup-group-access.js";
 import type { ChannelConfigAdapter, ChannelSetupAdapter } from "./types.adapters.js";
@@ -250,6 +251,11 @@ export type SetupChannelsOptions = {
   assertPersistentEffectCurrent?: () => void;
   onSelection?: (selection: ChannelId[]) => void;
   onPostWriteHook?: (hook: ChannelOnboardingPostWriteHook) => void;
+  /**
+   * Receives what an account delete changed outside `channels`. The caller writes it after
+   * committing the delete; without this sink the delete keeps those changes in the same write.
+   */
+  onAccountDeleteFollowUp?: (followUp: ChannelAccountDeleteFollowUp) => void;
   accountIds?: Partial<Record<ChannelId, string>>;
   onAccountId?: (channel: ChannelId, accountId: string) => void;
   onResolvedPlugin?: (channel: ChannelId, plugin: ChannelSetupPlugin) => void;

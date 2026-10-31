@@ -72,6 +72,13 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: gatewayMocks.callGateway,
 }));
 
+const followUpMocks = vi.hoisted(() => ({
+  persistAccountDeleteFollowUp: vi.fn(async () => true),
+}));
+
+// mock-isolation: Follow-up writes use real config IO, covered in account-delete-persistence.test.ts.
+vi.mock("./channels/account-delete-persistence.js", () => followUpMocks);
+
 const prompterMocks = vi.hoisted(() => ({
   confirm: vi.fn(async () => true),
 }));
@@ -380,6 +387,56 @@ describe("channelsRemoveCommand", () => {
 
     expectNoRemoval("external-chat has no default account to remove.");
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Known accounts: work."));
+  });
+
+  it("writes a delete's changes outside channels after the channel write, to the same file", async () => {
+    const plugin = installWorkAccountChannel();
+    const bindings = [{ agentId: "main", match: { channel: "external-chat", accountId: "work" } }];
+    const cfg = {
+      channels: { "external-chat": { accounts: { work: { token: "token-1" } } } },
+      bindings,
+    } as OpenClawConfig;
+    configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(cfg));
+    plugin.config.deleteAccount = (params) => ({
+      ...deleteAccountFromConfigSection({ ...params, sectionKey: "external-chat" }),
+      bindings: undefined,
+    });
+    const order: string[] = [];
+    configMocks.replaceConfigFile.mockImplementationOnce(
+      async (params: { sourceConfig: unknown }) => {
+        order.push("channel write");
+        await configMocks.writeConfigFile(params.sourceConfig);
+        return { path: "/config/openclaw.json" };
+      },
+    );
+    followUpMocks.persistAccountDeleteFollowUp.mockReset().mockImplementationOnce(async () => {
+      order.push("follow-up");
+      return false;
+    });
+
+    await channelsRemoveCommand(
+      { channel: "external-chat", account: "work", delete: true },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(order).toEqual(["channel write", "follow-up"]);
+    expect(configMocks.writeConfigFile).toHaveBeenCalledExactlyOnceWith({
+      channels: { "external-chat": {} },
+      bindings,
+    });
+    expect(followUpMocks.persistAccountDeleteFollowUp).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        paths: ["bindings"],
+        previous: [{ path: ["bindings"], value: bindings }],
+        next: [{ path: ["bindings"], value: undefined }],
+      }),
+      "/config/openclaw.json",
+      runtime,
+    );
+    // A failed follow-up keeps main's outcome: the account delete stands and the command succeeds.
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith('Deleted external-chat account "work".');
   });
 
   it("normalizes a listed deletion before stopping runtime, running lifecycle, and persisting", async () => {
