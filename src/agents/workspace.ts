@@ -908,7 +908,7 @@ export async function loadWorkspaceBootstrapFiles(
         name: entry.name,
         path: entry.filePath,
         content: `[UNREADABLE: ${reason}]`,
-        missing: false,
+        missing: loaded.reason === "validation" && !(loaded.error instanceof RangeError),
       });
     }
   }

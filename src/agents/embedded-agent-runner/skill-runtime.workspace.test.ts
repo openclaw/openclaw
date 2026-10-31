@@ -61,6 +61,29 @@ async function isolateSkills(root: string) {
   vi.stubEnv("OPENCLAW_HOME", root);
 }
 
+it("keeps configured skills when bootstrap belongs to a worktree without a snapshot", async () => {
+  const root = temps.make("worktree-skill-anchor-");
+  await isolateSkills(root);
+  const configured = path.join(root, "configured");
+  const task = path.join(root, "worktree");
+  await writeGuide(
+    path.join(configured, "skills/agent-guide"),
+    "agent-guide",
+    "Agent guide",
+    "Agent",
+  );
+  await writeGuide(path.join(task, "skills/task-guide"), "task-guide", "Task guide", "Task");
+  const result = await prepare(task, {
+    bootstrapWorkspaceDir: task,
+    config: {
+      agents: { entries: { main: { workspace: configured } } },
+      plugins: { enabled: false },
+      skills: { load: { watch: false } },
+    },
+  });
+  expect(result.installedSkills.map((skill) => skill.name)).toEqual(["agent-guide", "task-guide"]);
+});
+
 it("keeps Code Mode file ownership despite an unavailable same-name pin", async () => {
   const root = temps.make("code-mode-workspace-");
   await isolateSkills(root);
