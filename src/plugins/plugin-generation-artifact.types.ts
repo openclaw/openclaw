@@ -1,23 +1,6 @@
 import type { PluginSourceCustodyFork } from "./plugin-generation-source-lookup.js";
+import type { PluginSourceSnapshotFacts } from "./plugin-generation-source.types.js";
 import type { PluginModuleCapture } from "./plugin-package-metadata-capture.js";
-import type { PluginCapturedSourceFact } from "./plugin-source-verification.js";
-
-export type PluginFrozenSourceSnapshot = {
-  rootDir: string;
-  sourceRoot: string;
-  sourceAliases: Readonly<Record<string, string>>;
-  sourcePaths: ReadonlySet<string>;
-  sourceLinks: ReadonlyMap<string, string>;
-  sourceHardlinks: ReadonlySet<string>;
-  sourceDigest: string;
-};
-
-export type PluginSourceSnapshotFacts = {
-  files: ReadonlyMap<string, PluginCapturedSourceFact>;
-  directories: ReadonlySet<string>;
-  links: ReadonlyMap<string, string>;
-  hardlinks: ReadonlySet<string>;
-};
 
 /** Captured source custody and module lookup operations owned by one generation. */
 export type PluginGenerationArtifact = {

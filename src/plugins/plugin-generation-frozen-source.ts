@@ -1,15 +1,13 @@
 import path from "node:path";
 import { isPathInside } from "../infra/path-guards.js";
-import type {
-  PluginFrozenSourceSnapshot,
-  PluginGenerationArtifact,
-} from "./plugin-generation-artifact.types.js";
+import type { PluginGenerationArtifact } from "./plugin-generation-artifact.types.js";
 import {
   markPluginSourceCaptureOperation,
   restorePluginRecoverySourceResolver,
   snapshotPluginRecoverySourceResolver,
   type PluginRecoverySource,
 } from "./plugin-generation-source-lookup.js";
+import type { PluginFrozenSourceSnapshot } from "./plugin-generation-source.types.js";
 import { markPluginSourceAcquisitionError } from "./plugin-instance-error.js";
 import { PluginSnapshotDependencyError } from "./plugin-snapshot-dependency-error.js";
 

@@ -1646,8 +1646,10 @@ src/plugins/plugin-control-plane-context.ts
 src/plugins/plugin-generation-artifact.ts
 src/plugins/plugin-generation-capture.ts
 src/plugins/plugin-generation-file-capture.ts
+src/plugins/plugin-generation-frozen-source.ts
 src/plugins/plugin-generation-metrics.ts
 src/plugins/plugin-generation-receipt.ts
+src/plugins/plugin-generation-reference-capture.ts
 src/plugins/plugin-generation-source-lookup.ts
 src/plugins/plugin-install-default-choice.ts
 src/plugins/plugin-instance-background.ts
@@ -1716,6 +1718,7 @@ src/plugins/plugin-sdk-native-resolver.ts
 src/plugins/plugin-setup-module.ts
 src/plugins/plugin-shared-module-loader.ts
 src/plugins/plugin-shared-state-admission.ts
+src/plugins/plugin-snapshot-dependency-error.ts
 src/plugins/plugin-source-admission-store.ts
 src/plugins/plugin-source-admission-context.ts
 src/plugins/plugin-source-admission.types.ts
@@ -1726,6 +1729,7 @@ src/plugins/plugin-source-capture-native-loads.ts
 src/plugins/plugin-source-capture-path.ts
 src/plugins/plugin-source-file.ts
 src/plugins/plugin-source-references.ts
+src/plugins/plugin-source-snapshot.types.ts
 src/plugins/plugin-source-verification.ts
 src/plugins/portable-icon-paths.ts
 src/plugins/prepared-message-tool-catalog.ts

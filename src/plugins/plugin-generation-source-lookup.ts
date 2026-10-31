@@ -5,11 +5,11 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
 import { getPluginCache } from "./plugin-cache.js";
+import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import type {
   PluginFrozenSourceSnapshot,
   PluginSourceSnapshotFacts,
-} from "./plugin-generation-artifact.types.js";
-import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
+} from "./plugin-generation-source.types.js";
 import {
   markPluginSourceAcquisitionError,
   markPluginSourcePreparationOperation,
