@@ -409,6 +409,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/matrix/src/matrix/monitor/index.credentials.test.ts",
   "extensions/matrix/src/matrix/client/file-sync-store.test.ts",
   "extensions/matrix/src/matrix/monitor/handler.restart.test.ts",
+  "extensions/matrix/src/matrix/monitor/handler.delivery-recovery.test.ts",
   "extensions/matrix/src/matrix/monitor/ingress.test.ts",
   "extensions/matrix/src/matrix/client/storage.test.ts",
   "extensions/matrix/src/matrix/credentials.test.ts",
