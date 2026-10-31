@@ -2,6 +2,13 @@
 import type { ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import {
+  beginHistoryRequest,
+  chatHistoryRequests,
+  recordInitialChatInputHistory,
+  takeInitialChatInputHistory,
+  resetChatHistoryProjection,
+} from "./chat-history-state.ts";
 import { createInitializationContext } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
@@ -75,6 +82,139 @@ function pending(state: ChatPageHost, sendId: string) {
 }
 
 describe("sender-local scroll intent", () => {
+  it("admits initial authoritative history after a cached preview without treating it as remote input", () => {
+    const state = setup([userMessage("cached")]);
+    const requests = chatHistoryRequests(state);
+    requests.historyLoad = {
+      phase: "pending-connection",
+      sessionKey: state.sessionKey,
+      requestAgentId: undefined,
+      startup: true,
+    };
+    const accepted = {
+      phase: "committed" as const,
+      client: state.client!,
+      sessions: state.sessions,
+      connectionEpoch: state.connectionEpoch,
+      sessionKey: state.sessionKey,
+      requestAgentId: undefined,
+      sessionId: state.currentSessionId,
+      sessionInfo: undefined,
+    };
+    state.connected = true;
+    const ownership = beginHistoryRequest(
+      state,
+      state.client!,
+      state.connectionEpoch,
+      state.sessionKey,
+    );
+    recordInitialChatInputHistory(state, ownership, [
+      userMessage("cached"),
+      userMessage("historical"),
+    ]);
+    state.chatMessages = [userMessage("cached"), userMessage("historical")];
+    state.requestUpdate?.();
+    expect(state.chatFollowLocked).toBe(false);
+    requests.acceptedHistory = accepted;
+    recordInitialChatInputHistory(state, ownership, [userMessage("live-remote")]);
+    state.chatMessages = [...state.chatMessages, userMessage("live-remote")];
+    state.requestUpdate?.();
+    expect(state.chatFollowLocked).toBe(true);
+  });
+  it("baselines historical pending custody but locks a later live pending input", () => {
+    const state = setup([userMessage("cached")]);
+    state.connected = true;
+    const ownership = beginHistoryRequest(
+      state,
+      state.client!,
+      state.connectionEpoch,
+      state.sessionKey,
+    );
+    recordInitialChatInputHistory(state, ownership, [], {
+      pendingInputs: {
+        items: [
+          {
+            id: "pending:old",
+            runId: "old",
+            acceptedAt: 1,
+            state: "queued",
+            message: { role: "user", content: "old" },
+          },
+        ],
+        total: 1,
+      },
+    });
+    pending(state, "old");
+    expect(state.chatFollowLocked).toBe(false);
+    pending(state, "new-live");
+    expect(state.chatFollowLocked).toBe(true);
+  });
+  it("baselines initial delta envelopes using their authoritative send identity", () => {
+    const state = setup();
+    state.connected = true;
+    const ownership = beginHistoryRequest(
+      state,
+      state.client!,
+      state.connectionEpoch,
+      state.sessionKey,
+    );
+    recordInitialChatInputHistory(
+      state,
+      ownership,
+      [
+        {
+          message: { role: "user", content: "old" },
+          messageId: "old-entry",
+          clientRunId: "old-send",
+        },
+      ],
+      { payloads: true },
+    );
+    state.chatMessages = [userMessage("old-send", "old-entry")];
+    state.requestUpdate?.();
+    expect(state.chatFollowLocked).toBe(false);
+    expect(takeInitialChatInputHistory(state)).toBeUndefined();
+  });
+  it.each(["superseded", "reset"] as const)(
+    "retires an initial input receipt when its owner is %s",
+    (change) => {
+      const state = setup();
+      state.connected = true;
+      const ownership = beginHistoryRequest(
+        state,
+        state.client!,
+        state.connectionEpoch,
+        state.sessionKey,
+      );
+      recordInitialChatInputHistory(state, ownership, [userMessage("old")]);
+      if (change === "reset") {
+        resetChatHistoryProjection(state);
+      } else {
+        beginHistoryRequest(state, state.client!, state.connectionEpoch, state.sessionKey);
+      }
+      expect(takeInitialChatInputHistory(state)).toBeUndefined();
+      expect(chatHistoryRequests(state).initialInputHistory).toBeUndefined();
+    },
+  );
+  it.each(["persisted", "pending"] as const)(
+    "preserves %s live-input takeover while initial history is pending",
+    (kind) => {
+      const state = setup([userMessage("cached")]);
+      chatHistoryRequests(state).historyLoad = {
+        phase: "pending-connection",
+        sessionKey: state.sessionKey,
+        requestAgentId: undefined,
+        startup: true,
+      };
+      if (kind === "pending") {
+        pending(state, "live-remote");
+      } else {
+        state.chatMessages = [...state.chatMessages, userMessage("live-remote")];
+        state.requestUpdate?.();
+      }
+      expect(state.chatFollowLocked).toBe(true);
+    },
+  );
   it("does not treat already loaded history as a fresh input", () => {
     const state = setup([userMessage("loaded")]);
     state.requestUpdate?.();

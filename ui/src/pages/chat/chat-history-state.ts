@@ -1,3 +1,5 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -57,8 +59,53 @@ type ChatHistoryPaneRequests = {
   pendingSubscriptionReleases: Set<SessionMessageSubscription>;
   historyLoad: ChatHistoryLoadState;
   acceptedHistory?: Extract<ChatHistoryLoadState, { phase: "committed" }>;
+  /** Initial authoritative rows establish input identity before projection notifications. */
+  initialInputHistory?: { keys: ReadonlySet<string>; ownership: ChatHistoryRequestOwnership };
   initialSnapshotHydration?: InitialChatSnapshotHydration;
 };
+
+/** Record only an admitted startup response, before its reducer notifies input observers. */
+export function recordInitialChatInputHistory(
+  state: ChatState,
+  ownership: ChatHistoryRequestOwnership,
+  messages: readonly unknown[],
+  options: { payloads?: boolean; pendingInputs?: ChatHistoryResult["pendingInputs"] } = {},
+): void {
+  const requests = chatHistoryRequests(state);
+  if (requests.acceptedHistory || !acceptsHistoryResult(state, ownership)) {
+    return;
+  }
+  const keys = new Set<string>();
+  const record = (message: unknown, envelope?: Record<string, unknown>) => {
+    const identity = readSessionMessageIdentity(message, envelope);
+    if (identity?.role !== "user") {
+      return;
+    }
+    const key = identity.sendId
+      ? "send:" + identity.sendId
+      : identity.id
+        ? "entry:" + identity.id
+        : null;
+    if (key) {
+      keys.add(key);
+    }
+  };
+  for (const item of messages) {
+    const envelope = options.payloads ? asNonArrayRecord(item) : undefined;
+    record(envelope ? envelope.message : item, envelope);
+  }
+  options.pendingInputs?.items.forEach((input) =>
+    record(input.message, { clientRunId: input.runId }),
+  );
+  requests.initialInputHistory = { keys, ownership };
+}
+
+export function takeInitialChatInputHistory(state: ChatState): ReadonlySet<string> | undefined {
+  const requests = chatHistoryRequests(state);
+  const receipt = requests.initialInputHistory;
+  delete requests.initialInputHistory;
+  return receipt && acceptsHistoryResult(state, receipt.ownership) ? receipt.keys : undefined;
+}
 
 export type InitialChatSnapshotHydration = {
   sessionKey: string;
@@ -323,6 +370,7 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
   delete requests.acceptedHistory;
+  delete requests.initialInputHistory;
   setChatHistoryLoad(state, { phase: "idle" });
   state.chatLoading = false;
   const scope = readChatSessionProjectionScope(state, { agentId });

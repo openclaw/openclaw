@@ -267,6 +267,57 @@ async function withSessions(
 }
 
 suite.define(() => {
+  it("revalidates a fitting cached preview at the end after pane eviction", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        sessionKey: first,
+        sessions,
+        featureMethods: ["chat.metadata", "chat.startup"],
+        sessionTranscripts: Object.fromEntries(
+          sessions.map(({ key }) => [key, { messages: history(key, 1) }]),
+        ),
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, first));
+      await thread(page).getByText("Checkpoint 0.", { exact: false }).waitFor();
+      for (const session of sessions.slice(1)) {
+        await selectSession(page, session.key, undefined, session.key + ":message:0");
+      }
+      await expect
+        .poll(() =>
+          page
+            .locator(".chat-pane-cache__pane")
+            .evaluateAll(
+              (panes, key) => panes.some((pane) => Reflect.get(pane, "sessionKey") === key),
+              first,
+            ),
+        )
+        .toBe(false);
+      const full = {
+        messages: history(first, 80),
+        hasMore: false,
+        totalMessages: 80,
+        sessionId: sessions[0]!.sessionId,
+        thinkingLevel: null,
+      };
+      await gateway.setMethodResponse("chat.startup", full);
+      const match = { sessionKey: first };
+      const requests = (await gateway.getRequests("chat.startup", match)).length;
+      await gateway.deferNext("chat.startup", match);
+      await selectSession(page, first, undefined, first + ":message:0");
+      await gateway.waitForRequest("chat.startup", { after: requests, match });
+      await thread(page).getByText("Checkpoint 0.", { exact: false }).waitFor();
+      await gateway.resolveDeferred("chat.startup", full);
+      await waitForChatScrollIdle(page);
+      const endGap = () =>
+        thread(page).evaluate(
+          (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+        );
+      await expect.poll(endGap).toBeLessThanOrEqual(1);
+      await expect
+        .poll(() => page.locator(`[data-entry-id="${first}:message:79"]`).count())
+        .toBe(1);
+    });
+  });
   it.each([429, 1280])(
     "opens a cold long-Markdown conversation at its measured end (%ipx viewport)",
     async (width) => {
