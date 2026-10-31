@@ -270,7 +270,7 @@ export function createReplyDispatcher(
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
   // Start with pending=1 as a "reservation" to prevent premature gateway restart.
   // This is decremented when markComplete() is called to signal no more replies will come.
-  let pending = 1;
+  const pendingState = { pending: 1 };
   let completeCalled = false;
   // Track whether we've sent a block reply (for human delay - skip delay on first block).
   let sentFirstBlock = false;
@@ -313,13 +313,13 @@ export function createReplyDispatcher(
     } while (sent !== sendChain || settled !== settlementChain);
   };
 
-  const unregister = registerDispatcher(() => pending);
+  const unregister = registerDispatcher(pendingState);
   const releasePending = () => {
-    pending -= 1;
-    if (pending === 1 && completeCalled) {
-      pending -= 1;
+    pendingState.pending -= 1;
+    if (pendingState.pending === 1 && completeCalled) {
+      pendingState.pending -= 1;
     }
-    if (pending === 0) {
+    if (pendingState.pending === 0) {
       unregister();
       notifyIdle();
     }
@@ -554,7 +554,7 @@ export function createReplyDispatcher(
         ? replaceDispatchPayload(input, normalizedFallback.payload)
         : null;
     queuedCounts[kind] += 1;
-    pending += 1;
+    pendingState.pending += 1;
     if (deliveryOutcomeTracker) {
       deliveryOutcomeTracker.tracked = true;
     }
@@ -632,7 +632,7 @@ export function createReplyDispatcher(
       return;
     }
     completeCalled = true;
-    if (pending === 1) {
+    if (pendingState.pending === 1) {
       releasePending();
     }
   };
