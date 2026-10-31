@@ -7,7 +7,7 @@ import { drainGlobalSingletonLifecycleState as drain } from "../../shared/global
 import * as database from "../../state/openclaw-state-db.js";
 import { captureClientVoiceSessionSettlement } from "../../talk/client-voice-session-lifecycle.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { GatewayShutdownCleanupRetainedError } from "../server-shutdown.js";
+import { isGatewayCleanupRetainedError } from "../server-shutdown.js";
 import {
   cleanupTalkConnection as disconnect,
   prepareTalkConnectionClose as prepareClose,
@@ -103,7 +103,7 @@ it.each(["sync", "abort", "ignore"])("retries failed cleanup and drains %s settl
     ];
     const joined = Promise.all(drains).then(
       () => result("settled"),
-      (error: unknown) => result(error),
+      (error: unknown) => result(isGatewayCleanupRetainedError(error) ? "retained" : error),
     );
     try {
       expect(cleanup).toHaveBeenCalledTimes(2);
@@ -115,9 +115,7 @@ it.each(["sync", "abort", "ignore"])("retries failed cleanup and drains %s settl
       }
       await vi.advanceTimersByTimeAsync(2_000);
       expect(generic.scope.signal.aborted).toBe(false);
-      expect(result).toHaveBeenCalledWith(
-        mode === "ignore" ? expect.any(GatewayShutdownCleanupRetainedError) : "settled",
-      );
+      expect(result).toHaveBeenCalledWith(mode === "ignore" ? "retained" : "settled");
       expect(signal?.aborted).toBe(true);
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
     } finally {

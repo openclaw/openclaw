@@ -435,6 +435,7 @@ src/infra/database-engine/sqlite-vector-types.ts
 src/infra/database-engine/sqlite-vector.ts
 src/infra/database-engine/text-bytes.ts
 src/infra/database-engine/vector-contract.ts
+src/infra/gateway-shutdown-budget.ts
 src/infra/postgres-sync/bridge-prestart.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/idle-bridges.ts
@@ -444,6 +445,7 @@ src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
 src/infra/sql-connection.ts
 src/infra/sql-query-compiler.ts
+src/process/supervisor/cleanup-budget.ts
 src/sessions/communication-admission.ts
 src/sessions/communication-policy.ts
 src/config/sessions/session-actor-command.ts

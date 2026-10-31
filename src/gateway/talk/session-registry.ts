@@ -6,7 +6,6 @@ import {
   prepareClientVoiceSessionClose,
   withClientVoiceSessionSettlement,
 } from "../../talk/client-voice-session-lifecycle.js";
-import { GatewayShutdownCleanupRetainedError } from "../server-shutdown.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 type TalkConnectionCleanupKind =
@@ -180,7 +179,6 @@ export function prepareTalkConnectionClose(
       } catch (error) {
         if (error instanceof GatewayRetainedWorkTimeoutError) {
           log.warn(error.message);
-          throw new GatewayShutdownCleanupRetainedError([error], error.message);
         }
         throw error;
       }
