@@ -631,6 +631,20 @@ describe("/acp command", () => {
     }
   });
 
+  it("sends every line of a multiline ACP steer instruction", async () => {
+    mockGatewaySessionResolution(defaultAcpSessionKey);
+    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
+
+    await runCommand(
+      `/acp steer --session ${defaultAcpSessionKey} first line\n  second line\n\nfourth line`,
+    );
+
+    expectMockCallFields(hoisted.runTurnMock, {
+      mode: "steer",
+      text: "first line\n  second line\n\nfourth line",
+    });
+  });
+
   it("keeps bounded ACP steer output UTF-16 safe", async () => {
     const prefix = "a".repeat(799);
     mockGatewaySessionResolution(defaultAcpSessionKey);
@@ -934,6 +948,42 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toBe(
       "ACP error (ACP_TURN_FAILED): Could not update ACP model.\nnext: Retry, or use `/acp cancel` and send the message again.",
     );
+  });
+
+  it.each([
+    [
+      { runtime: { installCommand: "pnpm openclaw plugins install acpx" } },
+      "pnpm openclaw plugins install acpx",
+    ],
+    [
+      { backend: "acpx" },
+      `openclaw plugins install ${path.join(process.cwd(), "extensions", "acpx")}`,
+    ],
+    [
+      { backend: "custom-backend" },
+      'Install and enable the plugin that provides ACP backend "custom-backend".',
+    ],
+  ] as const)("shows install guidance through /acp install (%j)", async (acp, hint) => {
+    const result = await runCommand("/acp install", {
+      ...baseCfg,
+      acp: { ...baseCfg.acp, ...acp },
+    });
+    expectReplyText(result, "ACP install:", `run: ${hint}\nthen:`);
+  });
+
+  it("offers the package install when no workspace extension exists", async () => {
+    const cwd = vi
+      .spyOn(process, "cwd")
+      .mockReturnValue(path.join(process.cwd(), "missing-workspace"));
+    try {
+      expectReplyText(
+        await runCommand("/acp install"),
+        "ACP install:",
+        "run: openclaw plugins install acpx\nthen:",
+      );
+    } finally {
+      cwd.mockRestore();
+    }
   });
 
   it("explains when acpx is blocked by plugins.allow", async () => {

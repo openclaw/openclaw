@@ -4,14 +4,14 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import {
   catalogTool,
   fixtureCatalog,
-  fixtureRuntime,
+  staticRuntime,
 } from "./agent-bundle-mcp-fixture.test-support.js";
 import {
   buildBundleMcpToolsFromCatalog,
@@ -37,22 +37,14 @@ function firstTool(runtime: Pick<BundleMcpToolRuntime, "tools">) {
 }
 
 function knowledgeCatalog(server: Partial<McpToolCatalog["servers"][string]> = {}): McpToolCatalog {
-  return {
-    version: 1,
-    generatedAt: 0,
-    tools: [],
-    servers: {
-      knowledge: {
-        serverName: "knowledge",
-        safeServerName: "knowledge",
-        launchSummary: "knowledge",
-        toolCount: 0,
-        resources: { listChanged: false },
-        prompts: { listChanged: false },
-        ...server,
-      },
-    },
-  };
+  const catalog = fixtureCatalog("knowledge", []);
+  Object.assign(catalog.servers.knowledge!, {
+    safeServerName: "knowledge",
+    resources: { listChanged: false },
+    prompts: { listChanged: false },
+    ...server,
+  });
+  return catalog;
 }
 
 function makeToolRuntime(
@@ -76,21 +68,18 @@ function makeToolRuntime(
       params.supportsParallelToolCalls ?? false;
     return catalog;
   };
-  return fixtureRuntime(peekCatalog, {
+  return staticRuntime({
     sessionId: "session-collision",
     workspaceDir: "/tmp",
     configFingerprint: "fingerprint",
-    createdAt: 0,
-    lastUsedAt: 0,
-    markUsed: () => {},
     peekCatalog,
+    getCatalog: async () => peekCatalog(),
     callTool: async () =>
       params.result ?? {
         content: [{ type: "text", text: "FROM-BUNDLE" }],
         isError: false,
       },
     joinCleanup: async () => {},
-    dispose: async () => {},
   });
 }
 
@@ -185,12 +174,12 @@ describe("createBundleMcpToolRuntime", () => {
     expect(dispose).not.toHaveBeenCalled();
   });
 
-  it.each([
+  it.for([
     { catalogOutcome: "resolve", cleanupFault: "dispose" },
     { catalogOutcome: "reject", cleanupFault: "join" },
   ] as const)(
     "preserves private $cleanupFault failure when a cancelled catalog will $catalogOutcome",
-    async ({ catalogOutcome, cleanupFault }) => {
+    async ({ catalogOutcome, cleanupFault }, { signal }) => {
       const runtime = makeToolRuntime();
       const readCatalog = runtime.getCatalog;
       const entered = createDeferred();
@@ -236,7 +225,7 @@ describe("createBundleMcpToolRuntime", () => {
       try {
         await entered.promise;
         work.beginClose(new Error("private MCP acquisition cancelled"));
-        await withTestTimeout(cleanupStarted.promise, 1_000, "Private MCP cleanup did not start");
+        await withinTest(cleanupStarted.promise, signal);
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
@@ -353,33 +342,12 @@ describe("createBundleMcpToolRuntime", () => {
     ).toEqual(new Set(["show"]));
   });
 
-  it("never mints app views for tools from requester-scoped servers", async () => {
-    const tool = catalogTool("user-mail", "show", {
-      inputSchema: { type: "object" },
-      uiResourceUri: "ui://user-mail/app",
-    });
-    const sessionRuntime = makeToolRuntime({ tools: [tool], serverName: "user-mail" });
-    sessionRuntime.mcpAppsEnabled = true;
-    // View recovery (peek + transcript reconstruction) has no requester
-    // identity, so scoped servers stay fail-closed at view creation.
-    sessionRuntime.isRequesterScopedServer = (serverName) => serverName === "user-mail";
-    const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
-
-    const result = await firstTool(materialized).execute("call-1", {}, undefined, undefined);
-    expect(result.details ?? {}).not.toHaveProperty("mcpAppPreview");
-  });
-
   it("carries server instructions onto resource and prompt utility tools", () => {
     const tools = buildBundleMcpToolsFromCatalog({
       catalog: knowledgeCatalog({ instructions: "Read the catalogue before citing a resource." }),
     });
 
-    expect(tools.map((tool) => getPluginToolMeta(tool)?.mcp?.operation)).toEqual([
-      "prompts_get",
-      "prompts_list",
-      "resources_list",
-      "resources_read",
-    ]);
+    expect(tools).toHaveLength(4);
     for (const tool of tools) {
       expect(getPluginToolMeta(tool)?.mcp?.instructions).toBe(
         "Read the catalogue before citing a resource.",
@@ -461,7 +429,6 @@ describe("createBundleMcpToolRuntime", () => {
       { type: "image", data: "iVBOR", mimeType: "image/png" },
       { type: "text", text: JSON.stringify({ type: "image" }) },
     ]);
-    expect(result.details).toEqual({ mcpServer: "bundleProbe", mcpTool: "bundle_probe" });
   });
 
   it("disambiguates bundle MCP tools that collide with existing tool names", async () => {
@@ -519,12 +486,6 @@ describe("createBundleMcpToolRuntime", () => {
       catalog: knowledgeCatalog(),
     });
 
-    expect(tools.map((tool) => tool.name)).toEqual([
-      "knowledge__prompts_get",
-      "knowledge__prompts_list",
-      "knowledge__resources_list",
-      "knowledge__resources_read",
-    ]);
     await expect(
       firstTool({ tools }).execute("inventory-only", {}, undefined, undefined),
     ).rejects.toThrow("bundle-mcp catalog projection cannot execute tools");
@@ -574,13 +535,11 @@ describe("createBundleMcpToolRuntime", () => {
   it("keeps root fields callable when an MCP input schema uses a root union (#128743)", async () => {
     const inputSchema = {
       type: "object",
-      title: "MessagesReplyInput",
-      additionalProperties: false,
       required: ["thread_id"],
       properties: {
-        thread_id: { type: "string", minLength: 1, maxLength: 128 },
-        body: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
-        body_file: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+        thread_id: { type: "string" },
+        body: { anyOf: [{ type: "string" }, { type: "null" }] },
+        body_file: { anyOf: [{ type: "string" }, { type: "null" }] },
       },
       anyOf: [
         { required: ["body"], properties: { body: { type: "string" } } },

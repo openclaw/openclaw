@@ -395,34 +395,30 @@ describe("embedded run registry lifecycle generations", () => {
     },
   );
 
-  it("retains a handle's original lifecycle fence after eviction and clear", () => {
-    const abort = vi.fn();
-    const staleHandle = createRunHandle({ abort, runId: "cleared-stale-run" });
-
-    setActiveEmbeddedRun("cleared-stale-session", staleHandle, "agent:main:cleared-stale");
-    rotateAgentEventLifecycleGeneration();
-    clearActiveEmbeddedRun("cleared-stale-session", staleHandle, "agent:main:cleared-stale");
-
-    setActiveEmbeddedRun("cleared-stale-session", staleHandle, "agent:main:cleared-stale");
-
-    expect(abort.mock.calls).toEqual([["restart"], ["restart"]]);
-    expect(listActiveSessionRunIds()).not.toContain("cleared-stale-session");
-  });
-
-  it("rejects a current-lifecycle handle after its diagnostic owner closes", () => {
-    const closedRef = createIdentity("closed");
-
-    const abort = vi.fn();
-    const diagnosticOwner = createDiagnosticEmbeddedRunOwner({ ...closedRef, runId: "closed-run" });
-    const handle = createRunHandle({ abort, diagnosticOwner, runId: "closed-run" });
-    setActiveEmbeddedRun(closedRef.sessionId, handle, closedRef.sessionKey);
-    clearActiveEmbeddedRun(closedRef.sessionId, handle, closedRef.sessionKey);
-
-    setActiveEmbeddedRun(closedRef.sessionId, handle, closedRef.sessionKey);
-
-    expect(abort).toHaveBeenCalledWith("restart");
-    expect(listActiveSessionRunIds()).not.toContain(closedRef.sessionId);
-  });
+  it.each(["lifecycle", "diagnostic owner"])(
+    "rejects a cleared handle with a retired %s",
+    (kind) => {
+      const identity = createIdentity("cleared");
+      const abort = vi.fn();
+      const runId = "cleared-run";
+      const diagnosticOwner =
+        kind === "diagnostic owner"
+          ? createDiagnosticEmbeddedRunOwner({ ...identity, runId })
+          : undefined;
+      const handle = createRunHandle({ abort, diagnosticOwner, runId });
+      const register = () => setActiveEmbeddedRun(identity.sessionId, handle, identity.sessionKey);
+      register();
+      if (kind === "lifecycle") {
+        rotateAgentEventLifecycleGeneration();
+      }
+      clearActiveEmbeddedRun(identity.sessionId, handle, identity.sessionKey);
+      register();
+      expect(abort.mock.calls).toEqual(
+        kind === "lifecycle" ? [["restart"], ["restart"]] : [["restart"]],
+      );
+      expect(listActiveSessionRunIds()).not.toContain(identity.sessionId);
+    },
+  );
 
   it("propagates failure to abort a delayed prior-lifecycle registration", () => {
     const priorLifecycleGeneration = getAgentEventLifecycleGeneration();

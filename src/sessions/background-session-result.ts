@@ -17,22 +17,20 @@ import type { SessionTranscriptAssistantMessage } from "../config/sessions/trans
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import {
+  AUTOMATION_RESULT_MODEL,
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+  type SUBAGENT_COMPLETION_RESULT_KIND,
 } from "../shared/transcript-only-openclaw-assistant.js";
+import { isSessionControllerWorkActive } from "./session-controller.lifecycle-observation.js";
 import { captureSessionTarget, runSessionMutation } from "./session-controller.lifecycle.js";
-
-// Background completions are durable conversation output, so this identity
-// must stay outside the transcript-only delivery-mirror model set.
-const AUTOMATION_RESULT_MODEL = "automation-result" as const;
 
 type BackgroundSessionResultCommit = { ok: true } | { ok: false; reason: string };
 
-type BackgroundSessionResultProvenance = {
-  kind: "cron";
-  jobId: string;
-  runId: string;
-};
+/** Identifies which background producer wrote a result row. */
+export type BackgroundSessionResultProvenance =
+  | { kind: "cron"; jobId: string; runId: string }
+  | { kind: typeof SUBAGENT_COMPLETION_RESULT_KIND };
 
 /** Appends a background result without waiting for the target conversation's active turn. */
 export async function commitBackgroundResultToSession(params: {
@@ -44,7 +42,7 @@ export async function commitBackgroundResultToSession(params: {
   prepareDisplayContent?: () => Promise<readonly Record<string, unknown>[] | undefined>;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
   idempotencyKey: string;
-  provenance: BackgroundSessionResultProvenance;
+  provenance?: BackgroundSessionResultProvenance;
   config: OpenClawConfig;
   signal?: AbortSignal;
   /** Revalidate the producer after preparation and inside the transcript commit. */
@@ -122,10 +120,12 @@ export async function commitBackgroundResultToSession(params: {
           };
           // A retry owns the original committed payload, including its managed-media IDs.
           // Restaging media would conflict with the transcript's exact replay contract.
-          const prior = await findTranscriptEvent(scope, {
-            kind: "idempotency",
-            key: idempotencyKey,
-          });
+          const prior = await findTranscriptEvent(
+            scope,
+            { kind: "idempotency", key: idempotencyKey },
+            undefined,
+            "background-result",
+          );
           const priorMessage = prior && readTranscriptEventMessage(prior.event);
           const priorId = prior && readTranscriptEventId(prior.event);
           if (prior && (!priorMessage || !priorId)) {
@@ -145,10 +145,14 @@ export async function commitBackgroundResultToSession(params: {
             stopReason: "stop",
             timestamp: Date.now(),
             idempotencyKey,
-            openclawAutomation: params.provenance,
+            ...(isSessionControllerWorkActive(storePath, identities, params.agentId)
+              ? { excludeFromContext: true, openclawModelPlacement: "pending" as const }
+              : {}),
+            ...(params.provenance ? { openclawAutomation: params.provenance } : {}),
           } satisfies SessionTranscriptAssistantMessage & {
             idempotencyKey: string;
-            openclawAutomation: BackgroundSessionResultProvenance;
+            openclawAutomation?: BackgroundSessionResultProvenance;
+            openclawModelPlacement?: "pending";
           };
           owner.assertCurrent();
           params.assertCurrent?.();
@@ -167,7 +171,7 @@ export async function commitBackgroundResultToSession(params: {
                   ? {
                       ...priorMessage,
                       content: message.content,
-                      openclawAutomation: params.provenance,
+                      ...(params.provenance ? { openclawAutomation: params.provenance } : {}),
                     }
                   : message,
                 idempotencyLookup: "scan",

@@ -46,6 +46,7 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
@@ -71,17 +72,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
 let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
 beforeAll(async () => {
-  const module = await import("./server-kernel.js");
-  const create = module.createGatewayKernel;
-  const capture = vi.spyOn(module, "createGatewayKernel").mockImplementation(async (...args) => {
-    kernel = await create(...args);
-    return kernel;
-  });
-  try {
+  kernel = await captureGatewayKernel(async () => {
     server = await startTestGatewayServer(await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] }));
-  } finally {
-    capture.mockRestore();
-  }
+  });
 });
 afterAll(() => server.close());
 

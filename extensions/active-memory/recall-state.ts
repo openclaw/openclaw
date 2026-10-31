@@ -200,9 +200,7 @@ export function setCachedResult(cacheKey: string, result: ActiveRecallResult, tt
     sweepExpiredCacheEntries(now);
     lastActiveRecallCacheSweepAt = now;
   }
-  if (activeRecallCache.has(cacheKey)) {
-    activeRecallCache.delete(cacheKey);
-  }
+  activeRecallCache.delete(cacheKey);
   activeRecallCache.set(cacheKey, {
     expiresAt: now + ttlMs,
     result,

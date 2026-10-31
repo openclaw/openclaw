@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -14,6 +13,7 @@ import { prepareSkillResourceDelivery } from "../../src/skills/runtime/resources
 import type { SkillSnapshot } from "../../src/skills/types.js";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 // Metadata-shaped synthetic trees, never copies of operator instructions or scripts.
 const supportSizes = [
@@ -288,12 +288,9 @@ if (values["gc-log"]) {
 }
 const diagnostics = stopDiagnostics();
 let allocationBytes: number | null = null;
-function sumAllocation(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sumAllocation(child), 0);
-}
 if (values.allocations) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
-  allocationBytes = sumAllocation(profile.head);
+  allocationBytes = sumSampledHeapBytes(profile.head);
   inspector.disconnect();
 }
 fs.open = open;

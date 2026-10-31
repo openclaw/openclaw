@@ -20,6 +20,7 @@ import type { ModelCatalogEntry } from "../../api/types.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
+  RetryAction,
   SettingsEmpty,
   SettingsLoadingSkeleton,
   SettingsNavRow,
@@ -435,9 +436,7 @@ export function SearchPage() {
                   gateway.connected ? (
                     <div role="alert" class="callout danger">
                       {formatUiError(error())}
-                      <button class="btn btn--sm" onClick={() => void load()}>
-                        {t("common.retry")}
-                      </button>
+                      <RetryAction onRetry={() => void load()} />
                     </div>
                   ) : undefined
                 }
@@ -454,9 +453,7 @@ export function SearchPage() {
           {configState().lastError ? (
             <div role="alert" class="callout danger">
               {configState().lastError}
-              <button class="btn btn--sm" onClick={() => void retryConfig(gateway.capture())}>
-                {t("common.retry")}
-              </button>
+              <RetryAction onRetry={() => void retryConfig(gateway.capture())} />
             </div>
           ) : undefined}
           <Loading>

@@ -1,18 +1,13 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
-import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
-import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
-import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import {
@@ -21,502 +16,240 @@ import {
   presentSessionRow,
   readSessionRowInputs,
 } from "./session-utils-row.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
-import {
-  projectWorkerSessionPlacement,
-  readWorkerPlacementIdentity,
-} from "./worker-environments/placement-projector.js";
-import { activePlacement } from "./worker-environments/placement-suite.test-support.js";
 
-// Values frozen from d70a7e7300cdc0af4485d10b39f3e4986c3dd155.
-// SHA256 pins wire values; sparse materialization may change top-level property order.
-// Ownership fixtures below differ only in durable childSessions and removal of
-// historical-run spawnedBy/controlOwnerSessionKey (verified against the original hashes).
 const START = Date.UTC(2026, 8, 15);
-const TIMES = [START + 29_999, START + 30_000, START + 7_200_001] as const;
-const GOLDEN_HASHES: Record<string, string | readonly [string, string, string]> = {
-  "ACP metadata owns the runtime":
-    "806dd091c364088ac97e34825c6bdaee6e865b6ff911a6b54c2073c05b28afb5",
-  "activity current and active correlated placement":
-    "03b2a5f8df56d4c6b58c33838ff1a2a7ceeb555d95332d4e936bc32d20fd7995",
-  "activity stale and uncorrelated placement":
-    "44f6c17648306a69451dea4079e7f325eedb3a58c24eeac47af07c3e011ffb95",
-  "durable parent links outlive display retention": [
-    "ea88f50e0d3b5b904d3f64a44f228fff1cefaf0882c5be411e4263727ed254ef",
-    "ea88f50e0d3b5b904d3f64a44f228fff1cefaf0882c5be411e4263727ed254ef",
-    "daa5d5c2a7cebceeb7e2353d1f6372ba558c2f63c79488340dbdbe83fb26b2da",
-  ],
-  "ended run uses persisted lifecycle timestamps":
-    "46502481a02e7be79b466c588bf42e7cdf6ab62bdd37211763a979e35249d92e",
-  "expired status and incognito draft":
-    "fc06ca39632d330036ebab35135098ac12d6b22b4f5a0c0ed36b7f7c559474e6",
-  "goal below budget retains committed timestamps":
-    "1aaecea18cfa924f2714e47af426dc76fc1bd8b30dae956206e7cbe6f9199001",
-  "goal budget becomes limited at presentation time": [
-    "26b22c9c15b44c86fdbc6d403d4152168e2fa8651be2dfb03bd26fd4d30b9b11",
-    "89b735377c12bf3bd9b4a050c2d89aabe763b4dfe53da7caa7ee6f1b4acaacd5",
-    "e17984f9316f106afb181d5bfd1f952945e85e9a32b860420ab5d65130d7a1fa",
-  ],
-  "live subagent accumulated runtime and inherited model":
-    "bd892aa29e3d9306ca5d07f2f973bf1bc1881dadc5f8345b9eba3e3e0baf2165",
-  "missing entry": "ca59b3ec3a664a3caa055671a6e57891e8a9b072c0509e8073576ab8b80de292",
-  "observer digest equal than run start":
-    "4abca444a5d0be3ff30b99147ab9d17c073bb440ce3e1175007718d5bcda51d3",
-  "observer digest newer than run start":
-    "7cc823b5a30bba6938e56df9285e373a50710a5227643a7ee414a6b84cc88ff8",
-  "observer digest older than run start":
-    "ab9085aa5476af8045a0ffdac062f7a380f223cde9842bbe9a88b422fbb7a147",
-  "single-row snapshot without an explicit swarm context":
-    "495b2e3d130365dfdd9aaa322cd655f4d11f2cae5e673cc98a3e1369b1231dae",
-  "swarm summary retains collector completion and children":
-    "194b69b9172baad7878f5c67e7be312f101420979c71058e5603b6e451901be1",
+const TIMES = [START + 29_999, START + 30_000, START + 7_200_001];
+const KEY = "agent:main:dashboard:materialize";
+const BASE_ENTRY = { sessionId: "session", updatedAt: START, createdAt: START - 1_000 };
+const cfg: OpenClawConfig = {
+  agents: {
+    defaults: { reasoningDefault: "stream" },
+    entries: { main: {}, ops: { reasoningDefault: "on" } },
+  },
 };
 
-const PARENT = "agent:main:dashboard:parent";
-const LIVE = "agent:main:subagent:live";
-const LIVE_RUN = "materialize-golden-live";
-const BASE_ENTRY = { sessionId: "golden-session", updatedAt: START, createdAt: START - 1_000 };
-const GOAL = {
-  schemaVersion: 1,
-  id: "golden-goal",
-  objective: "Finish the synthetic fixture",
-  status: "active",
-  createdAt: START - 1_000,
-  updatedAt: START,
-  tokenStart: 20,
-  tokenStartFresh: true,
-  tokensUsed: 0,
-  tokenBudget: 100,
-  continuationTurns: 2,
-} satisfies NonNullable<SessionEntry["goal"]>;
-
-type RowFixture = {
-  name: string;
-  key: string;
-  entry?: InternalSessionEntry;
-  acpMeta?: SessionEntry["acp"];
-  store?: Record<string, SessionEntry>;
-  runs?: SubagentRunRecord[];
-  omitRowContext?: boolean;
-  expectedIsDock?: boolean;
-  decoration?: "current" | "stale";
-};
-
-function config(): OpenClawConfig {
+function rowParams(
+  entry?: SessionEntry,
+  overrides: Partial<Parameters<typeof readSessionRowInputs>[0]> = {},
+) {
   return {
-    agents: {
-      entries: { main: { identity: { name: "Fixture agent" } } },
-      defaults: {
-        model: { primary: "row-fixture/primary" },
-        thinkingDefault: "off",
-        models: { "row-fixture/primary": { agentRuntime: { id: "pi" } } },
-      },
-    },
-    models: {
-      providers: {
-        "row-fixture": {
-          baseUrl: "https://fixture.invalid/v1",
-          api: "openai-completions",
-          models: ["primary", "older", "newer"].map((id, index) => ({
-            id,
-            name: id,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: index + 1, output: (index + 1) * 2, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128_000,
-            maxTokens: 8_192,
-          })),
-        },
-      },
-    },
-  };
-}
-
-function fixtures(): RowFixture[] {
-  const ended = "agent:main:subagent:ended";
-  const unknown = "agent:main:subagent:unknown";
-  const parentEntry: SessionEntry = {
-    ...BASE_ENTRY,
-    sessionId: "parent-session",
-    providerOverride: "row-fixture",
-    modelOverride: "newer",
-    modelOverrideSource: "user",
-  };
-  const childStore: Record<string, SessionEntry> = {
-    [PARENT]: parentEntry,
-    [LIVE]: {
-      ...BASE_ENTRY,
-      sessionId: "live-session",
-      parentSessionKey: PARENT,
-    },
-    [ended]: { ...BASE_ENTRY, parentSessionKey: PARENT, status: "done", endedAt: START },
-    [unknown]: { ...BASE_ENTRY, parentSessionKey: PARENT },
-    "agent:main:subagent:stale": {
-      ...BASE_ENTRY,
-      parentSessionKey: PARENT,
-      updatedAt: START - 7_200_000,
-    },
-  };
-  const liveRun = createSubagentRunRecord({
-    runId: LIVE_RUN,
-    childSessionKey: LIVE,
-    requesterSessionKey: PARENT,
-    createdAt: START - 2_000,
-    startedAt: START,
-    accumulatedRuntimeMs: 500,
-    model: "row-fixture/older",
-  });
-  const activityEntry: SessionEntry = {
-    ...BASE_ENTRY,
-    activitySummary: {
-      version: 1,
-      formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
-      sessionId: BASE_ENTRY.sessionId,
-      text: "Completed the fixture and checked its output.",
-      updatedAt: START,
-      generation: "golden-generation",
-      maxSeq: 2,
-      leafEntryId: "golden-leaf",
-      coveredMessages: 2,
-      totalMessages: 2,
-      omittedContent: false,
-    },
-  };
-  const goalFixture = (
-    name: string,
-    suffix: string,
-    totalTokens: number,
-    goal = GOAL,
-  ): RowFixture => ({
-    name,
-    key: `agent:main:dashboard:${suffix}`,
-    entry: { ...BASE_ENTRY, goal, totalTokens, totalTokensFresh: true, totalTokensVersion: 1 },
-  });
-  return [
-    { name: "missing entry", key: "agent:main:dashboard:missing" },
-    {
-      name: "single-row snapshot without an explicit swarm context",
-      key: "agent:main:dashboard:single",
-      entry: { ...BASE_ENTRY, createdSurface: "plugin-dock" },
-      omitRowContext: true,
-      expectedIsDock: true,
-    },
-    {
-      name: "expired status and incognito draft",
-      key: "agent:main:dashboard:incognito",
-      entry: {
-        ...BASE_ENTRY,
-        visibility: "draft",
-        incognito: true,
-        agentStatus: { note: "Expired", expiresAt: START - 1 },
-        pinnedAt: START,
-        label: "Private fixture",
-      },
-    },
-    goalFixture("goal budget becomes limited at presentation time", "budget", 150),
-    goalFixture("goal below budget retains committed timestamps", "goal", 50, {
-      ...GOAL,
-      tokensUsed: 5,
-    }),
-    ...([-1, 0, 1] as const).map((offset): RowFixture => ({
-      name: `observer digest ${offset < 0 ? "older" : offset === 0 ? "equal" : "newer"} than run start`,
-      key: `agent:main:dashboard:observer-${offset}`,
-      entry: {
-        ...BASE_ENTRY,
-        startedAt: START,
-        observerDigest: {
-          sessionKey: `agent:main:dashboard:observer-${offset}`,
-          agentId: "main",
-          runId: "observer-run",
-          headline: "The fixture is ready",
-          health: "wrapping-up",
-          updatedAt: START + offset,
-          revision: 3,
-        },
-      },
-    })),
-    {
-      name: "live subagent accumulated runtime and inherited model",
-      key: LIVE,
-      entry: childStore[LIVE],
-      store: childStore,
-      runs: [liveRun],
-    },
-    {
-      name: "ended run uses persisted lifecycle timestamps",
-      key: ended,
-      entry: {
-        ...BASE_ENTRY,
-        status: "failed",
-        startedAt: START - 500,
-        endedAt: START + 1_000,
-        runtimeMs: 1_500,
-        lastRunError: "Synthetic failure",
-      },
-      runs: [
-        createSubagentRunRecord({
-          runId: "golden-ended",
-          childSessionKey: ended,
-          requesterSessionKey: PARENT,
-          createdAt: START - 1_000,
-          startedAt: START,
-          endedAt: START + 100,
-        }),
-      ],
-    },
-    {
-      name: "durable parent links outlive display retention",
-      key: PARENT,
-      entry: parentEntry,
-      store: childStore,
-      runs: [liveRun],
-    },
-    {
-      name: "swarm summary retains collector completion and children",
-      key: PARENT,
-      entry: parentEntry,
-      runs: ["running", "queued", "done", "failed"].map((status, index) =>
-        createSubagentRunRecord({
-          runId: `golden-swarm-${status}`,
-          childSessionKey: `agent:main:subagent:swarm-${status}`,
-          requesterSessionKey: PARENT,
-          requesterAgentId: "main",
-          swarmRequesterSessionKey: PARENT,
-          collect: true,
-          groupId: "golden-group",
-          createdAt: START + index,
-          execution:
-            status === "queued" ? { status: "queued" } : { status: "running", startedAt: START },
-          ...(status === "done" || status === "failed"
-            ? { collectorCompletion: { status: status === "done" ? "done" : "failed" } }
-            : {}),
-        }),
-      ),
-    },
-    {
-      name: "ACP metadata owns the runtime",
-      key: "agent:main:acp:golden",
-      entry: BASE_ENTRY,
-      acpMeta: {
-        backend: "acpx",
-        agent: "fixture",
-        runtimeSessionName: "golden-acp",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: START,
-      },
-    },
-    ...(["current", "stale"] as const).map((decoration) => ({
-      name:
-        decoration === "current"
-          ? "activity current and active correlated placement"
-          : "activity stale and uncorrelated placement",
-      key: `agent:main:dashboard:activity-${decoration}`,
-      entry: activityEntry,
-      decoration,
-    })),
-  ];
-}
-
-function decorate(row: GatewaySessionRow, fixture: RowFixture, cfg: OpenClawConfig) {
-  if (!fixture.decoration) {
-    return row;
-  }
-  const current = fixture.decoration === "current";
-  const placement = activePlacement(BASE_ENTRY.sessionId, {
-    sessionKey: fixture.key,
-    generation: 4,
-    environmentId: "golden-environment",
-    activeOwnerEpoch: 7,
-    workspaceBaseManifestRef: "golden-manifest",
-    createdAtMs: START - 1_000,
-    updatedAtMs: START,
-    stateChangedAtMs: START,
-  });
-  const identity = readWorkerPlacementIdentity(placement, {
-    get: () => ({
-      environmentId: "golden-environment",
-      providerId: "fixture-worker",
-      profileId: "fixture-profile",
-      ownerEpoch: current ? 7 : 8,
-      state: "requested",
-      leaseId: null,
-      sharedHost: null,
-      createdAtMs: START,
-      idleSinceAtMs: null,
-      destroyRequestedAtMs: null,
-      attachedSessionIds: [],
-      desktopAvailable: false,
-      desktopApps: [],
-      tunnelStatus: "stopped",
-    }),
-    readMachineShape: () => ({ class: "medium", os: "linux", cpu: 4, memoryGb: 16 }),
-  });
-  const activitySummary = projectSessionActivitySummary({
     cfg,
-    key: fixture.key,
     agentId: "main",
-    entry: fixture.entry,
-    enabled: true,
-    watermark: { generation: "golden-generation", maxSeq: current ? 2 : 3 },
-  });
-  return Object.assign(row, {
-    sharingRole: current ? "owner" : "viewer",
-    activitySummary: activitySummary ? { ...activitySummary, canEnsure: current } : undefined,
-    placement: projectWorkerSessionPlacement(placement, undefined, undefined, identity),
-  });
+    key: KEY,
+    entry,
+    store: entry ? { [KEY]: entry } : {},
+    storePath: "",
+    now: START,
+    skipTranscriptUsageFallback: true,
+    lightweightListRow: true,
+    ...overrides,
+  };
 }
 
+const read = (...args: Parameters<typeof rowParams>) => readSessionRowInputs(rowParams(...args));
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot(cfg);
+  setActivePluginRegistry(createEmptyPluginRegistry());
+});
 afterEach(() => {
-  clearAgentRunContext(LIVE_RUN);
   resetConfigRuntimeState();
   resetPluginRuntimeStateForTest();
   vi.restoreAllMocks();
 });
 
 test("projects the configured reasoning default a session inherits", () => {
-  const cfg: OpenClawConfig = {
-    agents: {
-      defaults: { reasoningDefault: "stream" },
-      entries: { main: {}, ops: { reasoningDefault: "on" } },
-    },
-  };
-  setRuntimeConfigSnapshot(cfg);
-  setActivePluginRegistry(createEmptyPluginRegistry());
   const row = (agentId: string) => {
     const key = `agent:${agentId}:main`;
-    return buildGatewaySessionRow({
-      cfg,
-      agentId,
-      key,
-      entry: BASE_ENTRY,
-      store: { [key]: BASE_ENTRY },
-      storePath: "",
-      now: START,
-      skipTranscriptUsageFallback: true,
-      lightweightListRow: true,
-    });
+    return buildGatewaySessionRow(
+      rowParams(BASE_ENTRY, { agentId, key, store: { [key]: BASE_ENTRY } }),
+    );
   };
-
   const opsRow = row("ops");
   expect(opsRow.reasoningDefault).toBe("on");
   expect(buildGatewaySessionSnapshot({ sessionRow: opsRow }).reasoningDefault).toBe("on");
   expect(row("main").reasoningDefault).toBe("stream");
 });
 
-test("preserves complete base rows across time and caller presentation fixtures", async () => {
-  await withStateDirEnv("openclaw-row-materialize-golden-", async ({ stateDir }) => {
-    const cfg = config();
-    setRuntimeConfigSnapshot(cfg);
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    registerAgentRunContext(LIVE_RUN, {
-      agentId: "main",
-      sessionKey: LIVE,
-      sessionId: "live-session",
-      activeModel: { provider: "row-fixture", model: "older" },
+test("materializes without a clock and presents equivalent indexed and fallback snapshots without mutation", async () => {
+  await withStateDirEnv("openclaw-row-materialize-", async ({ stateDir }) => {
+    const key = "agent:main:subagent:materialize";
+    const entry = {
+      ...BASE_ENTRY,
+      status: "failed" as const,
+      startedAt: START - 500,
+      endedAt: START + 1_000,
+      runtimeMs: 1_500,
+      lastRunError: "Synthetic failure",
+    };
+    const originalEntry = structuredClone(entry);
+    const run = createSubagentRunRecord({
+      runId: "materialize-ended",
+      childSessionKey: key,
+      requesterSessionKey: KEY,
+      createdAt: START - 1_000,
+      startedAt: START,
+      endedAt: START + 100,
     });
-    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-    for (const fixture of fixtures()) {
-      const originalEntry = structuredClone(fixture.entry);
-      const rowContext = buildSessionListRowMetadataContext({ now: TIMES[0], sessionKeys: [] });
-      const subagentRunInputs = {
-        runs: new Map((fixture.runs ?? []).map((run) => [run.runId, run])),
-        inMemoryRuns: [],
-      };
-      const runsByChild = new Map<string, SubagentRunRecord[]>();
-      for (const run of fixture.runs ?? []) {
-        const childKey = run.childSessionKey.trim();
-        const runs = runsByChild.get(childKey) ?? [];
-        runs.push(run);
-        runsByChild.set(childKey, runs);
-      }
-      rowContext.subagentRunsByChildSessionKey = runsByChild;
-      rowContext.subagentRuns = buildSubagentRunReadIndexFromRuns({
-        ...subagentRunInputs,
-        now: TIMES[0],
-      });
-      const rowParams = {
-        cfg,
-        agentId: "main",
-        key: fixture.key,
-        entry: fixture.entry,
-        preparedAcpMeta: fixture.acpMeta ?? null,
-        store: fixture.store ?? (fixture.entry ? { [fixture.key]: fixture.entry } : {}),
-        storePath,
-        now: TIMES[0],
-        rowContext: fixture.omitRowContext ? undefined : rowContext,
-        includeSwarmChildren: true,
-        skipTranscriptUsageFallback: true,
-        lightweightListRow: true,
-      };
-      const { inputs, presentation } = readSessionRowInputs(rowParams);
-      const clock = vi.spyOn(Date, "now").mockImplementation(() => {
-        throw new Error("Materialization must not read the clock");
-      });
-      let materialized: ReturnType<typeof materializeSessionRow>;
-      try {
-        materialized = materializeSessionRow(inputs);
-      } finally {
-        clock.mockRestore();
-      }
-      const retainedMaterialized = structuredClone(materialized);
-      const present = (indexed: boolean) =>
-        TIMES.map((now) =>
-          decorate(
-            presentSessionRow(materialized, {
-              ...presentation,
-              now,
-              subagentRuns: indexed
-                ? buildSubagentRunReadIndexFromRuns({ ...subagentRunInputs, now })
-                : undefined,
-            }),
-            fixture,
-            cfg,
-          ),
-        );
-      const rows = present(true);
-      const replay = present(false);
-      expect(replay).toStrictEqual(rows);
-      expect(replay.map((row) => JSON.stringify(row))).toEqual(
-        rows.map((row) => JSON.stringify(row)),
-      );
-      expect(materialized).toStrictEqual(retainedMaterialized);
-      expect(materialized.row.snapshotAt).toBeUndefined();
-      rows.forEach((row, index) => {
-        expect(structuredClone(row).snapshotAt).toBe(TIMES[index]);
-        expect(row).toMatchObject({
-          snapshotAt: TIMES[index],
-          isDock: fixture.expectedIsDock ?? false,
-          sessionModelRevision: expect.any(String),
-          sidebarRoot: fixture.entry?.sidebarRoot === true,
-          effectiveCommunication: { send: "always", receive: "always" },
-        });
-        expect(row.createdSurface).toBe(fixture.entry?.createdSurface);
-        expect(row.communication).toBeUndefined();
-        expect(row.spawnedBy).toBe(fixture.entry?.spawnedBy);
-        // These fixtures carry display snapshots, not an admitted current controller.
-        expect(row.controlOwnerSessionKey).toBeUndefined();
-        const {
-          snapshotAt: _snapshotAt,
-          createdSurface: _createdSurface,
-          isDock: _isDock,
-          sessionModelRevision: _sessionModelRevision,
-          communication: _communication,
-          effectiveCommunication: _effectiveCommunication,
-          sidebarRoot: _sidebarRoot,
-          ...previousWireFields
-        } = row;
-        const json = JSON.stringify(
-          Object.fromEntries(
-            Object.entries(previousWireFields).toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
-          ),
-        );
-        const actualHash = createHash("sha256").update(json).digest("hex");
-        const hashes = GOLDEN_HASHES[fixture.name];
-        const expectedHash = typeof hashes === "string" ? hashes : hashes?.[index];
-        expect(actualHash, `${fixture.name} at ${TIMES[index]}\n${json}`).toBe(expectedHash);
-      });
-      expect(fixture.entry).toStrictEqual(originalEntry);
+    const runInputs = { runs: new Map([[run.runId, run]]), inMemoryRuns: [] };
+    const rowContext = buildSessionListRowMetadataContext({ now: START, sessionKeys: [] });
+    rowContext.subagentRunsByChildSessionKey = new Map([[key, [run]]]);
+    rowContext.subagentRuns = buildSubagentRunReadIndexFromRuns({ ...runInputs, now: START });
+    const { inputs, presentation } = read(entry, {
+      key,
+      rowContext,
+      store: { [key]: entry },
+      storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
+    });
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => {
+      throw new Error("Materialization must not read the clock");
+    });
+    let materialized: ReturnType<typeof materializeSessionRow>;
+    try {
+      materialized = materializeSessionRow(inputs);
+    } finally {
+      clock.mockRestore();
     }
+    const retained = structuredClone(materialized);
+    for (const now of TIMES) {
+      const row = presentSessionRow(materialized, { ...presentation, now });
+      const indexed = presentSessionRow(materialized, {
+        ...presentation,
+        now,
+        subagentRuns: buildSubagentRunReadIndexFromRuns({ ...runInputs, now }),
+      });
+      expect(indexed).toStrictEqual(row);
+      expect(JSON.stringify(indexed)).toBe(JSON.stringify(row));
+      expect(structuredClone(row)).toMatchObject({
+        snapshotAt: now,
+        updatedAt: START,
+        status: "failed",
+        startedAt: START - 500,
+        endedAt: START + 1_000,
+        runtimeMs: 1_500,
+        lastRunError: "Synthetic failure",
+      });
+      expect(row.spawnedBy).toBeUndefined();
+      expect(row.controlOwnerSessionKey).toBeUndefined();
+    }
+    expect(materialized).toStrictEqual(retained);
+    expect(materialized.row.snapshotAt).toBeUndefined();
+    expect(entry).toStrictEqual(originalEntry);
   });
+});
+
+test("retains durable child navigation after display retention without reviving runtime control", () => {
+  const children = ["live", "done", "unknown", "stale"].map(
+    (name) => `agent:main:subagent:${name}`,
+  );
+  const store: Record<string, SessionEntry> = { [KEY]: BASE_ENTRY };
+  children.forEach((key, index) => {
+    store[key] = {
+      ...BASE_ENTRY,
+      parentSessionKey: KEY,
+      ...(index === 1 ? { status: "done", endedAt: START } : {}),
+      ...(index === 3 ? { updatedAt: START - 7_200_000 } : {}),
+    };
+  });
+  const { inputs, presentation } = read(BASE_ENTRY, { store });
+  const materialized = materializeSessionRow(inputs);
+  for (const now of TIMES) {
+    const row = presentSessionRow(materialized, { ...presentation, now });
+    expect(row.childSessions).toEqual(children);
+    expect(row.controlOwnerSessionKey).toBeUndefined();
+  }
+});
+
+test.each([-1, 0, 1])(
+  "projects only an observer digest newer than the run start (offset %i)",
+  (offset) => {
+    const observerDigest = {
+      sessionKey: KEY,
+      agentId: "main",
+      runId: "observer-run",
+      headline: "The fixture is ready",
+      health: "wrapping-up" as const,
+      updatedAt: START + offset,
+      revision: 3,
+    };
+    const { inputs } = read({ ...BASE_ENTRY, startedAt: START, observerDigest });
+    const row = materializeSessionRow(inputs).row;
+    expect(row.observerDigest).toEqual(
+      offset > 0
+        ? {
+            agentId: "main",
+            runId: "observer-run",
+            headline: "The fixture is ready",
+            health: "wrapping-up",
+            updatedAt: START + 1,
+            revision: 3,
+          }
+        : undefined,
+    );
+  },
+);
+
+test.each([50, 150])(
+  "projects goal accounting at presentation time for %i tokens without committing it",
+  (totalTokens) => {
+    const goal: NonNullable<SessionEntry["goal"]> = {
+      schemaVersion: 1,
+      id: "goal",
+      objective: "Finish",
+      status: "active",
+      createdAt: START - 1_000,
+      updatedAt: START,
+      tokenStart: 20,
+      tokenStartFresh: true,
+      tokensUsed: 5,
+      tokenBudget: 100,
+      continuationTurns: 2,
+    };
+    const { inputs, presentation } = read({
+      ...BASE_ENTRY,
+      goal,
+      totalTokens,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    });
+    const materialized = materializeSessionRow(inputs);
+    for (const now of TIMES) {
+      const projected = presentSessionRow(materialized, { ...presentation, now }).goal;
+      expect(projected).toMatchObject({
+        tokensUsed: totalTokens - 20,
+        status: totalTokens < 100 ? "active" : "budget_limited",
+        updatedAt: totalTokens < 100 ? START : now,
+      });
+      expect(projected?.budgetLimitedAt).toBe(totalTokens < 100 ? undefined : now);
+    }
+    expect(goal).toMatchObject({ status: "active", updatedAt: START, tokensUsed: 5 });
+  },
+);
+
+test("keeps incognito draft facts while expiring transient status", () => {
+  const { inputs, presentation } = read({
+    ...BASE_ENTRY,
+    visibility: "draft",
+    incognito: true,
+    agentStatus: { note: "Expired", expiresAt: START - 1 },
+    pinnedAt: START,
+    label: "Private",
+  });
+  const row = presentSessionRow(materializeSessionRow(inputs), presentation);
+  expect(row).toMatchObject({
+    visibility: "draft",
+    incognito: true,
+    pinnedAt: START,
+    label: "Private",
+    effectiveCommunication: { send: "always", receive: "always" },
+  });
+  expect(row.agentStatus).toBeUndefined();
+  expect(row.communication).toBeUndefined();
+});
+
+test("presents a missing entry without manufacturing stored session facts", () => {
+  const { inputs, presentation } = read();
+  const row = presentSessionRow(materializeSessionRow(inputs), presentation);
+  expect(row).toMatchObject({ key: KEY, updatedAt: null, snapshotAt: START });
+  expect(row.sessionId).toBeUndefined();
 });

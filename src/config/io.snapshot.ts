@@ -1,3 +1,4 @@
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
@@ -41,7 +42,6 @@ import {
 } from "./io.snapshot-preparation.js";
 import type { ValidationRequest } from "./io.snapshot-preparation.types.js";
 import {
-  collectInvalidConfigLegacyIssues,
   createConfigFileSnapshot,
   finalizeReadConfigSnapshotInternalResult,
 } from "./io.snapshot-shared.js";
@@ -55,12 +55,17 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
-import { findLegacyConfigIssues } from "./legacy.js";
+import { captureConfigFileWritePathProof } from "./io.write-safety.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
-import { createConfigWriteAuthorityGuard } from "./write-authority.js";
+import {
+  composeConfigWriteAssertions,
+  createConfigWriteAuthorityGuard,
+} from "./write-authority.js";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
+
+let legacyIssuesModule: Promise<typeof import("./io.legacy-issues.runtime.js")> | undefined;
 
 type InternalReadOptions = {
   prepareValidation?: "runtime" | "strict";
@@ -298,14 +303,14 @@ async function readConfigSnapshot(
       const preparePluginDiagnostics = availableSnapshot
         ? undefined
         : () => preparePluginMetadataMachineStateAsync({ env: deps.env });
-      const collect = () =>
-        context.options.pluginValidation === "core-only"
-          ? findLegacyConfigIssues(effectiveConfigRaw, effectiveParsed)
-          : collectInvalidConfigLegacyIssues(
-              effectiveConfigRaw,
-              effectiveParsed,
-              preparePluginDiagnostics,
-            );
+      const collect = async () => {
+        const { collectInvalidConfigLegacyIssues } = await (legacyIssuesModule ??=
+          import("./io.legacy-issues.runtime.js"));
+        return collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed, {
+          coreOnly: context.options.pluginValidation === "core-only",
+          preparePluginDiagnostics,
+        });
+      };
       const legacyIssues = await deps.measure("config.snapshot.read.legacy-issues", () =>
         availableSnapshot
           ? withPluginMetadataSnapshotScope(availableSnapshot, collect, {
@@ -480,6 +485,7 @@ export async function prepareConfigRecoveryFromContext(
     );
     const plan = await prepareSuspiciousConfigRead({
       deps: previewContext.deps,
+      measure: previewContext.deps.measure,
       configPath: context.configPath,
       raw: current.raw,
       parsed: current.parsed,
@@ -567,13 +573,24 @@ export async function readConfigFileSnapshotForWriteFromContext(
   context: ConfigIoContext,
   options: Pick<ConfigSnapshotReadOptions, "observe"> = {},
 ): Promise<ReadConfigFileSnapshotForWriteResult> {
-  const assertConfigPathForWrite = () => {
+  const assertConfigSelection = () => {
     if (resolveConfigPathForDeps(context.deps) !== context.configPath) {
       throw new ConfigMutationConflictError("config path changed since last load", {
         retryable: false,
       });
     }
   };
+  assertConfigSelection();
+  // Reads may follow file aliases; the writer separately pins its publication target.
+  const pathProof = captureConfigFileWritePathProof(
+    context.configPath,
+    resolvePathViaExistingAncestorSync(context.configPath),
+    context.deps.fs,
+  );
+  const assertConfigPathForWrite = composeConfigWriteAssertions(
+    assertConfigSelection,
+    pathProof.assertCurrent,
+  );
   assertConfigPathForWrite();
   // Per-call observation policy must not recapture the factory's path or environment.
   const readContext =

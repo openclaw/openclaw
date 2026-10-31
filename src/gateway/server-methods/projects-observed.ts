@@ -9,6 +9,7 @@ import { managedWorktrees } from "../../agents/worktrees/service.js";
 import type { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import type { startProjectsListDiagnostics } from "./projects-list-diagnostics.js";
+import { ProjectListingChangedError } from "./projects-session-store.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type ProjectCandidate = {
@@ -163,6 +164,7 @@ export async function listObservedProjects(
   client: Parameters<GatewayRequestHandlers["projects.list"]>[0]["client"],
   store: Awaited<ReturnType<typeof loadCombinedSessionStoreForGatewayCoreAsync>>["store"],
   diagnostics?: ReturnType<typeof startProjectsListDiagnostics>,
+  readMembership?: (key: string) => ReadonlySet<string> | undefined,
 ) {
   diagnostics?.mark("worktreeRegistry");
   const worktrees = await managedWorktrees.listRegistryRecords();
@@ -170,9 +172,15 @@ export async function listObservedProjects(
   const cfg = context.getRuntimeConfig();
   const rawCandidates: RawProjectCandidate[] = [];
   const visibilityFilter = createSessionListEntryFilter({ client, cfg });
+  const isVisible = (key: string) =>
+    createSessionListEntryFilter({
+      client,
+      cfg: context.getRuntimeConfig(),
+      membership: readMembership?.(key),
+    })?.(key, store[key]!) !== false;
   const canSeeAll = !visibilityFilter;
   for (const [sessionKey, entry] of Object.entries(store)) {
-    if (visibilityFilter && !visibilityFilter(sessionKey, entry)) {
+    if (visibilityFilter && !isVisible(sessionKey)) {
       continue;
     }
     const checkoutPath = entry.execCwd?.trim();
@@ -195,7 +203,7 @@ export async function listObservedProjects(
       // visibility policy that admitted the session also owns its managed checkout.
       const ownerId = worktree.ownerKind === "session" ? worktree.ownerId?.trim() : undefined;
       const ownerEntry = ownerId ? store[ownerId] : undefined;
-      if (!ownerId || !ownerEntry || !visibilityFilter?.(ownerId, ownerEntry)) {
+      if (!ownerId || !ownerEntry || !isVisible(ownerId)) {
         continue;
       }
     }
@@ -254,11 +262,8 @@ export async function listObservedProjects(
     usedSessions,
     assertCurrent() {
       const currentFilter = createSessionListEntryFilter({ client, cfg });
-      if (
-        currentFilter &&
-        (canSeeAll || [...usedSessions].some((key) => !currentFilter(key, store[key]!)))
-      ) {
-        throw new Error("Project access changed while preparing the listing. Retry the request.");
+      if (currentFilter && (canSeeAll || [...usedSessions].some((key) => !isVisible(key)))) {
+        throw new ProjectListingChangedError();
       }
     },
   };

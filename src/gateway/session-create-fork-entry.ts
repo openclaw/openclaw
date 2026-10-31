@@ -1,5 +1,4 @@
 import { cliBackendSupportsSessionFork } from "../agents/cli-backends.js";
-import { buildMainSessionRecoveryClearPatch } from "../agents/main-session-recovery/main-session-recovery-clear.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { forkCliSessionBindings } from "../config/sessions/cli-session-binding.js";
 
@@ -9,10 +8,9 @@ export function buildForkedGatewaySessionEntry(
   parent: { sessionKey: string; entry: SessionEntry },
   previousEntry?: SessionEntry,
 ): SessionEntry {
-  // Replacing the transcript identity also replaces the recovery episode owned by the old row.
   return {
     ...entry,
-    ...buildMainSessionRecoveryClearPatch(entry),
+    resumeAfterRestart: undefined,
     sessionId: fork.sessionId,
     lifecycleRunId: undefined,
     lastRunId: undefined,

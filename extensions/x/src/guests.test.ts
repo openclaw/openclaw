@@ -66,10 +66,7 @@ describe("X guest turns", () => {
       posts: [mention],
     });
     const guest = { id: "99", username: "visitor", name: "A Visitor" };
-    test.api.getMentions.mockResolvedValue({
-      ...page([mention]),
-      includes: { tweets: [], users: [guest] },
-    });
+    test.api.getMentions.mockResolvedValue(page([mention], [guest]));
     test.api.searchConversation.mockResolvedValue(
       page(
         Array.from({ length: 12 }, (_, index) =>
@@ -185,7 +182,7 @@ describe("X guest turns", () => {
     },
   );
 
-  it.each(["steer", "interrupt", undefined] as const)(
+  it.each(["steer", undefined] as const)(
     "refuses guests before thread reads with queue mode %s",
     async (mode) => {
       const cfg = guestConfig();

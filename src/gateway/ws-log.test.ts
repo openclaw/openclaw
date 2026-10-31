@@ -1,10 +1,17 @@
 import fs from "node:fs";
+import { threadId } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
+import {
+  withDevicePairingLock,
+  withDevicePairingWaitObservation,
+  type DevicePairingWaitObservation,
+} from "../infra/device-pairing-lock.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
 import { loggingState } from "../logging/state.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   formatForLog,
   logWs,
@@ -63,17 +70,6 @@ function timedTraffic(style: Parameters<typeof setLogStyle>[0], consoleLevel: "d
   };
 }
 
-function logPrivateEvent(payload: Parameters<typeof summarizeAgentEventForWsLog>[0]) {
-  setLogStyle("full");
-  setLoggerOverride({ level: "silent", consoleLevel: "info" });
-  const output = captureConsole();
-  const summary = summarizeAgentEventForWsLog(payload);
-  logWs("out", "event", { event: "agent", ...summary });
-  expect(output).toHaveBeenCalled();
-  expect(JSON.stringify(output.mock.calls)).not.toContain("synthetic-private-content");
-  return { summary, output };
-}
-
 function shouldLogWs(direction: "in" | "out", kind: string): boolean {
   let admitted = false;
   logWs(direction, kind, () => {
@@ -91,6 +87,45 @@ afterEach(() => {
   resetLogger();
   vi.restoreAllMocks();
 });
+
+test.each([999, 1_000])(
+  "attributes a held pairing writer only in a slow connect log (%i ms)",
+  async (waitMs) => {
+    setLogStyle("full");
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const output = captureConsole();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const writer = withDevicePairingLock(async () => {
+      entered.resolve();
+      await release.promise;
+    }, "devicePairing.rotateToken");
+    await entered.promise;
+    clock.mockReturnValue(1_500);
+    const frame = { connId: "pairing-holder", id: `wait-${waitMs}`, method: "connect" };
+    logWs("in", "req", frame);
+    const observation: DevicePairingWaitObservation = {};
+    const waiter = withDevicePairingWaitObservation(observation, () =>
+      withDevicePairingLock(async () => {}, "devicePairing.ensureToken"),
+    );
+    clock.mockReturnValue(1_500 + waitMs);
+    release.resolve();
+    await Promise.all([writer, waiter]);
+    logWs("out", "res", { ...frame, ok: true, pairingLockWait: observation.longestWait });
+    const message = output.mock.calls.at(-1)?.[0];
+    if (waitMs === 999) {
+      expect(message).not.toContain("pairingLockWait");
+    } else {
+      expect(message).toContain(
+        `pairingLockWait=${JSON.stringify({
+          waitMs: 1_000,
+          holderAtEnqueue: { operation: "devicePairing.rotateToken", threadId, heldMs: 500 },
+        })}`,
+      );
+    }
+  },
+);
 
 test("keeps failures and one-second responses at info while retaining successful traffic at debug", async () => {
   const output = captureConsole();
@@ -143,7 +178,6 @@ test.each([
   ["compact", "compact"],
   ["dashboard", "dashboard"],
   ["sidebar", "sidebar"],
-  [undefined, "full"],
   ["unrecognized caller value", "full"],
 ])("reports session row mode %s as %s", (rowMode, expected) => {
   expect(summarizeSessionListForWsLog({ source: "sidebar", rowMode })).toMatchObject({
@@ -243,12 +277,9 @@ test("formatForLog walks cause chain so the underlying error is not hidden (open
 
   const out = formatForLog(top);
 
-  expect(out).toMatch(/AcpRuntimeError/);
-  expect(out).toMatch(/ACP_TURN_FAILED/);
-  expect(out).toMatch(/Agent does not support session\/close/);
-  expect(out).toMatch(/Method not found/);
-  expect(out).toMatch(/nes\/close/);
-  expect(out).toMatch(/-32601/);
+  expect(out).toMatch(
+    /AcpRuntimeError.*ACP_TURN_FAILED.*Agent does not support session\/close.*Method not found.*nes\/close.*-32601/,
+  );
 });
 
 test("formatForLog caps cause-chain depth so a self-referential cause cannot loop", () => {
@@ -287,7 +318,10 @@ test.each([
   const incognito = scope === "incognito";
   const marker = "synthetic-private-content";
   const privateData = { text: marker, meta: marker, error: marker, reason: marker };
-  const { summary, output } = logPrivateEvent({
+  setLogStyle("full");
+  setLoggerOverride({ level: "silent", consoleLevel: "info" });
+  const output = captureConsole();
+  const summary = summarizeAgentEventForWsLog({
     runId: incognito ? "private-run" : "12345678-1234-1234-1234-123456789abc",
     sessionKey: incognito ? "agent:main:dashboard:incognito-synthetic" : "agent:main:thread-1",
     stream,
@@ -304,6 +338,9 @@ test.each([
           mediaUrls: ["a", "b"],
         },
   });
+  logWs("out", "event", { event: "agent", ...summary });
+  expect(output).toHaveBeenCalled();
+  expect(JSON.stringify(output.mock.calls)).not.toContain(marker);
   const expectedSummary = {
     run: incognito ? "private-run" : "12345678…9abc",
     agent: "main",

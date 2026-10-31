@@ -342,7 +342,6 @@ export async function compactEmbeddedAgentSessionDirect(
                 .map((candidate) => ({
                   provider: candidate.provider,
                   modelId: candidate.model,
-                  runtime: selected.boundHarnessRuntime,
                   agentId: requestedAgentIds.sessionAgentId,
                 })),
             ];
@@ -472,11 +471,12 @@ export async function compactEmbeddedAgentSessionDirect(
               ...params,
               provider,
               model,
+              agentHarnessId: isPrimaryCandidate ? params.agentHarnessId : undefined,
               requestedRouteResolution: isPrimaryCandidate ? undefined : "resolved",
               authProfileId,
               authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
               // The primary attempt retains its already prepared atomic plan. An
-              // actual fallback may change route/auth class and must rebuild it.
+              // actual fallback may change runtime/auth class and must rebuild it.
               runtimeAuthPlan: isPrimaryCandidate ? params.runtimeAuthPlan : undefined,
               runtimePlan: isPrimaryCandidate ? params.runtimePlan : undefined,
             });
@@ -484,10 +484,12 @@ export async function compactEmbeddedAgentSessionDirect(
         });
         return fallbackResult.result;
       };
-      return await withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
-        owner.captureContext();
-        return compactPrepared();
-      });
+      return await preparedModelRuntimeLease.run(() =>
+        withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
+          owner.captureContext();
+          return compactPrepared();
+        }),
+      );
     } catch (err) {
       return buildCompactionFailureResult(
         isFallbackSummaryError(err) ? err.message : formatErrorMessage(err),

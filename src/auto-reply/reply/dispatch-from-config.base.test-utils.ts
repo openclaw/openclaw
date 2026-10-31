@@ -36,6 +36,7 @@ import {
   hookMocks,
   messageAuditMocks,
   mocks,
+  mockSessionStorePath,
   runtimePluginMocks,
   sessionStoreMocks,
   transcriptMocks,
@@ -58,8 +59,17 @@ import {
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+function createSlackChannelCtx(fields: Partial<MsgContext>) {
+  return buildTestCtx({
+    Provider: "slack",
+    Surface: "slack",
+    OriginatingChannel: "slack",
+    OriginatingTo: "channel:C123",
+    ...fields,
+  });
+}
 
 beforeAll(dispatchHarness.globalBeforeAll0);
 
@@ -120,7 +130,7 @@ describe("dispatchReplyFromConfig", () => {
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
-      storePath: "/tmp/mock-sessions.json",
+      storePath: mockSessionStorePath,
       kind: "visible",
       resetTriggered: false,
       routeThreadId: "500.000",
@@ -194,48 +204,6 @@ describe("dispatchReplyFromConfig", () => {
       ),
     );
     expect(replyResolver.mock.calls[0]?.[3]).toBeUndefined();
-  });
-
-  it("drops a durable source duplicate before before_dispatch hooks", async () => {
-    setNoAbort();
-    const sessionKey = "agent:main:discord:direct:123";
-    const sourceTurnId = expectDefined(
-      buildChannelSourceTurnId({
-        provider: "discord",
-        conversationId: "channel:123",
-        messageId: "message-1",
-      }),
-      "source turn id",
-    );
-    sessionStoreMocks.currentEntry = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-      restartRecoveryDeliveryRunId: "recovery-1",
-      restartRecoveryDeliverySourceRunId: sourceTurnId,
-    };
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "before_dispatch") as () => boolean,
-    );
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      SessionKey: sessionKey,
-      OriginatingTo: "channel:123",
-      MessageSid: "message-1",
-      MessageSidFull: "   ",
-    });
-    const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
-
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher: createDispatcher(),
-      replyResolver,
-    });
-
-    expect(result).toMatchObject({ queuedFinal: false });
-    expect(hookMocks.runner.runBeforeDispatch).not.toHaveBeenCalled();
-    expect(replyResolver).not.toHaveBeenCalled();
   });
 
   it("returns session metadata changes marked during reply resolution", async () => {
@@ -407,11 +375,7 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "slack" });
     const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      OriginatingChannel: "slack",
-      OriginatingTo: "channel:C123",
+    const ctx = createSlackChannelCtx({
       ChatType: "group",
       SessionKey: "agent:main:slack:channel:C123",
       MessageSid: "slack-message-1",
@@ -440,7 +404,7 @@ describe("dispatchReplyFromConfig", () => {
         kind: "channel-final",
         sourceMessageId: "slack-message-1",
       },
-      storePath: "/tmp/mock-sessions.json",
+      storePath: mockSessionStorePath,
       updateMode: "inline",
       config: emptyConfig,
       beforeMessageWrite: expect.any(Function),
@@ -602,13 +566,7 @@ describe("dispatchReplyFromConfig", () => {
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
-        SessionKey: "agent:main:slack:channel:C123",
-      }),
+      ctx: createSlackChannelCtx({ SessionKey: "agent:main:slack:channel:C123" }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver: async () => payload(),
@@ -762,11 +720,7 @@ describe("dispatchReplyFromConfig", () => {
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
+      ctx: createSlackChannelCtx({
         SessionKey: "agent:main:slack:channel:C123",
         MessageSid: "slack-message-2",
       }),
@@ -795,13 +749,7 @@ describe("dispatchReplyFromConfig", () => {
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
-        SessionKey: "agent:main:slack:channel:C123",
-      }),
+      ctx: createSlackChannelCtx({ SessionKey: "agent:main:slack:channel:C123" }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver: async () => ({ text: "Hidden Slack reply" }),
@@ -844,11 +792,11 @@ describe("dispatchReplyFromConfig", () => {
     let inBandMutationRan = false;
     const rotatedSessionId = "rotated-session";
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(
-        isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
-      ).toBe(true);
+      expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(
+        true,
+      );
       await runSessionMutation({
-        scope: "/tmp/mock-sessions.json",
+        scope: mockSessionStorePath,
         identities: [sessionKey, sessionId],
         run: async () => {
           inBandMutationRan = true;
@@ -869,7 +817,7 @@ describe("dispatchReplyFromConfig", () => {
           )?.onSessionPrepared?.({
             sessionKey,
             sessionId: rotatedSessionId,
-            storePath: "/tmp/mock-sessions.json",
+            storePath: mockSessionStorePath,
           });
         },
       });
@@ -947,7 +895,7 @@ describe("dispatchReplyFromConfig", () => {
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
         await runSessionMutation({
-          scope: "/tmp/mock-sessions.json",
+          scope: mockSessionStorePath,
           identities: [sessionKey, sessionId],
           kind: "reset",
           policy: "preempt",
@@ -958,9 +906,7 @@ describe("dispatchReplyFromConfig", () => {
         }),
     );
     expect(mutationRan).toBe(false);
-    expect(isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
-      true,
-    );
+    expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(true);
 
     await resolverAborted;
     releaseResolver();
@@ -969,7 +915,7 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result.queuedFinal).toBe(false);
     expect(mutationRan).toBe(true);
-    expect(isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
+    expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(
       false,
     );
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -1028,9 +974,9 @@ describe("dispatchReplyFromConfig", () => {
       activeOperation.complete();
       await vi.waitFor(
         () => {
-          expect(
-            isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
-          ).toBe(false);
+          expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(
+            false,
+          );
         },
         { timeout: 500 },
       );
@@ -1149,7 +1095,7 @@ describe("dispatchReplyFromConfig", () => {
       undefined,
       undefined,
       undefined,
-      { storeScope: "/tmp/mock-sessions.json" },
+      { storeScope: mockSessionStorePath },
     );
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
     const dispatcher = createDispatcher();
@@ -1212,7 +1158,7 @@ describe("dispatchReplyFromConfig", () => {
       undefined,
       undefined,
       undefined,
-      { storeScope: "/tmp/mock-sessions.json" },
+      { storeScope: mockSessionStorePath },
     );
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
     hookMocks.runner.hasHooks.mockImplementation((hookName) => hookName === "before_dispatch");

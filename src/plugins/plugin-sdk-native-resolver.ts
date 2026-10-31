@@ -62,6 +62,7 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
       ["types", "types.ts"],
       ["validation", "validation.ts"],
       ["internal/anthropic", path.join("internal", "anthropic.ts")],
+      ["internal/google", path.join("internal", "google.ts")],
       ["internal/google-model-family", path.join("internal", "google-model-family.ts")],
       ["internal/openai", path.join("internal", "openai.ts")],
       [
@@ -380,9 +381,7 @@ function installResolver(): void {
           const filename = fileURLToPath(resolved.url);
           const sdkTarget = isPluginSdkAliasSpecifier(specifier)
             ? aliasTarget
-            : Array.from(getPluginCache().sdk.contexts.values()).some(({ sdkRoots }) =>
-                  sdkRoots.includes(path.dirname(filename)),
-                )
+            : getPluginCache().sdk.roots.has(path.dirname(filename))
               ? resolveAliasTargetForParentUrl(
                   `openclaw/plugin-sdk/${path.basename(filename, path.extname(filename))}`,
                   context.parentURL,

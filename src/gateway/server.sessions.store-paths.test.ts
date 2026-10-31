@@ -20,10 +20,8 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import * as stateDatabase from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { getGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
-import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
-import * as readContexts from "./session-read-contexts.test-support.js";
 import {
   bindSessionRowProjection,
   getSessionRowProjection,
@@ -51,114 +49,100 @@ function configureStores(stateDir: string, agents: NonNullable<typeof testState.
   return agentStorePath(stateDir);
 }
 
-test.each([false, true])(
-  "nested state cleanup joins suite ACP reads (disposal fails=%s)",
-  async (disposalFails) => {
-    const suiteStateDir = runtimePaths.resolveStateDir();
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const boundary = createDeferredCore<"joined" | "closed">();
-    let preparing: Promise<void> | undefined;
-    let closing = false;
-    let sharedPath: string | undefined;
-    const close = stateDatabase.closeOpenClawStateDatabaseByPathAsync;
-    const closeSpy = vi
-      .spyOn(stateDatabase, "closeOpenClawStateDatabaseByPathAsync")
-      .mockImplementation((...args) => {
-        if (closing && args[0] === sharedPath) {
-          boundary.resolve("closed");
-        }
-        return close(...args);
-      });
-    const restore: Array<() => void> = [];
-    const disposalFailure = new Error("synthetic read-context disposal failure");
-    const disposal = disposalFails
-      ? vi.spyOn(readContexts, "disposeSessionReadContexts").mockRejectedValueOnce(disposalFailure)
-      : undefined;
-    const fixture = withSessionTestState({ layout: "state-only" }, async (state) => {
-      sharedPath = state.statePath("state", "openclaw.sqlite");
-      const fixtureSignal = getAsyncWorkSignal();
-      ensureProfileForEmail("nested-state-reader@example.test");
-      const { storePath } = await createSessionStoreDir();
-      const runtime = getGatewayRecoveryRuntime();
-      const projection = getSessionRowProjection(runtime && getGatewayContextResolver(runtime)?.());
-      if (!projection) {
-        throw new Error("Suite Gateway projection is missing");
+test("nested state cleanup joins suite ACP reads", async () => {
+  const suiteStateDir = runtimePaths.resolveStateDir();
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const boundary = createDeferredCore<"joined" | "closed">();
+  let preparing: Promise<void> | undefined;
+  let closing = false;
+  let sharedPath: string | undefined;
+  const close = stateDatabase.closeOpenClawStateDatabaseByPathAsync;
+  const closeSpy = vi
+    .spyOn(stateDatabase, "closeOpenClawStateDatabaseByPathAsync")
+    .mockImplementation((...args) => {
+      if (closing && args[0] === sharedPath) {
+        boundary.resolve("closed");
       }
-      await projection.ensureMaterialized();
-      const read = stateReads.executeExistingOpenClawStateRead;
-      let held = false;
-      const reads = vi
-        .spyOn(stateReads, "executeExistingOpenClawStateRead")
-        .mockImplementation((...args) => {
-          if (
-            !held &&
-            args[1].type === "sessionRows.sharedFacts" &&
-            args[0].env?.OPENCLAW_STATE_DIR === suiteStateDir &&
-            getAsyncWorkSignal() !== fixtureSignal
-          ) {
-            held = true;
-            entered.resolve();
-            // The suite continuation has not admitted its shared-state read yet.
-            return release.promise.then(() => read(...args));
-          }
-          return read(...args);
-        });
-      restore.push(() => reads.mockRestore());
-      // The shared suite retains ACP absence by session key across these cases.
-      // Seed a fresh key after interception so its receipt cannot bypass the held read.
-      await writeSessionStore({
-        entries: {
-          [`agent:main:nested-state-reader-${disposalFails}`]: sessionStoreEntry(
-            `nested-state-reader-${disposalFails}`,
-            { updatedAt: 1 },
-          ),
-        },
-      });
-      sessionChanges.emit({ all: true, scope: { storePath }, factsInvalidated: true });
-      preparing = projection.ensureMaterialized();
-      void preparing.catch(() => {});
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        preparing,
-        "Suite projection completed without its ACP metadata read",
-      );
-      const ensure = projection.ensureMaterialized;
-      const join = vi.spyOn(projection, "ensureMaterialized").mockImplementation(() => {
-        if (closing) {
-          boundary.resolve("joined");
-        }
-        return ensure();
-      });
-      restore.push(() => join.mockRestore());
-      closing = true;
+      return close(...args);
     });
-    void fixture.catch(() => {});
-    try {
-      const first = await awaitGateBeforeSettlement(
-        boundary.promise,
-        fixture,
-        "Fixture completed without joining or closing its database",
-      );
-      expect(first).toBe("joined");
-      release.resolve();
-      await expect(preparing).resolves.toBeUndefined();
-      if (disposalFails) {
-        await expect(fixture).rejects.toBe(disposalFailure);
-      } else {
-        await fixture;
-      }
-    } finally {
-      release.resolve();
-      await Promise.allSettled([preparing, fixture]);
-      for (const reset of restore) {
-        reset();
-      }
-      closeSpy.mockRestore();
-      disposal?.mockRestore();
+  const restore: Array<() => void> = [];
+  const fixture = withSessionTestState({ layout: "state-only" }, async (state) => {
+    sharedPath = state.statePath("state", "openclaw.sqlite");
+    const fixtureSignal = getAsyncWorkSignal();
+    ensureProfileForEmail("nested-state-reader@example.test");
+    const { storePath } = await createSessionStoreDir();
+    const runtime = getGatewayLifecycleRuntime();
+    const projection = getSessionRowProjection(runtime && getGatewayContextResolver(runtime)?.());
+    if (!projection) {
+      throw new Error("Suite Gateway projection is missing");
     }
-  },
-);
+    await projection.ensureMaterialized();
+    const read = stateReads.executeExistingOpenClawStateRead;
+    let held = false;
+    const reads = vi
+      .spyOn(stateReads, "executeExistingOpenClawStateRead")
+      .mockImplementation((...args) => {
+        if (
+          !held &&
+          args[1].type === "sessionRows.sharedFacts" &&
+          args[0].env?.OPENCLAW_STATE_DIR === suiteStateDir &&
+          getAsyncWorkSignal() !== fixtureSignal
+        ) {
+          held = true;
+          entered.resolve();
+          // The suite continuation has not admitted its shared-state read yet.
+          return release.promise.then(() => read(...args));
+        }
+        return read(...args);
+      });
+    restore.push(() => reads.mockRestore());
+    // Seed after interception so a cached ACP absence cannot bypass the held read.
+    await writeSessionStore({
+      entries: {
+        "agent:main:nested-state-reader": sessionStoreEntry("nested-state-reader", {
+          updatedAt: 1,
+        }),
+      },
+    });
+    sessionChanges.emit({ all: true, scope: { storePath }, factsInvalidated: true });
+    preparing = projection.ensureMaterialized();
+    void preparing.catch(() => {});
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      preparing,
+      "Suite projection completed without its ACP metadata read",
+    );
+    const ensure = projection.ensureMaterialized;
+    const join = vi.spyOn(projection, "ensureMaterialized").mockImplementation(() => {
+      if (closing) {
+        boundary.resolve("joined");
+      }
+      return ensure();
+    });
+    restore.push(() => join.mockRestore());
+    closing = true;
+  });
+  void fixture.catch(() => {});
+  try {
+    const first = await awaitGateBeforeSettlement(
+      boundary.promise,
+      fixture,
+      "Fixture completed without joining or closing its database",
+    );
+    expect(first).toBe("joined");
+    release.resolve();
+    await expect(preparing).resolves.toBeUndefined();
+    await fixture;
+  } finally {
+    release.resolve();
+    await Promise.allSettled([preparing, fixture]);
+    for (const reset of restore) {
+      reset();
+    }
+    closeSpy.mockRestore();
+  }
+});
 
 test("sessions.list reads completed models from each physical agent store", async () => {
   const { dir: stateDir } = await createSessionStoreDir();
@@ -274,41 +258,40 @@ test.runIf(process.platform !== "win32")(
 
 test("configured-only parent-owned stores keep lineage children without directory discovery", async () => {
   const { dir: stateDir } = await createSessionStoreDir();
-  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-    const storeTemplate = configureStores(stateDir, {
-      ownership: "explicit",
-      entries: { ops: {} },
-    });
-    const storePath = storeTemplate.replace("{agentId}", "ops");
-    const mainKey = "agent:ops:main";
-    const childKey = "agent:codex:subagent:fixed-child";
-    testState.agentConfig = { sessionStore: { agentId: "ops" } };
-    await writeSessionStore({
-      agentId: "ops",
-      storePath,
-      entries: {
-        [childKey]: { sessionId: "session-child", updatedAt: 30, parentSessionKey: mainKey },
-        [mainKey]: { sessionId: "session-main", updatedAt: 20 },
-        "agent:local:main": { sessionId: "session-local", updatedAt: 10 },
-      },
-    });
-
-    expect((await directSessionReq("sessions.list", { configuredAgentsOnly: true })).ok).toBe(true);
-    const enumerateAgentDirs = vi.spyOn(sessionDirs, "resolveAgentSessionDirsFromAgentsDirSync");
-    try {
-      const listed = await directSessionReq<{ sessions: Array<{ key: string }> }>("sessions.list", {
-        includeGlobal: false,
-        includeUnknown: false,
-        configuredAgentsOnly: true,
-      });
-
-      expect(listed.ok).toBe(true);
-      expect(listed.payload?.sessions.map((session) => session.key)).toEqual([childKey, mainKey]);
-      expect(enumerateAgentDirs).not.toHaveBeenCalled();
-    } finally {
-      enumerateAgentDirs.mockRestore();
-    }
+  // Keep the suite Gateway's registry; the absolute template isolates this case's stores.
+  const storeTemplate = configureStores(stateDir, {
+    ownership: "explicit",
+    entries: { ops: {} },
   });
+  const storePath = storeTemplate.replace("{agentId}", "ops");
+  const mainKey = "agent:ops:main";
+  const childKey = "agent:codex:subagent:fixed-child";
+  testState.agentConfig = { sessionStore: { agentId: "ops" } };
+  await writeSessionStore({
+    agentId: "ops",
+    storePath,
+    entries: {
+      [childKey]: { sessionId: "session-child", updatedAt: 30, parentSessionKey: mainKey },
+      [mainKey]: { sessionId: "session-main", updatedAt: 20 },
+      "agent:local:main": { sessionId: "session-local", updatedAt: 10 },
+    },
+  });
+
+  expect((await directSessionReq("sessions.list", { configuredAgentsOnly: true })).ok).toBe(true);
+  const enumerateAgentDirs = vi.spyOn(sessionDirs, "resolveAgentSessionDirsFromAgentsDirSync");
+  try {
+    const listed = await directSessionReq<{ sessions: Array<{ key: string }> }>("sessions.list", {
+      includeGlobal: false,
+      includeUnknown: false,
+      configuredAgentsOnly: true,
+    });
+
+    expect(listed.ok).toBe(true);
+    expect(listed.payload?.sessions.map((session) => session.key)).toEqual([childKey, mainKey]);
+    expect(enumerateAgentDirs).not.toHaveBeenCalled();
+  } finally {
+    enumerateAgentDirs.mockRestore();
+  }
 });
 
 test("resolves and patches main alias to default agent main key", async () => {

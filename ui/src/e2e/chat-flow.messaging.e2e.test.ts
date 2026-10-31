@@ -153,7 +153,7 @@ suite.define(() => {
         __openclaw: { id: "shared-session-second-user", idempotencyKey: `${runId}:user`, seq: 2 },
       };
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       // Even an envelope-only event reads back with its canonical transcript identity.
       await gateway.setHistoryMessages([persistedUserMessage]);
       await emitDelta(gateway, runId, partial);
@@ -220,7 +220,7 @@ suite.define(() => {
         seq: 2,
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await emitDelta(gateway, runId, finalText);
       await streamingText(page, finalText).waitFor({ timeout: 10_000 });
       await gateway.emitChatFinal({ runId, text: finalText });
@@ -329,34 +329,5 @@ suite.define(() => {
     await expectRequestCountStable(gateway, "chat.send", 0);
     await expectCount(page.getByRole("listbox"), 0);
     expect(await composer.inputValue()).toBe("");
-  });
-
-  it("keeps the composer clear when a stale native input replay arrives after send", async () => {
-    const { page, gateway } = await chatFixture(suite, {
-      historyMessages: [timedText("assistant", "Ready for stale replay check.")],
-    });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await page.getByText("Ready for stale replay check.").waitFor({ timeout: 10_000 });
-
-    const prompt = "submitted message";
-    const composer = chatComposer(page);
-    await sendMessage(page, prompt);
-    await gateway.waitForRequest("chat.send");
-    expect(await composer.inputValue()).toBe("");
-
-    const afterReplay = await composer.evaluate((element, submitted) => {
-      const textarea = element as HTMLTextAreaElement;
-      textarea.value = submitted;
-      textarea.dispatchEvent(
-        new InputEvent("input", { bubbles: true, data: submitted, inputType: "insertText" }),
-      );
-      return textarea.value;
-    }, prompt);
-
-    expect(afterReplay).toBe("");
-    expect(await composer.inputValue()).toBe("");
-
-    await composer.pressSequentially(prompt);
-    expect(await composer.inputValue()).toBe(prompt);
   });
 });

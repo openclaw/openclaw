@@ -1,0 +1,256 @@
+/* Explicit details remain interactive on touch devices as well as hover pointers. */
+.person-activity-hovercard[data-open="true"] {
+  pointer-events: auto;
+}
+
+.person-activity-hovercard {
+  width: min(304px, calc(100vw - 24px));
+}
+
+.person-activity-card {
+  font-size: calc(12px * var(--control-ui-text-scale));
+  line-height: 1.5;
+}
+
+.person-activity-card__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 16px 12px;
+}
+
+.person-activity-card__header > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.person-activity-card__header .viewer-avatar--footer {
+  flex-shrink: 0;
+  width: 34.5px;
+  height: 34.5px;
+  font-size: calc(12px * var(--control-ui-text-scale));
+  /* The base ring color assumes the sidebar surface; blend with the popover. */
+  border-color: var(--popover);
+}
+
+.person-activity-card h2,
+.person-activity-card h3,
+.person-activity-card p {
+  margin: 0;
+}
+
+.person-activity-card h2 {
+  overflow-wrap: anywhere;
+  font-size: calc(14px * var(--control-ui-text-scale));
+  font-weight: 600;
+  line-height: 1;
+}
+
+.person-activity-card__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.person-activity-card__hint {
+  padding: 0 16px 12px;
+}
+
+.person-activity-card__status > span {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--ok);
+}
+
+.person-activity-card__status--idle > span {
+  background: var(--presence-idle);
+}
+
+.person-activity-card__status--unknown > span,
+.person-activity-card__status--offline > span {
+  background: var(--muted);
+}
+
+.person-activity-card__facts {
+  display: grid;
+  gap: 12px;
+  padding: 0 16px 16px;
+  margin: 0;
+}
+
+.person-activity-card__facts > div {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.person-activity-card__facts dt,
+.person-activity-card h3 {
+  color: var(--muted);
+  font-size: inherit;
+  font-weight: 400;
+}
+
+.person-activity-card__muted,
+.person-activity-card small,
+.person-activity-card__session-age {
+  color: var(--muted);
+}
+
+.person-activity-card__facts dd {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.person-activity-card__facts dd > span {
+  font-weight: 500;
+}
+
+.person-activity-card__facts time,
+.person-activity-card__session-age {
+  font-variant-numeric: tabular-nums;
+}
+
+.person-activity-card small {
+  display: block;
+  font-size: calc(11px * var(--control-ui-text-scale));
+}
+
+.person-activity-card__section,
+.person-activity-card footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.person-activity-card h3 {
+  margin-bottom: 6px;
+}
+
+.person-activity-card__sessions {
+  display: grid;
+  gap: 2px;
+}
+
+.person-activity-card__session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  margin: 0 -6px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+
+.person-activity-card__session-copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: normal;
+}
+
+.person-activity-card__session-name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+}
+
+.person-activity-card__session-name--multiline {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+.person-activity-card__session-name.hover-marquee {
+  --hover-marquee-fade-width: 18px;
+
+  white-space: nowrap;
+  color: var(--text);
+  text-overflow: clip;
+}
+
+@media (hover: none), (pointer: coarse), (prefers-reduced-motion: reduce) {
+  .person-activity-card__session-name > .hover-marquee__text {
+    display: inline;
+    white-space: normal;
+    transform: none;
+    transition: none;
+  }
+
+  .person-activity-card__session-name.hover-marquee {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    text-indent: 0;
+    transition: none;
+    mask-image: none;
+  }
+}
+
+.person-activity-card__session-age {
+  justify-self: end;
+  font-size: calc(11px * var(--control-ui-text-scale));
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.person-activity-card__session-icon {
+  flex: none;
+  align-self: flex-start;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.person-activity-card svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.person-activity-card footer {
+  padding: 0;
+}
+
+.person-activity-card footer a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 16px;
+  color: var(--text);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.person-activity-card a:hover {
+  background: var(--bg-hover);
+}
+
+.person-activity-card a:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+@media (pointer: coarse) {
+  .person-activity-card a {
+    min-height: 44px;
+    align-items: center;
+  }
+}

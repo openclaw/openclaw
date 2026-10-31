@@ -46,7 +46,6 @@ import {
 import { clearCodexBindingForClient } from "./session-binding.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
-  createIsolatedCodexAppServerClient,
   retainSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import type {
@@ -83,13 +82,15 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     : undefined;
   let nativeModelAdmission: CodexStartOrResumeThreadParams["nativeModelAdmission"];
   try {
-    nativeModelAdmission = modelAdmissionSource
-      ? modelAdmissionSource.modelPolicyRequired !== false
-        ? "required"
-        : options.nativeHookRelay?.enabled === false
-          ? "disabled"
-          : "optional"
-      : undefined;
+    // Private completions keep the owner's optional hook configuration without its source grant.
+    nativeModelAdmission =
+      runtime.nativeToolSurfaceEnabled && params.hostCapabilities.retainSourceAuthority
+        ? modelAdmissionSource && modelAdmissionSource.modelPolicyRequired !== false
+          ? "required"
+          : options.nativeHookRelay?.enabled === false
+            ? "disabled"
+            : "optional"
+        : undefined;
   } finally {
     modelAdmissionSource?.release();
   }
@@ -182,14 +183,14 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     }
   };
   const releaseSandboxExecEnvironment = async () => {
-    if (state.sandboxExecEnvironment) {
-      const environment = state.sandboxExecEnvironment;
-      state.sandboxExecEnvironment = undefined;
+    const environment = state.sandboxExecEnvironment;
+    state.sandboxExecEnvironment = undefined;
+    if (environment) {
       await releaseCodexSandboxExecServerEnvironment(sandbox, environment);
     }
   };
   const releaseSharedClientLeaseAndRetireOneShotClient = async () => {
-    if (connection.attemptClientFactory === createIsolatedCodexAppServerClient) {
+    if (connection.callerOwnedAttemptClient) {
       // Close the authorized node lease first; losing its socket first is a real disconnect.
       await releaseSandboxExecEnvironment();
       const ownedClient = state.releaseSharedClientLease ? state.client : undefined;
@@ -209,9 +210,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     await retireSharedCodexClientForOneShotCleanup();
   };
   const runCleanupStep = (step: string, operation: () => Promise<void> | void | undefined) =>
-    runCodexCleanupStep(params, step, async () => {
-      await operation();
-    });
+    runCodexCleanupStep(params, step, async () => await operation());
   let nativeSubagentMonitorSettlement: Promise<void> | undefined;
   const unregisterNativeSubagentMonitor = async () => {
     const registration = state.nativeSubagentMonitor;
@@ -243,14 +242,12 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           })
         : undefined;
     let parentTransferred = false;
-    let bindingRead: Awaited<ReturnType<typeof bindingStore.prepareRead>> | undefined;
+    let bindingGuard:
+      | Awaited<ReturnType<typeof bindingStore.prepareNativeSubagentGuard>>
+      | undefined;
     try {
       await unregisterNativeSubagentMonitor();
-      bindingRead = await bindingStore.prepareRead(bindingIdentity);
       connection.assertCurrent();
-      if (!bindingRead) {
-        throw new Error("Codex native subagent binding reader is unavailable");
-      }
       const parentSession = parent?.entry;
       const historyOwner = createCodexNativeSubagentHistoryOwner({
         parentThreadId,
@@ -260,6 +257,12 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           : {}),
         binding: thread,
       });
+      if (historyOwner && thread.lifecycle.preserveExistingBinding !== true) {
+        bindingGuard = await bindingStore.prepareNativeSubagentGuard(bindingIdentity, historyOwner);
+        if (!bindingGuard) {
+          throw new Error("Codex native subagent binding guard is unavailable");
+        }
+      }
       const assertParentSessionCurrent = async () => parent?.assertCurrent();
       const parentWriteAuthority = createNativeSubagentSessionAuthority(parent);
       const submissionStore: CodexNativeSubagentSubmissionStore | undefined =
@@ -267,14 +270,14 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           ? {
               ...createNativeSubagentSubmissionStore({
                 bindingStore,
-                readBinding: bindingRead.read,
+                assertBindingCurrent: bindingGuard!.assertCurrent,
                 identity: bindingIdentity,
                 owner: historyOwner,
                 assertLifecycleCurrentAsync: assertParentSessionCurrent,
                 authority: parentWriteAuthority,
               }),
               release: () => {
-                bindingRead?.release();
+                bindingGuard?.release();
                 parent?.release();
               },
             }
@@ -283,7 +286,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         historyOwner && submissionStore
           ? createNativeSubagentAssignmentStore({
               bindingStore,
-              readBinding: bindingRead.read,
+              assertBindingCurrent: bindingGuard!.assertCurrent,
               identity: bindingIdentity,
               owner: historyOwner,
               assertLifecycleCurrentAsync: () => assertParentSessionCurrent(),
@@ -317,6 +320,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           requesterStorePath: parent?.entryCurrent?.source.path ?? storePath,
           requesterTurnRunId: params.runId,
           requestCustody,
+          nativeProcessAuthority,
           completionScope: params.agentHarnessCompletionScope,
           historyOwner,
           submissionStore,
@@ -348,7 +352,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
             const unregister = registration.unregister;
             registration.unregister = () =>
               unregister().finally(() => {
-                bindingRead?.release();
+                bindingGuard?.release();
                 parent?.release();
               });
           }
@@ -364,7 +368,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       }
     } finally {
       if (!parentTransferred) {
-        bindingRead?.release();
+        bindingGuard?.release();
         parent?.release();
       }
     }

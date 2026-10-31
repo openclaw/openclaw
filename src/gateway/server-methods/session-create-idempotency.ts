@@ -6,9 +6,11 @@ import {
   errorShape,
   missingScopeErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import { DEDUPE_MAX } from "../server-constants.js";
 import { projectSessionFastModeEntryResult } from "../session-fast-mode-presentation.js";
 import type { GatewayInflightResult } from "./inflight.js";
+import { respondError } from "./response.js";
 import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandler, RespondFn } from "./types.js";
 
@@ -51,22 +53,15 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
       operatorAuthority?.profileId;
     const deviceId = request.client?.connect.device?.id?.trim();
     if (!principal && !deviceId) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "idempotent session creation requires an authenticated principal or device identity",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "idempotent session creation requires an authenticated principal or device identity",
       );
       return;
     }
     const owner = principal ? `principal:${principal}` : `device:${deviceId}`;
-    let entriesByOwner = sessionCreatesByContext.get(request.context);
-    if (!entriesByOwner) {
-      entriesByOwner = new Map();
-      sessionCreatesByContext.set(request.context, entriesByOwner);
-    }
+    const entriesByOwner = getOrCreateWeakOwnerMap(sessionCreatesByContext, request.context);
     const now = Date.now();
     let retainedEntryCount = 0;
     for (const [entryOwner, ownerEntries] of entriesByOwner) {
@@ -90,21 +85,18 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
     const existing = entries?.get(idempotencyKey);
     if (existing) {
       if (existing.requestIdentity !== requestIdentity) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "session creation idempotency key was reused with different parameters",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "session creation idempotency key was reused with different parameters",
         );
         return;
       }
       if (existing.authorization.role !== authorization.role) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.FORBIDDEN, "session creation authorization changed; start again"),
+        respondError(
+          respond,
+          ErrorCodes.FORBIDDEN,
+          "session creation authorization changed; start again",
         );
         return;
       }
@@ -132,10 +124,10 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
     }
     // Reserve a full owner's capacity for other principals while bounding process-wide state.
     if ((entries?.size ?? 0) >= DEDUPE_MAX || retainedEntryCount >= DEDUPE_MAX * 2) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "session creation capacity is full; retry later"),
+      respondError(
+        respond,
+        ErrorCodes.UNAVAILABLE,
+        "session creation capacity is full; retry later",
       );
       return;
     }

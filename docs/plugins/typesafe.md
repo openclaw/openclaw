@@ -355,6 +355,47 @@ provider configuration or the existing loopback `baseUrl` selects a self-hosted 
 redirects, and do not retry automatically. Consumers decide what to do with
 unavailable decisions; caller cancellation must not start fallback work.
 
+## Experimental image decisions
+
+Hosted Jev accepts one tagged PNG or JPEG image with optional accompanying text
+through Decision V2. The Jev, Jev Preview, and Jev 1.13.0 catalog rows advertise
+image input. Local Kev, custom endpoints, and other model IDs remain text-only.
+
+For example, pass this shape to `decision_evaluate`, replacing the placeholder
+with the base64 bytes of a real PNG:
+
+```json
+{
+  "contractVersion": 2,
+  "state": {
+    "type": "image",
+    "dataUri": "data:image/png;base64,<PNG_BYTES>",
+    "text": "Inspect the delivery area."
+  },
+  "questions": {
+    "package": { "type": "boolean", "instructions": "Is a package visible?" }
+  }
+}
+```
+
+The adapter sends the image once in TypeSafe's referenced `assets` map and enables
+`TypeSafe-Danger-Zone-Images: true` only for image requests. Text-only requests do
+not send this header, even when configured manually. Prepared credentials,
+headers, deadlines, cancellation, and usage accounting follow the same transport
+as text decisions; there is no separate image credential or endpoint.
+
+OpenClaw limits the decoded image to **4 MiB**. PNG and JPEG must be still images;
+WebP, remote image URLs, Box/Tags questions, and images embedded in instructions
+or criteria are not supported by this adapter. TypeSafe additionally requires
+**280–1568 pixels on each side** and rejects invalid or animated images rather
+than resizing them. Ordinary text/JSON guards remain unchanged; the serialized
+image request uses TypeSafe's 32 MiB body limit to allow base64 expansion.
+
+This is TypeSafe's experimental image API, not a production accuracy guarantee.
+Its format, limits, and accuracy may change. See the current
+[TypeSafe image documentation](https://docs.typesafe.ai/images) before use.
+Only send images you are authorized to share with the hosted service.
+
 ## Agent evaluation tool
 
 Core provides `decision_evaluate` automatically when an agent has an effective

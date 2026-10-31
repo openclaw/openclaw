@@ -153,7 +153,6 @@ export async function readTelegramHistoryAction(
   if (!(await isTelegramHistorySenderAllowed({ ...policy, senderId: scope.senderId }))) {
     throw new Error("Telegram history read is not permitted by the current group policy.");
   }
-  assertCurrent();
   const cache = createTelegramMessageCache({
     scope: resolveTelegramMessageCacheScope(
       resolveStorePath(currentConfig.session?.store, {
@@ -180,9 +179,7 @@ export async function readTelegramHistoryAction(
   let result;
   if (messageId !== undefined) {
     const node = await cache.get({ ...scope, messageId: String(messageId) });
-    assertCurrent();
     const allowed = node && (await isTelegramHistoryNodeAllowed({ ...policy, node }));
-    assertCurrent();
     result = { messages: node && allowed ? [node] : [], hasMore: false };
   } else {
     const anchor = before ?? (after === undefined ? scope.currentMessageId : undefined);
@@ -193,7 +190,6 @@ export async function readTelegramHistoryAction(
       after: after === undefined ? undefined : String(after),
       limit,
     });
-    assertCurrent();
   }
   if (!(await isTelegramHistorySenderAllowed({ ...policy, senderId: scope.senderId }))) {
     throw new Error("Telegram history read is not permitted by the current group policy.");

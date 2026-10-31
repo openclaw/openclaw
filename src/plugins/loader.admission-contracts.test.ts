@@ -12,6 +12,7 @@ import { drainSystemEvents } from "../infra/system-events.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { activatePluginRegistry } from "./loader-shared.js";
 import {
   loadOpenClawPluginCliRegistry,
@@ -79,8 +80,6 @@ module.exports = { id: "admission-contract", register() {} };`,
     activated: false,
     status: "disabled",
     activationSource: "disabled",
-    activationReason: "bundled (disabled by default)",
-    error: "bundled (disabled by default)",
   });
   expect(registry.cliRegistrars).toHaveLength(0);
   expect(fs.existsSync(imported)).toBe(false);
@@ -91,27 +90,28 @@ it("keeps scoped forced setup selection with a setup entry", () => {
   const markers = makePluginLoaderTempDir();
   const fullMarker = path.join(markers, "full-imported");
   const setupMarker = path.join(markers, "setup-imported");
+  const dir = makePluginLoaderTempDir();
   const channelSource = `const channel = {
   id: "admission-channel",
   meta: { id: "admission-channel", label: "Admission Channel" },
   capabilities: { chatTypes: ["direct"] },
   config: { listAccountIds: () => ["default"], resolveAccount: () => ({}) },
 };`;
-  const plugin = writePlugin({
-    id: "admission-setup",
-    filename: "index.cjs",
-    body: `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "imported");
+  const entry = (filename: string, marker: string, body: string) =>
+    writePlugin({
+      id: "admission-setup",
+      dir,
+      filename,
+      body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "imported");
 ${channelSource}
-module.exports = { id: "admission-setup", register(api) { api.registerChannel({ plugin: channel }); } };`,
-  });
-  writePlugin({
-    id: plugin.id,
-    dir: plugin.dir,
-    filename: "setup.cjs",
-    body: `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "imported");
-${channelSource}
-module.exports = { plugin: channel };`,
-  });
+module.exports = ${body};`,
+    });
+  const plugin = entry(
+    "index.cjs",
+    fullMarker,
+    '{ id: "admission-setup", register(api) { api.registerChannel({ plugin: channel }); } }',
+  );
+  entry("setup.cjs", setupMarker, "{ plugin: channel }");
   writePluginMetadata({
     dir: plugin.dir,
     id: plugin.id,
@@ -178,13 +178,11 @@ it("keeps system routing bound to the replacement lifecycle owner", async () => 
   });
   const manifestPath = path.join(plugin.dir, "openclaw.plugin.json");
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  fs.writeFileSync(
-    manifestPath,
-    JSON.stringify({ ...manifest, contracts: { tools: ["preparation_probe"] } }),
-  );
-  const config = {
-    plugins: { allow: [plugin.id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
-  };
+  writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+    ...manifest,
+    contracts: { tools: ["preparation_probe"] },
+  });
+  const config = pluginFixtureConfig(plugin);
   setRuntimeConfigSnapshot(config, config);
   const previous = createEmptyPluginRegistry();
   setActivePluginRegistry(previous);
@@ -294,13 +292,7 @@ describe("registry load modes", () => {
       registration: 'api.registerProvider({ id: "mode-provider", label: "Mode", auth: [] });',
     });
     const options = {
-      config: {
-        plugins: {
-          allow: [plugin.id],
-          load: { paths: [plugin.file] },
-          slots: { memory: "none" },
-        },
-      },
+      config: pluginFixtureConfig(plugin),
     };
     const validation = loadPluginRegistryHandle({ ...options, mode: "validate" });
     const full = loadPluginRegistryHandle(options);
@@ -339,14 +331,11 @@ describe("registration config snapshot", () => {
       }), { name: 'config_capture' });
     } };`,
     });
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: plugin.id,
-        configSchema: { type: "object", additionalProperties: false },
-        contracts: { tools: ["config_capture"] },
-      }),
-    );
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      id: plugin.id,
+      configSchema: { type: "object", additionalProperties: false },
+      contracts: { tools: ["config_capture"] },
+    });
     const source: OpenClawConfig = {
       agents: { entries: { ops: { name: "registration snapshot" } } },
       gateway: { auth: { mode: "token", token: "${GATEWAY_TOKEN}" } },

@@ -1,7 +1,4 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { buildBuiltinChatCommands } from "./commands-registry.shared.js";
 import type { ChatCommandDefinition } from "./commands-registry.types.js";
 import { listThinkingLevels } from "./thinking.js";
@@ -18,14 +15,10 @@ export function listReservedChatSlashCommandNames(extraNames: string[] = []): Se
   const reserved = new Set<string>();
   for (const command of getChatCommands()) {
     if (command.nativeName) {
-      reserved.add(normalizeOptionalLowercaseString(command.nativeName) ?? "");
+      reserved.add(command.nativeName);
     }
     for (const alias of command.textAliases) {
-      const trimmed = alias.trim();
-      if (!trimmed.startsWith("/")) {
-        continue;
-      }
-      reserved.add(normalizeLowercaseStringOrEmpty(trimmed.slice(1)));
+      reserved.add(alias.slice(1));
     }
   }
   for (const name of extraNames) {

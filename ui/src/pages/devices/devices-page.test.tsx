@@ -5,7 +5,6 @@ import { getQueriesForElement } from "@solidjs/testing-library";
 import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
 import type { PresenceEntry } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -16,6 +15,7 @@ import {
   deviceSystemInfo,
   deviceDesktopEnvironments,
 } from "../../test-helpers/devices-fixtures.ts";
+import { missingReadScopeErrorFixture } from "../../test-helpers/gateway-client.ts";
 import { waitForRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
@@ -46,6 +46,19 @@ describe("DevicesPage gateway lifecycle", () => {
     expect(
       getQueriesForElement(page.container).getByRole("heading", { level: 1 }).textContent,
     ).toBe("Devices");
+  });
+
+  it("waits for the first inventory before painting policy sections below it", async () => {
+    const page = mountPage(
+      gatewayFixture(gatewaySnapshot(clientFor().client, true, [], ["operator.admin"])),
+      { nodes: [{ nodeId: "office", displayName: "Office Mac" }] },
+      null,
+    );
+    expect(page.container.querySelectorAll(".settings-loading-skeleton")).toHaveLength(1);
+    expect(page.container.textContent).not.toContain(t("devices.binding.execNodeBinding"));
+    page.refreshPresentation();
+    await waitForSolid(() => expect(page.container.textContent).toContain("Office Mac"));
+    expect(page.container.textContent).toContain(t("devices.binding.execNodeBinding"));
   });
 
   it("keeps inventory usable and retires a held approval read on Gateway replacement", async () => {
@@ -333,15 +346,7 @@ describe("DevicesPage gateway lifecycle", () => {
     const { client, request } = clientFor(
       vi.fn(async (method: string) => {
         if (method === "system.info") {
-          throw new GatewayRequestError({
-            code: "FORBIDDEN",
-            message: "permission denied",
-            details: {
-              code: "MISSING_SCOPE",
-              missingScope: "operator.read",
-              requiredScopes: ["operator.read"],
-            },
-          });
+          throw missingReadScopeErrorFixture();
         }
         return responseFor(method);
       }),

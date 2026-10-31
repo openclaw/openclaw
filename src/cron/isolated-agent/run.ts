@@ -8,6 +8,7 @@ import {
 } from "../../agents/run-termination.js";
 import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -49,8 +50,6 @@ import {
 } from "../service/execution-errors.js";
 import { isCronOneShotContinuationJob } from "../service/one-shot-schedule.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
-import { persistCronAutomationResult } from "./run-automation-context.js";
-import { resolveCronActiveRuntimeConfig } from "./run-config.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
@@ -112,6 +111,7 @@ async function runCronIsolatedAgentTurnInTrace(
   const abortReason = () =>
     resolveCronAbortReasonText(abortSignal?.reason) ?? "cron: job execution timed out";
   const isFastTestEnv = isFastTestRuntimeEnv();
+  await using runtimeResources = new AsyncDisposableStack();
   let preparation: Awaited<ReturnType<typeof prepareCronRunContext>>;
   try {
     preparation = await prepareCronRunContext({
@@ -141,6 +141,21 @@ async function runCronIsolatedAgentTurnInTrace(
   async function runPreparedCronTurn(
     context: PreparedCronRunContext,
   ): Promise<RunCronAgentTurnResult> {
+    const preparedRuntimeLease = runtimeResources.use(context.preparedModelRuntimeLease);
+    if (context.runContinuationSession) {
+      // Native deletion drains the turn owner; release admission before cleanup and its runtime.
+      runtimeResources.defer(async () => {
+        try {
+          await withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, () =>
+            removeCronRunContinuationSessionIfIdle(context.runSessionKey),
+          );
+        } catch (error) {
+          logWarn(
+            `[cron:${params.job.id}] Failed to remove unused run continuation: ${String(error)}`,
+          );
+        }
+      });
+    }
     const prepared = { context };
     using operatorLease = new DisposableStack();
     await using _ = {
@@ -148,12 +163,19 @@ async function runCronIsolatedAgentTurnInTrace(
         await prepared.context.workspaceLease?.release();
       },
     };
-    await using preparedRuntimeLease = prepared.context.preparedModelRuntimeLease;
     let leaseActive = true;
     // Accounting, delivery, and teardown use the same metadata as inference. Keep
     // the lease open until cleanup finishes, then fence detached borrowed work.
     try {
-      return await withPreparedModelRuntimePluginGenerationScope(
+      const runTurn: typeof withPreparedModelRuntimePluginGenerationScope = (
+        generation,
+        run,
+        borrow,
+      ) =>
+        preparedRuntimeLease.run(() =>
+          withPreparedModelRuntimePluginGenerationScope(generation, run, borrow),
+        );
+      return await runTurn(
         preparedRuntimeLease.pluginGeneration,
         () =>
           withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, async () => {
@@ -177,7 +199,7 @@ async function runCronIsolatedAgentTurnInTrace(
             let admissionDeferredReason: "busy" | "active-hours" | undefined;
             const ownReplyOperation = getCurrentSessionControllerOwner();
             const resolveStartDeferral = (): "busy" | "active-hours" | undefined => {
-              const cfg = resolveCronActiveRuntimeConfig(params.cfg);
+              const cfg = selectLiveRuntimeConfig(params.cfg);
               if (
                 !isCronWithinActiveHours(
                   params.job.activeHours,
@@ -445,18 +467,6 @@ async function runCronIsolatedAgentTurnInTrace(
               if (automationRun) {
                 automationRun.closed = true;
               }
-              await persistCronAutomationResult({
-                cfg: prepared.context.cfgWithAgentDefaults,
-                job: params.job,
-                runId,
-                result: automationResult,
-                resultTarget: prepared.context.resultTarget,
-                agentId: prepared.context.agentId,
-                runSessionKey: prepared.context.runSessionKey,
-                runSessionId: prepared.context.currentRunSessionId(),
-                storePath: prepared.context.cronSession.storePath,
-                assertCurrent: assertInvocationCurrent,
-              });
               const finalized = await finalizeCronRun({
                 automationResult,
                 prepared: prepared.context,
@@ -608,17 +618,6 @@ async function runCronIsolatedAgentTurnInTrace(
                       });
                     } finally {
                       prepared.context.sessionPreparationEffect.release();
-                    }
-                    if (prepared.context.runContinuationSession) {
-                      try {
-                        await removeCronRunContinuationSessionIfIdle(
-                          prepared.context.runSessionKey,
-                        );
-                      } catch (error) {
-                        logWarn(
-                          `[cron:${params.job.id}] Failed to remove unused run continuation: ${String(error)}`,
-                        );
-                      }
                     }
                   } finally {
                     // Only run-scoped browser identities end here; persistent targets keep tracked tabs.

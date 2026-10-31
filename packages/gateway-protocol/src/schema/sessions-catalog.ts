@@ -1,6 +1,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { AgentActivityItemSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugin-json-value.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionParticipantSchema } from "./session-participant.js";
@@ -153,6 +154,15 @@ export const SessionCatalogTranscriptItemSchema = closedObject({
   model: Type.Optional(Type.String()),
   /** Source-supplied attribution, independent of the viewer and session adopter. */
   sender: Type.Optional(SessionParticipantSchema),
+  phase: Type.Optional(stringLiteralUnion(["commentary", "final_answer", "partial_answer"])),
+  activity: Type.Optional(AgentActivityItemSchema),
+  toolDetails: Type.Optional(PluginJsonValueSchema),
+  toolName: Type.Optional(Type.String()),
+  toolCallId: Type.Optional(Type.String()),
+  toolInput: Type.Optional(PluginJsonValueSchema),
+  toolInputOmitted: Type.Optional(Type.Boolean()),
+  isError: Type.Optional(Type.Boolean()),
+  exitCode: Type.Optional(Type.Integer()),
   truncated: Type.Optional(Type.Boolean()),
   raw: Type.Optional(PluginJsonValueSchema),
 });

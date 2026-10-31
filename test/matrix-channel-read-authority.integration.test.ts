@@ -20,6 +20,11 @@ import { createPluginRuntime } from "../src/plugins/runtime/index.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
 import { defaultRuntime } from "../src/runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { createMessageReadAuthority } from "./message-read-authority.test-support.js";
 
@@ -60,19 +65,15 @@ beforeEach(() => {
   for (const key of Object.keys(process.env).filter((name) => name.startsWith("MATRIX_"))) {
     vi.stubEnv(key, undefined);
   }
-  for (const key of [
-    "HTTPS_PROXY",
-    "HTTP_PROXY",
-    "https_proxy",
-    "http_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-  ]) {
+  for (const key of "HTTPS_PROXY HTTP_PROXY https_proxy http_proxy ALL_PROXY all_proxy".split(
+    " ",
+  )) {
     vi.stubEnv(key, undefined);
   }
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
   clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
@@ -134,9 +135,6 @@ const responses: Record<string, unknown> = {
   [emojiPath]: { images: { spark: { url: "mxc://example.org/spark" } } },
   [profilePath]: { displayname: "Alice", avatar_url: "mxc://example.org/alice" },
 };
-const responseFor = (path: string): unknown =>
-  Object.hasOwn(responses, path) ? responses[path] : undefined;
-
 type RegistrationOrigin = "bundled" | "official-installed";
 type MatrixHarness = Awaited<ReturnType<typeof createHarness>>;
 
@@ -147,7 +145,7 @@ function expectReads(requests: MatrixHarness["requests"], paths: string[]) {
       ({ method, authorization }) => method === "GET" && authorization === `Bearer ${accessToken}`,
     ),
   ).toBe(true);
-  expect(requests.filter((request) => responseFor(request.path) === undefined)).toEqual([]);
+  expect(requests.filter((request) => !Object.hasOwn(responses, request.path))).toEqual([]);
 }
 
 // Installation provenance is a registrar fixture, as in the shared dispatcher suite.
@@ -164,25 +162,16 @@ async function createHarness(origin: RegistrationOrigin) {
     requests.push({ method: request.method, path, authorization: request.headers.authorization });
     request.resume();
     onRequest?.(path);
-    const body = request.method === "GET" ? responseFor(path) : undefined;
-    response.writeHead(body === undefined ? 404 : 200, { "content-type": "application/json" });
-    response.end(
-      JSON.stringify(body ?? { errcode: "M_NOT_FOUND", error: "Unexpected fixture request" }),
+    const body =
+      request.method === "GET" && Object.hasOwn(responses, path) ? responses[path] : undefined;
+    respondJson(
+      response,
+      body ?? { errcode: "M_NOT_FOUND", error: "Unexpected fixture request" },
+      body === undefined ? 404 : 200,
     );
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const closeServer = () =>
-    new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    await closeServer();
-    throw new Error("Expected loopback TCP address");
-  }
-  const cfg = createConfig(`http://127.0.0.1:${address.port}`);
+  const closeServer = () => closeHttpServer(server);
+  const cfg = createConfig(await listenLoopback(server));
   const owner = createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     runtime: createPluginRuntime(),
@@ -274,55 +263,15 @@ async function withHarness(
   }
 }
 
+// Payload projection belongs to matrix/actions/{messages,reactions,room}.test.ts and
+// tool-actions.test.ts; this suite proves each registered action's real authorized HTTP handoff.
 const reads = [
-  {
-    action: "read",
-    params: { limit: 1 },
-    path: messagePath,
-    result: { messages: [{ content: message.content.body }] },
-  },
-  {
-    action: "reactions",
-    params: { messageId, limit: 1 },
-    path: reactionPath,
-    result: { reactions: [{ key: "👍", count: 1, users: [memberId] }] },
-  },
-  {
-    action: "list-pins",
-    params: {},
-    path: `${roomPath}/event/${messageId}`,
-    result: { pinned: [messageId], pins: [{ content: message.content.body }] },
-  },
-  {
-    action: "emoji-list",
-    params: {},
-    path: emojiPath,
-    result: {
-      emojis: [
-        { name: "spark", url: "mxc://example.org/spark" },
-        { name: "wave", url: "mxc://example.org/wave" },
-      ],
-    },
-  },
-  {
-    action: "member-info",
-    params: { userId: memberId },
-    path: profilePath,
-    result: { member: { userId: memberId, displayName: "Alice", roomId: allowedRoom } },
-  },
-  {
-    action: "channel-info",
-    params: {},
-    path: `${roomPath}/state/m.room.topic/`,
-    result: {
-      room: {
-        roomId: allowedRoom,
-        name: "Allowed room",
-        topic: "Synthetic room topic",
-        memberCount: 3,
-      },
-    },
-  },
+  ["read", { limit: 1 }, messagePath, { messages: [{ content: message.content.body }] }],
+  ["reactions", { messageId, limit: 1 }, reactionPath, { reactions: [{ key: "👍" }] }],
+  ["list-pins", {}, `${roomPath}/event/${messageId}`, { pinned: [messageId] }],
+  ["emoji-list", {}, emojiPath, { emojis: [{ name: "spark" }, { name: "wave" }] }],
+  ["member-info", { userId: memberId }, profilePath, { member: { userId: memberId } }],
+  ["channel-info", {}, `${roomPath}/state/m.room.topic/`, { room: { roomId: allowedRoom } }],
 ] as const;
 
 describe("Matrix member info CLI", () => {
@@ -347,43 +296,26 @@ describe("Matrix member info CLI", () => {
         import("../src/cli/one-shot-exit.js"),
       ]);
       // The harness owns config and registry admission; production owns parsed action dispatch.
-      const spies = [
-        vi.spyOn(configGuard, "ensureConfigReady").mockResolvedValue(undefined),
-        vi
-          .spyOn(channelPluginIds, "resolveDiscoverableScopedChannelPluginIds")
-          .mockImplementation(({ channelIds }) => [...channelIds]),
-        vi.spyOn(pluginLoader, "loadPluginRegistryHandle").mockReturnValue(registry),
-        vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log),
-        vi
-          .spyOn(defaultRuntime, "writeJson")
-          .mockImplementation((value) => runtime.log(JSON.stringify(value))),
-        vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error),
-        vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
-          throw new Error(`unexpected CLI exit(${code})`);
-        }),
-        vi.spyOn(oneShotExit, "requestExitAfterOneShotOutput").mockReturnValue(true),
-      ];
-      try {
-        await command.parseAsync(
-          [
-            "message",
-            "member",
-            "info",
-            "--channel",
-            "matrix",
-            "--user-id",
-            memberId,
-            "--channel-id",
-            allowedRoom,
-            "--json",
-          ],
-          { from: "user" },
-        );
-      } finally {
-        for (const spy of spies) {
-          spy.mockRestore();
-        }
-      }
+      vi.spyOn(configGuard, "ensureConfigReady").mockResolvedValue(undefined);
+      vi.spyOn(channelPluginIds, "resolveDiscoverableScopedChannelPluginIds").mockImplementation(
+        ({ channelIds }) => [...channelIds],
+      );
+      vi.spyOn(pluginLoader, "loadPluginRegistryHandle").mockReturnValue(registry);
+      vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
+      vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) =>
+        runtime.log(JSON.stringify(value)),
+      );
+      vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+      vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+        throw new Error(`unexpected CLI exit(${code})`);
+      });
+      vi.spyOn(oneShotExit, "requestExitAfterOneShotOutput").mockReturnValue(true);
+      await command.parseAsync(
+        `message member info --channel matrix --user-id ${memberId} --channel-id ${allowedRoom} --json`.split(
+          " ",
+        ),
+        { from: "user" },
+      );
 
       expect(runtime.log).toHaveBeenCalledTimes(1);
       expect(runtime.error).not.toHaveBeenCalled();
@@ -404,8 +336,8 @@ describe("Matrix member info CLI", () => {
 
 describe("registered installed Matrix reads", () => {
   it.each(reads)(
-    "reads $action from a configured sibling room",
-    async ({ action, params, path, result }) => {
+    "reads %s from a configured sibling room",
+    async (action, params, path, result) => {
       await withHarness("official-installed", async (fixture) => {
         const outcome = await fixture.invoke(action, params);
         expect(outcome?.details).toMatchObject({ ok: true, ...result });

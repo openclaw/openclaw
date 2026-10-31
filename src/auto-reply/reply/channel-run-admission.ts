@@ -35,16 +35,16 @@ function consumeChannelRunAdmission(
 } {
   const gatewayFacts = readGatewayLocalUserIngressFacts(gatewayLocalUserIngress);
   if (gatewayFacts) {
-    return Object.freeze({
+    return {
       ingressState: gatewayFacts.ingress.state,
       facts: gatewayFacts,
       onAdmitted: () => undefined,
-    });
+    };
   }
   const admission = consumeChannelAdmissionEvidence(evidence);
-  return Object.freeze({
+  return {
     ingressState: admission.ingressState,
-    facts: Object.freeze({
+    facts: {
       invoker: admission.invoker,
       ...(admission.assuranceRef
         ? {
@@ -59,7 +59,7 @@ function consumeChannelRunAdmission(
             ],
           }
         : {}),
-    }),
+    },
     onAdmitted: (context) => {
       const token = context.executionIdentityToken;
       if (token && admission.decisionCoverage && admission.identifierAuthentication) {
@@ -73,7 +73,7 @@ function consumeChannelRunAdmission(
         });
       }
     },
-  });
+  };
 }
 
 /** Defer evidence consumption until the selected runtime actually admits the run. */

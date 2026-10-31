@@ -30,7 +30,7 @@ const CHANNEL_LABELS = new Map<string, string>([
 const OPAQUE_ID_RUN_RE =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{10,}/gi;
 
-function shortenOpaqueIdRuns(text: string): string {
+export function shortenOpaqueIdRuns(text: string): string {
   return text.replace(OPAQUE_ID_RUN_RE, (match) => `…${match.slice(-4)}`);
 }
 

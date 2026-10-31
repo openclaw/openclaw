@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../pages/chat/sidebar-layout.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   createControlUiMockSameOriginGatewayScript,
@@ -69,7 +70,7 @@ async function prepareRailPage(page: Page, colorScheme: "dark" | "light") {
   await page.goto(`${suite.server.baseUrl}chat`);
 }
 
-async function trackReader(page: Page, colorScheme: "dark" | "light") {
+async function trackReader(page: Page) {
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   const messages = Array.from({ length: 240 }, (_, index) => ({
@@ -99,7 +100,16 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
     timestamp: Date.UTC(2026, 8, 4, 12, index),
   }));
   const gateway = await installMockGateway(page, { historyMessages: messages });
-  await prepareRailPage(page, colorScheme);
+  await prepareRailPage(page, "dark");
+  const checkThemes = async (run: () => Promise<void>) => {
+    // Theme changes paint; keep both presentations around one reader lifecycle.
+    for (const mode of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: mode });
+      await evaluateControlUiContext(page, (context, value) => context.theme.setMode(value), mode);
+      await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
+      await run();
+    }
+  };
   const transcript = page.locator(".chat-thread");
   await transcript
     .locator(".chat-virtual-row")
@@ -120,18 +130,20 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   await expect.poll(logicalCount).toBe(240);
   expect(await markers.count()).toBeLessThan(100);
   const track = rail.locator(".chat-position-rail__track");
-  const trackBounds = (await track.boundingBox())!;
-  const transcriptBounds = (await transcript.boundingBox())!;
-  const contentBounds = (await transcript.locator(".chat-thread-inner").boundingBox())!;
-  const conversationBounds = (await page.locator(".chat-main__conversation").boundingBox())!;
-  expect(trackBounds.x).toBeGreaterThanOrEqual(transcriptBounds.x);
-  expect(trackBounds.x + trackBounds.width).toBeLessThan(contentBounds.x);
-  expect(trackBounds.height).toBeCloseTo(900 * 0.45, 2);
-  const centerY = ({ y, height }: { y: number; height: number }) => y + height / 2;
-  expect(Math.abs(centerY(trackBounds) - centerY(conversationBounds))).toBeLessThan(2);
-  expect(await markerForIndex(239).getAttribute("aria-label")).toContain("240 of 240");
-  expect(await preview.count()).toBe(0);
-  expect(await rail.locator('[role="status"]').count()).toBe(0);
+  await checkThemes(async () => {
+    const trackBounds = (await track.boundingBox())!;
+    const transcriptBounds = (await transcript.boundingBox())!;
+    const contentBounds = (await transcript.locator(".chat-thread-inner").boundingBox())!;
+    const conversationBounds = (await page.locator(".chat-main__conversation").boundingBox())!;
+    expect(trackBounds.x).toBeGreaterThanOrEqual(transcriptBounds.x);
+    expect(trackBounds.x + trackBounds.width).toBeLessThan(contentBounds.x);
+    expect(trackBounds.height).toBeCloseTo(900 * 0.45, 2);
+    const centerY = ({ y, height }: { y: number; height: number }) => y + height / 2;
+    expect(Math.abs(centerY(trackBounds) - centerY(conversationBounds))).toBeLessThan(2);
+    expect(await markerForIndex(239).getAttribute("aria-label")).toContain("240 of 240");
+    expect(await preview.count()).toBe(0);
+    expect(await rail.locator('[role="status"]').count()).toBe(0);
+  });
 
   // Exercise the composite through real Tab navigation, including reentry.
   const focusedMarkerId = () =>
@@ -237,7 +249,9 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   const invisibleTick = rail
     .locator(".chat-position-rail__marker:not([data-visible]) .chat-position-rail__tick")
     .first();
-  expect(await readStyle(invisibleTick, "background-color")).toMatch(/\/ 0\.4\)$/);
+  await checkThemes(async () => {
+    expect(await readStyle(invisibleTick, "background-color")).toMatch(/\/ 0\.4\)$/);
+  });
   await expect.poll(fades).toEqual({ top: true, bottom: false });
   await expect.poll(currentIsVisible).toBe(true);
   await transcript.evaluate((element) => {
@@ -286,16 +300,18 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   await expect.poll(fades).toEqual({ top: false, bottom: true });
   await markerForIndex(1).hover();
   const previewImage = preview.locator("img");
-  await expect
-    .poll(() => previewImage.evaluate((image: HTMLImageElement) => image.naturalHeight))
-    .toBe(1024);
-  expect(
-    await preview.evaluate(
-      (element) =>
-        element.getBoundingClientRect().height /
-        Number.parseFloat(getComputedStyle(element).lineHeight),
-    ),
-  ).toBeLessThanOrEqual(3.01);
+  await checkThemes(async () => {
+    await expect
+      .poll(() => previewImage.evaluate((image: HTMLImageElement) => image.naturalHeight))
+      .toBe(1024);
+    expect(
+      await preview.evaluate(
+        (element) =>
+          element.getBoundingClientRect().height /
+          Number.parseFloat(getComputedStyle(element).lineHeight),
+      ),
+    ).toBeLessThanOrEqual(3.01);
+  });
   await page.mouse.move(600, 100);
 
   await markerForIndex(4).hover();
@@ -333,7 +349,7 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   const expectWave = async () => {
     await expect.poll(waveWidths).toEqual([8, 12, 16, 24, 32, 24, 16, 12, 8]);
   };
-  await expectWave();
+  await checkThemes(expectWave);
 
   const previewBounds = await preview.boundingBox();
   expect(previewBounds).not.toBeNull();
@@ -363,9 +379,9 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   await markerForIndex(5).press("ArrowDown");
   await expect.poll(focusedMarkerId).toBe("position-rail-6");
   await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 6");
-  expect(await readStyle(markerForIndex(6).locator(".chat-position-rail__tick"), "width")).toBe(
-    "8px",
-  );
+  await expect
+    .poll(() => readStyle(markerForIndex(6).locator(".chat-position-rail__tick"), "width"))
+    .toBe("8px");
   await showMarker(120);
   await markerForIndex(120).focus();
   await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 120");
@@ -463,9 +479,11 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
       }
     }
   };
-  for (const index of [120, 121]) {
-    await clickAndObserveFlash(index, true);
-  }
+  await checkThemes(async () => {
+    for (const index of [120, 121]) {
+      await clickAndObserveFlash(index, true);
+    }
+  });
   await markerForIndex(120).press("Escape");
   await expect.poll(() => preview.count()).toBe(0);
   await markerForIndex(120).press("Home");
@@ -476,28 +494,35 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   await markerForIndex(239).press("Enter");
   await expect.poll(currentMarkerIndex).toBe(239);
 
-  // Pane-local width matters even inside an otherwise wide desktop.
-  await setStyle(transcript, "width", "800px");
-  await markers.first().waitFor({ state: "hidden" });
-  await setStyle(transcript, "width");
-  await markers.first().waitFor({ state: "visible" });
+  await checkThemes(async () => {
+    // Pane-local width matters even inside an otherwise wide desktop.
+    await setStyle(transcript, "width", "800px");
+    await markers.first().waitFor({ state: "hidden" });
+    await setStyle(transcript, "width");
+    await markers.first().waitFor({ state: "visible" });
 
-  await page.setViewportSize({ height: 900, width: 900 });
-  await markers.first().waitFor({ state: "hidden" });
-  await page.setViewportSize({ height: 844, width: 390 });
-  await markers.first().waitFor({ state: "hidden" });
-  await page.setViewportSize({ height: 900, width: 1440 });
-  await markers.first().waitFor({ state: "visible" });
+    await page.setViewportSize({ height: 900, width: 900 });
+    await markers.first().waitFor({ state: "hidden" });
+    await page.setViewportSize({ height: 844, width: 390 });
+    await markers.first().waitFor({ state: "hidden" });
+    await page.setViewportSize({ height: 900, width: 1440 });
+    await markers.first().waitFor({ state: "visible" });
+  });
   await page.emulateMedia({ reducedMotion: "reduce" });
-  // Global reduced-motion policy uses 0.01ms.
-  expect(
-    Number.parseFloat(
-      await readStyle(markers.first().locator(".chat-position-rail__tick"), "transition-duration"),
-    ),
-  ).toBeLessThanOrEqual(0.00001);
+  await checkThemes(async () => {
+    // Global reduced-motion policy uses 0.01ms.
+    expect(
+      Number.parseFloat(
+        await readStyle(
+          markers.first().locator(".chat-position-rail__tick"),
+          "transition-duration",
+        ),
+      ),
+    ).toBeLessThanOrEqual(0.00001);
 
-  await showMarker(239);
-  await clickAndObserveFlash(239, false);
+    await showMarker(239);
+    await clickAndObserveFlash(239, false);
+  });
 
   // A foreign-host commit can change the inner column while the pane's
   // own dimensions stay fixed. Exercise that existing event boundary.
@@ -547,18 +572,15 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
 }
 
 suite.define(() => {
-  it.each(["dark", "light"] as const)(
-    "tracks reader position and keyboard jumps in %s mode",
-    async (colorScheme) => {
-      await suite.withPage(
-        {
-          colorScheme,
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: { height: 900, width: 1440 },
-        },
-        ({ page }) => trackReader(page, colorScheme),
-      );
-    },
-  );
+  it("tracks reader position and keyboard jumps with both theme presentations", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      ({ page }) => trackReader(page),
+    );
+  });
 });

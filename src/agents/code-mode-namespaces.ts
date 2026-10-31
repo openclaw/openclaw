@@ -108,6 +108,7 @@ export type CodeModeNamespaceRuntime = {
     namespaceId: string,
     path: string[],
     args: unknown[],
+    // The bridge owns JSON normalization and detachment of executed MCP results.
     executeTool: (params: {
       toolName: string;
       catalogId: string;
@@ -194,13 +195,6 @@ function scopeAtPath(root: McpNamespaceScope, path: readonly string[]): McpNames
   return current;
 }
 
-type McpNamespaceModel = {
-  root: McpNamespaceScope;
-  calls: Map<string, McpNamespaceCall>;
-  docs: McpApiServerDoc[];
-  bindings: Map<string, CodeModeMcpCatalogBinding>;
-};
-
 type McpNamespaceServer = {
   key: string;
   safeServerName: string;
@@ -285,9 +279,7 @@ function mcpNodeLabel(node: NonNullable<McpNamespaceServer["node"]>): string {
   return truncateUtf16Safe((node.displayName?.trim() || node.id).replace(/\s+/gu, " "), 128);
 }
 
-function createMcpNamespaceModel(
-  catalog: readonly CodeModeNamespaceCatalogEntry[],
-): McpNamespaceModel | undefined {
+function createMcpNamespaceModel(catalog: readonly CodeModeNamespaceCatalogEntry[]) {
   const plan = createMcpNamespacePlan(catalog);
   if (!plan) {
     return undefined;
@@ -503,12 +495,10 @@ export function createCodeModeNamespaceRuntime(
       if (!target.tool) {
         return toCodeModeJsonSafe(input);
       }
-      return toCodeModeJsonSafe(
-        await executeTool({
-          ...target.tool,
-          input,
-        }),
-      );
+      return await executeTool({
+        ...target.tool,
+        input,
+      });
     },
   };
 }

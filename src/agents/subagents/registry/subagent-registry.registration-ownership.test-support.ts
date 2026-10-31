@@ -20,7 +20,8 @@ import {
   saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun } from "./subagent-registry.js";
-import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-registry.types.js";
+import type { RegistryRegistrationFixture } from "./subagent-registry.requester-completion.fixture.test-support.js";
+import type { SubagentRegistrationScope } from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 
 type Registration = Parameters<typeof registerSubagentRun>[0];
@@ -28,10 +29,7 @@ type Registration = Parameters<typeof registerSubagentRun>[0];
 export function registerSubagentRegistrationOwnershipTests({
   registration,
   updateRun,
-}: {
-  registration: (runId: string, overrides?: Partial<Registration>) => Registration;
-  updateRun: (runId: string, update: (draft: SubagentRunRecord) => void) => Promise<void>;
-}) {
+}: RegistryRegistrationFixture) {
   const paramsFor = (runId: string, overrides: Partial<Registration> = {}) =>
     registration(runId, { childSessionKey: "global", ...overrides });
   const register = (runId: string, overrides?: Partial<Registration>) =>
@@ -99,7 +97,7 @@ export function registerSubagentRegistrationOwnershipTests({
     });
   });
 
-  for (const phase of ["ordinary intent", "queued intent", "queued descriptor"] as const) {
+  for (const phase of ["ordinary intent", "queued intent"] as const) {
     it.each([
       "persisted owner",
       "persisted unknown owner",
@@ -155,10 +153,7 @@ export function registerSubagentRegistrationOwnershipTests({
           const before = loadSubagentRegistryFromSqlite().get(retained.runId);
           let writes = 0;
           const refusal = probe.command(stateWorker, async (command, options, scope) => {
-            if (
-              command.type === "subagents.persistChanges" &&
-              ++writes === (phase === "queued descriptor" ? 2 : 1)
-            ) {
+            if (command.type === "subagents.persistChanges" && ++writes === 1) {
               throw new Error("registration write refused");
             }
             return scope.execute(command, options);
@@ -171,13 +166,6 @@ export function registerSubagentRegistrationOwnershipTests({
                   sessionEntry,
                   collect: true,
                   queued: phase !== "ordinary intent",
-                  queuedLaunch: {
-                    requesterRecovery: {},
-                    request: { sessionKey: session.sessionKey },
-                    timeoutMs: 100,
-                    schedulerGroupKey: "retained-group",
-                    maxConcurrent: 1,
-                  },
                 }),
                 { retainOwnership },
               ),

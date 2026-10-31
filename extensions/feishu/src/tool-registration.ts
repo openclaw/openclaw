@@ -34,7 +34,6 @@ export function registerFeishuTool<TSchemaType extends TSchema>(
     (ctx) => {
       const cfg = ctx.runtimeConfig ?? ctx.config ?? api.config;
       if (
-        !cfg ||
         !listEnabledFeishuAccounts(cfg).some(
           (account) => resolveToolsConfig(account.config.tools)[tool.family],
         )

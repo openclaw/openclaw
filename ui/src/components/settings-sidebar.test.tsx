@@ -121,6 +121,27 @@ afterEach(async () => {
 });
 
 describe("settings sidebar search", () => {
+  it("keeps Usage and Logs copy narrow until the first search without replacing the input", async () => {
+    for (const activeRouteId of ["usage", "logs"] as const) {
+      render({ activeRouteId, saveIndicator: { ...saveIndicator(), status: "paused" } });
+      expect(labels()).toContain("Appearance");
+      await waitForSolid(() =>
+        expect(container.textContent).toContain("Autosave paused after reconnect"),
+      );
+      expect(t("configView.chatPrefs.title")).toBe("configView.chatPrefs.title");
+    }
+    const search = searchHarness("", {
+      activeRouteId: "logs",
+      searchParams: { query: "collapse task progress", schema: null, value: null, uiHints: {} },
+    });
+    search.input.focus();
+    search.enter("collapse task progress");
+    await waitForSolid(() => expect(labels(".settings-sidebar__subitem-label")).toContain("Chat"));
+    expect(container.querySelector(".settings-sidebar__search-input")).toBe(search.input);
+    expect(document.activeElement).toBe(search.input);
+    expect(search.input.value).toBe("collapse task progress");
+  });
+
   it("keeps save recovery available in the embedded page header", async () => {
     const onRetry = vi.fn();
     render({
@@ -352,6 +373,33 @@ describe("settings sidebar search", () => {
     expect(onExit).toHaveBeenCalledOnce();
   });
 
+  it("clears the visible search before its projected query commits", () => {
+    const onExit = vi.fn();
+    const onSearchQueryChange = vi.fn((searchQuery: string) => {
+      setProps((current) => ({ ...current, searchQuery }));
+    });
+    const [props, setProps] = createSignal(sidebarProps({ onExit, onSearchQueryChange }));
+    mountSolid(() => <SettingsSidebar {...props()} />, { container });
+    flush();
+    const input = container.querySelector<HTMLInputElement>(".settings-sidebar__search-input")!;
+    input.focus();
+    input.value = "appearance";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(onSearchQueryChange).toHaveBeenLastCalledWith("");
+    expect(input.value).toBe("");
+    expect(document.activeElement).toBe(input);
+    expect(onExit).not.toHaveBeenCalled();
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(onExit).toHaveBeenCalledOnce();
+  });
+
   it("renders refreshed settings route titles from the active locale", async () => {
     render({});
 
@@ -372,7 +420,7 @@ describe("settings sidebar search", () => {
   });
 
   it.each(["sidebar", "embed-list", "embed-page"] as const)(
-    "preserves save feedback in web settings and native connection recovery in %s",
+    "preserves actionable save feedback in web settings and native connection recovery in %s",
     async (presentation) => {
       const onRetryConnect = vi.fn();
       const renderSidebar = (
@@ -389,7 +437,7 @@ describe("settings sidebar search", () => {
           lastError,
           gatewayVersion: "1.0.0",
           onRetryConnect,
-          saveIndicator: { ...saveIndicator(), status: "saving" },
+          saveIndicator: { ...saveIndicator(), status: "error", lastError: "Save failed" },
         });
 
       renderSidebar(null);
@@ -397,7 +445,7 @@ describe("settings sidebar search", () => {
       await vi.waitFor(() => {
         expect(
           container.querySelector<HTMLElement>(".settings-save-indicator")?.textContent,
-        ).toContain(t("configView.autoSaveSaving"));
+        ).toContain(t("configView.autoSaveFailed"));
       });
 
       renderSidebar(null);
@@ -438,7 +486,7 @@ describe("settings sidebar search", () => {
         expect(suspended?.hasAttribute("role")).toBe(false);
         expect(
           container.querySelector<HTMLElement>(".settings-save-indicator")?.textContent,
-        ).toContain(t("configView.autoSaveSaving"));
+        ).toContain(t("configView.autoSaveFailed"));
       }
 
       renderSidebar("offline", "connection refused?token=settings-secret");
@@ -650,7 +698,11 @@ it("follows agent owner replacement and publications without remounting", async 
   const selectionSubscriptions = [...selectionListeners];
   const identitySubscriptions = [...identityListeners];
   const subscriptions = [selectionSubscriptions, identitySubscriptions];
+  const optionCopy = selector.querySelector(".agent-select__option-copy");
+  expect(optionCopy).not.toBeNull();
   render({ ...props, gatewayVersion: "test" });
+  await selector.updateComplete;
+  expect(selector.querySelector(".agent-select__option-copy")).toBe(optionCopy);
   expect([[...selectionListeners], [...identityListeners]]).toEqual(subscriptions);
   settingsAgentSelection.state.selectedId = "research";
   settingsAgentSelection.state.scopeId = "research";
@@ -684,5 +736,13 @@ it("follows agent owner replacement and publications without remounting", async 
     expect(replacement.agentIdentity.ensure).toHaveBeenLastCalledWith(["research"]);
     expect(avatar()).toBe("🦊");
   });
+  render({
+    ...props,
+    ...replacement,
+    agents: props.agents.map((agent) =>
+      agent.id === "research" ? Object.assign({}, agent, { name: "Research renamed" }) : agent,
+    ),
+  });
+  await waitForSolid(() => expect(label()).toContain("Research renamed"));
   expect(container.querySelector<HTMLElement>("openclaw-agent-select")).toBe(selector);
 });

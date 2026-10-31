@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { GatewayCloseCodes, type GatewayPlugin } from "../internal/gateway.js";
 import {
@@ -19,11 +20,18 @@ type MockGateway = {
   emitter: EventEmitter;
 };
 
-const { stopLogging, unregisterGateway } = vi.hoisted(() => ({
-  stopLogging: vi.fn(),
-  unregisterGateway: vi.fn(),
-}));
-vi.mock("../gateway-logging.js", () => ({ attachDiscordGatewayLogging: () => stopLogging }));
+// Suite runs isolate=false: a partial factory here poisons the shared module
+// cache for later files in the worker (#123025), so spread the real module.
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    logVerbose: vi.fn(),
+    warn: (message: string) => `warn:${message}`,
+  };
+});
+
+const unregisterGateway = vi.hoisted(() => vi.fn());
 vi.mock("./gateway-registry.js", () => ({ registerGateway: vi.fn(), unregisterGateway }));
 
 describe("runDiscordGatewayLifecycle", () => {
@@ -32,7 +40,7 @@ describe("runDiscordGatewayLifecycle", () => {
     ({ runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js"));
   });
   beforeEach(() => {
-    stopLogging.mockClear();
+    vi.mocked(logVerbose).mockClear();
     unregisterGateway.mockClear();
   });
   afterEach(() => vi.useRealTimers());
@@ -112,10 +120,47 @@ describe("runDiscordGatewayLifecycle", () => {
   function expectCleanup(h: ReturnType<typeof createHarness>, attaches: number, detaches = 2) {
     expect(h.gatewaySupervisor.attachLifecycle).toHaveBeenCalledTimes(attaches);
     expect(unregisterGateway).toHaveBeenCalledWith("default");
-    expect(stopLogging).toHaveBeenCalledOnce();
+    expect(h.emitter.listenerCount("debug")).toBe(0);
+    expect(h.emitter.listenerCount("warning")).toBe(0);
     expect(h.threadStop).toHaveBeenCalledOnce();
     expect(h.gatewaySupervisor.detachLifecycle).toHaveBeenCalledTimes(detaches);
   }
+
+  it.each([
+    ["debug", "Gateway websocket opened", false],
+    ["debug", "Gateway websocket closed: 1001", true],
+    ["debug", "Gateway reconnect scheduled in 1000ms (close, resume=true)", true],
+    ["debug", "Gateway forcing fresh IDENTIFY after 3 failed resume attempts", true],
+    ["warning", "High latency detected: 1200ms", true],
+  ] as const)("logs %s: %s", async (event, message, promoted) => {
+    const h = createHarness();
+    const lifecycle = runDiscordGatewayLifecycle(h.params);
+    try {
+      await h.listening;
+      h.emitter.emit(event, message);
+      const verbose = `discord gateway${event === "warning" ? " warning" : ""}: ${message}`;
+      expect(logVerbose).toHaveBeenCalledExactlyOnceWith(verbose);
+      expect(h.runtime.log.mock.calls).toEqual(
+        promoted ? [[event === "warning" ? `warn:${verbose}` : verbose]] : [],
+      );
+    } finally {
+      h.abort.abort();
+      await lifecycle;
+    }
+  });
+
+  it("removes logging listeners on cleanup", async () => {
+    const h = createHarness();
+    const lifecycle = runDiscordGatewayLifecycle(h.params);
+    await h.listening;
+    h.abort.abort();
+    await lifecycle;
+    vi.mocked(logVerbose).mockClear();
+    h.emitter.emit("debug", "Gateway websocket closed: 1001");
+    h.emitter.emit("warning", "High latency detected: 1200ms");
+    expect(logVerbose).not.toHaveBeenCalled();
+    expect(h.runtime.log).not.toHaveBeenCalled();
+  });
 
   it.each([false, true])("joins bindings after voice cleanup fails=%s", async (fails) => {
     const h = createHarness();

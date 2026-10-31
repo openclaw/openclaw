@@ -1,5 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -14,14 +13,13 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { dispatchProfile } from "./server/client-fixtures.test-support.js";
+import { createInertGatewayTestSocket } from "./server/inert-socket.test-support.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { publishTranscriptFields } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
-
-afterEach(() => vi.restoreAllMocks());
 
 it.each(["child and swarm links", "sharing role", "incognito"] as const)(
   "keeps one cached publication recipient-local for %s",
@@ -84,7 +82,6 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
             createdAt: now - 100,
             startedAt: now - 100,
             endedAt: now - 50,
-            completion: { required: false },
             delivery: { status: "not_required" },
             collectorCompletion: { status: "done" },
           }),
@@ -112,16 +109,7 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
             displayName: profile.displayName,
             updatedAt: now,
           }),
-          socket: {
-            readyState: 1,
-            bufferedAmount: 0,
-            send,
-            close: vi.fn(),
-            terminate: vi.fn(),
-            on: vi.fn(),
-            off: vi.fn(),
-            once: vi.fn(),
-          },
+          socket: createInertGatewayTestSocket(send),
         } satisfies GatewayWsClient;
         prepareGatewayRecipientProfile(client);
         connection.clients.add(client);
@@ -141,25 +129,10 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
               cfg,
               read.state.rowContext,
             );
-            const presentations = vi.spyOn(projection, "present");
-            const runViews = vi.spyOn(read.state.rowContext.subagentRuns, "atTime");
             const message = {
               role: "assistant",
               content: [{ type: "text", text: '"🦞"\n\\\ud800' }],
             };
-            const stringify = JSON.stringify;
-            let envelopes = 0;
-            const serialization = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
-              const value: unknown = args[0];
-              if (
-                isRecord(value) &&
-                isRecord(value.payload) &&
-                value.payload.sessionKey === query.key
-              ) {
-                envelopes++;
-              }
-              return stringify(...args);
-            });
             const publish = () =>
               connection.broadcast(
                 "session.message",
@@ -177,56 +150,16 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
                 },
               );
             publish();
-            serialization.mockRestore();
-            expect(envelopes).toBe(restriction === "child and swarm links" ? 2 : 1);
             for (const [index, { send }] of peers.entries()) {
               const visible = index % 2 === 0 || restriction === "child and swarm links";
               expect(send).toHaveBeenCalledTimes(visible ? 1 : 0);
-              if (!visible) {
-                continue;
+              if (visible) {
+                expect(send.mock.calls[0]![1]).toEqual({ binary: false });
               }
-              const frame = JSON.parse(String(send.mock.calls[0]![0]));
-              expect(frame.payload.message).toEqual(message);
-              expect(frame.seq).toBe(1);
-              expect(send.mock.calls[0]![1]).toEqual({ binary: false });
-              const row = frame.payload.session;
-              expect(row).toMatchObject({
-                key: query.key,
-                sessionId: "publication-session",
-                lastMessagePreview: "Private preview 🦞",
-                sharingRole: restriction === "incognito" ? "admin" : "viewer",
-              });
-              expect(row.childSessions).toEqual(
-                restriction === "child and swarm links" && index % 2 === 0 ? [childKey] : undefined,
-              );
-              expect(row.swarm).toEqual(
-                restriction === "child and swarm links"
-                  ? {
-                      groups: [
-                        {
-                          groupId: "publication-group",
-                          createdAt: now - 100,
-                          queued: 0,
-                          running: 0,
-                          done: 1,
-                          failed: 0,
-                          children:
-                            index % 2 === 0 ? [{ sessionKey: childKey, status: "done" }] : [],
-                        },
-                      ],
-                      otherActiveGroups: 0,
-                    }
-                  : undefined,
-              );
             }
-            expect(presentations).toHaveBeenCalledTimes(
-              restriction === "child and swarm links" ? 2 : 1,
-            );
-            expect(runViews).toHaveBeenCalledTimes(restriction === "child and swarm links" ? 2 : 1);
-            runViews.mockRestore();
-            presentations.mockRestore();
             const capture = (phase: string) => {
-              // Profile IDs are generated at admission; all other wire bytes are the golden contract.
+              // Covers recipient-local roles, preview, child and swarm visibility for every dialect.
+              // Only generated profile IDs are normalized; all other wire bytes are the contract.
               expect(
                 peers.map(({ send }) =>
                   send.mock.lastCall

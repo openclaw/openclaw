@@ -107,9 +107,9 @@ const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
 );
 const validateReplayTurnsMock = vi.fn(async ({ messages }: { messages: unknown[] }) => messages);
-export const resolveSessionAgentIdMock = vi.fn<
-  typeof import("../agent-scope.js").resolveSessionAgentId
->(() => "main");
+const resolveSessionAgentIdMock = vi.fn<typeof import("../agent-scope.js").resolveSessionAgentId>(
+  () => "main",
+);
 export const resolveSessionAgentIdsMock = vi.fn<
   typeof import("../agent-scope.js").resolveSessionAgentIds
 >(() => ({
@@ -232,7 +232,7 @@ const applyAgentCompactionSettingsFromConfigMock = vi.fn();
 const createPreparedEmbeddedAgentSettingsManagerMock = vi.fn(() => ({
   getGlobalSettings: vi.fn(() => ({})),
 }));
-export const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { surface?: string }) =>
+const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { surface?: string }) =>
   params?.surface === "subagent"
     ? ["Subagent compact command guidance."]
     : params?.surface === "acp_backend"
@@ -269,7 +269,7 @@ export const resolveProviderEntryApiKeyProfileReferenceMock: Mock<() => unknown>
   kind: "none",
 }));
 const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn(() => false);
-export const registerProviderStreamForModelMock: Mock<(params?: unknown) => unknown> = vi.fn();
+const registerProviderStreamForModelMock: Mock<(params?: unknown) => unknown> = vi.fn();
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
 function createDefaultCompactionAuthStore(): AuthProfileStore {
   return {

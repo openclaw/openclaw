@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import { nativeMessage } from "./chat-thread-fixtures.test-support.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 
@@ -340,17 +341,14 @@ describe("transcript input order", () => {
 
   it.each([
     { state: "queued", label: "reversed", timestamps: [30, 20] },
-    { state: "interrupted", label: "reversed", timestamps: [30, 20] },
     { state: "cancelled", label: "equal", timestamps: [20, 20] },
   ] as const)(
     "preserves server $state input order and attached notices with $label timestamps",
     ({ state, timestamps }) => {
       const notice =
-        state === "interrupted"
-          ? "Interrupted before the agent started it. If it does not resume, copy it and send again."
-          : state === "cancelled"
-            ? "Cancelled before the agent started it. It will not run automatically; copy it and send again."
-            : null;
+        state === "cancelled"
+          ? "Cancelled before the agent started it. It will not run automatically; copy it and send again."
+          : null;
       const expectedInputs = ["First accepted input", "Second accepted input"].flatMap((text) =>
         notice ? [text, notice] : [text],
       );
@@ -421,12 +419,7 @@ describe("transcript input order", () => {
   it("reuses loaded history when a render rebuilds its pending input list", () => {
     let messageReads = 0;
     const loaded = new Proxy(
-      {
-        role: "assistant",
-        content: "Loaded history",
-        timestamp: 1,
-        __openclaw: { id: "loaded", seq: 1 },
-      },
+      nativeMessage("assistant", "Loaded history", 1, { id: "loaded", seq: 1 }),
       {
         get(target, key, receiver) {
           messageReads += 1;

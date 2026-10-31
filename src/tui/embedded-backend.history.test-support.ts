@@ -9,11 +9,26 @@ export function registerEmbeddedHistoryProjectionTests(params: {
   withPreparedExactRows: Mock;
   buildSessionRow: Mock;
 }) {
-  it("validates and presents history metadata within its prepared read frame", async () => {
+  async function loadHistory(opts: Parameters<EmbeddedTuiBackend["loadHistory"]>[0]) {
+    const backend = params.createBackend();
+    backend.start();
+    try {
+      return await backend.loadHistory(opts);
+    } finally {
+      await backend.stop();
+    }
+  }
+
+  it("presents captured history and the selected agent's verbose default within its read frame", async () => {
     const entry = { sessionId: "captured-session", lifecycleRevision: "captured-revision" };
     const target = { key: "global", agentId: "work", storePath: "/tmp/physical.sqlite" };
     params.loadSessionEntry.mockReturnValue({
-      cfg: {},
+      cfg: {
+        agents: {
+          defaults: { verboseDefault: "off" },
+          entries: { main: {}, work: { verboseDefault: "full" } },
+        },
+      },
       agentId: target.agentId,
       canonicalKey: target.key,
       storePath: "/tmp/logical.sqlite",
@@ -26,12 +41,10 @@ export function registerEmbeddedHistoryProjectionTests(params: {
         expect(active, "history identity must be validated before the read expires").toBe(true);
         return entry;
       },
-      target,
     };
     const describe = vi.fn(() => row);
     const present = vi.fn((current: typeof row) => {
       expect(active, "history metadata must be presented before the read expires").toBe(true);
-      expect(current).toBe(row);
       return { key: target.key, sessionId: current.entry.sessionId };
     });
     params.withPreparedExactRows.mockImplementationOnce(async (queries, consume) => {
@@ -43,22 +56,13 @@ export function registerEmbeddedHistoryProjectionTests(params: {
         active = false;
       }
     });
-    const backend = params.createBackend();
-    backend.start();
-    try {
-      const result = await backend.loadHistory({ sessionKey: "global", agentId: "work" });
-      expect(result).toMatchObject({
-        sessionId: entry.sessionId,
-        sessionInfo: { key: target.key, sessionId: entry.sessionId },
-      });
-      expect(describe).toHaveBeenCalledExactlyOnceWith(target);
-      expect(present).toHaveBeenCalledExactlyOnceWith(row);
-      expect(params.present).not.toHaveBeenCalled();
-      expect(params.buildSessionRow).not.toHaveBeenCalled();
-      expect(active).toBe(false);
-    } finally {
-      await backend.stop();
-    }
+    expect(await loadHistory({ sessionKey: "global", agentId: "work" })).toMatchObject({
+      sessionId: entry.sessionId,
+      verboseLevel: "full",
+      sessionInfo: { key: target.key, sessionId: entry.sessionId },
+    });
+    expect(describe).toHaveBeenCalledExactlyOnceWith(target);
+    expect(params.present).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -69,45 +73,12 @@ export function registerEmbeddedHistoryProjectionTests(params: {
       cfg: {},
       agentId: "main",
       canonicalKey: "agent:main:main",
-      storePath: "/tmp/main.sqlite",
       entry: { sessionId: "previous-session", lifecycleRevision: "previous-revision" },
     });
-    params.describe.mockReturnValue({
-      entry: currentEntry,
-      target: { key: "agent:main:main" },
-    });
-    const backend = params.createBackend();
-    backend.start();
-    try {
-      const result = await backend.loadHistory({ sessionKey: "agent:main:main" });
-      expect(result.sessionId).toBe("previous-session");
-      expect(result.sessionInfo).toBeUndefined();
-      expect(params.present).not.toHaveBeenCalled();
-      expect(params.buildSessionRow).not.toHaveBeenCalled();
-    } finally {
-      await backend.stop();
-    }
-  });
-
-  it("loads history verbose level from the session agent's own verboseDefault", async () => {
-    params.loadSessionEntry.mockReturnValue({
-      cfg: {
-        agents: {
-          defaults: { verboseDefault: "off" },
-          entries: { main: {}, ops: { verboseDefault: "full" } },
-        },
-      },
-      agentId: "ops",
-      canonicalKey: "agent:ops:main",
-      entry: {},
-    });
-    const backend = params.createBackend();
-    backend.start();
-    try {
-      const result = await backend.loadHistory({ sessionKey: "agent:ops:main" });
-      expect(result.verboseLevel).toBe("full");
-    } finally {
-      await backend.stop();
-    }
+    params.describe.mockReturnValue({ entry: currentEntry });
+    const result = await loadHistory({ sessionKey: "agent:main:main" });
+    expect(result.sessionId).toBe("previous-session");
+    expect(result.sessionInfo).toBeUndefined();
+    expect(params.present).not.toHaveBeenCalled();
   });
 }

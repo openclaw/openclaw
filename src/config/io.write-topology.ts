@@ -18,8 +18,8 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { prepareConfigWriteValues } from "./io.write-prepare.js";
-import { findLegacyConfigRuleIssues } from "./legacy.js";
 import { resolveLegacyAgentRosterOwner } from "./legacy.roster.js";
+import { findLegacyConfigRuleIssues } from "./legacy.shared.js";
 import type { OpenClawConfig } from "./types.js";
 import { materializeLegacyAgentOwnershipForActiveChannelsResultAsync } from "./validation.js";
 

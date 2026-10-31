@@ -14,7 +14,7 @@ import { disposeContextEngineSources } from "../../context-engine/registry.resou
 import type { ContextEngine, ContextEngineOperation } from "../../context-engine/types.js";
 import { recordAgentCleanupFailure, runAgentCleanupStep } from "../run-cleanup-timeout.js";
 
-type LogicalTurnSelectionState = "unselected" | "selected" | "started" | "disposed";
+type LogicalTurnSelectionState = "unselected" | "selected" | "started" | "handed-over" | "disposed";
 
 type EffectiveContextEngineRef = Readonly<{
   engine: ContextEngine;
@@ -40,6 +40,14 @@ export type ContextEngineLogicalTurnLease = {
   }) => EffectiveContextEngineRef;
   degradeBeforeStart: (reason: string) => EffectiveContextEngineRef;
   begin: () => EffectiveContextEngineRef;
+  /**
+   * Hands a started turn to a reloaded plugin generation at a step boundary. It disposes
+   * this generation's engines now, so the reload can drain them, and keeps the turn's
+   * settlements for its end. `rebind()` then resolves the same engine id again.
+   */
+  handOver: () => Promise<void>;
+  /** After `handOver()`, resolves the turn's engines from the current registry. */
+  rebind: () => Promise<void>;
   onDispose: (key: string, settle: () => Promise<void>) => void;
   deferDisposalUntil: (promise: Promise<unknown>) => void;
   dispose: () => Promise<void>;
@@ -53,13 +61,15 @@ export async function createContextEngineLogicalTurnLease(params: {
   awaitSessionDiffBaseline?: () => Promise<void>;
 }): Promise<ContextEngineLogicalTurnLease> {
   const { runId, sessionId } = params.identity;
-  const resolution = await resolveLogicalTurnContextEngines(params.config, {
-    initialize: ensureContextEnginesInitialized,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    beforeCustomEngine: params.awaitSessionDiffBaseline,
-    onCleanupFailure: recordAgentCleanupFailure,
-  });
+  const resolve = () =>
+    resolveLogicalTurnContextEngines(params.config, {
+      initialize: ensureContextEnginesInitialized,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      beforeCustomEngine: params.awaitSessionDiffBaseline,
+      onCleanupFailure: recordAgentCleanupFailure,
+    });
+  let resolution = await resolve();
   let state: LogicalTurnSelectionState = "unselected";
   let effective = resolution.configured;
   let degradedReason = resolution.configuredFailure;
@@ -148,6 +158,33 @@ export async function createContextEngineLogicalTurnLease(params: {
     degradeBeforeStart(resolution.configuredFailure);
   }
 
+  // Dispose one resolution's distinct instances in parallel so their deadlines do not
+  // stack. The shared helper records each failure before one-shot cleanup checks ownership.
+  const disposeEngines = async (resolved: typeof resolution) => {
+    const engines = [resolved.configured.engine, resolved.fallback.engine];
+    const distinctEngines = engines.filter((engine, index) =>
+      engines.slice(0, index).every((other) => !hasSameContextEngineInstance(engine, other)),
+    );
+    await Promise.allSettled(
+      distinctEngines.map((engine) =>
+        runAgentCleanupStep({
+          runId,
+          sessionId,
+          step: "context-engine-dispose",
+          log: { warn: console.warn },
+          cleanup: async () => {
+            const sources = new Set(
+              engines
+                .filter((other) => hasSameContextEngineInstance(engine, other))
+                .flatMap((other) => resolved.sourceResources?.get(other) ?? []),
+            );
+            await disposeContextEngineSources(engine, [...sources]);
+          },
+        }),
+      ),
+    );
+  };
+
   const lease: ContextEngineLogicalTurnLease = {
     get engine() {
       return effective.engine;
@@ -199,6 +236,29 @@ export async function createContextEngineLogicalTurnLease(params: {
       state = "started";
       return asEffective();
     },
+    async handOver() {
+      if (state !== "started") {
+        return;
+      }
+      state = "handed-over";
+      await disposeEngines(resolution);
+    },
+    async rebind() {
+      if (state !== "handed-over") {
+        return;
+      }
+      // Same config, so the same engine id; a rollback simply resolves the restored generation.
+      const next = await resolve();
+      if (!degradedReason && next.configuredFailure) {
+        await disposeEngines(next);
+        throw new Error(
+          `context engine "${resolution.configuredId}" is unavailable after plugin reload: ${next.configuredFailure}`,
+        );
+      }
+      resolution = next;
+      effective = degradedReason ? next.fallback : next.configured;
+      state = "started";
+    },
     onDispose(key, settle) {
       if (state === "disposed") {
         throw new Error("context-engine logical turn lease is already disposed");
@@ -216,6 +276,8 @@ export async function createContextEngineLogicalTurnLease(params: {
       if (state === "disposed") {
         return;
       }
+      // A turn that ends before rebinding released its engines when it was handed over.
+      const ownsEngines = state !== "handed-over";
       state = "disposed";
       await Promise.all(
         [...settlements.values()].map((cleanup) =>
@@ -229,37 +291,14 @@ export async function createContextEngineLogicalTurnLease(params: {
         ),
       );
       settlements.clear();
-      const engines = [resolution.configured.engine, resolution.fallback.engine];
-      const distinctEngines = engines.filter((engine, index) =>
-        engines.slice(0, index).every((other) => !hasSameContextEngineInstance(engine, other)),
-      );
-      // Dispose instances in parallel so their deadlines do not stack. The
-      // shared helper records each failure before one-shot cleanup checks ownership.
-      const disposeEngines = async () => {
-        await Promise.allSettled(
-          distinctEngines.map((engine) =>
-            runAgentCleanupStep({
-              runId,
-              sessionId,
-              step: "context-engine-dispose",
-              log: { warn: console.warn },
-              cleanup: async () => {
-                const sources = new Set(
-                  engines
-                    .filter((other) => hasSameContextEngineInstance(engine, other))
-                    .flatMap((other) => resolution.sourceResources?.get(other) ?? []),
-                );
-                await disposeContextEngineSources(engine, [...sources]);
-              },
-            }),
-          ),
-        );
-      };
-      if (disposalHolds.size > 0) {
-        void Promise.allSettled(disposalHolds).then(disposeEngines);
+      if (!ownsEngines) {
         return;
       }
-      await disposeEngines();
+      if (disposalHolds.size > 0) {
+        void Promise.allSettled(disposalHolds).then(() => disposeEngines(resolution));
+        return;
+      }
+      await disposeEngines(resolution);
     },
   };
   return lease;

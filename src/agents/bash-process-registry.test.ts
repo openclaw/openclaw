@@ -8,13 +8,13 @@ import {
   appendOutput,
   clearFinishedSessionsForScopes,
   deleteSession,
-  getActiveBackgroundExecSessionCount,
   getFinishedSession,
   isProcessSessionIdTaken,
   listFinishedSessions,
   listRunningSessions,
   markBackgrounded,
   markExited,
+  onBackgroundProcessesChanged,
   prepareSessionPoll,
   recordNotifyOnExitRemoval,
   tail,
@@ -30,7 +30,7 @@ const randomMocks = vi.hoisted(() => ({ generateSecureInt: vi.fn(() => 0) }));
 // mock-isolation: Deterministic session IDs exercise collision handling without real randomness.
 vi.mock("../infra/secure-random.js", () => ({ generateSecureInt: randomMocks.generateSecureInt }));
 
-it("releases discarded backing strings from live, finished, and staged output", async ({
+it("releases unrelated backing storage from live, finished, and staged output", async ({
   signal,
 }) => {
   const result = await runNodeScript(
@@ -78,6 +78,48 @@ beforeEach(() => {
   randomMocks.generateSecureInt.mockReset();
   randomMocks.generateSecureInt.mockReturnValue(0);
   resetProcessRegistryForTests();
+});
+
+it("coalesces output without serializing a target for every chunk and preserves later changes", () => {
+  vi.useFakeTimers();
+  const observed: { agentId?: string; output: string; exited: boolean }[] = [];
+  const first = makeSession({ id: "first" });
+  const other = makeSession({ id: "other" });
+  first.scopeKey = other.scopeKey = "shared-session";
+  first.agentId = "first-agent";
+  other.agentId = "other-agent";
+  const unsubscribe = onBackgroundProcessesChanged(({ agentId }) => {
+    const session = agentId === first.agentId ? first : other;
+    observed.push({ agentId, output: session.aggregated, exited: session.exited });
+  });
+  try {
+    const serialize = vi.spyOn(JSON, "stringify");
+    for (let i = 0; i < 100; i++) {
+      appendOutput(first, "stdout", "a");
+      appendOutput(other, "stderr", "b");
+    }
+    const serializations = serialize.mock.calls.length;
+    serialize.mockRestore();
+    vi.advanceTimersByTime(5_000);
+    expect(observed).toEqual([
+      { agentId: "first-agent", output: "a".repeat(100), exited: false },
+      { agentId: "other-agent", output: "b".repeat(100), exited: false },
+    ]);
+    vi.advanceTimersByTime(5_000);
+    expect(observed).toHaveLength(2);
+    appendOutput(first, "stdout", "final");
+    markExited(first, 0, null, "completed");
+    vi.advanceTimersByTime(5_000);
+    expect(observed.at(-1)).toEqual({
+      agentId: "first-agent",
+      output: "a".repeat(95) + "final",
+      exited: true,
+    });
+    expect(observed).toHaveLength(3);
+    expect(serializations).toBe(0);
+  } finally {
+    unsubscribe();
+  }
 });
 
 it("suppresses a notify-on-exit event when terminal poll acknowledgement wins the race", () => {
@@ -265,22 +307,6 @@ it("retains the complete newest log when it alone exceeds the aggregate budget",
 
   expect(listFinishedSessions()).toHaveLength(1);
   expect(getFinishedSession("oversized-finished")?.aggregated).toHaveLength(2_000_001);
-});
-
-it("tracks only live backgrounded sessions", () => {
-  const session = makeSession({ backgrounded: false });
-
-  expect(getActiveBackgroundExecSessionCount()).toBe(0);
-
-  markBackgrounded(session);
-  markBackgrounded(session);
-  expect(getActiveBackgroundExecSessionCount()).toBe(1);
-
-  markExited(session, 0, null, "completed");
-  expect(getActiveBackgroundExecSessionCount()).toBe(0);
-
-  markBackgrounded(session);
-  expect(getActiveBackgroundExecSessionCount()).toBe(0);
 });
 
 it.each([false, true])(

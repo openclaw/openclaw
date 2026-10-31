@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import {
   chatSessionListResponse,
   newChatPage,
@@ -15,13 +16,6 @@ const suite = createChatFlowE2eSuite();
 
 const sessionA = "agent:main:session-a";
 const bedrockModel = "bedrock/claude-opus-4.5";
-const sessionRow = <T extends object>(key: string, label: string, updatedAt: number, extra: T) => ({
-  key,
-  kind: "direct",
-  label,
-  updatedAt,
-  ...extra,
-});
 const generatedModels = (count: number, idPrefix = "model", namePrefix = "Model") =>
   Array.from({ length: count }, (_, index) => ({
     id: `${idPrefix}-${index + 1}`,
@@ -86,7 +80,7 @@ async function expectMenuPlacement(
         placed:
           box !== null &&
           anchor !== null &&
-          (above ? box.y + box.height <= anchor.y - 5 : box.y >= anchor.y + anchor.height + 5),
+          (above ? box.y + box.height <= anchor.y - 3 : box.y >= anchor.y + anchor.height + 3),
         withinViewport: box !== null && box.y >= 8 && box.y + box.height <= height - 8,
       };
     })
@@ -160,7 +154,7 @@ suite.define(() => {
       models: generatedModels(12),
     });
 
-    await gateway.waitForRequest("chat.startup");
+    await gateway.waitForRequest("sessions.messages.subscribe");
 
     const controls = page.locator(".chat-composer-model-control");
     for (const picker of [

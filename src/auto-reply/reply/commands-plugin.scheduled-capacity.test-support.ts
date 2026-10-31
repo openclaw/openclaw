@@ -1,11 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
 import {
-  enqueueSwarmRun,
   isSwarmRunActive,
   listSwarmRunReservationIds,
   releaseSwarmRun,
 } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronAgentExecutionStarted } from "../../cron/types.js";
 

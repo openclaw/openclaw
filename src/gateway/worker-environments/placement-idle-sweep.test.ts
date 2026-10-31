@@ -23,11 +23,26 @@ import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordina
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerPlacementIdleSweep } from "./placement-idle-sweep.js";
+import { makeClaimInput } from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { journalOwner } from "./placement-suite.test-support.js";
 import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
 
 const tempDirs = useStateDatabaseTempDirs();
+type SweepOptions = Parameters<typeof createWorkerPlacementIdleSweep>[0];
+type IdleFixtureOptions = Partial<
+  Pick<
+    SweepOptions,
+    | "reportChanges"
+    | "isPlacementOperationInFlight"
+    | "loadSessionRuntime"
+    | "getSessionWorkAdmissionCheck"
+  >
+> & {
+  suspendAfter?: string | null;
+  destroyFails?: boolean;
+  reclaim?: SweepOptions["dispatch"]["reclaim"];
+};
 
 describe("worker placement idle suspension", () => {
   let nowMs: number;
@@ -43,23 +58,7 @@ describe("worker placement idle suspension", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  async function createIdleFixture(
-    options: {
-      suspendAfter?: string | null;
-      destroyFails?: boolean;
-      reclaim?: Parameters<typeof createWorkerPlacementIdleSweep>[0]["dispatch"]["reclaim"];
-      reportChanges?: Parameters<typeof createWorkerPlacementIdleSweep>[0]["reportChanges"];
-      isPlacementOperationInFlight?: (sessionId: string) => boolean;
-      loadSessionRuntime?: Parameters<
-        typeof createWorkerPlacementIdleSweep
-      >[0]["loadSessionRuntime"];
-      getSessionWorkAdmissionCheck?: (identity: {
-        sessionId: string;
-        sessionKey: string;
-        agentId: string;
-      }) => Promise<() => boolean>;
-    } = {},
-  ) {
+  async function createIdleFixture(options: IdleFixtureOptions = {}) {
     const harness = await createHarness(database, placements, {
       reconcileChanged: false,
       reconcileCommitsManifest: false,
@@ -81,42 +80,22 @@ describe("worker placement idle suspension", () => {
       environments: harness.environments,
       dispatch: { reclaim: options.reclaim ?? harness.service.reclaim },
       reportChanges: options.reportChanges ?? ((operation) => operation()),
-      getConfig: () => ({
-        cloudWorkers: {
-          profiles: {
-            [REQUEST.profileId]: profile,
-          },
-        },
-      }),
+      getConfig: () => ({ cloudWorkers: { profiles: { [REQUEST.profileId]: profile } } }),
       isPlacementOperationInFlight,
       loadSessionRuntime: options.loadSessionRuntime,
-      ...(options.getSessionWorkAdmissionCheck
-        ? { getSessionWorkAdmissionCheck: options.getSessionWorkAdmissionCheck }
-        : {}),
+      getSessionWorkAdmissionCheck: options.getSessionWorkAdmissionCheck,
       info,
       warn,
     });
-    return { harness, idleSweep, profile, info, warn, isPlacementOperationInFlight };
+    const expectNotSuspended = () => {
+      expect(harness.environments.destroy).not.toHaveBeenCalled();
+      expect(info).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    };
+    return { harness, idleSweep, profile, info, warn, expectNotSuspended };
   }
 
-  function claimWorkerTurn(claimId = "busy-worker-claim") {
-    const active = placements.get(REQUEST.sessionId);
-    if (active?.state !== "active") {
-      throw new Error("expected an active worker placement");
-    }
-    return placements.claimTurn({
-      ...REQUEST,
-      claimId,
-      runId: `run-${claimId}`,
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
-  }
-
-  it("reports suspension only when enabled", async () => {
+  it("reports enabled suspension at the activation deadline through real reclaim", async () => {
     const changed = vi.fn();
     const unsubscribe = sessionChanges.subscribe(changed);
     const reportChanges = createGatewayWorkerPlacementChangePublisher({
@@ -129,64 +108,52 @@ describe("worker placement idle suspension", () => {
       warn: vi.fn(),
     });
     try {
-      const { harness, idleSweep, profile } = await createIdleFixture({
+      const { harness, idleSweep, profile, info, warn } = await createIdleFixture({
         suspendAfter: null,
         reportChanges,
       });
-      await harness.service.dispatch(REQUEST);
+      const active = await harness.service.dispatch(REQUEST);
       nowMs += 60_000;
       changed.mockClear();
       await idleSweep.sweep();
       expect(changed).not.toHaveBeenCalled();
       expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
 
-      profile.suspendAfter = "1m";
+      profile.suspendAfter = "2m";
+      nowMs += 59_999;
+      const sql = observeHostDataSql();
+      try {
+        await idleSweep.sweep();
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+      expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
+      expect(harness.environments.destroy).not.toHaveBeenCalled();
+      nowMs += 1;
       await idleSweep.sweep();
-      expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
+      expect(placements.get(REQUEST.sessionId)).toMatchObject({
+        state: "reclaimed",
+        turnClaim: null,
+      });
       expect(changed).toHaveBeenCalledWith({
         sessionKey: REQUEST.sessionKey,
         agentId: REQUEST.agentId,
       });
+      expect(harness.environments.destroy).toHaveBeenCalledExactlyOnceWith(active.environmentId);
+      expect(harness.log).toEqual(
+        expect.arrayContaining([
+          "placement:draining",
+          "workspace:reconcile",
+          "teardown:destroy",
+          "placement:reclaimed",
+        ]),
+      );
+      expect(info).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(REQUEST.sessionKey));
+      expect(warn).not.toHaveBeenCalled();
     } finally {
       unsubscribe();
     }
-  });
-
-  it("suspends a never-run worker after its activation through the real reclaim teardown", async () => {
-    const { harness, idleSweep, info, warn } = await createIdleFixture();
-    const active = await harness.service.dispatch(REQUEST);
-
-    nowMs += 59_999;
-    const sql = observeHostDataSql();
-    try {
-      expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
-      await idleSweep.sweep();
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-    }
-    expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
-    expect(harness.environments.destroy).not.toHaveBeenCalled();
-
-    nowMs += 1;
-    await idleSweep.sweep();
-
-    expect(placements.get(REQUEST.sessionId)).toMatchObject({
-      state: "reclaimed",
-      turnClaim: null,
-    });
-    expect(harness.environments.destroy).toHaveBeenCalledExactlyOnceWith(active.environmentId);
-    expect(harness.log).toEqual(
-      expect.arrayContaining([
-        "placement:draining",
-        "workspace:reconcile",
-        "teardown:destroy",
-        "placement:reclaimed",
-      ]),
-    );
-    expect(info).toHaveBeenCalledOnce();
-    expect(info).toHaveBeenCalledWith(expect.stringContaining(REQUEST.sessionKey));
-    expect(warn).not.toHaveBeenCalled();
   });
 
   it("cancels idle session preparation without waiting for a durable writer", async ({
@@ -204,7 +171,7 @@ describe("worker placement idle suspension", () => {
     const controller = new AbortController();
     let writer: Promise<void> | undefined;
     let writerSettled = false;
-    const { harness, idleSweep, info, warn } = await createIdleFixture({
+    const { harness, idleSweep, expectNotSuspended } = await createIdleFixture({
       loadSessionRuntime: async () => {
         writer = runWithSqliteDatabaseAdmissionTurn(
           [],
@@ -232,9 +199,7 @@ describe("worker placement idle suspension", () => {
       await withinTest(sweeping, signal);
       expect(writerSettled).toBe(false);
       expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
-      expect(harness.environments.destroy).not.toHaveBeenCalled();
-      expect(info).not.toHaveBeenCalled();
-      expect(warn).not.toHaveBeenCalled();
+      expectNotSuspended();
     } finally {
       release.resolve();
       await Promise.allSettled([writer, sweeping]);
@@ -245,10 +210,12 @@ describe("worker placement idle suspension", () => {
 
   it("starts the idle clock at the latest authoritative turn-claim release", async () => {
     const { harness, idleSweep } = await createIdleFixture();
-    await harness.service.dispatch(REQUEST);
+    const active = await harness.service.dispatch(REQUEST);
 
     nowMs += 50_000;
-    const claim = await claimWorkerTurn("recent-turn");
+    const claim = await placements.claimTurn(
+      makeClaimInput(active, "recent-turn", "run-recent-turn"),
+    );
     nowMs += 5_000;
     await placements.releaseTurn(claim);
 
@@ -324,15 +291,13 @@ describe("worker placement idle suspension", () => {
     { reason: "an admitted turn before its worker claim exists", kind: "admitted-turn" },
     { reason: "a durable pending result after its claim was revoked", kind: "pending-result" },
     { reason: "a durable workspace reconciliation journal", kind: "reconciling-result" },
-    { reason: "a profile without suspendAfter", kind: "no-suspend-after" },
     { reason: "a placement still provisioning", kind: "provisioning" },
     { reason: "a placement already draining", kind: "draining" },
   ] as const)("does not suspend when blocked by $reason", async ({ kind }) => {
     const getSessionWorkAdmissionCheck =
       kind === "admitted-turn" ? vi.fn(async () => () => true) : undefined;
-    const { harness, idleSweep, info, warn } = await createIdleFixture({
-      ...(kind === "no-suspend-after" ? { suspendAfter: null } : {}),
-      ...(getSessionWorkAdmissionCheck ? { getSessionWorkAdmissionCheck } : {}),
+    const { harness, idleSweep, expectNotSuspended } = await createIdleFixture({
+      getSessionWorkAdmissionCheck,
     });
 
     if (kind === "provisioning") {
@@ -342,18 +307,13 @@ describe("worker placement idle suspension", () => {
         kind === "local-claim" || kind === "pending-result" ? "remote-exec" : "worker-turn";
       const active = await harness.service.dispatch({ ...REQUEST, executionMode });
       if (kind === "worker-claim") {
-        await claimWorkerTurn();
+        await placements.claimTurn(
+          makeClaimInput(active, "busy-worker-claim", "run-busy-worker-claim"),
+        );
       } else if (kind === "local-claim" || kind === "pending-result") {
-        const claim = await placements.claimTurn({
-          ...REQUEST,
-          claimId: "busy-local-claim",
-          runId: "busy-local-run",
-          owner: {
-            kind: "local",
-            environmentId: active.environmentId,
-            ownerEpoch: active.activeOwnerEpoch,
-          },
-        });
+        const claim = await placements.claimTurn(
+          makeClaimInput(active, "busy-local-claim", "busy-local-run"),
+        );
         if (kind === "pending-result") {
           await placements.markWorkspaceResultPending(claim);
           await placements.clearLocalTurnClaimsAfterRestartAsync();
@@ -384,9 +344,7 @@ describe("worker placement idle suspension", () => {
     await idleSweep.sweep();
 
     expect(placements.get(REQUEST.sessionId)?.state).toBe(expectedState);
-    expect(harness.environments.destroy).not.toHaveBeenCalled();
-    expect(info).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
+    expectNotSuspended();
     if (getSessionWorkAdmissionCheck) {
       expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
       expect(getSessionWorkAdmissionCheck).toHaveBeenCalledExactlyOnceWith(
@@ -403,7 +361,7 @@ describe("worker placement idle suspension", () => {
   it("abandons suspension silently when session work is admitted before reclaim begins", async () => {
     const hasSessionWork = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
     const getSessionWorkAdmissionCheck = vi.fn(async () => hasSessionWork);
-    const { harness, idleSweep, info, warn } = await createIdleFixture({
+    const { harness, idleSweep, expectNotSuspended } = await createIdleFixture({
       getSessionWorkAdmissionCheck,
     });
     await harness.service.dispatch(REQUEST);
@@ -413,15 +371,13 @@ describe("worker placement idle suspension", () => {
 
     expect(hasSessionWork).toHaveBeenCalledTimes(2);
     expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active", turnClaim: null });
-    expect(harness.environments.destroy).not.toHaveBeenCalled();
-    expect(info).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
+    expectNotSuspended();
   });
 
   it.each(["transaction", "commit"] as const)(
     "rechecks idle policy at drain %s admission",
     async (stage) => {
-      const { harness, idleSweep, profile, info, warn } = await createIdleFixture({
+      const { harness, idleSweep, profile, expectNotSuspended } = await createIdleFixture({
         getSessionWorkAdmissionCheck: async () => () => false,
       });
       const active = await harness.service.dispatch(REQUEST);
@@ -440,9 +396,7 @@ describe("worker placement idle suspension", () => {
         state: "active",
         generation: active.generation,
       });
-      expect(harness.environments.destroy).not.toHaveBeenCalled();
-      expect(info).not.toHaveBeenCalled();
-      expect(warn).not.toHaveBeenCalled();
+      expectNotSuspended();
     },
   );
 
@@ -451,7 +405,7 @@ describe("worker placement idle suspension", () => {
     async (change) => {
       const reclaimStarted = createDeferredCore();
       const releaseReclaim = createDeferredCore();
-      const { harness, idleSweep, profile, info, warn } = await createIdleFixture({
+      const { harness, idleSweep, profile, expectNotSuspended } = await createIdleFixture({
         reclaim: async (request, authorize, beforeDrain) => {
           reclaimStarted.resolve();
           await releaseReclaim.promise;
@@ -466,7 +420,13 @@ describe("worker placement idle suspension", () => {
         await reclaimStarted.promise;
 
         if (change === "activity") {
-          const claim = await claimWorkerTurn("turn-during-idle-reclaim-wait");
+          const claim = await placements.claimTurn(
+            makeClaimInput(
+              active,
+              "turn-during-idle-reclaim-wait",
+              "run-turn-during-idle-reclaim-wait",
+            ),
+          );
           nowMs += 1_000;
           await placements.releaseTurn(claim);
         } else {
@@ -480,9 +440,7 @@ describe("worker placement idle suspension", () => {
           turnClaim: null,
           updatedAtMs: change === "activity" ? nowMs : active.updatedAtMs,
         });
-        expect(harness.environments.destroy).not.toHaveBeenCalled();
-        expect(info).not.toHaveBeenCalled();
-        expect(warn).not.toHaveBeenCalled();
+        expectNotSuspended();
 
         profile.suspendAfter = "1m";
         nowMs += 60_000;

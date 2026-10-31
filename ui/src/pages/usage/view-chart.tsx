@@ -36,34 +36,6 @@ export const USAGE_TOKEN_CATEGORIES = [
 
 type UsageChartRange = { startDate: string; endDate: string; complete: boolean };
 
-/**
- * Every calendar day of the range, so columns never move as a report fills in. Missing days are
- * known zero only once the report is complete; before that they are drawn as pending.
- */
-function calendarDaily(
-  daily: CostDailyEntry[],
-  range: UsageChartRange,
-): { days: CostDailyEntry[]; pending: Set<string> } {
-  const start = Date.parse(range.startDate);
-  const end = Date.parse(range.endDate);
-  const count = (end - start) / 86_400_000 + 1;
-  // Keep long historical ranges bounded instead of creating decades of empty columns.
-  if (!Number.isInteger(count) || count < 1 || count > 366) {
-    return { days: daily.toSorted((a, b) => a.date.localeCompare(b.date)), pending: new Set() };
-  }
-  const recorded = new Map(daily.map((day) => [day.date, day]));
-  const pending = new Set<string>();
-  const days = Array.from({ length: count }, (_, index) => {
-    const date = new Date(start + index * 86_400_000).toISOString().slice(0, 10);
-    const day = recorded.get(date);
-    if (!day && !range.complete) {
-      pending.add(date);
-    }
-    return day ?? { ...createEmptyCostUsageTotals(), date };
-  });
-  return { days, pending };
-}
-
 type ChartSeries = { id: string; label: string; color: string; values: number[] };
 
 /** Token types keep the colors the per-turn chart and breakdown use. */
@@ -106,15 +78,37 @@ export function DailyChartCompact(props: {
   onSelectDay: UsageProps["callbacks"]["filters"]["onSelectDay"];
   range: UsageChartRange;
 }) {
-  const calendar = createMemo(() => calendarDaily(props.dailyEntries, props.range));
+  const calendar = createMemo((): { days: CostDailyEntry[]; pending: Set<string> } => {
+    /**
+     * Every calendar day of the range, so columns never move as a report fills in. Missing days are
+     * known zero only once the report is complete; before that they are drawn as pending.
+     */
+    const daily = props.dailyEntries;
+    const range = props.range;
+    const start = Date.parse(range.startDate);
+    const end = Date.parse(range.endDate);
+    const count = (end - start) / 86_400_000 + 1;
+    // Keep long historical ranges bounded instead of creating decades of empty columns.
+    if (!Number.isInteger(count) || count < 1 || count > 366) {
+      return { days: daily.toSorted((a, b) => a.date.localeCompare(b.date)), pending: new Set() };
+    }
+    const recorded = new Map(daily.map((day) => [day.date, day]));
+    const pending = new Set<string>();
+    const days = Array.from({ length: count }, (_, index) => {
+      const date = new Date(start + index * 86_400_000).toISOString().slice(0, 10);
+      const day = recorded.get(date);
+      if (!day && !range.complete) {
+        pending.add(date);
+      }
+      return day ?? { ...createEmptyCostUsageTotals(), date };
+    });
+    return { days, pending };
+  });
   const days = () => calendar().days;
   const dates = createMemo(() => days().map((day) => day.date));
   const isTokens = () => props.chartMode === "tokens";
-  // A day with an interrupted response shows its recorded subtotals as lower bounds.
-  const measure = (value: number, index: number) => {
-    const report = days()[index]?.usageReport;
-    return isTokens() ? formatUsageTokens(value, report) : formatAnalysisCost(value, report);
-  };
+  const measure = (value: number) =>
+    isTokens() ? formatUsageTokens(value) : formatAnalysisCost(value);
   const axisLabel = (value: number) =>
     isTokens() ? formatUsageTokens(value) : formatAxisCost(value, scale());
   const series = createMemo((): ChartSeries[] => {
@@ -169,9 +163,7 @@ export function DailyChartCompact(props: {
     dates().map((_, index) => series().reduce((sum, entry) => sum + (entry.values[index] ?? 0), 0)),
   );
   const scale = createMemo(() => niceCeiling(Math.max(...totals(), 0)));
-  const sharesKnown = createMemo(
-    () => props.range.complete && days().every((day) => day.usageReport?.state !== "unavailable"),
-  );
+  const sharesKnown = () => props.range.complete;
   const shares = createMemo(() => {
     const sum = totals().reduce((total, value) => total + value, 0);
     return series().map((entry) => ({
@@ -196,8 +188,8 @@ export function DailyChartCompact(props: {
     if (day && calendar().pending.has(day.date)) {
       return `${formatFullDate(day.date)}: ${t("usage.daily.pending")}`;
     }
-    const tokens = `${formatUsageTokens(day?.totalTokens ?? 0, day?.usageReport)} ${t("usage.metrics.tokens").toLowerCase()}`;
-    return `${formatFullDate(day?.date ?? "")}: ${tokens}, ${formatAnalysisCost(day?.totalCost ?? 0, day?.usageReport)}`;
+    const tokens = `${formatUsageTokens(day?.totalTokens ?? 0)} ${t("usage.metrics.tokens").toLowerCase()}`;
+    return `${formatFullDate(day?.date ?? "")}: ${tokens}, ${formatAnalysisCost(day?.totalCost ?? 0)}`;
   };
   const tipPosition = (index: number) => {
     const share = (index + 0.5) / Math.max(1, dates().length);
@@ -276,13 +268,16 @@ export function DailyChartCompact(props: {
                         height: `${scale() > 0 ? (((totals()[index] ?? 0) / scale()) * 100).toFixed(2) : 0}%`,
                       }}
                     >
-                      <For each={series().filter((entry) => (entry.values[index] ?? 0) > 0)}>
+                      <For
+                        each={series().filter((entry) => (entry.values[index] ?? 0) > 0)}
+                        keyed={(entry) => entry.id}
+                      >
                         {(entry) => (
                           <span
                             class="cost-segment"
                             style={{
-                              background: entry.color,
-                              "flex-grow": String(entry.values[index] ?? 0),
+                              background: entry().color,
+                              "flex-grow": String(entry().values[index] ?? 0),
                             }}
                           />
                         )}
@@ -294,7 +289,7 @@ export function DailyChartCompact(props: {
                         { "daily-bar-label--hidden": index % labelEvery() !== 0 },
                       ]}
                     >
-                      {formatDayLabel(date())}
+                      {index % labelEvery() === 0 ? formatDayLabel(date()) : ""}
                     </span>
                   </button>
                 )}
@@ -307,7 +302,7 @@ export function DailyChartCompact(props: {
                     {formatFullDate(dates()[active().index] ?? "")} ·{" "}
                     {calendar().pending.has(dates()[active().index] ?? "")
                       ? t("usage.daily.pending")
-                      : measure(totals()[active().index] ?? 0, active().index)}
+                      : measure(totals()[active().index] ?? 0)}
                   </strong>
                   <Show when={series().length > 1}>
                     <For each={series().filter((entry) => (entry.values[active().index] ?? 0) > 0)}>
@@ -315,7 +310,7 @@ export function DailyChartCompact(props: {
                         <span>
                           <i style={{ background: entry.color }} />
                           {entry.label}
-                          <b>{measure(entry.values[active().index] ?? 0, active().index)}</b>
+                          <b>{measure(entry.values[active().index] ?? 0)}</b>
                         </span>
                       )}
                     </For>
@@ -357,9 +352,7 @@ export function CostBreakdownCompact(props: { totals: UsageTotals; mode: "tokens
         className,
         labelKey,
         percentage: total === 0 ? 0 : (value / total) * 100,
-        formatted: isTokenMode
-          ? formatUsageTokens(value, totals.usageReport)
-          : formatAnalysisCost(value, totals.usageReport),
+        formatted: isTokenMode ? formatUsageTokens(value) : formatAnalysisCost(value),
       };
     });
 
@@ -394,8 +387,8 @@ export function CostBreakdownCompact(props: { totals: UsageTotals; mode: "tokens
       <div class="cost-breakdown-total">
         {t("usage.breakdown.total")}:{" "}
         {state().isTokenMode
-          ? formatUsageTokens(state().totals.totalTokens, state().totals.usageReport)
-          : formatAnalysisCost(state().totals.totalCost, state().totals.usageReport)}
+          ? formatUsageTokens(state().totals.totalTokens)
+          : formatAnalysisCost(state().totals.totalCost)}
       </div>
     </div>
   );

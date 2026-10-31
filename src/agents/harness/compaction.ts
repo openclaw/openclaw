@@ -32,14 +32,16 @@ import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-mod
 import {
   agentRuntimeAuthPlanMatchesTarget,
   prepareAgentRuntimeAuth,
-  type PreparedAgentRuntimeAuth,
-  type PreparedAgentRuntimeAuthAttempt,
 } from "../runtime-plan/prepare-auth.js";
 import {
   resolvePreparedRuntimeAuthAttempts,
   resolvePreparedRuntimeModelAuth,
 } from "../runtime-plan/resolve-auth.js";
-import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
+import type {
+  PreparedAgentRuntimeAuth,
+  PreparedAgentRuntimeAuthAttempt,
+  AgentRuntimeAuthPlan,
+} from "../runtime-plan/types.js";
 import { prepareAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import {

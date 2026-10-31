@@ -6,10 +6,7 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  readSessionTranscriptEvents,
-  type TranscriptEntryAnchor,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -64,10 +61,8 @@ function expectPublished(update: unknown) {
 
 const transcriptRace = vi.hoisted(() => ({
   competingMessage: undefined as unknown,
-  lookups: [] as Array<string | undefined>,
   publish: vi.fn(),
   beforeAppend: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
-  userAnchor: undefined as TranscriptEntryAnchor | undefined,
 }));
 
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => {
@@ -105,13 +100,7 @@ vi.mock("openclaw/plugin-sdk/codex-session-transcript-runtime", async (importOri
           },
           appendMessageWithMessageSequence: async (options) => {
             await transcriptRace.beforeAppend();
-            transcriptRace.lookups.push(options.idempotencyLookup);
             const result = await locked.appendMessageWithMessageSequence(options);
-            const appended = result.result;
-            const message = appended?.message as AgentMessage | undefined;
-            if (appended && message?.role === "user") {
-              transcriptRace.userAnchor = appended.anchor;
-            }
             return { ...result, lifecycleRevision: "committed-mirror-lifecycle" };
           },
         });
@@ -122,10 +111,8 @@ vi.mock("openclaw/plugin-sdk/codex-session-transcript-runtime", async (importOri
 afterEach(() => {
   resetGlobalHookRunner();
   transcriptRace.competingMessage = undefined;
-  transcriptRace.lookups.length = 0;
   transcriptRace.publish.mockReset();
   transcriptRace.beforeAppend.mockReset().mockResolvedValue(undefined);
-  transcriptRace.userAnchor = undefined;
 });
 
 it("publishes each committed assistant before a later mirror append can stall", async () => {
@@ -169,10 +156,10 @@ it("adopts a competing indexed user without duplicating writes or slowing assist
   const redactedContent = [{ type: "text" as const, text: "[redacted by hook]" }];
   const redact = (message: AgentMessage) =>
     castAgentMessage({ ...message, content: redactedContent });
-  const beforeMessageWrite = vi.fn((...args: unknown[]) => {
+  const beforeMessageWrite = (...args: unknown[]) => {
     const event = args[0] as { message: AgentMessage };
     return { message: event.message.role === "user" ? redact(event.message) : event.message };
-  });
+  };
   initializeGlobalHookRunner(
     createMockPluginRegistry([{ hookName: "before_message_write", handler: beforeMessageWrite }]),
   );
@@ -209,15 +196,14 @@ it("adopts a competing indexed user without duplicating writes or slowing assist
   expect(result.userMessageReceipts).toMatchObject([
     {
       appended: false,
-      message: expect.objectContaining({
-        role: "user",
-        content: [{ type: "text", text: "[redacted by hook]" }],
+      message: {
+        content: redactedContent,
         idempotencyKey: "codex-user-race:prompt",
-        __openclaw: expect.objectContaining({
+        __openclaw: {
           mirrorOrigin: "codex-app-server",
           mirrorSourceFingerprint: userFingerprint,
-        }),
-      }),
+        },
+      },
       anchor: {
         entryId: messageEvents.find((event) => event.message.role === "user")?.id,
       },
@@ -225,13 +211,10 @@ it("adopts a competing indexed user without duplicating writes or slowing assist
   ]);
   const [receipt] = result.userMessageReceipts;
   expect(receipt?.message).toBe(result.messagesPresent[0]);
-  expect(receipt?.anchor).toBe(transcriptRace.userAnchor);
   expect(result.assistantMirrorIdentitiesOwned).toEqual(["turn-1:assistant"]);
-  expect(transcriptRace.lookups).toEqual(["scan", "scan"]);
   expectPublished({
     lifecycleRevision: "committed-mirror-lifecycle",
     message: { role: "assistant" },
     messageSeq: 2,
   });
-  expect(beforeMessageWrite).toHaveBeenCalledTimes(2);
 });

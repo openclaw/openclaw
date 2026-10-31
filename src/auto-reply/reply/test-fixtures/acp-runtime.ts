@@ -1,11 +1,16 @@
 import { vi } from "vitest";
 // Test fixtures for ACP runtime sessions, bindings, and reply delivery.
+import type { ChannelId } from "../../../channels/plugins/types.public.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
   SessionBindingService,
   SessionBindingServiceV2,
 } from "../../../infra/outbound/session-binding-service.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../../test-utils/channel-plugins.js";
 import type { ReplyDispatcher } from "../reply-dispatcher.types.js";
 
 const settledCounts = (delivered: number) => ({
@@ -163,4 +168,17 @@ export function createAcpCommandSessionBindingService(
     touchAsync: vi.fn(async () => {}),
     unbind: (input) => mocks.unbind(input),
   };
+}
+
+export function createAcpTestBindingRegistry(id: ChannelId) {
+  return createTestRegistry([
+    {
+      pluginId: id,
+      source: "test",
+      plugin: {
+        ...createChannelTestPluginBase({ id }),
+        conversationBindings: { supportsCurrentConversationBinding: true },
+      },
+    },
+  ]);
 }

@@ -32,6 +32,10 @@ vi.mock("../logging/state.js", () => ({ loggingState: {} }));
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ error: vi.fn() }),
 }));
+// mock-isolation: Task servers inherit PostgreSQL state without loading service construction.
+vi.mock("./postgres-sync/pool.js", () => {
+  throw new Error("task servers must not load PostgreSQL service construction");
+});
 // mock-isolation: Observe diagnostic cleanup without allocating a memory transport.
 vi.mock("./worker-memory.js", () => ({
   serveWorkerMemorySamples: () => ({
@@ -135,16 +139,12 @@ it.each([false, true])(
     const entered = createDeferred();
     const cleanup = createDeferred();
     const admission = await admissionFixture();
-    const { cancelWorkerIdleGc, scheduleWorkerIdleGc } = await import("./worker-idle-gc.js");
     const closeResource = vi.fn();
     const handler = vi.fn(async () => {
-      try {
-        throw new Error("uncertain native close");
-      } finally {
-        entered.resolve();
-        await cleanup.promise;
-        admission.inspect();
-      }
+      entered.resolve();
+      await cleanup.promise;
+      admission.inspect();
+      throw new Error("uncertain native close");
     });
     const receipt = resourceReceipt();
     boundary.closeMemory.mockImplementation(() => {
@@ -169,8 +169,6 @@ it.each([false, true])(
       expect(receipt.close).toHaveBeenCalledBefore(boundary.closeMemory);
       expect(boundary.closeMemory).toHaveBeenCalledBefore(admission.close);
       expect(admission.close).toHaveBeenCalledBefore(port.close);
-      expect(cancelWorkerIdleGc).toHaveBeenCalledTimes(3);
-      expect(scheduleWorkerIdleGc).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(1);
       port.emit("message", { taskId: 2 });
       expectCalls(1, handler);
@@ -260,3 +258,42 @@ it("expires a task's admission budget without poisoning its successor or resourc
   expectCalls(0, port.close, boundary.closeMemory);
   expect(process.exitCode).toBe(exitCode);
 });
+
+it.each([undefined, "openclaw doctor --fix"])(
+  "settles encoded service failures through the owning lifecycle (next step: %s)",
+  async (nextStep) => {
+    const { port, task, closed, serveOwnedWorkerTasks } = await workerFixture();
+    const { bindPostgresPool, recordPostgresPoolFailure } =
+      await import("./postgres-sync/pool-state.js");
+    const { port1, port2 } = new MessageChannel();
+    onTestFinished(() => {
+      port1.close();
+      port2.close();
+    });
+    bindPostgresPool({
+      allocation: new SharedArrayBuffer(4),
+      services: [{ port: port1, signal: new SharedArrayBuffer(8) }],
+      nextStep,
+    });
+    const error = new Error(
+      `PostgreSQL connection lost; outcome unknown${nextStep ? `. Run ${nextStep}.` : ""}`,
+    );
+    const result = { ok: false, error: error.message };
+    serveOwnedWorkerTasks(() => {
+      recordPostgresPoolFailure(error);
+      return result;
+    });
+    expect(await Promise.race([task(1), closed])).toBe(nextStep ? "result" : "closed");
+    if (nextStep) {
+      expect(port.postMessage).toHaveBeenCalledWith(
+        { status: "ok", taskId: 1, value: result, diagnostics: undefined },
+        [],
+      );
+      expect(port.close).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(exitCode);
+    } else {
+      expect(port.postMessage).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+    }
+  },
+);

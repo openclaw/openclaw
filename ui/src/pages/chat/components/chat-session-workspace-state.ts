@@ -290,20 +290,27 @@ export function captureSessionWorkspaceNavigation(
   };
 }
 
-/** The tabs owner calls this without changing preview identity or reader contents. */
-function restoreSessionWorkspaceNavigation(
-  state: SessionWorkspaceHost,
+function applySessionWorkspaceNavigation(
+  workspace: SessionWorkspaceState,
   navigation: SessionWorkspaceNavigation,
 ) {
-  const workspace = getSessionWorkspace(state);
   clearWorkspaceTimer(workspace);
   const { browserPath, browserSearch, filter, ...tree } = navigation;
   workspace.browserPath = browserPath;
   workspace.browserSearch = browserSearch;
   workspace.filter = filter;
   workspace.tree = { ...tree, expandedPaths: [...tree.expandedPaths] };
+}
+
+/** The tabs owner calls this without changing preview identity or reader contents. */
+function restoreSessionWorkspaceNavigation(
+  state: SessionWorkspaceHost,
+  navigation: SessionWorkspaceNavigation,
+) {
+  const workspace = getSessionWorkspace(state);
+  applySessionWorkspaceNavigation(workspace, navigation);
   loadSessionWorkspace(state, workspace);
-  for (const path of tree.expandedPaths) {
+  for (const path of navigation.expandedPaths) {
     void loadSessionWorkspaceDirectory(state, path);
   }
   sessionWorkspaceForHost(state).publish();
@@ -456,9 +463,15 @@ export function openSessionWorkspacePreview(
       workspace.catalogNavigation = captureSessionWorkspaceNavigation(workspace);
     }
   }
-  if (workspace.activePreviewId === null && content.kind !== "mcp-app") {
+  // Apps leave the catalog in place, but must keep an existing return snapshot current.
+  if (
+    workspace.activePreviewId === null &&
+    (content.kind !== "mcp-app" || workspace.catalogNavigation)
+  ) {
     workspace.catalogNavigation = captureSessionWorkspaceNavigation(workspace);
-    workspace.tree!.treeVisible = false;
+    if (content.kind !== "mcp-app") {
+      workspace.tree!.treeVisible = false;
+    }
   }
   let preview = workspace.previews.find(
     (entry) =>
@@ -563,6 +576,14 @@ function closeSessionWorkspacePreview(state: SessionWorkspaceHost, id: string) {
 export function clearSessionWorkspacePreviews(state: SessionWorkspaceHost) {
   const workspace = state.sessionWorkspaceState;
   if (workspace) {
+    if (workspace.activePreviewId !== null) {
+      workspace.activeId = null;
+      if (workspace.catalogNavigation) {
+        applySessionWorkspaceNavigation(workspace, workspace.catalogNavigation);
+        // Hidden panes retire readers now; Files admits its catalog read on presentation.
+        workspace.pendingReload = true;
+      }
+    }
     workspace.pendingPreview = undefined;
     workspace.previews = [];
     workspace.activePreviewId = null;

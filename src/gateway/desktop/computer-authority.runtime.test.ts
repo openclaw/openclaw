@@ -2,7 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { afterEach, expect, it, onTestFinished } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   claimAgentRunApprovalAuthority,
@@ -66,12 +66,11 @@ async function createRuntimeFixture(pluginId: string, managed = false) {
 }
 
 function reachGate<T>(gate: Promise<T>, invocation: Promise<unknown>, label: string) {
-  return Promise.race([
+  return awaitGateBeforeSettlement(
     gate,
-    invocation.then(() => {
-      throw new Error(`${label} native input never reached its gate`);
-    }),
-  ]);
+    invocation,
+    `${label} native input never reached its gate`,
+  );
 }
 
 it.each(["direct-run", "parent-closes-scope", "scope-closes"] as const)(

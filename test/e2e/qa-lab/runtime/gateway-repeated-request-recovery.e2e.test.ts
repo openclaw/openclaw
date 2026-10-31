@@ -22,10 +22,13 @@ type StabilitySnapshot = {
 
 type MockRequestSnapshot = Partial<
   Record<"cursor" | "prompt" | "allInputText" | "model" | "outcome" | "errorCode", unknown>
->;
+> & {
+  body?: { input?: Array<{ role?: string; content?: unknown }> };
+};
 
 type ClassifiedMockRequest = Record<"cursor" | "model" | "outcome" | "errorCode", unknown> & {
-  continuation: boolean;
+  recoveryUserPromptCount: number;
+  userInputCount: number;
   prompt: "recovery" | "queued" | "other" | "missing";
   stallGuidance: boolean;
 };
@@ -144,28 +147,31 @@ async function readClassifiedMockRequests(mockBaseUrl: string): Promise<Classifi
   return fetch(`${mockBaseUrl}/debug/requests`)
     .then((response) => response.json() as Promise<MockRequestSnapshot[]>)
     .then((records) =>
-      records.map(({ cursor, prompt, allInputText, model, outcome, errorCode }) => ({
-        cursor,
-        model,
-        continuation:
-          typeof prompt === "string" &&
-          !prompt.includes(RECOVERY_PROMPT) &&
-          !prompt.includes(QUEUED_PROMPT) &&
-          typeof allInputText === "string" &&
-          allInputText.includes(RECOVERY_PROMPT),
-        prompt:
-          typeof prompt === "string"
-            ? prompt.includes(QUEUED_PROMPT)
-              ? "queued"
-              : typeof allInputText === "string" && allInputText.includes(RECOVERY_PROMPT)
-                ? "recovery"
-                : "other"
-            : "missing",
-        stallGuidance:
-          typeof allInputText === "string" && allInputText.includes(STALL_GUIDANCE_NEEDLE),
-        outcome,
-        errorCode,
-      })),
+      records.map(({ cursor, prompt, allInputText, model, outcome, errorCode, body }) => {
+        const userInputs = (body?.input ?? []).filter((item) => item.role === "user");
+        return {
+          cursor,
+          model,
+          recoveryUserPromptCount: userInputs.reduce(
+            (count, item) =>
+              count + (JSON.stringify(item.content) ?? "").split(RECOVERY_PROMPT).length - 1,
+            0,
+          ),
+          userInputCount: userInputs.length,
+          prompt:
+            typeof prompt === "string"
+              ? prompt.includes(QUEUED_PROMPT)
+                ? "queued"
+                : prompt.includes(RECOVERY_PROMPT)
+                  ? "recovery"
+                  : "other"
+              : "missing",
+          stallGuidance:
+            typeof allInputText === "string" && allInputText.includes(STALL_GUIDANCE_NEEDLE),
+          outcome,
+          errorCode,
+        };
+      }),
     );
 }
 
@@ -282,32 +288,33 @@ it(
         (message) => message.role === "assistant" && messageText(message) === QUEUED_REPLY_MARKER,
       ),
     ).toHaveLength(1);
+    expect(
+      (finalHistory.messages ?? []).filter(
+        (message) => message.role === "user" && messageText(message).includes(RECOVERY_PROMPT),
+      ),
+    ).toHaveLength(1);
     const mockBaseUrl = harness?.mock?.baseUrl;
     if (!mockBaseUrl) {
       throw new Error("mock provider request evidence unavailable");
     }
     const requests = await readClassifiedMockRequests(mockBaseUrl);
     const recoveryRequests = requests.filter((request) => request.prompt === "recovery");
-    // After the fourth request times out, the existing transient-retry owner makes
-    // one same-model transcript continuation. Its no-details failure exhausts the
+    // After the fourth request times out, the transient-retry owner resends the
+    // persisted authored user turn. Its no-details failure exhausts the
     // already-used empty-error budget. This is not diagnostic liveness recovery.
     // Mock outcomes record intent before delay; the diagnostic above proves the timeout.
-    expect(recoveryRequests).toEqual([
-      ...Array.from({ length: 4 }, () =>
+    expect(recoveryRequests).toEqual(
+      Array.from({ length: 5 }, () =>
         expect.objectContaining({
           model: "gpt-5.6-luna",
-          continuation: false,
+          prompt: "recovery",
+          recoveryUserPromptCount: 1,
           outcome: "error",
           errorCode: "response_failed_no_details",
         }),
       ),
-      expect.objectContaining({
-        model: "gpt-5.6-luna",
-        continuation: true,
-        outcome: "error",
-        errorCode: "response_failed_no_details",
-      }),
-    ]);
+    );
+    expect(new Set(recoveryRequests.map((request) => request.userInputCount)).size).toBe(1);
     // A provider failure is not a stuck-run abort and must not inject recovery guidance.
     expect(requests.filter((request) => request.prompt === "queued")).toEqual([
       expect.objectContaining({ outcome: "success", stallGuidance: false }),

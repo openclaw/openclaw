@@ -10,8 +10,6 @@ const PROTECTED = new Set([
   "hold",
   "in-progress",
   "clawsweeper:queueable-fix",
-  "clawsweeper:source-repro",
-  "clawsweeper:fix-shape-clear",
   "no-stale",
   "bad-barnacle",
   "p0",
@@ -68,7 +66,7 @@ export function humanActivityAt(snapshot, ignoredComment) {
   return latest;
 }
 export const time = (value) => Date.parse(value ?? "") || 0;
-export const automated = (user) =>
+const automated = (user) =>
   user?.type === "Bot" ||
   user?.__typename === "Bot" ||
   BARNACLE.has(user?.id) ||

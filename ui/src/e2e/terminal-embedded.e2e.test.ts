@@ -79,7 +79,7 @@ suite.define(() => {
 
       expect(connect.params).toMatchObject({ auth: { token: "native-terminal-token" } });
       expect(await page.locator("openclaw-login-gate").count()).toBe(0);
-      expect(await page.locator("openclaw-terminal-panel").count()).toBe(1);
+      await page.locator("openclaw-terminal-panel").waitFor({ state: "attached" });
 
       await gateway.resolveDeferred("connect");
       const terminalOpen = await gateway.waitForRequest("terminal.open");

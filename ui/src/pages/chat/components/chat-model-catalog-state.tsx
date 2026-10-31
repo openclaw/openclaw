@@ -5,7 +5,7 @@ import "../../../components/tooltip.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { restoreChatModelRefreshFocus } from "./chat-model-picker-search.ts";
+import { restoreChatModelRefreshFocus } from "./chat-model-picker-search-view.ts";
 
 registerEnglishCatalog(registerModelControlsEnglish);
 
@@ -71,8 +71,32 @@ export function ChatModelCatalogRefresh(props: { state: ModelCatalogState | unde
   );
 }
 
-function createCatalogPresentation(props: ChatModelCatalogStateProps) {
-  return createMemo(() => {
+function CatalogAction(props: ChatModelCatalogStateProps & { action: "retry" | "setup" }) {
+  return (
+    <button
+      class="chat-controls__model-catalog-action"
+      data-chat-model-target-retry={
+        props.action === "retry" ? props.retryTarget?.groupId : undefined
+      }
+      data-chat-model-setup={props.action === "setup" ? "true" : undefined}
+      type="button"
+      disabled={props.action === "retry" && props.retryTarget?.disabled}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (props.action === "retry") {
+          props.retryTarget?.onRetry(props.retryTarget.groupId);
+        } else {
+          props.onModelSetup?.();
+        }
+      }}
+    >
+      {t(props.action === "retry" ? "common.retry" : "chat.modelControls.emptyModelsAction")}
+    </button>
+  );
+}
+
+export function ChatModelCatalogState(props: ChatModelCatalogStateProps) {
+  const presentation = createMemo(() => {
     const state = props.state;
     if (!state) {
       return undefined;
@@ -103,34 +127,6 @@ function createCatalogPresentation(props: ChatModelCatalogStateProps) {
             : t("chat.modelControls.loadingModels");
     return { status, checking, label };
   });
-}
-
-function CatalogAction(props: ChatModelCatalogStateProps & { action: "retry" | "setup" }) {
-  return (
-    <button
-      class="chat-controls__model-catalog-action"
-      data-chat-model-target-retry={
-        props.action === "retry" ? props.retryTarget?.groupId : undefined
-      }
-      data-chat-model-setup={props.action === "setup" ? "true" : undefined}
-      type="button"
-      disabled={props.action === "retry" && props.retryTarget?.disabled}
-      onClick={(event) => {
-        event.stopPropagation();
-        if (props.action === "retry") {
-          props.retryTarget?.onRetry(props.retryTarget.groupId);
-        } else {
-          props.onModelSetup?.();
-        }
-      }}
-    >
-      {t(props.action === "retry" ? "common.retry" : "chat.modelControls.emptyModelsAction")}
-    </button>
-  );
-}
-
-export function ChatModelCatalogState(props: ChatModelCatalogStateProps) {
-  const presentation = createCatalogPresentation(props);
   return (
     <Show when={presentation()}>
       {(value) => (

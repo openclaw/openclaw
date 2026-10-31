@@ -21,7 +21,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.providers.*.apiKey":
     "Provider credential used for API-key based authentication when the provider requires direct key auth. Use secret/env substitution and avoid storing real keys in committed config files.",
   "models.providers.*.auth":
-    'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, "aws-sdk" for AWS credential resolution, and "none" for custom openai-completions endpoints that do not enforce auth. Explicit "none" skips credentials and sends no Authorization header; other effective adapters are rejected.',
+    'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, "aws-sdk" for AWS credential resolution, and "none" for custom openai-completions endpoints that do not enforce auth. Explicit "none" skips credentials and sends no Authorization header; other effective adapters are rejected. "native-command" delegates credentials to an explicitly configured Codex runtime for a custom HTTPS Responses provider; it cannot be combined with API keys, profiles, or request overrides.',
   "models.providers.*.api":
     "Wire protocol adapter, independent of the provider ID. Chat Completions: openai-completions; Responses: openai-responses; Messages: anthropic-messages. Choose other adapters from the allowed values to match your upstream protocol.",
   "models.providers.*.maxTokens":
@@ -44,6 +44,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     'Provider agent runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli". OpenAI on the official endpoint defaults to the Codex harness when omitted.',
   "models.providers.*.localService":
     "Optional on-demand local model server process for this provider. OpenClaw checks healthUrl, starts the command when needed, waits for readiness, and then sends the model request.",
+  "models.providers.*.remote":
+    "Watchdog-only hosted timing override for local relays in front of hosted APIs. When true, the LLM idle and first-event watchdogs use hosted timing even with a local baseUrl, provider ID, localService, or local auth marker. Absent or false preserves locality detection. Explicit timeoutSeconds and run or agent budgets keep their precedence.",
   "models.providers.*.localService.command":
     "Absolute executable path for the local model server process. Keep this path explicit so provider startup is predictable and does not depend on shell PATH lookup.",
   "models.providers.*.localService.args":
@@ -148,6 +150,10 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
   "agents.defaults.workspace":
     "Default agent workspace for bootstrap and memory files. Also used as the working directory when agents.defaults.cwd is unset. Set this explicitly when running from wrappers so path resolution stays consistent.",
+  "agents.defaults.workspaceFileMode":
+    'New memory-core DREAMS.md, MEMORY.md, and memory/dreaming report permissions: "0600", "0620", "0640", or "0660". Unset keeps exact 0600; configured modes respect the writing host\'s umask. Existing files, daily memory, session corpus, and private state are unchanged. Directory traversal and default ACLs must be provisioned separately.',
+  "agents.entries.*.workspaceFileMode":
+    "Overrides agents.defaults.workspaceFileMode for this agent's newly created human-readable memory outputs. Existing file permissions are preserved; the writing host applies its own umask.",
   "agents.defaults.cwd":
     "Working directory for agent reply runs, separate from workspace bootstrap and memory files. Agent-specific cwd and session-spawned cwd take precedence. Supports ~ and relative paths; a distinct cwd requires an unsandboxed run.",
   "agents.defaults.skipBootstrap":
@@ -225,10 +231,18 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     'Selects the embedding backend used to build/query memory vectors. Defaults to "openai"; set "openai-compatible", "gemini", "voyage", "mistral", "bedrock", "deepinfra", "github-copilot", "lmstudio", "ollama", or "local" when you want a different backend.',
   "memory.search.model":
     "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
+  "memory.search.inputFormat":
+    'Optional paired literal text prefixes for embedding queries and documents, such as { query: "query: ", document: "passage: " }. Replaces automatic model formatting, including for model aliases. Both strings are required; spaces and newlines are preserved, and empty strings select raw text. A non-empty queryInstruction takes precedence for queries. Changing the document prefix requires a reindex.',
+  "memory.search.inputFormat.query":
+    "Literal prefix for query embeddings. Used unless a non-empty queryInstruction is set; an empty string disables automatic query formatting.",
+  "memory.search.inputFormat.document":
+    "Literal prefix for document embeddings. An empty string selects raw document text. Changing this prefix changes index and embedding-cache identity and requires a reindex.",
   "memory.search.inputType":
     "Use this optional provider-specific `input_type` value only when the same label should apply to both query and document embedding requests. For asymmetric providers, prefer queryInputType and documentInputType.",
   "memory.search.queryInputType":
     "Optional provider-specific `input_type` value for query-time memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a query label.",
+  "memory.search.queryInstruction":
+    'Optional literal prefix for query embeddings, such as "search_query: ". Include required spaces or newlines. Non-empty values replace inputFormat.query and automatic query formatting; unset or empty values use inputFormat.query when set, otherwise provider defaults. Documents and index identity are unchanged, so no reindex is needed. An empty per-agent override clears the inherited instruction.',
   "memory.search.documentInputType":
     "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
   "memory.search.outputDimensionality":

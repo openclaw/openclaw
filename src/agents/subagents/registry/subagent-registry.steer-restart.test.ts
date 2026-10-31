@@ -192,9 +192,17 @@ vi.mock("../../../context-engine/init.js", () => ({ ensureContextEnginesInitiali
 vi.mock("../../../context-engine/registry.js", () => ({
   resolveContextEngine: vi.fn(async () => noopContextEngine),
 }));
+// mock-isolation: Steer tests supply registry handles without discovering installed plugins.
 vi.mock("../../runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
-  return { loadAgentRuntimePluginRegistryHandle: vi.fn(() => createEmptyPluginRegistry()) };
+  const loadRegistry = vi.fn<
+    typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
+  >(() => createEmptyPluginRegistry());
+  return {
+    loadAgentRuntimePluginRegistryHandle: loadRegistry,
+    loadAgentRuntimePluginRegistryHandleAsync: async (...args: Parameters<typeof loadRegistry>) =>
+      loadRegistry(...args),
+  };
 });
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
@@ -501,7 +509,6 @@ describe("subagent registry steer restarts", () => {
     await updateRun(previous.runId, (draft) => {
       draft.endedHookEmittedAt = endedAt;
       draft.endedReason = "subagent-error";
-      draft.terminalOwner = "interrupted-recovery";
       draft.execution = { status: "terminal", endedAt, outcome: { status: "error" } };
       draft.completion = { required: true, resultText: "stale completion", capturedAt: endedAt };
       draft.cleanupCompletedAt = endedAt;
@@ -537,12 +544,7 @@ describe("subagent registry steer restarts", () => {
       status: "running",
       lifecycleGeneration: "test-generation",
     });
-    for (const key of [
-      "endedHookEmittedAt",
-      "endedReason",
-      "terminalOwner",
-      "cleanupCompletedAt",
-    ] as const) {
+    for (const key of ["endedHookEmittedAt", "endedReason", "cleanupCompletedAt"] as const) {
       expect(run[key], key).toBeUndefined();
     }
     expect(run.execution.endedAt).toBeUndefined();

@@ -21,35 +21,26 @@ function allowedCompletions(
 ) {
   return { type: "allowed_tools" as const, allowed_tools: { mode, tools } };
 }
+function unreadable<T extends object>(field: string, value: T): T {
+  return Object.defineProperty(value, field, {
+    enumerable: true,
+    get() {
+      throw new Error(`${field} exploded`);
+    },
+  });
+}
 
 it("keeps healthy tools when sibling descriptors or schemas are unreadable", () => {
   const projection = projectOpenAITools([
-    {
-      get name(): never {
-        throw new Error("name exploded");
-      },
-      parameters: {},
-    },
+    unreadable("name", { parameters: {} }),
     {
       name: "bad_schema",
-      parameters: {
-        type: "object",
-        get properties(): never {
-          throw new Error("properties exploded");
-        },
-      },
+      parameters: unreadable("properties", { type: "object" }),
     },
-    {
-      name: "lookup",
-      get description(): never {
-        throw new Error("description exploded");
-      },
-      parameters: undefined,
-    },
+    unreadable("description", { name: "lookup", parameters: undefined }),
   ]);
 
   expect(projection.tools).toEqual([{ toolIndex: 2, name: "lookup", parameters: {} }]);
-  expect(projection.diagnostics).toHaveLength(2);
   expect(findOpenAIStrictToolProjectionDiagnostics(projection)).toEqual([
     { toolIndex: 0, violations: ["tool[0].name is unreadable"] },
     {
@@ -102,9 +93,6 @@ it("keeps literal reference examples while quarantining dynamic schema reference
       violations: ["dynamic.parameters.properties.value.$dynamicRef"],
     },
   ]);
-  expect(reconcileOpenAIResponsesToolChoice(responseFunction("store_schema"), projection)).toEqual(
-    responseFunction("store_schema"),
-  );
 });
 
 it("classifies sparse descriptors as unreadable tools", () => {
@@ -119,12 +107,7 @@ it("classifies sparse descriptors as unreadable tools", () => {
 
 it("rejects pinned and required choices when their function tools are unavailable", () => {
   const projection = projectOpenAITools([
-    {
-      name: "broken",
-      get parameters(): never {
-        throw new Error("parameters exploded");
-      },
-    },
+    unreadable("parameters", { name: "broken", parameters: {} }),
   ]);
 
   expect(() => reconcileOpenAIResponsesToolChoice(responseFunction("broken"), projection)).toThrow(

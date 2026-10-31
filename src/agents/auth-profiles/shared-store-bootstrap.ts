@@ -13,6 +13,7 @@ import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-snapshot-source.js";
 import { registerListener } from "../../shared/listeners.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { agentEngineInput, openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -178,7 +179,7 @@ export function inspectSharedAuthLegacyRowsReadOnly(
     // Prepare in a child: closing the original inode here can release this
     // process's live auth writer locks on Linux, even through a read-only handle.
     prepared =
-      !postgres && behavior.artifactPreservingReadOnly
+      !postgres && (behavior.artifactPreservingReadOnly || isArtifactPreservingStateRead())
         ? prepareSqliteReadOnlyLocationSync(sourcePath)
         : undefined;
   } catch (error) {

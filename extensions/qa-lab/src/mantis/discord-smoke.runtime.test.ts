@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuard } = vi.hoisted(() => ({
@@ -17,13 +18,6 @@ const readText = (file: string) => fs.readFile(file, "utf8");
 const guildId = "1456350064065904867";
 const channelId = "1456744319972282449";
 const messageId = "1500000000000000001";
-
-function jsonResponse(payload: unknown, status = 200) {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 function fetchGuardCallsWithMethod(method: string) {
   return fetchWithSsrFGuard.mock.calls.filter(([request]) => {

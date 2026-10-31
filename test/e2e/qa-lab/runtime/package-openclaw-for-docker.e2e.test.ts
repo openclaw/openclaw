@@ -37,6 +37,7 @@ import {
   hermeticEnv,
   readRequiredPersistedInstalledPluginIndex,
 } from "../../../../src/commands/doctor-plugin-registry.test-support.js";
+import { listDirectoryTreeStrictSync } from "../../../../src/infra/directory-walk.js";
 import { resolveInstalledPluginIndexStorePath } from "../../../../src/plugins/installed-plugin-index-store-path.js";
 import { writePersistedInstalledPluginIndex } from "../../../../src/plugins/installed-plugin-index-store-write.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../../../src/state/openclaw-state-db.js";
@@ -867,6 +868,7 @@ describe("package-openclaw-for-docker", () => {
       "cli-parent-lifetime.mjs",
       "gateway-shutdown-budget.mjs",
       "node-runtime-env.mjs",
+      "runtime-process-bootstrap.generated.mjs",
       "packages/normalization-core/src/number-coercion.ts",
       "packages/normalization-core/src/string-coerce.ts",
       "scripts/package-openclaw-for-docker.mts",
@@ -896,6 +898,8 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",
       "scripts/lib/windows-taskkill.mjs",
       "src/infra/npm-command.ts",
+      "src/infra/runtime-process-dependency-url.ts",
+      "src/infra/runtime-process-manifest.ts",
       "src/shared/non-packaged-plugin-dirs.ts",
     ];
     try {
@@ -1369,8 +1373,8 @@ describe("package-openclaw-for-docker", () => {
       expect(receipt[0].files).toHaveLength(files.length);
       expect(fs.readdirSync(outputDir).toSorted()).toEqual(["openclaw-current.tgz", "pack.json"]);
       // Inspecting the final archive must not copy it into the caller's npm cache.
-      const cachedArtifactCopies = fs
-        .readdirSync(callerNpmCache, { encoding: "utf8", recursive: true })
+      const cachedArtifactCopies = listDirectoryTreeStrictSync(callerNpmCache)
+        .map((walkEntry) => walkEntry.relativePath)
         .map((entry) => path.join(callerNpmCache, entry))
         .filter((entry) => fs.statSync(entry).isFile() && fs.readFileSync(entry).equals(bytes));
       expect(cachedArtifactCopies).toEqual([]);
@@ -1383,7 +1387,12 @@ describe("package-openclaw-for-docker", () => {
     const packageJsonPath = path.join(sourceDir, "package.json");
     const originalPackageJson = `${JSON.stringify(
       {
-        dependencies: { "@openclaw/ai": "workspace:*", "dep-a": "workspace:1.2.3" },
+        dependencies: {
+          "@openclaw/ai": "workspace:*",
+          "dep-a": "workspace:1.2.3",
+          "root-required": "2.0.0",
+          "root-optional-peer": "3.0.0",
+        },
         devDependencies: { "@openclaw/session-url-contract": "workspace:*" },
         files: ["dist"],
         name: "openclaw",
@@ -1437,9 +1446,15 @@ describe("package-openclaw-for-docker", () => {
                 },
                 name: "@openclaw/ai",
                 version: "2026.6.17",
-                peerDependencies: { "@opentelemetry/api": "^1.9.0", retained: "1.0.0" },
+                peerDependencies: {
+                  "@opentelemetry/api": "^1.9.0",
+                  "root-required": "^2.0.0",
+                  "root-optional-peer": "^3.0.0",
+                  retained: "1.0.0",
+                },
                 peerDependenciesMeta: {
                   "@opentelemetry/api": { optional: true },
+                  "root-optional-peer": { optional: true },
                   retained: { optional: true },
                 },
               })}\n`,
@@ -1460,6 +1475,8 @@ describe("package-openclaw-for-docker", () => {
       expect(packageJson.dependencies["@openclaw/ai"]).toBe("2026.6.17");
       expect(packageJson.dependencies["@openclaw/private-runtime"]).toBeUndefined();
       expect(packageJson.dependencies["dep-a"]).toBe("1.2.3");
+      expect(packageJson.dependencies["root-required"]).toBe("2.0.0");
+      expect(packageJson.dependencies["root-optional-peer"]).toBe("3.0.0");
       expect(packageJson.devDependencies?.["@openclaw/session-url-contract"]).toBe("workspace:*");
       expect(packageJson.bundleDependencies).toContain("@openclaw/ai");
       expect(fs.existsSync(path.join(installedAiPath, "original-marker"))).toBe(false);
@@ -1729,7 +1746,7 @@ describe("package-openclaw-for-docker", () => {
     expect(calls).toEqual([
       `prepare-docs:${sourceDir}`,
       `prepare:${sourceDir}`,
-      `npm:pack --silent --ignore-scripts --pack-destination ${outputDir} --json=false:${sourceDir}`,
+      `npm:pack --loglevel=error --ignore-scripts --pack-destination ${outputDir} --json=false:${sourceDir}`,
       `restore-changelog:${sourceDir}`,
       `restore-docs:${sourceDir}`,
     ]);

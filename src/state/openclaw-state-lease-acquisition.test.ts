@@ -154,7 +154,7 @@ it("passes the exact persisted owner identity to the lease callback", async () =
   });
 });
 
-it("holds an exact Claw package owner until async release completes", async () => {
+it("holds an exact Template package owner until async release completes", async () => {
   await withOpenClawTestState({ label: "claw-package-lease-owner" }, async (state) => {
     const artifact = { kind: "plugin", source: "clawhub", ref: "sample/plugin" } as const;
     const options = { env: state.env, required: true };

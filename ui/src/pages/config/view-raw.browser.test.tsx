@@ -2,7 +2,11 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { baseProps, renderConfigInto } from "./config-view.test-support.tsx";
+import {
+  baseProps,
+  renderConfigInto,
+  requiredConfigElement as element,
+} from "./config-view.test-support.tsx";
 import type { ConfigProps } from "./view.tsx";
 import "../../styles.css";
 
@@ -42,19 +46,6 @@ describe("config raw editing and redaction", () => {
       throw new Error(`Expected button with text "${label}"`);
     }
     return button;
-  }
-
-  function element<T extends Element>(
-    container: HTMLElement,
-    selector: string,
-    constructor: new () => T,
-  ): T {
-    const found = container.querySelector(selector);
-    expect(found).toBeInstanceOf(constructor);
-    if (!(found instanceof constructor)) {
-      throw new Error(`Expected element matching "${selector}"`);
-    }
-    return found;
   }
 
   function openDiff(container: HTMLElement) {
@@ -232,26 +223,25 @@ describe("config raw editing and redaction", () => {
     },
   );
 
-  it("keeps sensitive raw config hidden until reveal before editing", () => {
-    const onRawChange = vi.fn();
-    const { container } = setup({
-      raw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
-      originalRaw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
-      formValue: { openai: { apiKey: "supersecret" } },
-      onRawChange,
+  it.each(["supersecret", "__OPENCLAW_REDACTED__"])("reveals raw %s accurately", (secret) => {
+    const raw = JSON.stringify({ openai: { apiKey: secret } }, null, 2);
+    const { container, props } = setup({
+      raw,
+      originalRaw: raw,
+      formValue: { openai: { apiKey: secret } },
     });
-
     expectHidden(container);
-
     const revealButton = element(container, ".config-raw-toggle", HTMLButtonElement);
     expect(revealButton.getAttribute("aria-pressed")).toBe("false");
     revealButton.click();
-
+    expect(text(container, ".config-raw-field .settings-count")).toBe(
+      secret === "__OPENCLAW_REDACTED__" ? "1 secret redacted" : "1 secret visible",
+    );
     const textarea = element(container, "textarea", HTMLTextAreaElement);
-    expect(textarea.value).toBe('{\n  "openai": { "apiKey": "supersecret" }\n}\n');
-    textarea.value = textarea.value.replace("supersecret", "updatedsecret");
+    expect(textarea.value).toBe(raw);
+    textarea.value = textarea.value.replace(secret, "updatedsecret");
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onRawChange).toHaveBeenCalledWith(textarea.value);
+    expect(props.onRawChange).toHaveBeenCalledWith(textarea.value);
   });
 
   it("opens raw pending changes without sending a fake raw edit", () => {

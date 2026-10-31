@@ -29,6 +29,10 @@
       mask-image: linear-gradient(to right, black calc(100% - 42px), transparent calc(100% - 26px));
     }
 
+    &[data-actionable] .chat-details__process-elapsed {
+      visibility: hidden;
+    }
+
     .chat-details-processes__action {
       opacity: 1;
       pointer-events: auto;
@@ -80,24 +84,10 @@
   corner-shape: round;
   background: var(--details-surface, var(--card));
   box-shadow: 0 0 0 1.5px var(--details-surface, var(--card));
-
-  > svg {
-    width: 8px;
-    height: 8px;
-    stroke-width: 2.5;
-  }
-
-  &[data-status="completed"] {
-    color: var(--ok);
-  }
-  &[data-status="failed"] {
-    color: var(--danger);
-  }
 }
 
 .chat-details-processes__spinner {
   display: block;
-  box-sizing: border-box;
   width: 8px;
   height: 8px;
   border: 1.25px solid color-mix(in srgb, var(--accent) 30%, var(--details-surface, var(--card)));
@@ -158,21 +148,6 @@
   }
 }
 
-.chat-details-processes__dismiss {
-  background: none;
-  color: var(--muted);
-
-  &:hover {
-    background: var(--bg-hover);
-    color: var(--text);
-  }
-
-  @media (hover: none) {
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
-
 .chat-details-processes__error {
   display: flex;
   align-items: center;
@@ -187,4 +162,27 @@
     min-width: 0;
     overflow-wrap: anywhere;
   }
+}
+
+.chat-details-processes__view-all {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  padding: var(--details-row-padding-block, 4px) var(--details-row-padding, 4px);
+  cursor: var(--cursor-action);
+}
+
+/* Text link: outranks the shared Details button hover background. */
+.chat-details .chat-details-processes__view-all:is(:hover, :focus-visible) {
+  background: none;
+  color: var(--text);
+}
+
+.chat-details-processes__envelope {
+  min-width: 0;
+}
+.chat-details-processes__motion-content {
+  display: flow-root;
 }

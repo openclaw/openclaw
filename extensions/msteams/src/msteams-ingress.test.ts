@@ -345,44 +345,35 @@ describe("Microsoft Teams durable ingress", () => {
     expect(stopped).toBe(true);
   });
 
-  it.each([false, true])(
-    "aborts a non-cooperative delivery at stop grace (terminal=%s)",
-    async (terminal) => {
-      vi.useFakeTimers();
-      try {
-        const deliveryStarted = createDeferred<void>();
-        let deliverySignal: AbortSignal | undefined;
-        const dispatch = vi.fn<IngressDispatch>(async (_activity, lifecycle) => {
-          deliverySignal = lifecycle.abortSignal;
-          deliveryStarted.resolve();
-          await new Promise<void>(() => {});
-        });
-        const ingress = makeIngress(dispatch);
-        ingress.start();
-        await ingress.accept(
-          activity({ id: terminal ? "activity-terminal-stop" : "activity-stop-timeout" }),
-        );
-        await deliveryStarted.promise;
+  it("aborts at stop grace and keeps a stopped ingress terminal", async () => {
+    vi.useFakeTimers();
+    try {
+      const deliveryStarted = createDeferred<void>();
+      let deliverySignal: AbortSignal | undefined;
+      const dispatch = vi.fn<IngressDispatch>(async (_activity, lifecycle) => {
+        deliverySignal = lifecycle.abortSignal;
+        deliveryStarted.resolve();
+        await new Promise<void>(() => {});
+      });
+      const ingress = makeIngress(dispatch);
+      ingress.start();
+      await ingress.accept(activity({ id: "activity-terminal-stop" }));
+      await deliveryStarted.promise;
 
-        const stopping = ingress.stop();
-        expect(deliverySignal?.aborted).toBe(false);
-        if (terminal) {
-          expect(ingress.stop()).toBe(stopping);
-          ingress.start();
-          await ingress.accept(activity({ id: "activity-after-stop-start" }));
-        }
-        await vi.advanceTimersByTimeAsync(MSTEAMS_REQUEST_TIMEOUT_MS);
-        await stopping;
-        expect(deliverySignal?.aborted).toBe(true);
-        if (terminal) {
-          expect(dispatch).toHaveBeenCalledTimes(1);
-          expect((await queue.listPending()).map((entry) => entry.id)).toContain(
-            "activity-after-stop-start",
-          );
-        }
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
+      const stopping = ingress.stop();
+      expect(deliverySignal?.aborted).toBe(false);
+      expect(ingress.stop()).toBe(stopping);
+      ingress.start();
+      await ingress.accept(activity({ id: "activity-after-stop-start" }));
+      await vi.advanceTimersByTimeAsync(MSTEAMS_REQUEST_TIMEOUT_MS);
+      await stopping;
+      expect(deliverySignal?.aborted).toBe(true);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect((await queue.listPending()).map((entry) => entry.id)).toContain(
+        "activity-after-stop-start",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

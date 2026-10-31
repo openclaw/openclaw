@@ -158,7 +158,9 @@ describe("native UI built-in delegation", () => {
         refresh();
         await view.updateComplete;
         flush();
-        expect(updates).toMatchObject([{ props: { routeId: "chat" }, presented: true }]);
+        await vi.waitFor(() =>
+          expect(updates).toMatchObject([{ props: { routeId: "chat" }, presented: true }]),
+        );
       } finally {
         cleanup();
       }

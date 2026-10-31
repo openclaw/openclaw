@@ -139,9 +139,7 @@ async function receiveAcknowledgement(bot: Bot, message: NonNullable<Update["mes
 it("admits shared contacts and preserves their fields in replies", async () => {
   const bot = await inputBot();
   const contact = mediaMessage(
-    {
-      contact: { first_name: "ContactProbe", last_name: "Q7", phone_number: "+15550100001" },
-    },
+    { contact: { first_name: "ContactProbe", last_name: "Q7", phone_number: "+15550100001" } },
     false,
   );
   await receive(bot, contact);
@@ -161,12 +159,7 @@ it.each([
 ])("does not activate groups from contact fields $name/$pattern", async ({ name, pattern }) => {
   const cfg = mentionConfig(pattern ? [pattern] : [], broadcastConfig());
   const bot = await inputBot(cfg);
-  await receive(
-    bot,
-    mediaMessage({
-      contact: { first_name: name, phone_number: "+15550100001" },
-    }),
-  );
+  await receive(bot, mediaMessage({ contact: { first_name: name, phone_number: "+15550100001" } }));
   expect(harness.replySpy).not.toHaveBeenCalled();
   await receive(bot, textMessage("@openclaw_bot hello"));
   expect(harness.replySpy).toHaveBeenCalled();
@@ -222,23 +215,19 @@ it.each([
 );
 
 it.each([
-  { topic: false, activation: "mention", admitted: true },
-  { topic: undefined, activation: "always", admitted: true },
+  { topic: false, activation: "mention" },
+  { topic: undefined, activation: "always" },
 ] as const)(
   "gives topic mention policy precedence over stored $activation activation ($topic)",
-  async ({ topic, activation, admitted }) => {
+  async ({ topic, activation }) => {
     await upsertSessionEntry({
       storePath,
       sessionKey: "agent:main:telegram:group:-10042001:topic:99",
-      entry: {
-        sessionId: "stored-activation",
-        updatedAt: 1,
-        groupActivation: activation,
-      },
+      entry: { sessionId: "stored-activation", updatedAt: 1, groupActivation: activation },
     });
     const cfg = config({ requireMention: true, topics: { "99": { requireMention: topic } } });
     await receive(await inputBot(cfg), textMessage("unmentioned topic input"));
-    expect(harness.replySpy).toHaveBeenCalledTimes(admitted ? 1 : 0);
+    expect(harness.replySpy).toHaveBeenCalledOnce();
   },
 );
 
@@ -294,10 +283,7 @@ it.each(["@openclaw_bot answer", "stop"])(
     cfg.messages = {
       ackReaction: "\u{1f440}",
       ackReactionScope: "group-all",
-      groupChat: {
-        mentionPatterns: [],
-        unmentionedInbound: "room_event",
-      },
+      groupChat: { mentionPatterns: [], unmentionedInbound: "room_event" },
     };
     await receive(await inputBot(cfg), {
       ...textMessage(text),
@@ -345,9 +331,7 @@ it.each(["forum_topic_created", "captionless bot media"])(
         chat: groupChat,
         from: telegramBotInfoForTest,
         ...(admitted ? { photo } : {}),
-        ...(kind === "forum_topic_created"
-          ? { forum_topic_created: { name: "Topic", icon_color: 0 } }
-          : {}),
+        ...(!admitted ? { forum_topic_created: { name: "Topic", icon_color: 0 } } : {}),
         reply_to_message: undefined,
       },
     });
@@ -465,10 +449,7 @@ it("uses the mixed-case account mention policy for inbound text", async () => {
       mentionPatterns: { mode: "allow", allowIn: ["-10042001"] },
     },
   };
-  const bot = await inputBot(cfg, true, "work");
-
-  await receive(bot, textMessage("account policy"));
-
+  await receive(await inputBot(cfg, true, "work"), textMessage("account policy"));
   expect(agentInput()?.BodyForAgent).toBe("account policy");
 });
 
@@ -517,6 +498,7 @@ it("transcribes only an authorized voice sender with forum echo routing and untr
     {
       OriginatingTo: "telegram:-10042001:topic:99",
       AccountId: "default",
+      MessageSid: String(voice.message_id + 1),
       ChatType: "group",
       MessageThreadId: 99,
     },
@@ -535,12 +517,14 @@ it("preserves named-account DM topic voice echo routing without a group mention"
   transcribe.mockResolvedValue("hello from a voice note");
   await receive(await inputBot(cfg, true, "atlas"), {
     ...voiceMessage(false),
+    message_id: 901,
     message_thread_id: 77,
   });
   expectVoiceInput(
     {
       OriginatingTo: "telegram:42001",
       AccountId: "atlas",
+      MessageSid: "901",
       ChatType: "direct",
       MessageThreadId: 77,
     },

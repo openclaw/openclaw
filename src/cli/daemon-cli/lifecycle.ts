@@ -41,6 +41,7 @@ import {
 } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createNullWriter } from "../../shared/null-writer.js";
 import { formatCliCommand } from "../command-format.js";
 import {
@@ -54,6 +55,7 @@ import {
 } from "./lifecycle-audit.js";
 import { resolveGatewayConfigPorts, resolveGatewayLifecycleContext } from "./lifecycle-context.js";
 import {
+  commandInterrupted,
   runServiceRestart,
   runServiceStart,
   runServiceStop,
@@ -247,13 +249,23 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
   }
 
   const healthWait = resolveRestartListenerHealthWait(restartIntent);
-  const health = await waitForGatewayHealthyListener({
-    port: lockIdentity.port,
-    attempts: healthWait.attempts,
-    delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
-    previousLockIdentity: signaled.previousLockIdentity,
-    waitIndefinitelyForPreviousOwner: healthWait.waitIndefinitelyForPreviousOwner,
-  });
+  let health: Awaited<ReturnType<typeof waitForGatewayHealthyListener>>;
+  try {
+    health = await waitForGatewayHealthyListener({
+      port: lockIdentity.port,
+      attempts: healthWait.attempts,
+      delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+      previousLockIdentity: signaled.previousLockIdentity,
+      waitIndefinitelyForPreviousOwner: healthWait.waitIndefinitelyForPreviousOwner,
+      signal: getAsyncWorkSignal(),
+    });
+  } catch (err) {
+    // An accepted interrupt owns the exit status; a cancelled wait is not a restart failure.
+    if (!commandInterrupted(err)) {
+      throw err;
+    }
+    return false;
+  }
   if (!health.healthy) {
     const message = `Gateway restart timed out after ${healthWait.timeoutSeconds}s waiting for health checks.`;
     fail(message, renderGatewayPortHealthDiagnostics(health));
@@ -332,7 +344,10 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
       const port = expectedPort ?? context.port;
       const deadlineAt = performance.now() + deadlineMs;
       const attempts = Math.ceil(deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS);
-      const healthDeadline = createGatewayRestartDeadline({ timeoutMs: deadlineMs });
+      const healthDeadline = createGatewayRestartDeadline({
+        timeoutMs: deadlineMs,
+        signal: getAsyncWorkSignal(),
+      });
       const [health, readiness] = await Promise.all([
         withCommandProcessScope(
           () =>
@@ -346,6 +361,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
               deadlineOutcome: "snapshot",
               env: context.env,
               supervisorKeepsAlive: process.platform === "darwin",
+              signal: getAsyncWorkSignal(),
             }),
           healthDeadline.signal,
         ).finally(() => healthDeadline.dispose()),
@@ -355,6 +371,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
           attempts,
           deadlineAt,
           delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+          signal: getAsyncWorkSignal(),
         }),
       ]);
       if (health.healthy && readiness.healthz === 200 && readiness.readyz === 200) {
@@ -456,22 +473,19 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   let restartedWithoutServiceManager = false;
   let unmanagedPreviousLockIdentity: GatewayLockIdentity | undefined;
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
-  const { explicit: configuredPort, fallback: fallbackPort } = await resolveGatewayConfigPorts();
-  let managedRestartContext = await resolveGatewayLifecycleContext(
-    service,
-    preserveDefinition,
-  ).catch(async (error: unknown) => {
-    if (hasCommandProcessCleanupError(error)) {
-      throw error;
-    }
-    if (preserveDefinition) {
-      throw error;
-    }
-    return { port: fallbackPort, env: process.env };
-  });
+  let configPorts = await resolveGatewayConfigPorts();
+  const { explicit: configuredPort, fallback: fallbackPort } = configPorts;
+  let restartContext = await resolveGatewayLifecycleContext(service, preserveDefinition).catch(
+    (error: unknown) => {
+      if (hasCommandProcessCleanupError(error) || preserveDefinition) {
+        throw error;
+      }
+      return { port: fallbackPort, env: process.env, command: undefined, config: undefined };
+    },
+  );
   let managedRestartPort = preserveDefinition
-    ? managedRestartContext.port
-    : (configuredPort ?? managedRestartContext.port);
+    ? restartContext.port
+    : (configuredPort ?? restartContext.port);
   // An unmanaged run loop keeps its lock port across in-process restarts, even
   // when config changes underneath it. Use that port for both the signal and
   // health proof or a valid CLI/env override looks like a failed restart.
@@ -482,7 +496,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
   let unmanagedRestartWait: ReturnType<typeof resolveRestartListenerHealthWait> | undefined;
 
-  return await runServiceRestart({
+  return runServiceRestart({
     serviceNoun: "Gateway",
     service,
     renderStartHints: renderGatewayServiceStartHints,
@@ -490,7 +504,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       ...opts,
       ...(restartIntent ? { restartIntent } : {}),
     },
-    checkTokenDrift: true,
+    readDriftContext: () => ({ config: configPorts.config ?? {}, command: restartContext.command }),
     expectedPort: configuredPort,
     beforeServiceMutation: () => assertGatewayServiceMutationAllowed("restart the gateway"),
     restartOwnedProcess: preserveDefinition
@@ -512,6 +526,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
             env: process.env,
             attempts: restartHealthAttempts,
             delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+            signal: getAsyncWorkSignal(),
           });
           if (!ready.healthy) {
             throw new Error(
@@ -548,10 +563,12 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
             state,
             issues,
           });
-          // Repair rewrites the service definition, so the old command environment
-          // no longer identifies where the restarted gateway publishes readiness.
-          managedRestartContext = await resolveGatewayLifecycleContext(service);
-          managedRestartPort = configuredPort ?? managedRestartContext.port;
+          // Repair invalidates the prepared service definition and caller config.
+          if (result) {
+            restartContext = await resolveGatewayLifecycleContext(service);
+            configPorts = await resolveGatewayConfigPorts();
+            managedRestartPort = configuredPort ?? restartContext.port;
+          }
           return result;
         },
     onNotLoaded: async () => {
@@ -595,7 +612,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     }) => {
       if (preserved) {
         preserveDefinition = true;
-        managedRestartPort = managedRestartContext.port;
+        managedRestartPort = restartContext.port;
       }
       let activationAccepted = accepted;
       const reportHealthFailure = (statusLines: string[], diagnostics: string[]) => {
@@ -618,6 +635,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           env: process.env,
           attempts: unmanagedRestartWait?.attempts ?? restartHealthAttempts,
           delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+          signal: getAsyncWorkSignal(),
           ...(unmanagedPreviousLockIdentity
             ? {
                 previousLockIdentity: unmanagedPreviousLockIdentity,
@@ -650,11 +668,14 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           attempts: restartHealthAttempts,
           delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
           ...(process.platform === "win32" ? { timeoutMs: restartWaitMs } : {}),
-          env: managedRestartContext.env,
-          ...(managedRestartContext.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1"
+          env: restartContext.env,
+          config: restartContext.config,
+          probeHosts: await resolveGatewayServiceProbeHosts(restartContext),
+          ...(restartContext.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1"
             ? { requirePluginHealth: false }
             : {}),
           supervisorKeepsAlive: process.platform === "darwin",
+          signal: getAsyncWorkSignal(),
         });
       let health = await waitForHealthy();
 
@@ -669,10 +690,10 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         }
 
         const terminated = await terminateStaleGatewayPids(health.staleGatewayPids, {
-          env: managedRestartContext.env,
+          env: restartContext.env,
           assertCurrent: assertGatewayServiceUpdateCurrent,
         });
-        const currentOwner = readGatewayOwnerLease({ env: managedRestartContext.env });
+        const currentOwner = readGatewayOwnerLease({ env: restartContext.env });
         if (terminated.length > 0 && (!currentOwner || currentOwner.state === "dead")) {
           const retryRestart = await service.restart({
             preserveDefinition,
@@ -690,7 +711,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
 
       if (health.healthy) {
-        return undefined;
+        return { outcome: "completed", readiness: health };
       }
 
       const diagnostics = renderRestartDiagnostics(health);
@@ -715,7 +736,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         [formatCliCommand("openclaw gateway status --deep"), formatCliCommand("openclaw doctor")],
         health.waitOutcome === "still-starting"
           ? // Published updater parents recognize this envelope and continue readiness verification.
-            managedRestartContext.env.OPENCLAW_UPDATE_IN_PROGRESS === "1"
+            restartContext.env.OPENCLAW_UPDATE_IN_PROGRESS === "1"
             ? "restart-health-failed"
             : "still-starting"
           : activationAccepted

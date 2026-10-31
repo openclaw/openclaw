@@ -1,12 +1,12 @@
 /* @vitest-environment jsdom */
 
-import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { page } from "./route.ts";
 
 it("loads Devices from the connection current after the route module yield", async () => {
@@ -45,14 +45,10 @@ it("loads Devices from the connection current after the route module yield", asy
   if (!page.loader) {
     throw new Error("Devices route has no loader");
   }
-  const pending = page.loader(context, {
-    signal: new AbortController().signal,
-    shouldRun: () => true,
-    revalidating: false,
-    location: { pathname: "/devices", search: "", hash: "" },
-    deps: "",
-    cause: "navigation",
-  } satisfies RouteLoaderOptions);
+  const pending = page.loader(
+    context,
+    createRouteLoaderOptions({ pathname: "/devices", search: "", hash: "" }),
+  );
   harness.publish({ ...harness.gateway.snapshot, client: currentClient });
   const data = await pending;
 

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createNodeWorkspaceTransferService } from "../gateway/worker-environments/node-workspace-transfer-service.js";
 import {
@@ -24,6 +24,7 @@ import {
 } from "./node-worker-transfer-client.fixture.test-support.js";
 import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
 import { listen } from "./node-worker-transfer-client.test-support.js";
+import { workspaceCommandEnv } from "./node-worker-workspace-commands.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -51,10 +52,31 @@ async function pack(root: string, commit: string) {
 }
 
 describe("node worker Git transfers", () => {
+  it.each(["win32", "linux"] as const)("isolates Git configuration on %s", (platform) => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+    const inherited = {
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_0: "core.hooksPath",
+      GIT_CONFIG_VALUE_0: "NUL",
+      GIT_CONFIG_KEY_1: "core.fsmonitor",
+      GIT_CONFIG_VALUE_1: "false",
+    };
+    try {
+      expect(workspaceCommandEnv("/workspace", inherited)).toMatchObject({
+        ...inherited,
+        HOME: "/workspace",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: platform === "win32" ? "NUL" : "/dev/null",
+        GIT_TERMINAL_PROMPT: "0",
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
   it.each([1, 2] as const)(
     "uploads worker commits only when result v%s was negotiated",
     async (version) => {
-      const root = tempDirs.make("node-worker-result-history-");
+      const root = tempDirs.make("node-worker-result-history-", process.cwd());
       const source = path.join(root, "source");
       const { workspaceDir } = transferFixture(root, "history");
       await fs.mkdir(source);
@@ -138,7 +160,7 @@ describe("node worker Git transfers", () => {
   it.runIf(process.platform === "win32")(
     "reuses foreign executable Git-base files without requesting an unavailable blob",
     async () => {
-      const root = tempDirs.make("node-worker-transfer-windows-git-executable-");
+      const root = tempDirs.make("node-worker-transfer-windows-git-executable-", process.cwd());
       const source = path.join(root, "source");
       const { workspaceDir, download } = transferFixture(
         root,
@@ -187,7 +209,7 @@ describe("node worker Git transfers", () => {
     const replaceSymlinkAncestor = scenario === "replace symlink ancestor";
     const lateWrite = scenario === "late write";
     const seedState = replaceSymlinkAncestor || lateWrite ? "unused" : scenario;
-    const root = tempDirs.make("node-worker-transfer-git-");
+    const root = tempDirs.make("node-worker-transfer-git-", process.cwd());
     const source = path.join(root, "source");
     const { workspaceDir, read } = transferFixture(root, "environment-git");
     await fs.mkdir(source);
@@ -223,12 +245,8 @@ describe("node worker Git transfers", () => {
         await fs.rm(objects, { recursive: true });
         await fs.symlink(path.join(source, ".git", "objects"), objects, "dir");
       } else if (seedState === "oversized") {
-        const oversized = await fs.open(path.join(objects, "oversized"), "w");
-        try {
-          await oversized.truncate(MAX_WORKSPACE_INVENTORY_TOTAL_BYTES + 1);
-        } finally {
-          await oversized.close();
-        }
+        await using oversized = await fs.open(path.join(objects, "oversized"), "w");
+        await oversized.truncate(MAX_WORKSPACE_INVENTORY_TOTAL_BYTES + 1);
       }
     }
     if (invalidSeed || lateWrite) {
@@ -268,39 +286,37 @@ describe("node worker Git transfers", () => {
     let requestedPacks = 0;
     const server = createHttpServer(
       transferHandler(async (req, res) => {
+        let body: string | Buffer | undefined;
         if (req.url?.endsWith("/manifest")) {
-          res.writeHead(200, { "content-length": String(Buffer.byteLength(rawManifest)) });
-          res.end(rawManifest);
-          return;
-        }
-        if (req.url?.endsWith("/pack")) {
-          requestedPacks += 1;
-          res.writeHead(200, { "content-length": String(packed.byteLength) });
-          res.end(packed);
-          return;
-        }
-        const sha256 = req.url?.match(/\/blobs\/([a-f0-9]{64})$/u)?.[1];
-        if (sha256) {
-          requestedBlobs.push(sha256);
-          const file = filesByHash.get(sha256);
-          if (file) {
-            if (lateWrite && sha256 === trackedSha) {
-              const staging = (await fs.readdir(root)).find((name) =>
-                name.startsWith(".workspace.workspace-transfer-"),
-              );
-              expect(staging).toBeDefined();
-              const script = path.join(root, staging!, "script.sh");
-              const original = await fs.stat(script);
-              await fs.writeFile(script, "#!/bin/sh\nexit 1\n");
-              await fs.utimes(script, original.atime, original.mtime);
+          body = rawManifest;
+        } else if (req.url?.endsWith("/pack")) {
+          requestedPacks++;
+          body = packed;
+        } else {
+          const sha256 = req.url?.match(/\/blobs\/([a-f0-9]{64})$/u)?.[1];
+          if (sha256) {
+            requestedBlobs.push(sha256);
+            const file = filesByHash.get(sha256);
+            if (file) {
+              if (lateWrite && sha256 === trackedSha) {
+                const staging = (await fs.readdir(root)).find((name) =>
+                  name.startsWith(".workspace.workspace-transfer-"),
+                );
+                expect(staging).toBeDefined();
+                const script = path.join(root, staging!, "script.sh");
+                const original = await fs.stat(script);
+                await fs.writeFile(script, "#!/bin/sh\nexit 1\n");
+                await fs.utimes(script, original.atime, original.mtime);
+              }
+              body = await fs.readFile(file);
             }
-            const body = await fs.readFile(file);
-            res.writeHead(200, { "content-length": String(body.byteLength) });
-            res.end(body);
-            return;
           }
         }
-        res.writeHead(404).end();
+        res.writeHead(
+          body === undefined ? 404 : 200,
+          body === undefined ? {} : { "content-length": String(Buffer.byteLength(body)) },
+        );
+        res.end(body);
       }),
     );
     const gatewayUrl = await listen(server);
@@ -369,7 +385,7 @@ describe("node worker Git transfers", () => {
     }
   });
   it("downloads repeated blob content once while preserving independent files and modes", async () => {
-    const root = tempDirs.make("node-worker-transfer-repeated-blob-");
+    const root = tempDirs.make("node-worker-transfer-repeated-blob-", process.cwd());
     const { workspaceDir, download } = transferFixture(root, "environment-repeated-blob");
     const body = Buffer.from("shared workspace content\n");
     const first = fileEntry("first.txt", body);

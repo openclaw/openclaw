@@ -53,6 +53,32 @@ it("carries runtime toolsAllow into coding tool construction", () => {
   });
 });
 
+it("keeps forced tools and frozen traces equivalent when overriding without a copy", () => {
+  const attempt = {
+    toolsAllow: ["read"],
+    forceMessageTool: false,
+    trace: { traceId: "11111111111111111111111111111111" },
+    replyOperation: { acceptedSteeredInboundAudio: false },
+  };
+  const overrides = {
+    forceMessageTool: true,
+    trace: { traceId: "22222222222222222222222222222222" },
+  };
+  const legacy = buildEmbeddedAttemptToolRunContext({ ...attempt, ...overrides });
+  const direct = buildEmbeddedAttemptToolRunContext(attempt, overrides);
+  const { hasCurrentInboundAudio: legacyAudio, ...legacyFacts } = legacy;
+  const { hasCurrentInboundAudio: directAudio, ...directFacts } = direct;
+  expect(directFacts).toEqual(legacyFacts);
+  expect(direct.runtimeToolAllowlist).toEqual(["read", "message"]);
+  expect(direct.trace?.traceId).toBe("22222222222222222222222222222222");
+  overrides.trace.traceId = "33333333333333333333333333333333";
+  expect(direct.trace?.traceId).toBe("22222222222222222222222222222222");
+  expect([legacyAudio(), directAudio()]).toEqual([false, false]);
+  attempt.replyOperation.acceptedSteeredInboundAudio = true;
+  expect([legacyAudio(), directAudio()]).toEqual([true, true]);
+  expect(attempt.forceMessageTool).toBe(false);
+});
+
 it("reads accepted steering at execution without crossing operation owners", () => {
   const replyOperation = { acceptedSteeredInboundAudio: false };
   const attempt = { currentInboundAudio: false, replyOperation };

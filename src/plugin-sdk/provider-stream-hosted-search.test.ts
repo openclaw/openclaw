@@ -2,21 +2,19 @@ import type { OpenAIResponsesOptions } from "@openclaw/ai/internal/openai";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { createOpenAIHostedWebSearchWrapper } from "./provider-stream-shared.js";
 
-const model = {
+const model = makeProviderModelFixture<"openai-responses">({
   api: "openai-responses",
   provider: "openai",
   id: "fixture",
   baseUrl: "https://api.openai.com/v1",
-  name: "fixture",
   reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 8192,
   maxTokens: 1024,
-} satisfies Model<"openai-responses">;
+}) satisfies Model<"openai-responses">;
 
 it("preserves native OpenAI hosted-search payload bytes and async replacement-hook semantics", async () => {
   let wire = "";

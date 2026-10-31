@@ -1,6 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { TestContext } from "vitest";
+import {
+  applyEmbeddedAttemptToolsAllow,
+  resolveEmbeddedAttemptToolConstructionPlan,
+} from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { buildEmbeddedAttemptToolRunContext } from "../../agents/embedded-agent-runner/run/attempt-tool-run-context.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
+import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -8,6 +15,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { createReplyAgentDefaults } from "./get-reply-config.test-support.js";
 
 export async function configureEventState(
   state: OpenClawTestState,
@@ -16,12 +24,7 @@ export async function configureEventState(
   const config: OpenClawConfig = {
     agents: {
       entries: { main: { workspace: state.workspaceDir } },
-      defaults: {
-        workspace: state.workspaceDir,
-        skipBootstrap: true,
-        model: { primary: "mock-openai/gpt-5.6-luna" },
-        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-      },
+      defaults: createReplyAgentDefaults(state.workspaceDir),
     },
     plugins: { enabled: false },
     skills: { load: { watch: false } },
@@ -53,4 +56,76 @@ export function runEventFixture(
     await Promise.allSettled([work]);
   });
   return work;
+}
+
+/** Admits an event turn and opens its real managed tool host; only the model is synthetic. */
+export async function openEventToolHost(
+  params: RunEmbeddedAgentParams,
+  label: string,
+  options: { includeOpenClawTools?: boolean } = {},
+) {
+  const admittedRunContext = await startEmbeddedTurn(params, label);
+  const workspace = await resolveAttemptWorkspaceSandbox({ ...params, admittedRunContext });
+  const host = createAgentHarnessHostCapabilities({
+    attempt: {
+      admittedRunContext,
+      runId: params.runId,
+      abortSignal: params.abortSignal,
+      config: params.config,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
+      permissionMode: params.permissionMode,
+      requireWorkspaceOnly: params.requireWorkspaceOnly,
+      sessionRoot: workspace.sessionPermissionRoot,
+      workspaceDir: params.workspaceDir,
+      bootstrapWorkspaceDir: params.bootstrapWorkspaceDir,
+      cwd: params.cwd,
+      sandboxAgentId: params.sandboxAgentId,
+      skillsSnapshot: params.skillsSnapshot,
+      toolExecutionAllow: params.toolExecutionAllow,
+      toolsAllow: params.toolsAllow,
+      runtimePluginToolGrant: params.runtimePluginToolGrant,
+      trigger: params.trigger,
+      senderIsOwner: params.senderIsOwner,
+      messageChannel: params.messageChannel,
+      messageProvider: params.messageProvider,
+      agentAccountId: params.agentAccountId,
+    },
+    pluginId: "openclaw",
+  });
+  const createToolSurface = expectDefined(
+    host.capabilities.createToolSurface,
+    "managed tool surface",
+  );
+  const toolRunContext = buildEmbeddedAttemptToolRunContext({
+    ...params,
+    model:
+      params.provider && params.model ? { provider: params.provider, id: params.model } : undefined,
+  });
+  const construction = resolveEmbeddedAttemptToolConstructionPlan({
+    toolsAllow: toolRunContext.runtimeToolAllowlist,
+  });
+  const tools = applyEmbeddedAttemptToolsAllow(
+    createToolSurface({
+      ...toolRunContext,
+      config: params.config,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      workspaceDir: workspace.effectiveWorkspace,
+      cwd: workspace.effectiveCwd,
+      sessionPermissionPolicy: workspace.sessionPermissionPolicy,
+      toolConstructionPlan: {
+        ...construction.codingToolConstructionPlan,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: options.includeOpenClawTools === true,
+        includePluginTools: false,
+      },
+    }),
+    construction.runtimeToolAllowlist,
+  );
+  return { admittedRunContext, tools, close: () => host.close() };
 }

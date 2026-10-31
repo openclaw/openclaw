@@ -330,23 +330,34 @@ it("shares one cold hydration across four callers without logging session data",
   expect(pages[0]?.trace).toMatchObject(traces[0]!);
   expect(new Set(records.map((record) => fields(record).diagnosticEpoch)).size).toBe(1);
   expect(JSON.stringify(records)).not.toContain(f.home);
+  expect(await f.list()).toEqual(results[0]);
+  expect(nativeRequest).toHaveBeenCalledOnce();
 });
 
-it("records complete native hydration before resident title filtering", async () => {
+it("bounds maximal waiter diagnostics across hydration pages before resident filtering", async () => {
   const f = await fixture();
   const thread = await f.thread("codex");
+  const maximum = Number.MAX_SAFE_INTEGER;
   const cursors: (string | undefined)[] = [];
   mockObservedRequest(async (observation, params, method) => {
     expect(method).toBe("thread/list");
     expect(params).not.toHaveProperty("searchTerm");
     cursors.push(params.cursor);
-    for (let attempt = 1; attempt <= 6; attempt++) {
+    observation?.attemptWaiterFinished?.(waiterSummary({ clientInstanceId: privateText }));
+    for (let index = 0; index < 6; index++) {
       observation?.attemptWaiterFinished?.(
         waiterSummary({
-          rpcId: (cursors.length - 1) * 6 + attempt,
-          overloadAttemptOrdinal: attempt,
-          waiterOutcome: attempt === 6 ? "resolved" : "native-error",
-          wireOutcomeAtWaiterSettlement: attempt === 6 ? "native-ok" : "ingress-rejected",
+          rpcId: maximum - index,
+          waiterOrdinal: maximum,
+          overloadAttemptOrdinal: maximum,
+          disposition: "joined",
+          attemptCreatedAtMs: maximum,
+          firstPossibleWriteAtMs: maximum,
+          waiterAttachedAtMs: maximum,
+          waiterSettledAtMs: maximum,
+          waiterOutcome: "authority-rejected",
+          wireOutcomeAtWaiterSettlement: "ingress-rejected",
+          wireObservedAtMs: maximum,
         }),
       );
     }
@@ -369,79 +380,38 @@ it("records complete native hydration before resident title filtering", async ()
   expect(pages).toHaveLength(20);
   for (const [index, page] of pages.entries()) {
     expect(fields(page)).toMatchObject({
+      outcome: "resolved",
       origin: "cold",
       controlRequestCalls: 1,
       inclusiveControlRequestWaitMs: 1_100,
+      inclusiveControlRequestWaitMaxMs: 1_100,
       provenanceChecks: 1,
       provenanceReadCalls: index === 0 ? 1 : 0,
       provenanceCacheHits: index === 0 ? 0 : 1,
-      controlWaitersOmitted: 2,
+      controlWaitersOmitted: 3,
+      omittedObservations: 0,
+      controlWaitersV1: JSON.stringify(
+        [0, 1, 4, 5].map((waiterIndex) => [
+          1,
+          maximum,
+          clientInstanceId,
+          maximum - waiterIndex,
+          maximum,
+          "joined",
+          maximum,
+          maximum,
+          maximum,
+          maximum,
+          "authority-rejected",
+          "ingress-rejected",
+          maximum,
+        ]),
+      ),
     });
-    const tuples = JSON.parse(String(fields(page).controlWaitersV1));
-    expect(tuples).toHaveLength(4);
-    expect(tuples.map((tuple: unknown[]) => tuple[1])).toEqual([1, 2, 5, 6]);
   }
   expect(JSON.stringify(records)).not.toContain("private-cursor-");
   await f.list("another query");
   expect(nativeRequest).toHaveBeenCalledTimes(20);
-});
-
-it("preserves a bounded page warning with maximal waiter values and omitted invalid facts", async () => {
-  const f = await fixture();
-  const maximum = Number.MAX_SAFE_INTEGER;
-  mockObservedRequest(async (observation) => {
-    observation?.attemptWaiterFinished?.(waiterSummary({ clientInstanceId: privateText }));
-    for (let index = 0; index < 4; index++) {
-      observation?.attemptWaiterFinished?.(
-        waiterSummary({
-          rpcId: maximum - index,
-          waiterOrdinal: maximum,
-          overloadAttemptOrdinal: maximum,
-          disposition: "joined",
-          attemptCreatedAtMs: maximum,
-          firstPossibleWriteAtMs: maximum,
-          waiterAttachedAtMs: maximum,
-          waiterSettledAtMs: maximum,
-          waiterOutcome: "authority-rejected",
-          wireOutcomeAtWaiterSettlement: "ingress-rejected",
-          wireObservedAtMs: maximum,
-        }),
-      );
-    }
-    clock += 1_100;
-    return { data: [] };
-  });
-  await f.control.initialize();
-  expect((await f.list())[0]).toMatchObject({ connected: true, sessions: [] });
-  const pages = await emitted(PAGE);
-  expect(pages).toHaveLength(1);
-  expect(fields(pages[0])).toMatchObject({
-    outcome: "resolved",
-    origin: "cold",
-    controlRequestCalls: 1,
-    inclusiveControlRequestWaitMs: 1_100,
-    inclusiveControlRequestWaitMaxMs: 1_100,
-    controlWaitersV1: JSON.stringify(
-      Array.from({ length: 4 }, (_, index) => [
-        1,
-        maximum,
-        clientInstanceId,
-        maximum - index,
-        maximum,
-        "joined",
-        maximum,
-        maximum,
-        maximum,
-        maximum,
-        "authority-rejected",
-        "ingress-rejected",
-        maximum,
-      ]),
-    ),
-    controlWaitersOmitted: 1,
-    omittedObservations: 0,
-  });
-  expect(nativeRequest).toHaveBeenCalledOnce();
 });
 
 it.each(["disabled", "disabled-during-call"] as const)(

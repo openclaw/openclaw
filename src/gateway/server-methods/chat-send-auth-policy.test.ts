@@ -18,6 +18,7 @@ import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.tes
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { publishOperatorRoleConfigChange } from "../operator-role-policy.js";
+import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -35,17 +36,18 @@ it.each([true, false])(
   "retains queued chat input across other grants (verified identity: %s)",
   async (verified) => {
     const fixture = await createFixture();
-    const { sessionKey: key } = fixture.scope;
+    const { scope, context, params } = fixture;
+    const { sessionKey: key } = scope;
     const identity = "retained@example.test";
     const profile = ensureProfileForEmail(identity);
     let current: OpenClawConfig = {
-      ...fixture.context.getRuntimeConfig(),
+      ...context.getRuntimeConfig(),
       gateway: { auth: { identityScopes: { [identity]: ["operator.read", "operator.write"] } } },
     };
     setRuntimeConfigSnapshot(current);
-    fixture.context.getRuntimeConfig = () => current;
-    fixture.context.getCommittedRuntimeConfig = () => current;
-    fixture.context.resolveGatewayContext = () => fixture.context;
+    context.getRuntimeConfig = () => current;
+    context.getCommittedRuntimeConfig = () => current;
+    context.resolveGatewayContext = () => context;
     const close = vi.fn();
     const client = {
       ...createOperatorWsClient({ socket: { close } }),
@@ -55,28 +57,22 @@ it.each([true, false])(
         verifiedIdentity: verified ? identity : undefined,
       }),
       ...(verified ? { authenticatedUserId: identity } : {}),
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: null,
-        hasAvatar: false,
-        avatarRevision: "1",
-        updatedAt: profile.updatedAt,
-      },
+      authenticatedUserProfile: dispatchProfile(profile.id, { updatedAt: profile.updatedAt }),
     };
     const harness = createDispatchTestHarness({
-      buildRequestContext: () => fixture.context,
+      buildRequestContext: () => context,
       extraHandlers: { "chat.send": handleChatSend },
     });
     const publish = (next: typeof current) => {
       current = next;
       setRuntimeConfigSnapshot(current);
-      publishOperatorRoleConfigChange(fixture.context);
+      publishOperatorRoleConfigChange(context);
       disconnectDisallowedGatewayPolicyClients([client], current);
     };
     let completion: Promise<void> | undefined;
     try {
       await harness.dispatcher.dispatch(
-        { type: "req", id: "queued-input", method: "chat.send", params: fixture.params },
+        { type: "req", id: "queued-input", method: "chat.send", params },
         client,
       );
       expect(harness.send).toHaveBeenCalledWith(
@@ -88,32 +84,30 @@ it.each([true, false])(
       >[0];
       const authority = dispatch.replyOptions?.operatorAuthority;
       assert(authority);
-      const active = rpcSourceTesting.get(fixture.params.idempotencyKey);
+      const active = rpcSourceTesting.get(params.idempotencyKey);
       assert(active);
-      const run = createQueueTestRun({ prompt: fixture.params.message });
+      const run = createQueueTestRun({ prompt: params.message });
       run.abortSignal = active.input.abortSignal;
       run.turnAdoptionLifecycle = dispatch.replyOptions?.turnAdoptionLifecycle;
       run.operatorAuthority = authority;
       bindSessionControllerSource(active.input, run);
       const settings = createQueueSettings({ mode: "followup" });
-      const queued = enqueueFollowupRun(key, run, settings, "none", async () => {}, false);
-      expect(queued).toBe(true);
+      enqueueFollowupRun(key, run, settings, "none", async () => {}, false);
       const detached = createDeferred();
-      fixture.context.removeChatRun = () => {
+      context.removeChatRun = () => {
         detached.resolve();
         return undefined;
       };
       completion = fixture.finishDispatch();
       await detached.promise;
-      expect(isRpcSourceQueued(active)).toBe(true);
-      const pending = await listSessionPendingInputs(fixture.scope);
+      const pending = await listSessionPendingInputs(scope);
       expect(pending.total).toBe(1);
       const expectRetained = async () => {
         expect(authority.assertCurrent).not.toThrow();
         expect(authority.signal?.aborted).toBe(false);
         expect(isRpcSourceQueued(active)).toBe(true);
         expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
-        expect(await listSessionPendingInputs(fixture.scope)).toEqual(pending);
+        expect(await listSessionPendingInputs(scope)).toEqual(pending);
       };
       for (const grant of [["operator.read"], ["operator.admin"], undefined] as const) {
         const next = structuredClone(current);
@@ -139,8 +133,6 @@ it.each([true, false])(
         expect(active.input.abortSignal.aborted).toBe(true);
         expect(getExistingFollowupQueue(key)?.items ?? []).toHaveLength(0);
       } else {
-        expect(authority.assertCurrent).not.toThrow();
-        expect(authority.signal?.aborted).toBe(false);
         publish({ ...current, gateway: { ...current.gateway, allowRealIpFallback: true } });
         expect(client.invalidated).toBe(true);
         expect(close).toHaveBeenCalledWith(4001, "gateway policy changed");

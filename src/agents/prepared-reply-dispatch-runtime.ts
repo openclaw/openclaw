@@ -5,6 +5,7 @@ import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owne
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { readCapturedPreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
+import { markPreparedPluginGenerationConfigured } from "./prepared-model-runtime.plugin-generation.js";
 import type {
   PreparedModelRuntimeLease,
   PreparedModelRuntimeOwner,
@@ -174,6 +175,7 @@ export class PreparedReplyDispatchPublicationOwner {
           `prepared reply dispatch runtime owner was not published for ${agentId}`,
         );
       }
+      markPreparedPluginGenerationConfigured(runtime.pluginGeneration);
       if (onRuntimeLease) {
         if (
           !pendingOwner?.snapshot ||

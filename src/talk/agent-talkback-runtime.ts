@@ -169,9 +169,6 @@ export function createRealtimeVoiceAgentTalkbackQueue(
   return {
     isIdle: () => !active && pendingQuestions.length === 0,
     close: () => {
-      if (closed) {
-        return;
-      }
       closed = true;
       clearDebounceTimer();
       clearPendingQuestions();

@@ -1,9 +1,13 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { Picker, type PickerParams, type PickerOption } from "./select-picker.ts";
 import overlayStyles from "./solid/overlay.css?inline";
+
+// Geometry assertions measure the settled list, not the Select entry scale.
+document.documentElement.style.setProperty("--select-enter-duration", "0s");
 
 const options: PickerOption[] = [
   { value: "fixture/anchor", label: "Anchor", description: "Fixture provider" },
@@ -63,7 +67,14 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
     trigger.click();
     await picker.updateComplete;
   };
+  const openSearch = async () => {
+    if (!picker.querySelector("input")) {
+      picker.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
+      await picker.updateComplete;
+    }
+  };
   const search = async (value: string) => {
+    await openSearch();
     const input = picker.querySelector<HTMLInputElement>("input")!;
     input.value = value;
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -83,22 +94,19 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
     await picker.updateComplete;
     return event;
   };
-  return { params, picker, trigger, open, search, rows, key, update, container };
+  return { params, picker, trigger, open, openSearch, search, rows, key, update, container };
 }
 
 describe("Picker", () => {
   it("keeps closed choices unmounted across catalog refreshes and shows current choices on open", async () => {
-    const p = await mount({ searchable: false });
+    const groupBy = vi.fn(() => undefined);
+    const p = await mount({ searchable: false, groupBy });
     const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
     expect(p.rows()).toHaveLength(0);
+    expect(groupBy).not.toHaveBeenCalled();
     const mutations: MutationRecord[] = [];
     const observer = new MutationObserver((records) => mutations.push(...records));
-    observer.observe(menu, {
-      attributes: true,
-      childList: true,
-      characterData: true,
-      subtree: true,
-    });
+    observer.observe(menu, allMutationObserverOptions());
     try {
       await p.update({
         options: [{ value: "updated", label: "Updated choice" }],
@@ -106,14 +114,17 @@ describe("Picker", () => {
       });
       mutations.push(...observer.takeRecords());
       expect(mutations).toHaveLength(0);
+      expect(groupBy).not.toHaveBeenCalled();
       expect(p.trigger.getAttribute("aria-label")).toBe("Model: Updated choice");
       await p.key("ArrowDown");
       expect(p.rows().map((row) => row.textContent?.trim())).toEqual(["Updated choice"]);
       expect(document.activeElement).toBe(p.picker.querySelector(".picker-select__options"));
       await p.key("Escape");
       expect(p.rows()).toHaveLength(0);
+      groupBy.mockClear();
       await p.update({ options, value: "fixture/anchor" });
       expect(p.rows()).toHaveLength(0);
+      expect(groupBy).not.toHaveBeenCalled();
       await p.open();
       expect(p.rows()).toHaveLength(options.length);
       expect(p.params.onChange).not.toHaveBeenCalled();
@@ -173,6 +184,7 @@ describe("Picker", () => {
       searchable: "always",
     });
     await p.open();
+    await p.openSearch();
     const search = p.picker.querySelector<HTMLInputElement>("input")!;
     for (const value of ["content", "trigger"]) {
       const row = p.rows().find((option) => option.dataset.value === value)!;
@@ -215,12 +227,7 @@ describe("Picker", () => {
       if (!grouped) {
         observer.observe(p.picker.querySelector(".picker-select__options")!, { childList: true });
       }
-      observer.observe(retained, {
-        attributes: true,
-        childList: true,
-        characterData: true,
-        subtree: true,
-      });
+      observer.observe(retained, allMutationObserverOptions());
       try {
         await p.search("atlas");
         mutations.push(...observer.takeRecords());
@@ -239,6 +246,96 @@ describe("Picker", () => {
       }
     },
   );
+
+  it("starts revealing a windowed selection before animation frames resume", async () => {
+    const frames = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
+    try {
+      const p = await mount({
+        options: Array.from({ length: 1000 }, (_, index) => ({
+          value: `model-${index}`,
+          label: `Model ${index}`,
+        })),
+        value: "model-750",
+        windowed: () => "",
+      });
+      p.container.style.width = "420px";
+      await p.open();
+      await waitForSolid(() =>
+        expect(
+          p.picker.querySelector<HTMLElement>(".picker-select__options")!.scrollTop,
+        ).toBeGreaterThan(0),
+      );
+    } finally {
+      cleanupSolid();
+      frames.mockRestore();
+    }
+  });
+
+  it("windows a caller-sized large catalog without truncating keyboard selection", async () => {
+    const choices = Array.from({ length: 1000 }, (_, index) => ({
+      value: `model-${index}`,
+      label: index === 999 ? "Zebra last model" : `Model ${String(index).padStart(4, "0")}`,
+      description:
+        index === 750
+          ? "A long description that wraps at the fixed picker width and must remain inside the viewport"
+          : undefined,
+      disabled: index === 751,
+    }));
+    const p = await mount({
+      options: choices,
+      value: "model-750",
+      // This fixed-width fixture exercises the navigation contract independently of sizing.
+      windowed: () => "",
+    });
+    p.container.style.width = "420px";
+    await p.open();
+    await p.openSearch();
+    const input = p.picker.querySelector<HTMLInputElement>("input")!;
+    const viewport = p.picker.querySelector<HTMLElement>(".picker-select__options")!;
+    const active = () => document.getElementById(input.getAttribute("aria-activedescendant")!);
+    const expectActive = async (value: string, position: number, count = 1000) => {
+      await waitForSolid(() => {
+        const row = active()!;
+        expect(row?.dataset.value).toBe(value);
+        expect(row.getAttribute("aria-posinset")).toBe(String(position));
+        expect(row.getAttribute("aria-setsize")).toBe(String(count));
+        const clip = viewport.getBoundingClientRect();
+        const bounds = row.getBoundingClientRect();
+        expect(bounds.top).toBeGreaterThanOrEqual(clip.top - 1);
+        expect(bounds.bottom).toBeLessThanOrEqual(clip.bottom + 1);
+        expect(p.rows().length).toBeLessThan(50);
+      });
+    };
+    await expectActive("model-750", 751);
+    expect(viewport.scrollTop).toBeGreaterThan(0);
+    await p.key("ArrowDown");
+    await expectActive("model-752", 753);
+    await p.key("ArrowUp");
+    await expectActive("model-750", 751);
+    // Input editing retains Home/End; the list's keyboard surface navigates all rows.
+    expect((await p.key("Home")).defaultPrevented).toBe(false);
+    const listKey = async (key: string) => {
+      viewport.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+      );
+      flush();
+    };
+    await listKey("End");
+    await expectActive("model-999", 1000);
+    await listKey("Home");
+    await expectActive("model-0", 1);
+    await listKey("z");
+    await expectActive("model-999", 1000);
+    expect(p.params.onChange).not.toHaveBeenCalled();
+    await p.search("Model 0998");
+    await expectActive("model-998", 1, 1);
+    expect(p.rows()).toHaveLength(1);
+    await p.key("Enter");
+    await waitForSolid(() =>
+      expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("model-998"),
+    );
+    expect(p.trigger.getAttribute("aria-expanded")).toBe("false");
+  });
 
   it("leaves closed-trigger Escape to the page after dismissing the menu without a write", async () => {
     const p = await mount();
@@ -357,12 +454,46 @@ describe("Picker", () => {
     expect(p.rows()).toHaveLength(9);
     expect(p.rows()[0]?.textContent).toContain("Fixture provider");
     await p.key("Escape");
+    expect(p.picker.querySelector("input")).toBeNull();
+    await p.key("Escape");
     expect(document.activeElement).toBe(p.trigger);
     expect(p.params.onChange).not.toHaveBeenCalled();
     await p.open();
+    await p.openSearch();
     expect(p.picker.querySelector<HTMLInputElement>("input")!.value).toBe("");
     expect(p.rows()).toHaveLength(9);
   });
+
+  it.each([
+    ["NFC", "MÜNCHEN", "Mu\u0308nchen"],
+    ["NFD", "MU\u0308NCHEN", "München"],
+  ])(
+    "matches canonical %s searches across option fields without rewriting values",
+    async (_, query, text) => {
+      const reference = `fixture/${text}`;
+      const p = await mount({
+        value: "label",
+        searchable: "always",
+        options: [
+          { value: "label", label: text },
+          { value: reference, label: "Reference" },
+          { value: "description", label: "Description", description: text },
+          { value: "group", label: "Grouped" },
+        ],
+        groupBy: (option) => (option.value === "group" ? { id: "group", label: text } : undefined),
+      });
+      await p.open();
+      expect((await p.search(query)).value).toBe(query);
+      expect(p.rows().map((row) => row.dataset.value)).toEqual([
+        "label",
+        reference,
+        "description",
+        "group",
+      ]);
+      p.rows()[1]!.click();
+      expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith(reference);
+    },
+  );
 
   it("commits an enabled visible choice once and skips disabled keyboard rows", async () => {
     const p = await mount();
@@ -393,6 +524,7 @@ describe("Picker", () => {
     removed.click();
     await p.key("Enter");
     expect(p.params.onChange).not.toHaveBeenCalled();
+    await p.key("Escape");
     await p.key("Escape");
     await p.open();
     expect(p.picker.querySelector("input")).toBeNull();

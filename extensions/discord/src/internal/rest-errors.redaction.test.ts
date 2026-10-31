@@ -20,12 +20,8 @@ async function captureError<T extends DiscordError>(
 
 const token = ["MTAxMjM0NTY3ODkwMTIzNDU2", "discord", "credential", "fixture"].join(".");
 function expectRedactedDetails(error: DiscordError, safe?: string) {
-  const details = JSON.stringify({
-    message: error.message,
-    rawBody: error.rawBody,
-  });
+  const details = JSON.stringify({ message: error.message, rawBody: error.rawBody });
   expect(details).not.toContain(token);
-  expect(details).not.toContain(`Bot ${token}`);
   expect(details).not.toContain("discord.credential");
   if (safe) {
     expect(details).toContain(safe);

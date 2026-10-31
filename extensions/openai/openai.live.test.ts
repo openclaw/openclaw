@@ -22,6 +22,8 @@ import {
 } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import { createReferencePng as createSyntheticPng } from "../test-support/generation-live-test-helpers.js";
+import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
+import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 import plugin from "./index.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
@@ -88,17 +90,13 @@ function resolveLiveOpenAISkipReason(error: unknown): string | null {
  * validation on that real, possibly-unmigrated file must never gate live provider tests.
  */
 function createLiveConfig(): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        openai: {
-          apiKey: OPENAI_API_KEY,
-          baseUrl: "https://api.openai.com/v1",
-          models: [],
-        },
-      },
+  return createModelProviderConfig({
+    openai: {
+      apiKey: OPENAI_API_KEY,
+      baseUrl: "https://api.openai.com/v1",
+      models: [],
     },
-  };
+  });
 }
 
 function createLiveTtsConfig(): ResolvedTtsConfig {
@@ -107,16 +105,7 @@ function createLiveTtsConfig(): ResolvedTtsConfig {
     mode: "final",
     provider: "openai",
     providerSource: "config",
-    modelOverrides: {
-      enabled: true,
-      allowText: true,
-      allowProvider: true,
-      allowVoice: true,
-      allowModelId: true,
-      allowVoiceSettings: true,
-      allowNormalization: true,
-      allowSeed: true,
-    },
+    modelOverrides: createSpeechDirectivePolicy(),
     providerConfigs: {
       openai: {
         apiKey: OPENAI_API_KEY,

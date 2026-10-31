@@ -87,7 +87,7 @@ function prepareLocalBrowserLoopbackPolicy(
 }
 
 /** Capture session/config policy once; only the approval owner is read at effect. */
-export function createLocalBrowserLoopbackAssertion(
+function createLocalBrowserLoopbackAssertion(
   params: BrowserLoopbackParams,
   readExecApprovals?: () => ExecApprovalsFile,
   preparation = prepareLocalBrowserLoopbackPolicy(params),

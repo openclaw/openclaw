@@ -2,7 +2,6 @@ import { expect } from "vitest";
 import type {
   ModelAuthStatusProfile,
   ModelAuthStatusResult,
-  ModelCatalogEntry,
   ProviderLoginOption,
 } from "../api/types.ts";
 import { waitForSolid } from "./solid-settle.ts";
@@ -21,10 +20,6 @@ export function loginOption(
   overrides: Partial<ProviderLoginOption> = {},
 ): ProviderLoginOption {
   return { id, brandId, label, kind, featured: false, ...overrides };
-}
-
-export function model(id: string, name: string, provider = "openai"): ModelCatalogEntry {
-  return { id, name, provider, available: true };
 }
 
 export function profile(

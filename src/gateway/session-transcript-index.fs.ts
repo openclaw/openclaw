@@ -41,20 +41,18 @@ export type SessionTranscriptIndex = {
   displaySource: string;
 };
 
-type ArchiveNavigationEntry = TranscriptRecord & {
-  rawSeq: number;
-  offset: number;
-  length: number;
-  activity?: TranscriptDisplayActivity;
-};
-
 type TranscriptIndexPreparation = {
   offset: number;
   lineOffset: number;
   length: number;
   afterCr: boolean;
   fragments: Buffer[];
-  records: ArchiveNavigationEntry[];
+  records: (TranscriptRecord & {
+    rawSeq: number;
+    offset: number;
+    length: number;
+    activity?: TranscriptDisplayActivity;
+  })[];
   rawSeqById: Map<string, number>;
 };
 

@@ -18,13 +18,39 @@ import {
 } from "./monitor-inbox.test-harness.js";
 
 const nowSeconds = (offsetMs = 0) => Math.floor((Date.now() + offsetMs) / 1000);
-const DEFAULT_MESSAGES_CFG = {
-  messagePrefix: undefined,
-  responsePrefix: undefined,
-} as const;
 
 function createInboxConfig(whatsapp: NonNullable<OpenClawConfig["channels"]>["whatsapp"]) {
-  return { channels: { whatsapp }, messages: DEFAULT_MESSAGES_CFG };
+  return {
+    channels: { whatsapp },
+    messages: { messagePrefix: undefined, responsePrefix: undefined },
+  };
+}
+
+function emitText(
+  sock: Awaited<ReturnType<typeof startInboxMonitor>>["sock"],
+  id: string,
+  remoteJid: string,
+  text: string,
+  fromMe = false,
+  participant?: string,
+  pushName?: string,
+) {
+  sock.ev.emit("messages.upsert", {
+    type: "notify",
+    messages: [
+      {
+        key: { id, remoteJid, fromMe, participant },
+        message: { conversation: text },
+        messageTimestamp: nowSeconds(),
+        pushName,
+      },
+    ],
+  });
+}
+
+function expectInbound(onMessage: ReturnType<typeof vi.fn>, shape: object) {
+  expect(onMessage).toHaveBeenCalled();
+  expect(onMessage.mock.calls[0]?.[0]).toMatchObject(shape);
 }
 
 async function openInboxMonitor(onMessage = vi.fn()) {
@@ -62,20 +88,7 @@ async function expectOutboundDmSkipsPairing(params: {
   const { listener, sock } = await startInboxMonitor(onMessage);
 
   try {
-    sock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: params.messageId,
-            fromMe: true,
-            remoteJid: "999@s.whatsapp.net",
-          },
-          message: { conversation: params.body },
-          messageTimestamp: nowSeconds(),
-        },
-      ],
-    });
+    emitText(sock, params.messageId, "999@s.whatsapp.net", params.body, true);
     await settleInboundWork();
 
     expect(onMessage).not.toHaveBeenCalled();
@@ -149,73 +162,39 @@ describe("web monitor inbox", () => {
     },
   );
 
-  it("allows messages from senders in allowFrom list", async () => {
-    mockLoadConfig.mockReturnValue(createInboxConfig({ allowFrom: ["+111", "+999"] }));
-
+  it.each([
+    {
+      name: "allowlisted sender",
+      allowFrom: ["+111", "+999"],
+      jid: "999@s.whatsapp.net",
+      sender: "+999",
+      body: "authorized message",
+    },
+    {
+      name: "same-phone sender outside allowFrom",
+      allowFrom: ["+111"],
+      jid: "123@s.whatsapp.net",
+      sender: "+123",
+      body: "self message",
+    },
+  ])("allows $name", async ({ allowFrom, jid, sender, body }) => {
+    mockLoadConfig.mockReturnValue(createInboxConfig({ allowFrom }));
     const { onMessage, listener, sock } = await openInboxMonitor();
-
-    const upsert = buildNotifyMessageUpsert({
-      id: "auth1",
-      remoteJid: "999@s.whatsapp.net",
-      text: "authorized message",
-      timestamp: nowSeconds(60_000),
-    });
-
-    sock.ev.emit("messages.upsert", upsert);
-    await waitForInboundWorkDrained();
-
-    // Should call onMessage for authorized senders
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        admission: expect.objectContaining({
-          conversation: expect.objectContaining({
-            id: "+999",
-          }),
-        }),
-        payload: expect.objectContaining({
-          body: "authorized message",
-        }),
-        platform: expect.objectContaining({
-          senderE164: "+999",
-        }),
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: "authorized",
+        remoteJid: jid,
+        text: body,
+        timestamp: nowSeconds(60_000),
       }),
     );
-
-    await listener.close();
-  });
-
-  it("allows same-phone messages even if not in allowFrom", async () => {
-    // Same-phone mode: when from === selfJid, should always be allowed
-    // This allows users to message themselves even with restrictive allowFrom
-    mockLoadConfig.mockReturnValue(createInboxConfig({ allowFrom: ["+111"] }));
-
-    const { onMessage, listener, sock } = await openInboxMonitor();
-
-    // Message from self (sock.user.id is "123@s.whatsapp.net" in mock)
-    const upsert = buildNotifyMessageUpsert({
-      id: "self1",
-      remoteJid: "123@s.whatsapp.net",
-      text: "self message",
-      timestamp: nowSeconds(60_000),
-    });
-
-    sock.ev.emit("messages.upsert", upsert);
     await waitForInboundWorkDrained();
-
-    // Should allow self-messages even if not in allowFrom
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        admission: expect.objectContaining({
-          conversation: expect.objectContaining({
-            id: "+123",
-          }),
-        }),
-        payload: expect.objectContaining({
-          body: "self message",
-        }),
-      }),
-    );
-
+    expectInbound(onMessage, {
+      admission: { conversation: { id: sender } },
+      payload: { body },
+      ...(sender === "+999" ? { platform: { senderE164: sender } } : {}),
+    });
     await listener.close();
   });
 
@@ -230,20 +209,7 @@ describe("web monitor inbox", () => {
     const { onMessage, listener, sock } = await openInboxMonitor();
 
     try {
-      sock.ev.emit("messages.upsert", {
-        type: "notify",
-        messages: [
-          {
-            key: {
-              id: "self-disabled",
-              fromMe: true,
-              remoteJid: "123@s.whatsapp.net",
-            },
-            message: { conversation: "disabled self-chat" },
-            messageTimestamp: nowSeconds(),
-          },
-        ],
-      });
+      emitText(sock, "self-disabled", "123@s.whatsapp.net", "disabled self-chat", true);
       await settleInboundWork();
 
       expect(onMessage).not.toHaveBeenCalled();
@@ -256,7 +222,6 @@ describe("web monitor inbox", () => {
   });
 
   it("locks down when no config is present (pairing for unknown senders)", async () => {
-    // No config file => locked-down defaults apply (pairing for unknown senders)
     mockLoadConfig.mockReturnValue({});
     upsertPairingRequestMock
       .mockResolvedValueOnce({ code: "PAIRCODE", created: true })
@@ -264,7 +229,6 @@ describe("web monitor inbox", () => {
 
     const { onMessage, listener, sock } = await openInboxMonitor();
 
-    // Message from someone else should be blocked
     const upsertBlocked = buildNotifyMessageUpsert({
       id: "no-config-1",
       remoteJid: "999@s.whatsapp.net",
@@ -288,7 +252,6 @@ describe("web monitor inbox", () => {
     expect(onMessage).not.toHaveBeenCalled();
     expect(sock.sendMessage).toHaveBeenCalledTimes(1);
 
-    // Message from self should be allowed
     const upsertSelf = buildNotifyMessageUpsert({
       id: "no-config-2",
       remoteJid: "123@s.whatsapp.net",
@@ -300,21 +263,19 @@ describe("web monitor inbox", () => {
     await waitForMessageCalls(onMessage, 1);
 
     expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        admission: expect.objectContaining({
-          conversation: expect.objectContaining({
-            id: "+123",
-          }),
-        }),
-        payload: expect.objectContaining({
-          body: "self ping",
-        }),
-        platform: expect.objectContaining({
-          recipientJid: "+123",
-        }),
-      }),
-    );
+    expectInbound(onMessage, {
+      admission: {
+        conversation: {
+          id: "+123",
+        },
+      },
+      payload: {
+        body: "self ping",
+      },
+      platform: {
+        recipientJid: "+123",
+      },
+    });
 
     await listener.close();
   });
@@ -340,20 +301,8 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("skips pairing replies for outbound DMs in same-phone mode", async () => {
-    await expectOutboundDmSkipsPairing({
-      selfChatMode: true,
-      messageId: "fromme-1",
-      body: "hello",
-    });
-  });
-
-  it("skips pairing replies for outbound DMs when same-phone mode is disabled", async () => {
-    await expectOutboundDmSkipsPairing({
-      selfChatMode: false,
-      messageId: "fromme-2",
-      body: "hello again",
-    });
+  it.each([true, false])("skips outbound DM pairing with selfChatMode=%s", async (selfChatMode) => {
+    await expectOutboundDmSkipsPairing({ selfChatMode, messageId: "fromme", body: "hello" });
   });
 
   it("allows owner fromMe group commands when they were not sent by the gateway", async () => {
@@ -370,41 +319,24 @@ describe("web monitor inbox", () => {
     sock.sendMessage.mockResolvedValueOnce({ key: { id: "out-1" } });
     await listener.sendMessage("120363@g.us", "/status");
 
-    sock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: "in-2",
-            fromMe: true,
-            remoteJid: "120363@g.us",
-            participant: "123@s.whatsapp.net",
-          },
-          message: { conversation: "/status" },
-          messageTimestamp: nowSeconds(),
-          pushName: "Owner",
-        },
-      ],
-    });
+    emitText(sock, "in-2", "120363@g.us", "/status", true, "123@s.whatsapp.net", "Owner");
     await waitForMessageCalls(onMessage, 1);
 
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        admission: expect.objectContaining({
-          conversation: expect.objectContaining({
-            kind: "group",
-            id: "120363@g.us",
-          }),
-        }),
-        payload: expect.objectContaining({
-          body: "/status",
-        }),
-        platform: expect.objectContaining({
-          fromMe: true,
-          senderE164: "+123",
-        }),
-      }),
-    );
+    expectInbound(onMessage, {
+      admission: {
+        conversation: {
+          kind: "group",
+          id: "120363@g.us",
+        },
+      },
+      payload: {
+        body: "/status",
+      },
+      platform: {
+        fromMe: true,
+        senderE164: "+123",
+      },
+    });
 
     await listener.close();
   });
@@ -425,101 +357,43 @@ describe("web monitor inbox", () => {
 
     sock.sendMessage.mockResolvedValueOnce({ key: { id: "out-1" } });
     await listener.sendMessage(remoteJid, "Done.");
-    sock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "in-2", fromMe: testCase.fromMe, remoteJid },
-          message: { conversation: "Done." },
-          messageTimestamp: nowSeconds(),
-        },
-      ],
-    });
+    emitText(sock, "in-2", remoteJid, "Done.", testCase.fromMe);
     await waitForMessageCalls(onMessage, 1);
 
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({ id: "in-2" }),
-        payload: expect.objectContaining({ body: "Done." }),
-      }),
-    );
-    await listener.close();
-  });
-
-  it("filters group fromMe echoes only when the gateway sent the matching message id", async () => {
-    mockLoadConfig.mockReturnValue(
-      createInboxConfig({
-        groupPolicy: "open",
-        allowFrom: ["+123"],
-      }),
-    );
-
-    const onMessage = vi.fn();
-    const { listener, sock } = await startInboxMonitor(onMessage);
-
-    sock.sendMessage.mockResolvedValueOnce({ key: { id: "bot-group-echo-1" } });
-    await listener.sendMessage("120363@g.us", "gateway echo candidate");
-
-    sock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: "bot-group-echo-1",
-            fromMe: true,
-            remoteJid: "120363@g.us",
-            participant: "123@s.whatsapp.net",
-          },
-          message: { conversation: "gateway echo candidate" },
-          messageTimestamp: nowSeconds(),
-          pushName: "Owner",
-        },
-      ],
+    expectInbound(onMessage, {
+      event: { id: "in-2" },
+      payload: { body: "Done." },
     });
-    await settleInboundWork();
-
-    expect(onMessage).not.toHaveBeenCalled();
-    expectOnlyOutboundChannelActivity();
-
     await listener.close();
   });
 
-  it("filters self-chat DM fromMe echoes when the gateway sent the matching message id", async () => {
-    mockLoadConfig.mockReturnValue(
-      createInboxConfig({
-        selfChatMode: true,
-        allowFrom: ["+123"],
-      }),
-    );
-
-    const onMessage = vi.fn();
-    const { listener, sock } = await startInboxMonitor(onMessage);
-
-    sock.sendMessage.mockResolvedValueOnce({ key: { id: "bot-dm-echo-1" } });
-    await listener.sendMessage("123@s.whatsapp.net", "self-chat reply");
-
-    sock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: "bot-dm-echo-1",
-            fromMe: true,
-            remoteJid: "123@s.whatsapp.net",
-          },
-          message: { conversation: "self-chat reply" },
-          messageTimestamp: nowSeconds(),
-          pushName: "Owner",
-        },
-      ],
-    });
-    await settleInboundWork();
-
-    expect(onMessage).not.toHaveBeenCalled();
-    expectOnlyOutboundChannelActivity();
-
-    await listener.close();
-  });
+  it.each([
+    {
+      name: "group",
+      remoteJid: "120363@g.us",
+      participant: "123@s.whatsapp.net",
+      whatsapp: { groupPolicy: "open" as const, allowFrom: ["+123"] },
+    },
+    {
+      name: "self-chat DM",
+      remoteJid: "123@s.whatsapp.net",
+      participant: undefined,
+      whatsapp: { selfChatMode: true, allowFrom: ["+123"] },
+    },
+  ])(
+    "filters $name fromMe echoes only for gateway-sent message IDs",
+    async ({ remoteJid, participant, whatsapp }) => {
+      mockLoadConfig.mockReturnValue(createInboxConfig(whatsapp));
+      const { onMessage, listener, sock } = await openInboxMonitor();
+      sock.sendMessage.mockResolvedValueOnce({ key: { id: "bot-echo-1" } });
+      await listener.sendMessage(remoteJid, "gateway echo");
+      emitText(sock, "bot-echo-1", remoteJid, "gateway echo", true, participant, "Owner");
+      await settleInboundWork();
+      expect(onMessage).not.toHaveBeenCalled();
+      expectOnlyOutboundChannelActivity();
+      await listener.close();
+    },
+  );
 
   it.each([
     {
@@ -679,7 +553,6 @@ describe("web monitor inbox", () => {
       { timeout: 5_000, interval: 5 },
     );
 
-    // Verify it WAS NOT passed to onMessage
     expect(onMessage).not.toHaveBeenCalled();
 
     await listener.close();

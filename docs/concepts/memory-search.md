@@ -11,8 +11,8 @@ read_when:
 wording differs from the original text. It chunks memory into small pieces and
 searches them with embeddings, keywords, or both.
 
-The built-in index supports SQLite and PostgreSQL agent databases. The PostgreSQL
-engine remains experimental. Search uses engine-local text ranking, so scores and ordering
+The built-in index supports SQLite and [qualified PostgreSQL runtimes](/gateway/postgresql#support-matrix).
+Search uses engine-local text ranking, so scores and ordering
 can differ from SQLite. It requires `unaccent` for text search, `pg_trgm` for the
 trigram tokenizer, and `vector` for semantic search. Explicit
 `memory.search.provider: "none"` enables keyword-only search without `vector`;
@@ -24,8 +24,9 @@ for extension setup.
 On PostgreSQL, both body keywords and filename/path lookup use the admitted
 index. Source and selected-agent scope restrict candidates before the result
 limit; semantic retrieval also filters the embedding model. Text uses native
-full-text ranking; semantic retrieval uses exact
-cosine distance over a derived float32 vector projection. Hybrid search keeps
+full-text ranking; semantic retrieval preselects candidates with binary sketches,
+then reranks them by exact cosine distance over a derived float32 vector projection.
+Small candidate-ID scopes use exact search. Hybrid search keeps
 the same vector/text weights, but PostgreSQL text scores are not SQLite BM25
 scores. A phrase with nearby terms can rank above scattered terms without
 promising identical ordering across engines.
@@ -129,6 +130,11 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 
 To move off Ollama, [llmman](/providers/llmman#advanced-configuration) serves the same `/api/embed`, so `provider: "ollama"` only needs a new `remote.baseUrl`.
 
+For models that require a query prefix, set
+[`memory.search.queryInstruction`](/reference/memory-config#query-instructions),
+for example `"search_query: "` for a Nomic model served under a generic alias.
+It changes query text only and does not require rebuilding the document index.
+
 ## How search works
 
 OpenClaw runs two retrieval paths in parallel and merges the results:
@@ -163,6 +169,15 @@ flowchart LR
 If only one path is available, the other runs alone. Keyword boosts stay bounded
 without clipping distinct lexical scores to the same maximum, so relevance
 continues to influence ranking when dated notes decay.
+
+When both paths return results, the builtin engine scales each query's keyword
+scores before weighting them. The strongest keyword match earns at most the best
+semantic score, and every other keyword match earns a share in proportion to its
+BM25 relevance, never more than its own keyword score. A match much weaker than
+the query's best keyword match adds little, so sharing a common word rarely
+outweighs a note that is closer in meaning. This matters most for questions
+asked in a different language than the notes. `minScore` applies to the weighted
+sum of the cosine similarity and the scaled keyword score.
 
 The builtin engine then applies fixed ranking rules:
 
@@ -223,7 +238,9 @@ redacted embedding-bootstrap reason in `debug.embeddingBootstrap` even when
 there are no matches.
 
 A failed local embedding request preserves keyword access to a matching index
-and records the degraded provider in memory status and Gateway logs. A real model
+and records the degraded provider in memory status and Gateway logs. A query
+embedding that comes back as all zeros skips vector recall for that search and
+is reported in the Gateway log, so keyword-only results never pass silently. A real model
 or index-configuration mismatch still pauses search instead of serving
 mismatched data.
 

@@ -17,6 +17,7 @@ import {
 } from "./openclaw-state-db-schema-v22-columns.js";
 import { withLegacyStateHeadLayout } from "./openclaw-state-db-schema-v26-layout.js";
 import { withLegacyStateWriteIndexes } from "./openclaw-state-db-schema-v27-indexes.js";
+import { stateTemplateNamesMigration } from "./openclaw-state-db-schema-v36-template-names.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -27,6 +28,7 @@ import { expectSchemaVersion } from "./openclaw-state-schema-version-assert.test
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
@@ -149,6 +151,7 @@ describe("v21 upgrade preserves portable cursor and resume identities", () => {
     template = path.join(directories.make("v21-portable-template-"), "openclaw.sqlite");
     using db = new DatabaseSync(template);
     db.exec(withLegacyStateWriteIndexes(withLegacyStateHeadLayout(OPENCLAW_STATE_SCHEMA_SQL)));
+    restorePreTemplateStateIdentifiersForTest(db);
     addPreCutoverClientCredentialTablesForTest(db);
     // Reconstruct exactly the columns and indexes changed by v22; all other contracts stay current.
     for (const table of STATE_CURSOR_TABLES_V22) {
@@ -226,6 +229,7 @@ describe("v21 upgrade preserves portable cursor and resume identities", () => {
           "gateway_origin_device_tokens",
           "exec_approvals_config",
           ...STATE_CURSOR_TABLES_V22,
+          ...stateTemplateNamesMigration.tables,
         ],
         () =>
           withStateMigrationBackupForTest(options, () => {

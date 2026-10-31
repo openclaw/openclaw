@@ -21,9 +21,6 @@ export type SlackChannelResolution = {
 
 function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return {};
-  }
   const mention = trimmed.match(/^<#([A-Z0-9]+)(?:\|([^>]+))?>$/i);
   if (mention) {
     const id = mention[1]?.toUpperCase();

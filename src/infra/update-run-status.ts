@@ -8,11 +8,11 @@ import {
 import { getUpdateRunHistoryStatusAsync } from "./update-run-reader.js";
 import { isAcknowledgedAbandonedUpdateRun, toPublicUpdateRun } from "./update-run-record.js";
 
-/** Status heals the bounded legacy defect and projects other driver loss without writes. */
+/** Status heals expired admissions and proven handoff death; other driver loss stays descriptive. */
 export async function readUpdateRunStatus() {
   let runReconciliationError: string | undefined;
   try {
-    await reconcileAbandonedUpdateRunsAsync({ legacyOnly: true });
+    await reconcileAbandonedUpdateRunsAsync({ statusOnly: true });
   } catch (error) {
     runReconciliationError = formatErrorMessage(error);
   }

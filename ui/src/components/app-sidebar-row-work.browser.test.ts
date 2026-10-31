@@ -29,12 +29,32 @@ it("keeps unrelated publications out of mounted row access and subtitle preparat
     hello: gatewayHelloForMethods(["sessions.patch", "sessions.groups.put"], ["operator.write"]),
   });
   const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+  sidebar.style.cssText = "display:block;width:320px;height:600px";
+  const viewport = sidebar.querySelector<HTMLElement>(".sidebar-shell__body")!;
+  viewport.style.cssText = "height:500px;flex:none;overflow:auto";
   sidebar.connected = true;
   sidebar.sessionsShowPreview = true;
   const owner = getAppSidebarOwner(sidebar.hostElement)!;
   owner.setVisibleSessionLimit("ungrouped", 80);
+  await waitForSolid(() => {
+    const rows = sidebar.querySelectorAll("[data-session-key]");
+    expect(rows.length).toBeLessThan(40);
+    expect(rows.item(rows.length - 1)?.getBoundingClientRect().bottom).toBeGreaterThanOrEqual(
+      viewport.getBoundingClientRect().bottom,
+    );
+  });
   await settleLitElement(sidebar);
-  expect(sidebar.querySelectorAll("[data-session-key]").length).toBeGreaterThanOrEqual(80);
+  // Measure from a settled window: the virtual list may grow by one row after its
+  // first layout pass, which is not work caused by the publications below.
+  let mounted = -1;
+  await waitForSolid(async () => {
+    await new Promise(requestAnimationFrame);
+    await settleLitElement(sidebar);
+    const count = sidebar.querySelectorAll("[data-session-key]").length;
+    const settled = count === mounted;
+    mounted = count;
+    expect(settled).toBe(true);
+  });
   const publishList = (result: SessionsListResult) => {
     sessions.publishList({ result });
     publishSidebarSessionList(owner.sessionData, {

@@ -630,7 +630,7 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
     }
     const connectedAt = Date.now();
     statusSink?.(channelReadyPatch({ lastConnectedAt: connectedAt, lastEventAt: connectedAt }));
-    runtime?.log?.(
+    runtime?.log(
       pathConflict
         ? `feishu[${accountId}]: ${pathConflict} The legacy listener keeps the old path working; move the path and callback before removing the legacyWebhook pin.`
         : `feishu[${accountId}]: webhook registered on Gateway port ${params.gatewayPort ?? 18789} at ${rawPath}; point the Feishu callback URL or reverse-proxy upstream to this Gateway route. ${legacyListener ? `The legacy listener on ${legacyListener.host}:${legacyListener.port} forwards here; remove the legacyWebhook pin after verifying delivery through the Gateway, or use legacyWebhook:false to override an inherited endpoint.` : "No legacy listener is configured."}`,

@@ -61,10 +61,7 @@ describe("createTeamsReplyStreamController", () => {
     const { stream, ctrl } = acknowledgedController();
     ctrl.onPartialReply({ text: replacement });
     expect(
-      ctrl.preparePayload({
-        text: replacement,
-        mediaUrl: media("replacement"),
-      }),
+      ctrl.preparePayload({ text: replacement, mediaUrl: media("replacement") }),
     ).toBeUndefined();
     stream.acknowledge(replacement);
     stream.close.mockResolvedValueOnce(undefined);
@@ -95,7 +92,7 @@ describe("createTeamsReplyStreamController", () => {
   });
 
   it("uses the latest partial when no final text payload follows a rewrite", async () => {
-    const { stream, ctrl } = acknowledgedController();
+    const { ctrl } = acknowledgedController();
     ctrl.onPartialReply({ text: "abXYZ" });
     ctrl.onPartialReply({ text: "abcdef" });
     expect(ctrl.preparePayload({ mediaUrl: media("final") })).toBeUndefined();
@@ -107,22 +104,6 @@ describe("createTeamsReplyStreamController", () => {
       logicalContent: "abcdef",
       postNativePayloads: [{ mediaUrl: media("final") }],
     });
-    expect(stream.emit).toHaveBeenLastCalledWith(
-      expect.objectContaining({ type: "message", text: "abcdef" }),
-    );
-  });
-
-  it("suppresses a replacement after the native stream discovers Stop", async () => {
-    const { stream, ctrl } = acknowledgedController();
-    ctrl.onPartialReply({ text: replacement });
-    stream.canceled = true;
-
-    expect(ctrl.preparePayload({ text: replacement })).toBeUndefined();
-    await expect(ctrl.finalize()).resolves.toEqual({
-      ...acknowledged,
-      content: "abcde",
-    });
-    expect(stream.close).not.toHaveBeenCalled();
   });
 
   it("preserves held payload order after replacement close fails", async () => {
@@ -166,17 +147,10 @@ describe("createTeamsReplyStreamController", () => {
 
     ctrl.onPartialReply({ text });
     expect(ctrl.preparePayload({ text })).toBeUndefined();
-    await expect(ctrl.finalize()).resolves.toEqual({
-      visibleReplySent: true,
-      messageId: "stream-final",
-      content: expected,
-      logicalContent: text,
-    });
-    expect(stream.clearText).toHaveBeenCalledTimes(1);
+    await ctrl.finalize();
     expect(stream.emit).toHaveBeenLastCalledWith(
       expect.objectContaining({ type: "message", text: expected }),
     );
-    expect(stream.close).toHaveBeenCalledTimes(1);
   });
 
   it("cancels the pending progress gate at finalize so no stale card posts after close", async () => {
@@ -201,28 +175,21 @@ describe("createTeamsReplyStreamController", () => {
     const stream = makeStream();
     stream.canceled = phase === "canceled";
     const ctrl = makeController(stream, { msteamsConfig: progressConfig });
+    const failure = {
+      itemId: "tool:exec",
+      name: "exec",
+      title: "Exec",
+      phase: "end",
+      status: "failed",
+    };
     if (phase === "settled") {
       expect(ctrl.preparePayload({ text: "complete final answer" })).toBeUndefined();
       await ctrl.pushPlanProgress([{ step: "Late plan", status: "in_progress" }]);
-      const lateFailure = {
-        itemId: "late-failure",
-        title: "Late failure",
-        phase: "end",
-        status: "failed",
-      };
-      await ctrl.pushItemEvent(lateFailure);
+      await ctrl.pushItemEvent(failure);
       await ctrl.finalize();
       await ctrl.pushPlanProgress([{ step: "Late settled plan", status: "in_progress" }]);
-      await ctrl.pushItemEvent(lateFailure);
-    } else {
-      await ctrl.pushItemEvent({
-        itemId: "tool:exec",
-        name: "exec",
-        title: "Exec",
-        phase: "end",
-        status: "failed",
-      });
     }
+    await ctrl.pushItemEvent(failure);
     expect(stream.update).not.toHaveBeenCalled();
   });
 

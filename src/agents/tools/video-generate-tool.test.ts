@@ -13,7 +13,8 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", async () => {
     await import("./media-generation-lifecycle.test-support.js");
   return createMediaRequesterReadMock();
 });
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -24,19 +25,28 @@ import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
 import * as pluginConfig from "../../plugins/config-state.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
+import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../../secrets/provider-env-vars.js";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import type { VideoGenerationProvider } from "../../video-generation/types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { createEmptyPreparedModelRuntimeFixture } from "../embedded-agent-runner/model.fixture.test-support.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
+import { findMediaGenerationOperation } from "../media-generation-activity.js";
+import { observeMediaGenerationSettlement } from "../media-generation-activity.observer.test-support.js";
+import {
+  buildMediaTaskRuntimeContext,
+  buildVideoGenerationTaskStatusDetails,
+} from "../media-generation-task-status.js";
+import { configWithDefaults } from "./media-config.test-support.js";
 import * as videoGenerateBackground from "./media-generate-background.js";
 import {
   defineMediaGenerationCancellationTests,
   defineMediaGenerationDuplicateTests,
   withHeldMediaGenerationResult,
 } from "./media-generation-lifecycle.test-support.js";
+import { createVideoGenerateStatusActionResult } from "./video-generate-tool.actions.js";
 import { createVideoGenerateTool } from "./video-generate-tool.js";
 import { createVideoProviderSnapshot } from "./video-generate-tool.test-support.js";
 
@@ -58,14 +68,6 @@ function videoAsset(bytes: string | Buffer, fileName: string, mimeType = "video/
 
 function savedMedia(fileName: string, size: number, contentType = "video/mp4") {
   return { path: `/tmp/${fileName}`, id: fileName, size, contentType };
-}
-
-function configWithDefaults(
-  defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
-): OpenClawConfig {
-  const config = { agents: { defaults } };
-  setRuntimeConfigSnapshot(config, config);
-  return config;
 }
 
 const mediaActivityMocks = vi.hoisted(() => ({ listOperations: vi.fn() }));
@@ -194,6 +196,18 @@ function toolParameterProperties(tool: ReturnType<typeof createTool>) {
   return parameters.properties ?? {};
 }
 
+function expectAudioReferences(tool: ReturnType<typeof createTool>, exposed: boolean) {
+  const properties = toolParameterProperties(tool);
+  for (const name of ["audioRef", "audioRefs", "audioRoles"]) {
+    if (exposed) {
+      expect(properties).toHaveProperty(name);
+      expect(properties[name]).toBeDefined();
+    } else {
+      expect(properties).not.toHaveProperty(name);
+    }
+  }
+}
+
 function resetVideoGenerateMocks(providerEnvVars: readonly string[]) {
   vi.restoreAllMocks();
   for (const key of providerEnvVars) {
@@ -202,7 +216,6 @@ function resetVideoGenerateMocks(providerEnvVars: readonly string[]) {
   vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
   mediaActivityMocks.listOperations.mockReset();
   mediaActivityMocks.listOperations.mockReturnValue(undefined);
-  resetRecentMediaGenerationDuplicateGuardsForTests();
   resetGeneratedMediaTaskActivityForTests();
   probeMediaFilesWithinBudgetMock.mockReset();
   probeMediaFilesWithinBudgetMock.mockImplementation(async (inputs: readonly unknown[]) =>
@@ -238,6 +251,38 @@ describe("createVideoGenerateTool", () => {
     vi.unstubAllEnvs();
     clearRuntimeConfigSnapshot();
   });
+
+  it.each([false, true])(
+    "reuses video schemas for reference audio=%s across tool instances",
+    (referenceAudioInputs) => {
+      const config: OpenClawConfig = {
+        plugins: { allow: ["external-video"], entries: { "external-video": { enabled: true } } },
+        agents: { defaults: { mediaModels: { video: { primary: "external-video/vid-v1" } } } },
+      };
+      const workspaceDir = "/workspace/video-schema-reuse";
+      setCurrentPluginMetadataSnapshot(
+        createVideoProviderSnapshot({
+          config,
+          workspaceDir,
+          id: "external-video",
+          origin: "bundled",
+          referenceAudioInputs,
+        }),
+        { config, workspaceDir },
+      );
+      const authProfileStore = createAuthStore("external-video");
+      const construct = () => {
+        const tool = createVideoGenerateTool({ config, workspaceDir, authProfileStore }, true);
+        if (!tool) {
+          throw new Error("expected video_generate tool");
+        }
+        return tool;
+      };
+      const cold = construct();
+      expectAudioReferences(cold, referenceAudioInputs);
+      expect(construct().parameters).toBe(cold.parameters);
+    },
+  );
 
   it("exposes video generation for an auth-backed video provider", () => {
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
@@ -284,12 +329,8 @@ describe("createVideoGenerateTool", () => {
       );
       createVideoGenerateTool({ config, workspaceDir });
       normalize.mockClear();
-      const properties = toolParameterProperties(createTool({ config, workspaceDir }));
+      expectAudioReferences(createTool({ config, workspaceDir }), phase.exposed);
       normalizationCounts.push(normalize.mock.calls.length);
-
-      for (const key of ["audioRef", "audioRefs", "audioRoles"]) {
-        expect(properties[key] !== undefined).toBe(phase.exposed);
-      }
     }
     expect(normalizationCounts[2]).toBeLessThanOrEqual(normalizationCounts[1]!);
     expect(normalizationCounts[3]).toBeLessThanOrEqual(normalizationCounts[2]!);
@@ -298,37 +339,27 @@ describe("createVideoGenerateTool", () => {
   it.each(["environment", "config"] as const)(
     "exposes reference-audio params with %s auth",
     (auth) => {
-      const agents = { defaults: { mediaModels: { video: { primary: "runway/gen4.5" } } } };
+      const defaults = { mediaModels: { video: { primary: "runway/gen4.5" } } };
       let config: OpenClawConfig;
       if (auth === "environment") {
         vi.stubEnv("FAL_KEY", "test-fal-key");
-        config = configWithDefaults(agents.defaults);
+        config = configWithDefaults(defaults);
       } else {
         config = {
-          agents,
+          agents: { defaults },
           models: {
             providers: {
-              fal: {
-                apiKey: "test-fal-key",
-                baseUrl: "https://fal.example",
-                models: [],
-              },
+              fal: { apiKey: "test-fal-key", baseUrl: "https://fal.example", models: [] },
             },
           },
         };
       }
-      const properties = toolParameterProperties(createTool({ config }));
-      for (const key of ["audioRef", "audioRefs", "audioRoles"]) {
-        expect(properties[key]).toBeDefined();
-      }
+      expectAudioReferences(createTool({ config }), true);
     },
   );
 
   it("runs explicit deployment refs and preserves timeout-only video defaults", async () => {
-    const provider = mockProvider({
-      models: [],
-      isConfigured: () => true,
-    });
+    const provider = mockProvider({ models: [], isConfigured: () => true });
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockImplementation(
       () => {
         throw new Error("prepared video execution should not rediscover runtime providers");
@@ -439,9 +470,7 @@ describe("createVideoGenerateTool", () => {
       videos: [videoAsset("valid", "valid.mp4"), { mimeType: "video/mp4" }],
     });
     const saveMediaBuffer = vi.spyOn(mediaStore, "saveMediaBuffer");
-    const tool = createConfiguredVideoTool("qwen/wan2.6-t2v");
-
-    await expect(tool.execute("call-invalid-asset", { prompt: "two videos" })).rejects.toThrow(
+    await expect(executeVideo("qwen/wan2.6-t2v", { prompt: "two videos" })).rejects.toThrow(
       "Provider qwen returned a video asset with neither buffer nor url — cannot deliver.",
     );
     expect(saveMediaBuffer).not.toHaveBeenCalled();
@@ -450,13 +479,7 @@ describe("createVideoGenerateTool", () => {
   it("starts background generation and wakes the session with URL and saved video names", async () => {
     const url = "https://example.com/generated-lobster.mp4";
     const name = "saved-lobster.mp4";
-    taskExecutorMocks.createOperation.mockReturnValue({
-      taskId: "task-123",
-      requesterSessionKey: "agent:main:discord:direct:123",
-      task: "friendly lobster surfing",
-      status: "running",
-      createdAt: Date.now(),
-    });
+    taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-123" });
     const wakeSpy = wakeCompletion();
     const savedId = "saved-lobster---a1b2c3d4-e5f6-4789-abcd-ef1234567890.mp4";
     const savedPath = `/tmp/${savedId}`;
@@ -505,6 +528,129 @@ describe("createVideoGenerateTool", () => {
       expect(wake.result).toContain(`name="${name}"`);
       expect(wake.result).not.toContain("MEDIA:");
     });
+  });
+
+  it("attributes a detached fallback result to its successful provider through delivery", async () => {
+    const sessionKey = "agent:main:discord:direct:123";
+    const primaryStarted = createDeferred();
+    const releasePrimary = createDeferred();
+    const savingStarted = createDeferred();
+    const releaseSave = createDeferred();
+    const deliveryStarted = createDeferred();
+    const releaseDelivery = createDeferred();
+    const primary: VideoGenerationProvider = {
+      id: "qa-primary",
+      defaultModel: "primary-v1",
+      models: ["primary-v1"],
+      capabilities: {},
+      isConfiguredAsync: async () => true,
+      generateVideo: vi.fn(async () => {
+        primaryStarted.resolve();
+        await releasePrimary.promise;
+        throw new Error("synthetic primary unavailable");
+      }),
+    };
+    const fallback: VideoGenerationProvider = {
+      id: "qa-fallback",
+      defaultModel: "fallback-v1",
+      models: ["fallback-v1"],
+      capabilities: {},
+      isConfiguredAsync: async () => true,
+      generateVideo: vi.fn(async () => ({ videos: [videoAsset("video", "fallback.mp4")] })),
+    };
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+      primary,
+      fallback,
+    ]);
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockImplementation(async () => {
+      savingStarted.resolve();
+      await releaseSave.promise;
+      return savedMedia("fallback.mp4", 5);
+    });
+    const wake = vi
+      .spyOn(videoGenerateBackground.videoGenerationTaskLifecycle, "wakeTaskCompletion")
+      .mockImplementation(async () => {
+        deliveryStarted.resolve();
+        await releaseDelivery.promise;
+        return { status: "delivered" };
+      });
+    const config = configWithDefaults({
+      mediaModels: {
+        video: { primary: "qa-primary/primary-v1", fallbacks: ["qa-fallback/fallback-v1"] },
+      },
+    });
+    const tool = createTool({
+      config,
+      agentSessionKey: sessionKey,
+      preparedModelRuntime: {
+        ...createEmptyPreparedModelRuntimeFixture({
+          agentDir: "/tmp/media-fallback-agent",
+          config,
+          metadataSnapshot: createEmptyPluginMetadataSnapshot(),
+          createStores: () => {
+            throw new Error("Unexpected model-store access in media fallback test");
+          },
+        }),
+        mediaCapabilityProviders: {
+          mediaUnderstandingProviders: undefined,
+          imageGenerationProviders: undefined,
+          videoGenerationProviders: [primary, fallback],
+          musicGenerationProviders: undefined,
+        },
+      },
+    });
+    const settlement = observeMediaGenerationSettlement(taskExecutorMocks);
+    const started = await executeVideo(tool);
+    const runId = started.details.runId;
+    assert(typeof runId === "string");
+    try {
+      await primaryStarted.promise;
+      expect((await createVideoGenerateStatusActionResult(sessionKey)).details).toMatchObject({
+        provider: "qa-primary",
+      });
+      releasePrimary.resolve();
+      await savingStarted.promise;
+      const saving = await createVideoGenerateStatusActionResult(sessionKey);
+      expect(saving.details).toMatchObject({
+        provider: "qa-fallback",
+        model: "fallback-v1",
+        progressSummary: "Saving generated video",
+      });
+      expect(saving.content).toEqual([
+        expect.objectContaining({ text: expect.stringContaining("with qa-fallback.") }),
+      ]);
+      expect(
+        await buildMediaTaskRuntimeContext({
+          capabilityToolNames: new Set(["video_generate"]),
+          sessionKey,
+          agentId: "main",
+        }),
+      ).toContain('provider_json="qa-fallback"');
+      expect((await executeVideo(tool)).details).toMatchObject({ provider: "qa-fallback" });
+      expect(findMediaGenerationOperation(runId)?.sourceId).toBe("video_generate:qa-primary");
+      releaseSave.resolve();
+      await deliveryStarted.promise;
+      expect((await createVideoGenerateStatusActionResult(sessionKey)).details).toMatchObject({
+        provider: "qa-fallback",
+        model: "fallback-v1",
+        progressSummary: "Generated media; delivering completion",
+      });
+      expect(wake.mock.calls[0]?.[0].result).toContain("with qa-fallback/fallback-v1.");
+    } finally {
+      releasePrimary.resolve();
+      releaseSave.resolve();
+      releaseDelivery.resolve();
+      await settlement.wait();
+    }
+    const completed = findMediaGenerationOperation(runId);
+    assert(completed);
+    expect(buildVideoGenerationTaskStatusDetails(completed)).toMatchObject({
+      provider: "qa-fallback",
+      model: "fallback-v1",
+      status: "succeeded",
+    });
+    expect(primary.generateVideo).toHaveBeenCalledOnce();
+    expect(fallback.generateVideo).toHaveBeenCalledOnce();
   });
 
   defineMediaGenerationCancellationTests({
@@ -658,10 +804,7 @@ describe("createVideoGenerateTool", () => {
       }),
     });
 
-    const result = await createConfiguredVideoTool("video-plugin/text-video").execute("call-1", {
-      action: "list",
-    });
-    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+    const { text } = await executeVideo("video-plugin/text-video", { action: "list" });
     expect(text).toContain(
       "model image-video: modes=imageToVideo, maxInputImages=1, maxDurationSeconds=15, supportedDurationSeconds=5/10/15, resolution, aspectRatio",
     );

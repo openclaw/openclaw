@@ -47,13 +47,7 @@ type SignalFinalPayload = {
   text: string;
 };
 
-type SignalApprovalRuntimeContext = {
-  baseUrl?: string;
-  account?: string;
-  accountUuid?: string;
-};
-
-function readSignalApprovalRuntimeContext(context: unknown): SignalApprovalRuntimeContext {
+function readSignalApprovalRuntimeContext(context: unknown) {
   const value = context as
     | { baseUrl?: unknown; account?: unknown; accountUuid?: unknown }
     | null

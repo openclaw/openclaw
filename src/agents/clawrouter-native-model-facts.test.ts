@@ -10,6 +10,7 @@ import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-sur
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { catalogProvider } from "./clawrouter-catalog.test-support.js";
 import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "./code-mode-runtime.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
 import {
   createEmptyAgentDiscoveryStores,
   resolveModelAsync,
@@ -96,26 +97,20 @@ it("resolves routed GPT and Claude models with the native runtime decisions", as
       model,
     }));
     const preparedModelRuntime: PreparedModelRuntimeSnapshot = {
-      catalogOwner: undefined,
+      ...createEmptyPreparedModelRuntimeFixture({
+        agentDir: state.agentDir(),
+        config: cfg,
+        metadataSnapshot,
+        createStores: () => stores,
+      }),
       agentId: "main",
-      agentDir: state.agentDir(),
       workspaceDir: state.workspaceDir,
-      activeProjectKeys: [],
-      config: cfg,
-      observationConfig: cfg,
-      isCurrent: () => true,
-      authModes: {},
-      metadataSnapshot,
       pluginRegistry,
-      allowGatewaySubagentBinding: false,
-      modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels,
       findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
         configuredRuntimeModels,
         metadataSnapshot,
       ),
-      inlineProviderModels: [],
-      createStores: () => stores,
     };
     const decisions = async (target: "clawrouter" | "openai" | "anthropic", modelId: string) => {
       const routed = target === "clawrouter";

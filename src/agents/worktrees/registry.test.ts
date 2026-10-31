@@ -11,6 +11,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "../../state/openclaw-state-schema.test-support.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -231,6 +232,7 @@ it("reads the provisioned-path ledger after captured shared-state migration", as
   await fs.copyFile(`${databasePath}.template`, databasePath, fs.constants.COPYFILE_EXCL);
   const { DatabaseSync } = requireNodeSqlite();
   const legacy = new DatabaseSync(databasePath);
+  restorePreTemplateStateIdentifiersForTest(legacy);
   addPreCutoverClientCredentialTablesForTest(legacy);
   legacy.exec(`
       ALTER TABLE worktrees DROP COLUMN provisioned_paths_json;

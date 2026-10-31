@@ -71,7 +71,24 @@ export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machine
     fs.rmSync(copy, { recursive: true, force: true });
     fs.cpSync(root, copy, { recursive: true });
     // System packages are read-only; cpSync keeps their modes, which would block these rewrites and the next refresh.
-    for (const entry of ["", ...fs.readdirSync(copy, { recursive: true })]) fs.chmodSync(path.join(copy, entry), 0o700);
+    // This bootstrap runs on a remote machine without OpenClaw modules. Keep its bounded
+    // Dirent traversal local, and never chmod a symlink (chmod follows its target).
+    const pending = [{ directory: copy, depth: 0 }];
+    let count = 0;
+    while (pending.length) {
+      const { directory, depth } = pending.pop();
+      fs.chmodSync(directory, 0o700);
+      const handle = fs.opendirSync(directory);
+      try {
+        for (let entry = handle.readSync(); entry; entry = handle.readSync()) {
+          if (++count > 100000 || depth >= 64) throw new Error("Corepack copy directory scan limit exceeded");
+          if (entry.isSymbolicLink()) continue;
+          const file = path.join(directory, entry.name);
+          if (entry.isDirectory()) pending.push({ directory: file, depth: depth + 1 });
+          else if (entry.isFile()) fs.chmodSync(file, 0o700);
+        }
+      } finally { handle.closeSync(); }
+    }
     // Shell runs line two and execs the worker Node; JavaScript reads it as a string and a comment.
     const header = "#!/bin/sh\\n':' //; exec '" + process.execPath.replaceAll("'", "'\\\\''") + "' \\"$0\\" \\"$@\\"\\n";
     for (const entry of fs.readdirSync(path.join(copy, "dist"))) {

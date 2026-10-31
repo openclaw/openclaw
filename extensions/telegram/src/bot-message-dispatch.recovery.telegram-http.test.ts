@@ -6,6 +6,8 @@ import type {
   PluginHookReplyPayloadSendingEvent,
   PluginHookReplyPayloadSendingResult,
 } from "openclaw/plugin-sdk/core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { readQueuedDeliveryEntriesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   buildReplyPayloads,
   createReplyToModeFilterForChannel,
@@ -14,7 +16,7 @@ import {
 import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { makeAgentAssistantMessage, makeAgentUserMessage } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createTelegramDispatchHttpFixture,
   installTelegramDispatchHook,
@@ -47,6 +49,8 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
       .acceptedFor("sendDocument")
       .map((call) => resolveTelegramTestUpload(call.fields, "document"));
   const replyId = (fields: Record<string, unknown>) => telegramReplyId(fields) ?? null;
+  const sentTexts = () => sends().map((call) => call.fields.text);
+  const uploadTexts = () => Promise.all(uploads().map((file) => file.text()));
 
   async function transcriptCase(sessionId: string) {
     const context = http.createContext();
@@ -137,9 +141,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
         manager.appendMessage(assistant(recoveredAnswer));
         manager.flushPendingPersistence();
       },
-      {
-        allowErrors: Boolean(controls),
-      },
+      { allowErrors: Boolean(controls) },
     );
     expect(modelRuns).toBe(1);
     if (controls) {
@@ -151,8 +153,72 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
         recoveredAnswer,
         recoveredAnswer,
       ]);
-      expect(sends().map((call) => call.fields.text)).toEqual([recoveredAnswer]);
+      expect(sentTexts()).toEqual([recoveredAnswer]);
       expect(http.texts()).toEqual([recoveredAnswer]);
+    }
+  });
+
+  it("replays the saved final through durable custody after its own HTTP deadline", async () => {
+    const { manager, dispatch } = await transcriptCase("deadline-transcript-final");
+    const firstArrived = createDeferred<void>();
+    const firstRelease = createDeferred<void>();
+    void firstRelease.promise.catch(() => undefined);
+    const retryArrived = createDeferred<void>();
+    const retryRelease = createDeferred<void>();
+    const isFinal = (call: { method: string; fields: Record<string, unknown> }) =>
+      call.method === "sendMessage" && call.fields.text === recoveredAnswer;
+    http.holdNextCall = {
+      predicate: isFinal,
+      arrived: firstArrived,
+      release: firstRelease,
+    };
+    let modelRuns = 0;
+    const delivering = dispatch(async () => {
+      modelRuns += 1;
+      manager.appendMessage(assistant(recoveredAnswer));
+      manager.flushPendingPersistence();
+    });
+    const settledTooSoon = delivering.then(() => {
+      throw new Error("final caller settled before saved-final recovery");
+    });
+    // Observe this branch immediately even when the first transport deadline fails.
+    void settledTooSoon.catch(() => undefined);
+    try {
+      await Promise.race([firstArrived.promise, settledTooSoon]);
+      expect(readQueuedDeliveryEntriesForTest(http.state.stateDir)).toMatchObject([
+        { retryAmbiguousFinalText: true, attemptCount: 1 },
+      ]);
+      http.holdNextCall = {
+        predicate: isFinal,
+        arrived: retryArrived,
+        release: retryRelease,
+      };
+      await vi.advanceTimersByTimeAsync(60_000);
+      await Promise.race([retryArrived.promise, settledTooSoon]);
+      // The abandoned request must terminate without a later fixture acceptance.
+      firstRelease.reject(new Error("discard the expired response"));
+      expect(readQueuedDeliveryEntriesForTest(http.state.stateDir)).toMatchObject([
+        {
+          retryAmbiguousFinalText: true,
+          ambiguousTransportError: true,
+          attemptCount: 2,
+          maxRetries: 2,
+        },
+      ]);
+      expect(modelRuns).toBe(1);
+      expect(http.callsFor("sendMessage").map((call) => call.fields.text)).toEqual([
+        recoveredAnswer,
+        recoveredAnswer,
+      ]);
+      retryRelease.resolve();
+      await delivering;
+      expect(readQueuedDeliveryEntriesForTest(http.state.stateDir)).toEqual([]);
+      expect(sentTexts()).toEqual([recoveredAnswer]);
+      expect(http.texts()).toEqual([recoveredAnswer]);
+    } finally {
+      firstRelease.reject(new Error("discard the expired response"));
+      retryRelease.resolve();
+      await delivering.catch(() => undefined);
     }
   });
 
@@ -182,7 +248,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
       },
       { replyToMode: "first", finalReply: replyPayloads },
     );
-    expect(sends().map((call) => call.fields.text)).toEqual([first, recoveredAnswer]);
+    expect(sentTexts()).toEqual([first, recoveredAnswer]);
     expect(sends().map((call) => replyId(call.fields))).toEqual([context.msg.message_id, null]);
     expect(http.callsFor("deleteMessage")).toEqual([]);
   });
@@ -207,7 +273,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
       },
       { finalReply: { text: shortened } },
     );
-    expect(sends().map((call) => call.fields.text)).toEqual([shortened]);
+    expect(sentTexts()).toEqual([shortened]);
     expect(sends()[0]?.fields.reply_parameters).toBeUndefined();
     expect(sends()[0]?.fields.reply_to_message_id).toBeUndefined();
   });
@@ -231,17 +297,11 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
         await http.waitForText(recoveredAnswer, "sendMessage");
         previewId = [...visibleMessages.keys()][0];
       },
-      {
-        cfg,
-        mode: "partial",
-        finalReply: [payload, { text: recoveredAnswer }],
-      },
+      { cfg, mode: "partial", finalReply: [payload, { text: recoveredAnswer }] },
     );
     expect(http.texts().filter(Boolean)).toEqual([shortened, recoveredAnswer]);
     expect(visibleMessages.get(previewId!)).toBe(shortened);
-    expect(await Promise.all(uploads().map((file) => file.text()))).toEqual([
-      "Attachment belonging only to the earlier answer.\n",
-    ]);
+    expect(await uploadTexts()).toEqual(["Attachment belonging only to the earlier answer.\n"]);
   });
 
   it("deduplicates only accepted source aliases after a partial block and recovered final", async () => {
@@ -302,11 +362,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
         finalReply: { text: recoveredAnswer, mediaUrls: sources.slice(0, 2), mediaUrl: sources[2] },
       },
     );
-    expect(await Promise.all(uploads().map((file) => file.text()))).toEqual([
-      "Document B\n",
-      "Document A\n",
-      "Document C\n",
-    ]);
+    expect(await uploadTexts()).toEqual(["Document B\n", "Document A\n", "Document C\n"]);
     expect(uploads().map((file) => file.name)).toEqual(["B.txt", "A.txt", "C.txt"]);
     const final = acceptedCalls.filter(
       (call) => (call.fields.caption ?? call.fields.text) === recoveredAnswer,

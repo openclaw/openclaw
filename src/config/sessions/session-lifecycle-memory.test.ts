@@ -71,7 +71,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   memorySessionActorOwners.reset();
-  registries.splice(0).forEach(markPluginRegistryRetired);
+  registries.splice(0).forEach((registry) => markPluginRegistryRetired(registry));
   vi.restoreAllMocks();
   vi.clearAllMocks();
 });

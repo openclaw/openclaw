@@ -1,10 +1,11 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { assert, beforeEach, expect, it, vi } from "vitest";
 import { createLlmTaskTool } from "./llm-task-tool.js";
 
 type LlmTaskApi = Parameters<typeof createLlmTaskTool>[0];
 type Complete = LlmTaskApi["runtime"]["llm"]["complete"];
+type CompletionResult = Awaited<ReturnType<Complete>>;
 
-function completionResult(params: Parameters<Complete>[0], text = "{}") {
+function completionResult(params: Parameters<Complete>[0], text = "{}"): CompletionResult {
   const [provider = "openai", model = "gpt-5.5"] = (params.model ?? "openai/gpt-5.5").split(
     /\/(.+)/,
   );
@@ -14,11 +15,8 @@ function completionResult(params: Parameters<Complete>[0], text = "{}") {
     model,
     agentId: "main",
     usage: {},
-    execution: {
-      mode: "isolated-agent-runtime" as const,
-      owner: { kind: "harness" as const, id: "openclaw" },
-    },
-    audit: { caller: { kind: "plugin" as const, id: "llm-task" } },
+    execution: { mode: "isolated-agent-runtime", owner: { kind: "harness", id: "openclaw" } },
+    audit: { caller: { kind: "plugin", id: "llm-task" } },
   };
 }
 
@@ -33,52 +31,45 @@ function normalizeThinkingLevel(raw?: string | null) {
       : undefined;
 }
 
-function fakeApi(): LlmTaskApi {
-  return {
-    config: { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
+function createTool(config: unknown) {
+  return createLlmTaskTool({
+    config,
     pluginConfig: {},
     runtime: {
       agent: { defaults: { provider: "openai", model: "gpt-5.5" }, normalizeThinkingLevel },
       llm: { complete },
     },
-  } as unknown as LlmTaskApi;
+  } as unknown as LlmTaskApi);
 }
+
+const tool = createTool({ agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } });
 
 function mockCompletion(text: string) {
   complete.mockImplementationOnce(async (params) => completionResult(params, text));
 }
 
-function firstIsolatedCompletionCall() {
-  const call = complete.mock.calls[0]?.[0];
-  if (!call) {
-    throw new Error("expected isolated completion");
-  }
-  return call;
+function isolatedCompletionCall() {
+  const call = complete.mock.lastCall?.[0];
+  assert(call?.execution?.mode === "isolated-agent-runtime", "expected isolated completion");
+  return call as Extract<typeof call, { execution: { mode: "isolated-agent-runtime" } }>;
 }
 
-let tool: ReturnType<typeof createLlmTaskTool>;
 beforeEach(() => {
   complete.mockReset();
   complete.mockImplementation(async (params) => completionResult(params));
-  tool = createLlmTaskTool(fakeApi());
 });
 
-it("strips fenced json", async () => {
+it.each([
+  { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
+  { agents: { entries: { chat: { model: "anthropic/claude-sonnet-4-6" } } } },
+  { agents: { defaults: { model: { primary: "Sonnet" } } } },
+])("strips fenced json with runtime-owned defaults %j", async (config) => {
   mockCompletion('```json\n{"ok":true}\n```');
-  const res = await tool.execute("id", { prompt: "return ok" });
+  const res = await createTool(config).execute("id", { prompt: "return ok" });
   expect(res.details.json).toEqual({ ok: true });
-  const call = firstIsolatedCompletionCall();
-  expect(call).toMatchObject({
-    model: undefined,
-    reasoning: undefined,
-    maxTokens: undefined,
-    temperature: undefined,
-    systemPrompt: expect.stringContaining("JSON-only"),
-  });
-  expect(call.execution).toEqual({ mode: "isolated-agent-runtime", timeoutMs: 30_000 });
-  expect(call.messages).toEqual([
-    { role: "user", content: expect.stringContaining("TASK:\nreturn ok") },
-  ]);
+  const call = isolatedCompletionCall();
+  expect(call.model).toBeUndefined();
+  expect(call.systemPrompt).toContain("JSON-only");
 });
 
 it("validates caller schemas with repeated $id independently across calls", async () => {
@@ -87,34 +78,32 @@ it("validates caller schemas with repeated $id independently across calls", asyn
     ["count", 1, "number", '{\n  "count": 1\n}'],
   ] as const) {
     const json = { [key]: value };
+    const schema = {
+      $id: "https://example.test/llm-task-result",
+      type: "object",
+      properties: { [key]: { type } },
+      required: [key],
+      additionalProperties: false,
+    };
     mockCompletion(JSON.stringify(json));
-    await expect(
-      tool.execute("id", {
-        prompt: `return ${key}`,
-        schema: {
-          $id: "https://example.test/llm-task-result",
-          type: "object",
-          properties: { [key]: { type } },
-          required: [key],
-          additionalProperties: false,
-        },
-      }),
-    ).resolves.toEqual({
+    await expect(tool.execute("id", { prompt: `return ${key}`, schema })).resolves.toEqual({
       content: [{ type: "text", text }],
       details: { json, provider: "openai", model: "gpt-5.5" },
     });
+    expect(isolatedCompletionCall().outputSchema).toBe(schema);
   }
 });
 
-it("throws on invalid json", async () => {
-  mockCompletion("not-json");
-  await expect(tool.execute("id", { prompt: "x" })).rejects.toThrow(/invalid json/i);
-});
-
-it("throws on schema mismatch", async () => {
-  mockCompletion('{"foo":1}');
-  const schema = { type: "object", properties: { foo: { type: "string" } }, required: ["foo"] };
-  await expect(tool.execute("id", { prompt: "x", schema })).rejects.toThrow(/match schema/i);
+it.each([
+  ["not-json", undefined, /invalid json/i],
+  [
+    '{"foo":1}',
+    { type: "object", properties: { foo: { type: "string" } }, required: ["foo"] },
+    /match schema/i,
+  ],
+] as const)("rejects %s", async (text, schema, error) => {
+  mockCompletion(text);
+  await expect(tool.execute("id", { prompt: "x", schema })).rejects.toThrow(error);
 });
 
 it("accepts model overrides that already include the selected provider prefix", async () => {
@@ -123,7 +112,7 @@ it("accepts model overrides that already include the selected provider prefix", 
     provider: "anthropic",
     model: "anthropic/claude-4-sonnet",
   });
-  expect(firstIsolatedCompletionCall().model).toBe("anthropic/claude-4-sonnet");
+  expect(isolatedCompletionCall().model).toBe("anthropic/claude-4-sonnet");
 });
 
 it("throws on invalid thinking level", async () => {
@@ -143,5 +132,5 @@ it("forwards caller cancellation to the isolated completion", async () => {
   });
 
   await expect(tool.execute("id", { prompt: "x" }, controller.signal)).rejects.toBe(cancellation);
-  expect(firstIsolatedCompletionCall().signal).toBe(controller.signal);
+  expect(isolatedCompletionCall().signal).toBe(controller.signal);
 });

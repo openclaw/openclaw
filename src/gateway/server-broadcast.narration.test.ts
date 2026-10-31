@@ -49,6 +49,11 @@ function harness() {
     narration,
     foreground,
     subscribers,
+    events: () => narration.frames.map(({ event }) => event),
+    texts: () => narration.frames.map(({ payload }) => payload.text),
+    last: () => narration.frames.at(-1)?.payload,
+    publish: (text: string, state = "delta", runId = "run") =>
+      broadcaster.broadcast("chat", chat(text, state, runId)),
     revoke: () => {
       allowed = false;
     },
@@ -127,10 +132,10 @@ describe("narration delivery through the Gateway broadcaster", () => {
       h.broadcast("agent", activity("assistant", { text: `Raw ${index}` }));
       publish(`Latest sentence ${index}.`);
     }
-    expect(h.narration.frames.map(({ event }) => event)).toEqual(["agent", "session.narration"]);
+    expect(h.events()).toEqual(["agent", "session.narration"]);
     expect(deadlines).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(100);
-    expect(h.narration.frames.at(-1)?.payload.text).toBe("Latest sentence 19.");
+    expect(h.last()?.text).toBe("Latest sentence 19.");
     expect(h.foreground.frames.filter(({ event }) => event === "chat")).toHaveLength(20);
     expect(
       h.foreground.frames.findLast(({ event }) => event === "chat")?.payload,
@@ -153,55 +158,47 @@ describe("narration delivery through the Gateway broadcaster", () => {
 
   it("bounds visible tails after stripping hidden blocks and immediately delivers final retractions", () => {
     const h = harness();
-    h.broadcast(
-      "chat",
-      chat(`Visible.\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${"private ".repeat(4_000)}`),
-    );
-    expect(h.narration.frames.at(-1)?.payload.text).toBe("Visible.");
+    h.publish(`Visible.\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${"private ".repeat(4_000)}`);
+    expect(h.last()?.text).toBe("Visible.");
     vi.advanceTimersByTime(2_000);
-    h.broadcast("chat", chat(`Visible. <think>${"private ".repeat(4_000)}`));
-    expect(h.narration.frames.at(-1)?.payload.text?.trim()).toBe("Visible.");
+    h.publish(`Visible. <think>${"private ".repeat(4_000)}`);
+    expect(h.last()?.text?.trim()).toBe("Visible.");
     vi.advanceTimersByTime(2_000);
-    h.broadcast("chat", chat(`${"x".repeat(20_000)}\n\nLatest line.`));
-    expect(h.narration.frames.at(-1)?.payload.text).toHaveLength(16_384);
-    expect(h.narration.frames.at(-1)?.payload.text).toMatch(/Latest line\.$/);
-    h.broadcast("chat", chat("", "final"));
+    h.publish(`${"x".repeat(20_000)}\n\nLatest line.`);
+    expect(h.last()?.text).toHaveLength(16_384);
+    expect(h.last()?.text).toMatch(/Latest line\.$/);
+    h.publish("", "final");
     expect(h.narration.frames.at(-2)?.payload.text).toBe("");
   });
 
   it("retires text superseded by tool activity without restarting its pacing window", () => {
     const h = harness();
     const tool = () => h.broadcast("agent", activity("tool", { phase: "start", name: "read" }));
-    h.broadcast("chat", chat("First."));
+    h.publish("First.");
     vi.advanceTimersByTime(100);
-    h.broadcast("chat", chat("Before the tool."));
+    h.publish("Before the tool.");
     vi.advanceTimersByTime(100);
     tool();
     vi.advanceTimersByTime(1_800);
-    expect(h.narration.frames.map(({ event }) => event)).toEqual(["session.narration", "agent"]);
+    expect(h.events()).toEqual(["session.narration", "agent"]);
 
-    h.broadcast("chat", chat("Assistant resumed."));
+    h.publish("Assistant resumed.");
     vi.advanceTimersByTime(100);
-    h.broadcast("chat", chat("Before another tool."));
+    h.publish("Before another tool.");
     tool();
-    h.broadcast("chat", chat("Latest assistant activity."));
+    h.publish("Latest assistant activity.");
     vi.advanceTimersByTime(1_899);
-    expect(h.narration.frames.map(({ event }) => event)).toEqual([
-      "session.narration",
-      "agent",
-      "session.narration",
-      "agent",
-    ]);
+    expect(h.events()).toEqual(["session.narration", "agent", "session.narration", "agent"]);
     vi.advanceTimersByTime(1);
-    expect(h.narration.frames.at(-1)?.payload.text).toBe("Latest assistant activity.");
+    expect(h.last()?.text).toBe("Latest assistant activity.");
     expect(h.foreground.frames.filter(({ event }) => event === "chat")).toHaveLength(5);
   });
 
   it("does not let an older digest follow a new-run lifecycle event", () => {
     const h = harness();
-    h.broadcast("chat", chat("First."));
+    h.publish("First.");
     vi.advanceTimersByTime(100);
-    h.broadcast("chat", chat("Queued from the previous run."));
+    h.publish("Queued from the previous run.");
     vi.advanceTimersByTime(100);
     h.broadcast("agent", activity("lifecycle", { phase: "start" }, "next-run"));
     vi.advanceTimersByTime(1_800);
@@ -209,8 +206,8 @@ describe("narration delivery through the Gateway broadcaster", () => {
       ["session.narration", "run"],
       ["agent", "next-run"],
     ]);
-    h.broadcast("chat", chat("New run progress.", "delta", "next-run"));
-    expect(h.narration.frames.at(-1)?.payload).toMatchObject({
+    h.publish("New run progress.", "delta", "next-run");
+    expect(h.last()).toMatchObject({
       runId: "next-run",
       text: "New run progress.",
     });
@@ -238,17 +235,7 @@ describe("narration delivery through the Gateway broadcaster", () => {
       h.broadcast("agent", payload);
     }
     expect(h.foreground.frames).toHaveLength(7);
-    expect(h.narration.frames).toMatchObject([
-      { payload: { stream: "item", data: { phase: "end", kind: "preamble" } } },
-      {
-        payload: {
-          stream: "item",
-          data: { phase: "update", kind: "answer_candidate", status: "selected" },
-        },
-      },
-      { payload: { stream: "run_status", data: { phase: "starting_model" } } },
-      { payload: { stream: "tool", data: { phase: "start", name: "read" } } },
-    ]);
+    expect(h.narration.frames.map(({ payload }) => payload)).toEqual(visible);
   });
 
   it.each(["revocation", "close", "retirement"] as const)(
@@ -282,23 +269,17 @@ describe("narration delivery through the Gateway broadcaster", () => {
     h.broadcast("chat", chat("Full alias."), { sessionKeys: [key, sibling] });
     expect(h.narration.frames.at(-1)?.event).toBe("chat");
     h.subscribers.subscribe("narration", sibling, { mode: "narration" });
-    h.broadcast("chat", chat("First session."));
+    h.publish("First session.");
     h.broadcast("chat", { ...chat("Second session."), sessionKey: sibling });
-    expect(h.narration.frames.slice(-2).map(({ payload }) => payload.text)).toEqual([
-      "First session.",
-      "Second session.",
-    ]);
-    h.broadcast("chat", chat("Last partial."));
+    expect(h.texts().slice(-2)).toEqual(["First session.", "Second session."]);
+    h.publish("Last partial.");
     h.broadcast("chat", {
       sessionKey: key,
       runId: "run",
       state: "error",
       errorMessage: "Stopped.",
     });
-    expect(h.narration.frames.slice(-2).map(({ event }) => event)).toEqual([
-      "session.narration",
-      "chat",
-    ]);
+    expect(h.events().slice(-2)).toEqual(["session.narration", "chat"]);
     expect(h.narration.frames.at(-2)?.payload.text).toBe("Last partial.");
   });
 
@@ -340,10 +321,7 @@ describe("narration delivery through the Gateway broadcaster", () => {
       { sessionKeys: [mainKey], agentId: "main" },
     );
     vi.advanceTimersByTime(1_900);
-    expect(h.narration.frames.slice(-2).map(({ payload }) => payload.text)).toEqual([
-      "Literal pending.",
-      "Ops pending.",
-    ]);
+    expect(h.texts().slice(-2)).toEqual(["Literal pending.", "Ops pending."]);
     expect(h.narration.frames).toHaveLength(6);
 
     publish("global", "main", "Raw resumed.");
@@ -353,11 +331,7 @@ describe("narration delivery through the Gateway broadcaster", () => {
     publish("global", "ops", "Ops retained.");
     h.subscribers.unsubscribe("narration", mainKey, "raw");
     vi.advanceTimersByTime(1_900);
-    expect(h.narration.frames.slice(-3).map(({ payload }) => payload.text)).toEqual([
-      "Raw retired.",
-      "Literal retired.",
-      "Ops retained.",
-    ]);
+    expect(h.texts().slice(-3)).toEqual(["Raw retired.", "Literal retired.", "Ops retained."]);
     expect(h.narration.frames).toHaveLength(10);
 
     publish("global", "main", "Raw retired on final release.");

@@ -1,5 +1,8 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { Model } from "../../../llm/types.js";
+import { getProviderRequestAuth } from "../../../plugins/provider-auth-authority.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createEmbeddedRunAuthController, type EmbeddedRunAuthState } from "./auth-controller.js";
 
 const mocks = vi.hoisted(() => ({ resolveCredential: vi.fn(), exchangeCredential: vi.fn() }));
@@ -12,24 +15,32 @@ vi.mock("../../../plugins/provider-runtime.js", async (importOriginal) => ({
   prepareProviderRuntimeAuth: mocks.exchangeCredential,
 }));
 
+// This suite substitutes resolution/preparation; canonical lifetime publication is
+// exercised with real stores in auth-controller.request-auth.test.ts.
+vi.mock("../../auth-profiles/authorization.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../auth-profiles/authorization.js")>()),
+  captureAuthProfileAuthorization: vi.fn(async () => ({
+    authorizationId: "synthetic-authorization",
+    assertCurrent() {},
+    async revalidate() {},
+    dispose() {},
+  })),
+}));
+
 beforeEach(() => vi.clearAllMocks());
 
 it.each([false, true])(
   "observes canonical ownership after credential resolution (replaced: %s)",
   async (replaced) => {
     const events: string[] = [];
-    const model: Model = {
+    const model: Model = makeProviderModelFixture({
       id: "gpt-4.1",
       name: "Synthetic admission",
       provider: "openai",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 16_000,
       maxTokens: 1024,
-    };
+    });
     const state: EmbeddedRunAuthState = {
       models: { runtime: model, effective: model },
       apiKeyInfo: null,
@@ -97,3 +108,178 @@ it.each([false, true])(
     expect(revalidate).toHaveBeenCalledOnce();
   },
 );
+
+it.each([
+  "closed",
+  "aborted",
+  "closed-during-prepare",
+  "aborted-during-prepare",
+  "run-revoked-during-prepare",
+  "binding-revoked-during-prepare",
+  "profile-advanced",
+  "resolution-error",
+  "closed-after-resolve",
+  "request-aborted-during-prepare",
+  "credential-timeout",
+  "exchange-timeout",
+] as const)("refuses retained request credentials when %s", async (scenario) => {
+  vi.useFakeTimers();
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  const model: Model = {
+    id: "chat",
+    name: "Synthetic request",
+    provider: "fixture",
+    api: "fixture",
+    baseUrl: "https://example.test",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 16000,
+    maxTokens: 1024,
+  };
+  const profileId = "fixture:selected";
+  const state: EmbeddedRunAuthState = {
+    models: { runtime: model, effective: model },
+    apiKeyInfo: null,
+    lastProfileId: undefined,
+    runtimeAuthState: null,
+    runtimeAuthRefreshCancelled: false,
+    profileIndex: 0,
+    thinkLevel: "off",
+  };
+  const auth = { apiKey: "synthetic-access", mode: "oauth", profileId, source: "profile" };
+  mocks.resolveCredential.mockResolvedValue(auth);
+  mocks.exchangeCredential.mockResolvedValue(undefined);
+  const install = vi.fn();
+  const abort = new AbortController();
+  let current = true;
+  let bindingCurrent = true;
+  const assertBinding = () => {
+    if (!bindingCurrent) {
+      throw new Error("binding revoked");
+    }
+  };
+  const controller = createEmbeddedRunAuthController({
+    config: undefined,
+    agentDir: "/synthetic/agent",
+    workspaceDir: "/synthetic/workspace",
+    authStore: {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "fixture",
+          access: "synthetic-access",
+          refresh: "synthetic-refresh",
+          expires: 4102444800000,
+          accountId: "account-a",
+        },
+      },
+    },
+    authStorage: { setRuntimeApiKey: install },
+    authProfileBinding: {
+      profileId,
+      authRequirement: "subscription",
+      assertCurrent: assertBinding,
+      revalidate: async () => assertBinding(),
+    },
+    profileCandidates: [profileId],
+    initialThinkLevel: "off",
+    attemptedThinking: new Set(),
+    fallbackConfigured: false,
+    allowTransientCooldownProbe: false,
+    provider: model.provider,
+    modelId: model.id,
+    state,
+    signal: abort.signal,
+    timeoutMs: 100,
+    assertCurrent: () => {
+      if (!current) {
+        throw new Error("run revoked");
+      }
+    },
+    log: { debug() {}, info() {}, warn() {} },
+  });
+  await controller.initializeAuthProfile();
+  const capability = getProviderRequestAuth(state.models.effective);
+  if (!capability) {
+    throw new Error("Missing request auth capability");
+  }
+  install.mockClear();
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const during = scenario.includes("during");
+  let exchangeSignal: AbortSignal | undefined;
+  if (during) {
+    mocks.exchangeCredential.mockImplementation(async ({ context }) => {
+      exchangeSignal = context.signal;
+      entered.resolve();
+      await release.promise;
+      return { apiKey: "late-token" };
+    });
+  }
+  if (scenario === "closed") {
+    controller.stopRuntimeAuthRefreshTimer();
+  }
+  if (scenario === "aborted") {
+    abort.abort(new Error("request canceled"));
+  }
+  if (scenario === "profile-advanced") {
+    await controller.applyAuthProfileCandidate(profileId);
+    install.mockClear();
+  }
+  if (scenario === "resolution-error") {
+    mocks.resolveCredential.mockRejectedValue(new Error("owner lookup failed"));
+  }
+  if (scenario === "credential-timeout") {
+    mocks.resolveCredential.mockImplementation(() => release.promise);
+  }
+  if (scenario === "exchange-timeout") {
+    mocks.exchangeCredential.mockImplementation(() => release.promise);
+  }
+  if (scenario === "closed-after-resolve") {
+    const result = await capability.resolve({});
+    controller.stopRuntimeAuthRefreshTimer();
+    expect(() => result.assertCurrent()).toThrow(/closed/);
+    return;
+  }
+  const requestAbort = new AbortController();
+  const result = capability.resolve({ signal: requestAbort.signal });
+  const observed = result.catch((error: unknown) => error);
+  if (scenario.endsWith("timeout")) {
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await Promise.race([observed, Promise.resolve("still pending")])).toMatchObject({
+      name: "AbortError",
+      message: expect.stringContaining("timed out"),
+    });
+  }
+  const assertion = expect(result).rejects.toThrow(
+    /closed|canceled|aborted|revoked|lookup failed|timed out/,
+  );
+  if (during) {
+    await entered.promise;
+    if (scenario === "closed-during-prepare") {
+      controller.stopRuntimeAuthRefreshTimer();
+    }
+    if (scenario === "aborted-during-prepare") {
+      abort.abort(new Error("request canceled"));
+    }
+    if (scenario === "request-aborted-during-prepare") {
+      requestAbort.abort();
+      await Promise.resolve();
+      expect(exchangeSignal?.aborted).toBe(true);
+    }
+    if (scenario === "run-revoked-during-prepare") {
+      current = false;
+    }
+    if (scenario === "binding-revoked-during-prepare") {
+      bindingCurrent = false;
+    }
+    release.resolve();
+  }
+  await assertion;
+  expect(install).not.toHaveBeenCalled();
+  controller.stopRuntimeAuthRefreshTimer();
+});

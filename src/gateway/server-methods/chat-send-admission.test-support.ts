@@ -9,7 +9,6 @@ export async function prepareChatAdmission({
   params,
   client,
   context,
-  isDirectExternalUser,
   assertCurrent,
 }: Preparation) {
   const request = await normalizeChatSendRequest({ params, client });
@@ -19,7 +18,6 @@ export async function prepareChatAdmission({
   const prepared = await prepareChatSendSession({
     client,
     context,
-    isDirectExternalUser,
     assertCurrent,
     request: request.value,
   });

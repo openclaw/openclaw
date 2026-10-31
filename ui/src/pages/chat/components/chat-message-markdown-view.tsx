@@ -15,6 +15,7 @@ import {
 } from "../../../lib/chat/message-normalizer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
+import { assistantMessageCanOwnTurnActions } from "../chat-assistant-reply.ts";
 import {
   type AssistantMessageExpansionState,
   resolveCappedMessageId,
@@ -112,7 +113,13 @@ export function resolveMessageActionDetails(
   },
 ): MessageActionDetails | null {
   const { messageId: renderMessageId, canFetchFullMessage, onReply, senderLabel } = params;
-  const role = normalizeRoleForGrouping(normalizedMessage.role);
+  const normalizedRole = normalizeRoleForGrouping(normalizedMessage.role);
+  const role =
+    normalizedRole === "tool" &&
+    asNullableRecord(message)?.role === "assistant" &&
+    assistantMessageCanOwnTurnActions(message)
+      ? "assistant"
+      : normalizedRole;
   const pendingInput =
     resolveSourceMessageId(message)?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX) === true;
   const cappedMessageId = canFetchFullMessage ? resolveCappedMessageId(message, role) : undefined;

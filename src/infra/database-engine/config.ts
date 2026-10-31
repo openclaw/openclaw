@@ -41,6 +41,7 @@ async function resolveDatabasePostgresInput(
     path: "database.postgres.connection",
     value: connection,
     defaults: config.secrets?.defaults,
+    includeResolved: true,
   });
   if (ref?.source === "store") {
     throw new Error(
@@ -61,5 +62,6 @@ async function resolveDatabasePostgresInput(
   return Object.freeze({
     connection: value,
     schemaPrefix: config.database?.postgres?.schemaPrefix ?? "openclaw",
+    ...(ref?.source === "env" ? { connectionEnvKey: ref.id } : {}),
   });
 }

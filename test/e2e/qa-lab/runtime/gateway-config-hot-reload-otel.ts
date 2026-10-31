@@ -40,6 +40,7 @@ export async function proveHotReloadOtel({
       const endpointB = `http://127.0.0.1:${await receiverB.listen()}`;
       const gateway = await owner.start({
         repoRoot,
+        initializeCurrentRuntimeState: true,
         useRepoCli: true,
         command: {
           executablePath: process.execPath,

@@ -1,6 +1,6 @@
-import { beforeEach, afterEach, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readRestartSentinel } from "../../infra/restart-sentinel.js";
+import { readRestartSentinel, writeRestartSentinel } from "../../infra/restart-sentinel.js";
 import {
   resetGatewayRestartStateForInProcessRestart,
   setPreRestartDeferralCheck,
@@ -28,6 +28,11 @@ async function restart(params: Record<string, unknown>, guard?: () => void) {
   return result;
 }
 
+beforeAll(async () => {
+  // A running Gateway already has shared state before owner authorization reads it.
+  await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
+});
+
 beforeEach(() => {
   config = { commands: { ownerAllowFrom: ["owner"] } };
   vi.useFakeTimers();
@@ -44,34 +49,27 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["non-owner", "disabled", "requester-revoked"])(
-  "refuses %s before scheduling",
-  async (change) => {
-    if (change === "disabled") {
-      config.commands!.restart = false;
-    }
-    await expect(
-      restart(
-        {
-          requester: { channel: "slack", senderId: change === "non-owner" ? "other" : "owner" },
-        },
-        change === "requester-revoked"
-          ? () => {
-              throw new Error("requester revoked");
-            }
-          : undefined,
-      ),
-    ).rejects.toThrow(
-      change === "disabled"
-        ? "commands.restart=false"
-        : change === "non-owner"
-          ? "current owner principal"
-          : "requester revoked",
-    );
-    expect(vi.getTimerCount()).toBe(0);
-    expect(emitted).not.toHaveBeenCalled();
-  },
-);
+it.each([
+  ["non-owner", "other", "current owner principal"],
+  ["disabled", "owner", "commands.restart=false"],
+  ["requester-revoked", "owner", "requester revoked"],
+])("refuses %s without restarting", async (change, senderId, error) => {
+  if (change === "disabled") {
+    config.commands!.restart = false;
+  }
+  await expect(
+    restart(
+      { requester: { channel: "slack", senderId } },
+      change === "requester-revoked"
+        ? () => {
+            throw new Error("requester revoked");
+          }
+        : undefined,
+    ),
+  ).rejects.toThrow(error);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(emitted).not.toHaveBeenCalled();
+});
 
 it.each(["owner", "restart-policy"])(
   "cancels deferred restart when %s authority changes",

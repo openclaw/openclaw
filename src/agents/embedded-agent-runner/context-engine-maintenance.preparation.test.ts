@@ -9,6 +9,7 @@ import {
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { expectCallCount as expectCalls } from "../../test-utils/mock-call-assertions.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import {
   createBackgroundMaintenanceEngine,
@@ -99,12 +100,6 @@ function fixture(failQueue = false) {
       await waitForSessionMaintenance(sessionKey);
     },
   };
-}
-
-function expectCalls(count: number, ...mocks: Array<ReturnType<typeof vi.fn>>) {
-  for (const mock of mocks) {
-    expect(mock).toHaveBeenCalledTimes(count);
-  }
 }
 
 let sql: ReturnType<typeof observeMainThreadSql>;

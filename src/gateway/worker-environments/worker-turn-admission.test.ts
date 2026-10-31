@@ -15,6 +15,7 @@ import type { PluginHookBeforeAgentRunEvent } from "../../plugins/hook-types.js"
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { prepareSkillBundle } from "../../skills/library/bundle.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { runWorkerEmbeddedTurn } from "../../worker/embedded-agent.runtime.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
@@ -41,11 +42,32 @@ import {
   sessionTarget,
   setupWorkerTurnLauncherTest,
   turn,
-  unusedEnvironments,
+  workerTurnEnvironments,
+  type WorkerTurnLauncherOptions,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
 
 afterAll(closeStateDatabaseForTest);
+
+function executeTurn(
+  input: Parameters<ReturnType<typeof createWorkerSessionTurnPlacementProvider>["executeTurn"]>[1],
+  environment: ReturnType<typeof attachedEnvironment>,
+  launchTurn: NonNullable<ReturnType<typeof createWorkerTurnTunnel>["launchTurn"]>,
+  options: Partial<Pick<WorkerTurnLauncherOptions, "reconcileActivePlacement">> = {},
+) {
+  const tunnel = createWorkerTurnTunnel({
+    launchTurn,
+    reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+  });
+  return createWorkerSessionTurnPlacementProvider({
+    placements,
+    ...options,
+    environments: workerTurnEnvironments(tunnel, {
+      get: () => environment,
+      acknowledgeCredentialDelivery: async () => true,
+    }),
+  }).executeTurn({ ...sessionTarget, runId: input.runId }, input, vi.fn());
+}
 
 describe("worker-side before_agent_run admission", () => {
   beforeEach(async () => {
@@ -220,37 +242,18 @@ describe("worker-side before_agent_run admission", () => {
                 }
               : undefined,
           });
-          return {
-            stdout: "",
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
+          return createCommandResult();
         },
       );
-      const tunnel = createWorkerTurnTunnel({
-        launchTurn: launch,
-        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
-      });
-      const environments = {
-        ...unusedEnvironments(),
-        get: () => environment,
-        acquireTurnCredential: async () => credential(),
-        startTunnel: async () => tunnel,
-        acknowledgeCredentialDelivery: async () => true,
-      };
-      const provider = createWorkerSessionTurnPlacementProvider({ placements, environments });
       try {
-        const execution = provider.executeTurn(
-          { ...sessionTarget, runId: input.runId },
+        const execution = executeTurn(
           {
             ...input,
             pluginGeneration: runtime.pluginGeneration,
             userTurnTranscriptRecorder: recorder,
           },
-          vi.fn(),
+          environment,
+          launch,
         );
         if (block) {
           const result = await execution;
@@ -342,24 +345,8 @@ describe("worker-side before_agent_run admission", () => {
         return { ...result, signal: null, killed: false, termination: "exit" };
       },
     );
-    const tunnel = createWorkerTurnTunnel({
-      launchTurn: launch,
-      reconcileWorkspace: reconcileUnchangedLocalWorkspace,
-    });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      placements,
-      environments: {
-        ...unusedEnvironments(),
-        get: () => environment,
-        acquireTurnCredential: async () => credential(),
-        startTunnel: async () => tunnel,
-        acknowledgeCredentialDelivery: async () => true,
-      },
-    });
     try {
-      await expect(
-        provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, vi.fn()),
-      ).rejects.toThrow(error);
+      await expect(executeTurn(input, environment, launch)).rejects.toThrow(error);
       expect(readWorkerTurnTranscriptStorageRows()).toEqual([]);
     } finally {
       input.preparedRunAdmission.close();
@@ -512,39 +499,21 @@ describe("worker-side before_agent_run admission", () => {
           payload: { phase: "finishing", endedAt: 1, aborted: true },
         });
         // A valid successful result must not let finalization persist unapproved input.
-        return {
+        return createCommandResult({
           stdout: JSON.stringify({
             status: "completed",
             transcriptLeafId: null,
             transcriptNextSeq: 1,
           }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        });
       },
     );
-    const tunnel = createWorkerTurnTunnel({
-      launchTurn: launch,
-      reconcileWorkspace: reconcileUnchangedLocalWorkspace,
-    });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      placements,
-      // The scrubbed terminal ACK hands recovery back to this external lifecycle owner.
-      reconcileActivePlacement: async () => {},
-      environments: {
-        ...unusedEnvironments(),
-        get: () => environment,
-        acquireTurnCredential: async () => credential(),
-        startTunnel: async () => tunnel,
-        acknowledgeCredentialDelivery: async () => true,
-      },
-    });
     try {
       await expect(
-        provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, vi.fn()),
+        executeTurn(input, environment, launch, {
+          // The scrubbed terminal ACK hands recovery back to this external lifecycle owner.
+          reconcileActivePlacement: async () => {},
+        }),
       ).rejects.toThrow(admissionError);
       expect(launch).toHaveBeenCalledOnce();
       expect(execute).not.toHaveBeenCalled();

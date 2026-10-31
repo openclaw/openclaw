@@ -1,4 +1,3 @@
-import { serialize } from "node:v8";
 import {
   decodeMetadataAppendEvent,
   sessionMetadataAppendNeedsReload,
@@ -11,7 +10,7 @@ import {
   runWithMetadataMessageAdmission,
   type MetadataWorkerAdmission,
 } from "../../agents/sessions/session-manager-message-admission.worker.js";
-import { readSessionManagerReload } from "../../agents/sessions/session-manager-reload.js";
+import { readSessionManagerReload } from "../../agents/sessions/session-manager-reload.kernel.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { isUserMessage } from "../../sessions/user-turn-transcript.message.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
@@ -24,6 +23,7 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { createTranscriptAppendBatch } from "./session-accessor.sqlite-transcript-batch.js";
 import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import type { SessionActorAppend, SessionActorAppendCommitted } from "./session-actor-contract.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
@@ -133,6 +133,19 @@ export function applySessionActorAppend(
     }
     return { ...bound, ...initialEntry?.fence };
   };
+  // Complete actor identities admit the initializer without re-reading its pending rows.
+  const initializationBatch =
+    append.header &&
+    append.kind === "metadata" &&
+    append.input.initialModel &&
+    state.transcript.complete
+      ? createTranscriptAppendBatch(
+          database,
+          resolveSqliteTranscriptScope(scopeForAppend(append.input.scope)),
+          [],
+          { scheduleProjectionReconcile: false },
+        )
+      : undefined;
   let modelPromptProjection: SessionActorAppendCommitted["modelPromptProjection"];
   const finalizeProjection = (snapshot: SessionActorAppendCommitted["value"]["snapshot"]) => {
     if (!modelPromptProjection) {
@@ -155,7 +168,7 @@ export function applySessionActorAppend(
   const metadata = (
     input: SessionMetadataOperations["session.metadata.append"]["input"],
     scope = scopeForAppend(input.scope),
-    persistActorMutation = true,
+    persistActorMutation = !initializationBatch,
   ) => {
     const scoped = {
       ...input,
@@ -181,7 +194,17 @@ export function applySessionActorAppend(
             beforeFresh,
             undefined,
             persistActorMutation,
+            initializationBatch?.cursor,
           );
+          if (initializationBatch && input.initialModel) {
+            // Each append already advanced the actor; settlement only persists that watermark.
+            initializationBatch.settle(
+              true,
+              initializationBatch.cursor.batch.events.length,
+              value.projectionNeedsReconcile,
+              { steps: 0, adjustedTime: 0 },
+            );
+          }
           authorize("commit");
           value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);
           return value;
@@ -202,7 +225,6 @@ export function applySessionActorAppend(
             ),
           ),
         };
-        serialize(value);
       } catch (error) {
         value.reload = {
           ok: false,

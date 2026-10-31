@@ -14,11 +14,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import {
-  bindSessionPendingInputSources,
-  stageSessionPendingInput,
-  withSessionPendingInputPersistence,
-} from "../../config/sessions/session-accessor.pending-inputs.js";
+import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "../../config/sessions/session-accessor.sqlite-maintenance-kick.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
@@ -597,19 +593,24 @@ it("commits user and custom messages in FIFO order without host writes, and chec
     ]);
     expect(manager.getLeafId()).toBe(lastId);
     expect(beforeFreshMessageCommit).toHaveBeenCalledTimes(3);
-    const beforeRejectedReplay = manager.getPersistedEntries();
-    const refusedReplay = await manager.appendMessageAsync(user("first")).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(refusedReplay).toMatchObject({
-      name: "Error",
-      message: `Session transcript keyed user is outside the current turn: ${first.entryId}`,
+    const beforeReplay = manager.getPersistedEntries();
+    expect(await manager.appendMessageWithTranscriptAnchorAsync(user("first"))).toMatchObject({
+      appended: false,
+      entryId: first.entryId,
+      message: first.message,
     });
-    expect(isRecordedModelFallbackStop(refusedReplay)).toBe(false);
-    expect(manager.getPersistedEntries()).toEqual(beforeRejectedReplay);
-    const afterRefusal = await manager.appendMessageAsync(user("after-replay-refusal"));
-    expect(manager.getLeafEntry()).toMatchObject({ id: afterRefusal, parentId: lastId });
+    for (const conflicting of [
+      { ...user("first"), content: "Different input" },
+      { ...user("first"), __openclaw: { senderId: "different-principal" } },
+    ]) {
+      await expect(manager.appendMessageAsync(conflicting)).rejects.toThrow(
+        "conflicts with the admitted message",
+      );
+    }
+    expect(manager.getPersistedEntries()).toEqual(beforeReplay);
+    expect(manager.getLeafId()).toBe(lastId);
+    const afterReplay = await manager.appendMessageAsync(user("after-replay"));
+    expect(manager.getLeafEntry()).toMatchObject({ id: afterReplay, parentId: lastId });
     expect(hostExec.mock.calls.filter(([sql]) => /^BEGIN\b/iu.test(sql))).toEqual([]);
     expect(await loadTranscriptEvents(target)).toEqual(manager.getPersistedEntries());
   } finally {
@@ -617,7 +618,7 @@ it("commits user and custom messages in FIFO order without host writes, and chec
   }
 });
 
-it("revalidates overtaken keyed replays while retaining fresh committed pending users", async () => {
+it("acknowledges overtaken keyed replays while retaining fresh committed pending users", async () => {
   const { target, manager } = await fixture(state, "overtaken-keyed-replay");
   const originalId = await manager.appendMessageAsync(user("original"));
   let newerId: string | undefined;
@@ -635,15 +636,11 @@ it("revalidates overtaken keyed replays while retaining fresh committed pending 
       spy.mockRestore();
     }
   };
-  const replayFailure = await appendOvertaken(user("original"), "after-replay").then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-  expect(replayFailure).toMatchObject({
-    name: "Error",
-    message: `Session transcript keyed user is outside the current turn: ${originalId}`,
+  expect(await appendOvertaken(user("original"), "after-replay")).toMatchObject({
+    entryId: originalId,
+    appended: false,
+    viewWasSuperseded: true,
   });
-  expect(isRecordedModelFallbackStop(replayFailure)).toBe(false);
   expect(manager.getEntries()).toMatchObject([
     { id: originalId, parentId: null },
     { id: newerId, parentId: originalId },
@@ -731,72 +728,6 @@ it("fences local navigation changes at worker commit and receipt publication", a
     { type: "message", parentId: tail, message: user("committed-before-reset") },
   ]);
 });
-
-it.each([false, true])(
-  "preserves pending custody and closed committed replay (collected: %s)",
-  async (collected) => {
-    const { target, manager } = await fixture(state, `pending-messages-${collected}`);
-    const stage = async (key: string) =>
-      expectDefined(
-        await stageSessionPendingInput(target, {
-          runId: key,
-          message: user(key),
-          assertCurrent: () => {},
-        }),
-        "Expected pending input custody",
-      );
-    const firstSource = await stage("first");
-    const sources = [firstSource];
-    if (collected) {
-      sources.push(await stage("second"));
-    }
-    const receipt = collected
-      ? expectDefined(
-          bindSessionPendingInputSources(sources, user("aggregate")),
-          "Expected aggregate custody",
-        )
-      : firstSource;
-    const beforeFreshMessageCommit = vi.fn(() => {
-      throw new Error("Accepted input must retain its original admission");
-    });
-    try {
-      await expect(manager.appendMessageAsync(firstSource.message)).rejects.toThrow(
-        "admitted turn",
-      );
-      const committed = await receipt.run(() =>
-        manager.appendMessageWithTranscriptAnchorAsync(receipt.message, {
-          beforeFreshMessageCommit,
-        }),
-      );
-      expect(committed).toMatchObject({
-        entryId: receipt.inputId,
-        message: receipt.message,
-        appended: true,
-      });
-      expect([receipt.state, ...sources.map((source) => source.state)]).toEqual(
-        Array(sources.length + 1).fill("consumed"),
-      );
-      expect(beforeFreshMessageCommit).not.toHaveBeenCalled();
-      const events = await loadTranscriptEvents(target);
-      expect(events).toEqual(manager.getPersistedEntries());
-      receipt.finish("cancelled");
-      await expect(
-        withSessionPendingInputPersistence(receipt, () =>
-          manager.appendMessageWithTranscriptAnchorAsync(receipt.message, {
-            beforeFreshMessageCommit,
-          }),
-        ),
-      ).resolves.toMatchObject({ entryId: receipt.inputId, appended: false });
-      expect(beforeFreshMessageCommit).not.toHaveBeenCalled();
-      expect(await loadTranscriptEvents(target)).toEqual(events);
-    } finally {
-      receipt.finish("interrupted");
-      for (const source of sources) {
-        source.finish("interrupted");
-      }
-    }
-  },
-);
 
 it("rolls back worker promotion when pending authority retires at commit", async () => {
   const { target, manager } = await fixture(state, "revoked-message");

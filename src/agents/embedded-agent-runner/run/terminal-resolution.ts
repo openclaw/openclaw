@@ -321,7 +321,7 @@ export async function resolveEmbeddedRunTerminal(input: {
         externalAbort: externalAbort || signalOwnedInterruption,
         hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
         hasIntentionalTerminalCompletion: intentionalTerminalCompletion,
-        terminalAuthFailure: input,
+        terminalFailure: input,
       }) ??
       ((authoredSilenceRequiresResult || settledTurnFinalizationAttempted) &&
       terminalFacts.payloadCount === 0 &&
@@ -639,9 +639,7 @@ async function completeEmbeddedRun(
         finalPromptText: input.attempt.finalPromptText,
         finalAssistantVisibleText:
           sourceFinal?.text ??
-          (isMissingReplyNotice
-            ? undefined
-            : (incompleteText ?? input.prepared.finalAssistantVisibleText)),
+          (isMissingReplyNotice ? undefined : input.prepared.finalAssistantVisibleText),
         finalAssistantRawText: isMissingReplyNotice
           ? undefined
           : input.prepared.finalAssistantRawText,

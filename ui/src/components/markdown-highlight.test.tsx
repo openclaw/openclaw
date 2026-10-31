@@ -1,5 +1,6 @@
 import { createMemo, createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
+import { markdownContentHtml } from "../lib/markdown-content.ts";
 import { prepareMessageMarkdown } from "../pages/chat/components/chat-message-text-preparation.ts";
 import { MessageJson } from "../pages/chat/components/chat-message-text-view.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
@@ -8,9 +9,11 @@ import { LinkReaderMarkdown } from "./link-reader-markdown.tsx";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import { createMarkdownRef } from "./markdown-dom-ref.ts";
 import { parseMarkdownJson } from "./markdown-json.ts";
+import { toStreamingMarkdownDomParts } from "./markdown-live.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import corpus from "./markdown-transcript-corpus.json" with { type: "json" };
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
+import { toStreamingMarkdownParts } from "./markdown.test-support.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { MarkdownHtml } from "./solid/markdown-html.tsx";
 import { SanitizedHtml } from "./solid/sanitized-html.tsx";
 
@@ -35,7 +38,10 @@ it("preserves readable code and node state across lazy highlighting", async () =
         "plain-history",
         { role: "assistant", isStreaming: false },
         {},
-      ).parts.join("");
+      )
+        .parts()
+        .map(markdownContentHtml)
+        .join("");
     });
     const streamed = createMemo(() => {
       proseRuns.streaming++;
@@ -51,6 +57,7 @@ it("preserves readable code and node state across lazy highlighting", async () =
         props.history ? "lazy-history" : "lazy-stream",
         { role: "assistant", isStreaming: props.streaming },
         { codeBlockInteraction: "interactive" },
+        props.streaming ? toStreamingMarkdownDomParts : undefined,
       ),
     }));
     return <div class="retained-fixture" ref={ref} onClick={handleMarkdownCodeBlockClick} />;

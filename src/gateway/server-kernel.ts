@@ -214,12 +214,16 @@ async function createGatewayKernelWithSdkHost(
         log,
         logCron,
         shutdownRuntime,
+        exitAfterStartupFailure: opts.exitAfterStartupFailure,
       }),
     );
     lifecycleRuntime = preparedLifecycleRuntime;
     const databaseStartupAdmission = getAgentDatabaseStartupAdmission();
     if (databaseStartupAdmission) {
-      preparedLifecycleRuntime.registerGatewayLifetimeSidecars(databaseStartupAdmission.adopt());
+      preparedLifecycleRuntime.registerGatewayLifetimeSidecars({
+        name: "database-admission",
+        ...databaseStartupAdmission.adopt(),
+      });
     }
     // Retain teardown first. A timer turn lets I/O run before more cached imports.
     await delay(0, undefined, { signal: runtime.connectionWork.signal });
@@ -266,7 +270,7 @@ async function createGatewayKernelWithSdkHost(
     await prelude;
     if (lifecycleRuntime) {
       // The lifecycle releases metadata only after its required joins succeed.
-      await lifecycleRuntime.closeOnStartupFailure();
+      await lifecycleRuntime.closeOnStartupFailure(startupError);
     } else {
       closeStartupTrace?.();
       await kernelState?.mentionInbox.dispose();

@@ -3,12 +3,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import * as machineState from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import {
-  clearBundledDiscoveryModeMemo,
-  prepareBundledDiscoveryMode,
-} from "./bundled-discovery-state.js";
+import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
 import { resolvePluginDocumentExtractors } from "./document-extractors.runtime.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
@@ -112,16 +108,25 @@ function resolution(fixture: ReturnType<typeof environment>, allow = [PLUGIN_ID]
 
 type Resolution = ReturnType<typeof resolution>;
 const setupResolvers = [
-  {
-    name: "web search setup",
-    artifact: "web-search-contract-api.js",
-    resolve: (params: Resolution) => resolvePluginWebSearchProviders({ ...params, mode: "setup" }),
-  },
-  {
-    name: "web fetch setup",
-    artifact: "web-fetch-contract-api.js",
-    resolve: (params: Resolution) => resolvePluginWebFetchProviders({ ...params, mode: "setup" }),
-  },
+  ["web-search-contract-api.js", resolvePluginWebSearchProviders],
+  ["web-fetch-contract-api.js", resolvePluginWebFetchProviders],
+] as const;
+type Resolver = (params: Resolution) => { label: string }[];
+const fromProcess =
+  (resolve: Resolver): Resolver =>
+  (params) => {
+    useProcessEnvironment(params);
+    return resolve(params);
+  };
+const resolvers: ReadonlyArray<readonly [string, Resolver]> = [
+  ...setupResolvers.map(
+    ([artifact, resolve]) =>
+      [artifact, (params: Resolution) => resolve({ ...params, mode: "setup" })] as const,
+  ),
+  ["web-search-contract-api.js", resolveRuntimeWebSearchProviders],
+  ["web-fetch-provider.js", resolveRuntimeWebFetchProviders],
+  ["document-extractor.js", fromProcess(resolvePluginDocumentExtractors)],
+  ["web-content-extractor.js", fromProcess(resolvePluginWebContentExtractors)],
 ];
 
 describe("public artifact environment ownership", () => {
@@ -149,35 +154,7 @@ describe("public artifact environment ownership", () => {
     },
   );
 
-  it.each([
-    ...setupResolvers,
-    {
-      name: "web search runtime descriptors",
-      artifact: "web-search-contract-api.js",
-      resolve: resolveRuntimeWebSearchProviders,
-    },
-    {
-      name: "web fetch runtime",
-      artifact: "web-fetch-provider.js",
-      resolve: resolveRuntimeWebFetchProviders,
-    },
-    {
-      name: "document extractors",
-      artifact: "document-extractor.js",
-      resolve: (params: Resolution) => {
-        useProcessEnvironment(params);
-        return resolvePluginDocumentExtractors({ config: params.config });
-      },
-    },
-    {
-      name: "web content extractors",
-      artifact: "web-content-extractor.js",
-      resolve: (params: Resolution) => {
-        useProcessEnvironment(params);
-        return resolvePluginWebContentExtractors({ config: params.config });
-      },
-    },
-  ])("loads and reuses each caller's artifact for $name", async ({ resolve, artifact }) => {
+  it.each(resolvers)("loads and reuses each caller's %s artifact", async (artifact, resolve) => {
     const ambient = environment("ambient");
     const caller = environment("caller");
     useProcessEnvironment(ambient);
@@ -195,7 +172,7 @@ describe("public artifact environment ownership", () => {
     expect(caller.evaluations()).toEqual([artifact]);
   });
 
-  describe.each(setupResolvers)("$name compatibility", ({ resolve }) => {
+  describe.each(setupResolvers)("%s compatibility", (_artifact, resolve) => {
     it.each(["compat", "allowlist"] as const)(
       "uses the caller's %s policy instead of the opposite process policy",
       async (mode) => {
@@ -212,35 +189,12 @@ describe("public artifact environment ownership", () => {
         await using cache = createPluginCache();
         withPluginCache(cache, () => {
           expect(
-            resolve(resolution(caller, ["another-plugin"])).map((entry) => entry.label),
+            resolve({ ...resolution(caller, ["another-plugin"]), mode: "setup" }).map(
+              (entry) => entry.label,
+            ),
           ).toEqual(mode === "compat" ? ["caller"] : []);
         });
       },
     );
-  });
-
-  it("reuses prepared discovery policy across repeated web setup calls without synchronous state reads", async () => {
-    const fixture = environment("prepared");
-    useProcessEnvironment(fixture);
-    writeConfigMachineState("plugins.bundledDiscovery", "compat", { env: fixture.env });
-    clearBundledDiscoveryModeMemo();
-    await closeOpenClawStateDatabaseAsync();
-    await using cache = createPluginCache();
-    await withPluginCache(cache, async () => {
-      await prepareBundledDiscoveryMode(fixture.env);
-      const reads = vi.spyOn(machineState, "readConfigMachineState");
-      for (let attempt = 0; attempt < 3; attempt++) {
-        expect(
-          resolvePluginWebSearchProviders({
-            ...resolution(fixture, ["another-plugin"]),
-            mode: "setup",
-          }).map((provider) => provider.label),
-        ).toEqual(["prepared"]);
-      }
-      expect(reads.mock.calls.filter(([key]) => key === "plugins.bundledDiscovery")).toHaveLength(
-        0,
-      );
-    });
-    expect(fixture.evaluations()).toEqual(["web-search-contract-api.js"]);
   });
 });

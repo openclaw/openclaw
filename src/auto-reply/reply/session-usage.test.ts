@@ -3,11 +3,13 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { contextBudgetStatusFixture } from "../../config/sessions/context-budget.test-support.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import * as sessionActors from "../../config/sessions/session-actor.js";
 import { recordSessionParticipantInWorker } from "../../config/sessions/session-sharing-store.async.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
@@ -100,6 +102,32 @@ describe("session actor usage accounting", () => {
     contextTokensUsed: 1_000_000,
     contextTokensSource: "runtime",
   } satisfies UsageUpdate;
+  function pricingConfig(
+    provider: string,
+    id: string,
+    cost: ModelDefinitionConfig["cost"],
+  ): OpenClawConfig {
+    return {
+      models: {
+        providers: {
+          [provider]: {
+            baseUrl: "https://fixture.invalid",
+            models: [
+              {
+                id,
+                name: id,
+                cost,
+                reasoning: false,
+                input: ["text"],
+                contextWindow: 1_000_000,
+                maxTokens: 1_000,
+              },
+            ],
+          },
+        },
+      },
+    };
+  }
 
   it("persists terminal usage through an actor rebase while participant writes queue", async () => {
     const session = await usageSession();
@@ -222,25 +250,10 @@ describe("session actor usage accounting", () => {
         inputTokens: 5_000,
         outputTokens: 2_000,
         cacheRead: 50_000,
-        contextBudgetStatus: {
-          schemaVersion: 1,
-          source: "pre-prompt-estimate",
-          updatedAt: 1,
-          provider: "claude-cli",
-          model: "claude-opus-4-7",
-          route: "compact_only",
+        contextBudgetStatus: contextBudgetStatusFixture({
           shouldCompact: true,
-          estimatedPromptTokens: 180_000,
-          contextTokenBudget: 1_048_576,
-          promptBudgetBeforeReserve: 1_044_480,
-          reserveTokens: 4_096,
-          effectiveReserveTokens: 4_096,
-          remainingPromptBudgetTokens: 864_480,
-          overflowTokens: 0,
-          toolResultReducibleChars: 0,
-          messageCount: 0,
-          unwindowedMessageCount: 0,
-        },
+          route: "compact_only",
+        }),
       },
       update: {
         usage: { output: 125 },
@@ -382,11 +395,12 @@ describe("session actor usage accounting", () => {
       contextTokensUsed: 200_000,
     });
 
-    const storedEntry1 = session.read();
-    expect(storedEntry1?.goal?.tokenStart).toBe(100);
-    expect(storedEntry1?.goal?.tokenStartFresh).toBe(true);
-    expect(storedEntry1?.goal?.tokensUsed).toBe(0);
-    expect(storedEntry1?.goal?.status).toBe("active");
+    expect(session.read().goal).toMatchObject({
+      tokenStart: 100,
+      tokenStartFresh: true,
+      tokensUsed: 0,
+      status: "active",
+    });
 
     await session.update({
       usage: { input: 125, output: 5, total: 130 },
@@ -394,35 +408,24 @@ describe("session actor usage accounting", () => {
       contextTokensUsed: 200_000,
     });
 
-    const storedEntry2 = session.read();
-    expect(storedEntry2?.goal?.tokenStart).toBe(100);
-    expect(storedEntry2?.goal?.tokensUsed).toBe(25);
-    expect(storedEntry2?.goal?.status).toBe("budget_limited");
+    expect(session.read().goal).toMatchObject({
+      tokenStart: 100,
+      tokensUsed: 25,
+      status: "budget_limited",
+    });
   });
 
   it("snapshots estimatedCostUsd instead of accumulating (fixes #69347)", async () => {
-    const session = await usageSession({ sessionId: "s1", updatedAt: Date.now() });
+    const session = await usageSession();
 
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { main: {}, other: {} } },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            models: [
-              {
-                id: "gpt-5.4",
-                name: "GPT 5.4",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0.5 },
-                contextWindow: 200_000,
-                maxTokens: 8_192,
-              },
-            ],
-          },
-        },
-      },
+      ...pricingConfig("openai", "gpt-5.4", {
+        input: 1.25,
+        output: 10,
+        cacheRead: 0.125,
+        cacheWrite: 0.5,
+      }),
     };
 
     for (let commit = 0; commit < 2; commit += 1) {
@@ -445,41 +448,16 @@ describe("session actor usage accounting", () => {
   ])(
     "replaces prior snapshot cost with current tiered run cost $total (tokens: $withTokens)",
     async ({ total, withTokens }) => {
-      const session = await usageSession({
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        estimatedCostUsd: 0.5,
-      });
+      const session = await usageSession({ estimatedCostUsd: 0.5 });
 
       await session.update({
-        cfg: {
-          models: {
-            providers: {
-              fixture: {
-                baseUrl: "https://fixture.invalid",
-                models: [
-                  {
-                    id: "tiered",
-                    name: "Tiered",
-                    reasoning: false,
-                    input: ["text"],
-                    contextWindow: 1_000_000,
-                    maxTokens: 1_000,
-                    cost: {
-                      input: 1,
-                      output: 0,
-                      cacheRead: 0,
-                      cacheWrite: 0,
-                      tieredPricing: [
-                        { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] },
-                      ],
-                    },
-                  },
-                ],
-              },
-            },
-          },
-        },
+        cfg: pricingConfig("fixture", "tiered", {
+          input: 1,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          tieredPricing: [{ input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] }],
+        }),
         usage: {
           ...(withTokens ? { input: 300_000, output: 200 } : {}),
           ...(total !== undefined ? { cost: { total } } : {}),
@@ -502,31 +480,23 @@ describe("session actor usage accounting", () => {
 
   it("preserves the displayed session model when an internal announce uses fallback", async () => {
     const topicSessionKey = "agent:main:telegram:group:-1003871627242:topic:6823";
-    const session = await usageSession(
-      {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        modelProvider: "openai",
-        model: "gpt-5.5",
-        contextTokens: 200_000,
-        inputTokens: 1_234,
-        outputTokens: 56,
-        cacheRead: 7,
-        cacheWrite: 8,
-        totalTokens: 1_305,
-        totalTokensFresh: true,
-        estimatedCostUsd: 0.123,
-        cliSessionIds: { "claude-cli": "visible-cli-session" },
-        cliSessionBindings: {
-          "claude-cli": {
-            sessionId: "visible-cli-session",
-            authProfileId: "anthropic:visible",
-          },
-        },
-        claudeCliSessionId: "visible-cli-session",
+    const visibleState = {
+      ...retainedRuntime,
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      contextTokens: 200_000,
+      inputTokens: 1_234,
+      outputTokens: 56,
+      cacheRead: 7,
+      cacheWrite: 8,
+      totalTokens: 1_305,
+      totalTokensFresh: true,
+      estimatedCostUsd: 0.123,
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "existing-cli-session", authProfileId: "anthropic:visible" },
       },
-      topicSessionKey,
-    );
+    } satisfies Partial<SessionEntry>;
+    const session = await usageSession(visibleState, topicSessionKey);
 
     await session.update({
       preserveUserFacingSessionModelState: true,
@@ -544,21 +514,8 @@ describe("session actor usage accounting", () => {
     });
 
     const storedEntry = session.read();
-    expect(storedEntry.modelProvider).toBe("openai");
-    expect(storedEntry.model).toBe("gpt-5.5");
-    expect(storedEntry.contextTokens).toBe(200_000);
-    expect(storedEntry.inputTokens).toBe(1_234);
-    expect(storedEntry.outputTokens).toBe(56);
-    expect(storedEntry.cacheRead).toBe(7);
-    expect(storedEntry.cacheWrite).toBe(8);
-    expect(storedEntry.totalTokens).toBe(1_305);
-    expect(storedEntry.totalTokensFresh).toBe(true);
-    expect(storedEntry.estimatedCostUsd).toBe(0.123);
-    expect(storedEntry.cliSessionIds?.["claude-cli"]).toBe("visible-cli-session");
-    expect(storedEntry.cliSessionBindings?.["claude-cli"]).toEqual({
-      sessionId: "visible-cli-session",
-      authProfileId: "anthropic:visible",
-    });
-    expect(storedEntry.claudeCliSessionId).toBe("visible-cli-session");
+    for (const [field, value] of Object.entries(visibleState)) {
+      expect(Reflect.get(storedEntry, field)).toEqual(value);
+    }
   });
 });

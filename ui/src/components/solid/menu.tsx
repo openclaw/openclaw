@@ -2,7 +2,6 @@ import { dynamic, type JSX } from "@solidjs/web";
 import { For, Show, createMemo, onSettled, untrack, merge } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { createAnchoredOverlay } from "../../lib/reactive/overlay-anchor.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { findMenuSearch, registerMenuShortcuts } from "../menu-shortcuts.ts";
 import type { OverlayPlacement } from "../overlay-anchor.ts";
@@ -14,6 +13,7 @@ import { useMenuMachine, type MenuBinding, type MenuControls } from "./menu-mach
 import { MenuNavigationError } from "./menu-navigation-error.tsx";
 import { useOverlayControl } from "./overlay-control.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
+import kbdStyles from "../kbd.css?inline";
 import overlayStyles from "./overlay.css?inline";
 import "./overlay.css";
 
@@ -52,6 +52,8 @@ export type MenuItem = {
   details?: JSX.Element;
   labelClass?: string;
   disabled?: boolean;
+  /** A disabled leaf can receive focus to explain its state; activation remains blocked. */
+  focusableWhenDisabled?: boolean;
   checked?: boolean;
   type?: "checkbox" | "radio";
   class?: JSX.ClassValue;
@@ -119,6 +121,7 @@ export type MenuProps = {
     | "tabindex"
     | "aria-hidden"
     | "aria-disabled"
+    | "aria-description"
     | "aria-keyshortcuts"
     | "aria-busy"
     | "value"
@@ -191,7 +194,7 @@ export function Menu(props: BranchProps): JSX.Element {
       ),
     acquireOcclusion: acquireNativeOverlaySurface,
     onRootChange: (root) =>
-      root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles]) : undefined,
+      root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles, kbdStyles]) : undefined,
     onInitialFocus: (intent) => focusItem(intent),
     onEscape(event) {
       if (props.onEscape?.(event)) {
@@ -282,18 +285,22 @@ export function Menu(props: BranchProps): JSX.Element {
     ids: { trigger: initialIdentity.triggerId },
     pointerFocus: () => props.pointerFocus ?? "menu",
   });
-  const searchInput = () =>
+  const searchControl = () =>
     registeredElements().find(
-      (node): node is HTMLInputElement =>
-        node instanceof HTMLInputElement &&
-        node.hasAttribute("data-search") &&
+      (node): node is HTMLInputElement | HTMLButtonElement =>
+        ((node instanceof HTMLInputElement && node.hasAttribute("data-search")) ||
+          (node instanceof HTMLButtonElement && node.hasAttribute("data-search-toggle"))) &&
         node.closest('[role="menu"]') === overlay.surface,
     );
+  const searchInput = () => {
+    const control = searchControl();
+    return control instanceof HTMLInputElement ? control : undefined;
+  };
   onSettled(() =>
     registerMenuShortcuts(
       overlay.surface,
       () => binding.items().map((element) => ({ element, key: element.dataset.shortcut })),
-      searchInput,
+      searchControl,
     ),
   );
   const searchKeydown = nativeListener(
@@ -318,7 +325,7 @@ export function Menu(props: BranchProps): JSX.Element {
         return;
       }
       const search = findMenuSearch(overlay.surface);
-      if (search) {
+      if (search instanceof HTMLInputElement) {
         search.focus({ preventScroll: true });
         // Keep native text insertion, but do not activate a parent shortcut or typeahead.
         event.stopImmediatePropagation();
@@ -327,9 +334,12 @@ export function Menu(props: BranchProps): JSX.Element {
     true,
   );
   const ownItems = () =>
-    binding.items().filter((item) => !item.matches(':disabled, [aria-disabled="true"]'));
+    binding
+      .items()
+      .filter(
+        (item) => !item.matches(':disabled, [aria-disabled="true"]:not([data-disabled-focusable])'),
+      );
   const triggerItemRef = initialIdentity.binding?.itemRef();
-  const opened = projectOwner(overlay, (owner) => owner.open, Object.is).read;
   const control = useOverlayControl(overlay, initialLazy, props, () => body());
   const anchor = createAnchoredOverlay(
     overlay,
@@ -467,10 +477,11 @@ export function Menu(props: BranchProps): JSX.Element {
                 // The keyed leaf retains its renderer; its live bindings carry item changes.
                 const initialRenderCustom = untrack(() => item().render);
                 const itemRef = binding.itemRef();
+                const focusableDisabled = () => item().disabled && item().focusableWhenDisabled;
                 const attributes = merge((): MenuItemBindings => ({
                   ...binding.item(
                     item().id,
-                    item().disabled,
+                    item().disabled && !focusableDisabled(),
                     item().type,
                     item().checked,
                     item().label,
@@ -479,6 +490,7 @@ export function Menu(props: BranchProps): JSX.Element {
                   "aria-label": item().label,
                   "aria-checked": item().type ? (item().checked ? "true" : "false") : undefined,
                   "aria-disabled": item().disabled ? "true" : undefined,
+                  "data-disabled-focusable": focusableDisabled() ? "" : undefined,
                   "data-value": item().id,
                   ref: itemRef,
                 }));
@@ -489,6 +501,10 @@ export function Menu(props: BranchProps): JSX.Element {
                     {...item().attributes}
                     {...attributes}
                     onClick={(event: MouseEvent) => {
+                      if (focusableDisabled()) {
+                        event.preventDefault();
+                        return;
+                      }
                       item().attributes?.onClick?.(event);
                       if (!event.defaultPrevented) {
                         attributes.onClick?.(event);
@@ -505,17 +521,29 @@ export function Menu(props: BranchProps): JSX.Element {
                     class={["oc-menu-item", item().class]}
                     value={item().attributes?.value ?? item().id}
                     data-variant={item().variant}
-                    disabled={item().href === undefined ? item().disabled : undefined}
+                    disabled={
+                      item().href === undefined
+                        ? item().disabled && !focusableDisabled()
+                        : undefined
+                    }
                   >
                     <Show when={item().type}>
                       <span class="oc-menu-item__check" aria-hidden="true">
-                        {item().checked ? "✓" : ""}
+                        <Show when={item().checked}>
+                          <Icon name="check" />
+                        </Show>
                       </span>
                     </Show>
                     <Show when={item().icon}>
                       <span class="oc-menu-item__icon">{item().icon}</span>
                     </Show>
-                    <span class={["oc-menu-item__label", item().labelClass]}>
+                    <span
+                      class={[
+                        "oc-menu-item__label",
+                        { "oc-menu-item__label--text": item().content === undefined },
+                        item().labelClass,
+                      ]}
+                    >
                       {item().content ?? item().label}
                     </span>
 
@@ -549,7 +577,13 @@ export function Menu(props: BranchProps): JSX.Element {
                               <Show when={item().icon}>
                                 <span class="oc-menu-item__icon">{item().icon}</span>
                               </Show>
-                              <span class={["oc-menu-item__label", item().labelClass]}>
+                              <span
+                                class={[
+                                  "oc-menu-item__label",
+                                  "oc-menu-item__label--text",
+                                  item().labelClass,
+                                ]}
+                              >
                                 {item().label}
                               </span>
 
@@ -618,7 +652,7 @@ export function Menu(props: BranchProps): JSX.Element {
         aria-haspopup="menu"
         aria-disabled={props.disabled ? "true" : props.triggerAttributes?.["aria-disabled"]}
         aria-controls={`${initialIdentity.id}:content`}
-        aria-expanded={opened() ? "true" : "false"}
+        aria-expanded={binding.isOpen() ? "true" : "false"}
         data-highlighted={
           initialIdentity.binding &&
           (initialIdentity.binding.highlightedValue() === props.triggerAttributes?.["data-value"] ||

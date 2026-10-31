@@ -8,13 +8,14 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/wizard.ts";
 import { WizardSession } from "../../../../src/wizard/session.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createModelProviderLogin, type ModelProviderLogin } from "./login-controller.ts";
 import { ModelProviderLoginView } from "./login-view.tsx";
 import {
+  museCodeCapability,
   loginHarness,
   openPicker,
   selectProvider,
@@ -60,23 +61,7 @@ describe("Models provider login", () => {
   ])("connects Muse Code (setup: $setup, entry: $entry)", async ({ setup, entry }) => {
     vi.spyOn(window, "open").mockReturnValue(null);
     const { context, request, answer } = loginHarness({
-      capabilities: [
-        {
-          provider: "meta",
-          apiKeySupported: true,
-          quickApiKeySetup: true,
-          loginOptions: [
-            {
-              id: "meta/muse-code",
-              brandId: "meta",
-              label: "Muse Code",
-              kind: "device-code",
-              featured: true,
-              requiresSetup: true,
-            },
-          ],
-        },
-      ],
+      capabilities: [museCodeCapability()],
     });
     const originalRequest = request.getMockImplementation()!;
     const authStatusReady = deferred();
@@ -783,7 +768,10 @@ describe("Models provider login", () => {
     ).toBe(true);
     expect(profiles[0]?.textContent).toContain("External CLI account");
     expect(profiles[1]?.textContent).toContain("Saved browser account");
-    expect(profiles[1]?.textContent).toContain("Expiring");
+    expect(profiles[1]?.textContent).toContain("Credentials configured");
+    expect(profiles[1]?.textContent).toContain(
+      "Access-token expiry alone does not mean you need to sign in again.",
+    );
     expect(dialog.textContent).not.toContain("other-provider@example.invalid");
     expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
     const originalRequest = request.getMockImplementation()!;

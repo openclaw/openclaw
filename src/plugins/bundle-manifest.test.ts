@@ -1,7 +1,7 @@
 /** Tests bundle manifest parsing for Agent, Codex, Claude, Cursor, and OpenClaw formats. */
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
@@ -27,10 +27,7 @@ function expectLoadedManifest(
   bundleFormat: "agent" | "codex" | "claude" | "cursor",
 ) {
   const result = loadBundleManifest({ rootDir, bundleFormat });
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error("expected bundle manifest to load");
-  }
+  assert(result.ok);
   return result.manifest;
 }
 
@@ -243,27 +240,17 @@ describe("bundle manifest parsing", () => {
   });
 
   it.each([
-    {
-      name: "wrong schema falls through to native entry detection",
-      manifest: { $schema: "https://wrong.example/plugin.schema.json", name: "not-agent" },
-      files: { "index.ts": "export default {}" },
-      expected: null,
-    },
-    {
-      name: "missing schema falls through to manifestless Claude markers",
-      manifest: { name: "not-agent" },
-      files: { "skills/example/SKILL.md": "---\ndescription: Example\n---\n" },
-      expected: "claude",
-    },
-    {
-      name: "wrong schema without fallback markers is not a bundle",
-      manifest: { $schema: "https://wrong.example/plugin.schema.json", name: "not-agent" },
-      files: {},
-      expected: null,
-    },
-  ])("$name", ({ manifest, files, expected }) => {
+    ["native entry", "wrong", { "index.ts": "export default {}" }, null],
+    [
+      "Claude markers",
+      undefined,
+      { "skills/example/SKILL.md": "---\ndescription: Example\n---\n" },
+      "claude",
+    ],
+    ["no markers", "wrong", {}, null],
+  ] as const)("falls through invalid Agent schema to %s", (_name, $schema, files, expected) => {
     const rootDir = fixture({
-      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: manifest,
+      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: { name: "not-agent", $schema },
       ...files,
     });
 

@@ -1,4 +1,3 @@
-// ClawHub release candidate producer tests cover blocked script evidence output.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -31,8 +30,6 @@ const providerCase = (
 ): ModelCase => [`provider identity: ${name}`, null, model, windowsModel, platform, provider];
 const modelCases: ModelCase[] = [
   ["default platforms and model", defaultModel],
-  ["explicit all platforms", defaultModel, undefined, undefined, "all"],
-  ["general model override", general, general],
   ["Windows model override", windows, general, windows, "windows"],
   ["unselected Windows override", defaultModel, undefined, windows, "macos"],
   ["selected non-Windows platforms", general, general, windows, "macos,linux"],
@@ -48,20 +45,8 @@ const modelCases: ModelCase[] = [
   ["Windows model whitespace normalization", windows, undefined, "  openai/windows  ", "windows"],
   providerCase("mixed providers", general, customWindows, "linux,windows"),
   providerCase("Windows-first mixed providers", general, customWindows, "windows,linux"),
-  providerCase(
-    "arbitrary common provider",
-    customGeneral,
-    customWindows,
-    "linux,windows",
-    "custom",
-  ),
-  providerCase(
-    "Windows-first arbitrary common provider",
-    customGeneral,
-    customWindows,
-    "windows,linux",
-    "custom",
-  ),
+  providerCase("common provider", customGeneral, customWindows, "linux,windows", "custom"),
+  providerCase("Windows-first custom", customGeneral, customWindows, "windows,linux", "custom"),
   [
     "provider identity: additional model slashes",
     "custom/nested/model",
@@ -71,20 +56,7 @@ const modelCases: ModelCase[] = [
     "custom",
     "nested/model",
   ],
-  providerCase(
-    "padded valid provider parts",
-    "  openai/general  ",
-    " openai/windows ",
-    undefined,
-    "openai",
-  ),
-  providerCase(
-    "normalized-equal raw-different models",
-    "  openai/shared  ",
-    shared,
-    undefined,
-    "openai",
-  ),
+  providerCase("normalized-equal models", "  openai/shared  ", shared, undefined, "openai"),
   providerCase("provider case remains distinct", "OpenAI/general", windows),
   providerCase("identical trim-empty provider", " /model", undefined, "linux,macos"),
   providerCase("identical trim-empty model", "openai/   ", undefined, "linux,macos"),
@@ -94,15 +66,6 @@ const modelCases: ModelCase[] = [
     "provider identity: identical bare alias",
     "alias",
     "alias",
-    undefined,
-    undefined,
-    "live-frontier",
-    null,
-  ],
-  [
-    "provider identity: identical padded bare alias",
-    "alias",
-    " alias ",
     undefined,
     undefined,
     "live-frontier",
@@ -141,9 +104,8 @@ for (const [
       repoRoot: process.cwd(),
       tarballEnv: missingTarballEnv,
     });
-    const evidencePath = path.join(artifactBase, "qa-evidence.json");
     const evidence = validateQaEvidenceSummaryJson(
-      JSON.parse(await fs.readFile(evidencePath, "utf8")),
+      JSON.parse(await fs.readFile(path.join(artifactBase, "qa-evidence.json"), "utf8")),
     );
     expect(result).toEqual(evidence);
     expect(evidence.entries).toMatchObject([

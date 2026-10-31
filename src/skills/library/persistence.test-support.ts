@@ -14,6 +14,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { persistenceRuntimeEntrypoint } from "./persistence-runtime.test-support.js";
 
@@ -233,7 +234,8 @@ export async function assertPersistenceBundle(
 
 export async function assertPersistenceFiles(directory: string, version: "old" | "new" | "orphan") {
   const files = persistenceFiles(version);
-  const actualFiles = (await fs.readdir(directory, { recursive: true, withFileTypes: true }))
+  const actualFiles = (await listDirectoryTreeStrict(directory))
+    .map((walkEntry) => walkEntry.dirent)
     .filter((entry) => !entry.isDirectory())
     .map((entry) =>
       path.relative(directory, path.join(entry.parentPath, entry.name)).split(path.sep).join("/"),

@@ -125,7 +125,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   const opened = () =>
     isPresented() &&
     (props.mobileHost
-      ? props.mobileHost.open &&
+      ? (props.mobileHost.open || props.mobileHost.exiting) &&
         !props.mobileHost.suspended &&
         props.mobileHost.destination.area === "details" &&
         (!props.mobileHost.destination.page || Boolean(props.mobileHost.destination.page.details))
@@ -133,12 +133,14 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   const outputsDemand = createMemo(() =>
     desktop() && opened() && props.chat?.outputs ? props.chat.retainOutputs : undefined,
   );
-  // Load on first presentation, then retain disclosure state while closed.
-  // Automatic content follows transcript paint; explicit opens bypass that wait.
-  // After first mount, retain disclosure state while closed or reconnecting.
+  // Mount cached chrome with the transcript; retain disclosure state while closed.
+  const cachedReady = () =>
+    props.chat?.cachedDetails?.subagents !== undefined &&
+    props.chat.cachedDetails.automations !== undefined;
   const [sessionOpened] = createSignal<boolean>(
     (previous) =>
-      previous || (opened() && (!props.contentPending || intent() === "open" || !desktop())),
+      previous ||
+      (opened() && (!props.contentPending || cachedReady() || intent() === "open" || !desktop())),
   );
   const docked = () => opened() && canDock();
   const surface = document.createElement("div");
@@ -490,7 +492,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     mountSurface(layout);
     position(layout);
   };
-  createResizeObserver(
+  // Parent snapshots may change while these native observation targets stay the same.
+  const resizeTargets = createMemo(
     () =>
       [
         props.elements?.pane,
@@ -499,8 +502,13 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         props.elements?.footer,
         props.elements?.getComposerInput?.(),
       ].filter((element): element is HTMLElement => Boolean(element)),
-    reposition,
+    {
+      lazy: true,
+      equals: (before, after) =>
+        before.length === after.length && before.every((el, i) => el === after[i]),
+    },
   );
+  createResizeObserver(resizeTargets, reposition);
   onSettled(() => {
     props.setRef({ open: openFrom, close: () => close(true) });
     const pane = layoutElements()?.pane;
@@ -510,8 +518,9 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     if (pane && desktop()) {
       layout.observe(pane, { attributes: true, attributeFilter: ["class", "style"] });
     }
-    // Initial ResizeObserver delivery discovers docking width after layout.
-    mountSurface(readLayout());
+    // Resolve automatic docking before paint, including adaptive panes whose
+    // first ResizeObserver delivery may be delayed in a background tab.
+    reposition();
     const stop = [
       listen(window, "resize", reposition),
       listen(document, "pointerdown", outside),
@@ -546,7 +555,9 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       <Show when={sessionOpened()}>
         <ChatLazyBoundary
           fallback={
-            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+            !cachedReady() && (
+              <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+            )
           }
         >
           {content.children}

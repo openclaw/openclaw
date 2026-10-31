@@ -428,6 +428,12 @@ it(
             configPath,
             token,
             ...controlUi,
+            beforeConnect: async (server) => {
+              await server.startupSettled;
+              // Client admission waits for post-ready work on this manual clock.
+              void clock.advanceBy(500);
+              await observe(wakeRegistered);
+            },
             onEvent: (event) => {
               const cron = event.event === "cron" ? (event.payload as CronEvent) : undefined;
               if (cron?.action === "finished") {
@@ -437,9 +443,8 @@ it(
             },
           });
           gateway = started;
-          await started.server.startupSettled;
-          void clock.advanceBy(500);
-          await observe(wakeRegistered);
+          // Cold startup must not leave new one-shot timestamps in the real past.
+          clock.setTime(Date.now());
           return started;
         });
         const live = cronScheduler.result;

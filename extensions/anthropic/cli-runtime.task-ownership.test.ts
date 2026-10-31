@@ -93,9 +93,98 @@ for await (const line of createInterface({ input: process.stdin })) {
 });
 
 it.each(["local_agent", "local_workflow"])(
-  "settles the parent without a nested %s parent-lane receipt",
+  "holds a nested %s answer until its parent-lane result",
   async (childType) => {
+    // Claude Code non-interactive routing: a subagent's task notifies that subagent
+    // while it runs, and the parent stream only once it has ended.
     const fixture = String.raw`
+import { createInterface } from "node:readline";
+const send = (record) => process.stdout.write(JSON.stringify(record) + "\n");
+const agent = (task_id, parent_task_id) => ({ task_id, run_id: task_id + "-run", task_type: parent_task_id ? process.env.CHILD_TASK_TYPE : "local_agent",
+  ...(parent_task_id ? { parent_task_id } : {}) });
+const tasks = (...list) => send({ type: "system", subtype: "background_tasks_changed", tasks: list });
+const started = (task) => send({ type: "system", subtype: "task_started", ...task, is_backgrounded: true,
+  spawn_depth: task.parent_task_id ? 2 : 1, tool_use_id: "tool-" + task.task_id });
+const notified = (task) => send({ type: "system", subtype: "task_notification", task_id: task.task_id,
+  run_id: task.run_id, status: "completed", output_file: "", summary: task.task_id });
+const receipt = (task) => send({ type: "user", isReplay: true, parent_tool_use_id: null, uuid: "receipt-" + task.task_id,
+  origin: { kind: "task-notification" }, message: { role: "user",
+    content: "<task-notification>\n<task-id>" + task.task_id + "</task-id>\n<status>completed</status>\n</task-notification>" } });
+const result = (answer, task) => send({ type: "result", subtype: "success", is_error: false, session_id: "fixture-session",
+  result: JSON.stringify({ answer, pid: process.pid }), num_turns: 1, stop_reason: "end_turn",
+  ...(task ? { origin: { kind: "task-notification", producer: "session-task", runId: task.run_id } } : {}) });
+let input = 0;
+for await (const line of createInterface({ input: process.stdin })) {
+  const message = JSON.parse(line);
+  if (message.type === "control_request") {
+    send({ type: "control_response", response: {
+      subtype: "success", request_id: message.request_id, response: {},
+    } });
+    send({ type: "system", subtype: "init", capabilities: ["msg_lifecycle_v1"] });
+    continue;
+  }
+  input++;
+  send({ type: "command_lifecycle", state: "started", command_uuid: message.uuid });
+  const outer = agent("outer-" + input);
+  const inner = agent("inner-" + input, outer.task_id);
+  tasks(outer);
+  started(outer);
+  result("launched");
+  tasks(outer, inner);
+  started(inner);
+  if (input === 1) {
+    // The running outer agent consumes this notification; no parent receipt or result follows.
+    notified(inner);
+    tasks(outer);
+    tasks();
+    notified(outer);
+    receipt(outer);
+    result("final", outer);
+  } else {
+    tasks(inner);
+    notified(outer);
+    receipt(outer);
+    result("outer reported", outer);
+    tasks();
+    notified(inner);
+    receipt(inner);
+    result("final", inner);
+  }
+}
+`;
+    const liveSession = createLiveSession();
+    const context = await harness.context(fixture, { liveSession }, { CHILD_TASK_TYPE: childType });
+    const turns: Record<string, unknown>[][] = [];
+    for (const prompt of ["subagent answers", "subagent ended first"]) {
+      const answers: Record<string, unknown>[] = [];
+      for await (const record of executeClaudeCli({
+        ...context,
+        prompt,
+        useResume: turns.length > 0,
+      })) {
+        if (record.type !== "result") {
+          continue;
+        }
+        const detail = JSON.parse(String(record.result)) as Record<string, unknown>;
+        // A wrongly held final answer leaves the iterator open; check each result as it arrives.
+        expect(record.openclaw_interim_result).toBe(detail.answer === "final" ? undefined : true);
+        answers.push(detail);
+      }
+      expect(liveSession.current()?.isIdle()).toBe(true);
+      turns.push(answers);
+    }
+    expect(turns.map((answers) => answers.map((detail) => detail.answer))).toEqual([
+      ["launched", "final"],
+      ["launched", "outer reported", "final"],
+    ]);
+    expect(turns[1]?.[0]?.pid).toBe(turns[0]?.[0]?.pid);
+  },
+);
+
+it("never lends a later warm turn to a descendant that outlived its foreground parent", async () => {
+  // Claude Code 2.1.310 reparents a nested background Agent when its foreground parent
+  // finishes; the main answer can arrive while that descendant still runs.
+  const fixture = String.raw`
 import { createInterface } from "node:readline";
 const send = (record) => process.stdout.write(JSON.stringify(record) + "\n");
 const system = (subtype, fields) => send({ type: "system", subtype, ...fields });
@@ -116,53 +205,24 @@ for await (const line of createInterface({ input: process.stdin })) {
       result("warm input");
       continue;
     }
-    const parent = { task_id: "parent", task_type: "local_agent" };
-    const child = { task_id: "child", task_type: process.env.CHILD_TASK_TYPE, parent_task_id: "parent" };
-    system("background_tasks_changed", { tasks: [parent] });
-    system("task_started", { ...parent, is_backgrounded: true });
-    result("waiting for parent");
-    // Native's process-wide level precedes task_started. Nested Agents have a
-    // parent and depth, but unlike nested Bash they have no owned_by_subagent flag.
-    system("background_tasks_changed", { tasks: [parent, child] });
-    system("task_started", { ...child,
-      ...(child.task_type === "local_agent" ? { spawn_depth: 2 } : {}), is_backgrounded: true });
-    system("task_notification", { task_id: "child", status: "completed" });
-    system("background_tasks_changed", { tasks: [parent] });
+    const child = { task_id: "child", task_type: "local_agent", parent_task_id: "parent" };
+    system("task_started", { task_id: "parent", task_type: "local_agent", is_backgrounded: false });
+    system("background_tasks_changed", { tasks: [child] });
+    system("task_started", { ...child, is_backgrounded: true });
     system("task_notification", { task_id: "parent", status: "completed" });
-    // Only the parent notification is consumed in the main query. The child's
-    // receipt and answer belong to its launching agent, not this stream.
-    send({ type: "user", isReplay: true, parent_tool_use_id: null,
-      origin: { kind: "task-notification" }, message: { role: "user",
-        content: "<task-notification><task-id>parent</task-id></task-notification>" } });
-    system("background_tasks_changed", { tasks: [] });
+    system("background_tasks_changed", { tasks: [{ task_id: "child", task_type: "local_agent" }] });
     send({ type: "command_lifecycle", state: "completed", command_uuid: message.uuid });
     result("parent final");
   }
 }
 `;
-    const liveSession = createLiveSession();
-    const context = await harness.context(fixture, { liveSession }, { CHILD_TASK_TYPE: childType });
-    const results: Record<string, unknown>[] = [];
-    for await (const record of executeClaudeCli(context)) {
-      if (record.type !== "result") {
-        continue;
-      }
-      results.push(record);
-      if (results.length === 1) {
-        expect(record).toHaveProperty("openclaw_interim_result", true);
-      } else {
-        // Assert on delivery, not a timeout: the broken owner emits this final
-        // answer as interim and then leaves its iterator open indefinitely.
-        expect(record).not.toHaveProperty("openclaw_interim_result");
-      }
-    }
-    expect(results).toHaveLength(2);
-    const final = resultDetail(results);
-    expect(final.answer).toBe("parent final");
-    const handle = liveSession.current();
-    expect(handle?.isIdle()).toBe(true);
-    const next = resultDetail(await collect({ ...context, useResume: true }));
-    expect(next).toMatchObject({ answer: "warm input", pid: final.pid });
-    expect(liveSession.current()).toBe(handle);
-  },
-);
+  const liveSession = createLiveSession();
+  const context = await harness.context(fixture, { liveSession });
+  const first = resultDetail(await collect(context));
+  expect(first.answer).toBe("parent final");
+  expect(liveSession.current()).toBeUndefined();
+  // The next turn starts a fresh process; that process's descendant still runs, too.
+  const next = resultDetail(await collect({ ...context, useResume: true }));
+  expect(next).toMatchObject({ answer: "parent final" });
+  expect(next.pid).not.toBe(first.pid);
+});

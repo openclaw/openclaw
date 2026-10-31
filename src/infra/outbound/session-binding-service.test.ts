@@ -131,8 +131,7 @@ function createRecord(input: SessionBindingBindInput): SessionBindingRecord {
     targetSessionKey: input.targetSessionKey,
     targetKind: input.targetKind,
     conversation: {
-      channel: input.conversation.channel,
-      accountId: input.conversation.accountId,
+      ...input.conversation,
       conversationId,
       parentConversationId: input.conversation.parentConversationId?.trim() || undefined,
     },
@@ -350,9 +349,7 @@ describe("session binding service", () => {
 
   it("honors owner scopes for generic touch, detach, and session cleanup", async () => {
     const first = await bind(conversation("workspace"));
-    const second = await bind(conversation("teamchat"), {
-      targetSessionKey: first.targetSessionKey,
-    });
+    const second = await bind(conversation("teamchat"));
     service.touch(first.bindingId, 1234, second.conversation);
     expect(service.resolveByConversation(first.conversation)).toEqual(first);
     await expect(
@@ -398,7 +395,7 @@ describe("session binding service", () => {
 
   it("falls back to generic current-conversation bindings for registered channels", async () => {
     const ref = conversation("workspace", "user:U123");
-    const input = bindInput(ref, { targetSessionKey: "agent:codex:acp:workspace-dm" });
+    const input = bindInput(ref);
     expect(service.getCapabilities({ channel: "Workspace", accountId: " DEFAULT " })).toEqual({
       adapterAvailable: true,
       bindSupported: true,
@@ -406,13 +403,10 @@ describe("session binding service", () => {
       placements: ["current"],
     });
 
-    const rejected = await expectSessionBindingError(
+    await expectSessionBindingError(
       service.bind({ ...input, placement: "child" }),
       "BINDING_CAPABILITY_UNSUPPORTED",
     );
-    expect(rejected).toMatchObject({
-      message: 'Session binding placement "child" is not supported for workspace:default',
-    });
 
     const bound = await service.bind({
       ...input,
@@ -421,38 +415,20 @@ describe("session binding service", () => {
         accountId: " DEFAULT ",
         conversationId: " user:U123 ",
       },
-      metadata: { label: "workspace-dm" },
-      ttlMs: 60_000,
     });
 
     expect(bound).toMatchObject({
       bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
-      targetSessionKey: "agent:codex:acp:workspace-dm",
+      targetSessionKey: input.targetSessionKey,
       targetKind: "session",
       status: "active",
       conversation: ref,
-      metadata: { label: "workspace-dm" },
     });
-
-    const resolved = service.resolveByConversation(ref);
-    expect(resolved).toMatchObject({
-      bindingId: bound.bindingId,
-      targetSessionKey: "agent:codex:acp:workspace-dm",
-    });
-    expect(service.listBySession("agent:codex:acp:workspace-dm")).toEqual([resolved]);
-
-    service.touch(bound.bindingId, 1234);
-    expect(service.resolveByConversation(bound.conversation)?.metadata).toMatchObject({
-      label: "workspace-dm",
-      lastActivityAt: 1234,
-    });
-
-    const unbound = await service.unbind({
-      targetSessionKey: "agent:codex:acp:workspace-dm",
-      reason: "test cleanup",
-    });
-    expect(unbound).toHaveLength(1);
-    expect(unbound[0]?.bindingId).toBe(bound.bindingId);
+    expect(service.resolveByConversation(ref)).toEqual(bound);
+    expect(service.listBySession(input.targetSessionKey)).toEqual([bound]);
+    await expect(
+      service.unbind({ targetSessionKey: input.targetSessionKey, reason: "test cleanup" }),
+    ).resolves.toEqual([bound]);
     expect(service.resolveByConversation(ref)).toBeNull();
   });
 
@@ -470,7 +446,6 @@ describe("session binding service", () => {
     expect(inspectSessionBindingByConversation(current)).toMatchObject({ binding: null });
     expect(service.listBySession(workerKey)).toEqual([]);
 
-    // A user's explicit bind of the same conversation still owns it.
     await bind(current, {
       targetSessionKey: "agent:codex:acp:user-owned",
       metadata: { boundBy: "U123" },
@@ -494,59 +469,38 @@ describe("session binding service", () => {
   it("shares registered adapters across duplicate module instances", async () => {
     const first = await importSessionBindingServiceModule(`first-${Date.now()}`);
     const second = await importSessionBindingServiceModule(`second-${Date.now()}`);
-    const firstBind = vi.fn(async (input: SessionBindingBindInput) => createRecord(input));
-    const secondBind = vi.fn(async (input: SessionBindingBindInput) => createRecord(input));
-    const binding = (conversationId: string) =>
-      createRecord(
-        bindInput(conversation("demo-binding", conversationId), { targetSessionKey: "agent:main" }),
-      );
-    const firstBinding = binding("thread-1"),
-      secondBinding = binding("thread-2");
-    const firstAdapter = adapter({
-      channel: "demo-binding",
-      bind: firstBind,
-      listBySession: (key) => (key === "agent:main" ? [firstBinding] : []),
-    });
-    const secondAdapter = adapter({
-      channel: "Demo-Binding",
-      accountId: "DEFAULT",
-      bind: secondBind,
-      listBySession: (key) => (key === "agent:main" ? [secondBinding] : []),
-    });
+    const makeOwner = (channel: string, accountId: string, conversationId: string) => {
+      const record = createRecord(bindInput(conversation("demo-binding", conversationId)));
+      return adapter({
+        channel,
+        accountId,
+        bind: async (input) => ({ ...createRecord(input), bindingId: record.bindingId }),
+        listBySession: (key) => (key === "agent:main:shared" ? [record] : []),
+      });
+    };
+    const firstAdapter = makeOwner("demo-binding", "default", "thread-1");
+    const secondAdapter = makeOwner("Demo-Binding", "DEFAULT", "thread-2");
 
     first.testing.resetSessionBindingAdaptersForTests();
     first.registerSessionBindingAdapter(firstAdapter);
     second.registerSessionBindingAdapter(secondAdapter);
 
-    expect(second.testing.getRegisteredAdapterKeys()).toEqual(["demo-binding:default"]);
-    expect(second.getSessionBindingService().listBySession("agent:main")).toEqual([secondBinding]);
-
     const sharedService = second.getSessionBindingService();
-    const bindChild = (index: number) =>
-      sharedService.bind(
-        bindInput(conversation("demo-binding", `thread-${index}`), {
-          targetSessionKey: `agent:main:subagent:child-${index}`,
-          targetKind: "subagent",
-        }),
-      );
-    const secondBound = await bindChild(1);
-    expect(secondBound.conversation).toMatchObject(conversation("demo-binding", "thread-1"));
-    expect(firstBind).not.toHaveBeenCalled();
-    expect(secondBind).toHaveBeenCalledTimes(1);
-
+    const bindChild = () => sharedService.bind(bindInput(conversation("demo-binding")));
+    const secondBound = await bindChild();
+    expect(secondBound.bindingId).toBe("default:thread-2");
+    expect(sharedService.listBySession("agent:main:shared")[0]?.bindingId).toBe(
+      secondBound.bindingId,
+    );
     second.unregisterSessionBindingAdapter({ ...secondAdapter, adapter: secondAdapter });
-
-    expect(second.getSessionBindingService().listBySession("agent:main")).toEqual([firstBinding]);
-    const firstBound = await bindChild(2);
-    expect(firstBound.conversation).toMatchObject(conversation("demo-binding", "thread-2"));
-    expect(firstBind).toHaveBeenCalledTimes(1);
-    expect(secondBind).toHaveBeenCalledTimes(1);
-
+    const firstBound = await bindChild();
+    expect(firstBound.bindingId).toBe("default:thread-1");
+    expect(sharedService.listBySession("agent:main:shared")[0]?.bindingId).toBe(
+      firstBound.bindingId,
+    );
     first.unregisterSessionBindingAdapter({ ...firstAdapter, adapter: firstAdapter });
-
-    expect(second.getSessionBindingService().listBySession("agent:main")).toStrictEqual([]);
-    await expectSessionBindingError(bindChild(3), "BINDING_ADAPTER_UNAVAILABLE");
-
+    expect(sharedService.listBySession("agent:main:shared")).toEqual([]);
+    await expectSessionBindingError(bindChild(), "BINDING_ADAPTER_UNAVAILABLE");
     first.testing.resetSessionBindingAdaptersForTests();
   });
 });

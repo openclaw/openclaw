@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { assertSignalDaemonEndpointAvailable, spawnSignalDaemon } from "./daemon.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -62,6 +63,22 @@ function daemonEnvironment(values: Record<string, string>) {
   return spawnMock.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv;
 }
 
+async function freshDaemonEnvironment(values: Record<string, string> = {}) {
+  for (const name of (
+    "HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY http_proxy https_proxy no_proxy all_proxy " +
+    "SSL_CERT_FILE SSL_CERT_DIR REQUESTS_CA_BUNDLE CURL_CA_BUNDLE NODE_EXTRA_CA_CERTS"
+  ).split(" ")) {
+    vi.stubEnv(name, undefined);
+  }
+  for (const [name, value] of Object.entries(values)) {
+    vi.stubEnv(name, value);
+  }
+  // The notice is once per process; each case needs a fresh module.
+  vi.resetModules();
+  const { spawnSignalDaemon: spawnFresh } = await import("./daemon.js");
+  return () => spawnFresh({ cliPath: "signal-cli", httpHost: "127.0.0.1", httpPort: 8080 });
+}
+
 beforeEach(() => {
   child = createMockChild();
   spawnMock.mockReset().mockReturnValue(child);
@@ -92,20 +109,13 @@ describe("spawnSignalDaemon", () => {
   });
   it("rejects an occupied managed endpoint with actionable port guidance", async () => {
     const listener = createServer();
-    await new Promise<void>((resolve, reject) => {
-      listener.once("error", reject);
-      listener.listen(0, "127.0.0.1", resolve);
-    });
-    const address = listener.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Expected a TCP listener address");
-    }
+    const port = await listenOnLoopback(listener);
 
     try {
       await expect(
-        assertSignalDaemonEndpointAvailable({ httpHost: "127.0.0.1", httpPort: address.port }),
+        assertSignalDaemonEndpointAvailable({ httpHost: "127.0.0.1", httpPort: port }),
       ).rejects.toThrow(
-        `Signal managed native endpoint 127.0.0.1:${address.port} is unavailable: Port ${address.port} is already in use. Stop the conflicting service, configure this Signal account with a different transport.httpPort, or use external-native for an intentionally operator-managed daemon.`,
+        `Signal managed native endpoint 127.0.0.1:${port} is unavailable: Port ${port} is already in use. Stop the conflicting service, configure this Signal account with a different transport.httpPort, or use external-native for an intentionally operator-managed daemon.`,
       );
       expect(listener.listening).toBe(true);
     } finally {
@@ -129,18 +139,10 @@ describe("spawnSignalDaemon", () => {
 
   it("expands home-relative configPath before passing it to signal-cli", () => {
     startDaemon({ configPath: "~/.openclaw/signal-cli" });
-    expect(spawnMock).toHaveBeenCalledWith(
-      "signal-cli",
-      [
-        "--config",
-        path.join(os.homedir(), ".openclaw/signal-cli"),
-        "daemon",
-        "--http",
-        "127.0.0.1:8080",
-        "--no-receive-stdout",
-      ],
-      { env: expect.any(Object), stdio: ["ignore", "pipe", "pipe"] },
-    );
+    expect(spawnMock.mock.calls[0]?.[1].slice(0, 2)).toEqual([
+      "--config",
+      path.join(os.homedir(), ".openclaw/signal-cli"),
+    ]);
   });
 
   it("starts signal-cli with process essentials but without Gateway secrets", () => {
@@ -149,6 +151,8 @@ describe("spawnSignalDaemon", () => {
       JAVA_OPTS: "-Xmx256m",
       LC_ALL: "C.UTF-8",
       XDG_DATA_HOME: "/srv/signal-test/share",
+      SIGNAL_CLI_CONFIG: "/srv/signal-test/config.json",
+      SIGNAL_CLI_USER_AGENT: "Signal-Android/9.0.0",
     };
     const secrets = {
       OPENCLAW_GATEWAY_TOKEN: "synthetic-gateway-token",
@@ -162,14 +166,6 @@ describe("spawnSignalDaemon", () => {
     for (const name of Object.keys(secrets)) {
       expect(env).not.toHaveProperty(name);
     }
-  });
-
-  it("keeps the environment signal-cli reads for its own configuration", () => {
-    const config = {
-      SIGNAL_CLI_CONFIG: "/srv/signal-test/config.json",
-      SIGNAL_CLI_USER_AGENT: "Signal-Android/9.0.0",
-    };
-    expect(daemonEnvironment(config)).toMatchObject(config);
   });
 
   it("matches Windows environment names case-insensitively", () => {
@@ -192,142 +188,90 @@ describe("spawnSignalDaemon", () => {
     }
   });
 
-  describe("dropped proxy and CA environment notice", () => {
-    const hintNames = [
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "NO_PROXY",
-      "ALL_PROXY",
-      "http_proxy",
-      "https_proxy",
-      "no_proxy",
-      "all_proxy",
-      "SSL_CERT_FILE",
-      "SSL_CERT_DIR",
-      "REQUESTS_CA_BUNDLE",
-      "CURL_CA_BUNDLE",
-      "NODE_EXTRA_CA_CERTS",
-    ];
-
-    // The notice is once per process, so each case loads a fresh daemon module.
-    async function loadFreshDaemon() {
-      vi.resetModules();
-      return (await import("./daemon.js")).spawnSignalDaemon;
-    }
-
-    beforeEach(() => {
-      for (const name of hintNames) {
-        vi.stubEnv(name, undefined);
-      }
+  it("warns once, by name only, when proxy or CA variables are not passed through", async () => {
+    const startFresh = await freshDaemonEnvironment({
+      HTTPS_PROXY: "http://synthetic-user:synthetic-pass@proxy.invalid:3128",
+      no_proxy: "synthetic-internal.invalid",
+      SSL_CERT_FILE: "/srv/synthetic-ca/bundle.pem",
+      OPENCLAW_GATEWAY_TOKEN: "synthetic-gateway-token",
     });
+    startFresh();
+    startFresh();
 
-    it("warns once, by name only, when proxy or CA variables are not passed through", async () => {
-      vi.stubEnv(
-        "HTTPS_PROXY",
-        ["http://synthetic-user", "synthetic-pass@proxy.invalid:3128"].join(":"),
-      );
-      vi.stubEnv("no_proxy", "synthetic-internal.invalid");
-      vi.stubEnv("SSL_CERT_FILE", "/srv/synthetic-ca/bundle.pem");
-      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "synthetic-gateway-token");
-      const spawnFresh = await loadFreshDaemon();
-      const startFresh = () =>
-        spawnFresh({ cliPath: "signal-cli", httpHost: "127.0.0.1", httpPort: 8080 });
+    expect(subsystemWarnMock).toHaveBeenCalledTimes(1);
+    const [subsystem, message] = subsystemWarnMock.mock.calls[0] as [string, string];
+    expect(subsystem).toBe("signal/daemon");
+    expect(message).toContain("HTTPS_PROXY, SSL_CERT_FILE, no_proxy");
+    expect(message).not.toContain("synthetic-");
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN");
+    const env = spawnMock.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv;
+    expect(env).not.toHaveProperty("HTTPS_PROXY");
+    expect(env).not.toHaveProperty("SSL_CERT_FILE");
+  });
 
-      startFresh();
-      startFresh();
-
-      expect(subsystemWarnMock).toHaveBeenCalledTimes(1);
-      const [subsystem, message] = subsystemWarnMock.mock.calls[0] as [string, string];
-      expect(subsystem).toBe("signal/daemon");
-      expect(message).toContain("HTTPS_PROXY, SSL_CERT_FILE, no_proxy");
-      expect(message).toContain("JAVA_TOOL_OPTIONS");
-      expect(message).toContain("-Dhttps.proxyHost=<host> -Dhttps.proxyPort=<port>");
-      expect(message).toContain("transport.cliPath");
-      expect(message).toContain("external-native");
-      expect(message).toContain(
-        "https://docs.openclaw.ai/channels/signal#managed-daemon-environment",
-      );
-      expect(message).not.toContain("synthetic-");
-      expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN");
-      const env = spawnMock.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv;
-      expect(env).not.toHaveProperty("HTTPS_PROXY");
-      expect(env).not.toHaveProperty("SSL_CERT_FILE");
+  it("stays quiet when no proxy or CA variables are set", async () => {
+    const startFresh = await freshDaemonEnvironment({
+      HTTPS_PROXY: " ",
+      OPENCLAW_GATEWAY_TOKEN: "synthetic-gateway-token",
     });
-
-    it("stays quiet when no proxy or CA variables are set", async () => {
-      vi.stubEnv("HTTPS_PROXY", " ");
-      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "synthetic-gateway-token");
-      const spawnFresh = await loadFreshDaemon();
-
-      spawnFresh({ cliPath: "signal-cli", httpHost: "127.0.0.1", httpPort: 8080 });
-
-      expect(subsystemWarnMock).not.toHaveBeenCalled();
-    });
+    startFresh();
+    expect(subsystemWarnMock).not.toHaveBeenCalled();
   });
 
   it("classifies complete UTF-8 output lines through the spawned process", async () => {
+    const errors = [
+      "ERROR DaemonCommand - startup failed",
+      "SEVERE Manager - database exception",
+    ] as const;
+    const logs = [
+      "WARN Manager - retrying",
+      "receive exception: org.signal.libsignal.protocol.InvalidMessageException: invalid PreKey message: decryption failed",
+      "partial warning",
+      "INFO Manager - café ready",
+    ] as const;
     const log = vi.fn();
     const error = vi.fn();
     startDaemon({ runtime: { log, error, exit: vi.fn() } });
     const ended = once(child.stderr, "end");
-    child.stderr.write(Buffer.from("ER"));
+    child.stderr.write("ER");
     child.stderr.write(
-      Buffer.from(
-        "ROR DaemonCommand - startup failed\r\nSEVERE Manager - database exception\nWARN Manager - retrying\nreceive exception: org.signal.libsignal.protocol.InvalidMessageException: invalid PreKey message: decryption failed\npartial",
-      ),
+      `${errors[0].slice(2)}\r\n${errors[1]}\n${logs.slice(0, 2).join("\n")}\npartial`,
     );
     child.stderr.write(" warning\n");
-    const utf8Line = Buffer.from("INFO Manager - café ready");
+    const utf8Line = Buffer.from(logs[3]);
     const splitCodePointAt = utf8Line.indexOf(0xc3) + 1;
     child.stderr.write(utf8Line.subarray(0, splitCodePointAt));
     child.stderr.end(utf8Line.subarray(splitCodePointAt));
     await ended;
-    expect(error.mock.calls).toEqual([
-      ["signal-cli: ERROR DaemonCommand - startup failed"],
-      ["signal-cli: SEVERE Manager - database exception"],
-    ]);
-    expect(log.mock.calls).toEqual([
-      ["signal-cli: WARN Manager - retrying"],
-      [
-        "signal-cli: receive exception: org.signal.libsignal.protocol.InvalidMessageException: invalid PreKey message: decryption failed",
-      ],
-      ["signal-cli: partial warning"],
-      ["signal-cli: INFO Manager - café ready"],
-    ]);
+    expect(error.mock.calls).toEqual(errors.map((line) => [`signal-cli: ${line}`]));
+    expect(log.mock.calls).toEqual(logs.map((line) => [`signal-cli: ${line}`]));
   });
 
-  it("falls back to SIGKILL when the daemon does not exit after SIGTERM", async () => {
-    vi.useFakeTimers();
-    const handle = startDaemon();
-    const stopPromise = handle.stop();
-    expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
-    await vi.runOnlyPendingTimersAsync();
-    expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
-    child.emit("exit", null, "SIGKILL");
-    await stopPromise;
-  });
-
-  it("reuses the in-flight stop promise across repeated calls", async () => {
-    const handle = startDaemon();
-    const firstStop = handle.stop();
-    const secondStop = handle.stop();
-    expect(firstStop).toBe(secondStop);
-    expect(child.kill).toHaveBeenCalledTimes(1);
-    child.emit("exit", 0, null);
-    await Promise.all([firstStop, secondStop]);
-  });
-
-  it("does not treat a post-spawn signaling error as process exit", async () => {
-    const handle = startDaemon();
-    let resolved = false;
-    const stopPromise = handle.stop().then(() => {
-      resolved = true;
-    });
-    child.emit("error", new Error("kill EPERM"));
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-    child.emit("exit", 0, null);
-    await stopPromise;
-    expect(resolved).toBe(true);
-  });
+  it.each(["forced", "repeated", "signaling-error"])(
+    "waits for actual exit: %s stop",
+    async (mode) => {
+      vi.useFakeTimers();
+      const handle = startDaemon();
+      let resolved = false;
+      const stopPromise = handle.stop();
+      const settled = stopPromise.then(() => {
+        resolved = true;
+      });
+      if (mode === "forced") {
+        expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+        await vi.runOnlyPendingTimersAsync();
+        expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+      } else if (mode === "repeated") {
+        expect(handle.stop()).toBe(stopPromise);
+        expect(child.kill).toHaveBeenCalledTimes(1);
+      } else {
+        child.emit("error", new Error("kill EPERM"));
+        await Promise.resolve();
+        expect(resolved).toBe(false);
+      }
+      child.emit("exit", mode === "forced" ? null : 0, mode === "forced" ? "SIGKILL" : null);
+      await settled;
+      expect(resolved).toBe(true);
+    },
+  );
 });

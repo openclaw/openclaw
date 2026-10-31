@@ -25,6 +25,7 @@ const LAZY_LOCALE_REGISTRY = {
   fa: () => import("../locales/fa.ts"),
   ru: () => import("../locales/ru.ts"),
   sv: () => import("../locales/sv.ts"),
+  ca: () => import("../locales/ca.ts"),
   cs: () => import("../locales/cs.ts"),
 } satisfies Record<Exclude<Locale, typeof DEFAULT_LOCALE>, () => Promise<LocaleModule>>;
 

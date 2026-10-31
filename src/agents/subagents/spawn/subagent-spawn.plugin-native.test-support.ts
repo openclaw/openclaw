@@ -18,14 +18,13 @@ import {
   readAdmittedRunOperatorAuthority,
   resolvePreparedRunAdmission,
 } from "../../admitted-run-context.js";
-import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import { registerNativePluginListCases } from "../../plugin-native-subagent.list.test-support.js";
-import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import * as subagentSessionReconciliation from "../registry/subagent-session-reconciliation.js";
 import { holdQueuedSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
 import { registerNativePluginCommandCases } from "./subagent-spawn.plugin-command.test-support.js";
+import { registerDiskProfileCase } from "./subagent-spawn.plugin-disk-profile.test-support.js";
 import { registerNativePluginPolicyCases } from "./subagent-spawn.plugin-native-policy.test-support.js";
 import {
   holdNativeCapacity,
@@ -36,6 +35,7 @@ import {
 } from "./subagent-spawn.plugin-native-rewrite.test-support.js";
 import { registerNativePluginProfileCases } from "./subagent-spawn.plugin-profiles.test-support.js";
 import {
+  createSpawnTranscriptTarget,
   createSpawnOperatorSource,
   recordSpawnBoundaryFinal,
   type NativePluginSpawnTestOptions,
@@ -56,10 +56,10 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
   registerNativePluginProfileCases(options);
   registerNativePluginCommandCases(options);
   registerNativePluginRewriteCases(options);
+  registerDiskProfileCase(options);
   it("native plugin facade keeps native IDs, exact overrides, parent custody and requester policy", async () => {
     const source = createSpawnOperatorSource();
     const bound = await createBoundParent(source.authority);
-    const { parentSessionKey, parentRunId } = bound;
     const { context, runtime } = await createBoundGateway(bound);
     await holdNativeCapacity(bound, "plugin-capacity");
     const failures: unknown[] = [];
@@ -80,12 +80,15 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
               { pluginId, assertCurrent: source.authority.assertCurrent },
             );
           const native = makeNative();
-          const request = {
-            requestId: "review",
-            task: "Review the implementation",
+          const requested = {
             model: "custom/requested-model",
             thinking: "high",
             fastMode: "ultrafast" as const,
+          };
+          const request = {
+            requestId: "review",
+            task: "Review the implementation",
+            ...requested,
             context: "isolated" as const,
           };
           let entered = createDeferred();
@@ -129,17 +132,12 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
             { status: "fulfilled", value: accepted },
           ]);
           expect(subagentRuns.size).toBe(1);
-          expect(beforeSpawn).toHaveBeenCalledTimes(1);
           expect(accepted).toEqual({
             runId: expect.any(String),
             childSessionKey: expect.any(String),
             completionMode: "collect",
             selection: {
-              requested: {
-                model: "custom/requested-model",
-                thinking: "high",
-                fastMode: "ultrafast",
-              },
+              requested,
               resolved: { model: "custom/test-model", thinking: "low", fastMode: false },
             },
           });
@@ -148,13 +146,7 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
             .spyOn(subagentSessionReconciliation, "loadSubagentSessionEntry")
             .mockRejectedValueOnce(new Error("child metadata unavailable"));
           try {
-            expect((await native.spawn(request)).selection).toEqual({
-              requested: {
-                model: "custom/requested-model",
-                thinking: "high",
-                fastMode: "ultrafast",
-              },
-            });
+            expect((await native.spawn(request)).selection).toEqual({ requested });
           } finally {
             unreadableChild.mockRestore();
           }
@@ -196,24 +188,13 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
             sessionKey: accepted.childSessionKey,
           });
           expect(entry).toMatchObject({
-            spawnedBy: parentSessionKey,
             spawnDepth: 2,
             modelOverride: "test-model",
             providerOverride: "custom",
             thinkingLevel: "low",
             fastMode: false,
-            inheritedToolAllow: expect.arrayContaining(["read"]),
           });
-          expect(subagentRuns.get(childRunId)).toMatchObject({
-            requesterTurnRunId: parentRunId,
-            completionRequesterSessionId: "parent-session",
-            collect: true,
-            execution: { status: "queued" },
-          });
-          expect(await native.collect({ ids: [childRunId], timeoutSeconds: 0 })).toMatchObject({
-            completed: [],
-            pending: [childRunId],
-          });
+          expect(subagentRuns.get(childRunId)?.completionRequesterSessionId).toBe("parent-session");
           // Same replay input in another plugin has independent native custody.
           // Discard acceptance before plugin persistence, then recover solely from native custody.
           await makeNative("another-plugin").spawn(request);
@@ -224,14 +205,6 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
           const sibling = expectDefined(recovered, "accepted child without a plugin receipt");
           expect(sibling.runId).not.toBe(accepted.runId);
           expect(subagentRuns.size).toBe(2);
-          const otherRequester = makeNative("native-test", "different-parent-incarnation");
-          expect(
-            await otherRequester.collect({ ids: [childRunId], timeoutSeconds: 0 }),
-          ).toMatchObject({
-            errors: [{ runId: childRunId, error: "not_owner" }],
-            completed: [],
-            pending: [],
-          });
           // Recover accepted native custody in a fresh invocation without any plugin receipt store.
           const listed = [
             {
@@ -242,37 +215,8 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
             },
           ];
           expect(await expectDefined(makeNative().list, "native listing")()).toEqual(listed);
-          expect(
-            await expectDefined(makeNative("another-plugin").list, "other plugin listing")(),
-          ).toEqual([expect.objectContaining({ runId: sibling.runId })]);
-          expect(await expectDefined(otherRequester.list, "reset parent listing")()).toEqual([]);
-          expect(await expectDefined(native.list, "native listing")({ status: "done" })).toEqual(
-            [],
-          );
-          const alternateSource = createSpawnOperatorSource("another-requester");
-          try {
-            const other = createRequestNativeSubagentRuntime(
-              {
-                options: {
-                  config: bound.cfg,
-                  agentId: "main",
-                  sessionKey: parentSessionKey,
-                  sessionId: "parent-session",
-                  runId: "recovery-turn",
-                  runtimeToolAllowlist: ["agents_wait"],
-                  inheritRuntimeToolAllowlist: true,
-                },
-                operatorAuthority: alternateSource.authority,
-                assertCurrent: alternateSource.authority.assertCurrent,
-                prepareSpawn: async () => bound.admitted,
-              },
-              { pluginId: "native-test", assertCurrent: alternateSource.authority.assertCurrent },
-            );
-            expect(await expectDefined(other.list, "other requester listing")()).toEqual([]);
-          } finally {
-            alternateSource.closeRequest();
-            alternateSource.revoke();
-          }
+          // Persisted listing tests own owner filters; native command /stop tests own
+          // collection after a requester reset. This case covers live acceptance custody.
           // A cached successful tool surface cannot survive a live tool-policy revocation.
           setRuntimeConfigSnapshot({
             ...bound.cfg,
@@ -388,14 +332,7 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
       let childRunId: string | undefined;
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "The actual finalized input" },
-        target: {
-          agentId: "main",
-          sessionKey: parentSessionKey,
-          sessionId: entry.sessionId,
-          sessionEntry: entry,
-          storePath: bound.storePath,
-          config: bound.cfg,
-        },
+        target: createSpawnTranscriptTarget(bound, entry),
         assertOriginalInputCommit: () => {
           expect(adopted).toBe(true);
         },
@@ -497,36 +434,12 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
               createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
             );
             try {
-              const [ordinaryWait] = finalizeAgentTools({
-                tools: [
-                  createAgentsWaitTool({
-                    config: bound.cfg,
-                    agentId: "main",
-                    agentSessionKey: parentSessionKey,
-                  }),
-                ],
-                hookContext: {
-                  config: bound.cfg,
-                  agentId: "main",
-                  sessionKey: parentSessionKey,
-                  runId: "followup-run",
-                },
-              });
-              await expect(
-                expectDefined(ordinaryWait, "finalized wait tool").execute("ordinary-wait", {
-                  ids: [childRunId],
-                  timeoutSeconds: 0,
-                }),
-              ).resolves.toMatchObject({
-                details: { status: "blocked", reason: "collector denied" },
-              });
               await expect(
                 nativeSubagentRuntime.collect({
                   ids: [acceptedRunId],
                   timeoutSeconds: 0,
                 }),
               ).rejects.toThrow("collector denied");
-              expect(beforeToolCall).toHaveBeenCalledTimes(2);
             } finally {
               resetGlobalHookRunner();
             }

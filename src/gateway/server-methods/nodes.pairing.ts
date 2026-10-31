@@ -145,7 +145,7 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
     }
     const requestId = params.requestId.trim();
     // Intentionally fail closed for RPC callers without an explicit scoped session.
-    const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const callerScopes = client?.connect.scopes ?? [];
     await respondUnavailableOnThrow(respond, async () => {
       if (
         !(await enforcePendingNodePairingOwnership({

@@ -77,11 +77,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     ws.emitOpen();
     await vi.advanceTimersByTimeAsync(0);
     expect(dispatch).not.toHaveBeenCalled();
-    ws.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "handshake-challenge", ts: 1_800_000_000_000 },
-    });
+    ws.emitConnectChallenge({ nonce: "handshake-challenge", ts: 1_800_000_000_000 });
     await dispatched;
     expect(dispatch).toHaveBeenCalledOnce();
   });
@@ -165,6 +161,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(wsInstances).toHaveLength(1);
       expect(client.needsWakeReconnect).toBe(false);
+      expect(client.needsReachabilityReconnect).toBe(false);
       expect(onClose).toHaveBeenLastCalledWith(
         expect.objectContaining({
           willRetry: false,
@@ -206,6 +203,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+      GATEWAY_CLIENT_CAPS.CHAT_QUEUE_STATUS,
       GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND,
       GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY,
       GATEWAY_CLIENT_CAPS.HELLO_PRESENCE_SELF,
@@ -280,6 +278,8 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     });
     expect(onReconnectScheduled).toHaveBeenCalledExactlyOnceWith(delayMs);
     expect(wsInstances).toHaveLength(1);
+    expect(client.needsWakeReconnect).toBe(false);
+    expect(client.needsReachabilityReconnect).toBe(false);
     await vi.advanceTimersByTimeAsync(delayMs - 1);
     expect(wsInstances).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);

@@ -23,6 +23,7 @@ export const SUPPORTED_LOCALES = [
   "fa",
   "ru",
   "sv",
+  "ca",
   "cs",
 ] as const;
 

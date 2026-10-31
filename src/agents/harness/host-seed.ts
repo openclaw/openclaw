@@ -140,7 +140,7 @@ export function bindBoundedSeed(
       const additionalBytes = new Map<AgentMessage, number>();
       if (prepareMedia) {
         for (const message of activeCount ? [...bounded.messages, ...active] : bounded.messages) {
-          if (message.role !== "user") {
+          if (message.role !== "user" && message.role !== "assistant") {
             continue;
           }
           const prepared = await prepareMedia({ message, maxChars: tokenBudget * 4 });

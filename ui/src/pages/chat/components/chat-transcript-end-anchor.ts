@@ -6,16 +6,22 @@ import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 export class TranscriptEndAnchor {
   private offset: number | null = null;
   private frame: number | null = null;
+  private pendingReconcile: (() => void) | null = null;
+
+  constructor(private readonly afterCommit: (effect: () => void) => void) {}
+
+  private readonly flushReconcile = () => {
+    const reconcile = this.pendingReconcile;
+    this.cancelReconcile();
+    reconcile?.();
+  };
 
   isResizeAnchor(element: HTMLDivElement | null): boolean {
+    if (this.offset === null || element === null) {
+      return false;
+    }
     const max = maxTranscriptScrollOffset(element);
-    return (
-      this.offset !== null &&
-      max !== null &&
-      element !== null &&
-      Math.abs(element.scrollTop - this.offset) <= 1 &&
-      this.offset !== max
-    );
+    return max !== null && Math.abs(element.scrollTop - this.offset) <= 1 && this.offset !== max;
   }
 
   recordLayoutCorrection(before: number, after: number): void {
@@ -33,12 +39,10 @@ export class TranscriptEndAnchor {
     if (this.frame !== null) {
       return;
     }
-    // Nested Lit children still change layout after the pane's commit.
-    // Coalesce end-follow after those commits using the current reader's anchor.
-    this.frame = requestAnimationFrame(() => {
-      this.frame = null;
-      reconcile();
-    });
+    this.pendingReconcile = reconcile;
+    // A measured range commit can follow before paint; external layout still has a frame fallback.
+    this.frame = requestAnimationFrame(this.flushReconcile);
+    this.afterCommit(this.flushReconcile);
   }
 
   cancelReconcile(): void {
@@ -46,6 +50,7 @@ export class TranscriptEndAnchor {
       cancelAnimationFrame(this.frame);
       this.frame = null;
     }
+    this.pendingReconcile = null;
   }
 
   disconnect(): void {

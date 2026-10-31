@@ -1,14 +1,12 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../infra/session-cost-usage-totals.js";
 import type { SessionCostSummary, UsageDailyBucket } from "../infra/session-cost-usage.types.js";
 import { createUsageAggregateAccumulator, usageModelIdentity } from "./usage-aggregates.js";
 import { buildUsageOverview } from "./usage-overview.js";
-import { filterSessionsByQuery } from "./usage-query.js";
 import type { SessionUsageEntry, UsageOverviewOptions } from "./usage-types.js";
 
 const utc: UsageDailyBucket = { mode: "utc-offset", utcOffsetMinutes: 0 };
 const zeroMessages = { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 };
-const unavailable = { state: "unavailable" as const };
 const usage = (...parts: Partial<SessionCostSummary>[]): SessionCostSummary =>
   Object.assign(createEmptyCostUsageTotals(), ...parts);
 function overview(rows: SessionUsageEntry[], options: UsageOverviewOptions = {}, compact = true) {
@@ -32,47 +30,44 @@ function report(
 
 it("matches wildcard filters without exponential backtracking", () => {
   const longKey = "a".repeat(128);
-  const sessions = [{ key: longKey }, { key: "Agent:Main:Job.42", sessionId: "run-[42]" }];
-  expect(filterSessionsByQuery(sessions, `key:${"*?".repeat(64)}b`).sessions).toEqual([]);
-  expect(filterSessionsByQuery(sessions, `key:${"*?".repeat(64)}`).sessions).toEqual([sessions[0]]);
-  expect(filterSessionsByQuery(sessions, "key:agent:*:job.??").sessions).toEqual([sessions[1]]);
-  expect(filterSessionsByQuery(sessions, "id:run-[?2]").sessions).toEqual([sessions[1]]);
-  expect(filterSessionsByQuery(sessions, "key:*jobX??").sessions).toEqual([]);
+  const sessions = [
+    { key: longKey, usage: null },
+    { key: "Agent:Main:Job.42", sessionId: "run-[42]", usage: null },
+  ];
+  expect(overview(sessions, { query: `key:${"*?".repeat(64)}b` }, false).sessions).toEqual([]);
+  expect(overview(sessions, { query: `key:${"*?".repeat(64)}` }, false).sessions).toEqual([
+    sessions[0],
+  ]);
+  expect(overview(sessions, { query: "key:agent:*:job.??" }, false).sessions).toEqual([
+    sessions[1],
+  ]);
+  expect(overview(sessions, { query: "id:run-[?2]" }, false).sessions).toEqual([sessions[1]]);
+  expect(overview(sessions, { query: "key:*jobX??" }, false).sessions).toEqual([]);
 });
 
-it("keeps incomplete table totals unknown beyond the page and scopes completeness to selected days", () => {
-  const complete = usage({ input: 40, inputCost: 1, totalTokens: 40, totalCost: 1 });
-  const interrupted = usage({
+it("keeps table totals beyond the page and scopes them to selected days", () => {
+  const first = usage({ input: 40, inputCost: 1, totalTokens: 40, totalCost: 1 });
+  const second = usage({
     input: 75,
     inputCost: 2,
     totalTokens: 75,
     totalCost: 2,
-    usageReport: unavailable,
     activityDates: ["2026-05-14", "2026-05-15"],
     dailyBreakdown: [
-      { ...complete, date: "2026-05-14", tokens: 40, cost: 1 },
-      { ...daily("2026-05-15", 0), usageReport: unavailable },
+      { ...first, date: "2026-05-14", tokens: 40, cost: 1 },
+      daily("2026-05-15", 35),
     ],
   });
   const rows = [
-    { key: "complete", updatedAt: 2, usage: complete },
-    { key: "interrupted", updatedAt: 1, usage: interrupted },
+    { key: "first", updatedAt: 2, usage: first },
+    { key: "second", updatedAt: 1, usage: second },
   ];
   const all = overview(rows, { limit: 1 });
-  expect(all.sessions.map((row) => row.key)).toEqual(["complete"]);
-  expect(all.totals.usageReport).toEqual(unavailable);
-  expect(all.overview.tableTotals).toEqual({
-    tokens: 115,
-    cost: 3,
-    errors: 0,
-    usageReport: unavailable,
-  });
+  expect(all.sessions.map((row) => row.key)).toEqual(["first"]);
+  expect(all.overview.tableTotals).toEqual({ tokens: 115, cost: 3, errors: 0 });
   const selected = overview([rows[1]!], { selectedDays: ["2026-05-14"] });
-  expect(selected.overview.usageReport).toEqual(unavailable);
-  expect(selected.totals.usageReport).toBeUndefined();
   expect(selected.overview.tableTotals).toEqual({ tokens: 40, cost: 1, errors: 0 });
-  expect(selected.sessions[0]?.usage).toMatchObject(complete);
-  expect(selected.sessions[0]?.usage?.usageReport).toBeUndefined();
+  expect(selected.sessions[0]?.usage).toMatchObject(first);
 });
 
 it.each([
@@ -314,6 +309,16 @@ it("counts activity independently of recently modified empty comparison rows", (
 it.each(["tokens", "cost"] as const)(
   "sorts and displays compact %s for selected days while retaining canonical history",
   (sort) => {
+    const metadata = {
+      computedAt: 2,
+      sessionId: "usage-session",
+      lastActivity: 2,
+      durationMs: 1,
+      messageCounts: { ...zeroMessages, total: 1, assistant: 1 },
+      toolUsage: tools(1),
+      modelUsage: [{ model: "synthetic", count: 1, totals: usage({ totalTokens: 1 }) }],
+      latency: latency(1, 10, 10, 10),
+    };
     const rows = [
       { key: "first", total: 100, selected: 90 },
       { key: "second", total: 1000, selected: 1 },
@@ -321,6 +326,7 @@ it.each(["tokens", "cost"] as const)(
       key,
       agentId: "main",
       usage: usage({
+        ...metadata,
         totalTokens: total,
         totalCost: total / 10,
         firstActivity: 1,
@@ -349,6 +355,7 @@ it.each(["tokens", "cost"] as const)(
       ["first", 90, 9],
     ]);
     expect(compact.overview.selectedRows[0]?.usage?.dailyBreakdown).toBeUndefined();
+    expect(compact.overview.selectedRows[0]?.usage).toMatchObject(metadata);
     expect(canonical.overview.selectedRows[0]?.usage?.dailyBreakdown).toHaveLength(2);
     expect(compact.overview).toMatchObject({
       selectedUsageComplete: true,
@@ -389,22 +396,54 @@ function aggregate(...summaries: Partial<SessionCostSummary>[]) {
   return accumulator.finish();
 }
 
-it("retains incomplete daily and model subtotals after merging complete rows", () => {
-  const date = "2026-05-15";
-  const marker = { state: "unavailable" as const };
-  const result = aggregate(
-    ...[marker, undefined].map((usageReport) => ({
-      usageReport,
-      dailyBreakdown: [{ ...usage(), date, tokens: 10, cost: 1, usageReport }],
-      dailyModelUsage: [{ date, model: "local", tokens: 10, cost: 1, count: 1, usageReport }],
-    })),
-  );
-  expect(result.daily).toEqual([
-    { date, tokens: 20, cost: 2, messages: 0, toolCalls: 0, errors: 0, usageReport: marker },
-  ]);
-  expect(result.modelDaily).toEqual([
-    { ...modelDay(date, "local", 20, 2, 2), usageReport: marker },
-  ]);
+it("sorts fresh aggregate arrays without copying them and isolates successive reports", () => {
+  const accumulator = createUsageAggregateAccumulator();
+  for (const [index, name] of ["first", "second"].entries()) {
+    const date = `2026-03-${12 - index}`;
+    const totals = usage({ firstActivity: 0, totalTokens: index + 1, totalCost: index + 1 });
+    accumulator.add({
+      agentId: name,
+      channel: name,
+      creatorKey: name,
+      usage: {
+        ...totals,
+        toolUsage: { totalCalls: index + 1, uniqueTools: 1, tools: [{ name, count: index + 1 }] },
+        modelUsage: [{ provider: name, model: name, count: 1, totals }],
+        dailyBreakdown: [day(date, totals)],
+        dailyModelUsage: [modelDay(date, name, index + 1, index + 1, 1, name)],
+        dailyLatency: [{ date, ...latency(1, 10, 10, 10) }],
+      },
+    });
+  }
+  const sortCopies = vi.spyOn(Array.prototype, "toSorted");
+  let result: ReturnType<typeof accumulator.finish>;
+  try {
+    result = accumulator.finish();
+    expect(sortCopies).not.toHaveBeenCalled();
+  } finally {
+    sortCopies.mockRestore();
+  }
+  expect(result.byModel.map(({ model }) => model)).toEqual(["second", "first"]);
+  expect(result.byCreator?.map(({ key }) => key)).toEqual(["second", "first"]);
+  expect(result.daily.map(({ date }) => date)).toEqual(["2026-03-11", "2026-03-12"]);
+  const expected = structuredClone(result);
+  const arrays = [
+    result.tools.tools,
+    result.byModel,
+    result.byProvider,
+    result.byAgent,
+    result.byChannel,
+    result.byCreator,
+    result.costDaily,
+    result.dailyLatency,
+    result.modelDaily,
+    result.daily,
+    ...(result.byCreator ?? []).flatMap((creator) => [creator.daily, creator.sessionActivity]),
+  ];
+  for (const array of arrays) {
+    array?.splice(0);
+  }
+  expect(accumulator.finish()).toEqual(expected);
 });
 
 it("builds collision-free model identities with legacy unknown grouping", () => {
@@ -625,4 +664,146 @@ it("retains creator daily amounts and counts each multi-day session once", () =>
     ],
   });
   expect(summary).toEqual(original);
+});
+
+it("sorts private filter inventories without copying them again", () => {
+  const rows: SessionUsageEntry[] = [
+    { key: "z", agentId: "z", channel: "z", modelProvider: "z", model: "z", usage: null },
+    { key: "a", agentId: "a", channel: "a", modelProvider: "a", model: "a", usage: null },
+  ];
+  const before = structuredClone(rows);
+  const copies = vi.spyOn(Array.prototype, "toSorted");
+  let result: ReturnType<typeof overview>;
+  try {
+    result = overview(rows);
+    // The page keeps one copying sort; the five private filter lists need none.
+    expect(copies).toHaveBeenCalledTimes(1);
+  } finally {
+    copies.mockRestore();
+  }
+  expect(result.overview.filterOptions).toEqual({
+    agent: ["a", "z"],
+    channel: ["a", "z"],
+    provider: ["a", "z"],
+    model: ["a", "z"],
+    tool: [],
+  });
+  expect(rows).toEqual(before);
+});
+
+const makeSession = (
+  key: string,
+  summary: Partial<SessionCostSummary> | null,
+  fields: Omit<SessionUsageEntry, "key" | "usage"> = {},
+) => ({ key, usage: summary === null ? null : usage(summary), ...fields });
+
+function queryOverview(rows: SessionUsageEntry[], query: string) {
+  const result = overview(
+    rows,
+    { query, limit: rows.length, recentKeys: rows.map((row) => row.key) },
+    false,
+  );
+  return { sessions: result.sessions, warnings: result.overview.queryWarnings };
+}
+
+it("matches quoted multi-word session labels", () => {
+  const session = { key: "planning", label: "Team Planning", usage: null };
+
+  expect(queryOverview([session], 'label:"Team Planning"').sessions).toEqual([session]);
+  expect(queryOverview([session], '"Team Planning"').sessions).toEqual([session]);
+});
+
+function populatedSessions() {
+  const rows: [string, string, string, number, number, string][] = [
+    ["openai", "discord", "gpt", 100, 1, "read"],
+    ["anthropic", "slack", "claude", 80, 0, "write"],
+    ["google", "discord", "gemini", 60, 1, "read"],
+  ];
+  return rows.map(([key, channel, model, totalTokens, errors, name]) =>
+    makeSession(
+      key,
+      {
+        totalTokens,
+        messageCounts: { ...zeroMessages, errors },
+        toolUsage: { uniqueTools: 1, totalCalls: 1, tools: [{ count: 1, name }] },
+      },
+      { channel, modelProvider: key, model, hasContextWeight: true },
+    ),
+  );
+}
+
+it("unions categorical values while intersecting categories and other constraints", () => {
+  const sessions = populatedSessions();
+  const cases: Array<[query: string, keys: string[]]> = [
+    ["provider:openai provider:anthropic", ["openai", "anthropic"]],
+    ["provider: provider:openai", ["openai"]],
+    ["channel:discord channel:slack", ["openai", "anthropic", "google"]],
+    ["model:gpt model:claude", ["openai", "anthropic"]],
+    ["tool:read tool:write", ["openai", "anthropic", "google"]],
+    ["provider:openai provider:anthropic channel:discord", ["openai"]],
+    ["provider:openai provider:anthropic minTokens:90 has:errors has:tools", ["openai"]],
+    ["minTokens:50 minTokens:90", ["openai"]],
+    ["has:errors has:tools", ["openai", "google"]],
+  ];
+
+  for (const [query, keys] of cases) {
+    expect(queryOverview(sessions, query).sessions.map((session) => session.key)).toEqual(keys);
+  }
+});
+
+it("supports numeric filters like minTokens/maxTokens", () => {
+  const a = makeSession("a", {
+    totalTokens: 1_000,
+    totalCost: 20,
+    messageCounts: { ...zeroMessages, total: 30 },
+  });
+  const b = makeSession("b", {
+    totalTokens: 5,
+    totalCost: 2,
+    messageCounts: { ...zeroMessages, total: 3 },
+  });
+  const filters = [
+    "minTokens:10",
+    "minTokens:1k",
+    "minCost:10",
+    "minMessages:10",
+    "maxTokens:10",
+    "maxCost:10",
+    "maxMessages:10",
+  ];
+
+  for (const [index, filter] of filters.entries()) {
+    expect(queryOverview([a, b], filter)).toEqual({
+      sessions: [index < 4 ? a : b],
+      warnings: [],
+    });
+  }
+});
+
+it("supports every has predicate and warns on unknown values", () => {
+  const populated = populatedSessions()[0]!;
+  const empty = makeSession("empty", null);
+
+  for (const value of ["tools", "errors", "context", "usage", "model", "provider"]) {
+    expect(queryOverview([populated, empty], `has:${value}`)).toEqual({
+      sessions: [populated],
+      warnings: [],
+    });
+  }
+  expect(queryOverview([populated, empty], "has:__proto__")).toEqual({
+    sessions: [populated, empty],
+    warnings: ["Unknown has:__proto__"],
+  });
+});
+
+it("rejects non-decimal numbers and warns on unknown keys", () => {
+  const target = makeSession("a", { totalTokens: 10_000, totalCost: 0 });
+  for (const value of ["1e3", "0x1000", "9007199254740993", "wat"]) {
+    const unknown = value === "wat";
+    const query = `${unknown ? "__proto__:1 " : ""}minTokens:${value}`;
+    expect(queryOverview([target], query).warnings).toEqual([
+      ...(unknown ? ["Unknown filter: __proto__"] : []),
+      "Invalid number for minTokens",
+    ]);
+  }
 });

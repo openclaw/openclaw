@@ -54,6 +54,10 @@ export type DiagnosticRuntimeMeasurementFields =
     }
   | {
       type: "diagnostic.gc";
+      /** Native full-heap usage immediately after a major collection. */
+      heapUsedAfterMajorGcBytes?: number;
+      /** Unix time when the isolate's existing profiler drained that collection. */
+      heapUsedAfterMajorGcTimestampSeconds?: number;
       durationMs: number;
       /** Optional for existing SDK event producers; native observers always supply attribution. */
       kind?: GcSample["kind"];
@@ -147,6 +151,8 @@ export type DiagnosticMemoryUsage = {
   workerCount?: number;
   /** Live PostgreSQL bridges, including children of workers with diagnostic registration. */
   postgresBridgeCount?: number;
+  /** Threads that started their own PostgreSQL pool without inherited endpoints. */
+  postgresPoolSelfRootCount?: number;
   workerHeapSampledCount?: number;
   workerHeapTotalBytes?: number;
   workerHeapUsedBytes?: number;

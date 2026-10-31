@@ -5,6 +5,8 @@ import type { ImageContent } from "../../llm/types.js";
 import { prepareFileContextFromMedia } from "../../media-understanding/file-context.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../../media/media-facts.js";
+import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { detectAndLoadPromptImages } from "../embedded-agent-runner/run/images.js";
 import {
   readPersistedImageBlockFactIndexes,
@@ -25,17 +27,27 @@ export async function prepareHarnessContextMedia(params: {
   agentWorkspaceDir?: string;
   modelInput: string[];
   agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
   channelId?: string;
   accountId?: string;
   sandbox?: { root: string; bridge: SandboxFsBridge };
   assertCurrent: () => void;
+  signal?: AbortSignal;
 }): Promise<{ text?: string; images: ImageContent[] }> {
   params.assertCurrent();
-  if (params.message.role !== "user" || params.maxChars <= 0) {
+  if (
+    (params.message.role !== "user" && params.message.role !== "assistant") ||
+    isTranscriptOnlyOpenClawAssistantMessage(params.message) ||
+    params.maxChars <= 0
+  ) {
     return { images: [] };
   }
   if (!Number.isFinite(params.maxChars)) {
     throw new Error("Context media requires a finite character budget");
+  }
+  if (params.message.role === "assistant") {
+    return prepareAssistantContextImages(params);
   }
   const message = params.message;
   const media = readPersistedMediaFacts(message) ?? [];
@@ -53,6 +65,7 @@ export async function prepareHarnessContextMedia(params: {
     accountId: params.accountId,
     maxChars: params.maxChars,
     assertCurrent: params.assertCurrent,
+    signal: params.signal,
   });
   params.assertCurrent();
   const imageFacts = media.filter(isImageMediaFact);
@@ -126,5 +139,76 @@ export async function prepareHarnessContextMedia(params: {
       // Stable sorting retains page order within each attachment.
       .toSorted((left, right) => left.sourceIndex - right.sourceIndex)
       .map(({ image }) => image),
+  };
+}
+
+async function prepareAssistantContextImages(
+  params: Parameters<typeof prepareHarnessContextMedia>[0],
+): Promise<{ text?: string; images: ImageContent[] }> {
+  const blocks = readAssistantDisplayContent(params.message).filter(
+    (block) => block.type === "image",
+  );
+  if (!blocks.length) {
+    return { images: [] };
+  }
+  if (!params.modelInput.includes("image")) {
+    return {
+      text: "[Attachment images omitted: this model does not support image input]",
+      images: [],
+    };
+  }
+  const idempotencyKey = Reflect.get(params.message, "idempotencyKey");
+  if (
+    !params.agentId ||
+    !params.sessionKey ||
+    !params.sessionId ||
+    typeof idempotencyKey !== "string" ||
+    !idempotencyKey.trim()
+  ) {
+    return { text: "[Referenced image contents are not included in this context]", images: [] };
+  }
+  const { readManagedOutgoingContextImage } =
+    await import("../../gateway/managed-image-attachments.js");
+  params.assertCurrent();
+  const images: ImageContent[] = [];
+  let failed = 0;
+  for (const block of blocks) {
+    params.assertCurrent();
+    const image =
+      typeof block.artifactId === "string"
+        ? await readManagedOutgoingContextImage({
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            idempotencyKey,
+            artifactId: block.artifactId,
+            maxBytes: MAX_IMAGE_BYTES,
+            assertCurrent: params.assertCurrent,
+          })
+        : null;
+    params.assertCurrent();
+    if (image) {
+      images.push({
+        type: "image",
+        data: image.buffer.toString("base64"),
+        mimeType: image.mimeType,
+      });
+    } else {
+      failed++;
+    }
+  }
+  const sanitized = await sanitizeImageBlocks(images, "context:assistant", {
+    ...resolveImageSanitizationLimits(params.config),
+    maxBytes: MAX_IMAGE_BYTES,
+  });
+  params.assertCurrent();
+  failed += sanitized.dropped;
+  return {
+    ...(failed
+      ? {
+          text: `[${failed} referenced image${failed === 1 ? "" : "s"} not included in this context]`,
+        }
+      : {}),
+    images: sanitized.images,
   };
 }

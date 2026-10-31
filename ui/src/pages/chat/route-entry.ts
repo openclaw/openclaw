@@ -1,3 +1,4 @@
+import "../../styles/chat/composer-context-strip.css";
 import "../../styles/chat/composer-progress.css";
 import "../../styles/chat/composer-queue.css";
 import "../../styles/chat/composer-status.css";

@@ -2,8 +2,10 @@ import { sql, type RawBuilder } from "kysely";
 import type { PostgresSqlConnection } from "../sql-connection.js";
 import type { SearchSchema, StoreSearchCapabilities } from "./contract.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
+import { getAdmittedPostgresSchema } from "./postgres-schema.js";
 import {
   assertPostgresSearchAdmitted,
+  postgresSearchTokenSeparators,
   rebuildPostgresSearch,
   searchConfig,
   pgSearchName,
@@ -11,7 +13,17 @@ import {
 import { bindPostgresVector } from "./postgres-vector.js";
 import type { TextIndex, TextQuery } from "./text-contract.js";
 
-function tsquery(query: TextQuery, config: string): RawBuilder<unknown> {
+type SearchText = (text: RawBuilder<unknown> | string) => RawBuilder<unknown>;
+/** Query text parses through the same separator split as the stored vector. */
+function searchTextFor(textSearchVersion: 1 | 2 | undefined): SearchText {
+  const separators = postgresSearchTokenSeparators;
+  return textSearchVersion === 2
+    ? (text) =>
+        /* kysely-allow-raw: The constant class and bound text feed the native parser. */ sql`regexp_replace(${text}, ${separators}, ' ', 'g')`
+    : (text) => sql`${text}`;
+}
+
+function tsquery(query: TextQuery, config: string, searchText: SearchText): RawBuilder<unknown> {
   if (query.kind === "contains") {
     throw new Error("Contains is only available on an admitted trigram index");
   }
@@ -26,20 +38,20 @@ function tsquery(query: TextQuery, config: string): RawBuilder<unknown> {
         FROM json_to_recordset(${JSON.stringify(query.clauses)}::json)
           AS atom(kind text, text text, prefix boolean)
         CROSS JOIN LATERAL (SELECT CASE WHEN atom.kind = 'term'
-          THEN plainto_tsquery(${sql.lit(config)}::regconfig, atom.text)
-          ELSE phraseto_tsquery(${sql.lit(config)}::regconfig, atom.text)
+          THEN plainto_tsquery(${sql.lit(config)}::regconfig, ${searchText(sql`atom.text`)})
+          ELSE phraseto_tsquery(${sql.lit(config)}::regconfig, ${searchText(sql`atom.text`)})
         END AS value) AS parsed
       ), '')::tsquery`;
     }
-    const clauses = query.clauses.map((clause) => tsquery(clause, config));
+    const clauses = query.clauses.map((clause) => tsquery(clause, config, searchText));
     return clauses.length
       ? /* kysely-allow-raw: Only the closed query-kind enum selects an operator. */ sql`(${sql.join(clauses, sql.raw(query.kind === "all" ? " && " : " || "))})`
       : sql`''::tsquery`;
   }
   const parsed =
     query.kind === "term"
-      ? sql`plainto_tsquery(${sql.lit(config)}::regconfig, ${query.text})`
-      : sql`phraseto_tsquery(${sql.lit(config)}::regconfig, ${query.text})`;
+      ? sql`plainto_tsquery(${sql.lit(config)}::regconfig, ${searchText(query.text)})`
+      : sql`phraseto_tsquery(${sql.lit(config)}::regconfig, ${searchText(query.text)})`;
   return query.kind === "phrase" && query.prefix
     ? sql`coalesce((nullif(${parsed}::text, '') || ':*')::tsquery, ''::tsquery)`
     : parsed;
@@ -52,6 +64,8 @@ export function bindPostgresSearch(
   assertPostgresSearchAdmitted(db, schema);
   const config = `${pgSearchName(getPostgresPhysicalFacts(db)!.namespace)}.${pgSearchName(searchConfig)}`;
   const extension = pgSearchName(schema.extensionSchema ?? "public");
+  const textSearchVersion = getAdmittedPostgresSchema(db)?.postgresTextSearchVersion;
+  const searchText = searchTextFor(textSearchVersion);
   const store = {};
   const text = Object.fromEntries(
     Object.entries(schema.text ?? {}).map(([name, index]) => [name, { ...index, store }]),
@@ -71,7 +85,7 @@ export function bindPostgresSearch(
     if (!query) {
       throw new Error("PostgreSQL rank and snippet require the literal search query");
     }
-    return tsquery(query, config);
+    return tsquery(query, config, searchText);
   };
   return {
     text,
@@ -93,7 +107,7 @@ export function bindPostgresSearch(
               )
             ) {
               const phrases = query.clauses.map((clause) => clause.text);
-              return /* kysely-allow-raw: Bound literal phrases are matched independently against the admitted vector. */ sql<boolean>`EXISTS (SELECT 1 FROM json_array_elements_text(${JSON.stringify(phrases)}::json) AS search_terms(value) WHERE ${column} @@ phraseto_tsquery(${sql.lit(config)}::regconfig, search_terms.value))`;
+              return /* kysely-allow-raw: Bound literal phrases are matched independently against the admitted vector. */ sql<boolean>`EXISTS (SELECT 1 FROM json_array_elements_text(${JSON.stringify(phrases)}::json) AS search_terms(value) WHERE ${column} @@ phraseto_tsquery(${sql.lit(config)}::regconfig, ${searchText(sql`search_terms.value`)}))`;
             }
             if (query.kind === "contains") {
               if (index.postgres?.mode !== "trigram") {
@@ -102,7 +116,7 @@ export function bindPostgresSearch(
               const pattern = `%${query.text.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
               return /* kysely-allow-raw: PostgreSQL's literal trigram predicate returns boolean. */ sql<boolean>`${column} ILIKE ${pattern} ESCAPE '\\'`;
             }
-            return /* kysely-allow-raw: PostgreSQL's tsvector predicate returns boolean. */ sql<boolean>`${column} @@ ${tsquery(query, config)}`;
+            return /* kysely-allow-raw: PostgreSQL's tsvector predicate returns boolean. */ sql<boolean>`${column} @@ ${tsquery(query, config, searchText)}`;
           },
           rank(index, query, options) {
             if (query?.kind === "contains") {
@@ -132,7 +146,19 @@ export function bindPostgresSearch(
               throw new Error(`Text index has no field ${field}`);
             }
             const words = Math.max(1, Math.min(48, Math.trunc(maxTokens)));
-            return /* kysely-allow-raw: The native headline is bounded text from the admitted field. */ sql<string>`left(ts_headline(${sql.lit(config)}::regconfig, ${relation(index, field)}, ${requireQuery(query)}, ${`StartSel='', StopSel='', MaxWords=${words}, MinWords=1, MaxFragments=1, FragmentDelimiter=' … '`}), ${Math.max(1, Math.min(500, Math.trunc(maxChars)))})`;
+            const options = `StartSel='', StopSel='', MaxWords=${words}, MinWords=1, MaxFragments=1, FragmentDelimiter=' … '`;
+            const chars = Math.max(1, Math.min(500, Math.trunc(maxChars)));
+            const column = relation(index, field);
+            if (textSearchVersion !== 2) {
+              return /* kysely-allow-raw: The native headline is bounded text from the admitted field. */ sql<string>`left(ts_headline(${sql.lit(config)}::regconfig, ${column}, ${requireQuery(query)}, ${options}), ${chars})`;
+            }
+            // Version 2 queries split punctuation-joined words, so the headline must parse the
+            // same split to find the matching passage. Replacing each punctuation character with
+            // one space keeps character offsets, so the selected fragment is re-sliced from the
+            // original field and keeps its displayed punctuation.
+            const split = sql`regexp_replace(${column}, '[[:punct:]]', ' ', 'g')`;
+            const fragment = sql`ts_headline(${sql.lit(config)}::regconfig, ${split}, ${requireQuery(query)}, ${options})`;
+            return /* kysely-allow-raw: The native headline locates bounded text inside the admitted field. */ sql<string>`left(substr(${column}, strpos(${split}, ${fragment}), length(${fragment})), ${chars})`;
           },
           identity: (index) =>
             /* kysely-allow-raw: The declared source identity is the native numeric row identity. */ sql<number>`${relation(index, index.postgres!.identity)}`,

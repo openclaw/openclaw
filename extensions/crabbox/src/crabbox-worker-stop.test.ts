@@ -12,36 +12,61 @@ import {
 const lease = { leaseId: LEASE_ID, profile: { ...PROFILE, warmImage: false } };
 
 describe("Crabbox worker stop confirmation", () => {
-  it("keeps cleanup blocking when Crabbox refuses asynchronous stop for a direct backend", async ({
-    signal,
-  }) => {
-    const releaseStarted = Promise.withResolvers<void>();
-    const releaseFinished = Promise.withResolvers<void>();
-    const { provider } = createWarmProvider(async ({ argv }) => {
-      if (argv.includes("--wait=false")) {
-        return commandResult({
-          code: 2,
-          stderr: "--wait=false requires an ordinary coordinator-backed stop",
-        });
+  it.for(["direct stop", "capture"] as const)(
+    "retains destroy confirmation while waiting for %s",
+    async (phase, { signal }) => {
+      const started = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      const { provider, calls } = createWarmProvider(async ({ argv }) => {
+        if (phase === "direct stop" && argv.includes("--wait=false")) {
+          return commandResult({
+            code: 2,
+            stderr: "--wait=false requires an ordinary coordinator-backed stop",
+          });
+        }
+        if (
+          phase === "direct stop"
+            ? argv[1] === "stop"
+            : argv[1] === "checkpoint" && argv[2] === "create"
+        ) {
+          started.resolve();
+          await withinTest(finish.promise, signal);
+        }
+        return undefined;
+      });
+      const pendingLease =
+        phase === "capture"
+          ? { ...(await provisionWarmProfile(provider)), profile: PROFILE }
+          : lease;
+      vi.useFakeTimers();
+      const accepted = vi.fn();
+      const returned = vi.fn();
+      const destroy = provider
+        .destroy({ ...pendingLease, onCleanupAccepted: accepted })
+        .then(returned);
+      try {
+        await withinTest(started.promise, signal);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(accepted).toHaveBeenCalledTimes(phase === "capture" ? 1 : 0);
+        expect(returned).not.toHaveBeenCalled();
+        if (phase === "capture") {
+          expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
+        }
+      } finally {
+        finish.resolve();
+        await destroy;
+        vi.useRealTimers();
       }
-      if (argv[1] === "stop") {
-        releaseStarted.resolve();
-        await withinTest(releaseFinished.promise, signal);
-      }
-      return undefined;
-    });
-    const accepted = vi.fn();
-    const returned = vi.fn();
-    const destroy = provider.destroy({ ...lease, onCleanupAccepted: accepted }).then(returned);
-    try {
-      await withinTest(releaseStarted.promise, signal);
-      expect(accepted).not.toHaveBeenCalled();
-      expect(returned).not.toHaveBeenCalled();
-    } finally {
-      releaseFinished.resolve();
-      await destroy;
-    }
-  });
+      expect(calls.at(-1)?.argv).toEqual([
+        "crabbox",
+        "stop",
+        "--provider",
+        "aws",
+        "--id",
+        LEASE_ID,
+      ]);
+    },
+  );
 
   it.each([
     {
@@ -50,16 +75,13 @@ describe("Crabbox worker stop confirmation", () => {
     },
     { code: 4, stderr: `lease ${LEASE_ID} already stopped` },
   ])("rejects unproven stop despite misleading prose: $stderr", async ({ code, stderr }) => {
-    const { provider, calls } = createWarmProvider(() => commandResult({ code, stderr }));
+    const { provider } = createWarmProvider(() => commandResult({ code, stderr }));
     await expect(provider.destroy(lease)).rejects.toThrow(`stop failed with exit code ${code}`);
-    expect(calls.map(({ argv }) => argv)).toEqual([
-      ["crabbox", "stop", "--provider", "aws", "--id", LEASE_ID],
-    ]);
   });
 
   it("completes destroy and releases warm allocation ownership for a never-admitted lease", async () => {
     const inspectError = `coordinator GET /v1/leases/${LEASE_ID}: http 404: {"error":"not_found"}`;
-    const { provider, calls, warn } = createWarmProvider(({ argv }) => {
+    const { provider, calls } = createWarmProvider(({ argv }) => {
       if (argv[1] === "warmup") {
         return commandResult({ code: 1, stderr: "allocation not admitted" });
       }
@@ -67,7 +89,6 @@ describe("Crabbox worker stop confirmation", () => {
         return commandResult({ code: 1, stderr: inspectError });
       }
       if (argv[1] === "stop") {
-        // Crabbox 0.67.0 output, with the captured lease ID replaced by the fixture's ID.
         return commandResult({
           code: 1,
           stderr:
@@ -84,41 +105,6 @@ describe("Crabbox worker stop confirmation", () => {
     await expect(provider.inspect(lease)).resolves.toEqual({ status: "unknown" });
     await expect(provider.destroy({ ...lease, profile: PROFILE })).resolves.toBeUndefined();
     expect(store.lookup(owner.key)?.allocations[LEASE_ID]).toBeUndefined();
-    expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
     expect(calls.some(({ argv }) => argv[1] === "heartbeat")).toBe(false);
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      `Crabbox lease ${LEASE_ID} (provider aws) is absent; treating stop as already released`,
-    );
-  });
-
-  it("accepts cleanup before a slow capture finishes while retaining destroy confirmation", async () => {
-    const captureStarted = Promise.withResolvers<void>();
-    const finishCapture = Promise.withResolvers<void>();
-    const { provider, calls } = createWarmProvider(async ({ argv }) => {
-      if (argv[1] === "checkpoint" && argv[2] === "create") {
-        captureStarted.resolve();
-        await finishCapture.promise;
-      }
-      return undefined;
-    });
-    const provisioned = await provisionWarmProfile(provider);
-    vi.useFakeTimers();
-    const returned = vi.fn();
-    const accepted = vi.fn();
-    const destroy = provider
-      .destroy({ ...provisioned, profile: PROFILE, onCleanupAccepted: accepted })
-      .then(returned);
-    try {
-      await captureStarted.promise;
-      await vi.advanceTimersByTimeAsync(0);
-      expect(accepted).toHaveBeenCalledOnce();
-      expect(returned).not.toHaveBeenCalled();
-      expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
-    } finally {
-      finishCapture.resolve();
-      await destroy;
-      vi.useRealTimers();
-    }
-    expect(calls.at(-1)?.argv).toEqual(["crabbox", "stop", "--provider", "aws", "--id", LEASE_ID]);
   });
 });

@@ -45,7 +45,7 @@
   --oc-surface-card: var(--card);
   --oc-surface-card-strong: var(--popover);
   --oc-surface-interactive: var(--bg-elevated);
-  --oc-surface-interactive-hover: var(--bg-hover);
+  --oc-surface-interactive-hover: var(--surface-hover);
   --oc-surface-accent-soft: var(--accent-subtle);
   --oc-surface-secondary-soft: var(--accent-2-subtle);
   --oc-selection-bg: var(--selection-bg);
@@ -311,7 +311,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 }
 
 .oc-input {
-  box-sizing: border-box;
   width: 100%;
   min-height: var(--oc-control-min-height);
   padding: var(--oc-space-2) var(--oc-space-3);
@@ -353,7 +352,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 
 .oc-banner {
   display: grid;
-  box-sizing: border-box;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: start;
   gap: var(--oc-space-3);
@@ -373,7 +371,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 
 .oc-empty {
   display: grid;
-  box-sizing: border-box;
   min-height: 12rem;
   place-items: center;
   padding: var(--oc-space-5);
@@ -590,7 +587,7 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 }
 
 .settings-page.oc-app-surface .btn.oc-action,
-.agents-home .btn:is(.agents-home__claw-add, .agents-home__open).oc-action {
+.agents-home .btn:is(.agents-home__template-add, .agents-home__open).oc-action {
   min-height: 0;
   gap: 6px;
   padding: 8px 14px;
@@ -616,13 +613,14 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 }
 
 .settings-page.oc-app-surface .btn.btn--sm.oc-action,
-.agents-home .btn.btn--sm:is(.agents-home__claw-add, .agents-home__open).oc-action {
+.agents-home .btn.btn--sm:is(.agents-home__template-add, .agents-home__open).oc-action {
   padding: 6px 10px;
   font-size: var(--oc-font-size-xs);
 }
 
 .settings-page.oc-app-surface .btn.oc-action:hover:not(:disabled),
-.agents-home .btn:is(.agents-home__claw-add, .agents-home__open).oc-action:hover:not(:disabled) {
+.agents-home
+  .btn:is(.agents-home__template-add, .agents-home__open).oc-action:hover:not(:disabled) {
   border-color: var(--oc-border-strong);
   background: var(--oc-surface-interactive-hover);
   color: var(--oc-text-primary);

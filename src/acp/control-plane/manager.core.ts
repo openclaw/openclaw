@@ -104,7 +104,50 @@ export class AcpSessionManager {
         );
         return { isCurrent: ownership.isCurrent, release: ownership.release };
       },
-      forceDiscardSessionRuntime: (params) => this.#forceDiscardSessionRuntime(params),
+      /** Evicts only the captured runtime generation; old handles close in the background. */
+      forceDiscardSessionRuntime: async (params) => {
+        params.assertCurrent?.();
+        if (params.isCurrent && !params.isCurrent()) {
+          throw createSupersededActorError(params.sessionKey);
+        }
+        const target = resolveAcpSessionTarget(params);
+        const { sessionKey } = target;
+        const actorKey = acpSessionActorKey(target);
+        this.actorQueue.rotate(actorKey);
+        const activeTurn = this.activeTurnBySession.get(actorKey);
+        if (activeTurn) {
+          activeTurn.abortController.abort();
+          if (this.activeTurnBySession.get(actorKey) === activeTurn) {
+            this.activeTurnBySession.delete(actorKey);
+          }
+        }
+        const cached = this.runtimeHandles.take(target);
+        const closeTargets = [
+          ...(activeTurn ? [{ runtime: activeTurn.runtime, handle: activeTurn.handle }] : []),
+          ...(cached &&
+          (!activeTurn || !this.runtimeHandles.handlesMatch(cached.handle, activeTurn.handle))
+            ? [{ runtime: cached.runtime, handle: cached.handle }]
+            : []),
+        ];
+        void Promise.allSettled(
+          closeTargets.map(async ({ runtime, handle }) => {
+            await runtime.close({
+              handle,
+              reason: params.reason,
+              discardPersistentState: true,
+            });
+          }),
+        ).then((outcomes) => {
+          const failed = outcomes.find(
+            (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected",
+          );
+          if (failed) {
+            logVerbose(
+              `acp-manager: force-discard runtime close failed for ${sessionKey}: ${String(failed.reason)}`,
+            );
+          }
+        });
+      },
     });
     registerAcpSessionManagerDisposer(this, async (reason) => {
       this.lifecycle.abort();
@@ -480,58 +523,6 @@ export class AcpSessionManager {
       ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
       runtimeHandles: this.runtimeHandles,
       setSessionState: this.setSessionState.bind(this),
-    });
-  }
-
-  /** Evicts only the captured runtime generation; old handles close in the background. */
-  async #forceDiscardSessionRuntime(params: {
-    cfg: OpenClawConfig;
-    sessionKey: string;
-    agentId?: string;
-    reason: string;
-    isCurrent?: () => boolean;
-    assertCurrent?: () => void;
-  }): Promise<void> {
-    params.assertCurrent?.();
-    if (params.isCurrent && !params.isCurrent()) {
-      throw createSupersededActorError(params.sessionKey);
-    }
-    const target = resolveAcpSessionTarget(params);
-    const { sessionKey } = target;
-    const actorKey = acpSessionActorKey(target);
-    this.actorQueue.rotate(actorKey);
-    const activeTurn = this.activeTurnBySession.get(actorKey);
-    if (activeTurn) {
-      activeTurn.abortController.abort();
-      if (this.activeTurnBySession.get(actorKey) === activeTurn) {
-        this.activeTurnBySession.delete(actorKey);
-      }
-    }
-    const cached = this.runtimeHandles.take(target);
-    const closeTargets = [
-      ...(activeTurn ? [{ runtime: activeTurn.runtime, handle: activeTurn.handle }] : []),
-      ...(cached &&
-      (!activeTurn || !this.runtimeHandles.handlesMatch(cached.handle, activeTurn.handle))
-        ? [{ runtime: cached.runtime, handle: cached.handle }]
-        : []),
-    ];
-    void Promise.allSettled(
-      closeTargets.map(async ({ runtime, handle }) => {
-        await runtime.close({
-          handle,
-          reason: params.reason,
-          discardPersistentState: true,
-        });
-      }),
-    ).then((outcomes) => {
-      const failed = outcomes.find(
-        (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected",
-      );
-      if (failed) {
-        logVerbose(
-          `acp-manager: force-discard runtime close failed for ${sessionKey}: ${String(failed.reason)}`,
-        );
-      }
     });
   }
 

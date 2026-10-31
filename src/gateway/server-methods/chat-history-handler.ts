@@ -8,6 +8,7 @@ import {
   validateChatHistoryParams,
   validateChatStartupParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { ChatHistoryParams } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveAgentConfig, resolveAgentVerboseDefault } from "../../agents/agent-scope.js";
 import { findModelCatalogEntry } from "../../agents/model-catalog.js";
@@ -44,7 +45,7 @@ import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
 import { resolveSessionHistoryUnavailableMessage } from "../session-history-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
-import { withReadySessionRows } from "../session-row-prepared-read.js";
+import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
@@ -61,12 +62,13 @@ import {
 import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import { captureQueuedChatInputRunIds, readChatPendingInputs } from "./chat-pending-inputs.js";
-import { prepareChatStartupRequester } from "./chat-startup-requester.js";
+import { withChatStartupDiagnostics } from "./chat-server-timing.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
+/** Internal callers carry schema-validated fields and their resolved session target. */
 export async function handleChatHistoryRequest({
   params,
   respond,
@@ -79,7 +81,8 @@ export async function handleChatHistoryRequest({
   acceptsSerializedJson,
   acceptsDeflatedSegments,
   req,
-}: GatewayRequestHandlerOptions & {
+}: Omit<GatewayRequestHandlerOptions, "params"> & {
+  params: ChatHistoryParams;
   method: ChatHistoryMethod;
   retainedTranscript?: {
     sessionId: string;
@@ -87,9 +90,6 @@ export async function handleChatHistoryRequest({
     verifyRetainedState?: () => Promise<boolean>;
   };
 }) {
-  if (!assertValidParams(params, validateChatHistoryParams, method, respond)) {
-    return;
-  }
   const {
     sessionKey,
     limit,
@@ -119,7 +119,6 @@ export async function handleChatHistoryRequest({
     await prepareOptionalSubagentSessionListReadCache();
   }
   signal?.throwIfAborted();
-  const agentIdOverride = normalizeOptionalString(params.agentId);
   const selection = await prepareChatHistorySessionRead({
     context,
     sessionMutationAuthorization,
@@ -128,7 +127,7 @@ export async function handleChatHistoryRequest({
     signal,
     method,
     sessionKey,
-    agentIdOverride,
+    agentIdOverride: normalizeOptionalString(params.agentId),
     requestedSessionId,
     retainedSessionId,
   });
@@ -161,9 +160,6 @@ export async function handleChatHistoryRequest({
               agentId: sessionAgentId,
               sessionKey: canonicalKey,
               sessionEntry: entry,
-              ...(method === "chat.startup"
-                ? { readRequesterProfileId: await prepareChatStartupRequester(client) }
-                : {}),
               readPolicy: method === "chat.history" ? "ready" : "current",
             });
           } catch (error) {
@@ -199,26 +195,22 @@ export async function handleChatHistoryRequest({
     });
     const max = limit ?? 200;
     const maxHistoryBytes = Math.min(maxBytes ?? Infinity, getMaxChatHistoryMessagesBytes());
-    // Keep the default response small while honoring explicit back-scroll budgets.
-    // Recovery lookahead retains its separate read budget.
+    // Bound default responses independently of recovery lookahead and explicit back-scroll budgets.
     const maxResponseBytes = Math.min(maxBytes ?? 512 * 1024, maxHistoryBytes);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(maxChars);
     const pendingInputs =
       sessionId && sessionId === entry?.sessionId
-        ? await readChatPendingInputs(
-            {
-              agentId: sessionAgentId,
-              sessionKey: canonicalKey,
-              sessionId,
-              storePath,
-            },
-            {
-              before: pendingBefore,
-              limit: max,
-              maxChars: effectiveMaxChars,
-              queuedRunIds,
-              cronStorePath: context.cronStorePath,
-            },
+        ? await measureDiagnosticsTimelineSpan(`gateway.${method}.pending_inputs`, () =>
+            readChatPendingInputs(
+              { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
+              {
+                before: pendingBefore,
+                limit: max,
+                maxChars: effectiveMaxChars,
+                queuedRunIds,
+                cronStorePath: context.cronStorePath,
+              },
+            ),
           )
         : { items: [], total: 0 };
     // Receipts belong to the currently selected physical session, never archived history.
@@ -302,6 +294,9 @@ export async function handleChatHistoryRequest({
       ? {
           ...historyPage.encodedResponse,
           messages: new SerializedJsonArray(historyPage.encodedResponse.messages),
+          activity: historyPage.encodedResponse.activity
+            ? new SerializedJsonArray(historyPage.encodedResponse.activity)
+            : undefined,
         }
       : prepareChatHistoryResponsePage(historyPage, {
           entry: historyEntry,
@@ -365,7 +360,7 @@ export async function handleChatHistoryRequest({
           cfg,
           entries: [{ agentId: sessionAgentId, sessionKey: canonicalKey, entry: undefined }],
         });
-    const publishDelta = await withReadySessionRows(rowProjection, queries, (read) => {
+    const presentRead = (read: SessionRowReadView) => {
       const scopedRuntime = { ...runtimeScope, physicalPaths: read.physicalPaths };
       const currentSharing = readCurrentSharing(read);
       if (!currentSharing) {
@@ -641,7 +636,11 @@ export async function handleChatHistoryRequest({
       }
       respond(true, presentHistory(payload));
       return undefined;
-    });
+    };
+    const publishDelta = await measureDiagnosticsTimelineSpan(
+      `gateway.${method}.projection_final`,
+      () => withReadySessionRows(rowProjection, queries, presentRead),
+    );
     await publishDelta?.();
   } finally {
     selection.release();
@@ -649,13 +648,15 @@ export async function handleChatHistoryRequest({
 }
 
 export const chatHistoryHandlers: GatewayRequestHandlers = {
-  "chat.history": (opts) => handleChatHistoryRequest({ ...opts, method: "chat.history" }),
-  "chat.startup": async (opts) => {
+  "chat.history": defineValidatedGatewayHandler("chat.history", validateChatHistoryParams, (opts) =>
+    handleChatHistoryRequest({ ...opts, method: "chat.history" }),
+  ),
+  "chat.startup": withChatStartupDiagnostics(async (opts) => {
     if (!assertValidParams(opts.params, validateChatStartupParams, "chat.startup", opts.respond)) {
       return;
     }
     if ("sessionKey" in opts.params) {
-      await handleChatHistoryRequest({ ...opts, method: "chat.startup" });
+      await handleChatHistoryRequest({ ...opts, params: opts.params, method: "chat.startup" });
       return;
     }
     const connId = opts.client?.connId?.trim();
@@ -723,6 +724,6 @@ export const chatHistoryHandlers: GatewayRequestHandlers = {
       respond: (ok, payload, error, meta) =>
         opts.respond(ok, ok ? { ...asOptionalRecord(payload), resolution } : payload, error, meta),
     });
-  },
+  }),
   "chat.metadata": handleChatMetadataRequest,
 };

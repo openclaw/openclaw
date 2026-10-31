@@ -566,7 +566,9 @@ it("does not capture the discarded prefix of an absolute path.resolve asset", ()
   cleanups.push(() => fs.rmSync(source, { recursive: true, force: true }));
   const external = path.join(source, "external.txt");
   const pluginRoot = path.join(source, "plugin");
-  const misleading = path.join(pluginRoot, "discarded", external);
+  // A rooted path still discards the prefix without nesting a Windows drive in the decoy.
+  const absoluteAsset = path.sep + path.relative(path.parse(external).root, external);
+  const misleading = path.join(pluginRoot, "discarded", absoluteAsset);
   fs.mkdirSync(path.dirname(misleading), { recursive: true });
   fs.writeFileSync(misleading, "must not capture");
   fs.writeFileSync(external, "before");
@@ -574,7 +576,7 @@ it("does not capture the discarded prefix of an absolute path.resolve asset", ()
   fs.writeFileSync(
     entry,
     `const fs = require('node:fs'); const path = require('node:path');
-     exports.read = () => fs.readFileSync(path.resolve(__dirname, 'discarded', ${JSON.stringify(external)}), 'utf8');`,
+     exports.read = () => fs.readFileSync(path.resolve(__dirname, 'discarded', ${JSON.stringify(absoluteAsset)}), 'utf8');`,
   );
   const artifact = capturePluginGenerationArtifact(pluginRoot, entry);
   cleanups.push(artifact.dispose);

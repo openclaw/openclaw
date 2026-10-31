@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDoctorPrompter } from "../commands/doctor-prompter.js";
+import { createDoctorHealthFlowContext } from "./doctor-health-context.test-support.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import {
   createDoctorHealthContribution,
@@ -8,6 +9,7 @@ import {
   renderStructuredHealthFindings,
   showDoctorHealthSummary,
 } from "./doctor-health-contribution.js";
+import type { HealthFinding } from "./health-checks.js";
 
 const { debug } = vi.hoisted(() => ({ debug: vi.fn() }));
 // mock-isolation: inspect diagnostic retention without writing the user's log files.
@@ -15,20 +17,21 @@ vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => ({ debu
 
 function context(shouldRepair = false): DoctorHealthFlowContext {
   debug.mockClear();
-  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-  return {
-    runtime,
-    options: {},
-    prompter: createDoctorPrompter({
-      runtime,
-      options: { nonInteractive: true, repair: shouldRepair },
-    }),
-    cfg: {},
-    cfgForPersistence: {},
-    configResult: { cfg: {} },
-    sourceConfigValid: true,
-    configPath: "/example/openclaw.json",
-  };
+  const ctx = createDoctorHealthFlowContext();
+  ctx.prompter = createDoctorPrompter({
+    runtime: ctx.runtime,
+    options: { nonInteractive: true, repair: shouldRepair },
+  });
+  return ctx;
+}
+
+function finding(
+  id: string,
+  severity: HealthFinding["severity"],
+  message: string,
+  extra: Partial<HealthFinding> = {},
+): HealthFinding {
+  return { checkId: `example/${id}`, severity, message, ...extra };
 }
 
 describe("Doctor current-state summary", () => {
@@ -55,6 +58,7 @@ describe("Doctor current-state summary", () => {
             return {
               config: { ...cfg, gateway: { mode: "local" as const } },
               changes: ["Configured Gateway mode."],
+              warnings: ["structured warning"],
             };
           },
         },
@@ -64,6 +68,8 @@ describe("Doctor current-state summary", () => {
       const output = vi.mocked(ctx.runtime.log).mock.calls.flat().join("\n");
       if (repair) {
         expect(ctx.cfg.gateway?.mode).toBe("local");
+        expect(ctx.cfgForPersistence).toEqual({});
+        expect(ctx.runtime.error).toHaveBeenCalledWith("structured warning");
         expect(ctx.configResult.pendingChangePanels).toContain("Configured Gateway mode.");
         expect(output).not.toContain("Configured Gateway mode.");
         expect(output).not.toContain("Gateway mode is missing.");
@@ -81,22 +87,13 @@ describe("Doctor current-state summary", () => {
     const { buffer, reportFindings } = createDoctorHealthFindingBuffer(ctx.runtime);
     const rawWarning = "Original migration advisory";
     reportFindings(
-      [
-        {
-          checkId: "example/startup",
-          severity: "warning",
-          message: "Startup advisory",
-          category: "recommended",
-        },
-      ],
+      [finding("startup", "warning", "Startup advisory", { category: "recommended" })],
       [rawWarning],
     );
     ctx.healthFindings = buffer.healthFindings;
     showDoctorHealthSummary(ctx);
     expect(buffer.healthFindings).toEqual([]);
-    reportFindings([
-      { checkId: "example/deferred", severity: "warning", message: "Deferred capture advisory" },
-    ]);
+    reportFindings([finding("deferred", "warning", "Deferred capture advisory")]);
     expect(ctx.healthFindings).toBe(buffer.healthFindings);
     expect(
       collectDoctorHealthResultWarnings({
@@ -110,48 +107,30 @@ describe("Doctor current-state summary", () => {
     const sharedFindings: NonNullable<DoctorHealthFlowContext["healthFindings"]> = [];
     ctx.healthFindings = sharedFindings;
     const findings = [
-      {
-        checkId: "example/archive",
-        severity: "warning",
+      finding("archive", "warning", "Original archive retained.", {
         category: "historical",
-        message: "Original archive retained.",
         fixHint: "No action needed if conversations are visible.",
-      },
-      {
-        checkId: "example/setup",
-        severity: "warning",
+      }),
+      finding("setup", "warning", "Optional setup improves completion.", {
         category: "recommended",
-        message: "Optional setup improves completion.",
         fixHint: "Enable completion if wanted.",
-      },
-      {
-        checkId: "example/healthy",
-        severity: "info",
+      }),
+      finding("healthy", "info", "Gateway is healthy.", {
         category: "fix-now",
-        message: "Gateway is healthy.",
-      },
-      {
-        checkId: "example/current",
-        severity: "error",
+      }),
+      finding("current", "error", "Gateway cannot start.", {
         category: "historical",
-        message: "Gateway cannot start.",
         path: "gateway.mode",
         fixHint: "Configure Gateway mode.",
-      },
-      {
-        checkId: "example/actionable",
-        severity: "warning",
-        message: "Credentials expired.",
+      }),
+      finding("actionable", "warning", "Credentials expired.", {
         fixHint: "Sign in again.",
-      },
-      {
-        checkId: "example/maintainer",
-        severity: "error",
+      }),
+      finding("maintainer", "error", "Required plugin failed.", {
         category: "recommended",
-        message: "Required plugin failed.",
         fixHint: "Report this failure to the plugin maintainer.",
-      },
-    ] as const;
+      }),
+    ];
     renderStructuredHealthFindings(ctx, findings);
     showDoctorHealthSummary(ctx);
     const output = vi.mocked(ctx.runtime.log).mock.calls.flat().join("\n");
@@ -170,10 +149,10 @@ describe("Doctor current-state summary", () => {
     ]) {
       expect(output).not.toContain(message);
     }
-    for (const finding of findings) {
+    for (const entry of findings) {
       expect(debug).toHaveBeenCalledWith("Doctor finding", {
-        ...finding,
-        consoleMessage: JSON.stringify(finding),
+        ...entry,
+        consoleMessage: JSON.stringify(entry),
       });
     }
     expect(output).not.toContain("[warning]");

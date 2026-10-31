@@ -11,6 +11,7 @@ import { resolveGatewayLockDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cronOwnerHardeningEntrypoints } from "../cron/owner-hardening-runtime.test-support.js";
 import { loadCronJobsStoreWithConfigJobsReadOnly, loadCronQuarantinedJobs } from "../cron/store.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
@@ -94,7 +95,7 @@ function writeText(file: string, value: string) {
 
 function expectConfigUntouched(configPath: string, stateDir: string, raw: string) {
   expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-  const files = fs.readdirSync(stateDir, { recursive: true, encoding: "utf8" });
+  const files = listDirectoryTreeStrictSync(stateDir).map((entry) => entry.relativePath);
   expect(files.filter((file) => /\.(?:sqlite|db)(?:$|-(?:wal|shm|journal)$)/u.test(file))).toEqual(
     [],
   );
@@ -172,7 +173,7 @@ describe("doctor invalid config process exit", () => {
       fs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
       fs.writeFileSync(configPath, "{}\n");
       const databasePath = seedV17AdditiveRepairDatabase(stateDir);
-      const args = ["doctor", "--fix", "--non-interactive", "--yes", "--no-workspace-suggestions"];
+      const args = ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"];
 
       const first = await run(args, DOCTOR_CHILD_TIMEOUT_MS);
       expect(first.code, first.stderr).toBe(0);
@@ -398,7 +399,7 @@ describe("doctor invalid config process exit", () => {
       const result = await run(invalidCommands[mode], DOCTOR_CHILD_TIMEOUT_MS);
       const output = `${result.stderr}\n${result.stdout}`;
       expect(result, output).toMatchObject({
-        code: human || mode === "json" ? 0 : mode === "lint" ? 2 : 1,
+        code: human || mode === "json" || mode === "lint" ? 2 : 1,
         signal: null,
       });
       if (human) {
@@ -406,11 +407,10 @@ describe("doctor invalid config process exit", () => {
           "Config invalid; doctor will run with best-effort config.",
           "unknown: config could not be parsed; fix config",
           "Run `openclaw config validate` to inspect the parse error.",
-          "Doctor complete.",
         ]) {
           expect(output).toContain(message);
         }
-        expect(output).not.toContain("Building Control UI assets");
+        expect(output).not.toContain("Doctor complete.");
       } else if (flag) {
         expect(output).toContain(`${flag}=1`);
         expect(output).toContain("immutable");
@@ -467,7 +467,7 @@ describe("doctor invalid config process exit", () => {
 
         const result = await run(doctorArgs("fix"), DOCTOR_CHILD_TIMEOUT_MS);
         const output = `${result.stderr}\n${result.stdout}`;
-        expect(result, output).toMatchObject({ code: 0, signal: null });
+        expect(result, output).toMatchObject({ code: 2, signal: null });
         expect(output).toContain("exclusive offline");
         expect(output).toContain("unknown: config could not be parsed");
         const files = expectConfigUntouched(configPath, stateDir, raw);
@@ -531,6 +531,8 @@ describe("Doctor repair followed by gateway readiness", () => {
         env: {
           NODE_ENV: undefined,
           ...doctorEnv,
+          // Retain elapsed step costs on timeout, not only the last progress label.
+          OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
           OPENCLAW_HOME: undefined,
           OPENCLAW_NO_RESPAWN: "1",
           OPENCLAW_SKIP_CHANNELS: "1",
@@ -612,8 +614,11 @@ describe("Doctor repair followed by gateway readiness", () => {
           execPath: nodeExecutable,
           timeoutMs: READINESS_CHILD_TIMEOUT_MS,
         });
+        // Keep the extra diagnostics scoped to Doctor, not Gateway startup.
+        env.OPENCLAW_GATEWAY_STARTUP_TRACE = process.env.OPENCLAW_GATEWAY_STARTUP_TRACE;
         const doctorOutput = `${doctor.stdout}\n${doctor.stderr}`;
         expect(doctor.code, doctorOutput).toBe(0);
+        expect(doctor.stderr).toMatch(/doctor[.]legacy-cron[.]store [0-9]+[.][0-9]+ms/);
         expect(doctorOutput).not.toContain("Building Control UI assets");
         expect(doctorOutput).not.toContain("Left plugin-state sidecar in place");
         expect(fs.readFileSync(sidecarPath)).toEqual(preservedSidecar);

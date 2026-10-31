@@ -4,6 +4,7 @@ import tls from "node:tls";
 import { decodeTextPrefix } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { openProxyConnectTunnel } from "@openclaw/proxyline";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { toErrorObject } from "./errors.js";
 import {
   getActiveManagedProxyUrl,
@@ -104,7 +105,7 @@ async function openApnsTlsTunnel(params: {
   // CONNECT ignores URL paths. Strip path metadata before Proxyline sees it so
   // tokens embedded in a configured proxy URL cannot surface in errors.
   const proxyUrl = normalizeConnectProxyUrl(params.proxyUrl);
-  const deadline = Date.now() + params.timeoutMs;
+  const deadline = monotonicNow() + params.timeoutMs;
   const proxySocket = await openProxyConnectTunnel({
     proxyUrl,
     ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
@@ -134,9 +135,8 @@ async function openApnsTlsTunnel(params: {
     });
     timeout = setTimeout(
       () => abortController.abort(new Error(`Proxy CONNECT timed out after ${params.timeoutMs}ms`)),
-      Math.max(1, deadline - Date.now()),
-    );
-    timeout.unref?.();
+      Math.max(1, deadline - monotonicNow()),
+    ).unref();
     await Promise.race([
       once(targetTlsSocket, "secureConnect", { signal: abortController.signal }),
       once(targetTlsSocket, "close", { signal: abortController.signal }).then(() => {
@@ -271,8 +271,7 @@ export async function probeApnsHttp2ReachabilityViaProxy(
       let responseHeaders: Record<string, string> = {};
       const timeout = setTimeout(() => {
         fail(new Error(`APNs reachability check timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-      timeout.unref?.();
+      }, timeoutMs).unref();
 
       const cleanup = () => {
         clearTimeout(timeout);

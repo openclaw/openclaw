@@ -249,10 +249,12 @@ export function readLocalSkillCardContentSync(skillDir: string): string | undefi
 export async function searchSkillsFromClawHub(params: {
   query?: string;
   limit?: number;
+  signal?: AbortSignal;
 }): Promise<ClawHubSkillSearchResult[]> {
   return await searchClawHubSkills({
     query: params.query?.trim() ?? "",
     limit: params.limit,
+    signal: params.signal,
   });
 }
 

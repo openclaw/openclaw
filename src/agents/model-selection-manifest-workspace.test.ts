@@ -1,5 +1,6 @@
 // Verifies configured model selection uses manifest policy only in scoped contexts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -32,17 +33,6 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: normalizeProviderModelIdWithRuntimeMock,
 }));
 
-const defaultNormalizationSnapshot = createPluginMetadataSnapshotFixture({
-  plugins: [
-    {
-      id: "default-normalizer",
-      modelIdNormalization: {
-        providers: { openai: { aliases: { entry: "middle", middle: "final" } } },
-      },
-    },
-  ],
-});
-
 function normalizationSnapshot(
   providers: NonNullable<PluginManifestRecord["modelIdNormalization"]>["providers"],
 ) {
@@ -50,6 +40,9 @@ function normalizationSnapshot(
     plugins: [{ id: "workspace-model-normalizer", modelIdNormalization: { providers } }],
   });
 }
+const defaultNormalizationSnapshot = normalizationSnapshot({
+  openai: { aliases: { entry: "middle", middle: "final" } },
+});
 
 function createCatalogConfig(): OpenClawConfig {
   return {
@@ -57,42 +50,51 @@ function createCatalogConfig(): OpenClawConfig {
   } as unknown as OpenClawConfig;
 }
 
-function expectConfiguredModelRef(params: Parameters<typeof resolveConfiguredModelRef>[0]) {
-  return expect(resolveConfiguredModelRef(params));
+type Selection = Parameters<typeof resolveConfiguredModelRef>[0];
+function expectConfiguredModelRef(params: Partial<Selection> & Pick<Selection, "cfg">) {
+  return expect(
+    resolveConfiguredModelRef({
+      defaultProvider: "openai",
+      defaultModel: "unused",
+      ...params,
+    }),
+  );
+}
+
+function modelConfig(
+  model: AgentDefaultsConfig["model"],
+  models?: AgentDefaultsConfig["models"],
+): OpenClawConfig {
+  return { agents: { defaults: { model, models } } };
+}
+
+function expectNoMetadataLoads() {
+  expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
 }
 
 describe("configured model manifest workspace scope", () => {
   beforeEach(() => {
-    loadManifestMetadataSnapshotMock.mockReset();
-    getCurrentPluginMetadataSnapshotMock.mockReset();
-    getActivePluginRegistryWorkspaceDirFromStateMock.mockReset();
-    normalizeProviderModelIdWithRuntimeMock.mockReset();
+    for (const mock of [
+      loadManifestMetadataSnapshotMock,
+      getCurrentPluginMetadataSnapshotMock,
+      getActivePluginRegistryWorkspaceDirFromStateMock,
+      normalizeProviderModelIdWithRuntimeMock,
+    ]) {
+      mock.mockReset();
+    }
     getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
     loadManifestMetadataSnapshotMock.mockReturnValue(
-      normalizationSnapshot({
-        custom: {
-          prefixWhenBare: "workspace-custom",
-        },
-      }),
+      normalizationSnapshot({ custom: { prefixWhenBare: "workspace-custom" } }),
     );
   });
 
   it("does not reuse workspace manifest policies without a workspace context", () => {
-    // Workspace plugin normalization must not leak into unscoped callers; they
-    // can only use the current global metadata snapshot.
     const cfg = createCatalogConfig();
-
     expect(buildConfiguredModelCatalog({ cfg })).toMatchObject([
-      {
-        provider: "custom",
-        id: "fast-model",
-      },
+      { provider: "custom", id: "fast-model" },
     ]);
-    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith({
-      config: cfg,
-      env: process.env,
-    });
-    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
+    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("builds configured catalog facts once when resolving allowed models", () => {
@@ -107,26 +109,15 @@ describe("configured model manifest workspace scope", () => {
       }).allowedCatalog,
     ).toMatchObject([{ provider: "custom", id: "fast-model" }]);
     expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);
-    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
+    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("does not load manifest metadata for wildcard-only configured model aliases", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/*": {},
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
+    const cfg = modelConfig(undefined, { "anthropic/*": {} });
     const aliases = buildModelAliasIndex({ cfg, defaultProvider: "anthropic" });
 
-    expect(aliases.byAlias.size).toBe(0);
-    expect(aliases.byKey.size).toBe(0);
-    expect(getCurrentPluginMetadataSnapshotMock.mock.calls.length).toBe(0);
-    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
+    expect([aliases.byAlias.size, aliases.byKey.size]).toEqual([0, 0]);
+    expectNoMetadataLoads();
   });
 
   it("resolves selected-agent default-provider aliases without cold manifest discovery", () => {
@@ -149,8 +140,8 @@ describe("configured model manifest workspace scope", () => {
       defaultProvider: "openai",
       defaultModel: "gpt-5.6-sol",
     }).toEqual({ provider: "openai", model: "ops" });
-    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
-    expect(normalizeProviderModelIdWithRuntimeMock.mock.calls.length).toBe(0);
+    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
   });
 
   it("preserves workspace manifest policy for default-provider aliases", () => {
@@ -158,186 +149,98 @@ describe("configured model manifest workspace scope", () => {
     loadManifestMetadataSnapshotMock.mockReturnValue(
       normalizationSnapshot({ openai: { aliases: { ops: "workspace-ops" } } }),
     );
-    const cfg = {
-      agents: { defaults: { models: { "openai/ops": { alias: "Operations" } } } },
-    } as unknown as OpenClawConfig;
+    const cfg = modelConfig(undefined, { "openai/ops": { alias: "Operations" } });
 
     expect(
       buildModelAliasIndex({ cfg, defaultProvider: "openai" }).byAlias.get("operations")?.ref,
     ).toEqual({ provider: "openai", model: "workspace-ops" });
-    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(1);
-    expect(loadManifestMetadataSnapshotMock.mock.calls[0]?.[0]?.workspaceDir).toBe("/workspace/a");
+    expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/workspace/a" }),
+    );
   });
 
-  it.each([{ name: "explicit", primary: "openai/entry", models: undefined }])(
-    "does not renormalize the $name selection",
-    ({ primary, models }) => {
-      const manifestPlugins = defaultNormalizationSnapshot;
-      expectConfiguredModelRef({
-        cfg: { agents: { defaults: { model: { primary }, models } } },
-        defaultProvider: "openai",
-        defaultModel: "unused",
-        manifestPlugins,
-        allowPluginNormalization: false,
-      }).toEqual({ provider: "openai", model: "middle" });
-    },
-  );
-
-  it.each([{ manifest: false, runtime: true, expected: "runtime-entry" }])(
-    "honors captured normalization flags (manifest=$manifest, runtime=$runtime)",
-    ({ manifest, runtime, expected }) => {
-      normalizeProviderModelIdWithRuntimeMock.mockImplementation(
-        ({ context }: { context: { modelId: string } }) => `runtime-${context.modelId}`,
-      );
-      expectConfiguredModelRef({
-        cfg: { agents: { defaults: { model: "entry" } } },
-        defaultProvider: "openai",
-        defaultModel: "unused",
-        manifestPlugins: defaultNormalizationSnapshot,
-        allowManifestNormalization: manifest,
-        allowPluginNormalization: runtime,
-      }).toEqual({ provider: "openai", model: expected });
-      expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalledTimes(runtime ? 1 : 0);
-      expect(getCurrentPluginMetadataSnapshotMock.mock.calls.length).toBe(0);
-      expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
-    },
-  );
-
-  it("reuses metadata captured during unsuccessful provider inference", () => {
-    loadManifestMetadataSnapshotMock.mockReturnValue(defaultNormalizationSnapshot);
+  it.each([
+    ["openai/entry", "middle"],
+    ["entry@", "entry@"],
+    ["/", "unused"],
+  ])("normalizes captured selection %s once", (primary, model) => {
     expectConfiguredModelRef({
-      cfg: { agents: { defaults: { model: "entry", models: { "custom/unrelated": {} } } } },
-      defaultProvider: "openai",
-      defaultModel: "unused",
+      cfg: modelConfig({ primary }),
+      manifestPlugins: defaultNormalizationSnapshot,
       allowPluginNormalization: false,
-    }).toEqual({ provider: "openai", model: "middle" });
-    expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+    }).toEqual({ provider: "openai", model });
+    expectNoMetadataLoads();
+  });
+
+  it("honors captured normalization flags (manifest=false, runtime=true)", () => {
+    normalizeProviderModelIdWithRuntimeMock.mockImplementation(
+      ({ context }: { context: { modelId: string } }) => `runtime-${context.modelId}`,
+    );
+    expectConfiguredModelRef({
+      cfg: modelConfig("entry"),
+      manifestPlugins: defaultNormalizationSnapshot,
+      allowManifestNormalization: false,
+      allowPluginNormalization: true,
+    }).toEqual({ provider: "openai", model: "runtime-entry" });
+    expectNoMetadataLoads();
   });
 
   it("preserves the configured native API owner for a captured bare default", () => {
     normalizeProviderModelIdWithRuntimeMock.mockReturnValue("wrong-runtime-model");
     expectConfiguredModelRef({
       cfg: {
-        agents: { defaults: { model: "entry@work" } },
+        ...modelConfig("entry@work"),
         models: {
-          providers: {
-            openai: { api: "ollama", baseUrl: "https://fixture.invalid", models: [] },
-          },
+          providers: { openai: { api: "ollama", baseUrl: "https://fixture.invalid", models: [] } },
         },
       },
-      defaultProvider: "openai",
-      defaultModel: "unused",
       manifestPlugins: defaultNormalizationSnapshot,
     }).toEqual({ provider: "openai", model: "middle" });
     expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
   });
 
   it.each([
-    { primary: "entry@", expected: "entry@" },
-    { primary: "/", expected: "unused" },
-  ])(
-    "keeps existing parser behavior for captured malformed input '$primary'",
-    ({ primary, expected }) => {
-      expectConfiguredModelRef({
-        cfg: { agents: { defaults: { model: { primary } } } },
-        defaultProvider: "openai",
-        defaultModel: "unused",
-        manifestPlugins: [],
-        allowPluginNormalization: false,
-      }).toEqual({ provider: "openai", model: expected });
-      expect(getCurrentPluginMetadataSnapshotMock.mock.calls.length).toBe(0);
-      expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
-    },
-  );
-
-  it("does not load manifest metadata for statically resolved primary models", () => {
-    const cases: Array<{ cfg: OpenClawConfig; expected: { provider: string; model: string } }> = [
+    [modelConfig({ primary: "sonnet-4.6" }), "anthropic", "claude-sonnet-4-6"],
+    [
       {
-        cfg: {
-          agents: { defaults: { model: { primary: "sonnet-4.6" } } },
-        } as unknown as OpenClawConfig,
-        expected: { provider: "anthropic", model: "claude-sonnet-4-6" },
-      },
-      {
-        cfg: {
-          agents: { defaults: { model: { primary: "gpt-5.5" } } },
-          models: { providers: { openai: { models: [{ id: "gpt-5.5" }] } } },
-        } as unknown as OpenClawConfig,
-        expected: { provider: "openai", model: "gpt-5.5" },
-      },
-    ];
-
-    for (const { cfg, expected } of cases) {
-      getCurrentPluginMetadataSnapshotMock.mockClear();
-      loadManifestMetadataSnapshotMock.mockClear();
-      expectConfiguredModelRef({
-        cfg,
-        defaultProvider: "anthropic",
-        defaultModel: "claude-sonnet-4-6",
-      }).toEqual(expected);
-      expect(getCurrentPluginMetadataSnapshotMock.mock.calls.length).toBe(0);
-      expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
-    }
-  });
-
-  it("uses manifest-normalized configured refs to infer providers for bare defaults", () => {
-    loadManifestMetadataSnapshotMock.mockReturnValue(
-      normalizationSnapshot({
-        anthropic: {
-          aliases: {
-            "sonnet-4.6": "claude-sonnet-4-6",
-          },
-        },
-      }),
-    );
-    const cfg = {
-      agents: {
-        defaults: {
-          model: { primary: "claude-sonnet-4-6" },
-          models: {
-            "anthropic/sonnet-4.6": {},
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expectConfiguredModelRef({
-      cfg,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.4",
-    }).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
-    expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("reuses resolved manifest plugins while resolving direct primary models", () => {
-    loadManifestMetadataSnapshotMock.mockReturnValue(
-      normalizationSnapshot({
-        anthropic: {
-          aliases: {
-            "sonnet-4.6": "claude-sonnet-4-6",
-          },
-        },
-        openrouter: {
-          prefixWhenBare: "openrouter",
-        },
-      }),
-    );
-    const cfg = {
-      agents: {
-        defaults: {
-          model: { primary: "openrouter:auto" },
-          models: {
-            "anthropic/sonnet-4.6": { alias: "sonnet" },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
+        ...modelConfig({ primary: "gpt-5.5" }),
+        models: { providers: { openai: { models: [{ id: "gpt-5.5" }] } } },
+      } as unknown as OpenClawConfig,
+      "openai",
+      "gpt-5.5",
+    ],
+  ] as const)("resolves static %j without metadata", (cfg, provider, model) => {
     expectConfiguredModelRef({
       cfg,
       defaultProvider: "anthropic",
       defaultModel: "claude-sonnet-4-6",
-    }).toEqual({ provider: "openrouter", model: "openrouter/auto" });
+    }).toEqual({ provider, model });
+    expectNoMetadataLoads();
+  });
+
+  it.each([
+    ["entry", { "custom/unrelated": {} }, "openai", "middle"],
+    ["claude-sonnet-4-6", { "anthropic/sonnet-4.6": {} }, "anthropic", "claude-sonnet-4-6"],
+    [
+      "openrouter:auto",
+      { "anthropic/sonnet-4.6": { alias: "sonnet" } },
+      "openrouter",
+      "openrouter/auto",
+    ],
+  ] as const)("reuses discovered metadata for %s", (primary, models, provider, model) => {
+    loadManifestMetadataSnapshotMock.mockReturnValue(
+      normalizationSnapshot({
+        openai: { aliases: { entry: "middle", middle: "final" } },
+        anthropic: { aliases: { "sonnet-4.6": "claude-sonnet-4-6" } },
+        openrouter: { prefixWhenBare: "openrouter" },
+      }),
+    );
+    expectConfiguredModelRef({
+      cfg: modelConfig({ primary }, models),
+      defaultProvider: primary === "openrouter:auto" ? "anthropic" : "openai",
+      defaultModel: primary === "openrouter:auto" ? "claude-sonnet-4-6" : "gpt-5.4",
+      allowPluginNormalization: primary === "entry" ? false : undefined,
+    }).toEqual({ provider, model });
     expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledTimes(1);
   });
 });

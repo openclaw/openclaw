@@ -225,8 +225,11 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
       },
     );
     if (checked.status !== 0) {
+      // A failed check does not prove lock loss. Preserve process evidence for
+      // the existing redacted diagnostic formatter instead of guessing its cause.
       throw new Error(
-        "PR operation lock changed or is unreadable; retain provisioning state for recovery.",
+        `PR operation lock check failed (status=${checked.status}, signal=${checked.signal}); retain provisioning state for recovery.${checked.stderr?.trim() ? `\n${checked.stderr.trim()}` : ""}`,
+        { cause: checked.error },
       );
     }
   };

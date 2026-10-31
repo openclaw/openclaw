@@ -96,7 +96,9 @@ function SystemsInventory(props: { controller: Systems }) {
     latest(inventoryRead.read);
     return null;
   };
-  const query = createMemo(() => controller().state.query.trim().toLocaleLowerCase());
+  const query = createMemo(() =>
+    controller().state.query.trim().toLocaleLowerCase().normalize("NFC"),
+  );
   const rows = createMemo(() => {
     const sortMode = controller().state.sortMode;
     return controller()
@@ -112,7 +114,7 @@ function SystemsInventory(props: { controller: Systems }) {
             row.environment.id,
             systemPlatform(row) ?? "",
             row.environment.platform ?? row.node?.platform ?? "",
-          ].some((value) => value.toLocaleLowerCase().includes(query()))
+          ].some((value) => value.toLocaleLowerCase().normalize("NFC").includes(query()))
         );
       })
       .toSorted((a, b) => {

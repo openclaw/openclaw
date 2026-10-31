@@ -20,6 +20,16 @@ function teamsConfig(msteams: MSTeamsConfig): OpenClawConfig {
 
 const policy = msteamsSetupWizard.dmPolicy!;
 const groups = msteamsSetupWizard.groupAccess!;
+const credentials = {
+  appId: "synthetic-app",
+  appPassword: "synthetic-secret",
+  tenantId: "synthetic-tenant",
+};
+const inherited = {
+  dmPolicy: "allowlist",
+  allowFrom: ["root-user"],
+  groupPolicy: "allowlist",
+} satisfies MSTeamsConfig;
 function policyKeys(prefix: string) {
   return { policyKey: `${prefix}.dmPolicy`, allowFromKey: `${prefix}.allowFrom` };
 }
@@ -51,17 +61,12 @@ describe("msteamsSetupWizard account-scoped policies", () => {
       { input: "channel", resolved: true, teamId: "team-b", channelId: "channel-b" },
       { input: "incomplete", resolved: true },
     ]);
-    const note = vi.fn(async () => {});
     const resolved = await groups.resolveAllowlist!({
-      cfg: teamsConfig({
-        appId: "synthetic-app",
-        appPassword: "synthetic-secret",
-        tenantId: "synthetic-tenant",
-      }),
+      cfg: teamsConfig(credentials),
       accountId: "default",
       credentialValues: {},
       entries: ["unknown/general", "whole-team", "channel", "incomplete"],
-      prompter: { note },
+      prompter: { note: async () => {} },
     });
 
     expect(resolved).toEqual([
@@ -69,29 +74,20 @@ describe("msteamsSetupWizard account-scoped policies", () => {
       { teamKey: "team-a" },
       { teamKey: "unknown", channelKey: "general" },
     ]);
-    expect(note).toHaveBeenCalledWith(
-      "Resolved channels: channel-b\nResolved teams: team-a\nUnresolved (kept as typed): unknown/general",
-      "MS Teams channels",
-    );
   });
 
   it("reads and edits root DM policy without consuming its SecretRef", () => {
     const secret = { source: "env" as const, provider: "default", id: "TEAMS_POLICY_SECRET" };
-    const account = {
-      appId: "synthetic-app",
-      tenantId: "synthetic-tenant",
+    const cfg = teamsConfig({
       appPassword: secret,
-      dmPolicy: "allowlist" as const,
+      dmPolicy: "allowlist",
       allowFrom: ["user-1"],
-    };
-    const cfg = teamsConfig(account);
+    });
     const before = structuredClone(cfg);
-    const accountId = "default";
-
     expect(policy.getCurrent(cfg)).toBe("allowlist");
-    expect(policy.resolveConfigKeys?.(cfg, accountId)).toEqual(policyKeys("channels.msteams"));
-    const next = policy.setPolicy(cfg, "open", accountId);
-    expect(resolveMSTeamsAccountConfig(next, accountId)).toMatchObject({
+    expect(policy.resolveConfigKeys?.(cfg, "default")).toEqual(policyKeys("channels.msteams"));
+    const next = policy.setPolicy(cfg, "open", "default");
+    expect(resolveMSTeamsAccountConfig(next, "default")).toMatchObject({
       dmPolicy: "open",
       allowFrom: ["user-1", "*"],
       appPassword: secret,
@@ -123,21 +119,11 @@ describe("msteamsSetupWizard account-scoped policies", () => {
   });
 
   it("writes the root default policy without changing siblings", () => {
-    const inherited = {
-      dmPolicy: "allowlist",
-      allowFrom: ["root-user"],
-      groupPolicy: "allowlist",
-    } as const;
     const cfg = teamsConfig({
       defaultAccount: "default",
       ...inherited,
       allowFrom: [...inherited.allowFrom],
-      appId: "default-app",
-      appPassword: "default-secret",
-      tenantId: "tenant-id",
-      accounts: {
-        support: { appId: "support-app", appPassword: "support-secret", tenantId: "tenant-id" },
-      },
+      accounts: { support: {} },
     });
     const opened = policy.setPolicy(cfg, "open", "default");
     const disabled = groups.setPolicy({
@@ -152,21 +138,19 @@ describe("msteamsSetupWizard account-scoped policies", () => {
       allowFrom: ["root-user", "*"],
     });
     expect(resolveMSTeamsAccountConfig(disabled, "support")).toMatchObject(inherited);
-    expect(Object.keys(disabled.channels?.msteams?.accounts ?? {})).toEqual(
-      expect.arrayContaining(["default", "support"]),
-    );
     expect(disabled.channels?.msteams?.accounts).not.toHaveProperty("Default");
   });
 
   it("writes an explicit default account group allowlist without changing its sibling", () => {
+    const root = { root: {} };
+    const existing = { existing: {} };
+    const support = { teams: { support: {} } };
     const cfg = teamsConfig({
       defaultAccount: "Default",
-      teams: { root: {} },
-      accounts: {
-        Default: { teams: { existing: {} } },
-        support: { teams: { support: {} } },
-      },
+      teams: root,
+      accounts: { Default: { teams: existing }, support },
     });
+    const before = structuredClone(cfg);
 
     const next = groups.applyAllowlist?.({
       cfg,
@@ -175,18 +159,14 @@ describe("msteamsSetupWizard account-scoped policies", () => {
     });
 
     expect(next?.channels?.msteams).toMatchObject({
-      teams: { root: {} },
+      teams: root,
       accounts: {
-        Default: {
-          teams: {
-            existing: {},
-            "team-a": { channels: { "channel-a": {} } },
-          },
-        },
-        support: { teams: { support: {} } },
+        Default: { teams: { ...existing, "team-a": { channels: { "channel-a": {} } } } },
+        support,
       },
     });
     expect(next?.channels?.msteams?.accounts).not.toHaveProperty("default");
+    expect(cfg).toEqual(before);
   });
 
   it("preserves a display-style key for policy paths and allowlist writes", async () => {

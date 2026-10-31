@@ -28,7 +28,7 @@ import {
   seedDesktopResizeSources,
   writeDesktopResizeProvider,
 } from "./desktop-resize-real.test-support.ts";
-import { deviceGatewayEnv } from "./device-gateway.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 
 type DesktopProofPhase = Exclude<
   ReturnType<typeof desktopProofTestReport>["files"][number]["assertions"][number]["phase"],

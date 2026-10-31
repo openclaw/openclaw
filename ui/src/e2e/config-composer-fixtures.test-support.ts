@@ -14,12 +14,16 @@ export function createConfigSuite(name: string) {
   });
 }
 
-export const settingsPageOptions = {
-  colorScheme: "dark",
-  locale: "en-US",
-  serviceWorkers: "block",
-  viewport: { height: 1000, width: 1440 },
-} satisfies BrowserContextOptions;
+export function createSettingsPageOptions() {
+  return {
+    colorScheme: "dark",
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport: { height: 1000, width: 1440 },
+  } satisfies BrowserContextOptions;
+}
+
+export const settingsPageOptions = createSettingsPageOptions();
 
 export function configProof(name: string, variant?: string) {
   const enabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -84,6 +88,18 @@ export function computedStyles(control: Locator, names: readonly string[]) {
 }
 
 export async function revealControl(control: Locator) {
+  const closedObjects = control
+    .page()
+    .locator("details.cfg-object:not([open])")
+    .filter({ visible: true });
+  while ((await control.count()) === 0) {
+    await expect
+      .poll(async () => (await control.count()) > 0 || (await closedObjects.count()) > 0)
+      .toBe(true);
+    if ((await control.count()) === 0) {
+      await closedObjects.first().locator(":scope > summary").click();
+    }
+  }
   await expect.poll(() => control.count()).toBe(1);
   for (const details of await control.locator("xpath=ancestor::details").all()) {
     if ((await details.getAttribute("open")) === null) {

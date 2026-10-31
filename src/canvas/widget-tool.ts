@@ -52,6 +52,8 @@ type ShowWidgetToolOptions = {
   inlineClientAvailable?: boolean;
   /** Admitted callers without a rendering client may author only durable dashboard widgets. */
   pinnedOnly?: boolean;
+  /** Keeps the session's recorded inline schema while this turn's missing inline client limits calls to pins. */
+  pinWithoutInlineClient?: boolean;
   presenters?: readonly WidgetPresenter[];
   presenterContext?: WidgetPresenterContext;
 };
@@ -172,6 +174,8 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
   const inlineHostEnabled = options.inlineHostEnabled !== false;
   const inlineAvailable =
     !pinnedOnly && inlineHostEnabled && options.inlineClientAvailable !== false;
+  const pinWithoutInlineClient = inlineAvailable && options.pinWithoutInlineClient === true;
+  const inlineExecutionAvailable = inlineAvailable && !pinWithoutInlineClient;
   const allKinds = ["html"];
   const presenters = options.presenters ?? [];
   const presenterContext =
@@ -292,7 +296,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         }),
       ),
     }),
-    ...(currentChannelPresenter || pinnedOnly
+    ...(currentChannelPresenter || pinnedOnly || pinWithoutInlineClient
       ? {}
       : { requiredClientCaps: SHOW_WIDGET_REQUIRED_CLIENT_CAPS }),
     prepareArguments: (args) => {
@@ -380,9 +384,11 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       const wantsCurrentChannel =
         requestedTarget === "assistant_message" && currentPresenterSupportsKind;
       const wantsNodePanel = requestedTarget === "node_panel";
-      if (!inlineAvailable && !wantsCurrentChannel && !wantsNodePanel && !shouldPin) {
+      if (!inlineExecutionAvailable && !wantsCurrentChannel && !wantsNodePanel && !shouldPin) {
         throw new WidgetHtmlInputError(
-          "inline widget hosting is disabled; set pin=true to place the widget on the session dashboard",
+          pinWithoutInlineClient
+            ? "no connected client can show inline widgets this turn; set pin=true to place the widget on the session dashboard"
+            : "inline widget hosting is disabled; set pin=true to place the widget on the session dashboard",
         );
       }
       if (wantsCurrentChannel && currentChannelPresenter) {
@@ -393,7 +399,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       }
       const wrappedDocument = isReport ? "" : buildWidgetDocument(title, widgetCode);
       const hasPresentationRoute =
-        !isReport && (inlineAvailable || wantsCurrentChannel || wantsNodePanel);
+        !isReport && (inlineExecutionAvailable || wantsCurrentChannel || wantsNodePanel);
       let pinnedText = "";
       let pinnedWidgetName: string | undefined;
       let capabilityState: BoardWidgetPutResult["widgets"][number]["grantState"] | undefined;
@@ -531,7 +537,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         });
       }
 
-      if (presentationAttempt && !presentationAttempt.ok && !inlineAvailable) {
+      if (presentationAttempt && !presentationAttempt.ok && !inlineExecutionAvailable) {
         const failureText = widgetPresentationFailureText(presentationAttempt.error, false);
         if (pinnedWidgetName) {
           return jsonResult({

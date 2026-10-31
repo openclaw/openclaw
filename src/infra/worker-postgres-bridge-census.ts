@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 export type PostgresBridgeCounter = {
   threadId: number;
   count: Int32Array<SharedArrayBuffer>;
+  selfRootCount?: Int32Array<SharedArrayBuffer>;
 };
 
 export function readPostgresBridgeCounters(value: unknown): PostgresBridgeCounter[] {
@@ -19,7 +20,11 @@ export function readPostgresBridgeCounters(value: unknown): PostgresBridgeCounte
       entry.threadId !== threadId &&
       entry.count instanceof Int32Array &&
       entry.count.length === 1 &&
-      entry.count.buffer instanceof SharedArrayBuffer,
+      entry.count.buffer instanceof SharedArrayBuffer &&
+      (entry.selfRootCount === undefined ||
+        (entry.selfRootCount instanceof Int32Array &&
+          entry.selfRootCount.length === 1 &&
+          entry.selfRootCount.buffer instanceof SharedArrayBuffer)),
   );
 }
 
@@ -27,8 +32,11 @@ export function readPostgresBridgeCounters(value: unknown): PostgresBridgeCounte
 export function collectPostgresBridgeCounters(
   count: Int32Array<SharedArrayBuffer>,
   sources: Iterable<{ postgresBridgeCounters?: readonly PostgresBridgeCounter[] }>,
+  selfRootCount?: Int32Array<SharedArrayBuffer>,
 ): PostgresBridgeCounter[] {
-  const counters = new Map<number, PostgresBridgeCounter>([[threadId, { threadId, count }]]);
+  const counters = new Map<number, PostgresBridgeCounter>([
+    [threadId, { threadId, count, selfRootCount }],
+  ]);
   for (const source of sources) {
     for (const counter of source.postgresBridgeCounters ?? []) {
       counters.set(counter.threadId, counter);
@@ -39,4 +47,12 @@ export function collectPostgresBridgeCounters(
 
 export function countPostgresBridges(counters: readonly PostgresBridgeCounter[]): number {
   return counters.reduce((total, counter) => total + Atomics.load(counter.count, 0), 0);
+}
+
+export function countPostgresPoolSelfRoots(counters: readonly PostgresBridgeCounter[]): number {
+  return counters.reduce(
+    (total, counter) =>
+      total + (counter.selfRootCount ? Atomics.load(counter.selfRootCount, 0) : 0),
+    0,
+  );
 }

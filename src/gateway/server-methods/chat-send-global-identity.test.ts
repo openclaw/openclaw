@@ -289,6 +289,7 @@ it.each<IdentityScenario>([
         sessionKey: scenario.key,
         message,
         idempotencyKey: runId,
+        ...(scenario.pendingReplacement ? { queueMode: "steer" as const } : {}),
       };
       const send = (response: typeof respond, id = runId, admit?: () => Promise<boolean>) =>
         handleDirectExternalChatSend(
@@ -363,7 +364,11 @@ it.each<IdentityScenario>([
       }
       expect(respond).toHaveBeenCalledWith(
         true,
-        { runId, status: "started" },
+        {
+          runId,
+          status: "started",
+          ...(!scenario.replaceDuringPersistence ? { messageSeq: 2 } : {}),
+        },
         undefined,
         expect.anything(),
       );

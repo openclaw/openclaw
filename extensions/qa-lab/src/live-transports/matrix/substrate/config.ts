@@ -13,7 +13,7 @@ import type { MatrixQaProvisionedTopology } from "./topology.js";
 
 type MatrixQaThreadRepliesMode = "off" | "inbound" | "always";
 type MatrixQaAutoJoinMode = "allowlist" | "always" | "off";
-type MatrixQaStreamingMode = "off" | "partial" | "quiet";
+type MatrixQaStreamingMode = "off" | "partial" | "progress" | "quiet";
 type MatrixQaActorRole = "driver" | "observer" | "sut";
 type MatrixQaChunkMode = "length" | "newline";
 type MatrixQaExecApprovalTarget = "both" | "channel" | "dm";
@@ -133,10 +133,13 @@ function resolveMatrixQaStreamingMode(
   if (value === true || value === "partial") {
     return "partial";
   }
-  if (value === "quiet") {
-    return "quiet";
+  if (value === "quiet" || value === "progress") {
+    return value;
   }
-  if (isRecord(value) && (value.mode === "partial" || value.mode === "quiet")) {
+  if (
+    isRecord(value) &&
+    (value.mode === "partial" || value.mode === "progress" || value.mode === "quiet")
+  ) {
     return value.mode;
   }
   return "off";

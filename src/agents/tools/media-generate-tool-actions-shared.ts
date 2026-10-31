@@ -94,6 +94,18 @@ export function createMediaGenerateProviderListAction<T extends MediaGeneratePro
     });
 }
 
+/**
+ * Snapshots provider metadata into plain JSON values so list results stay
+ * serializable after plugin provider resources are released. Plugin-bound
+ * proxies reject later reads once their consumer closes, and structuredClone
+ * cannot materialize them; the JSON round-trip also drops non-JSON values that
+ * would otherwise break later serialization.
+ */
+function snapshotProviderMetadata<T>(value: T): T {
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- Plugin-bound proxies cannot be materialized by structuredClone; the JSON round-trip is the serialization contract.
+  return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T); // SAFETY: JSON round-trip preserves the JSON-serializable subset of T's shape.
+}
+
 export async function createMediaGenerateProviderListActionResult<
   TProvider extends MediaGenerateProvider,
 >(params: {
@@ -187,7 +199,7 @@ export async function createMediaGenerateProviderListActionResult<
     content: [{ type: "text", text: lines.join("\n") }],
     details: {
       kind: params.kind,
-      providers: providerDetails,
+      providers: providerDetails.map(snapshotProviderMetadata),
     },
   };
 }

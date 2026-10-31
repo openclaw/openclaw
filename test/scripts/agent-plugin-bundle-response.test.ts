@@ -15,13 +15,13 @@ const described = (patch = {}) => ({ ...target, parameters: { ...parameters, ...
 
 function targetResult(
   text = probeText,
-  details: Partial<{ mcpServer: string; mcpTool: string; status: string }> = {},
+  patch: Partial<{ details: unknown; isError: boolean }> = {},
 ) {
   return {
     tool: { ...target },
     result: {
       content: [{ type: "text", text }],
-      details: { mcpServer: "weather-probe", mcpTool: "weather_probe", ...details },
+      ...patch,
     },
   };
 }
@@ -112,8 +112,8 @@ describe("Agent Plugins bundle mock response", () => {
     ["wrong call selector", 2, { args: { id: "other", args: {} } }],
     ["unexpected target arguments", 2, { args: { id: target.id, args: { unexpected: true } } }],
     ["wrong receipt target", 2, { value: { ...targetResult(), tool: { ...target, id: "other" } } }],
-    ["wrong MCP server", 2, { value: targetResult(probeText, { mcpServer: "other" }) }],
-    ["failed target result", 2, { value: targetResult(probeText, { status: "error" }) }],
+    ["leaked internal details", 2, { value: targetResult(probeText, { details: {} }) }],
+    ["failed target result", 2, { value: targetResult(probeText, { isError: true }) }],
     ["missing environment evidence", 2, { value: targetResult("probe ok") }],
     ["LF-suffixed probe mode field", 2, { value: targetResult(`${probeText}\n`) }],
     ["permissive additional properties", 1, { value: described({ additionalProperties: true }) }],

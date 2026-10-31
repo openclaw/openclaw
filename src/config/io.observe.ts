@@ -76,7 +76,6 @@ function resolveObservation(params: {
     hash: params.current.hash,
     lastObservedSuspiciousSignature: entry.lastObservedSuspiciousSignature,
     bytes: params.current.bytes,
-    hasMeta: params.current.hasMeta,
     gatewayMode: params.current.gatewayMode,
     parsed: params.snapshot.parsed,
     lastKnownGood: baseline,
@@ -262,7 +261,6 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
     });
     const suspicious = resolveConfigObserveSuspiciousReasons({
       bytes: current.bytes,
-      hasMeta: current.hasMeta,
       gatewayMode: current.gatewayMode,
       parsed: params.parsed,
       lastKnownGood: baseline.previousLastKnownGood,

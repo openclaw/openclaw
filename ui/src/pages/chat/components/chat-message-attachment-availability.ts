@@ -14,6 +14,7 @@ import {
   notifyChatMediaResourceSubscribers,
   observeChatMediaResource,
   readChatMediaResource,
+  releaseChatMediaResourceOwner,
   scheduleChatMediaResourceRefresh,
   type ChatMediaResource,
   type ImageRenderOptions,
@@ -58,6 +59,16 @@ export function resolveAssistantAttachmentAvailability(
   options: ImageRenderOptions = {},
   allowImage = false,
 ): AssistantAttachmentAvailability {
+  if (
+    options.mediaReadAllowed === false &&
+    !source.startsWith("data:") &&
+    !source.startsWith("blob:")
+  ) {
+    if (options.onMediaChange) {
+      releaseChatMediaResourceOwner(options.onMediaChange);
+    }
+    return { status: "checking" };
+  }
   if (!isLocalAssistantAttachmentSource(source)) {
     return { status: "available" };
   }

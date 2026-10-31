@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -101,6 +102,37 @@ function stageResult({ ref, base, current }: Awaited<ReturnType<typeof resultFix
   });
 }
 
+it.each(["base", "current"] as const)(
+  "identifies only a current-manifest path rejection before staging (%s invalid)",
+  async (invalid) => {
+    const fixture = await resultFixture(`unsafe-${invalid}`);
+    const rejected = encodeWorkspaceManifest({
+      version: 1,
+      baseCommit: null,
+      entries: [
+        {
+          path: "legacy\\notes.txt",
+          type: "file",
+          mode: 0o644,
+          size: 0,
+          sha256: "a".repeat(64),
+        },
+      ],
+    });
+    fixture[invalid] = rejected;
+    const error = await stageResult(fixture).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toHaveProperty("message", "Worker workspace manifest contains an unsafe path");
+    if (invalid === "current") {
+      expect(error).toHaveProperty("code", "WORKSPACE_STAGE_CURRENT_PATH_UNSAFE");
+    } else {
+      expect(error).not.toHaveProperty("code");
+    }
+    expect(await hasRef(fixture.ref)).toBe(false);
+    expect(await readText("result.txt")).toBe("base\n");
+  },
+);
+
 function prepareWorkspaceResult(params: {
   ref: string;
   base: ReturnType<typeof encodeWorkspaceManifest>;
@@ -122,6 +154,62 @@ function prepareWorkspaceResult(params: {
     currentManifestRaw: params.current.raw,
   });
 }
+
+it("applies a mixed workspace delta without per-entry worker verification", async () => {
+  const baseFiles = {
+    "edit.txt": "base edit\n",
+    "delete.txt": "delete me\n",
+    "rename-old.txt": "rename me\n",
+    "conflict.txt": "base conflict\n",
+    "unchanged.txt": "keep me\n",
+  };
+  const additions = Object.fromEntries(
+    Array.from({ length: 8 }, (_, index) => [`add-${index}.txt`, `added ${index}\n`]),
+  );
+  const currentFiles = {
+    ...additions,
+    "edit.txt": "worker edit\n",
+    "rename-new.txt": "rename me\n",
+    "conflict.txt": "worker conflict\n",
+    "unchanged.txt": "keep me\n",
+  };
+  await writeWorkspaceFiles(local, baseFiles);
+  await writeWorkspaceFiles(staged, currentFiles);
+  const base = { ...(await manifestFor(local)), baseCommit: "a".repeat(40) };
+  const current = { ...(await manifestFor(staged)), baseCommit: base.baseCommit };
+  await writeWorkspaceFiles(local, {
+    "conflict.txt": "local conflict\n",
+    "local-ignored.txt": "local only\n",
+  });
+  const operations: unknown[] = [];
+  const diagnostics = channel("openclaw.git.operation");
+  const record = (message: unknown) => operations.push(message);
+  diagnostics.subscribe(record);
+  let applied;
+  try {
+    applied = await apply(base, current);
+  } finally {
+    diagnostics.unsubscribe(record);
+  }
+  expect(applied.conflictPaths).toEqual(["conflict.txt"]);
+  await expectWorkspaceFiles(local, {
+    ...currentFiles,
+    "conflict.txt": "local conflict\n",
+    "local-ignored.txt": "local only\n",
+  });
+  for (const deleted of ["delete.txt", "rename-old.txt"]) {
+    await expect(fs.lstat(path.join(local, deleted))).rejects.toMatchObject({ code: "ENOENT" });
+  }
+  expect(applied.manifest.entries.map((entry) => entry.path).toSorted()).toEqual(
+    Object.keys(currentFiles).toSorted(),
+  );
+  expect(operations).toContainEqual(
+    expect.objectContaining({ operation: "workspace.reconcile.preflight", outcome: "ok" }),
+  );
+  expect(operations).not.toContainEqual(
+    expect.objectContaining({ operation: "workspace.manifest.file" }),
+  );
+});
 
 it("keeps local-only paths outside a Git workspace's accepted manifest", async () => {
   await fs.writeFile(path.join(local, "tracked.txt"), "tracked\n");

@@ -32,8 +32,12 @@ export type ChatSessionAbortParams = {
   assertCurrent?: () => void;
   /** Prepare persisted request facts immediately before the synchronous cancellation effects. */
   beforeAbort?: () => Promise<void>;
+  /** Explicit user Stop also cancels and suppresses Workshop Experience Review for the stopped runs. */
+  cancelExperienceReview?: true;
   preserveSideRuns?: boolean;
   cascadeDescendants?: true;
+  /** Current session lifecycle owner; reporting only, never descendant selection. */
+  yieldedRequesterRunId?: string;
   /** Exact lifecycle owners may include hidden and side runs for this one session. */
   includeProtectedRuns?: boolean;
   /** Captures exact registrations before cancellation can remove them. */

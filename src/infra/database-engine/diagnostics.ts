@@ -13,7 +13,7 @@ import { captureGatewayStateOwner, resolveGatewayStateOwnerPath } from "../gatew
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import { quoteSqliteIdentifier as quote } from "../sqlite-schema-sql.js";
-import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
+import { prepareSqliteReadOnlyLocation } from "../sqlite-snapshot-source.js";
 import {
   createDatabaseStoreDiagnostic,
   type DatabaseStoreDiagnostic,
@@ -45,6 +45,9 @@ function observeLease(
       : lease.state === "live"
         ? "live-owner"
         : "unverifiable";
+  if (result.lease === "unverifiable") {
+    result.nextSteps.push("Inspect the recorded Gateway lease before offline maintenance.");
+  }
 }
 
 function observeVersion(result: DatabaseStoreDiagnostic, version: number) {
@@ -79,10 +82,10 @@ function inspectSqlite(
     try {
       const source = descriptor.inspectSqliteSource(db);
       observeVersion(result, source.version);
-      if (source.migrationRequired) {
-        result.schema.pending = Math.max(1, result.schema.pending ?? 0);
-        result.issues.push("A store schema migration is pending.");
-        result.nextSteps.push("Run openclaw doctor --fix before porting this store.");
+      if (source.migrationRequired && source.version === result.schema.expectedVersion) {
+        // Port preparation includes same-version repairs; it is not a schema-version gap.
+        result.issues.push("Store preparation is required before porting.");
+        result.nextSteps.push("Database porting performs this preparation on a private copy.");
       }
     } catch {
       // Core state and agent stores keep their authoritative version in user_version.
@@ -309,11 +312,18 @@ export async function inspectDatabaseStore(
             (!recorded || isGatewayStateOwnerDefinitelyStale(recorded, ownerPath))
           ? "none"
           : "unverifiable";
+      if (recorded && result.custody === "unverifiable") {
+        result.nextSteps.push(
+          "Inspect the recorded store owner's custody before offline maintenance.",
+        );
+      }
     } catch {
       result.issues.push("Physical store custody could not be verified.");
       result.nextSteps.push("Check the Gateway owner and rerun openclaw doctor.");
     }
-    const prepared = prepareSqliteReadOnlyLocationSync(input.path);
+    const prepared = await prepareSqliteReadOnlyLocation(input.path, {
+      preserveSourceArtifacts: true,
+    });
     let engine: BackupEngine;
     try {
       engine = readBackupEngineImage(prepared.location, input.path);
@@ -334,7 +344,7 @@ export async function inspectDatabaseStore(
         inspectSqlite(result, db, input.descriptor);
       }
     } finally {
-      prepared.cleanup();
+      await prepared.cleanupAsync();
     }
     if (engine.engine === "postgres") {
       await inspectPostgres(result, engine, input.postgres);
@@ -345,19 +355,9 @@ export async function inspectDatabaseStore(
       "Run openclaw doctor --fix with the matching version, or restore this store's verified backup.",
     );
   }
-  if (result.custody === "unverifiable" || result.lease === "unverifiable") {
-    result.nextSteps.push(
-      "Inspect the store owner's custody and lease before offline maintenance.",
-    );
-  }
   if (result.observed === "postgres" && result.degraded === null) {
     result.nextSteps.push(
       "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-    );
-  }
-  if (result.backup === null) {
-    result.nextSteps.push(
-      "No matching backup outcome was observed; run openclaw backup create and verify its result.",
     );
   }
   if (result.schema.expectedVersion === null && result.schema.versioning !== "unversioned") {

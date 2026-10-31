@@ -7,8 +7,8 @@ import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import { isClawsAvailable } from "../pages/claws/availability.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.tsx";
+import { isTemplatesAvailable } from "../pages/templates/availability.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import type { ShellLazyOverlayHost } from "./app-shell-lazy-view.tsx";
@@ -91,9 +91,10 @@ export function readShellView(host: ShellViewHost) {
     historyRecovering,
   );
   const presentationScope = gatewayPresentationScope(context.gateway);
-  // Initial hello can paint the shell before recovery finishes. Keep that brief
-  // startup state in existing chrome rather than flashing recovery feedback.
+  // Cold hello can paint the shell before recovery finishes. Suppress that brief
+  // startup feedback, but keep admitted warm-boot chrome stable through reconnect.
   const initialConnection =
+    !runtime.warmBoot &&
     !presentationScope.readyOnce &&
     !gatewaySnapshot.offlineStable &&
     (connectionStatus === "connecting" ||
@@ -116,7 +117,7 @@ export function readShellView(host: ShellViewHost) {
         )
       : null;
   // Onboarding renders without any navigation chrome, so the settings takeover
-  // must not reserve its fixed sidebar column (the grid would stay off-center).
+  // must not reserve its sidebar column (the grid would stay off-center).
   const nativeEmbed = isNativeEmbedHost();
   const embedSettingsRoot = nativeEmbed && activeRoute === "settings";
   const embedSettings =
@@ -138,7 +139,7 @@ export function readShellView(host: ShellViewHost) {
   });
   // Drawer navigation always opens expanded; the tab's desktop collapse state
   // stays in memory for when the viewport returns to the desktop layout.
-  // The settings sidebar has a fixed width, so the collapse state pauses too.
+  // Settings needs expanded navigation, so the collapse state pauses there too.
   const navCollapsed =
     !nativeEmbed &&
     navigationSnapshot.navCollapsed &&
@@ -147,7 +148,10 @@ export function readShellView(host: ShellViewHost) {
     !settingsTakeover;
   const railAvailable = !nativeEmbed && !settingsTakeover && !onboarding;
   const railWidth = railAvailable ? NAVIGATION_RAIL_WIDTH : 0;
-  const expandedNavWidth = navigationSnapshot.navWidth + railWidth;
+  // Settings replaces the rail and sidebar without moving the desktop reading surface.
+  const expandedNavWidth =
+    navigationSnapshot.navWidth +
+    (settingsTakeover && !mobileNavLayout ? NAVIGATION_RAIL_WIDTH : railWidth);
   const navigationSurfaceHidden = navigationSurfaceIsHidden({
     onboarding,
     navCollapsed,
@@ -163,7 +167,6 @@ export function readShellView(host: ShellViewHost) {
       onboarding,
       compact: mergedChatChrome,
     });
-  const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
   // A route query is navigation input, not an owner record. Let it override the
   // live selection only after the roster proves that agent exists.
   const requestedRouteAgentId = host.shellNavigation.newSessionRouteAgentId();
@@ -200,10 +203,10 @@ export function readShellView(host: ShellViewHost) {
     router: runtime.router,
     activePluginTabId: activePluginRef ? pluginTabKey(activePluginRef) : "",
     enabledRouteIds:
-      isClawsAvailable(context.runtimeConfig.state) === true
+      isTemplatesAvailable(context.runtimeConfig.state) === true
         ? APP_ROUTE_IDS
-        : APP_ROUTE_IDS.filter((routeId) => routeId !== "claws"),
-    sessionKey: host.activeSessionKey,
+        : APP_ROUTE_IDS.filter((routeId) => routeId !== "templates"),
+    sessionKey: host.routeState.sessionRouteNotice ? "" : host.activeSessionKey,
     connected: gatewayConnected,
     connectionStatus,
     footerControlsOverlap: host.shellLayout.footerControlsOverlap,
@@ -312,7 +315,10 @@ export function readShellView(host: ShellViewHost) {
     expandedNavWidth,
     navigationSurfaceHidden,
     floatingAttentionVisible,
-    shellWidth,
+    // Only the visible desktop divider needs viewport geometry.
+    get shellWidth() {
+      return Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
+    },
     selectedAgentId,
     newSessionDisabledReason,
     workspacePluginsEnabled,

@@ -125,6 +125,8 @@ export type {
   ProviderPrepareDynamicModelContext,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareRuntimeAuthContext,
+  ProviderPrepareRuntimeAuthContextV2,
+  ProviderRuntimeAuthModel,
   ProviderPreparedRuntimeAuth,
   ProviderReconcileLocalServiceContext,
   ProviderReasoningOutputMode,
@@ -273,3 +275,12 @@ export type {
   PluginHookBeforeChannelIngressEvent,
   PluginHookBeforeChannelIngressResult,
 } from "../plugins/hook-message.types.js";
+
+export type {
+  RepositoryIntegration,
+  RepositoryActor,
+  RepositoryOperation,
+  RepositoryCredentialScope,
+  RepositoryConnectionIdentity,
+  RepositoryAdmission,
+} from "../plugins/repository-integration.types.js";

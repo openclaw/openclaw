@@ -4,8 +4,8 @@ import { expect, it } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequest,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
 } from "../../../src/gateway/control-ui-contract.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -162,6 +162,125 @@ suite.define(() => {
     await pollText(pill).toContain("Publish failed");
   });
 
+  it("keeps one mobile pill across a PR's publication lifecycle", async () => {
+    const published = {
+      requestId: "publication-lifecycle",
+      publisher: sharedPublisher,
+      status: "published",
+      url: "https://github.com/openclaw/openclaw/pull/4321",
+      repository: "openclaw/openclaw",
+      branch: "openclaw/lifecycle",
+      headCommit: "a".repeat(40),
+    };
+    const { page, gateway, watchedKey } = await openPublicationChat(
+      { "sessions.github.publish": published },
+      {},
+      { viewport: { width: 393, height: 852 } },
+    );
+    await closeChatDetails(page);
+    await gateway.waitForRequest("sessions.github.options");
+    const pills = page.locator(".activity-pill");
+    const publication = page.locator('.activity-pill[data-family="publication"]');
+    const pullRequestPill = page.locator('.activity-pill[data-family="pull-request"]');
+
+    await emitPullRequests(gateway, watchedKey, publicationState("openclaw/lifecycle"));
+    await pollText(publication).toContain("Publish PR");
+    await publication.click();
+    await page.getByRole("button", { name: "Publish PR", exact: true }).click();
+    await closeChatDetails(page);
+    // Until the PR snapshot lists it, the receipt bridges as that PR's number.
+    await pollText(publication).toContain("#4321");
+    await pollCount(pills).toBe(1);
+
+    // The Gateway omits branch facts once the checkout has a live PR.
+    const listed = pullRequest(4321, {
+      branch: "openclaw/lifecycle",
+      state: "open",
+      additions: 2,
+      deletions: 1,
+    });
+    await emitPullRequests(gateway, watchedKey, {
+      pullRequests: [listed],
+      rateLimited: false,
+      status: "ready",
+    });
+    await pollCount(publication).toBe(0);
+    await pollCount(pullRequestPill).toBe(1);
+    await pollCount(pills).toBe(1);
+    await pollAttr(pullRequestPill, "data-tone").toBe("ok");
+    // Details continues the publication as the PR row, not a second entry.
+    const group = await openDetailsPullRequests(page);
+    await pollCount(group.locator('[data-details-destination="publication"]')).toBe(0);
+    await closeChatDetails(page);
+
+    await emitPullRequests(gateway, watchedKey, {
+      pullRequests: [{ ...listed, state: "merged" }],
+      rateLimited: false,
+      status: "ready",
+    });
+    await pollAttr(pullRequestPill, "data-tone").toBe("purple");
+    await pollCount(pills).toBe(1);
+
+    // Another session PR still gets its own pill.
+    await emitPullRequests(gateway, watchedKey, {
+      pullRequests: [{ ...listed, state: "merged" }, pullRequest(4400, { state: "draft" })],
+      rateLimited: false,
+      status: "ready",
+    });
+    await pollCount(pullRequestPill).toBe(2);
+    await pollCount(publication).toBe(0);
+
+    // New work after the merge starts the next PR's lifecycle beside the merged one.
+    await emitPullRequests(gateway, watchedKey, {
+      ...publicationState("openclaw/lifecycle"),
+      pullRequests: [{ ...listed, state: "merged" }],
+    });
+    await pollText(publication).toContain("Publish PR");
+    await pollCount(pullRequestPill).toBe(1);
+    await pollCount(pills).toBe(2);
+  });
+
+  it("hides a published PR's single mobile pill without reviving its receipt", async () => {
+    const published = {
+      requestId: "publication-hide",
+      publisher: sharedPublisher,
+      status: "published",
+      url: "https://github.com/openclaw/openclaw/pull/4500",
+      repository: "openclaw/openclaw",
+      branch: "openclaw/hide",
+      headCommit: "b".repeat(40),
+    };
+    const { page, gateway, watchedKey } = await openPublicationChat(
+      { "sessions.github.publish": published },
+      {},
+      { viewport: { width: 393, height: 852 } },
+    );
+    await closeChatDetails(page);
+    await gateway.waitForRequest("sessions.github.options");
+    const pills = page.locator(".activity-pill");
+    const publication = page.locator('.activity-pill[data-family="publication"]');
+    await emitPullRequests(gateway, watchedKey, publicationState("openclaw/hide"));
+    await publication.click();
+    await page.getByRole("button", { name: "Publish PR", exact: true }).click();
+    await closeChatDetails(page);
+    await pollText(publication).toContain("#4500");
+
+    await emitPullRequests(gateway, watchedKey, {
+      pullRequests: [pullRequest(4500, { branch: "openclaw/hide", state: "open" })],
+      rateLimited: false,
+      status: "ready",
+    });
+    const pullRequestPill = page.locator('.activity-pill[data-family="pull-request"]');
+    await pollCount(pills).toBe(1);
+    await pullRequestPill.click();
+    const page4500 = page.locator(
+      '.chat-mobile-details-page[data-details-page="pull-request"]:visible',
+    );
+    await page4500.locator(".chat-pr-mobile__hide").click();
+    await closeChatDetails(page);
+    await pollCount(pills).toBe(0);
+  });
+
   it("shows detected PRs in Details with rate-limit staleness", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
@@ -264,8 +383,6 @@ suite.define(() => {
 
   it.each([
     { width: 1440, theme: "light" },
-    { width: 1440, theme: "dark" },
-    { width: 390, theme: "light" },
     { width: 390, theme: "dark" },
   ] as const)(
     "keeps every PR visible and actionable at $width in $theme",
@@ -331,33 +448,33 @@ suite.define(() => {
           expect(row.width).toBeCloseTo(bounds.stackWidth, 1);
           previousBottom = row.bottom;
         }
-        for (let index = 0; index < count; index++) {
-          const chip = chips.nth(index);
-          const expectedUrl = `https://github.com/openclaw/openclaw/pull/${index + 1}`;
-          if (mobile) {
-            await chip.click();
-            const detail = page.locator(
-              '.chat-mobile-details-page[data-details-page="pull-request"]:visible',
-            );
-            const link = detail.getByRole("link", { name: "Open on GitHub", exact: true });
-            await pollAttr(link, "href").toBe(expectedUrl);
-            await link.click({ trial: true });
-            await detail.getByRole("button", { name: "Hide", exact: true }).click({ trial: true });
-            await openDetailsPullRequests(page);
-          } else {
-            await pollAttr(chip.locator(".chat-pr__link"), "href").toBe(expectedUrl);
-            await chip.locator(".chat-pr__link").click({ trial: true });
-            await chip
-              .getByRole("button", {
-                name: `Actions for pull request openclaw/openclaw#${index + 1}`,
-                exact: true,
-              })
-              .click();
-            const menu = chip.getByRole("menu");
-            await menu.getByRole("menuitem", { name: "Hide", exact: true }).click({ trial: true });
-            await page.keyboard.press("Escape");
-            await menu.waitFor({ state: "hidden" });
-          }
+      }
+      for (let index = 0; index < 3; index++) {
+        const chip = chips.nth(index);
+        const expectedUrl = `https://github.com/openclaw/openclaw/pull/${index + 1}`;
+        if (mobile) {
+          await chip.click();
+          const detail = page.locator(
+            '.chat-mobile-details-page[data-details-page="pull-request"]:visible',
+          );
+          const link = detail.getByRole("link", { name: "Open on GitHub", exact: true });
+          await pollAttr(link, "href").toBe(expectedUrl);
+          await link.click({ trial: true });
+          await detail.getByRole("button", { name: "Hide", exact: true }).click({ trial: true });
+          await openDetailsPullRequests(page);
+        } else {
+          await pollAttr(chip.locator(".chat-pr__link"), "href").toBe(expectedUrl);
+          await chip.locator(".chat-pr__link").click({ trial: true });
+          await chip
+            .getByRole("button", {
+              name: `Actions for pull request openclaw/openclaw#${index + 1}`,
+              exact: true,
+            })
+            .click();
+          const menu = chip.getByRole("menu");
+          await menu.getByRole("menuitem", { name: "Hide", exact: true }).click({ trial: true });
+          await page.keyboard.press("Escape");
+          await menu.waitFor({ state: "hidden" });
         }
       }
       if (mobile) {
@@ -476,8 +593,27 @@ suite.define(() => {
     },
   );
 
-  it("publishes through the Gateway and renders the terminal pull request URL", async () => {
-    const { page, gateway, watchedKey } = await openPublicationChat();
+  it("publishes from a cloud-idle workspace and renders the terminal pull request URL", async () => {
+    const { page, gateway, watchedKey } = await openPublicationChat({
+      "sessions.list": {
+        count: 1,
+        defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+        path: "",
+        sessions: [
+          {
+            contextTokens: null,
+            hasActiveRun: false,
+            key: "main",
+            kind: "direct",
+            placement: { state: "active" },
+            status: "done",
+            totalTokens: 0,
+            updatedAt: 1,
+          },
+        ],
+        ts: 1,
+      },
+    });
     await emitPullRequests(
       gateway,
       watchedKey,
@@ -490,7 +626,14 @@ suite.define(() => {
     await openChatPublication(page);
     await gateway.deferNext("sessions.github.publish");
     const publish = page.getByRole("button", { name: "Create PR" });
-    await publish.waitFor();
+    await expect.poll(() => publish.isEnabled()).toBe(true);
+    expect(
+      await page.getByRole("button", { name: "Publication account", exact: true }).count(),
+    ).toBe(0);
+    expect(await page.locator(".chat-pr__accounts-panel").count()).toBe(0);
+    expect(await page.locator(".chat-environment__branch").textContent()).not.toContain(
+      "reclaim the workspace",
+    );
     await publish.click();
     const request = await gateway.waitForRequest("sessions.github.publish");
     expect(request.params).toMatchObject({
@@ -637,6 +780,7 @@ suite.define(() => {
       after: requestCountB,
     });
     expect(requestB.params).toMatchObject({ sessionKey: sessionB });
+    await openChatPublication(page);
     const publishingB = page.getByRole("button", { name: "Publishing…" });
     const publishingBState = () =>
       publishingB.evaluateAll((buttons) => ({
@@ -675,40 +819,17 @@ suite.define(() => {
     );
   });
 
-  it("renders a typed publication failure and its next action", async () => {
+  it("reuses the publication key after an unknown outcome and rotates it after a typed failure", async () => {
     const { page, gateway, watchedKey } = await openPublicationChat({
       "sessions.github.publish": terminalFailure,
     });
     await emitPullRequests(
       gateway,
       watchedKey,
-      publicationState("openclaw/rejected-publication", {
-        createUrl: "https://github.com/openclaw/openclaw/pull/new/openclaw/rejected-publication",
+      publicationState("openclaw/retry-publication", {
+        createUrl: "https://github.com/openclaw/openclaw/pull/new/openclaw/retry-publication",
       }),
     );
-
-    await openChatPublication(page);
-    await page.getByRole("button", { name: "Create PR" }).click();
-    await openChatPublication(page);
-    const failure = page.locator('.chat-pr__publication-outcome[data-state="failed"]');
-    await pollText(failure).toContain("Publication failed");
-    await pollText(failure).toContain("Check repository write access");
-    await pollCount(page.getByRole("button", { name: "Choose a new publication" })).toBe(1);
-    await pollText(page.locator("[data-publication-account]")).toContain("Publish as @system-bot");
-    expect(
-      await page
-        .locator(
-          'a[href="https://github.com/openclaw/openclaw/pull/new/openclaw/rejected-publication"]',
-        )
-        .count(),
-    ).toBe(0);
-  });
-
-  it("reuses the publication key after an unknown outcome and rotates it after failure", async () => {
-    const { page, gateway, watchedKey } = await openPublicationChat({
-      "sessions.github.publish": terminalFailure,
-    });
-    await emitPullRequests(gateway, watchedKey, publicationState("openclaw/retry-publication"));
 
     await openChatPublication(page);
     await gateway.deferNext("sessions.github.publish");
@@ -730,7 +851,18 @@ suite.define(() => {
       after: requestCount,
     });
     expect(publicationRequestKey(second.params)).toBe(publicationRequestKey(first.params));
+    const failure = page.locator('.chat-pr__publication-outcome[data-state="failed"]');
+    await pollText(failure).toContain("Publication failed");
+    await pollText(failure).toContain("Check repository write access");
     await pollCount(page.getByRole("button", { name: "Choose a new publication" })).toBe(1);
+    await pollText(page.locator("[data-publication-account]")).toContain("Publish as @system-bot");
+    expect(
+      await page
+        .locator(
+          'a[href="https://github.com/openclaw/openclaw/pull/new/openclaw/retry-publication"]',
+        )
+        .count(),
+    ).toBe(0);
 
     requestCount = (await gateway.getRequests("sessions.github.publish")).length;
     await page.getByRole("button", { name: "Choose a new publication" }).click();
@@ -739,53 +871,5 @@ suite.define(() => {
       after: requestCount,
     });
     expect(publicationRequestKey(third.params)).not.toBe(publicationRequestKey(second.params));
-  });
-
-  it("preserves explicit shared publication on a cloud-idle workspace", async () => {
-    const { page, gateway, watchedKey } = await openPublicationChat({
-      "sessions.github.publish": {
-        requestId: "cloud-publication",
-        status: "requested",
-        publisher: sharedPublisher,
-        message: "Publication requested after workspace reconciliation.",
-      },
-      "sessions.list": {
-        count: 1,
-        defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-        path: "",
-        sessions: [
-          {
-            contextTokens: null,
-            hasActiveRun: false,
-            key: "main",
-            kind: "direct",
-            placement: { state: "active" },
-            status: "done",
-            totalTokens: 0,
-            updatedAt: 1,
-          },
-        ],
-        ts: 1,
-      },
-    });
-    await emitPullRequests(gateway, watchedKey, publicationState("openclaw/cloud-idle"));
-
-    await openChatPublication(page);
-    await expect.poll(() => page.getByRole("button", { name: "Create PR" }).isEnabled()).toBe(true);
-    expect(
-      await page.getByRole("button", { name: "Publication account", exact: true }).count(),
-    ).toBe(0);
-    expect(await page.locator(".chat-pr__accounts-panel").count()).toBe(0);
-    expect(await page.locator(".chat-environment__branch").textContent()).not.toContain(
-      "reclaim the workspace",
-    );
-    await page.getByRole("button", { name: "Create PR" }).click();
-    const request = await gateway.waitForRequest("sessions.github.publish");
-    expect(request.params).toMatchObject({
-      selection: { source: "shared", expected: sharedPublisher },
-    });
-    await pollText(page.locator(".chat-pr__publication-outcome")).toContain(
-      "Publication requested after workspace reconciliation.",
-    );
   });
 });

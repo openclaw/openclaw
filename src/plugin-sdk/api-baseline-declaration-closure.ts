@@ -213,7 +213,7 @@ export function createDeclarationClosureRenderer(params: {
     if (cached) {
       return cached;
     }
-    if (!sourceFile.isDeclarationFile && !emittedSources.has(sourceFile.fileName)) {
+    if (!sourceFile.isDeclarationFile && !emittedSources.has(key)) {
       throw new Error(
         `Missing emitted declaration for ${normalizePluginSdkApiSourcePath(repoRoot, sourceFile.fileName)}`,
       );

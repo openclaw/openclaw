@@ -105,6 +105,60 @@ to appear. Never construct that allowlist from unreviewed snapshot strings.
 Do not substitute the ordinary two-file diff: its object labels and retaining paths are sensitive.
 Review the generated schema and output before exporting aggregates.
 
+### Attribute compiled code to scripts
+
+Use the aggregate-only code mode to rank compiled scripts and detect repeated
+compilation identities:
+
+```bash
+node scripts/heap-snapshot-diff.mjs --code-by-script /path/to/capture.heapsnapshot \
+  --script-allowlist /path/to/reviewed-build-files.txt --top 30 \
+  > /path/to/private-evidence/code-summary.json
+```
+
+`--code-by-script` implies `--summary`; the same on-host isolation and pressure
+guards below apply. Its output contains only aggregate counts/bytes and reviewed
+script names. Build the separate newline-separated script allowlist from the
+**deployed build's file listing**, including JavaScript files in `dist` and
+package-relative JavaScript paths in deployed `node_modules`. Review the listing
+before use; exclude user state, home directories, and symlinks outside the product
+build. List each approved absolute path, file URL, or package-relative spelling
+explicitly. Matching is exact after removing the snapshot name's query/hash:
+there are no prefix, basename, URL-decoding, or realpath matches. Never derive
+this allowlist from snapshot strings. Without an allowlist, all names are redacted.
+List the release that produced the snapshot, not the current symlink: after a
+deploy, `current` resolves to a newer release directory and every name redacts.
+
+`topScripts` ranks retained bytes; `duplicateScripts` includes **every** complete
+normalized identity with multiple reachable V8 Script objects, regardless of
+`--top`. HMAC-SHA-256 values keyed per run distinguish redacted names within one
+report without emitting them; they cannot confirm a guessed path or link runs. Empty
+and truncated names have null hashes and remain separate; match `--string-limit`
+to the capturing runtime. Instance counts measure compiled Script objects, not
+functions or proof of repeated module evaluation. Intentional VM/plugin isolation
+and query-busted imports can both create multiple instances; inspect the loader
+before treating duplication as waste.
+
+Attribution follows Node/V8's Script and SharedFunctionInfo links, closure
+code/feedback links, and strong internal/hidden edges between code nodes. Script
+and function-info seeds stay fixed. Conflicting script associations and tagged
+runtime builtins go to `sharedOrRuntime`; code with no known association goes to
+`unattributed`. This is an inferred association, not an exclusive ownership proof.
+`shallowBytes` partitions reachable code nodes once. `retainedBytes` is the union
+of each group's dominated subtrees, including source strings and non-code data;
+nested code in the same group counts once, but **different rows can overlap**.
+The `total` row unions all reachable code subtrees independently. Do not sum
+retained rows or equate them with `v8.getHeapCodeStatistics()` or expected savings.
+
+`sourceStrings` separately ranks the strings reached by each Script's `source`
+edge, including concatenated and sliced backing strings. Its total counts each
+physical string once; per-script rows can overlap when scripts share storage.
+These are shallow string bytes, not exclusive retained size or RSS. The same
+script allowlist applies, and source contents are never emitted. Check that
+instrumentation preserves built JavaScript before attributing these bytes to the
+product: transforming loaders can append large inline source maps to the loaded
+source even when the built files contain none.
+
 `duplicateStringRetainers` ranks excess shallow bytes by a representative direct
 retainer constructor/property and its nearest context or named-constructor
 dominator. It keeps the first largest copy of each complete string and charges

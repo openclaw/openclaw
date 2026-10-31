@@ -1,8 +1,18 @@
+import { stripTypeScriptTypes } from "node:module";
 import vm from "node:vm";
-import { parse } from "acorn";
+import { parse as parseBabel } from "@babel/parser";
+import traverse from "@babel/traverse";
 import { describe, expect, it } from "vitest";
-import { rewriteStandaloneImports } from "../../scripts/lib/bun-standalone-imports.mjs";
+import {
+  assertNoUnrenderedModuleUrls,
+  createUnrenderedModuleUrlBootstrap,
+  rewriteStandaloneImports,
+} from "../../scripts/lib/bun-standalone-imports.mjs";
+import { createStandaloneSourceGlobals } from "../../scripts/lib/bun-standalone-source-globals.mjs";
+import { createStandaloneSourceParser } from "../../scripts/lib/bun-standalone-source-parser.mjs";
+import { typeCheckSources } from "../helpers/typescript.js";
 
+const parse = createStandaloneSourceParser();
 const runtimeRoot = "/removed-build/runtime";
 const filename = `${runtimeRoot}/dist/entry.mjs`;
 const relocatedRoot = "file:///relocated-app/runtime/";
@@ -15,7 +25,11 @@ const embeddedPaths = {
   "../standalone-worker-threads.cjs": "/$bunfs/root/standalone-worker-threads.js",
 };
 
-function rewrite(contents: string, entries: Record<string, string> = embeddedPaths) {
+function rewrite(
+  contents: string,
+  entries: Record<string, string> = embeddedPaths,
+  preserveTypes = false,
+) {
   return rewriteStandaloneImports({
     contents,
     filename,
@@ -24,10 +38,350 @@ function rewrite(contents: string, entries: Record<string, string> = embeddedPat
     moduleAliases,
     workerThreadsShim,
     parse,
+    preserveTypes,
   });
 }
 
 describe("standalone import relocation", () => {
+  it("relocates free CommonJS paths while preserving local bindings and property names", () => {
+    const source = `[
+      { __dirname, __filename },
+      (({ __dirname }) => __dirname)({ __dirname: "local" }),
+      ({ __dirname: "property" }).__dirname,
+      class { __dirname() { return "method"; } },
+    ];`;
+    const contents = rewrite(source);
+    const result = vm.runInNewContext(contents, {
+      __openclawStandaloneNativePath: (relative: string) => `/relocated-app/runtime/${relative}`,
+    });
+    expect(result[0]).toEqual({
+      __dirname: "/relocated-app/runtime/dist",
+      __filename: "/relocated-app/runtime/dist/entry.mjs",
+    });
+    expect(result[1]).toBe("local");
+    expect(result[2]).toBe("property");
+    expect(new result[3]()["__dirname"]()).toBe("method");
+  });
+
+  it.each([
+    'import { __dirname as directory } from "./value.mjs"; export { directory as __filename };',
+    'export { value as __dirname } from "./value.mjs";',
+    'export * as __filename from "./value.mjs";',
+    "__dirname: for (;;) { break __dirname; }",
+  ])("preserves module names and labels: %s", (source) => {
+    const contents = rewrite(source);
+    expect(() => parse(contents, { ecmaVersion: "latest", sourceType: "module" })).not.toThrow();
+    expect(contents).toBe(source);
+  });
+
+  it("defers a known unrendered URL without inventing a runtime path", () => {
+    const contents = rewriteStandaloneImports({
+      contents: "(() => import.meta.url)",
+      filename,
+      runtimeRoot,
+      embeddedPaths,
+      moduleAliases,
+      workerThreadsShim,
+      resolveModuleUrl: () => null,
+      parse,
+    });
+    const context = vm.createContext({});
+    vm.runInContext(createUnrenderedModuleUrlBootstrap(), context);
+    const read = vm.runInContext(contents, context);
+    expect(read).toThrow("OPENCLAW_UNRENDERED_MODULE_URL:dist/entry.mjs");
+    expect(() => assertNoUnrenderedModuleUrls(contents, "entry.js")).toThrow(
+      "An unrendered source module URL survived bundling in entry.js",
+    );
+  });
+
+  it("preserves a default URL's string contract when its source is unrendered", () => {
+    const source = `const readCommitFromBuildInfo = (moduleUrl = import.meta.url) => moduleUrl;
+const readLoadedCommit = (moduleUrl: string) => readCommitFromBuildInfo(moduleUrl);
+const result: string = readLoadedCommit("file:///explicit.mjs");
+[result, readCommitFromBuildInfo];`;
+    const contents = rewriteStandaloneImports({
+      contents: source,
+      filename,
+      runtimeRoot,
+      embeddedPaths,
+      moduleAliases,
+      workerThreadsShim,
+      resolveModuleUrl: () => null,
+      parse: createStandaloneSourceParser(),
+      preserveTypes: true,
+    });
+    expect(
+      typeCheckSources({
+        "globals.d.ts": `/// <reference types="node" />\n${createStandaloneSourceGlobals()}`,
+        "consumer.ts": contents,
+      }),
+    ).toEqual([]);
+    const context = vm.createContext({});
+    vm.runInContext(createUnrenderedModuleUrlBootstrap(), context);
+    const [result, read] = vm.runInContext(stripTypeScriptTypes(contents), context);
+    expect(result).toBe("file:///explicit.mjs");
+    expect(read).toThrow("OPENCLAW_UNRENDERED_MODULE_URL:dist/entry.mjs");
+  });
+
+  it.each([
+    ["direct", "%s"],
+    ["satisfies", "(%s) satisfies Resolver"],
+    ["as", "(%s) as Resolver"],
+    ["non-null", "(%s)!"],
+    ["parenthesized", "(((%s)))"],
+  ])(
+    "retains the typed %s resolver's handoff, receiver, arguments and restoration",
+    (_, expression) => {
+      const resolver = expression.replace(
+        "%s",
+        `function (request, parent, isMain, options) {
+  if (request === "throw") throw new Error("resolver failure");
+  this.calls += 1;
+  seen.push([parent, isMain, options?.paths]);
+  return request;
+}`,
+      );
+      const source = `type Resolver = (this: { calls: number }, request: string, parent: string | undefined, isMain: boolean, options?: { paths: string[] }) => string;
+const original: Resolver = function (request) { return request; };
+const holder: { module: { calls: number; _resolveFilename?: Resolver } } = { module: { calls: 0, _resolveFilename: original } };
+const resolverProperty = "_resolveFilename" as const;
+const seen: unknown[] = [];
+holder.module[resolverProperty] = ${resolver};
+const mapped: string = holder.module._resolveFilename("/physical/entry.js", "parent", false, { paths: ["root"] });
+const externalResult: string = holder.module._resolveFilename("/external/entry.js", undefined, true);
+let error: string | undefined;
+try { holder.module._resolveFilename("throw", undefined, false); } catch (caught) { error = caught instanceof Error ? caught.message : "unknown"; }
+holder.module._resolveFilename = original;
+[mapped, externalResult, holder.module.calls, holder.module._resolveFilename === original, error, seen];`;
+      const contents = rewriteStandaloneImports({
+        contents: source,
+        filename,
+        runtimeRoot,
+        embeddedPaths,
+        moduleAliases,
+        workerThreadsShim,
+        parse: createStandaloneSourceParser(),
+        preserveTypes: true,
+      });
+      const declarations = `declare var __openclawStandaloneExternalModulePath: (path: string) => string | undefined;\n`;
+      expect(typeCheckSources({ "resolver.ts": declarations + contents })).toEqual([]);
+      const result = vm.runInNewContext(stripTypeScriptTypes(contents), {
+        __openclawStandaloneExternalModulePath: (target: string) =>
+          target === "/physical/entry.js" ? "/$bunfs/root/entry.js" : undefined,
+      });
+      expect(result).toEqual([
+        "/$bunfs/root/entry.js",
+        "/external/entry.js",
+        2,
+        true,
+        "resolver failure",
+        [
+          ["parent", false, ["root"]],
+          [undefined, true, undefined],
+        ],
+      ]);
+    },
+  );
+
+  it("keeps a typed root's published module URL while its compiler input is staged elsewhere", async () => {
+    const rewritten = rewriteStandaloneImports({
+      contents: "(async () => [import.meta.url, await import(target), __dirname, __filename])",
+      filename: `${runtimeRoot}/.typed-source/core/src/entry.ts`,
+      physicalFilename: `${runtimeRoot}/dist/entry.js`,
+      runtimeRoot,
+      embeddedPaths,
+      moduleAliases,
+      workerThreadsShim,
+      parse: createStandaloneSourceParser(),
+      preserveTypes: true,
+    });
+    const load = vm.runInNewContext(rewritten, {
+      target: "./next.js",
+      __openclawStandaloneRootUrl: relocatedRoot,
+      __openclawStandaloneImport: async (parent: string, target: string) =>
+        new URL(target, parent).href,
+      __openclawStandaloneNativePath: (relative: string) => `/relocated-app/runtime/${relative}`,
+    });
+    expect(await load()).toEqual([
+      `${relocatedRoot}dist/entry.js`,
+      `${relocatedRoot}dist/next.js`,
+      "/relocated-app/runtime/dist",
+      "/relocated-app/runtime/dist/entry.js",
+    ]);
+  });
+
+  it("retains the import type witness without evaluating computed arguments again", async () => {
+    const source = "(async () => import(next(), options()))";
+    const rewritten = rewriteStandaloneImports({
+      contents: source,
+      filename,
+      runtimeRoot,
+      embeddedPaths,
+      moduleAliases,
+      workerThreadsShim,
+      parse: createStandaloneSourceParser(),
+      preserveTypes: true,
+    });
+    let specifiers = 0;
+    let options = 0;
+    const value = { answer: 42 };
+    const load = vm.runInNewContext(rewritten, {
+      __openclawStandaloneRootUrl: relocatedRoot,
+      next: () => {
+        specifiers++;
+        return "./leaf.ts";
+      },
+      options: () => {
+        options++;
+        return { with: { type: "json" } };
+      },
+      __openclawStandaloneImport: async (
+        _parent: string,
+        target: string,
+        attributes: unknown,
+        witness: () => Promise<unknown>,
+      ) => {
+        expect(target).toBe("./leaf.ts");
+        expect(attributes).toEqual({ with: { type: "json" } });
+        expect(typeof witness).toBe("function");
+        return value;
+      },
+    });
+    expect(await load()).toEqual(value);
+    expect([specifiers, options]).toEqual([1, 1]);
+    expect(rewritten).toContain("() => import(next(), options())");
+  });
+
+  it.each<[string, string[]]>([
+    ['const target = "./leaf.js"; import(target);', ["./leaf.js"]],
+    ["const target = `./leaf.js`; import(target);", ["./leaf.js"]],
+    ['async function read() { const target = "./leaf.js"; return import(target); }', ["./leaf.js"]],
+    ['{ const target = "./leaf.js"; import(target); }', ["./leaf.js"]],
+    ['function read() { return import(target); } const target = "./leaf.js";', ["./leaf.js"]],
+    ['const target = "./leaf.js"; ({target: other} = record); import(target);', ["./leaf.js"]],
+    [
+      'const target = "./outer.js"; class C { static { const target = "./inner.js"; import(target); } } import(target);',
+      ["./outer.js", "./inner.js"],
+    ],
+    [
+      'const target = "./outer.js"; class C { static { var target = "./inner.js"; import(target); } } import(target);',
+      ["./outer.js"],
+    ],
+    [
+      'const target = "./outer.js"; switch (import(target)) { default: const target = "./inner.js"; import(target); }',
+      ["./inner.js", "./outer.js"],
+    ],
+    [
+      'const target = "./outer.js"; function read(value = import(target)) { var target = "./inner.js"; return value; }',
+      ["./outer.js"],
+    ],
+    [
+      'const target = "./outer.js"; class C { constructor(public target: string) { import(target); } } import(target);',
+      ["./outer.js"],
+    ],
+    [
+      'const target = "./outer.js"; namespace N { const target = "./inner.js"; export function read() { return import(target); } } import(target);',
+      ["./outer.js", "./inner.js"],
+    ],
+    [
+      'const target = "./outer.js"; function read() { enum target { A } return import(target); }',
+      [],
+    ],
+    [
+      'const target = "./outer.js"; namespace N { import target = Other.target; export function read() { return import(target); } }',
+      [],
+    ],
+    ['let target = "./leaf.js"; target = "./other.js"; import(target);', []],
+    ['const target = "./leaf.js"; function read(target) { return import(target); }', []],
+    [
+      'const target = "./leaf.js"; { import(target); const target = "./other.js"; }',
+      ["./other.js"],
+    ],
+    ['const target = "./leaf.js"; try {} catch (target) { import(target); }', []],
+    ['const target = "./leaf.js"; for (const target of values) { import(target); }', []],
+    [
+      'const target = "./leaf.js"; const read = class target { read() { return import(target); } };',
+      [],
+    ],
+    ['const target = "./leaf.js"; if (false) target = "./other.js"; import(target);', []],
+    ['import(target); const target = "./leaf.js";', ["./leaf.js"]],
+  ])("exposes only immutable lexical literals to source discovery: %s", (source, expected) => {
+    const sourceParser = createStandaloneSourceParser();
+    const rewritten = rewriteStandaloneImports({
+      contents: source,
+      filename,
+      runtimeRoot,
+      embeddedPaths,
+      moduleAliases,
+      workerThreadsShim,
+      parse: sourceParser,
+      preserveTypes: true,
+    });
+    const imports: string[] = [];
+    traverse(
+      parseBabel(rewritten, {
+        sourceType: "module",
+        plugins: ["typescript", "decorators-legacy"],
+      }),
+      {
+        ImportExpression({ node }) {
+          if (node.source.type === "StringLiteral") {
+            imports.push(node.source.value);
+          }
+        },
+      },
+    );
+    expect(imports.toSorted()).toEqual(expected.toSorted());
+  });
+
+  it("keeps const-import typing, shadowing and temporal-dead-zone evaluation", async () => {
+    const source = `const target = "./leaf.js";
+async function read(): Promise<number> { return (await import(target)).answer; }
+async function shadow(target: string) { return await import(target); }
+let early: string | undefined;
+try { import(later); } catch (error) { early = error instanceof ReferenceError ? "tdz" : "other"; }
+const later = "./later.js";
+[read, shadow, early];`;
+    const rewritten = rewriteStandaloneImports({
+      contents: source,
+      filename,
+      runtimeRoot,
+      embeddedPaths,
+      moduleAliases,
+      workerThreadsShim,
+      parse: createStandaloneSourceParser(),
+      preserveTypes: true,
+    });
+    const diagnostics = typeCheckSources({
+      "globals.d.ts": `/// <reference types="node" />\n${createStandaloneSourceGlobals()}`,
+      "consumer.ts": rewritten,
+      "leaf.ts": "export const answer: number = 42;",
+      "later.ts": "export const answer: number = 9;",
+    });
+    // The original early read must remain an error even after discovery normalization.
+    expect(diagnostics.map((diagnostic) => diagnostic.code)).toEqual([2448, 2454]);
+    expect(
+      typeCheckSources({
+        "globals.d.ts": `/// <reference types="node" />\n${createStandaloneSourceGlobals()}`,
+        "consumer.ts": rewritten,
+        "leaf.ts": 'export const answer: string = "invalid";',
+        "later.ts": "export const answer: number = 9;",
+      }).some((diagnostic) => diagnostic.code === 2322),
+    ).toBe(true);
+    const targets: string[] = [];
+    const [read, shadow, early] = vm.runInNewContext(stripTypeScriptTypes(rewritten), {
+      __openclawStandaloneRootUrl: relocatedRoot,
+      __openclawStandaloneImport: async (_parent: string, target: string) => {
+        targets.push(target);
+        return { answer: 42 };
+      },
+    });
+    expect(await read()).toBe(42);
+    expect(await shadow("./shadow.js")).toEqual({ answer: 42 });
+    expect(early).toBe("tdz");
+    expect(targets).toEqual(["./leaf.js", "./shadow.js"]);
+  });
+
   it.each([
     [moduleAliases.ws, embeddedPaths["node_modules/ws/index.js"]],
     [workerThreadsShim, embeddedPaths["../standalone-worker-threads.cjs"]],
@@ -104,9 +458,12 @@ describe("standalone import relocation", () => {
             onResolve: (_options: unknown, callback: typeof resolve) => (resolve = callback),
           }),
       },
-      __openclawStandaloneEmbeddedPath: (target: string) => (target === sdk ? image : undefined),
+      __openclawStandaloneExternalModuleResolution: (target: string) =>
+        target === sdk
+          ? { path: image, namespace: "openclaw-image" }
+          : { path: target, namespace: "file" },
     });
-    expect(resolve!({ path: sdk })).toEqual({ path: image, namespace: "file" });
+    expect(resolve!({ path: sdk })).toEqual({ path: image, namespace: "openclaw-image" });
     const installed = "/profile/plugins/matrix/entry.js";
     expect(resolve!({ path: installed })).toEqual({ path: installed, namespace: "file" });
   });
@@ -117,24 +474,35 @@ describe("standalone import relocation", () => {
     ).toThrow("Unsupported standalone plugin resolver: openclaw-plugin-sdk-alias");
   });
 
-  it.each(["key", '"_resolveFilename"', "direct"])(
+  it.each(["key", '"_resolveFilename"', "direct", "typed-arrow"])(
     "maps the CJS %s resolver handoff while preserving external paths and restoration",
     (property) => {
-      const access = property === "direct" ? "._resolveFilename" : `[${property}]`;
-      const source = `const key = "_resolveFilename";
+      const typed = property === "typed-arrow";
+      const access = property === "direct" ? "._resolveFilename" : `[${typed ? "key" : property}]`;
+      const resolver = typed
+        ? "((value) => { Module.calls += 1; return value; }) satisfies typeof original"
+        : "function (value) { this.calls += 1; return value; }";
+      const source = `const key = "_resolveFilename"${typed ? " as const" : ""};
         const original = (value) => value;
-        const Module = { _resolveFilename: original };
-        Module${access} = function (value) { this.calls += 1; return value; };
-        Module.calls = 0;
+        const Module = { calls: 0, _resolveFilename: original };
+        Module${access} = ${resolver};
         const mapped = Module${access}("/app/runtime/dist/plugin-sdk/entry.js");
         const external = Module${access}("/profile/plugins/entry.cjs");
         Module${access} = original;
         [mapped, external, Module.calls, Module${access} === original];`;
-      const result = vm.runInNewContext(rewrite(source), {
-        __openclawStandaloneEmbeddedPath: (target: string) =>
+      const context = {
+        __openclawStandaloneExternalModulePath: (target: string) =>
           target === "/app/runtime/dist/plugin-sdk/entry.js" ? "/$bunfs/root/sdk.js" : undefined,
-      });
-      expect(result).toEqual(["/$bunfs/root/sdk.js", "/profile/plugins/entry.cjs", 2, true]);
+      };
+      const expected = ["/$bunfs/root/sdk.js", "/profile/plugins/entry.cjs", 2, true];
+      expect(vm.runInNewContext(rewrite(stripTypeScriptTypes(source)), { ...context })).toEqual(
+        expected,
+      );
+      expect(
+        vm.runInNewContext(stripTypeScriptTypes(rewrite(source, embeddedPaths, typed)), {
+          ...context,
+        }),
+      ).toEqual(expected);
     },
   );
 });

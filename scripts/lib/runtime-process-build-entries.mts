@@ -4,11 +4,16 @@ import {
   runtimeProcessCoreEntrypoints,
 } from "./runtime-process-core-build-entries.mts";
 
-const pluginBuildEntrypoints = Object.values(pluginRuntimeProcessManifest).map((entry) =>
-  Object.assign({}, entry, {
-    currentModuleUrl: new URL(`../../${entry.ownerSource}`, import.meta.url).href,
-  }),
-);
+const pluginBuildEntrypoints = Object.values(pluginRuntimeProcessManifest).flatMap((entry) => {
+  if ("build" in entry) {
+    return [];
+  }
+  return [
+    Object.assign({}, entry, {
+      currentModuleUrl: new URL(`../../${entry.ownerSource}`, import.meta.url).href,
+    }),
+  ];
+});
 
 // The private test graph covers package-owned workers as well as the host runtime.
 export const runtimeProcessBuildEntrypoints = [

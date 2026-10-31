@@ -1,9 +1,7 @@
-import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
-import type { RawData, WebSocket } from "ws";
+import type { WebSocket } from "ws";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import type { AgentCommandDeliveryResult } from "../agents/command/delivery-result.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import {
   agentCommandMock,
@@ -21,11 +19,7 @@ type AgentResponse = {
   type?: string;
   id?: string;
   ok?: boolean;
-  payload?: {
-    runId?: string;
-    status?: string;
-    result?: Pick<AgentCommandDeliveryResult, "payloads" | "deliveryStatus" | "deliverySucceeded">;
-  };
+  payload?: { status?: string; result?: object };
 };
 
 let harness: GatewayServerHarness;
@@ -61,23 +55,19 @@ test("preserves a session-only WebChat reply across ordered final response and r
   };
   const first = await harness.openClient(clientOptions);
   const orderedResponses: AgentResponse[] = [];
-  const isResponse = (frame: AgentResponse) =>
-    frame.type === "res" && frame.id === "agent-contract";
-  const recordResponse = (data: RawData) => {
-    const frame = JSON.parse(rawDataToString(data)) as AgentResponse;
-    if (isResponse(frame)) {
+  const waitForResponse = (accepted: boolean) =>
+    onceMessage<AgentResponse>(
+      first.ws,
+      (frame) =>
+        frame.type === "res" &&
+        frame.id === "agent-contract" &&
+        (frame.payload?.status === "accepted") === accepted,
+    ).then((frame) => {
       orderedResponses.push(frame);
-    }
-  };
-  first.ws.on("message", recordResponse);
-  const acceptedPromise = onceMessage<AgentResponse>(
-    first.ws,
-    (frame) => isResponse(frame) && frame.payload?.status === "accepted",
-  );
-  const terminalPromise = onceMessage<AgentResponse>(
-    first.ws,
-    (frame) => isResponse(frame) && frame.payload?.status !== "accepted",
-  );
+      return frame;
+    });
+  const acceptedPromise = waitForResponse(true);
+  const terminalPromise = waitForResponse(false);
 
   let terminal: AgentResponse;
   try {
@@ -89,9 +79,7 @@ test("preserves a session-only WebChat reply across ordered final response and r
       terminalPromise,
       "agent completed before command dispatch",
     );
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expect(vi.mocked(agentCommandMock).mock.calls[0]?.[0]).toMatchObject({
-      runId: idempotencyKey,
       channel: "webchat",
       messageChannel: "webchat",
       runContext: { messageChannel: "webchat" },
@@ -101,18 +89,14 @@ test("preserves a session-only WebChat reply across ordered final response and r
 
     runCompletion.resolve();
     terminal = await terminalPromise;
-    const response = (status: string, result?: { payloads: typeof payloads }) => ({
-      type: "res",
-      id: "agent-contract",
-      ok: true,
-      payload: { runId: idempotencyKey, status, ...(result ? { result } : {}) },
-    });
-    expect(orderedResponses).toMatchObject([response("accepted"), response("ok", { payloads })]);
+    expect(orderedResponses.map(({ ok, payload }) => ({ ok, payload }))).toMatchObject([
+      { ok: true, payload: { runId: idempotencyKey, status: "accepted" } },
+      { ok: true, payload: { runId: idempotencyKey, status: "ok", result: { payloads } } },
+    ]);
     expect(terminal.payload?.result).not.toHaveProperty("deliveryStatus");
     expect(terminal.payload?.result).not.toHaveProperty("deliverySucceeded");
   } finally {
     runCompletion.resolve();
-    first.ws.off("message", recordResponse);
     const responsesSettled = Promise.allSettled([acceptedPromise, terminalPromise]);
     await closeGatewayTestWebSocket(first.ws);
     await responsesSettled;

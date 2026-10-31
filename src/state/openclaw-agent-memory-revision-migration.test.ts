@@ -12,7 +12,13 @@ import {
 
 const predecessor = 30;
 const target = OPENCLAW_AGENT_SCHEMA_VERSION;
-const scope = ["memory_index_chunks", "memory_index_sources", "schema_meta"];
+const scope = [
+  "memory_index_chunks",
+  "memory_index_sources",
+  "schema_meta",
+  "session_transcript_cold_archive_chunks",
+  "transcript_events",
+];
 
 const withFixture = migrationFixture({ seed, predecessor, target, scope, admission: true });
 

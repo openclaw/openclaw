@@ -2,7 +2,6 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
-  errorShape,
   missingScopeErrorShape,
   validateNodeInvokeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -36,6 +35,7 @@ import {
   parseGatewayPayload,
 } from "./nodes.helpers.js";
 import {
+  captureNodeSystemRunEventSource,
   isForwardedNodeInvokeApprovalAuthorityActive,
   resolveNodeInvokeRuntimeAuthorityError,
 } from "./nodes.invoke-authority.js";
@@ -50,12 +50,20 @@ import {
 } from "./nodes.shared.js";
 import { wakeNodeForReconnect } from "./nodes.wake-reconnect.js";
 import { maybeSendNodeWakeNudge, maybeWakeNodeWithApns } from "./nodes.wake.js";
-import { respondUnavailableOnThrow } from "./response.js";
+import { respondError, respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const nodeInvokeHandlers: GatewayRequestHandlers = {
-  "node.invoke": async ({ params, respond, context, client, req, signal }) => {
+  "node.invoke": async ({
+    params,
+    respond,
+    context,
+    client,
+    req,
+    signal,
+    hasCurrentClientAuthority,
+  }) => {
     if (!assertValidParams(params, validateNodeInvokeParams, "node.invoke", respond)) {
       return;
     }
@@ -94,13 +102,9 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       if (isUploadAllowed()) {
         return false;
       }
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.FORBIDDEN, GATEWAY_UPLOADS_DISABLED_MESSAGE, {
-          details: { code: GATEWAY_UPLOADS_DISABLED_CODE },
-        }),
-      );
+      respondError(respond, ErrorCodes.FORBIDDEN, GATEWAY_UPLOADS_DISABLED_MESSAGE, {
+        details: { code: GATEWAY_UPLOADS_DISABLED_CODE },
+      });
       return true;
     };
     if (rejectDisabledUpload()) {
@@ -111,32 +115,26 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         ? client.internal.nodeInvokeStream
         : undefined;
     if (!nodeId || !command) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "nodeId and command required"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "nodeId and command required");
       return;
     }
     if (isPrivateNodeInvokeCommand(command)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "node.invoke does not allow private node controls", {
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "node.invoke does not allow private node controls",
+        {
           details: { command },
-        }),
+        },
       );
       return;
     }
     if (command === "system.execApprovals.get" || command === "system.execApprovals.set") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "node.invoke does not allow system.execApprovals.*; use exec.approvals.node.*",
-          { details: { command } },
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "node.invoke does not allow system.execApprovals.*; use exec.approvals.node.*",
+        { details: { command } },
       );
       return;
     }
@@ -144,14 +142,11 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       return;
     }
     if (isBrowserProxyNodeInvokeCommand(command) && isForbiddenBrowserProxyMutation(p.params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `node.invoke cannot mutate persistent browser profiles via ${command}`,
-          { details: { command } },
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        `node.invoke cannot mutate persistent browser profiles via ${command}`,
+        { details: { command } },
       );
       return;
     }
@@ -307,17 +302,13 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               `node wake done node=${nodeId} req=${wakeReqId} connected=false ` +
                 `reason=not_connected totalMs=${totalDurationMs}`,
             );
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.UNAVAILABLE, "node not connected", {
-                details: {
-                  code: "NOT_CONNECTED",
-                  nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
-                  nodeCommandDispatched: false,
-                },
-              }),
-            );
+            respondError(respond, ErrorCodes.UNAVAILABLE, "node not connected", {
+              details: {
+                code: "NOT_CONNECTED",
+                nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
+                nodeCommandDispatched: false,
+              },
+            });
             return;
           }
 
@@ -346,13 +337,9 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               session,
               authorizationCfg,
             );
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.INVALID_REQUEST, hint, {
-                details: { reason: allowed.reason, command },
-              }),
-            );
+            respondError(respond, ErrorCodes.INVALID_REQUEST, hint, {
+              details: { reason: allowed.reason, command },
+            });
             return false;
           }
           return true;
@@ -374,13 +361,9 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           execApprovalManager: context.execApprovalManager,
         });
         if (!forwardedParams.ok) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, forwardedParams.message, {
-              details: forwardedParams.details ?? null,
-            }),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, forwardedParams.message, {
+            details: forwardedParams.details ?? null,
+          });
           return;
         }
         if (respondIfInvokeExpired()) {
@@ -391,14 +374,11 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           releaseApprovalHandoff =
             context.execApprovalManager?.retainForHandoff(authority.recordId) ?? undefined;
           if (!releaseApprovalHandoff) {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.INVALID_REQUEST,
-                "approved runtime authority closed before node dispatch",
-                { details: { code: "APPROVAL_AUTHORITY_CLOSED" } },
-              ),
+            respondError(
+              respond,
+              ErrorCodes.INVALID_REQUEST,
+              "approved runtime authority closed before node dispatch",
+              { details: { code: "APPROVAL_AUTHORITY_CLOSED" } },
             );
             return;
           }
@@ -474,17 +454,13 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             const errorCode = policyResult.unavailable
               ? ErrorCodes.UNAVAILABLE
               : ErrorCodes.INVALID_REQUEST;
-            respond(
-              false,
-              undefined,
-              errorShape(errorCode, permission?.message ?? policyResult.message, {
-                details: {
-                  ...policyResult.details,
-                  ...(policyResult.code ? { code: policyResult.code } : {}),
-                  ...(permission ? { permissionMissing: permission.permissionMissing } : {}),
-                },
-              }),
-            );
+            respondError(respond, errorCode, permission?.message ?? policyResult.message, {
+              details: {
+                ...policyResult.details,
+                ...(policyResult.code ? { code: policyResult.code } : {}),
+                ...(permission ? { permissionMissing: permission.permissionMissing } : {}),
+              },
+            });
             return;
           }
           respondWithInvocationResult(policyResult, "original");
@@ -494,14 +470,10 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           context.nodeRegistry.getForPairingGeneration(nodeId, generation.key),
         );
         if (!dispatchSession || dispatchSession.connId !== nodeSession.connId) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, "node connection changed before dispatch", {
-              retryable: true,
-              details: { code: "ROUTE_CHANGED" },
-            }),
-          );
+          respondError(respond, ErrorCodes.UNAVAILABLE, "node connection changed before dispatch", {
+            retryable: true,
+            details: { code: "ROUTE_CHANGED" },
+          });
           return;
         }
         if (!authorizeNodeCommand(dispatchSession, context.getRuntimeConfig())) {
@@ -516,13 +488,9 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         // exact runtime capability at the final raw transport handoff.
         const authorityError = runtimeAuthorityError();
         if (authorityError) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, authorityError, {
-              details: { code: "APPROVAL_AUTHORITY_CLOSED" },
-            }),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, authorityError, {
+            details: { code: "APPROVAL_AUTHORITY_CLOSED" },
+          });
           return;
         }
         if (rejectDisabledUpload()) {
@@ -535,6 +503,8 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           command,
           params: forwardedParams.params,
           turnSource,
+          prepareSystemRunEventSource: (key) =>
+            captureNodeSystemRunEventSource({ client, context, hasCurrentClientAuthority }, key),
           timeoutMs: dispatchTimeoutMs,
           deadlineAtMs: invokeDeadlineAtMs,
           signal: invocationLifecycle,
@@ -605,30 +575,27 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               `node pending queued node=${nodeId} req=${req.id} command=${command} ` +
                 `queuedId=${queued.action.id} wakePath=${wake.path} wakeAvailable=${wake.available}`,
             );
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.UNAVAILABLE,
-                "node command queued until iOS returns to foreground",
-                {
-                  retryable: true,
-                  details: {
-                    code: "QUEUED_UNTIL_FOREGROUND",
-                    queuedActionId: queued.action.id,
-                    nodeId,
-                    command,
-                    wake: {
-                      path: wake.path,
-                      available: wake.available,
-                      throttled: wake.throttled,
-                      apnsStatus: wake.apnsStatus,
-                      apnsReason: wake.apnsReason,
-                    },
-                    nodeError: res.error ?? null,
+            respondError(
+              respond,
+              ErrorCodes.UNAVAILABLE,
+              "node command queued until iOS returns to foreground",
+              {
+                retryable: true,
+                details: {
+                  code: "QUEUED_UNTIL_FOREGROUND",
+                  queuedActionId: queued.action.id,
+                  nodeId,
+                  command,
+                  wake: {
+                    path: wake.path,
+                    available: wake.available,
+                    throttled: wake.throttled,
+                    apnsStatus: wake.apnsStatus,
+                    apnsReason: wake.apnsReason,
                   },
+                  nodeError: res.error ?? null,
                 },
-              ),
+              },
             );
             return;
           }

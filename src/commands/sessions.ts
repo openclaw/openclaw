@@ -8,7 +8,7 @@ import type {
   ModelRuntimeChoice,
   ModelsListResult,
 } from "../../packages/gateway-protocol/src/schema/model-catalog.js";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
@@ -69,19 +69,6 @@ function toSessionCatalogEntry(
       ? { nativeRuntime: runtime.agentRuntime.id }
       : {}),
   };
-}
-
-/** True ACP sessions use the child runtime's model, not the configured fallback. */
-function applyAcpModelOverlayIfNeeded(
-  modelRef: { provider: string; model: string },
-  sessionKey: string,
-  acpRuntime: boolean,
-): { provider: string; model: string } {
-  if (!acpRuntime || !isAcpSessionKey(sessionKey)) {
-    return modelRef;
-  }
-  const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? "acp";
-  return { provider: "acpx", model: `${agentId}-acp` };
 }
 
 function parseSessionsLimit(value: string | number | undefined): number | undefined | null {
@@ -270,11 +257,12 @@ export async function sessionsCommand(
       const acpRuntime = acpMeta != null;
       // ACP rows need stored-key metadata before model/runtime resolution so
       // bridge sessions and true ACP runtime sessions display differently.
-      const modelRef = applyAcpModelOverlayIfNeeded(
-        resolveSessionDisplayModelRef(cfg, row, classifyCliProvider, agentId),
-        acpSessionKey,
-        acpRuntime,
-      );
+      let modelRef = resolveSessionDisplayModelRef(cfg, row, classifyCliProvider, agentId);
+      /** True ACP sessions use the child runtime's model, not the configured fallback. */
+      if (acpRuntime && isAcpSessionKey(acpSessionKey)) {
+        const acpAgentId = parseAgentSessionKey(acpSessionKey)?.agentId ?? "acp";
+        modelRef = { provider: "acpx", model: `${acpAgentId}-acp` };
+      }
       const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
         cfg,
         agentId,
@@ -479,10 +467,14 @@ export async function sessionsCommand(
 
   const primaryTarget = targets[0];
   if (primaryTarget && targets.length === 1 && !aggregateAgents) {
-    runtime.log(info(`Session store: ${resolveSessionStoreDisplayPath(primaryTarget)}`));
+    runtime.log(
+      info(terminalText`Session store: ${resolveSessionStoreDisplayPath(primaryTarget)}`),
+    );
   } else {
     runtime.log(
-      info(`Session stores: ${targets.length} (${targets.map((t) => t.agentId).join(", ")})`),
+      info(
+        terminalText`Session stores: ${targets.length} (${targets.map((t) => t.agentId).join(", ")})`,
+      ),
     );
   }
   runtime.log(
@@ -518,12 +510,12 @@ export async function sessionsCommand(
         Object.assign(column, { header: colorize(rich, theme.heading, column.header) }),
       ),
       rows: rows.map((row) => ({
-        agent: colorize(rich, theme.accentBright, sanitizeTerminalText(row.agentId)),
+        agent: colorize(rich, theme.accentBright, terminalText`${row.agentId}`),
         kind: formatKindCell(row.kind, rich),
         key: formatSessionKeyCell(row.key, rich),
         age: formatSessionAgeCell(row.updatedAt, rich),
         model: formatSessionModelCell(row.displayModelRef.model, rich),
-        runtime: colorize(rich, theme.info, sanitizeTerminalText(row.runtimeLabel)),
+        runtime: colorize(rich, theme.info, terminalText`${row.runtimeLabel}`),
         tokens: formatTokensCell(
           resolveSessionTotalTokens(row),
           resolveFreshSessionTotalTokens(row),

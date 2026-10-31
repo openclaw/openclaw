@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { SessionGoal } from "../../../packages/gateway-protocol/src/schema/sessions-goal.ts";
+import { createSessionGoalFixture } from "../../../src/gateway/session-goal.test-support.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails } from "./chat-details.test-support.ts";
 import { chatMessage, exactButton, requireRecord } from "./chat-flow.test-support.ts";
@@ -10,18 +11,12 @@ const viewport = { width: 1440, height: 900 };
 const pageOptions = { viewport, colorScheme: "light" } as const;
 
 function goalFixture(now: number, id: string, overrides: Partial<SessionGoal> = {}): SessionGoal {
-  return {
-    schemaVersion: 1,
-    id,
-    objective: "Verify the sample deployment",
+  return createSessionGoalFixture(id, "Verify the sample deployment", {
     status: "paused",
     createdAt: now,
     updatedAt: now,
-    tokenStart: 0,
-    tokensUsed: 0,
-    continuationTurns: 0,
     ...overrides,
-  };
+  });
 }
 
 function goalSessions(
@@ -88,6 +83,7 @@ suite.define(() => {
         goal: committed,
       });
       await expect.poll(() => save.count()).toBe(0);
+      await page.clock.install();
       // Release the Goal refresh after the ACK to exercise the losing read order.
       const lists = await gateway.deferNext("sessions.list");
       await gateway.emitGatewayEvent("sessions.changed", {
@@ -95,6 +91,7 @@ suite.define(() => {
         agentId: "main",
         reason: "goal",
       });
+      await page.clock.fastForward(5_001);
       await gateway.waitForRequest("sessions.list", { after: lists });
       await gateway.resolveDeferred("sessions.list");
       await expect
@@ -263,6 +260,7 @@ suite.define(() => {
       const now = Date.now();
       const method = "sessions.goal.update";
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         sessionKey: "agent:main:main",
         heldMethods: [method, "chat.startup"],
         historyMessages: [

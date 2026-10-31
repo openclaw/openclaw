@@ -211,19 +211,14 @@ it.each(["rollback", "top-level", "enclosing transaction"] as const)(
       } else {
         const firstRows = readEvents(first);
         const secondRows = readEvents(second);
-        let rebound = false;
-        let caught: unknown;
         const appendAndCatch = () => {
-          try {
+          expect(() => {
             manager.appendMessage(message("rejected first-target write"), {
               beforeFreshMessageCommit: () => {
                 manager.setSessionTarget(second);
-                rebound = true;
               },
             });
-          } catch (error) {
-            caught = error;
-          }
+          }).toThrow(expect.objectContaining({ name: "SessionTranscriptWriterClaimReboundError" }));
         };
         if (mode === "enclosing transaction") {
           // Catch before COMMIT so it cannot mask a late append rejection.
@@ -231,8 +226,6 @@ it.each(["rollback", "top-level", "enclosing transaction"] as const)(
         } else {
           appendAndCatch();
         }
-        expect(rebound).toBe(true);
-        expect(caught).toMatchObject({ name: "SessionTranscriptWriterClaimReboundError" });
         expect(readEvents(first)).toEqual(firstRows);
         expect(readEvents(second)).toEqual(secondRows);
       }

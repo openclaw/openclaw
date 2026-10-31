@@ -203,7 +203,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
           {
             expectedHead,
             nextSequence: draft.head.nextSequence,
-            changes: [...draft.dirtySources].map((key) => {
+            changes: Array.from(draft.dirtySources, (key) => {
               const source = draft.processed.get(key);
               return [key, source ? serializeMentionSource(source) : undefined];
             }),

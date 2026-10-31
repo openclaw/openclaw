@@ -96,7 +96,7 @@ function reportDiscoveryError(pluginId: string, error: unknown) {
     loggedMessageActionErrors.add(key);
     const detail =
       error instanceof Error && error.stack ? formatErrorStackWithMessage(error) : message;
-    defaultRuntime.error?.(
+    defaultRuntime.error(
       `[message-action-discovery] ${pluginId}.actions.describeMessageTool failed: ${detail}`,
     );
   }

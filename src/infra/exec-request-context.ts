@@ -1,3 +1,4 @@
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { isAgentRunDirectAbortReason } from "../agents/run-termination.js";
 import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -10,6 +11,8 @@ export type ExecRequestIdentity = {
   agentId?: string;
   ownerConnId?: string;
   ownerDeviceId?: string;
+  /** Original host-issued person follows request custody after its foreground source retires. */
+  initiatingPersonalOperator?: AdmittedRunOperatorAuthority;
   controlUiVisible?: boolean;
   turnKind?: "main" | "btw";
 };
@@ -53,10 +56,8 @@ function createExecRequestOwner(identity: ExecRequestIdentity): ExecRequestOwner
 
 export function cancelExecRequestOwners(owners: readonly ExecRequestOwner[]): void {
   for (const owner of owners) {
-    if (!owner.controller.signal.aborted) {
-      const reason = createAbortError("The request that owns this command was stopped");
-      owner.controller.abort(reason);
-    }
+    const reason = createAbortError("The request that owns this command was stopped");
+    owner.controller.abort(reason);
   }
 }
 

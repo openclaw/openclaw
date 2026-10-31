@@ -45,7 +45,10 @@ OpenClaw exposes `show_widget` only when the originating Gateway client declares
 
 An agent-turn automation bound to a persistent session and carrying a server-authored scheduled tool policy may explicitly allow `show_widget` without an inline client. That scheduled surface is pinned-only: every call requires `pin: true`, writes to the bound session dashboard, and cannot set `presentation.target`. Detached cron-run sessions, ordinary capless channel runs, and scheduled jobs without an explicit tool cap remain excluded. The originating-client capability remains mandatory for inline presentation.
 
-When the Gateway automatically resumes an interrupted Control UI turn after a restart, the recovered turn can also create or update pinned dashboard widgets without a connected browser. Recovery uses the same pinned-only surface: set `pin: true` and omit `presentation.target`. Inline previews still require a new turn from a client that declares `inline-widgets`. The resumed turn does not inherit a browser connection or device presentation rights.
+A post-restart input uses the session's current authority and tool policy. It does
+not inherit an old browser connection or device presentation rights. Inline
+previews still require a connected client with `inline-widgets`; use the normal
+pinned-widget surface only when the current turn is authorized to do so.
 
 A `status: "pinned"` tool result means the widget is on the session dashboard. Open that dashboard tab in the Control UI, or use `dashboard` with `action: "focus_tab"` and the saved widget's `tabId` when the tool is available. Widget hosting URLs are internal rendering resources and should not be opened in the Browser panel to substitute for widget presentation.
 
@@ -310,6 +313,10 @@ Accepted prompts appear in the transcript as regular user messages and start a n
 ## Dashboard capabilities
 
 Pinned HTML widgets expose one ticket-bound host API. An explicit [session permission mode](/gateway/permission-modes) determines how declared capabilities are approved: **Full access** grants them immediately. **Workspace** uses an AI reviewer and rejects anything it does not allow. **Guarded** shows an **Allow** / **Reject** card. **Read only** rejects them. Without an explicit session mode, the equivalent configured exec approval policy applies.
+
+To inspect a widget's approved network origins and host tools, hover over its
+**Granted** badge or reach the badge with **Tab**. **Escape** dismisses the
+capabilities tooltip; **Enter** reopens it without changing the grant.
 
 - `openclaw.host.controlUiBaseUrl` exposes the Control UI origin plus its configured base path after the dashboard host initializes. It is `null` before initialization and outside the dashboard, so read it in the link's click handler rather than when the widget script first runs.
 - `openclaw.prompt.send(text)` requires transient user activation and posts a visible composer message. Declaring and receiving the `prompt` tool grant skips the extra per-click confirmation. Validation, focus checks, and rate limits still apply.

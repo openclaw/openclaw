@@ -20,7 +20,9 @@ export async function runModelCallAndCaptureTraceparent(params: {
     ) => {
       outboundTraceparent = options?.headers?.traceparent ?? undefined;
       const stream = createAssistantMessageEventStream();
-      stream.end(makeAgentAssistantMessage({ content: [] }));
+      stream.end(
+        makeAgentAssistantMessage({ content: [], responseModel: "synthetic-routed-model" }),
+      );
       return stream;
     },
     {

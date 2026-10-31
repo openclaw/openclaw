@@ -598,7 +598,7 @@ describe("installPackageDir", () => {
 
     try {
       const original = await withPluginLifecycleLease(leaseOptions, async (lease) => {
-        const assertOwned = lease.assertOwned.bind(lease);
+        const assertOwned = lease.assertOwned;
         const result = await installPackageDir(
           copyPackageDirInstallTransactionRequest(
             requestDeferredPackageDirInstall({}, assertOwned),

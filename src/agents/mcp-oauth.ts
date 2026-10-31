@@ -1,7 +1,8 @@
 /** MCP OAuth credential provider, flow coordinator, and login helpers. */
-import { auth, type FetchLike } from "@modelcontextprotocol/client";
+import type { FetchLike } from "@modelcontextprotocol/client";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
+import type { OpenClawStateLeaseWorkerAuthority } from "../state/openclaw-state-lease-worker-owner.js";
 import {
   type OpenClawStateAsyncLeaseContext,
   withOpenClawStateLeaseAsync,
@@ -25,6 +26,7 @@ import {
   projectMcpOAuthCredentialsStatus,
   type McpOAuthPrincipalStatus,
 } from "./mcp-oauth-status.js";
+import { mcpOAuthAuthorizationRequiredError } from "./mcp-oauth-store.authorization.js";
 import {
   clearMcpOAuthStore,
   consumeOAuthState,
@@ -74,12 +76,6 @@ async function withMcpOAuthLease<T>(
     },
     context,
     (lease) => run(lease, context),
-  );
-}
-
-function mcpOAuthAdditionalAuthorizationError(identity: McpOAuthIdentity): Error {
-  return new Error(
-    `MCP server "${identity.serverName}" requires additional OAuth authorization. ${mcpOAuthSignInHint(identity)}`,
   );
 }
 
@@ -177,10 +173,10 @@ export async function resolveMcpOAuthAccessToken(
         params.interactiveAuthorizationRequired === true &&
         challengeAppliesToCurrentState
       ) {
-        throw mcpOAuthAdditionalAuthorizationError(params.identity);
+        throw mcpOAuthAuthorizationRequiredError(params.identity, context.admission, true);
       }
       if (store.pendingAuthorizationChallenge?.requiresAuthorization === true) {
-        throw mcpOAuthAdditionalAuthorizationError(params.identity);
+        throw mcpOAuthAuthorizationRequiredError(params.identity, context.admission, true);
       }
       if (store.refreshClaim) {
         throw new Error("MCP OAuth refresh outcome is uncertain; sign in again.");
@@ -189,9 +185,7 @@ export async function resolveMcpOAuthAccessToken(
         if (params.allowMissingToken === true) {
           return undefined;
         }
-        throw new Error(
-          `MCP server "${params.identity.serverName}" requires OAuth authorization. ${mcpOAuthSignInHint(params.identity)}`,
-        );
+        throw mcpOAuthAuthorizationRequiredError(params.identity, context.admission);
       }
 
       if (isStoredMcpOAuthAccessTokenUsable(store, params)) {
@@ -203,6 +197,8 @@ export async function resolveMcpOAuthAccessToken(
         );
       }
 
+      const { auth } = await import("@modelcontextprotocol/client");
+      await lease.assertOwned();
       const pendingChallenge = store.pendingAuthorizationChallenge;
       await mutateMcpOAuthStore({ storeKey, lease, context }, { kind: "bindTokensIssuer" });
       const boundary = createMcpOAuthRefreshBoundary({ storeKey, lease, context });
@@ -284,42 +280,55 @@ export async function recordMcpOAuthAuthorizationRequired(params: {
   );
 }
 
-/** Deletes one OAuth session without racing an in-flight refresh or login. */
-export async function clearMcpOAuthCredentials(identity: McpOAuthIdentity): Promise<void> {
-  await clearMcpOAuthStoreKey(identity.storeKey);
+/**
+ * Deletes one OAuth session without racing an in-flight refresh or login. Callers acting for
+ * a requester pass its live authority; the lease wait can outlast that authority.
+ */
+export async function clearMcpOAuthCredentials(
+  identity: McpOAuthIdentity,
+  authority?: OpenClawStateLeaseWorkerAuthority,
+): Promise<void> {
+  await clearMcpOAuthStoreKey(identity.storeKey, captureOpenClawStateWorkerContext(), authority);
 }
 
 async function clearMcpOAuthStoreKey(
   storeKey: string,
-  context: OpenClawStateWorkerContext = captureOpenClawStateWorkerContext(),
+  context: OpenClawStateWorkerContext,
+  authority?: OpenClawStateLeaseWorkerAuthority,
 ): Promise<void> {
+  authority?.assertCurrent();
   await withMcpOAuthLease(
     storeKey,
     async (lease) => {
-      await clearMcpOAuthStore({ storeKey, lease, context });
+      await clearMcpOAuthStore({ storeKey, lease, context }, authority);
     },
-    undefined,
+    authority?.signal,
     context,
   );
 }
 
 /** Clear operator and requester credentials bound to one configured server URL. */
-export async function clearMcpOAuthServer(identity: McpOAuthIdentity): Promise<void> {
+export async function clearMcpOAuthServer(
+  identity: McpOAuthIdentity,
+  authority?: OpenClawStateLeaseWorkerAuthority,
+): Promise<void> {
   const context = captureOpenClawStateWorkerContext();
-  await clearMcpOAuthStoreKey(identity.storeKey, context);
-  await clearMcpOAuthRequesters(identity, context);
+  await clearMcpOAuthStoreKey(identity.storeKey, context, authority);
+  await clearMcpOAuthRequesters(identity, context, authority);
 }
 
 /** Clear requester credentials without changing the operator row for this server URL. */
 export async function clearMcpOAuthRequesters(
   identity: McpOAuthIdentity,
   context: OpenClawStateWorkerContext = captureOpenClawStateWorkerContext(),
+  authority?: OpenClawStateLeaseWorkerAuthority,
 ): Promise<void> {
   const prefix = requesterMcpOAuthStoreKeyPrefix(identity.serverName, identity.serverUrl);
   const requesterKeys = await listMcpOAuthStoreKeysByPrefix(prefix, context);
   for (const storeKey of requesterKeys) {
-    await clearMcpOAuthStoreKey(storeKey, context);
+    await clearMcpOAuthStoreKey(storeKey, context, authority);
   }
+  authority?.assertCurrent();
   await deleteMcpOAuthPendingAuthorizationsByPrefix(prefix, context);
 }
 
@@ -352,6 +361,7 @@ async function runMcpOAuthAuthorizationAttempt(
     config: McpOAuthConfig;
     fetchFn: FetchLike;
     authorizationCode?: string;
+    iss?: string;
     resourceMetadataUrl?: URL;
     scope?: string;
     suppressStoredTokens?: boolean;
@@ -360,6 +370,7 @@ async function runMcpOAuthAuthorizationAttempt(
   lease: OpenClawStateAsyncLeaseContext,
   context: OpenClawStateWorkerContext,
 ): Promise<"authorized" | "redirect"> {
+  const { auth } = await import("@modelcontextprotocol/client");
   params.login?.assertCurrent();
   const boundary = createMcpOAuthRefreshBoundary(
     { storeKey: params.identity.storeKey, lease, context },
@@ -382,6 +393,7 @@ async function runMcpOAuthAuthorizationAttempt(
     result = await auth(provider, {
       serverUrl: params.identity.serverUrl,
       authorizationCode: normalizeOptionalString(params.authorizationCode),
+      iss: params.iss,
       resourceMetadataUrl: params.resourceMetadataUrl,
       scope: normalizeOptionalString(params.scope) ?? normalizeOptionalString(params.config?.scope),
       fetchFn: boundary.wrap(
@@ -488,7 +500,7 @@ export async function startMcpOAuthAuthorization(
 export async function completeMcpOAuthAuthorization(
   identity: McpOAuthIdentity,
   config: ResolvedHttpMcpTransportConfig,
-  input: { code: string },
+  input: { code: string; iss?: string },
 ): Promise<"authorized"> {
   const storeKey = identity.storeKey;
   return await withMcpOAuthLease<"authorized">(storeKey, async (lease, context) => {
@@ -510,7 +522,7 @@ function readMcpOAuthAuthorizationState(authorizationUrl: string | undefined): s
 async function completeMcpOAuthAuthorizationUnderLease(
   identity: McpOAuthIdentity,
   config: ResolvedHttpMcpTransportConfig,
-  input: { code: string },
+  input: { code: string; iss?: string },
   lease: OpenClawStateAsyncLeaseContext,
   context: OpenClawStateWorkerContext,
   login?: McpOAuthLoginLifecycle,
@@ -535,6 +547,7 @@ async function completeMcpOAuthAuthorizationUnderLease(
       config: { ...config.oauth, redirectUrl: store.redirectUrl },
       fetchFn: buildMcpOAuthAuthorizationFetch(config, login?.assertCurrent),
       authorizationCode,
+      iss: input.iss,
       resourceMetadataUrl: pendingChallenge?.resourceMetadataUrl
         ? new URL(pendingChallenge.resourceMetadataUrl)
         : undefined,
@@ -562,7 +575,7 @@ async function completeMcpOAuthAuthorizationUnderLease(
 export async function completeOAuthCallback(
   identity: McpOAuthIdentity,
   config: ResolvedHttpMcpTransportConfig,
-  input: { code: string; state: string },
+  input: { code: string; state: string; iss?: string },
   login?: McpOAuthLoginLifecycle,
   context: OpenClawStateWorkerContext = captureOpenClawStateWorkerContext(),
 ): Promise<"authorized" | "expired"> {

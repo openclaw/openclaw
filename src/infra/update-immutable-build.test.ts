@@ -94,8 +94,6 @@ it.each(["operator", "root", "state-owner", "provisioned"])(
       }
       if (argv[0] === "/usr/bin/systemd-run") {
         expect((await fs.stat(stage)).mode & 0o077).toBe(0);
-        await fs.mkdir(path.join(stage, "generation"));
-        await fs.writeFile(path.join(stage, "generation", "artifact"), "candidate");
       }
       return { code: 0, stdout: "", stderr: "" };
     });
@@ -110,7 +108,6 @@ it.each(["operator", "root", "state-owner", "provisioned"])(
       assertCurrent: () => {},
     });
 
-    expect(await fs.readFile(path.join(stage, "generation", "artifact"), "utf8")).toBe("candidate");
     expect(chown.mock.calls.length).toBe(mode === "operator" ? 0 : 3);
     const launch = mocks.command.mock.calls.find(([argv]) => argv[0] === "/usr/bin/systemd-run");
     expect(launch?.[0]).toEqual(

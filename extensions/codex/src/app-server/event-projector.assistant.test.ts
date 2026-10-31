@@ -343,6 +343,45 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     }
   });
 
+  it.each([false, true])(
+    "retains stable partial answers before the final answer (native handoff: %s)",
+    async (handoff) => {
+      const { projector, onAgentEvent, onPartialReply } = await fixture.observePartial();
+      const partial = fixture.message("partial", "The first result is ready.", "partial_answer");
+      const final = finalItem("final", "The second result is ready.");
+      await fixture.start(projector, { ...partial, text: "" });
+      await fixture.delta(projector, partial.text, partial.id);
+      await fixture.complete(projector, partial);
+      if (handoff) {
+        const work = { type: "sleep", id: "work", durationMs: 1 };
+        await fixture.start(projector, work);
+        await fixture.complete(projector, work);
+      }
+      await streamFinalAnswer(projector, final.id, final.text);
+      await fixture.finish(projector, [final]);
+
+      const result = fixture.result(projector);
+      const answer = `${partial.text}\n\n${final.text}`;
+      expect(result.assistantTexts).toEqual([partial.text, final.text]);
+      expect(result.preparedTerminalReply).toEqual(terminalReply(answer));
+      expect(result.lastAssistant?.content).toEqual(fixture.text(answer));
+      expect(result.messagesSnapshot).toContainEqual(
+        expect.objectContaining({ role: "assistant", content: fixture.text(answer) }),
+      );
+      expect(fixture.events(onAgentEvent, "assistant")).toEqual([
+        assistantEvent(partial.id, partial.text),
+        assistantEvent(final.id, final.text),
+      ]);
+      expect(
+        fixture.events(onAgentEvent, "item", "answer_candidate").map((event) => event.data.itemId),
+      ).toEqual([final.id, final.id]);
+      expect(onPartialReply.mock.calls.map(([reply]) => reply.text)).toEqual([
+        partial.text,
+        final.text,
+      ]);
+    },
+  );
+
   it("keeps an earlier final answer when a later coda arrives with no tool work between them", async () => {
     const { projector, onAgentEvent } = await fixture.observe();
     const summary = "Read-only; inspected actual diffs, no mutations: - #122457 — Copies";

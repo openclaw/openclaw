@@ -116,7 +116,7 @@ export function registerPublicationBatchTests(
           const event = message as { engine: string; sql: string };
           const table =
             event.engine === "postgres"
-              ? /^insert into "(memory_index_chunks|memory_index_chunk_recall_metadata|memory_index_chunk_provenance)"\s/iu.exec(
+              ? /^insert into "(memory_index_sources|memory_index_chunks|memory_index_chunk_recall_metadata|memory_index_chunk_provenance)"\s/iu.exec(
                   event.sql,
                 )?.[1]
               : undefined;
@@ -162,6 +162,7 @@ export function registerPublicationBatchTests(
           "memory_index_chunk_provenance",
           "memory_index_chunk_recall_metadata",
           "memory_index_chunks",
+          "memory_index_sources",
         ]);
       }),
   );

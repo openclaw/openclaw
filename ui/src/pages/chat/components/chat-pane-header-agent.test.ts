@@ -1,18 +1,12 @@
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
+import { makeBootRoster } from "../../../app/bootstrap.test-support.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { createPaneHeaderWorkspaceFixture, createTestChatPane } from "../chat-pane.test-support.ts";
 import { mountChatPaneHeader, renderPaneHeaderInto } from "./chat-pane-header.test-support.ts";
 
 const containers: HTMLElement[] = [];
 afterEach(() => containers.splice(0).forEach((container) => container.remove()));
-
-function researchHeader(patch: Parameters<typeof mountChatPaneHeader>[1] = {}) {
-  return mountChatPaneHeader(containers, {
-    agent: { id: "research", name: "Research lead", textAvatar: "🔬" },
-    ...patch,
-  });
-}
 
 const find = (container: Element, selector: string) =>
   container.querySelector<HTMLElement>(`.chat-pane__${selector}`);
@@ -27,15 +21,12 @@ function fixture() {
   const navigate = vi.fn();
   Object.defineProperty(pane.context, "navigate", { configurable: true, value: navigate });
   state.settings = { ...state.settings, sidebarAgentsMode: "roster" };
-  pane.context.agents.state.agentsList = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
+  pane.context.agents.state.agentsList = makeBootRoster({
     agents: [
       { id: "main", name: "Chief of Staff", identity: { emoji: "🦊" } },
       { id: "research", name: "Research lead", identity: { emoji: "🔬" } },
     ],
-  };
+  });
   const container = document.createElement("div");
   document.body.append(container);
   containers.push(container);
@@ -55,33 +46,20 @@ function fixture() {
   return { pane, state, container, draw, request, navigate };
 }
 
-it("opens agent settings from the roster pill without a session context popover", () => {
-  const { container, props } = researchHeader({
+it("keeps roster chrome while allowing an inline rename", () => {
+  const { container, props, update } = mountChatPaneHeader(containers, {
+    agent: { id: "research", name: "Research lead", textAvatar: "🔬" },
     parentSession: { key: "agent:research:parent", title: "Parent conversation" },
   });
-  const pill = find(container, "agent-identity")!;
-  expect(pill.tagName).toBe("BUTTON");
-  expect(pill.getAttribute("aria-label")).toBe("Research lead settings");
-  pill.click();
-  expect(props.onOpenAgentSettings).toHaveBeenCalledWith("research");
   expect(container.querySelector("[role=dialog]")).toBeNull();
   expect(find(container, "crumbs")).toBeNull();
-});
-
-it("edits an overflow-menu rename inline and keeps the pill on agent changes", () => {
-  const { container, props, update } = researchHeader();
   update({ editing: true, renameValue: "Updated conversation" });
-  const input = find(container, "header-leading")!.querySelector<HTMLInputElement>(
-    ".chat-pane__session-title-input",
-  )!;
+  const input = container.querySelector<HTMLInputElement>(".chat-pane__session-title-input")!;
   expect(input.value).toBe("Updated conversation");
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   expect(props.onCommitRename).toHaveBeenCalledOnce();
-  update({ editing: false, agent: { id: "main", name: "Chief of Staff", textAvatar: "🦊" } });
+  update({ editing: false });
   expect(find(container, "crumbs")).toBeNull();
-  expect(find(container, "agent-name")?.textContent).toBe("Chief of Staff");
-  find(container, "agent-identity")!.click();
-  expect(props.onOpenAgentSettings).toHaveBeenCalledWith("main");
 });
 
 it("uses the pane agent on direct navigation and retained agent switches, only in roster mode", () => {
@@ -95,6 +73,7 @@ it("uses the pane agent on direct navigation and retained agent switches, only i
   expect(leading().textContent).not.toContain("workspace-research");
   expect(centered()?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🔬");
   const settings = find(container, "agent-identity")!;
+  expect(settings.tagName).toBe("BUTTON");
   expect(settings.getAttribute("aria-label")).toBe("Research lead settings");
   settings.click();
   expect(navigate).toHaveBeenCalledWith("agents", {
@@ -107,6 +86,8 @@ it("uses the pane agent on direct navigation and retained agent switches, only i
   expect(centered()?.textContent).toContain("Chief of Staff");
   expect(centered()?.textContent).not.toContain("Research lead");
   expect(centered()?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦊");
+  find(container, "agent-identity")!.click();
+  expect(navigate).toHaveBeenLastCalledWith("agents", { pathname: "/settings/agents/main" });
 
   state.settings = { ...state.settings, sidebarAgentsMode: "chip" };
   draw();
@@ -125,20 +106,12 @@ it("uses the pane agent on direct navigation and retained agent switches, only i
 it("keeps the requested agent ID while its roster is loading or missing", () => {
   const { pane, state, container, draw } = fixture();
   state.assistantName = "Wrong agent";
-  pane.context.agents.state.agentsList = null;
-  draw();
-  expect(find(container, "agent-identity")?.textContent).toContain("research");
-  expect(find(container, "header-leading")?.textContent).not.toContain("Wrong agent");
-
-  pane.context.agents.state.agentsList = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
-    agents: [{ id: "main", name: "Wrong agent" }],
-  };
-  draw();
-  expect(find(container, "agent-identity")?.textContent).toContain("research");
-  expect(find(container, "header-leading")?.textContent).not.toContain("Wrong agent");
+  for (const roster of [null, makeBootRoster({ agents: [{ id: "main", name: "Wrong agent" }] })]) {
+    pane.context.agents.state.agentsList = roster;
+    draw();
+    expect(find(container, "agent-identity")?.textContent).toContain("research");
+    expect(find(container, "header-leading")?.textContent).not.toContain("Wrong agent");
+  }
 });
 
 it("updates a hydrated avatar and name without restoring a removed image", async () => {

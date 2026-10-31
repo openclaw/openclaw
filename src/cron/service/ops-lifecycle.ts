@@ -35,7 +35,7 @@ function subscribeStoreMutations(state: CronServiceState): void {
   const generation = state.lifecycleGeneration;
   mutationSubscriptions.set(
     state,
-    subscribeCronJobsStoreMutations(state.deps.storePath, () => {
+    subscribeCronJobsStoreMutations(state.deps.storeKey, () => {
       const refresh = async () => {
         await locked(state, () => reloadProvisionedCronJobs(state, generation));
         if (!state.stopped && state.lifecycleGeneration === generation && state.schedulerStarted) {
@@ -134,6 +134,8 @@ export function resumeScheduling(state: CronServiceState) {
   state.schedulingPaused = false;
   if (state.schedulerStarted) {
     refreshCronScheduler(state);
-    void drainCronRunQueue(state);
+    void drainCronRunQueue(state).catch((error: unknown) =>
+      state.deps.log.warn({ err: String(error) }, "cron: queue drain delayed"),
+    );
   }
 }

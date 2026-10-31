@@ -2,6 +2,8 @@ import type { BrowserContextOptions, Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
 import type { SessionUsageEntry } from "../../../src/shared/usage-types.js";
+import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
+import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
@@ -90,13 +92,7 @@ function emptyUsageResponses() {
       sessions: [],
       totals: emptyTotals,
       aggregates: {
-        messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
-        tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-        byModel: [],
-        byProvider: [],
-        byAgent: [],
-        byChannel: [],
-        daily: [],
+        ...buildAggregatesFromSessions([]),
         costDaily: [],
       },
     },
@@ -287,6 +283,7 @@ suite.define(() => {
         if (scenario === "recent-tab") {
           for (const name of ["Visible C", "Visible A", "Visible B"]) {
             await list.getByRole("button", { name, exact: true }).click();
+            await expectText(page.locator(".session-detail-title")).toBe(name);
           }
           await card.getByRole("button", { name: "Recently viewed", exact: true }).click();
           list = card.locator(".session-bars--recent");
@@ -465,15 +462,7 @@ suite.define(() => {
         methodResponses: {
           "sessions.usage.timeseries": { points: [] },
           "sessions.usage.logs": { logs: [] },
-          "agents.list": {
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "writer", name: "Writer" },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createAgentRoster({ main: "Main", writer: "Writer" }, "main", "agent"),
           "sessions.usage": {
             updatedAt: Date.now(),
             startDate: dayOffset(-89),

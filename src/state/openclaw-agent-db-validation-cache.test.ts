@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { assert, describe, expect, it as baseIt, vi } from "vitest";
@@ -6,6 +7,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { cleanupSessionStateForTest as cleanupState } from "../test-utils/session-state-cleanup.js";
 import {
   AgentDatabaseSchemaAdmissionChangedError as AdmissionChangedError,
   AgentDatabaseSchemaAdmissionInvalidError as AdmissionInvalidError,
@@ -45,7 +47,6 @@ import {
 import {
   closeOpenClawAgentDatabaseByPath as closePath,
   closeOpenClawAgentDatabasesAsync as closeDatabases,
-  closeOpenClawAgentDatabasesForTest as retireFixture,
   openOpenClawAgentDatabase as openDatabase,
   runOpenClawAgentWriteTransaction as writeTransaction,
 } from "./openclaw-agent-db.js";
@@ -53,7 +54,12 @@ import { runOpenClawAgentWriteAdmission as admitWrite } from "./openclaw-agent-w
 import { expectRow, expectRows } from "./openclaw-state-db-fixtures.test-support.js";
 
 const observedValidationDirectories = vi.hoisted(
-  () => [] as Array<{ directory: string; notify: (filename?: string) => void; active: boolean }>,
+  () =>
+    [] as Array<{
+      directory: string;
+      notify: (filename?: string, event?: string) => void;
+      active: boolean;
+    }>,
 );
 type ReceiptRun = Parameters<typeof withReceiptFixture>[1];
 type ReceiptOptions = Parameters<ReceiptRun>[1];
@@ -105,7 +111,7 @@ function liveCell() {
 }
 // mock-isolation: Drive identity invalidation deterministically without native watcher timing.
 vi.mock("../infra/owned-directory-observation.js", () => ({
-  observeOwnedDirectory(directory: string, notify: (filename?: string) => void) {
+  observeOwnedDirectory(directory: string, notify: (filename?: string, event?: string) => void) {
     const observer = { directory, notify, active: true };
     observedValidationDirectories.push(observer);
     return {
@@ -119,7 +125,7 @@ vi.mock("../infra/owned-directory-observation.js", () => ({
 describe("canonical proof on physical database validation", () => {
   it.for(["ordinary close", "fixture retirement"] as const)(
     "handles a removed fixture's queued observation after %s",
-    async (cleanup, { empty: { database } }) => {
+    async (cleanup, { empty: { database, options } }) => {
       const captured = captureReadValidation(database)!;
       const successor = independentWorkerReceipt(database);
       const root = path.dirname(database.path);
@@ -132,7 +138,7 @@ describe("canonical proof on physical database validation", () => {
       expect(observer!.active).toBe(true);
       expectFlag(captured.validation.valid, 1);
       if (cleanup === "fixture retirement") {
-        retireFixture(root);
+        await cleanupState({ rootPath: root, stateDir: options.env!.OPENCLAW_STATE_DIR });
         expect(observer!.active).toBe(false);
         expect(getTransfer(database)).toBeUndefined();
       }
@@ -161,6 +167,19 @@ describe("canonical proof on physical database validation", () => {
       captured!.assertCurrent();
       closePath(database.path);
       expect(activeObservers(database.path)).not.toHaveLength(0);
+      if (invalidation === "observation") {
+        const stat = vi.spyOn(fs, "statSync");
+        syncBuiltinESMExports();
+        try {
+          for (const observer of activeObservers(database.path)) {
+            observer.notify(path.basename(database.path), "change");
+          }
+          expect(stat).not.toHaveBeenCalled();
+        } finally {
+          stat.mockRestore();
+          syncBuiltinESMExports();
+        }
+      }
       replaceFile(database.path);
       expectFlag(captured!.validation.valid, 1);
       expect(captureReadValidation(database)?.validation.receiptId).toBe(
@@ -170,7 +189,7 @@ describe("canonical proof on physical database validation", () => {
         expect(captureReadValidation(database, "admission")).toBeUndefined();
       } else {
         for (const observer of activeObservers(database.path)) {
-          observer.notify(path.basename(database.path));
+          observer.notify(path.basename(database.path), "rename");
         }
       }
       expect(() => captured!.assertCurrent()).toThrow(
@@ -384,6 +403,29 @@ describe("canonical proof on physical database validation", () => {
   );
 
   describe("native integrity proof handoff", () => {
+    it.for(["empty", "canonical"] as const)(
+      "keeps concurrent publications current after $0 admission succeeds",
+      (cache, { empty: { database, options } }) => {
+        if (cache === "canonical") {
+          writeTransaction(recordCanonical, options);
+        }
+        const received = independentWorkerReceipt(database);
+        clearValidation(database.path);
+        if (cache === "canonical") {
+          expect(hasCanonical(database)).toBe(true);
+        }
+        const first = capturePublication(database);
+        const second = capturePublication(database);
+
+        first(received.identity, structuredClone(received));
+        // A later opener must not replace the owner captured by the queued peer.
+        const third = capturePublication(database);
+        expect(() => second(received.identity, structuredClone(received))).not.toThrow();
+        expect(() => third(received.identity, structuredClone(received))).not.toThrow();
+        expect(getTransfer(database)?.schema).toBeDefined();
+      },
+    );
+
     it("distinguishes raced publication from malformed receipts even after revocation", ({
       empty: { database },
     }) => {

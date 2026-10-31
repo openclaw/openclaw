@@ -1,10 +1,11 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { tempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { expect, it, vi } from "vitest";
 
 const { decodePayload, forwardSignals, launchSandbox, signalExitCode } = createRequire(
   import.meta.url,
@@ -27,113 +28,103 @@ const { decodePayload, forwardSignals, launchSandbox, signalExitCode } = createR
   signalExitCode: (signal: number | string | undefined) => number;
 };
 
-describe("mxc-spawn-launcher", () => {
-  it("decodes a JSON --payload-file and removes it before spawning", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "mxc-launcher-test-"));
-    const payloadFile = path.join(dir, "payload.json");
-    const body = { config: { process: { env: ["SECRET=value"] } }, options: {} };
-    try {
-      writeFileSync(payloadFile, JSON.stringify(body), "utf-8");
+it("decodes a JSON --payload-file and removes it before spawning", async () => {
+  await using workspace = await tempWorkspace({
+    rootDir: tmpdir(),
+    prefix: "mxc-launcher-test-",
+  });
+  const payloadFile = path.join(workspace.dir, "payload.json");
+  const body = { config: { process: { env: ["SECRET=value"] } }, options: {} };
+  writeFileSync(payloadFile, JSON.stringify(body), "utf-8");
+  expect(decodePayload(["--payload-file", payloadFile])).toEqual(body);
+  expect([payloadFile, workspace.dir].map(existsSync)).toEqual([false, false]);
+});
 
-      expect(decodePayload(["--payload-file", payloadFile])).toEqual(body);
-      expect([payloadFile, dir].map(existsSync)).toEqual([false, false]);
-    } finally {
-      rmSync(dir, { force: true, recursive: true });
-    }
+it("throws when --payload is missing", () => {
+  expect(() => decodePayload([])).toThrow(/Missing --payload-file/);
+});
+
+it("maps PTY signal exits to process exit codes", () => {
+  expect([15, "SIGTERM", "SIGINT", "SIGUNKNOWN", undefined].map(signalExitCode)).toEqual([
+    143, 143, 130, 1, 1,
+  ]);
+});
+
+it("resolves a promised PTY before selecting its bridge", async () => {
+  const pty = { onData: vi.fn() };
+  const ptyBridge = vi.fn();
+  const childBridge = vi.fn();
+
+  await launchSandbox(() => Promise.resolve(pty), { process: {} }, undefined, {
+    pty: ptyBridge,
+    child: childBridge,
   });
 
-  it("throws when --payload is missing", () => {
-    expect(() => decodePayload([])).toThrow(/Missing --payload-file/);
+  expect(ptyBridge.mock.calls).toEqual([[pty]]);
+  expect(childBridge).not.toHaveBeenCalled();
+});
+
+it("forwards process termination signals to spawned sandbox children", () => {
+  using processOn = vi.spyOn(process, "on").mockReturnValue(process);
+  const spawned = { kill: vi.fn() };
+  const clearTimeoutMock = vi.fn();
+  const timer = { unref: vi.fn() };
+  const setTimeoutMock = vi.fn((_callback: () => void, _ms: number) => timer);
+  const signals = forwardSignals(spawned, {
+    exitGraceMs: 25,
+    setTimeout: setTimeoutMock,
+    clearTimeout: clearTimeoutMock,
   });
 
-  it("maps PTY signal exits to process exit codes", () => {
-    expect([15, "SIGTERM", "SIGINT", "SIGUNKNOWN", undefined].map(signalExitCode)).toEqual([
-      143, 143, 130, 1, 1,
-    ]);
+  processOn.mock.calls.find(([event]) => event === "SIGTERM")?.[1]();
+  processOn.mock.calls.find(([event]) => event === "SIGINT")?.[1]();
+
+  expect(spawned.kill.mock.calls).toEqual([["SIGTERM"], ["SIGINT"]]);
+  expect(setTimeoutMock.mock.calls).toEqual([[expect.any(Function), 25]]);
+  expect(timer.unref).toHaveBeenCalledTimes(1);
+
+  setTimeoutMock.mock.calls[0]?.[0]();
+
+  expect(spawned.kill).toHaveBeenLastCalledWith("SIGKILL");
+  expect(signals.exitCode()).toBe(143);
+  signals.dispose();
+  expect(clearTimeoutMock).toHaveBeenCalledWith(timer);
+});
+
+it("waits for child stdio closure and releases launcher input and signal listeners", async () => {
+  const originalCode = process.exitCode;
+  const inputListeners = process.stdin.listeners("data");
+  const signalListeners = process.listeners("SIGTERM");
+  using exit = vi.spyOn(process, "exit").mockImplementation(() => {
+    throw new Error("forced launcher exit");
   });
-
-  it("resolves a promised PTY before selecting its bridge", async () => {
-    const pty = { onData: vi.fn() };
-    const spawnResult = Promise.resolve(pty);
-    const ptyBridge = vi.fn();
-    const childBridge = vi.fn();
-
-    await launchSandbox(() => spawnResult, { process: {} }, undefined, {
-      pty: ptyBridge,
-      child: childBridge,
-    });
-
-    expect(ptyBridge.mock.calls).toEqual([[pty]]);
-    expect(childBridge).not.toHaveBeenCalled();
+  const child = Object.assign(new EventEmitter(), {
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: vi.fn(),
   });
-
-  it("forwards process termination signals to spawned sandbox children", () => {
-    const processOn = vi.spyOn(process, "on").mockReturnValue(process);
-    const spawned = { kill: vi.fn() };
-    const clearTimeoutMock = vi.fn();
-    const timer = { unref: vi.fn() };
-    const setTimeoutMock = vi.fn((_callback: () => void, _ms: number) => timer);
-    try {
-      const signals = forwardSignals(spawned, {
-        exitGraceMs: 25,
-        setTimeout: setTimeoutMock,
-        clearTimeout: clearTimeoutMock,
-      });
-
-      processOn.mock.calls.find(([event]) => event === "SIGTERM")?.[1]();
-      processOn.mock.calls.find(([event]) => event === "SIGINT")?.[1]();
-
-      expect(spawned.kill.mock.calls).toEqual([["SIGTERM"], ["SIGINT"]]);
-      expect(setTimeoutMock.mock.calls).toEqual([[expect.any(Function), 25]]);
-      expect(timer.unref).toHaveBeenCalledTimes(1);
-
-      setTimeoutMock.mock.calls[0]?.[0]();
-
-      expect(spawned.kill).toHaveBeenLastCalledWith("SIGKILL");
-      expect(signals.exitCode()).toBe(143);
-      signals.dispose();
-      expect(clearTimeoutMock).toHaveBeenCalledWith(timer);
-    } finally {
-      processOn.mockRestore();
-    }
+  let settled = false;
+  const running = launchSandbox(() => child, {}, {}).then(() => {
+    settled = true;
   });
-
-  it("waits for child stdio closure and releases launcher input and signal listeners", async () => {
-    const originalCode = process.exitCode;
-    const inputListeners = process.stdin.listeners("data");
-    const signalListeners = process.listeners("SIGTERM");
-    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("forced launcher exit");
-    });
-    const child = Object.assign(new EventEmitter(), {
-      stdin: new PassThrough(),
-      stdout: new PassThrough(),
-      stderr: new PassThrough(),
-      kill: vi.fn(),
-    });
-    let settled = false;
-    const running = launchSandbox(() => child, {}, {}).then(() => {
-      settled = true;
-    });
-    try {
-      await Promise.resolve();
-      child.emit("exit", 7, null);
-      await Promise.resolve();
-      expect(settled).toBe(false);
-      expect(exit).not.toHaveBeenCalled();
-      child.stdout.end();
-      child.stderr.end();
-      child.emit("close", 7, null);
-      await running;
-      expect(process.exitCode).toBe(7);
-      expect(process.stdin.listeners("data")).toEqual(inputListeners);
-      expect(process.listeners("SIGTERM")).toEqual(signalListeners);
-      expect(child.stdin.destroyed).toBe(true);
-    } finally {
-      child.emit("close", 7, null);
-      await running;
-      process.exitCode = originalCode;
-      exit.mockRestore();
-    }
-  });
+  try {
+    await Promise.resolve();
+    child.emit("exit", 7, null);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(exit).not.toHaveBeenCalled();
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", 7, null);
+    await running;
+    expect(process.exitCode).toBe(7);
+    expect(process.stdin.listeners("data")).toEqual(inputListeners);
+    expect(process.listeners("SIGTERM")).toEqual(signalListeners);
+    expect(child.stdin.destroyed).toBe(true);
+  } finally {
+    child.emit("close", 7, null);
+    await running;
+    process.exitCode = originalCode;
+  }
 });

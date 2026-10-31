@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { resetWorkingProgress } from "../chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
+import { makeMessage } from "../chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState, setExpansionState } from "../chat-thread.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import {
@@ -9,16 +10,10 @@ import {
   projectTranscriptIndex,
   projectTranscriptRows,
 } from "./chat-transcript-message-index.ts";
+import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 
 const sessionKey = "agent:main:dashboard:0f6d5a1c-5a9e-4c1e-9b1a-2f3c4d5e6f70";
-function makeMessage(
-  id: string,
-  seq: number,
-  fields: { role?: string; timestamp?: number; runId?: string; [key: string]: unknown } = {},
-) {
-  const { role = "assistant", timestamp = seq * 10, runId = "run-1", ...extra } = fields;
-  return { role, content: id, timestamp, __openclaw: { id, seq, runId }, ...extra };
-}
+
 const finalAnswer = (id: string, seq: number, fields = {}) =>
   makeMessage(id, seq, { phase: "final_answer", stopReason: "stop", ...fields });
 function makeTool(
@@ -129,6 +124,88 @@ it.each([
   if (frame?.outcome.kind === "completed") {
     expect(frame.outcome.actionOwner?.message).toBe(answer);
   }
+});
+
+it("changes the footprint revision when the same message ID receives new content", () => {
+  const before = indexFor(projectHistory([finalAnswer("answer", 2, { content: "Before" })]))
+    .rows[0]!;
+  const replay = indexFor(projectHistory([finalAnswer("answer", 2, { content: "Before" })]))
+    .rows[0]!;
+  const after = indexFor(projectHistory([finalAnswer("answer", 2, { content: "After" })])).rows[0]!;
+  expect(after.key).toBe(before.key);
+  expect(after.kind === "item" && after.revision).not.toBe(
+    before.kind === "item" && before.revision,
+  );
+  expect(replay.kind === "item" && replay.revision).toBe(before.kind === "item" && before.revision);
+});
+
+it("invalidates only a changed reaction row while retaining other cached footprints", () => {
+  const chain = projectHistory([
+    finalAnswer("answer", 2),
+    makeMessage("neighbor", 3, { role: "user" }),
+  ]);
+  const expanded = new Map<string, boolean>();
+  const summaries = [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }];
+  const project = (reactions: Map<string, typeof summaries>) =>
+    projectTranscriptIndex(chain, expanded, { ...labels, messageReactions: reactions }).rows.filter(
+      (row) => row.kind === "item",
+    );
+  const before = project(new Map());
+  const reacted = project(new Map([["answer", summaries]]));
+  expect(reacted.map((row) => row.key)).toEqual(before.map((row) => row.key));
+  expect(reacted[0]!.revision).not.toBe(before[0]!.revision);
+  expect(reacted[1]!.revision).toBe(before[1]!.revision);
+  const replay = project(
+    new Map([
+      ["answer", summaries],
+      ["outside-window", summaries],
+    ]),
+  );
+  expect(replay.map((row) => row.revision)).toEqual(reacted.map((row) => row.revision));
+  expect(project(new Map([["answer", []]])).map((row) => row.revision)).toEqual(
+    before.map((row) => row.revision),
+  );
+});
+
+it("leaves an attached live continuation out of reusable row geometry", () => {
+  const items = chatItems({
+    messages: [
+      { role: "assistant", content: "Answer", timestamp: 10, __openclaw: { id: "answer", seq: 1 } },
+    ],
+  });
+  const settled = chainFor(items);
+  const active = chainFor([...items, { kind: "reading-indicator", key: "waiting", startedAt: 32 }]);
+  expect(active.continuations.size).toBe(1);
+  const before = indexFor(settled).rows[0]!;
+  const during = indexFor(active).rows[0]!;
+  expect(during.key).toBe(before.key);
+  expect(before.kind === "item" && before.revision).toEqual(expect.any(String));
+  expect(during.kind === "item" && during.revision).toBeUndefined();
+});
+
+it("distinguishes terminal frame geometry when a hidden terminal changes its outcome", () => {
+  const messages = [
+    history[0],
+    makeMessage("call", 2, {
+      content: [{ type: "toolCall", id: "read", name: "read", arguments: {} }],
+      stopReason: "toolUse",
+    }),
+    makeTool("read", 3, "run-1", 30),
+  ];
+  const stopped = [...messages, makeMessage("terminal", 4, { content: [], stopReason: "stop" })];
+  const before = chainFor(chatItems({ messages }), { messages });
+  const after = chainFor(chatItems({ messages: stopped }), { messages: stopped });
+  const first = onlyFrame(before);
+  const last = onlyFrame(after);
+  expect(first.outcome.kind).toBe("interrupted");
+  expect(last.outcome.kind).toBe("completed");
+  expect(last.key).toBe(first.key);
+  expect(messagesIn([last])).toEqual(messagesIn([first]));
+  const beforeRow = indexFor(before).rows.find((row) => row.key === first.key)!;
+  const afterRow = indexFor(after).rows.find((row) => row.key === last.key)!;
+  expect(afterRow.kind === "item" && afterRow.revision).not.toBe(
+    beforeRow.kind === "item" && beforeRow.revision,
+  );
 });
 
 describe("completed reply frame ownership", () => {
@@ -333,7 +410,7 @@ it.each([
   { name: "dashboard frame and queued tail", framed: true, searchActive: false },
   { name: "unframed stream without boundary", framed: false, searchActive: false },
   { name: "search projection", framed: true, searchActive: true },
-])("recomputes streamed history: $name", ({ framed, searchActive }) => {
+])("retains streamed structure until visibility changes: $name", ({ framed, searchActive }) => {
   const historical = (seq: number, fields: Record<string, unknown>) =>
     makeMessage(`history-${seq - 1}`, seq, {
       timestamp: seq,
@@ -426,15 +503,9 @@ it.each([
       if (!framed && owner?.kind === "stream-run") {
         expect(owner.boundaryId).toBeUndefined();
       }
-      if (framed && visible) {
-        const marker = index.positionIndex.markers.find((item) => item.id === "run:live");
-        expect(
-          index.positionIndex.liveMarkers?.find((item) => item.id === marker?.id)?.message ??
-            marker?.message,
-        ).toMatchObject({ content: [{ type: "text", text: stream }] });
-      }
       if ([3, 4, 6, 9].includes(delta)) {
         const previous = retained.at(-1)!;
+        expect(chain).toBe(previous.chain);
         expect(chain.transcriptItems[0]).toBe(previous.chain.transcriptItems[0]);
         expect(index.transcriptMessageKeys).toBe(previous.index.transcriptMessageKeys);
         expect(index.loadedReplySources).toBe(previous.index.loadedReplySources);
@@ -518,6 +589,11 @@ describe("subagent handoff", () => {
       : waiting;
     const chain = projectHistory(messages, options);
     const frame = onlyFrame(chain);
+    const indexed = indexFor(chain).rows.find((row) => row.key === frame.key);
+    expect(indexed?.kind).toBe("item");
+    expect(indexed?.kind === "item" && indexed.revision).toEqual(
+      statusShape ? undefined : expect.any(String),
+    );
     expect(frame).toMatchObject({
       key: waitingKey,
       ...(runId ? { runId } : {}),
@@ -624,7 +700,7 @@ describe("system event presentation", () => {
     role: "user",
     content: "[System] Continue the interrupted turn.",
     timestamp: 20,
-    provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+    provenance: { kind: "internal_system", sourceTool: "system-event" },
     __openclaw: { id, idempotencyKey: runId + ":user" },
   });
 
@@ -678,3 +754,45 @@ describe("system event presentation", () => {
     expect(chain.transcriptItems[1]).toBe(pending);
   });
 });
+
+it.each([
+  ["work in both runs", true],
+  ["work only in the later run", false],
+] as const)(
+  "keeps a collapsed browser preview after an earlier run's reply: %s",
+  (_name, early) => {
+    const browse = {
+      ...makeMessage("browse", 4, { role: "toolResult", content: "Opened", runId: "run-b" }),
+      toolName: "browser",
+      toolCallId: "browse",
+      details: {
+        browserTab: {
+          profile: "managed",
+          target: "host",
+          targetId: "tab-1",
+          url: "https://example.com",
+          title: "Example",
+        },
+      },
+    };
+    const chain = projectHistory([
+      history[0],
+      ...(early ? [makeTool("work-0", 2, "run-a", 20)] : []),
+      makeMessage("reply-a", 3, { runId: "run-a", stopReason: "stop" }),
+      browse,
+      makeMessage("reply-b", 5, { runId: "run-b", stopReason: "stop" }),
+    ]);
+    // No visible reply owns the rollup, so it stays outside the frames; its preview follows reply A.
+    expect(chain.transcriptItems.map((item) => item.kind)).toEqual([
+      "group",
+      "work-group",
+      "agent-run-frame",
+      "agent-run-frame",
+    ]);
+    const expanded = new Map<string, boolean>();
+    const previews = projectTranscriptWorkPreviews(chain.workGroups, { sessionKey, expanded });
+    const rows = projectTranscriptRows(indexFor(chain, expanded).rows, previews, []);
+    const [firstFrame] = framesOf(chain);
+    expect(rows.map((row) => row.key)).toContain(`work-previews:${firstFrame!.key}`);
+  },
+);

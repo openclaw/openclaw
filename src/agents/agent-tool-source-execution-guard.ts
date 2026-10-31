@@ -7,7 +7,10 @@ import {
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import {
+  captureGatewayToolReceiptAssertion,
+  getGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 const executionBudgetContext = resolveGlobalSingleton(
   Symbol.for("openclaw.agentToolExecutionBudgetContext"),
@@ -72,11 +75,9 @@ export function captureAgentToolSourceExecutionGuard(signal?: AbortSignal): Sess
   // neither diagnostic identity tokens nor their collection grant authority.
   const authority = getGatewayToolCallerIdentity()?.receiptAuthority;
   const assertBudgetCurrent = executionBudgetContext.getStore()?.assertCurrent;
-  const assertReceipt = Object.assign(() => {
-    if (authority?.() === false) {
-      throw new Error("tool invocation authority is no longer active");
-    }
-  }, authority);
+  const assertReceipt = authority
+    ? captureGatewayToolReceiptAssertion(authority, "tool invocation authority is no longer active")
+    : undefined;
   return composeSessionSourceAssertion([assertReceipt], (assertSource) => {
     signal?.throwIfAborted();
     assertBudgetCurrent?.();

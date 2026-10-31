@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import type { SubsystemLogger } from "../../../logging/subsystem.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -258,9 +259,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
           takePendingMidTurnPrecheckRequest: () => undefined,
         },
         preparedUserTurnMessage: {
-          role: "user",
-          content: "hello",
-          timestamp: 100,
+          ...makeUserMessage("hello", 100),
           __openclaw: { senderName: "Alice" },
         },
         sessionManager,

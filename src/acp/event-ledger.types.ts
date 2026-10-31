@@ -39,6 +39,7 @@ export type AcpEventLedger = {
     update: SessionUpdate;
   }) => Promise<void>;
   markIncomplete: (params: { sessionId: string; sessionKey: string }) => Promise<void>;
+  readSessionKey: (params: { sessionId: string }) => Promise<string | undefined>;
   readReplay: (params: { sessionId: string; sessionKey: string }) => Promise<AcpEventLedgerReplay>;
   readReplayBySessionId: (params: { sessionId: string }) => Promise<AcpEventLedgerReplay>;
   readReplayBySessionKey: (params: { sessionKey: string }) => Promise<AcpEventLedgerReplay>;

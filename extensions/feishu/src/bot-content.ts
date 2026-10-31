@@ -87,14 +87,13 @@ export function parseFeishuMessageEvent(
 ): FeishuMessageContext {
   const mentionedBot = checkBotMentioned(event, botOpenId);
   const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
-  // Strip bot addressing for commands (#35994); debounced content already expanded
+  // Preserve mention identities for agent context. Debounced content already expanded
   // each message's own keys, so never reinterpret placeholder-like display names.
   const content =
     preparedContent ??
     normalizeMentions(
       parseMessageContent(event.message.content, event.message.message_type),
       event.message.mentions,
-      botOpenId,
     );
   const senderOpenId = event.sender.sender_id.open_id?.trim();
   const senderUserId = event.sender.sender_id.user_id?.trim();
@@ -132,7 +131,7 @@ export function parseFeishuMessageEvent(
   return ctx;
 }
 
-export function parseMessageContent(content: string, messageType: string): string {
+function parseMessageContent(content: string, messageType: string): string {
   if (messageType === "post") {
     return parsePostContent(content, {
       renderMediaPlaceholders: false,
@@ -176,7 +175,7 @@ export function parseMessageContent(content: string, messageType: string): strin
 
 const FEISHU_MEDIA_MESSAGE_TYPES = new Set(["image", "file", "audio", "video", "media", "sticker"]);
 
-export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string): boolean {
+function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string): boolean {
   if (!botOpenId) {
     return false;
   }

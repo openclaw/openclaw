@@ -51,6 +51,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   const {
     params,
     attemptClientFactory,
+    callerOwnedAttemptClient,
     bindingStore,
     appServer,
     pluginConfig,
@@ -87,6 +88,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       assertCurrentAsync: runtime.nativeExecutionPolicy.assertCurrent,
       authority: connection.authority,
       attemptClientFactory,
+      callerOwnedAttemptClient,
       bindingStore,
       runtime: connection.options.runtime,
       appServer: pluginAppServer,

@@ -183,10 +183,10 @@ describe("resource-qualified native solo timings", () => {
   const descriptor = {
     shard_name: "storage-hosted-2",
     configs: ["test/vitest/vitest.infra.config.ts"],
-    includePatterns: ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts"],
+    includePatterns: ["src/system-agent/setup-inference-activate.test.ts"],
   };
   const key =
-    "native-solo-8cpu-8workers:122cfdeb2f6b006ace10e2583ac92903cbb9137b74e884d7afba1d81560bc129";
+    "native-solo-8cpu-8workers:94be95e41d7b2c72236d1aa22e2efd41b5fb6a0c76514f70e53a92232b092bfd";
   const log = (span: number, group = descriptor) => {
     const line = (second: number, body: string) =>
       `${new Date(Date.parse("2026-08-27T23:00:00Z") + second * 1000).toISOString()} ${body}`;
@@ -615,11 +615,14 @@ describe("runtime placement observations", () => {
       const weights: Record<string, number> = gateway
         ? { moved: 180, retained: 250, gateway: 30, ordinary: 190 }
         : { moved: 100, retained: 330, spare: 80, ordinary: 50 };
-      const cost = (groups: NodeTestShardGroup[]) =>
-        (gateway ? 60 : 100) + groups.reduce((sum, entry) => sum + weights[entry.shard_name]!, 0);
+      const cost = vi.fn(
+        (groups: NodeTestShardGroup[]) =>
+          (gateway ? 60 : 100) + groups.reduce((sum, entry) => sum + weights[entry.shard_name]!, 0),
+      );
       rebalanceRuntimeTestJobs(jobs, {
         cost,
-        admits: (groups) => groups.length > 0 && cost(groups) <= (gateway ? 360 : 440),
+        admits: (groups, seconds = cost) =>
+          groups.length > 0 && seconds(groups) <= (gateway ? 360 : 440),
         runnerRank: () => 0,
         prepareRecipient: (recipient) =>
           gateway
@@ -642,6 +645,14 @@ describe("runtime placement observations", () => {
             : [["retained"], ["gateway", "moved"]]
           : [["retained"], ["spare"], ["ordinary", "moved"]],
       );
+      if (!gateway) {
+        // Even a losing recipient must use its already-priced envelope for admission.
+        expect(
+          cost.mock.calls.filter(
+            ([groups]) => groups.map((entry) => entry.shard_name).join(",") === "spare,moved",
+          ),
+        ).toHaveLength(1);
+      }
       if (gateway) {
         if (!packed) {
           expect(jobs.map((entry) => entry.predictedSeconds)).toEqual([310, 270]);

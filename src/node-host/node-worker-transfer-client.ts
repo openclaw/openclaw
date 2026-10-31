@@ -19,9 +19,10 @@ import {
   workerHistoryNotAdopted,
 } from "../gateway/worker-environments/workspace-result-history.js";
 import { workerWorkspaceTransferPaths } from "../gateway/worker-environments/workspace-result-staging.js";
-import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
   ensureStagedInputDirectory,
@@ -218,9 +219,8 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
       workspaceDir: staging,
       homeDir: params.manifestHome,
       argv: [
-        "node",
-        "-e",
-        REMOTE_WORKSPACE_MANIFEST_JS,
+        process.execPath,
+        ...resolveRuntimeWorkerArgv(resolveRuntimeProcessEntrypointUrl("nodeWorkspaceManifest")),
         staging,
         manifest.baseCommit ?? "",
         "publish",

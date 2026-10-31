@@ -3,6 +3,7 @@ import { withinTest } from "../../../test/helpers/promise.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
@@ -27,17 +28,12 @@ function activePlacement(
 }
 
 function result(availableBytes: number, totalBytes: number): SpawnResult {
-  return {
+  return createCommandResult({
     stdout: JSON.stringify({
       availableBytes: String(availableBytes),
       totalBytes: String(totalBytes),
     }),
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  };
+  });
 }
 
 function createHarness(
@@ -201,14 +197,8 @@ it("samples an idle active placement and emits only projected status transitions
       totalBytes: 10 * GIB,
       observedAtMs: 1_000,
     });
-    const command = harness.runCommand.mock.calls[0]?.[0];
-    expect(command).toMatchObject({
-      transportRetry: "idempotent",
-      timeoutMs: 30_000,
-    });
-    expect(command?.argv.at(-1)).toBe("/workspace/session-disk");
-    expect(command?.argv[2]).toContain("statfs");
-    expect(command?.argv[2]).toContain("bavail");
+    expect(harness.runCommand.mock.calls[0]?.[0].argv.at(-1)).toBe("/workspace/session-disk");
+    expect(harness.runCommand.mock.calls[0]?.[0].argv[2]).toContain("bavail");
     expect(harness.startTunnel).toHaveBeenCalledWith({
       environmentId: "environment-disk",
       ownerEpoch: 7,

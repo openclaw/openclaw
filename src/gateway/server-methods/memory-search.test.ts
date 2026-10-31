@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import {
@@ -15,7 +17,12 @@ import {
   readLockPayloadSync,
   resolveGatewayLockPaths,
 } from "../../infra/gateway-lock.js";
-import type { MemoryProviderStatus, MemorySearchResult } from "../../memory-host-sdk/host/types.js";
+import {
+  readMemorySearchManagerStatus,
+  type MemoryProviderStatus,
+  type MemorySearchManager,
+  type MemorySearchResult,
+} from "../../memory-host-sdk/host/types.js";
 import {
   createPluginStateKeyedStore,
   type OpenKeyedStoreOptions,
@@ -109,6 +116,37 @@ function createStubManager() {
     })),
     close: vi.fn(async () => undefined),
   };
+}
+
+async function expectSearchRetrievalBudget(
+  maxRequests: number,
+  readDiagnostics: () => Promise<unknown>,
+  search: () => Promise<void>,
+) {
+  const tasks = channel("openclaw.worker.task");
+  let requests = 0;
+  const observe = (event: unknown) => {
+    if (
+      isRecord(event) &&
+      typeof event.worker === "string" &&
+      /(?:manager|memory)-search\.worker\.(?:js|ts)$/.test(event.worker)
+    ) {
+      requests += 1;
+    }
+  };
+  tasks.subscribe(observe);
+  try {
+    await readDiagnostics();
+    expect(requests, "the real status worker must be observable").toBeGreaterThan(0);
+    requests = 0;
+    await search();
+    // Keep index admission and retrieval; full status counts are diagnostics.
+    expect
+      .soft(requests, "warm keyword search retrieval requests")
+      .toBeLessThanOrEqual(maxRequests);
+  } finally {
+    tasks.unsubscribe(observe);
+  }
 }
 
 describe("memory.search gateway method", () => {
@@ -718,9 +756,14 @@ describe("memory.search gateway method", () => {
 
   it("shares one format repair across concurrent transient Gateway searches", async () => {
     const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
-      createMemoryRuntime: (host: {
-        runInBackgroundContext: <T>(run: () => T) => T;
-      }) => MemoryPluginRuntime;
+      createMemoryRuntime: (host: { runInBackgroundContext: <T>(run: () => T) => T }) => Omit<
+        MemoryPluginRuntime,
+        "getMemorySearchManager"
+      > & {
+        getMemorySearchManager: (
+          params: Parameters<MemoryPluginRuntime["getMemorySearchManager"]>[0],
+        ) => Promise<{ manager: MemorySearchManager | null; error?: string }>;
+      };
       configureMemoryCoreDreamingState: (
         openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
       ) => void;
@@ -755,7 +798,10 @@ describe("memory.search gateway method", () => {
         agentId: "main",
         purpose: "cli",
       });
-      assert(seeded.manager?.sync, seeded.error ?? "Expected a memory index manager");
+      assert(
+        typeof seeded.manager?.sync === "function",
+        seeded.error ?? "Expected a memory index manager",
+      );
       await seeded.manager.sync({ reason: "cli", force: true });
       const dbPath = seeded.manager.status().dbPath;
       assert(dbPath, "Expected a memory index database path");
@@ -845,7 +891,45 @@ describe("memory.search gateway method", () => {
       responses.forEach((response) => expectRecall(response));
       expect(readRevision() - beforeConcurrent).toBe(singleRepairWrites);
       getActiveMemorySearchManagerCore.mockResolvedValueOnce(observer);
-      expectRecall(await invokeMemorySearch({ query: "Juniper", agentId: "main" }, cfg), false);
+      const observerManager = observer.manager;
+      await expectSearchRetrievalBudget(
+        3,
+        () => readMemorySearchManagerStatus(observerManager),
+        async () => {
+          expectRecall(await invokeMemorySearch({ query: "Juniper", agentId: "main" }, cfg), false);
+        },
+      );
+      const cli = await memoryRuntime.getMemorySearchManager({
+        cfg,
+        agentId: "main",
+        purpose: "cli",
+      });
+      const cliManager = cli.manager;
+      const cliSearch = memoryRuntime.searchForCli?.bind(memoryRuntime);
+      assert(cliManager && cliSearch, "Expected the real CLI search runtime");
+      try {
+        await expectSearchRetrievalBudget(
+          2,
+          () => readMemorySearchManagerStatus(cliManager),
+          async () => {
+            const result = await cliSearch({
+              manager: cliManager,
+              cfg,
+              agentId: "main",
+              query: "Juniper",
+            });
+            expect(result.results).toEqual([
+              expect.objectContaining({
+                path: "memory/orchard.md",
+                snippet: expect.stringContaining("copper lanterns"),
+              }),
+            ]);
+            expect(result).not.toHaveProperty("warning");
+          },
+        );
+      } finally {
+        await cliManager.close?.();
+      }
       expect(readRevision() - beforeConcurrent).toBe(singleRepairWrites);
     } finally {
       await memoryRuntime.closeAllMemorySearchManagers?.();

@@ -8,7 +8,10 @@ import {
   ServiceInspectionError,
   findServiceOwnershipRefusal,
 } from "../../daemon/service-inspection-error.js";
-import { resolveManagedServiceNodeRunner } from "../../daemon/service-layout.js";
+import {
+  resolveManagedServiceNodeRunner,
+  resolveManagedServiceStartupRuntime,
+} from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
   resolveManagedGatewayServiceCommand,
@@ -39,6 +42,7 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 import type {
   ManagedGatewayUpdateVerdict,
   ManagedGatewayServiceObservation,
+  ManagedServiceStopParams,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
 import {
@@ -54,7 +58,9 @@ import { isManagedGatewayServiceOffline } from "./update-command-service-publica
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
 import { windowsUpdateManualGuidance } from "./update-command-windows-preflight.js";
 import {
+  abortWindowsTaskUpdateIfInterrupted,
   createWindowsTaskAutoStartRecovery,
+  restoreAndCompleteWindowsTask,
   UpdateCommandAbort,
   type WindowsTaskAutoStartRecovery,
 } from "./update-command-windows-task.js";
@@ -143,52 +149,6 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
   return recovery;
 }
 
-async function abortWindowsTaskUpdateIfInterrupted(
-  recovery: WindowsTaskAutoStartRecovery,
-): Promise<void> {
-  if (!recovery.interrupted()) {
-    return;
-  }
-  await restoreAndCompleteWindowsTask(recovery);
-  throw new UpdateCommandAbort();
-}
-
-async function restoreAndCompleteWindowsTask(recovery: WindowsTaskAutoStartRecovery) {
-  try {
-    await recovery.restore();
-  } finally {
-    await recovery.complete();
-  }
-}
-
-type ManagedServiceStopParams = {
-  recovery?: unknown;
-  updateRun?: UpdateCommandOptions["run"];
-  recordPhase?: (phase: "activating") => Promise<void>;
-  updateInstallKind: "git" | "package";
-  root: string;
-  shouldRestart: boolean;
-  jsonMode: boolean;
-  phase?: "inspect" | "prepare" | "refresh";
-  /** Package/helper root can differ from the inspected service during a rebind. */
-  handoffRoot?: string;
-  handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
-  expectedService?: ManagedGatewayServiceObservation &
-    Partial<Pick<PreManagedServiceStop, "stopped">>;
-  allowInstallRootChange?: boolean;
-  onStopped?: (state: PreManagedServiceStop) => void;
-  /** Doctor restores this same native instance after its offline repair. */
-  retainNativeIdentity?: boolean;
-  assertCurrent?: (phase?: "restore") => void;
-  waitForCurrent?: () => Promise<void>;
-  timeoutMs?: number;
-  warn?: (message: string) => void;
-} & (
-  | { recordPhase: (phase: "activating") => Promise<void> }
-  | { updateRun?: undefined }
-  | { phase: "inspect" | "refresh" }
-);
-
 function unavailableServiceState(
   verdict: Extract<ManagedGatewayUpdateVerdict, { kind: "unavailable" }>,
 ): PreManagedServiceStop {
@@ -213,13 +173,12 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(
     return unavailableServiceState(params.expectedService.serviceUpdateVerdict);
   }
   try {
-    if (params.phase === "inspect") {
-      return await stopManagedServiceBeforeMutableUpdate(params);
-    }
-    return await withGatewayServiceOperationLock(
-      params.expectedService?.serviceEnv ?? process.env,
-      (assertNative) => stopManagedServiceBeforeMutableUpdate(params, assertNative),
-    );
+    return params.phase === "inspect"
+      ? await stopManagedServiceBeforeMutableUpdate(params)
+      : await withGatewayServiceOperationLock(
+          params.expectedService?.serviceEnv ?? process.env,
+          (assertNative) => stopManagedServiceBeforeMutableUpdate(params, assertNative),
+        );
   } catch (error) {
     if (
       error instanceof ServiceInspectionError &&
@@ -449,6 +408,9 @@ async function stopManagedServiceBeforeMutableUpdate(
           : "Gateway restart skipped: no Gateway service or listener is running.",
     };
   }
+  if (params.phase === "inspect" && serviceUpdateVerdict.kind === "owned") {
+    params.onOwnedStartupRuntime?.(resolveManagedServiceStartupRuntime(serviceState));
+  }
   const operatorRestartWarning =
     process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && serviceUpdateVerdict.kind === "owned"
       ? await admitSystemdUpdate(
@@ -567,6 +529,24 @@ async function stopManagedServiceBeforeMutableUpdate(
     let currentState = await readCurrentService(serviceState.env);
     await assertAncestry(currentState);
     if (process.platform === "linux") {
+      const { assertSystemdServiceActionAllowed } =
+        await import("../../daemon/systemd-lifecycle.js");
+      assertCurrent();
+      try {
+        assertSystemdServiceActionAllowed(
+          currentState.systemdInstallation?.kind === "system"
+            ? currentState.systemdInstallation.system
+            : undefined,
+          "stop",
+        );
+      } catch (error) {
+        const message = `Gateway stop phase blocked: ${String(error)}`;
+        return {
+          ...inspected,
+          blockMessage: message,
+          blockFailureFacts: [{ check: "gateway-stop", code: "service-mutation-refused", message }],
+        };
+      }
       const refreshed = await prepareSystemdMaintenance(currentState, true);
       if (refreshed.kind === "refreshed") {
         // Policy refresh preserves the launcher; retain admitted installation drift.
@@ -633,11 +613,28 @@ async function stopManagedServiceBeforeMutableUpdate(
         await recordPhase("activating");
         assertCurrent();
       }
+      params.assertDeadline?.();
+      if (params.retainNativeIdentity && process.platform !== "win32") {
+        if (!service.isEnabled) {
+          throw new Error("Gateway native autostart policy could not be verified before stopping.");
+        }
+        // Windows owns its temporary disable and restoration through task recovery.
+        inspected.serviceAutoStartEnabled = await service.isEnabled({
+          env: currentState.env,
+          timeoutMs: params.timeoutMs,
+        });
+        assertCurrent();
+        params.assertDeadline?.();
+      }
       stoppedAtMs = Date.now();
       await service.stop({
         env: currentState.env,
+        ...(inspected.serviceSystemdIdentity
+          ? { systemdIdentity: inspected.serviceSystemdIdentity }
+          : {}),
         stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
         assertCurrent,
+        beforeEffect: params.assertDeadline,
         warn,
         ...(updateRun
           ? { updateHandoff: { root: params.handoffRoot ?? params.root, runId: updateRun.runId } }

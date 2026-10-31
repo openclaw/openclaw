@@ -5,10 +5,13 @@ import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/
 import type { RequestFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
+import { removeQueuedMessage } from "./chat-queue.ts";
 import { requestChatSend } from "./chat-send-request.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { startupAdmissionResponse } from "./chat-startup-response.test-support.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 import { handleAbortChat } from "./run-lifecycle.ts";
 
@@ -110,22 +113,7 @@ async function startPreparingSend(
         return;
       }
     }
-    pending.handleResponse({
-      type: "res",
-      id: request.id,
-      ok: ready,
-      ...(ready
-        ? { payload: { status: "ok", runId: "started" } }
-        : {
-            error: {
-              code: "UNAVAILABLE",
-              message: "Agent is preparing",
-              retryable: true,
-              retryAfterMs: 1_000,
-              details: { reason: "startup-sidecars", method: request.method },
-            },
-          }),
-    });
+    pending.handleResponse(startupAdmissionResponse(request, ready));
     issued.resolve();
   });
   host.chatMessage = message;
@@ -134,11 +122,38 @@ async function startPreparingSend(
   return { host, pending, attempts, writes, sending, ready: () => (ready = true) };
 }
 
+it.each(["ready", "discard"])(
+  "retains refused sends past the request deadline: %s",
+  async (ending) => {
+    const fixture = await startPreparingSend("Keep waiting for this agent");
+    const original = JSON.parse(fixture.attempts[0]!) as RequestFrame;
+    await vi.advanceTimersByTimeAsync(GATEWAY_STARTUP_ADMISSION_WAIT_MS);
+    await fixture.sending;
+    expect(fixture.host.chatQueue[0]).toMatchObject({ sendState: "waiting-reconnect" });
+    expect(fixture.host.chatError).toBeNull();
+    expect(fixture.writes).toHaveLength(0);
+    if (ending === "discard") {
+      expect(
+        removeQueuedMessage(fixture.host, fixture.host.chatQueue[0]!.id, { discard: true }),
+      ).toBe("removed");
+    }
+    fixture.ready();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await waitForFast(() => expect(fixture.writes).toHaveLength(ending === "ready" ? 1 : 0));
+    if (ending === "ready") {
+      expect(fixture.writes[0]?.params).toEqual(original.params);
+    }
+    await vi.advanceTimersByTimeAsync(GATEWAY_STARTUP_ADMISSION_WAIT_MS);
+    expect(fixture.writes).toHaveLength(ending === "ready" ? 1 : 0);
+    expect(fixture.pending.hasPending).toBe(false);
+  },
+);
+
 describe.each(["send", "steer", "redirect"] as const)("%s startup", (command) => {
   const message = (text: string) => (command === "send" ? text : `/${command} ${text}`);
-  it.each([45_000, 240_000])("delivers once after %i ms", async (delay) => {
+  it("delivers once after four minutes of startup", async () => {
     const fixture = await startPreparingSend(message("Wait for this agent"));
-    await vi.advanceTimersByTimeAsync(delay);
+    await vi.advanceTimersByTimeAsync(240_000);
     expect(fixture.pending.hasPending).toBe(true);
     expect(fixture.writes).toHaveLength(0);
     fixture.ready();

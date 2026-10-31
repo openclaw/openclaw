@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import "../../components/modal-dialog.tsx";
 import {
   SettingsEmpty,
@@ -36,7 +37,8 @@ export function SkillLibrary(props: {
   };
   const Entries = () => {
     const list = createMemo(() => acceptedList() ?? read().list);
-    const query = createMemo(() => props.library.local.query.toLowerCase().trim());
+    // Canonical-form comparison: a composed (NFC) query must match decomposed (NFD) copy.
+    const query = createMemo(() => props.library.local.query.toLowerCase().trim().normalize("NFC"));
     const scope = createMemo(() => current().view);
     const entries = createMemo(() => {
       const snapshot = list();
@@ -52,6 +54,7 @@ export function SkillLibrary(props: {
           (!search ||
             `${entry.slug} ${entry.name} ${entry.description} ${entry.ownerLabel}`
               .toLowerCase()
+              .normalize("NFC")
               .includes(search))
         );
       });
@@ -327,8 +330,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
       <div class="plugins-toolbar">
         <label class="field" style={{ "min-width": "0", flex: "1" }}>
           <span>{t("skillLibrary.file")}</span>
-          <select
-            class="settings-select"
+          <SettingsSelect
             aria-label={t("skillLibrary.file")}
             value={draft().selectedFile}
             onChange={(event) =>
@@ -336,19 +338,14 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
                 state.draft!.selectedFile = event.currentTarget.value;
               })
             }
-          >
-            <option value="SKILL.md" selected={draft().selectedFile === "SKILL.md"}>
-              SKILL.md
-            </option>
-            <For each={draft().files} keyed={(file) => file.path}>
-              {(file) => (
-                <option value={file().path} selected={draft().selectedFile === file().path}>
-                  {file().path}
-                  {file().executable ? " *" : ""}
-                </option>
-              )}
-            </For>
-          </select>
+            options={[
+              { value: "SKILL.md", label: "SKILL.md" },
+              ...draft().files.map((file) => ({
+                value: file.path,
+                label: `${file.path}${file.executable ? " *" : ""}`,
+              })),
+            ]}
+          />
         </label>
         <Show when={support() && props.library.canEdit()}>
           <button
@@ -463,8 +460,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
         <div class="plugins-toolbar">
           <label class="field" style={{ flex: "1", "min-width": "0" }}>
             <span>{t("skillLibrary.revision")}</span>
-            <select
-              class="settings-select"
+            <SettingsSelect
               aria-label={t("skillLibrary.revision")}
               value={draft().rollbackRevision}
               disabled={mutationLocked()}
@@ -473,27 +469,16 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
                   state.draft!.rollbackRevision = event.currentTarget.value;
                 })
               }
-            >
-              <option value="" selected={draft().rollbackRevision === ""}>
-                {t("skillLibrary.selectRevision")}
-              </option>
-              <For
-                each={draft().revisions.filter(
-                  (revision) => revision.revision !== entry()?.revision,
-                )}
-                keyed={(revision) => revision.revision}
-              >
-                {(revision) => (
-                  <option
-                    value={revision().revision}
-                    selected={draft().rollbackRevision === revision().revision}
-                  >
-                    {new Date(revision().createdAt).toLocaleString()} ·{" "}
-                    {revision().revision.slice(0, 8)}
-                  </option>
-                )}
-              </For>
-            </select>
+              options={[
+                { value: "", label: t("skillLibrary.selectRevision") },
+                ...draft()
+                  .revisions.filter((revision) => revision.revision !== entry()?.revision)
+                  .map((revision) => ({
+                    value: revision.revision,
+                    label: `${new Date(revision.createdAt).toLocaleString()} · ${revision.revision.slice(0, 8)}`,
+                  })),
+              ]}
+            />
           </label>
           <MutationButton
             action="rollback"

@@ -11,6 +11,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
 import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
@@ -28,6 +29,14 @@ import {
 } from "./workspace-sync-scripts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
+
+async function expectNoTransactions(root: string) {
+  expect((await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-"))).toEqual(
+    [],
+  );
+}
 
 function transactionRunner(workspace: string, env = process.env) {
   // Unlike manifests, transactions take the action before the workspace.
@@ -122,15 +131,7 @@ describe("remote workspace manifest script", () => {
     const rawManifest = serializeWorkerWorkspaceManifest({
       version: 1,
       baseCommit: null,
-      entries: [
-        {
-          path: "script.sh",
-          type: "file",
-          mode: 0o755,
-          size: original.byteLength,
-          sha256: createHash("sha256").update(original).digest("hex"),
-        },
-      ],
+      entries: [{ ...workspaceFile("script.sh", original), mode: 0o755 }],
     });
     const digest = createHash("sha256").update(rawManifest).digest("hex");
     const windowsScript = `Object.defineProperty(process, "platform", { value: "win32" });\n${REMOTE_WORKSPACE_MANIFEST_JS}`;
@@ -140,7 +141,7 @@ describe("remote workspace manifest script", () => {
     const published = await runWindows(["", "publish", digest], { input: rawManifest });
     expect(published).toMatchObject({ code: 0, stdout: `sha256:${digest}\n` });
 
-    const capture = async () => await runWindows(["", "all", digest]);
+    const capture = () => runWindows(["", "all", digest]);
     expect(await capture()).toMatchObject({ code: 0, stdout: `sha256:${digest}\n` });
 
     await fs.writeFile(file, "#!/bin/sh\necho changed\n");
@@ -182,10 +183,11 @@ describe("remote workspace manifest script", () => {
     await ok("apply", nonce);
     await expectFiles(workspace, { "node/child.txt": "new child\n", "added.txt": "added\n" });
 
-    await fs.writeFile(
-      path.join(path.dirname(staging), "phase.json"),
-      JSON.stringify({ version: 1, nonce, phase: "applying" }),
-    );
+    await writeJson(path.join(path.dirname(staging), "phase.json"), {
+      version: 1,
+      nonce,
+      phase: "applying",
+    });
     const recoveryNonce = "b".repeat(32);
     const recoveryBegin = await begin(recoveryNonce, ["node"]);
     expect(recoveryBegin.code).toBe(0);
@@ -270,7 +272,8 @@ describe("remote workspace manifest script", () => {
     await fs.chmod(path.join(workspace, "parent"), 0o700);
   });
 
-  it.each(["begun", "applied", "committed"] as const)(
+  // The in-flight applied outcome is covered by workspace-accepted-sync.test.ts.
+  it.each(["begun", "committed"] as const)(
     "reports strict settlement for %s transactions",
     async (outcome) => {
       const { root, workspace, runTransaction, begin, stage, ok } = await transactionWorkspace(
@@ -282,9 +285,7 @@ describe("remote workspace manifest script", () => {
       } else {
         await stage(nonce, { "result.txt": `${outcome}\n` });
         await ok("apply", nonce);
-        if (outcome === "committed") {
-          await ok("commit", nonce);
-        }
+        await ok("commit", nonce);
       }
       expect(await runTransaction("settle", nonce)).toMatchObject({
         code: 0,
@@ -297,9 +298,7 @@ describe("remote workspace manifest script", () => {
       } else {
         await ok("rollback", nonce);
       }
-      expect(
-        (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
-      ).toEqual([]);
+      await expectNoTransactions(root);
     },
   );
 
@@ -381,9 +380,7 @@ process.kill = function(pid, signal) {
         });
         expect(await withinTest(competing.exited, signal)).toMatchObject({ code: 0, stderr: "" });
         await expectFiles(workspace, { "result.txt": "old\n" });
-        expect(
-          (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
-        ).toEqual([]);
+        await expectNoTransactions(root);
       } finally {
         apply.child.kill("SIGKILL");
         competing?.child.kill("SIGKILL");
@@ -401,14 +398,8 @@ process.kill = function(pid, signal) {
     expect(begin.code).toBe(0);
     const transaction = path.dirname(begin.stdout.trim());
     await Promise.all([
-      fs.writeFile(
-        path.join(transaction, "phase.json"),
-        JSON.stringify({ version: 1, nonce, phase: "applying" }),
-      ),
-      fs.writeFile(
-        path.join(transaction, "state.json"),
-        JSON.stringify([{ relative: "result.txt", hadLive: true }]),
-      ),
+      writeJson(path.join(transaction, "phase.json"), { version: 1, nonce, phase: "applying" }),
+      writeJson(path.join(transaction, "state.json"), [{ relative: "result.txt", hadLive: true }]),
     ]);
     await fs.rename(
       path.join(workspace, "result.txt"),
@@ -439,9 +430,7 @@ process.kill = function(pid, signal) {
       stdout: `${JSON.stringify({ version: 1, outcome: "rolled-back" })}\n`,
     });
     await expectFiles(workspace, { "result.txt": "old\n" });
-    expect(
-      (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
-    ).toEqual([]);
+    await expectNoTransactions(root);
   });
 
   it("keeps the gateway's canonical manifest available across a second turn", async () => {

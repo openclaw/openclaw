@@ -1,4 +1,9 @@
 // Run on an approved benchmark host with --expose-gc --import ./scripts/tsx.mjs.
+// Fast owner comparison (Node 26.12+; no inspector, forced GC, or phase waits):
+// node --import ./scripts/tsx.mjs extensions/diagnostics-prometheus/src/metric-store.benchmark.test-support.ts \
+//   --record-only --iterations 20000 --output /path/to/result.json
+// Uses the recorded 4,628-series shape by default. Reports warm record CPU/allocation
+// and dirty-scrape CPU/allocation separately; compare both .prom files between arms.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -14,6 +19,8 @@ import {
 } from "node:perf_hooks";
 import { setImmediate as immediate, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { writeHeapSnapshot } from "node:v8";
+import { measureRecords } from "./metric-store-record-measure.test-support.js";
 import {
   MAX_PROMETHEUS_FAMILY_SERIES,
   PROMETHEUS_FAMILY_RESERVES,
@@ -24,12 +31,15 @@ import {
   createPrometheusMetricStore,
   type PrometheusMetricStore,
 } from "./prometheus-metric-store.js";
-import { recordWorkerRequest } from "./service-worker.js";
+import { createWorkerRequestMetricsRecorder } from "./service-worker.js";
 
 const { values } = parseArgs({
   options: {
     output: { type: "string" },
+    "pool-churn": { type: "boolean", default: false },
+    "heap-snapshot": { type: "string" },
     iterations: { type: "string", default: "100000" },
+    "record-only": { type: "boolean", default: false },
     "render-only": { type: "boolean", default: false },
     http: { type: "boolean", default: false },
     "http-only": { type: "boolean", default: false },
@@ -44,7 +54,7 @@ const { values } = parseArgs({
   },
 });
 assert(values.output, "--output is required");
-assert(globalThis.gc, "Run with --expose-gc");
+assert(values["record-only"] || globalThis.gc, "Run with --expose-gc");
 function integerOption(value: string, name: string, min: number, max: number) {
   const parsed = Number(value);
   assert(
@@ -53,26 +63,18 @@ function integerOption(value: string, name: string, min: number, max: number) {
   );
   return parsed;
 }
-const iterations = integerOption(values.iterations, "--iterations", 1000, 10000000);
-const renderSamples = integerOption(values["render-samples"], "--render-samples", 200, 100000);
-const allocationRenders = integerOption(
-  values["allocation-renders"],
-  "--allocation-renders",
-  1,
-  100000,
-);
-const phaseMs = integerOption(values["phase-ms"], "--phase-ms", 1000, 3600000);
-const updatesPerRender = integerOption(
-  values["updates-per-render"],
-  "--updates-per-render",
-  0,
-  16384,
-);
+function numericOption(name: keyof typeof values, min: number, max: number) {
+  return integerOption(String(values[name]), `--${name}`, min, max);
+}
+const iterations = numericOption("iterations", 1000, 10000000);
+const renderSamples = numericOption("render-samples", 200, 100000);
+const allocationRenders = numericOption("allocation-renders", 1, 100000);
+const phaseMs = numericOption("phase-ms", 1000, 3600000);
+const updatesPerRender = numericOption("updates-per-render", 0, 16384);
 assert(!updatesPerRender || values.shape, "--updates-per-render requires --shape");
 const withHttp = values.http || values["http-only"];
-const httpPort = values["http-port"]
-  ? integerOption(values["http-port"], "--http-port", 40000, 65535)
-  : undefined;
+const httpPort = values["http-port"] ? numericOption("http-port", 40000, 65535) : undefined;
+assert(!values["heap-snapshot"] || !withHttp, "Heap snapshots are a separate retention-only pass");
 assert(!withHttp || httpPort, "--http-port is required with --http or --http-only");
 const startAt = values["start-at"] ? Number(values["start-at"]) : Date.now() + 30000;
 assert(Number.isSafeInteger(startAt), "--start-at must be an epoch millisecond integer");
@@ -82,8 +84,10 @@ const capacity =
 const results: Record<string, unknown> = {};
 let phaseIndex = 0;
 const session = new Session();
-session.connect();
-await session.post("HeapProfiler.enable");
+if (!values["record-only"]) {
+  session.connect();
+  await session.post("HeapProfiler.enable");
+}
 
 async function phaseStart(name: string) {
   const remaining = startAt + phaseIndex++ * phaseMs - Date.now();
@@ -122,10 +126,10 @@ function memoryDelta(after: NodeJS.MemoryUsage, before: NodeJS.MemoryUsage) {
   };
 }
 
-async function measure(
+async function measure<T>(
   name: string,
   operations: number,
-  run: () => void | Promise<void>,
+  run: () => T | Promise<T>,
   profiled = true,
 ) {
   await phaseStart(name);
@@ -163,7 +167,7 @@ async function measure(
   const eventLoop = monitorEventLoopDelay({ resolution: 1 });
   eventLoop.enable();
   started = performance.now();
-  await run();
+  const result = await run();
   ended = performance.now();
   const used = process.cpuUsage(cpu);
   eventLoop.disable();
@@ -208,17 +212,18 @@ async function measure(
       p99Eligible: eventLoop.count >= 1000,
     },
   };
+  return result;
 }
 
 type Shape = {
   histograms: { name: PrometheusMetricName; labelSets: number; finiteBuckets: number[] }[];
   scalars: { name: PrometheusMetricName; labelSets: number; type: "counter" | "gauge" }[];
 };
+function shapeObject(value: unknown, message: string): asserts value is Record<string, unknown> {
+  assert(value && typeof value === "object", message);
+}
 function parseShape(raw: unknown): Shape {
-  assert(
-    raw && typeof raw === "object" && "histograms" in raw && "scalars" in raw,
-    "Invalid shape",
-  );
+  shapeObject(raw, "Invalid shape");
   assert(
     Array.isArray(raw.histograms) && Array.isArray(raw.scalars),
     "Shape must contain histogram and scalar arrays",
@@ -226,10 +231,7 @@ function parseShape(raw: unknown): Shape {
   let total = 0;
   const names = new Set<string>();
   const series = (row: unknown) => {
-    assert(
-      row && typeof row === "object" && "name" in row && "labelSets" in row,
-      "Invalid series shape",
-    );
+    shapeObject(row, "Invalid series shape");
     assert(
       typeof row.name === "string" && Object.hasOwn(PROMETHEUS_FAMILY_RESERVES, row.name),
       "Unknown metric name",
@@ -245,15 +247,12 @@ function parseShape(raw: unknown): Shape {
       Math.max(MAX_PROMETHEUS_FAMILY_SERIES, PROMETHEUS_FAMILY_RESERVES[name]),
     );
     total += labelSets;
-    return { name, labelSets };
+    return { name, labelSets, finiteBuckets: row.finiteBuckets, type: row.type };
   };
   const histograms: Shape["histograms"] = raw.histograms.map((row: unknown) => {
-    const common = series(row);
-    assert(
-      row && typeof row === "object" && "finiteBuckets" in row && Array.isArray(row.finiteBuckets),
-      "Invalid histogram bounds",
-    );
-    const finiteBuckets = row.finiteBuckets.map((bound: unknown) => {
+    const { name, labelSets, finiteBuckets: bounds } = series(row);
+    assert(Array.isArray(bounds), "Invalid histogram bounds");
+    const finiteBuckets = bounds.map((bound: unknown) => {
       assert(
         typeof bound === "number" && Number.isFinite(bound),
         "Histogram bounds must be finite",
@@ -266,26 +265,24 @@ function parseShape(raw: unknown): Shape {
         finiteBuckets.every((bound, index) => index === 0 || bound > finiteBuckets[index - 1]!),
       "Histogram bounds must be sorted and unique",
     );
-    return { ...common, finiteBuckets };
+    return { name, labelSets, finiteBuckets };
   });
   const scalars: Shape["scalars"] = raw.scalars.map((row: unknown) => {
-    const common = series(row);
-    assert(
-      row &&
-        typeof row === "object" &&
-        "type" in row &&
-        (row.type === "counter" || row.type === "gauge"),
-      "Invalid scalar type",
-    );
-    return { ...common, type: row.type };
+    const { name, labelSets, type } = series(row);
+    assert(type === "counter" || type === "gauge", "Invalid scalar type");
+    return { name, labelSets, type };
   });
   assert(total <= capacity, "Shape exceeds store capacity");
   return { histograms, scalars };
 }
 
+// Dead traffic between new series exposes long-lived views pinning unrelated pool slabs.
+const churnPool = () => values["pool-churn"] && Buffer.from("x".repeat(8192));
+
 function populateShape(store: PrometheusMetricStore, shape: Shape) {
   for (const { name, labelSets, finiteBuckets } of shape.histograms) {
     for (let index = 0; index < labelSets; index++) {
+      churnPool();
       store.histogram(
         name,
         "Synthetic histogram",
@@ -297,6 +294,7 @@ function populateShape(store: PrometheusMetricStore, shape: Shape) {
   }
   for (const { name, labelSets, type } of shape.scalars) {
     for (let index = 0; index < labelSets; index++) {
+      churnPool();
       store[type](
         name,
         "Synthetic scalar",
@@ -313,9 +311,13 @@ function populateShape(store: PrometheusMetricStore, shape: Shape) {
   };
 }
 
-function shapeUpdater(store: PrometheusMetricStore, shape: Shape | undefined) {
+function shapeUpdater(
+  store: PrometheusMetricStore,
+  shape: Shape | undefined,
+  count = updatesPerRender,
+) {
   const updates: ((round: number) => void)[] = [];
-  if (shape && updatesPerRender) {
+  if (shape && count) {
     for (const { name, labelSets, finiteBuckets } of shape.histograms) {
       for (let index = 0; index < labelSets; index++) {
         const labels = { kind: `kind-${index % 8}`, worker_slot: String(index) };
@@ -330,11 +332,11 @@ function shapeUpdater(store: PrometheusMetricStore, shape: Shape | undefined) {
         updates.push((round) => store[type](name, "Synthetic scalar", labels, round + 1));
       }
     }
-    assert(updatesPerRender <= updates.length, "Cannot update more series than the shape contains");
+    assert(count <= updates.length, "Cannot update more series than the shape contains");
   }
   let cursor = 0;
   return () => {
-    for (let index = 0; index < updatesPerRender; index++) {
+    for (let index = 0; index < count; index++) {
       updates[cursor % updates.length]!(cursor++);
     }
   };
@@ -378,6 +380,7 @@ function populateCapacity(store: PrometheusMetricStore) {
       if (series === capacity) {
         break;
       }
+      churnPool();
       const labels = { kind: `kind-${label % 8}`, worker_slot: String(label) };
       const buckets = rpcBuckets[name];
       if (buckets || familyIndex % 4 >= 2) {
@@ -509,7 +512,9 @@ async function measureHttp(
     const reply = receive();
     client.send(count);
     const result = await reply;
-    assert(!result.error, result.error);
+    if (result.error) {
+      throw new Error(result.error);
+    }
     assert.equal(result.durations.length, count);
     if (expectedBytes) {
       assert.equal(result.totalBytes, count * expectedBytes);
@@ -523,17 +528,8 @@ async function measureHttp(
       ["prometheus.http", renderSamples, false],
       ["prometheus.http-allocation", allocationRenders, true],
     ] as const) {
-      let reply: Reply | undefined;
       const previousServed = served;
-      await measure(
-        name,
-        count,
-        async () => {
-          reply = await request(count);
-        },
-        profiled,
-      );
-      assert(reply);
+      const reply = await measure(name, count, () => request(count), profiled);
       assert.equal(served - previousServed, count);
       results[`${name}.client`] = {
         receivedBytes: reply.totalBytes,
@@ -553,6 +549,25 @@ async function measureHttp(
   }
 }
 
+if (values["record-only"]) {
+  const shapePath = values.shape ?? new URL("../benchmarks/render-shape.json", import.meta.url);
+  const shape = parseShape(JSON.parse(await readFile(shapePath, "utf8")));
+  const store = createPrometheusMetricStore();
+  const fixture = populateShape(store, shape);
+  await measureRecords({
+    output: values.output,
+    iterations,
+    renderSamples,
+    store,
+    fixture,
+    update: shapeUpdater(store, shape, 1),
+    updateAll: shapeUpdater(store, shape, fixture.histogramSeries + fixture.scalarSeries),
+    scrapeInfo,
+    releaseScrape,
+  });
+  process.exit(0);
+}
+
 try {
   if (!values["render-only"] && !values["http-only"]) {
     const store = createPrometheusMetricStore();
@@ -570,19 +585,10 @@ try {
     observe(2000);
     await measure("prometheus.observation", iterations * 3, () => observe(iterations));
     const workerStore = createPrometheusMetricStore();
+    const recordWorker = createWorkerRequestMetricsRecorder(workerStore);
     const record = (count: number) => {
       for (let index = 0; index < count; index++) {
-        recordWorkerRequest(workerStore, {
-          type: "worker.request",
-          ts: 1,
-          seq: index,
-          kind: "sqlite_read",
-          phase: "completed",
-          requestClass: "sessions.get",
-          queueDepth: 0,
-          queueWaitMs: 0.1,
-          durationMs: 1,
-        });
+        recordWorker("sqlite_read", "sessions.get", "completed", 0, 0.1, 1, undefined);
       }
     };
     record(2000);
@@ -630,8 +636,11 @@ try {
     retainedStore.render();
   }
   const warmedMemory = await retainedMemory();
+  if (values["heap-snapshot"]) {
+    writeHeapSnapshot(values["heap-snapshot"]);
+  }
   let consumedUnits = 0;
-  if (!values["http-only"]) {
+  if (!values["http-only"] && !values["heap-snapshot"]) {
     const durations = new Float64Array(renderSamples);
     await measure(
       "prometheus.full-capacity-render",
@@ -687,6 +696,7 @@ try {
         node: process.version,
         iterations,
         renderSamples,
+        poolChurn: values["pool-churn"],
         allocationRenders,
         updatesPerRender,
         http: withHttp,

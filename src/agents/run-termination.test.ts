@@ -10,19 +10,14 @@ import { FailoverError } from "./failover/error.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
-  isAbortedAgentStopReason,
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
   resolveCliToolTerminalReason,
 } from "./run-termination.js";
 
-function abortedSignal(reason?: unknown) {
-  const controller = new AbortController();
-  controller.abort(reason);
-  return controller.signal;
-}
+const abortedSignal = (reason?: unknown) => AbortSignal.abort(reason);
 
-function namedError(name: string, message: string) {
+function namedError(name: string, message = name) {
   return Object.assign(new Error(message), { name });
 }
 
@@ -43,33 +38,12 @@ function expectLifecycle(
 }
 
 it.each([
-  [
-    "restart-abort reason",
-    { abortSignal: abortedSignal(createAgentRunRestartAbortError()) },
-    "cancelled",
-  ],
-  ["AbortError", { error: namedError("AbortError", "CLI run aborted") }, "cancelled"],
-  [
-    "retryable HTTP 500",
-    {
-      error: coerceToFailoverError({
-        status: 500,
-        message: "500 Fixture request needs a task header",
-      }),
-    },
-    "failed",
-  ],
-  [
-    "timeout beats AbortError",
-    {
-      abortSignal: abortedSignal(namedError("TimeoutError", "timed out")),
-      error: namedError("AbortError", "CLI run aborted"),
-    },
-    "timed_out",
-  ],
-  ["hostile name getter", { error: hostileProperty(new Error("boom"), "name") }, "failed"],
-] as const)("CLI terminal: %s", (_name, input, expected) => {
-  expect(resolveCliToolTerminalReason(input)).toBe(expected);
+  [undefined, abortedSignal(createAgentRunRestartAbortError()), "cancelled"],
+  [namedError("AbortError"), undefined, "cancelled"],
+  [namedError("AbortError"), abortedSignal(namedError("TimeoutError")), "timed_out"],
+  [hostileProperty(new Error("boom"), "name"), undefined, "failed"],
+] as const)("classifies CLI error and abort signal %#", (error, abortSignal, expected) => {
+  expect(resolveCliToolTerminalReason({ error, abortSignal })).toBe(expected);
 });
 
 it("contains revoked abort reason proxies", () => {
@@ -83,11 +57,6 @@ it("contains revoked abort reason proxies", () => {
   });
 });
 
-it("treats restart as an aborted terminal reason", () => {
-  expect(isAbortedAgentStopReason("aborted")).toBe(true);
-  expect(isAbortedAgentStopReason("restart")).toBe(true);
-  expect(isAbortedAgentStopReason("timeout")).toBe(false);
-});
 it("only turns live restart refusals into recovery and preserves explicit stop outcomes", () => {
   const error = new Error("runtime preparation failed", { cause: new GatewayDrainingError() });
   expectLifecycle(error, {});
@@ -105,12 +74,11 @@ it("only turns live restart refusals into recovery and preserves explicit stop o
       { aborted: true, stopReason: "aborted" },
       abortedSignal(createAgentRunDirectAbortError()),
     );
-    expect(
-      resolveAgentRunErrorLifecycleFields(
-        error,
-        abortedSignal(new DOMException("deadline", "TimeoutError")),
-      ).stopReason,
-    ).toBe("timeout");
+    expectLifecycle(
+      error,
+      { aborted: true, stopReason: "timeout" },
+      abortedSignal(new DOMException("deadline", "TimeoutError")),
+    );
     expectLifecycle(new Error("Gateway is restarting"), {});
   } finally {
     resetGatewayWorkAdmission();

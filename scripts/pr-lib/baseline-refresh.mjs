@@ -26,11 +26,6 @@ function git(args, options = {}) {
 }
 const text = (...args) => decoder.decode(git(args)).trim();
 function hash(bytes, write = false) {
-  if (write) {
-    return decoder
-      .decode(git(["hash-object", "--no-filters", "-w", "--stdin"], { input: bytes }))
-      .trim();
-  }
   const directory = fs.mkdtempSync(join(tmpdir(), "openclaw-pr-hash-"));
   const path = join(directory, "snapshot");
   let fd;
@@ -46,7 +41,11 @@ function hash(bytes, write = false) {
     fs.rmdirSync(directory);
     directoryRemoved = true;
     return decoder
-      .decode(git(["hash-object", "--no-filters", "--stdin"], { stdio: [fd, "pipe", "pipe"] }))
+      .decode(
+        git(["hash-object", "--no-filters", ...(write ? ["-w"] : []), "--stdin"], {
+          stdio: [fd, "pipe", "pipe"],
+        }),
+      )
       .trim();
   } finally {
     try {

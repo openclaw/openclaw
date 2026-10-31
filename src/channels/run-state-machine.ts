@@ -43,8 +43,7 @@ export function createRunStateMachine(params: RunStateMachineParams) {
     if (runActivityHeartbeat || activeRuns <= 0 || !lifecycleActive) {
       return;
     }
-    runActivityHeartbeat = setInterval(publish, heartbeatMs);
-    runActivityHeartbeat.unref?.();
+    runActivityHeartbeat = setInterval(publish, heartbeatMs).unref();
   };
 
   const deactivate = () => {

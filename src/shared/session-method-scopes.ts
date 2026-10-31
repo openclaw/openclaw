@@ -16,9 +16,11 @@ export function resolveDynamicSessionMutationRequiredScope(
     if (!validateSessionsDispatchParams(params)) {
       return "operator.write";
     }
-    // Paired-device selection stays write-scoped; profiles and configured defaults can
-    // allocate cloud infrastructure and therefore require an administrator.
-    return params.deviceId !== undefined || params.autoDevice === true
+    // The dispatch owner checks explicit profiles against the live role and creator.
+    // Target-less configured defaults still require an administrator.
+    return params.profileId !== undefined ||
+      params.deviceId !== undefined ||
+      params.autoDevice === true
       ? "operator.write"
       : "operator.admin";
   }

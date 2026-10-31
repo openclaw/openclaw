@@ -5,6 +5,7 @@
  * ordinary process environment needed for shells and Node-based tools.
  */
 import { isDeepStrictEqual } from "node:util";
+import { isGatewayCredentialEnvVarName } from "../../infra/host-env-security.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
 import { listKnownSecretEnvVarNames } from "../../secrets/provider-env-vars.js";
@@ -102,6 +103,7 @@ export function sanitizeEnvVars(
   return sanitizeSandboxEnvValues(
     envVars,
     (key) =>
+      isGatewayCredentialEnvVarName(key) ||
       knownSecretNames.has(key.toUpperCase()) ||
       matchesAnyPattern(key, blockedPatterns) ||
       (Boolean(options.strictMode) && !matchesAnyPattern(key, allowedPatterns)),

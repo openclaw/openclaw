@@ -66,7 +66,7 @@ export function isStoredCredentialCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
-  credential: AuthProfileCredential;
+  credential: Pick<AuthProfileCredential, "provider">;
 }): boolean {
   return prepareProviderCompatibility(params).matchesStoredProvider(params.credential.provider);
 }

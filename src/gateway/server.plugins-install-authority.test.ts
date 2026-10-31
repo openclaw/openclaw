@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,6 +15,7 @@ import type { GatewayClient, GatewayClientOptions } from "./client.js";
 import { pairOperatorDeviceFixture } from "./paired-device.test-support.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import { startGatewayServerCore } from "./server-start.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 
 const OLD_TOKEN = "shared-token-old";
 type ConfigSnapshot = { hash: string; config: OpenClawConfig };
@@ -105,15 +106,8 @@ describe("gateway plugin install authority", () => {
     state = await createOpenClawTestState({
       label: "plugin-install-authority",
       env: {
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        ...KERNEL_TEST_ENV,
         OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       },
     });
@@ -275,15 +269,13 @@ describe("gateway plugin install authority", () => {
       await state.writeJson(`${sourceDir}/package.json`, {
         name: pluginId,
         version: "1.0.0",
-        main: "index.cjs",
         openclaw: { extensions: ["./index.cjs"] },
       });
       await state.writeJson(`${sourceDir}/openclaw.plugin.json`, {
         id: pluginId,
-        name: pluginId,
         activation: { onStartup: true },
         contracts: { tools: [`${pluginId.replaceAll("-", "_")}_probe`] },
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
+        configSchema: { type: "object", additionalProperties: false },
       });
       await state.writeText(
         `${sourceDir}/index.cjs`,
@@ -314,20 +306,11 @@ describe("gateway plugin install authority", () => {
       );
       try {
         await wait(
-          Promise.race([
+          awaitGateBeforeSettlement(
             reached.promise,
-            reply.then((response) => {
-              if ("error" in response) {
-                throw response.error;
-              }
-              throw new Error("Install replied before boundary");
-            }),
-            finished.promise.then(({ error }) => {
-              throw error instanceof Error
-                ? error
-                : new Error("Install settled before boundary", { cause: error });
-            }),
-          ]),
+            Promise.race([request, finished.promise]),
+            "Install settled before boundary",
+          ),
           "install boundary not reached",
         );
         if (action === "disconnect-revoke") {

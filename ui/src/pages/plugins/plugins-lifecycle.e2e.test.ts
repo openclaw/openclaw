@@ -209,7 +209,7 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         pluginId: "calendar-plus",
       });
       const warnings = [
-        "Claw planner depends on calendar-plus. Update its plugin selection.",
+        "Template planner depends on calendar-plus. Update its plugin selection.",
         "Removed all plugin entries owned by the calendar-plus package.",
       ] as const;
       const refreshError = "Configuration reload failed after removal.";

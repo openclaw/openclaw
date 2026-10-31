@@ -52,11 +52,12 @@ suite.define(() => {
           status: SessionPlacementDiskSpace["status"],
           label: string,
         ): Promise<void> => {
+          await cloudBadge.waitFor({ state: "visible" });
           await expect.poll(() => cloudBadge.getAttribute("data-disk-space-status")).toBe(status);
-          await expect.poll(() => cloudBadge.getAttribute("aria-label")).toBe(label);
-          const descriptionId = await cloudBadge.getAttribute("aria-describedby");
-          expect(descriptionId).toBeTruthy();
-          await expect.poll(() => page.locator(`#${descriptionId}`).textContent()).toBe(label);
+          await expect
+            .poll(() => sidebarRow.getByRole("img", { name: label, exact: true }).count())
+            .toBe(1);
+          await expect.poll(() => cloudBadge.getAttribute("title")).toBe(label);
         };
         const refresh = async (diskSpace: SessionPlacementDiskSpace): Promise<void> => {
           const requestCount = (await gateway.getRequests("sessions.list")).length;

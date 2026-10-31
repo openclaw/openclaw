@@ -22,7 +22,7 @@ import {
   buildSystemdManagerPropertyOutput,
   buildSystemdUnitPropertyOutput,
 } from "./service.test-helpers.js";
-import { createSystemdCommandQuery } from "./systemd-command-query.js";
+import { createSystemdCommandQuery as createQuery } from "./systemd-command-query.js";
 import { readSystemdServiceExecStart } from "./systemd-service-files.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
 import {
@@ -35,9 +35,9 @@ let queryEnv: { HOME: string; XDG_RUNTIME_DIR: string; DBUS_SESSION_BUS_ADDRESS:
 const unitName = "openclaw-gateway.service";
 const callArgs = ["call", "org.test", "/unitName", "org.test.Manager", "LoadUnit", "s", unitName];
 const unavailable = () => new Error("inspection unavailable");
-const reader = (options?: Parameters<typeof createSystemdCommandQuery>[2]) =>
-  createSystemdCommandQuery(queryEnv, unitName, options, unavailable);
-const query = async (options?: Parameters<typeof createSystemdCommandQuery>[2]) =>
+const reader = (options?: Parameters<typeof createQuery>[2]) =>
+  createQuery(queryEnv, unitName, options, unavailable);
+const query = async (options?: Parameters<typeof createQuery>[2]) =>
   (await reader(options)).query(callArgs, ["o"]);
 const success = (stdout: string) => ({ code: 0, termination: "exit" as const, stdout, stderr: "" });
 const failure = (stderr: string) => ({ ...success(""), code: 1, stderr });
@@ -55,36 +55,33 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["before query", "during query"])(
-  "names the expired effective-command probe: %s",
-  async (phase) => {
-    let now = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    const commandReader = await createSystemdCommandQuery(
-      queryEnv,
-      unitName,
-      {
-        timeoutMs: 100,
-        systemdReadTarget: {
-          scope: "system",
-          unitName,
-          unitPath: `/etc/systemd/system/${unitName}`,
-        },
+it.each(["before query", "during query"])("names the expired probe: %s", async (phase) => {
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  const commandReader = await createQuery(
+    queryEnv,
+    unitName,
+    {
+      timeoutMs: 100,
+      systemdReadTarget: {
+        scope: "system",
+        unitName,
+        unitPath: `/etc/systemd/system/${unitName}`,
       },
-      unavailable,
-    );
-    busctl.mockImplementation(async () => {
-      now = 101;
-      return success('o "/unit"');
-    });
-    if (phase === "before query") {
-      now = 101;
-    }
-    await expect(commandReader.query(callArgs, ["o"])).rejects.toThrow(
-      /Stalled check: (?:effective command LoadUnit|busctl call .* LoadUnit)\./,
-    );
-  },
-);
+    },
+    unavailable,
+  );
+  busctl.mockImplementation(async () => {
+    now = 101;
+    return success('o "/unit"');
+  });
+  if (phase === "before query") {
+    now = 101;
+  }
+  await expect(commandReader.query(callArgs, ["o"])).rejects.toThrow(
+    /Stalled check: (?:effective command LoadUnit|busctl call .* LoadUnit)\./,
+  );
+});
 
 it("does not infer ownership from expanded specifiers or normalized working directories", async () => {
   const home = queryEnv.HOME;
@@ -114,18 +111,16 @@ it("does not infer ownership from expanded specifiers or normalized working dire
     ),
   );
 
+  const definition = (name: string) => ({
+    programArguments: [`${home}/bin/openclaw`, "gateway", "--unit", name],
+    workingDirectory,
+    environment: { OPENCLAW_HOME: `${home}/openclaw`, UNIT_NAME: name },
+    environmentValueSources: { OPENCLAW_HOME: "inline", UNIT_NAME: "inline" },
+  });
   const command = await readSystemdServiceExecStart(queryEnv);
   expect(command).toEqual({
-    programArguments: [`${home}/bin/openclaw`, "gateway", "--unit", unitName],
-    workingDirectory,
-    environment: { OPENCLAW_HOME: `${home}/openclaw`, UNIT_NAME: unitName },
-    environmentValueSources: { OPENCLAW_HOME: "inline", UNIT_NAME: "inline" },
-    managedDefinition: {
-      programArguments: [`${home}/bin/openclaw`, "gateway", "--unit", "%n"],
-      workingDirectory,
-      environment: { OPENCLAW_HOME: `${home}/openclaw`, UNIT_NAME: "%n" },
-      environmentValueSources: { OPENCLAW_HOME: "inline", UNIT_NAME: "inline" },
-    },
+    ...definition(unitName),
+    managedDefinition: definition("%n"),
     managedOverrides: {},
     sourcePath: unit,
     definitionPaths: [unit],

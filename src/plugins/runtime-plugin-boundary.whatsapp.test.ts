@@ -1,10 +1,10 @@
-import fs from "node:fs";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mts";
 import { loadFacadeModuleAtLocationSync } from "../plugin-sdk/facade-loader.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 type HeavyModule = {
@@ -18,11 +18,7 @@ const tempDirs: string[] = [];
 
 function writeRuntimeFixture(prefix: string, files: Record<string, string>) {
   const rootDir = makeTrackedTempDir(prefix, tempDirs);
-  for (const [relativePath, value] of Object.entries(files)) {
-    const target = path.join(rootDir, relativePath);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, value, "utf8");
-  }
+  writeArtifacts(rootDir, files);
   return rootDir;
 }
 

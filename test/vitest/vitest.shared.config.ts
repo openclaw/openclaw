@@ -1,4 +1,5 @@
 // Threads inherit admission; forks also run this bootstrap in their own process.
+import "../helpers/postgres-pool-roots.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

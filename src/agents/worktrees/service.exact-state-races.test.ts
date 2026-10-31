@@ -4,15 +4,11 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as gitExec from "../../infra/git-exec.js";
 import * as commandRunner from "../../process/exec-runner.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  runOpenClawStateWriteTransaction,
-} from "../../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { updateRegistryWorktreeInDatabase } from "./registry-run-end.worker.js";
 import * as registry from "./registry.js";
 import { updateRegistryWorktree } from "./registry.js";
@@ -34,14 +30,7 @@ async function git(cwd: string, ...args: string[]) {
 
 describe("exact-state retirement admission and recovery", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
-  const temps = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(async () => {
-      vi.restoreAllMocks();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      cleanup();
-    }),
-  );
+  const temps = useStateDatabaseTempDirs();
   let repo: string;
   let env: NodeJS.ProcessEnv;
   let stateDir: string;

@@ -15,7 +15,10 @@ export function extendControlUiE2eWaitTimeoutForSourceServer(): void {
 }
 
 /** Selected descriptors and cached rows can render before the authoritative roster. */
-export async function waitForControlUiInitialRoster(page: Page): Promise<void> {
+export async function waitForControlUiInitialRoster(
+  page: Page,
+  timeout = controlUiE2eWaitTimeoutMs,
+): Promise<void> {
   try {
     await page
       .waitForFunction(
@@ -34,7 +37,7 @@ export async function waitForControlUiInitialRoster(page: Page): Promise<void> {
           return readiness?.ready || (offline && readiness?.booted === true);
         },
         undefined,
-        { timeout: controlUiE2eWaitTimeoutMs },
+        { timeout },
       )
       .then((ready) => ready.dispose());
   } catch (cause) {

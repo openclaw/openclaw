@@ -59,6 +59,10 @@ describe("MCP App model context", () => {
     expect(lease?.modelContext[0]).toEqual({ content, structuredContent: { selection: 1 } });
     const input = projectMcpAppModelContextInput(lease!.modelContext);
     expect(input.context.text).not.toContain("_meta");
+    expect(getMcpAppModelContext(active, view)?.content?.[3]).toMatchObject({
+      _meta: { "openai/title": "Part" },
+      resource: { _meta: { private: true } },
+    });
   });
 
   it("keeps idempotent update IDs and notifies user removals without accepting stale edits", () => {

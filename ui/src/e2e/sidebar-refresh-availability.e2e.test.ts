@@ -48,10 +48,9 @@ async function checkRefreshAvailability({ page }: { page: Page }) {
   });
   await page.goto(`${suite.server.baseUrl}new`);
   const sidebar = page.locator("openclaw-app-sidebar");
-  const connectionStatus = page.locator(".sidebar-shell__footer .gateway-status");
-  const connectionLabel = connectionStatus.locator(".gateway-status__label");
+  const identity = page.locator(".sidebar-identity-card");
   const expectSuspending = async () => {
-    await expect.poll(() => connectionLabel.textContent()).toBe("Suspending…");
+    await expect.poll(() => identity.getAttribute("aria-label")).toContain("Suspending…");
     expect(await sidebar.getByRole("alert").count()).toBe(0);
   };
   const retained = sidebar.getByText("Retained sample session", { exact: true });
@@ -71,7 +70,7 @@ async function checkRefreshAvailability({ page }: { page: Page }) {
   await page.clock.fastForward(5_001);
   await page.clock.resume();
   await sidebar.getByText("Recovered sample session", { exact: true }).waitFor();
-  await connectionStatus.waitFor({ state: "detached" });
+  expect(await page.locator(".sidebar-shell__connection").count()).toBe(0);
   expect((await gateway.getRequests(catalogMethod)).length).toBe(before + 1);
   expect(await gateway.getSocketCount()).toBe(1);
   expect(await sidebar.getByRole("alert").count()).toBe(0);

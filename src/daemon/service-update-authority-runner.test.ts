@@ -6,6 +6,7 @@ import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import {
@@ -55,14 +56,7 @@ it("revokes a captured native runner when its service authority scope closes", a
   expect(nativeCommand).not.toHaveBeenCalled();
 });
 
-const result = {
-  stdout: "native",
-  stderr: "",
-  code: 0,
-  signal: null,
-  killed: false,
-  termination: "exit" as const,
-};
+const result = createCommandResult({ stdout: "native" });
 
 it("expires a queued deadline without invoking it or releasing its predecessor", async () => {
   vi.useFakeTimers();
@@ -84,6 +78,28 @@ it("expires a queued deadline without invoking it or releasing its predecessor",
     });
     await expect(scope).rejects.toThrow();
     expect({ expired, commands }).toEqual({ expired: true, commands: ["first"] });
+  } finally {
+    release.resolve();
+  }
+});
+
+it("keeps a queued deadline on the monotonic clock across wall-clock jumps", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+  vi.setSystemTime(0);
+  const { entered, release, commands, run } = blockedNative();
+  try {
+    await run(async () => {
+      const runner = nativeRunner();
+      const first = runner(["first"], {});
+      await entered.promise;
+      const queued = runner(["survives"], { timeoutMs: 20 });
+      await vi.advanceTimersByTimeAsync(5);
+      vi.setSystemTime(60_000);
+      release.resolve();
+      await expect(queued).resolves.toMatchObject({ code: 0 });
+      expect(commands).toEqual(["first", "survives"]);
+      await first;
+    });
   } finally {
     release.resolve();
   }

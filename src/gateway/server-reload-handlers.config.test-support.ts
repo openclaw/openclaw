@@ -9,7 +9,7 @@ import {
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { requireActivePluginChannelRegistry } from "../plugins/runtime.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
-import type { GatewayCronState } from "./server-cron.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import type {
   GatewayPluginReloadResult,
   GatewayHotReloadPublication,
@@ -206,6 +206,36 @@ export function createTestCronState(overrides: Partial<GatewayCronState> = {}): 
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
     ...overrides,
+  };
+}
+
+export function createHotReloadHandlerTestParams(
+  params: Pick<GatewayReloadHandlerParams, "scheduler" | "deps"> &
+    Partial<GatewayReloadHandlerParams>,
+  initialState = createDefaultGatewayReloadState(),
+): GatewayReloadHandlerParams {
+  let state: ReturnType<GatewayReloadHandlerParams["getState"]> = initialState;
+  return {
+    getState: () => state,
+    setState: (next) => {
+      state = next;
+    },
+    broadcast: vi.fn(),
+    getPluginRegistry: vi.fn(),
+    startChannel: vi.fn(async () => new Map()),
+    stopChannel: vi.fn(async () => {}),
+    releaseChannelRouteHandoffs: vi.fn(),
+    pruneInactiveChannelAccountState: vi.fn(),
+    reloadPlugins: vi.fn(async () => makePluginReloadResult()),
+    logHooks: createInfoWarnErrorLogger(),
+    logChannels: { info: vi.fn(), error: vi.fn() },
+    logCron: { error: vi.fn() },
+    logReload: createInfoWarnErrorLogger(),
+    cronReconciliation: {
+      arm: vi.fn(() => ({ complete: vi.fn(async () => {}) })),
+      invalidate: vi.fn(),
+    },
+    ...params,
   };
 }
 

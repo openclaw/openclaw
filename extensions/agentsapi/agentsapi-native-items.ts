@@ -10,12 +10,7 @@ import {
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AgentsApiItem } from "./agentsapi-client.js";
 
-export type AgentsApiNativeTool = {
-  name: string;
-  args: Record<string, unknown>;
-  meta?: string;
-  commandBearing: boolean;
-};
+export type AgentsApiNativeTool = NonNullable<ReturnType<typeof agentsApiNativeTool>>;
 
 export type AgentsApiNativeToolOutcome = {
   status: "running" | "completed" | "failed" | "cancelled" | "unknown";
@@ -25,10 +20,7 @@ export type AgentsApiNativeToolOutcome = {
   errorCode?: string;
 };
 
-export function agentsApiNativeTool(
-  item: AgentsApiItem,
-  params: AgentHarnessAttemptParamsV2,
-): AgentsApiNativeTool | undefined {
+export function agentsApiNativeTool(item: AgentsApiItem, params: AgentHarnessAttemptParamsV2) {
   let name: string;
   let args: Record<string, unknown>;
   if (item.type === "command_execution") {

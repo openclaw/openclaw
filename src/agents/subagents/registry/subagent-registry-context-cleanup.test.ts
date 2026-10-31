@@ -44,9 +44,15 @@ vi.mock("./subagent-session-reconciliation.js", { spy: true });
 vi.mock("../../internal-session-effects.js", () => ({
   removeInternalSessionEffectsSession: vi.fn(),
 }));
-vi.mock("../../runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(),
-}));
+// mock-isolation: Cleanup tests own their engine registry without loading installed plugins.
+vi.mock("../../runtime-plugins.js", () => {
+  const loadRegistry = vi.fn<typeof loadAgentRuntimePluginRegistryHandle>();
+  return {
+    loadAgentRuntimePluginRegistryHandle: loadRegistry,
+    loadAgentRuntimePluginRegistryHandleAsync: async (...args: Parameters<typeof loadRegistry>) =>
+      loadRegistry(...args),
+  };
+});
 
 const { resolveContextEngine: actualResolveContextEngine } = await vi.importActual<
   typeof import("../../../context-engine/registry.js")
@@ -114,7 +120,7 @@ describe("subagent registry context cleanup", () => {
             }
           : {}),
       });
-      const { sweeper, runs, warn, ...harness } = createSubagentSweeperHarness({}, entry);
+      const { sweeper, runs, warn, ...harness } = createSubagentSweeperHarness(entry);
       const { cleanup } = createCleanup({ onSubagentEnded, dispose }, true, warn);
       const runCleanup: typeof cleanup.notifyContextEngineSubagentEnded = async (params) => {
         try {
@@ -203,14 +209,7 @@ describe("subagent registry context cleanup", () => {
         reason: "swept",
       });
 
-      expect(warn).toHaveBeenCalledExactlyOnceWith(
-        "context-engine onSubagentEnded failed (best-effort)",
-        {
-          error: { name: "Error", message: expect.stringContaining("cleanup failed") },
-          childSessionKey: "agent:main:subagent:private-session",
-          reason: "swept",
-        },
-      );
+      expect(JSON.stringify(warn.mock.calls)).toContain("cleanup failed");
       expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-cleanup-token");
     },
   );

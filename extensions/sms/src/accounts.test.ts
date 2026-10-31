@@ -61,20 +61,15 @@ afterEach(() => vi.unstubAllEnvs());
 
 describe("SMS account config", () => {
   it("reports an invalid public webhook URL without unconfiguring SMS credentials", () => {
-    expect(
-      inspectSmsAccount(
-        config({
-          accountSid: "AC123",
-          authToken: "secret",
-          fromNumber: "+15557654321",
-          publicWebhookUrl: "https://sms_gateway.example.com/webhooks/sms",
-        }),
-      ),
-    ).toMatchObject({
-      accountId: "default",
-      name: "+15557654321",
+    const inspected = inspectSmsAccount(
+      config({
+        ...sender,
+        authToken: "secret",
+        publicWebhookUrl: "https://sms_gateway.example.com/webhooks/sms",
+      }),
+    );
+    expect(inspected).toMatchObject({
       configured: true,
-      tokenStatus: "available",
       signatureValidation: "invalid-public-url",
     });
   });
@@ -131,38 +126,35 @@ describe("SMS account config", () => {
   });
 
   it("uses env fallbacks for the default account only", () => {
-    vi.stubEnv("TWILIO_ACCOUNT_SID", "AC-env");
-    vi.stubEnv("TWILIO_AUTH_TOKEN", "env-token");
-    vi.stubEnv("TWILIO_PHONE_NUMBER", "+15550001111");
-    vi.stubEnv("TWILIO_MESSAGING_SERVICE_SID", "MG-env");
-    vi.stubEnv("SMS_WEBHOOK_PATH", "/webhooks/sms/env");
-    vi.stubEnv("SMS_PUBLIC_WEBHOOK_URL", "https://sms.example.com/webhook");
+    const fields = [
+      ["TWILIO_ACCOUNT_SID", "accountSid", "AC-env", ""],
+      ["TWILIO_AUTH_TOKEN", "authToken", "env-token", ""],
+      ["TWILIO_PHONE_NUMBER", "fromNumber", "+15550001111", ""],
+      ["TWILIO_MESSAGING_SERVICE_SID", "messagingServiceSid", "MG-env", ""],
+      ["SMS_WEBHOOK_PATH", "webhookPath", "/webhooks/sms/env", "/webhooks/sms"],
+      ["SMS_PUBLIC_WEBHOOK_URL", "publicWebhookUrl", "https://sms.example.com/webhook", ""],
+    ] as const;
+    for (const [env, , value] of fields) {
+      vi.stubEnv(env, value);
+    }
     vi.stubEnv("SMS_ALLOWED_USERS", "sms:+15552223333,+15554445555");
     vi.stubEnv("SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION", "true");
     vi.stubEnv("SMS_TEXT_CHUNK_LIMIT", "800");
-
     const cfg = config({ accounts: { support: { enabled: true } } });
-
     expect(listSmsAccountIds(cfg)).toEqual(["default", "support"]);
-    expect(resolveSmsAccount(cfg)).toMatchObject({
-      accountSid: "AC-env",
-      authToken: "env-token",
-      fromNumber: "+15550001111",
-      messagingServiceSid: "MG-env",
-      webhookPath: "/webhooks/sms/env",
-      publicWebhookUrl: "https://sms.example.com/webhook",
+    const root = resolveSmsAccount(cfg);
+    const named = resolveSmsAccount(cfg, "support");
+    for (const [, field, value, fallback] of fields) {
+      expect(root[field]).toBe(value);
+      expect(named[field]).toBe(fallback);
+    }
+    expect(root).toMatchObject({
       dangerouslyDisableSignatureValidation: true,
       allowFrom: ["+15552223333", "+15554445555"],
       textChunkLimit: 800,
     });
-    expect(resolveSmsAccount(cfg, "support")).toMatchObject({
+    expect(named).toMatchObject({
       accountId: "support",
-      accountSid: "",
-      authToken: "",
-      fromNumber: "",
-      messagingServiceSid: "",
-      webhookPath: "/webhooks/sms",
-      publicWebhookUrl: "",
       dangerouslyDisableSignatureValidation: false,
       allowFrom: [],
       textChunkLimit: 1500,
@@ -176,12 +168,7 @@ describe("SMS account config", () => {
   });
 
   it("coerces numeric allowFrom entries accepted by the config schema", () => {
-    const parsed = parseSmsConfig({
-      accountSid: "AC123",
-      authToken: "token",
-      fromNumber: "+15550001111",
-      allowFrom: [15551234567],
-    });
+    const parsed = parseSmsConfig({ allowFrom: [15551234567] });
 
     expect(resolveSmsAccount(config(parsed))).toMatchObject({ allowFrom: ["+15551234567"] });
   });

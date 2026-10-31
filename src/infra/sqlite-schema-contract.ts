@@ -641,6 +641,11 @@ function compareTableDefinitions(
   const allowedMissingColumns = new Set(compatibility.allowedMissingColumns ?? []);
   for (const [columnName, definition] of actual.columns) {
     if (!expected.columns.has(columnName)) {
+      const objectName = `${tableName}.${columnName}`;
+      const allowedDefinitions = compatibility.allowedColumnDefinitions?.[objectName] ?? [];
+      if (allowedDefinitions.some((allowed) => normalizeSqlWhitespace(allowed) === definition)) {
+        continue;
+      }
       if (
         allowCompatibleAdditiveColumns &&
         compatibility.allowCompatibleAdditiveColumns &&
@@ -648,7 +653,6 @@ function compareTableDefinitions(
       ) {
         continue;
       }
-      const objectName = `${tableName}.${columnName}`;
       add("unexpected-column", objectName);
     }
   }

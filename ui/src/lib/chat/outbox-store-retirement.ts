@@ -17,12 +17,6 @@ import {
 } from "./outbox-store.ts";
 type StoredComposerRetirementTarget = SessionState["deletedSessions"][number];
 
-type StoredComposerRetirement = {
-  scope: StoredChatOutboxScope;
-  minimumRevision: number;
-  retireBeforeRevision: number;
-};
-
 export function retireStoredComposerDrafts(
   state: ChatComposerScope,
   targets: readonly StoredComposerRetirementTarget[],
@@ -51,7 +45,11 @@ export function retireStoredComposerDrafts(
     };
   }
 
-  const retirements: StoredComposerRetirement[] = [];
+  const retirements: {
+    scope: StoredChatOutboxScope;
+    minimumRevision: number;
+    retireBeforeRevision: number;
+  }[] = [];
   const written: Array<{ storeSessionKey: string; revision: number }> = [];
   let visibleChanged = false;
   try {

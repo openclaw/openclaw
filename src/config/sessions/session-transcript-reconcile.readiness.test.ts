@@ -4,18 +4,28 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
+import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
+import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import {
+  rewriteSqliteTranscriptEventRowsInTransaction,
+  updateSqliteTranscriptEventJsonInTransaction,
+} from "./session-accessor.sqlite-transcript-rewrite.js";
+import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import * as transcriptMaintenance from "./session-transcript-index-maintenance.js";
 import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
-import { readSessionTranscriptProjectionStatus } from "./session-transcript-reconcile-readiness.js";
+import * as readiness from "./session-transcript-reconcile-readiness.js";
 import * as fixtures from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
+  isSessionTranscriptIndexReconcileRunning,
   reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
+import { holdReconcileAck } from "./session-transcript-reconcile.test-support.js";
 
 vi.mock("node:worker_threads", async () =>
   (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
@@ -119,7 +129,12 @@ it("observes foreground traversal completion while foreign writes continue", asy
   }
 });
 
-it.each(["between-polls", "queued-status", "during-close"] as const)(
+it.each([
+  "waiting-for-publication",
+  "publication-cancel",
+  "queued-status",
+  "during-close",
+] as const)(
   "preserves readiness lifetime and cancellation across %s",
   async (boundary) => {
     const stateDir = tempDirs.make("openclaw-projection-read-retirement-");
@@ -131,7 +146,7 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
       await waitForSessionTranscriptIndexReconcile(options);
       const database = openOpenClawAgentDatabase(options);
       fixtures.markRebuild(database.db);
-      const held = fixtures.holdReconcileAck(observer, "plan-start");
+      const held = holdReconcileAck(observer, "plan-start");
       resume = held.release;
       startSessionTranscriptIndexReconcile(options);
       await held.paused;
@@ -147,20 +162,25 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
         const closing = closeOpenClawAgentDatabasesAsync();
         const readinessOptions = { ...options, path: database.path };
         await expect(
-          readSessionTranscriptProjectionStatus(readinessOptions, scope.sessionId),
+          readiness.readSessionTranscriptProjectionStatus(readinessOptions, scope.sessionId),
         ).resolves.toBe(false);
         const controller = new AbortController();
         const reason = new Error("cancel projection status during close");
         controller.abort(reason);
         await expect(
-          readSessionTranscriptProjectionStatus(
+          readiness.readSessionTranscriptProjectionStatus(
             readinessOptions,
             scope.sessionId,
             controller.signal,
           ),
         ).rejects.toMatchObject({ name: "AbortError", cause: reason });
         expect(() => startSessionTranscriptIndexReconcile(options)).not.toThrow();
-        const waiting = expect(waitForSessionTranscriptProjection(scope)).resolves.toBeUndefined();
+        let settled = false;
+        const waiting = waitForSessionTranscriptProjection(scope).then(() => {
+          settled = true;
+        });
+        await timers.setImmediate();
+        expect(settled).toBe(false);
         resume?.();
         await closing;
         await waiting;
@@ -231,13 +251,168 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
           }
         }
       } else {
-        // The real status read completed; retire its owner while the waiter yields.
-        using polling = vi.spyOn(timers, "setTimeout").mockImplementationOnce(retire);
-        await expect(waitForSessionTranscriptProjection(scope)).resolves.toBeUndefined();
-        expect(polling).toHaveBeenCalled();
+        const inspected = createDeferred();
+        const readStatus = readiness.readSessionTranscriptProjectionStatus;
+        using status = vi
+          .spyOn(readiness, "readSessionTranscriptProjectionStatus")
+          .mockImplementation(async (...args) => {
+            const pending = await readStatus(...args);
+            inspected.resolve();
+            return pending;
+          });
+        const controller = new AbortController();
+        const waiting = waitForSessionTranscriptProjection(scope, controller.signal);
+        await inspected.promise;
+        if (boundary === "publication-cancel") {
+          const reason = new Error("cancel projection publication wait");
+          controller.abort(reason);
+          await expect(waiting).rejects.toMatchObject({ name: "AbortError", cause: reason });
+          expect(isSessionTranscriptIndexReconcileRunning(options)).toBe(true);
+        } else {
+          const closing = retire();
+          await expect(waiting).resolves.toBeUndefined();
+          await closing;
+        }
+        expect(status).toHaveBeenCalledTimes(1);
       }
     } finally {
       resume?.();
+      await waitForSessionTranscriptIndexReconcile(options);
+      await fixtures.closeReconcileDatabases();
+      clearRuntimeConfigSnapshot();
+    }
+  },
+  30_000,
+);
+
+it("settles pending sessions after background failure without retracting published readiness", async () => {
+  const stateDir = tempDirs.make("openclaw-projection-publication-failure-");
+  const { options, scope } = fixtures.reconcileScope(stateDir, "ready-first");
+  const broken = { ...scope, sessionId: "broken-next", sessionKey: "agent:main:broken-next" };
+  setRuntimeConfigSnapshot({});
+  let release: (() => void) | undefined;
+  try {
+    for (const target of [scope, broken]) {
+      await fixtures.seedTranscript(target, "seed", "Publication failure", null);
+    }
+    await waitForSessionTranscriptIndexReconcile(options);
+    const database = openOpenClawAgentDatabase(options);
+    for (const target of [scope, broken]) {
+      fixtures.markRebuild(database.db, target.sessionId);
+    }
+    database.db
+      .prepare("UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 1")
+      .run(broken.sessionId);
+    const held = holdReconcileAck(observer, "plan-finish", scope.sessionId);
+    const terminal = createDeferred<"done" | "failed">();
+    const observeTask = observer.onTask;
+    observer.onTask = (task) => {
+      observeTask?.(task);
+      task.observeMessage((message) => {
+        if (message.type === "done" || message.type === "failed") {
+          terminal.resolve(message.type);
+        }
+      });
+    };
+    release = held.release;
+    startSessionTranscriptIndexReconcile({ ...options, preferredSessionId: scope.sessionId });
+    await held.paused;
+    await expect(waitForSessionTranscriptProjection(scope)).resolves.toBeUndefined();
+    const inspected = createDeferred();
+    const readStatus = readiness.readSessionTranscriptProjectionStatus;
+    using status = vi
+      .spyOn(readiness, "readSessionTranscriptProjectionStatus")
+      .mockImplementation(async (...args) => {
+        const pending = await readStatus(...args);
+        inspected.resolve();
+        return pending;
+      });
+    const waiting = waitForSessionTranscriptProjection(broken);
+    const failure = expect(waiting).resolves.toBeUndefined();
+    await inspected.promise;
+    release();
+    await expect(terminal.promise).resolves.toBe("failed");
+    await failure;
+    expect(status).toHaveBeenCalledTimes(1);
+    expect(fixtures.rebuildState(database.db, broken.sessionId)).toEqual({ needs_rebuild: 1 });
+    await expect(waitForSessionTranscriptProjection(scope)).resolves.toBeUndefined();
+  } finally {
+    release?.();
+    await waitForSessionTranscriptIndexReconcile(options);
+    await fixtures.closeReconcileDatabases();
+    clearRuntimeConfigSnapshot();
+  }
+}, 30_000);
+
+it.each(["rewrite", "replacement", "json-update"] as const)(
+  "publishes synchronous %s readiness before unrelated reconciliation finishes",
+  async (producer) => {
+    const stateDir = tempDirs.make("openclaw-projection-sync-ready-");
+    const { options, scope } = fixtures.reconcileScope(stateDir, "sync-target");
+    const unrelated = {
+      ...scope,
+      sessionId: "unrelated",
+      sessionKey: "agent:main:unrelated",
+    };
+    setRuntimeConfigSnapshot({});
+    let release: (() => void) | undefined;
+    try {
+      for (const target of [scope, unrelated]) {
+        await fixtures.seedTranscript(target, "seed", "Synchronous projection", null);
+      }
+      await waitForSessionTranscriptIndexReconcile(options);
+      const database = openOpenClawAgentDatabase(options);
+      const events = loadTranscriptEventsFromDatabase(database, scope.sessionId);
+      for (const target of [scope, unrelated]) {
+        fixtures.markRebuild(database.db, target.sessionId);
+      }
+      const held = holdReconcileAck(observer, "plan-start", unrelated.sessionId);
+      release = held.release;
+      startSessionTranscriptIndexReconcile({ ...options, preferredSessionId: unrelated.sessionId });
+      await held.paused;
+      const inspected = createDeferred();
+      const readStatus = readiness.readSessionTranscriptProjectionStatus;
+      using status = vi
+        .spyOn(readiness, "readSessionTranscriptProjectionStatus")
+        .mockImplementation(async (...args) => {
+          const pending = await readStatus(...args);
+          inspected.resolve();
+          return pending;
+        });
+      let settled = false;
+      const waiting = waitForSessionTranscriptProjection(scope).then(() => {
+        settled = true;
+      });
+      await inspected.promise;
+      await timers.setTimeout(40);
+      expect(settled).toBe(false);
+      expect(status).toHaveBeenCalledTimes(1);
+      runOpenClawAgentWriteTransaction((current) => {
+        if (producer === "replacement") {
+          replaceSqliteTranscriptEventsInTransaction(
+            current,
+            resolveSqliteTranscriptScope(scope),
+            events,
+          );
+        } else if (producer === "json-update") {
+          updateSqliteTranscriptEventJsonInTransaction(current, scope.sessionId, [
+            { seq: 1, eventJson: JSON.stringify(events[1]!) },
+          ]);
+        } else {
+          const event = events[1]!;
+          rewriteSqliteTranscriptEventRowsInTransaction(
+            current,
+            resolveSqliteTranscriptScope(scope),
+            [{ seq: 1, event, expectedEventJson: JSON.stringify(event) }],
+          );
+        }
+      }, options);
+      await waiting;
+      expect(status).toHaveBeenCalledTimes(1);
+      expect(isSessionTranscriptIndexReconcileRunning(options)).toBe(true);
+      expect(fixtures.rebuildState(database.db, unrelated.sessionId)).toEqual({ needs_rebuild: 1 });
+    } finally {
+      release?.();
       await waitForSessionTranscriptIndexReconcile(options);
       await fixtures.closeReconcileDatabases();
       clearRuntimeConfigSnapshot();

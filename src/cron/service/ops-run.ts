@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { retainGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
 import {
   createAbortError,
@@ -109,7 +109,7 @@ export async function enqueueRun(
   opts?: Pick<ManualRunOptions, "commitGuard" | "event" | "onEventTransferred" | "runId">,
 ) {
   const runId = opts?.runId ?? `cron-request.${randomUUID()}`;
-  const releaseCaller = retainGatewayDeviceRevocation(opts?.commitGuard);
+  const releaseCaller = opts?.event ? retainGatewayDeviceRevocation(opts.commitGuard) : undefined;
   const trackAdmission = captureCronRunAdmissionTracker();
   return runWithoutOwnedSessionTranscriptWrites(() =>
     runWithGatewayIndependentRootWorkContinuation(async () => {

@@ -23,6 +23,10 @@ import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import { describeAgentsWaitTool } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
+import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 
 const MAX_WAIT_IDS = 1_000;
 
@@ -279,9 +283,18 @@ function readWaitState(
     inputIndex: number;
   }> = [];
   const pending: string[] = [];
+  const announcing: string[] = [];
   for (const [inputIndex, runId] of ids.entries()) {
     const entry = entries.get(runId);
     if (!entry?.collect) {
+      // Session-mode children may deliver to a bound thread instead of the requester.
+      if (
+        entry?.expectsCompletionMessage &&
+        entry.spawnMode !== "session" &&
+        owner.currentSessionKeys.has(entry.requesterSessionKey)
+      ) {
+        announcing.push(runId);
+      }
       errors.push({ runId, error: "not_found" });
       continue;
     }
@@ -301,6 +314,12 @@ function readWaitState(
     } else {
       pending.push(runId);
     }
+  }
+  if (announcing.length === ids.length) {
+    // Mixed batches keep per-ID results; an announcing-only wait gets delivery guidance instead.
+    throw new ToolInputError(
+      `agents_wait only collects runs started with collect=true. ${announcing.join(", ")} will report back to this session as a completion message; continue other work or end the turn instead of waiting.`,
+    );
   }
   completed.sort(
     (left, right) => left.completedAt - right.completedAt || left.inputIndex - right.inputIndex,
@@ -335,11 +354,14 @@ async function waitForCollector(params: CollectorWaitParams) {
 }
 
 async function waitForCollectorState(params: CollectorWaitParams) {
+  const watchdogAttempt = getGatewayToolCallerIdentity()?.watchdogAttempt;
+  const assertCurrent = captureGatewayToolCallerAssertion();
   const deadline =
     params.timeoutMs === undefined ? undefined : performance.now() + params.timeoutMs;
   let changed: boolean;
   let resume: (() => void) | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let watchdogWait: ReturnType<NonNullable<typeof watchdogAttempt>["beginWait"]> | undefined;
   const wake = () => {
     changed = true;
     resume?.();
@@ -397,15 +419,31 @@ async function waitForCollectorState(params: CollectorWaitParams) {
       }
       await new Promise<void>((resolve) => {
         resume = resolve;
+        // Protect only the authorized parked wait; publications end protection
+        // before any registry or transcript reread. Execution deadlines still apply.
+        watchdogWait = watchdogAttempt?.beginWait({
+          kind: "runtime_owned",
+          isCurrent: () => {
+            if (resume === undefined || changed || params.signal?.aborted) {
+              return false;
+            }
+            params.assertCurrent?.();
+            assertCurrent?.();
+            return true;
+          },
+        });
         if (deadline !== undefined) {
           timer = setTimeout(resolve, Math.max(0, deadline - performance.now()));
         }
       });
+      watchdogWait?.close();
+      watchdogWait = undefined;
       clearTimeout(timer);
       timer = undefined;
       resume = undefined;
     }
   } finally {
+    watchdogWait?.close();
     clearTimeout(timer);
     unsubscribe();
     params.signal?.removeEventListener("abort", wake);

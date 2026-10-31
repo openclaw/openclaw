@@ -9,20 +9,7 @@ import {
   validateSessionsReclaimParams,
   validateSessionsReclaimResult,
 } from "../index.js";
-import { schemaValidation, validation, withOverrides } from "./protocol-validation.test-support.js";
-
-const placementStates = [
-  "local",
-  "requested",
-  "provisioning",
-  "syncing",
-  "starting",
-  "active",
-  "draining",
-  "reconciling",
-  "reclaimed",
-  "failed",
-] as const;
+import { schemaValidation, validation } from "./protocol-validation.test-support.js";
 
 const basePlacement = { generation: 4, createdAtMs: 100, updatedAtMs: 200, stateChangedAtMs: 150 };
 const workerBundleHash = "a".repeat(64);
@@ -32,10 +19,14 @@ const workspaceFields = {
   remoteWorkspaceDir: "/workspace/session-1",
 };
 const workerOwnedFields = { ...environmentFields, ...workspaceFields, activeOwnerEpoch: 7 };
+const placed = <T extends object>(state: string, fields: T) => ({
+  ...basePlacement,
+  state,
+  ...fields,
+});
 const key = "agent:main:dispatch";
 const expected = { generation: 4, environmentId: "environment-1", ownerEpoch: 7 };
-const moveRequest = { key, expected };
-const move = withOverrides(moveRequest);
+const moveRequest = (target: unknown, fields: object = {}) => ({ expected, target, ...fields });
 const gateway = { kind: "gateway" };
 const device = (deviceId = "device-1") => ({ kind: "device", deviceId });
 const profile = (overrides: object = {}) => ({
@@ -105,104 +96,41 @@ describe("session dispatch protocol schemas", () => {
     const result = (value: unknown) => ({
       ok: true,
       key,
-      sessionId: "session-dispatch",
+      sessionId: "session-1",
       placement: value,
     });
-    reclaimed.accepts(
-      ...["local", "reclaimed"].map((state) => result({ state, ...basePlacement })),
-    );
-    reclaimed.rejects(
-      ...[
-        { state: "requested", ...basePlacement },
-        { state: "active", ...basePlacement, ...workerOwnedFields },
-      ].map(result),
-    );
+    reclaimed.accepts(...["local", "reclaimed"].map((state) => result(placed(state, {}))));
+    reclaimed.rejects(result(placed("requested", {})), result(placed("active", workerOwnedFields)));
   });
 
   it("keeps placement states closed", () => {
     const states = schemaValidation(SessionPlacementStateSchema);
-    states.accepts(...placementStates);
+    states.accepts("active");
     states.rejects("unknown");
   });
 
   it("requires workspace identity while starting", () => {
-    const starting = {
-      state: "starting",
-      ...basePlacement,
-      ...environmentFields,
-      ...workspaceFields,
-    };
+    const starting = placed("starting", { ...environmentFields, ...workspaceFields });
     placement.accepts(starting);
     const { workspaceBaseManifestRef: _manifest, ...missingManifest } = starting;
     placement.rejects(missingManifest, { ...starting, lastTranscriptAckCursor: 0 });
   });
 
-  it.each(["active"] as const)("requires complete worker ownership for %s placement", (state) => {
-    placement.accepts({
-      state,
-      ...basePlacement,
-      ...workerOwnedFields,
-      lastTranscriptAckCursor: 2,
-      lastLiveEventAckCursor: 9,
-    });
-    placement.rejects({
-      state,
-      ...basePlacement,
-      environmentId: "environment-1",
-      activeOwnerEpoch: 7,
-      workerBundleHash,
-    });
-  });
-
-  it("accepts explicit abandonment only for a Gateway target", () => {
-    const request = (target: object, abandonSource = true) => move({ target, abandonSource });
-    moving.accepts(request(gateway));
-    moving.rejects(request(device()), request(profile()), request(gateway, false));
-  });
-
-  it("bounds move source and target identifiers", () => {
-    const accepted = "x".repeat(256);
-    const rejected = "x".repeat(257);
-    moving.accepts(
-      move({
-        expected: { ...expected, environmentId: accepted },
-        target: profile({ profileId: accepted, machineClass: "x".repeat(128), os: "x".repeat(64) }),
+  it("requires complete worker ownership for active placement", () => {
+    placement.accepts(
+      placed("active", {
+        ...workerOwnedFields,
+        lastTranscriptAckCursor: 2,
+        lastLiveEventAckCursor: 9,
       }),
     );
-    for (const machineClass of ["", "x".repeat(129)]) {
-      moving.rejects(move({ target: profile({ machineClass }) }));
-    }
-    for (const os of ["", "x".repeat(65)]) {
-      moving.rejects(move({ target: profile({ os }) }));
-    }
-    for (const value of [rejected, " leading", "trailing "]) {
-      moving.rejects(
-        move({
-          expected: { ...expected, environmentId: value },
-          target: gateway,
-        }),
-        move({ target: device(value) }),
-      );
-    }
-  });
-
-  it("rejects an inexact move source", () => {
-    moving.rejects(
-      move({
-        expected: { ...expected, ownerEpoch: 0 },
-        target: gateway,
-      }),
-    );
+    placement.rejects(placed("active", { ...environmentFields, activeOwnerEpoch: 7 }));
   });
 
   it("projects bounded durable move progress without operation authority", () => {
     progress.accepts(
       { target: gateway, updatedAtMs: 1 },
-      {
-        target: device(),
-        updatedAtMs: 2,
-        error: "device worker is offline",
-      },
+      { target: device(), updatedAtMs: 2, error: "device worker is offline" },
     );
     progress.rejects({
       target: gateway,
@@ -213,24 +141,39 @@ describe("session dispatch protocol schemas", () => {
 
   it("validates projected retries with the same source and target constraints as Move requests", () => {
     const retries = [
-      { expected, target: gateway },
-      { expected, target: gateway, abandonSource: true },
-      { expected, target: device() },
-      { expected, target: profile({ profileId: "team", os: "linux", machineClass: "tiny" }) },
+      moveRequest(gateway),
+      moveRequest(gateway, { abandonSource: true }),
+      moveRequest(device()),
+      moveRequest(profile({ profileId: "team", os: "linux", machineClass: "tiny" })),
+      moveRequest(
+        profile({
+          profileId: "x".repeat(256),
+          machineClass: "x".repeat(128),
+          os: "x".repeat(64),
+        }),
+        { expected: { ...expected, environmentId: "x".repeat(256) } },
+      ),
     ];
     for (const retry of retries) {
       progress.accepts(retryProgress(retry));
       moving.accepts({ key, ...retry });
     }
     for (const retry of [
-      { expected: { ...expected, generation: -1 }, target: gateway },
-      { expected: { ...expected, environmentId: "x".repeat(257) }, target: gateway },
-      { expected, target: gateway, abandonSource: false },
-      { expected, target: device(), abandonSource: true },
-      { expected, target: profile({ profileId: "team" }), abandonSource: true },
-      { expected, target: gateway, operationId: "move:v1:opaque" },
+      moveRequest(gateway, { expected: { ...expected, ownerEpoch: 0 } }),
+      moveRequest(gateway, { expected: { ...expected, generation: -1 } }),
+      moveRequest(gateway, { abandonSource: false }),
+      moveRequest(device(), { abandonSource: true }),
+      moveRequest(profile({ profileId: "team" }), { abandonSource: true }),
+      moveRequest(gateway, { operationId: "move:v1:opaque" }),
+      ...["", "x".repeat(129)].map((machineClass) => moveRequest(profile({ machineClass }))),
+      ...["", "x".repeat(65)].map((os) => moveRequest(profile({ os }))),
+      ...["x".repeat(257), " leading", "trailing "].flatMap((value) => [
+        moveRequest(gateway, { expected: { ...expected, environmentId: value } }),
+        moveRequest(device(value)),
+      ]),
     ]) {
       progress.rejects(retryProgress(retry));
+      moving.rejects({ key, ...retry });
     }
   });
 

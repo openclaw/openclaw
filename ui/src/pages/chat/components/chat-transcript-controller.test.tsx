@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRoot } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { projectChatFields } from "../chat-field-projection.ts";
 import { makeChatHost } from "../chat-host.test-support.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
@@ -20,6 +20,7 @@ import {
   TranscriptTestHost,
 } from "../test-helpers/chat-transcript-native.tsx";
 import { createChatTranscript } from "./chat-transcript-controller.ts";
+import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -112,7 +113,7 @@ function renderReadySession(
   tail?: TestContentRow["content"],
 ) {
   return transcript.renderSession(`agent:main:${key}`, (session) => {
-    session.setContentReady(true);
+    session.layout.ready = true;
     return session.render(
       rows,
       (row) => (row.kind === "content" ? row.content : null),
@@ -203,6 +204,7 @@ it("updates the visible range on native scroll without a parent render", async (
 });
 
 it("keeps retained MCP rows and the virtual row model atomic through teardown", async () => {
+  const flushFrames = stubAnimationFrames();
   const teardownPending = createDeferred();
   transcriptDomState.measuredRowHeight = 180;
   const initialRows = [
@@ -217,6 +219,7 @@ it("keeps retained MCP rows and the virtual row model atomic through teardown", 
   ];
   const { container, renderRows } = await mountTestTranscript("pane-mcp-rows", initialRows);
   emitRowSizes(transcriptRows(container), 180);
+  flushFrames();
   renderRows(initialRows);
   expect(transcriptSize(container)).toBe(540);
   stubMcpAppLifecycle(container, () => teardownPending.promise);
@@ -249,6 +252,8 @@ it("keeps retained MCP rows and the virtual row model atomic through teardown", 
     committedRows.filter((row) => row.dataset.virtualRowKey !== "group:reply"),
     180,
   );
+  // Deliver the old tool's queued receipt after replacement, alongside the new rows.
+  flushFrames();
   renderRows(regroupedRows);
   // The old tool's 40px delivery must not resize the retained reply key.
   expect(transcriptSize(container)).toBe(540);
@@ -304,6 +309,7 @@ it.each(["append", "reorder", "focused reorder"] as const)(
 
 it("reconciles an implicit end anchor when committed content has no scroll range", async () => {
   const flushFrames = stubAnimationFrames();
+  transcriptDomState.measuredRowHeight = 20;
   const { container, transcript, draw } = threadFixture(
     threadProps("pane-underfill-anchor", "agent:main:underfill", messages(18, "message")),
   );
@@ -324,7 +330,7 @@ it("reconciles an implicit end anchor when committed content has no scroll range
     await Promise.resolve();
     flush();
   }
-  expect(transcriptRows(container)[0]?.dataset.index).toBe("0");
+  await waitForSolid(() => expect(transcriptRows(container)[0]?.dataset.index).toBe("0"));
   expect(container.textContent).toContain("message 0");
 });
 
@@ -589,6 +595,8 @@ it.each([0, 252])(
   "retires an end index without losing newer native movement (%s px)",
   async (nativeGrowth) => {
     const flushFrames = stubAnimationFrames();
+    // Match estimates from the start so row measurement adds no unrelated compensation.
+    transcriptDomState.measuredRowHeight = 120;
     const transcript = createChatTranscript(() => `retired-end-index-${nativeGrowth}`, {
       canFollowEnd: () => false,
     });
@@ -628,7 +636,6 @@ it.each([0, 252])(
     vi.advanceTimersByTime(150);
     expect(container.scrollTop, "stale idle must not restore its old offset").toBe(before);
     transcript.cancelScroll();
-    transcriptDomState.measuredRowHeight = 120;
     const next: TestContentRow[] = [...content, contentRow("peer", <div>Peer</div>), typing];
     renderRows(next);
     await Promise.resolve();
@@ -641,13 +648,15 @@ it.each([0, 252])(
 );
 
 it("keeps smooth latest through settlement and idle until the target", async () => {
+  const flushFrames = stubAnimationFrames();
   transcriptDomState.measuredRowHeight = 120;
   const rows = numberedContentRows(40);
   const { container, transcript } = await mountTestTranscript("idle-latest", rows);
   geometry(container, { clientHeight: 600, scrollHeight: 4800 });
   const scrollTo = vi.fn();
   container.scrollTo = scrollTo;
-  vi.useFakeTimers();
+  // Keep mount-time reconciliation on the same frame queue while faking native idle.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   scroll(container, 1000);
   transcript.update();
   transcript.scrollToEnd({ behavior: "smooth" });
@@ -655,7 +664,7 @@ it("keeps smooth latest through settlement and idle until the target", async () 
   expect(scrollTo).toHaveBeenLastCalledWith({ top: 4200, behavior: "smooth" });
   scroll(container, 1500);
   geometry(container, { scrollHeight: 4900 });
-  vi.advanceTimersByTime(16);
+  flushFrames();
   expect(scrollTo).toHaveBeenLastCalledWith({ top: 4300, behavior: "smooth" });
   scrollTo.mockClear();
 
@@ -733,4 +742,44 @@ it("preserves saved reader restoration when initial rows include typing", async 
     renderRows(rows);
   }
   expect(container.scrollTop).toBe(420);
+});
+
+it("keeps late reactions when geometry replays an older projection", async () => {
+  const sessionKey = "agent:main:reaction-replay";
+  const props = threadProps("reaction-replay", sessionKey, [
+    {
+      role: "assistant",
+      content: "A retained reply",
+      timestamp: 1_000,
+      __openclaw: { id: "reply" },
+    },
+  ]);
+  const transcript = createTestTranscript();
+  const container = document.body.appendChild(document.createElement("div"));
+  transcript.start();
+  onTestFinished(() => {
+    render(null, container);
+    transcript.dispose();
+    container.remove();
+  });
+  const project = (messageReactions: NonNullable<typeof props.messageReactions>) =>
+    transcript.renderSession(sessionKey, (session) =>
+      projectChatTranscript({ ...props, messageReactions, onReact: vi.fn() }, session),
+    );
+  const before = project(new Map());
+  render(before.renderRows(), container);
+  await flushDeferredRowPrune();
+  const bubble = requireElement(container, ".chat-bubble");
+  const after = project(
+    new Map([["reply", [{ emoji: "👍", count: 1, identities: [{ id: "peer", label: "Peer" }] }]]]),
+  );
+
+  // A queued geometry pass can replay the accepted snapshot before the new one commits.
+  render(before.renderRows(), container);
+  flush();
+  render(after.renderRows(), container);
+  flush();
+
+  expect(requireElement(container, ".chat-message-reactions").textContent).toContain("👍");
+  expect(requireElement(container, ".chat-bubble")).toBe(bubble);
 });

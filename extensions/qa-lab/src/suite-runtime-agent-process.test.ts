@@ -3,6 +3,7 @@ import timersPromises from "node:timers/promises";
 import { promisify } from "node:util";
 import type { CommandOptions, SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { commandResult as spawnResult } from "../../test-support/command-result.test-support.js";
 
 const runCommandMock = vi.hoisted(() =>
   vi.fn<(argv: string[], options: CommandOptions) => Promise<SpawnResult>>(),
@@ -43,16 +44,7 @@ import {
 } from "./suite-runtime-agent-process.js";
 
 function commandResult(stdout = "", overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout,
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    cleanup: "normal",
-    ...overrides,
-  };
+  return spawnResult({ stdout, cleanup: "normal", ...overrides });
 }
 
 const captureError = (error: unknown) => error;

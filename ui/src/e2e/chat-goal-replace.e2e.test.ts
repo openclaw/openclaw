@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { exactButton } from "./chat-flow.test-support.ts";
+import { exactButton, chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureFrame } from "./sidebar-assertions.test-support.ts";
 
@@ -37,10 +37,7 @@ suite.define(() => {
           sessionKey: "agent:main:main",
           heldMethods: [method],
           historyMessages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "The deployment checklist is paused for review." }],
-            },
+            chatMessage("assistant", "The deployment checklist is paused for review."),
           ],
           sessions: [
             createControlUiSessionRow("agent:main:main", "Deployment checklist", now, {
@@ -102,7 +99,7 @@ suite.define(() => {
           .poll(() => card.locator(".agent-chat__goal-objective").textContent())
           .toBe(proposed);
         expect(await card.locator(".agent-chat__goal-label").textContent()).toBe("Goal paused");
-        expect(await card.locator(".agent-chat__goal-elapsed").textContent()).toBe("1m 00s");
+        expect(await card.locator(".agent-chat__goal-elapsed").textContent()).toBe("1m");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.goal.clear")).toHaveLength(0);
         if (artifacts) {
@@ -279,15 +276,10 @@ suite.define(() => {
           seq: 2,
           state: "delta",
           deltaText: "I have resumed with the updated objective and am drafting the rollout notes.",
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: "I have resumed with the updated objective and am drafting the rollout notes.",
-              },
-            ],
-          },
+          message: chatMessage(
+            "assistant",
+            "I have resumed with the updated objective and am drafting the rollout notes.",
+          ),
         });
         await page
           .getByRole("paragraph")

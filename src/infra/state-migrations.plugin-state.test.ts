@@ -64,69 +64,9 @@ describe("legacy migration plan failure isolation", () => {
     await state.cleanup();
   });
 
-  it.each(["throw", "reject"] as const)(
-    "isolates %s replacement failures and retries imports",
-    async (failure) => {
-      const sourcePath = await state.writeText("legacy-import.json", "legacy source\n");
-      const earlierPath = await state.writeText("earlier.txt", "earlier artifact\n");
-      const laterPath = await state.writeText("later.txt", "later artifact\n");
-      const imported = store<string>("failure-isolation");
-      await imported.register("scope:conflict", "canonical");
-      let shouldFail = true;
-      const plans: ChannelLegacyStateMigrationPlan[] = [
-        artifactPlan("move", "Earlier artifact", earlierPath),
-        importPlan({
-          label: "Replacement import",
-          sourcePath,
-          namespace: "failure-isolation",
-          scopeKey: "scope",
-          cleanupSource: "rename",
-          readEntries: () => [{ key: "conflict", value: "incoming" }],
-          shouldReplaceExistingEntry: () => {
-            if (!shouldFail) {
-              return true;
-            }
-            const error = new Error("synthetic callback failure");
-            if (failure === "reject") {
-              return Promise.reject(error);
-            }
-            throw error;
-          },
-        }),
-        artifactPlan("copy", "Later artifact", laterPath),
-      ];
-      const run = () => runExisting(plans);
-
-      const failed = await run();
-
-      expect(failed.changes).toEqual([
-        expect.stringContaining("Moved Earlier artifact"),
-        expect.stringContaining("Copied Later artifact"),
-      ]);
-      expect(failed.warnings).toEqual([
-        expect.stringMatching(/Failed migrating Replacement import.*synthetic callback failure/),
-      ]);
-      expect(fs.readFileSync(`${earlierPath}.moved`, "utf8")).toBe("earlier artifact\n");
-      expect(fs.readFileSync(`${laterPath}.copied`, "utf8")).toBe("later artifact\n");
-      expect(fs.readFileSync(sourcePath, "utf8")).toBe("legacy source\n");
-      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
-      expect(await imported.lookup("scope:conflict")).toBe("canonical");
-      expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
-
-      shouldFail = false;
-      const repaired = await run();
-
-      expect(repaired.warnings).toEqual([]);
-      expect(repaired.changes).toContainEqual(
-        expect.stringContaining("Migrated 1 Replacement import entry"),
-      );
-      expect(await imported.lookup("scope:conflict")).toBe("incoming");
-      await expectRetired(sourcePath, "legacy source\n", run);
-    },
-  );
-
   it.each([
     { failure: "predicate", cleanupFirst: false },
+    { failure: "rejection", cleanupFirst: false },
     { failure: "reader", cleanupFirst: false },
     { failure: "capacity", cleanupFirst: false },
     { failure: "predicate", cleanupFirst: true },
@@ -135,30 +75,34 @@ describe("legacy migration plan failure isolation", () => {
     "defers shared-source cleanup ($failure, cleanupFirst=$cleanupFirst)",
     async ({ failure, cleanupFirst }) => {
       // iMessage derives a durable short-id counter and an expiring cache from one JSONL file.
-      const original = `${JSON.stringify({ shortId: failure === "empty" ? "0" : "9000", timestamp: 0 })}\n`;
+      const original = "legacy reply cache\n";
       const sourcePath = await state.writeText("reply-cache.jsonl", original);
       const unrelatedPath = await state.writeText("unrelated.txt", "independent artifact\n");
+      const earlierPath = await state.writeText("earlier.txt", "earlier artifact\n");
       const counter = store<{ counter: number }>("shared-counter", 1);
-      await counter.register(failure === "capacity" ? "occupied" : "counter", { counter: 1 });
+      const counterKey = "scope:counter";
+      await counter.register(failure === "capacity" ? "occupied" : counterKey, { counter: 1 });
       let shouldFail = true;
       const counterObservedMove: boolean[] = [];
       const counterPlan = importPlan({
         label: "Reply counter",
         sourcePath,
         namespace: "shared-counter",
+        scopeKey: "scope",
         maxEntries: 1,
         readEntries: () => {
-          counterObservedMove.push(fs.existsSync(`${unrelatedPath}.moved`));
+          counterObservedMove.push(fs.existsSync(`${unrelatedPath}.copied`));
           if (failure === "reader" && shouldFail) {
             throw new Error("synthetic counter read failure");
           }
-          const entry = JSON.parse(fs.readFileSync(sourcePath, "utf8")) as { shortId: string };
-          const value = Number.parseInt(entry.shortId, 10);
-          return value > 0 ? [{ key: "counter", value: { counter: value } }] : [];
+          return failure === "empty" ? [] : [{ key: "counter", value: { counter: 9000 } }];
         },
         shouldReplaceExistingEntry: () => {
           if (failure === "predicate" && shouldFail) {
             throw new Error("synthetic counter callback failure");
+          }
+          if (failure === "rejection" && shouldFail) {
+            return Promise.reject(new Error("synthetic counter callback failure"));
           }
           return true;
         },
@@ -171,18 +115,22 @@ describe("legacy migration plan failure isolation", () => {
         cleanupWhenEmpty: true,
         readEntries: () => [],
       });
-      const unrelatedPlan = artifactPlan("move", "Unrelated artifact", unrelatedPath);
-      const plans = cleanupFirst
-        ? [cachePlan, unrelatedPlan, counterPlan]
-        : [counterPlan, cachePlan, unrelatedPlan];
+      const unrelatedPlan = artifactPlan("copy", "Unrelated artifact", unrelatedPath);
+      const plans = [
+        artifactPlan("move", "Earlier artifact", earlierPath),
+        ...(cleanupFirst
+          ? [cachePlan, unrelatedPlan, counterPlan]
+          : [counterPlan, cachePlan, unrelatedPlan]),
+      ];
       const run = () => runExisting(plans);
 
       const first = await run();
 
       expect(counterObservedMove).toEqual([cleanupFirst]);
-      expect(fs.readFileSync(`${unrelatedPath}.moved`, "utf8")).toBe("independent artifact\n");
+      expect(fs.readFileSync(`${earlierPath}.moved`, "utf8")).toBe("earlier artifact\n");
+      expect(fs.readFileSync(`${unrelatedPath}.copied`, "utf8")).toBe("independent artifact\n");
       expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
-      expect(await counter.lookup("counter")).toEqual(
+      expect(await counter.lookup(counterKey)).toEqual(
         failure === "capacity" ? undefined : { counter: 1 },
       );
       if (failure === "empty") {
@@ -191,11 +139,9 @@ describe("legacy migration plan failure isolation", () => {
         return;
       }
 
-      expect(fs.existsSync(sourcePath), "the incomplete counter still needs its source").toBe(true);
       expect(fs.readFileSync(sourcePath, "utf8")).toBe(original);
       expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
       expect(first.warnings).toContainEqual(expect.stringContaining("Reply counter"));
-      expect(first.changes).not.toContainEqual(expect.stringContaining("Archived"));
 
       shouldFail = false;
       if (failure === "capacity") {
@@ -204,7 +150,10 @@ describe("legacy migration plan failure isolation", () => {
       const repaired = await run();
 
       expect(repaired.warnings).toEqual([]);
-      expect(await counter.lookup("counter")).toEqual({ counter: 9000 });
+      expect(await counter.lookup(counterKey)).toEqual({ counter: 9000 });
+      expect(repaired.changes).toContainEqual(
+        expect.stringContaining("Migrated 1 Reply counter entry"),
+      );
       await expectRetired(sourcePath, original, run);
     },
   );

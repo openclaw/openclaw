@@ -1,4 +1,5 @@
 // Synthetic benchmarks only. Controllers serialize snapshots and keep them outside timed windows.
+// OPENCLAW_BENCH_TRACE_GC=1 is a separate promotion pass; use untraced runs for timing gates.
 import {
   existsSync,
   mkdirSync,
@@ -6,17 +7,31 @@ import {
   renameSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
+import fsPromises from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { GCProfiler, getHeapStatistics, writeHeapSnapshot } from "node:v8";
+import {
+  GCProfiler,
+  getHeapCodeStatistics,
+  getHeapSpaceStatistics,
+  getHeapStatistics,
+  setFlagsFromString,
+  writeHeapSnapshot,
+} from "node:v8";
 import workerThreads, { isMainThread, threadId } from "node:worker_threads";
 
 const output = process.env.OPENCLAW_BENCH_RETAINED_WORKER_DIR;
 const baseline = process.env.OPENCLAW_BENCH_BASELINE_DIR;
+const traceGc = process.env.OPENCLAW_BENCH_TRACE_GC === "1";
+const sampleAllocation = process.env.OPENCLAW_BENCH_SAMPLE_ALLOCATION === "1";
+const sampleCpu = process.env.OPENCLAW_BENCH_SAMPLE_CPU === "1";
+const countSql = process.env.OPENCLAW_BENCH_COUNT_SQL === "1";
 if ((!output && !baseline) || (output && !path.isAbsolute(output))) {
   throw new Error("Worker heap preload requires an absolute synthetic benchmark output directory");
 }
@@ -26,19 +41,48 @@ if (baseline && !path.isAbsolute(baseline)) {
 const baselineModules = new Set<string>();
 if (baseline) {
   const root = fileURLToPath(new URL("../../", import.meta.url));
+  const originalUrl = (url: string | undefined) => {
+    if (!url?.startsWith("file:")) {
+      return url;
+    }
+    const relative = path.relative(baseline, fileURLToPath(url));
+    return relative.startsWith("..") ? url : pathToFileURL(path.join(root, relative)).href;
+  };
   registerHooks({
-    load(url, context, nextLoad) {
-      if (url.startsWith("file:")) {
-        const relative = path.relative(root, fileURLToPath(url));
+    resolve(specifier, context, nextResolve) {
+      let resolved;
+      try {
+        resolved = nextResolve(specifier, context);
+      } catch (error) {
+        if (
+          !(error instanceof Error) ||
+          !("code" in error) ||
+          error.code !== "ERR_MODULE_NOT_FOUND"
+        ) {
+          throw error;
+        }
+        const parentURL = originalUrl(context.parentURL);
+        const original = originalUrl(specifier) ?? specifier;
+        if (parentURL === context.parentURL && original === specifier) {
+          throw error;
+        }
+        // Sparse historical overlays keep unchanged dependencies in the candidate checkout.
+        resolved = nextResolve(original, { ...context, parentURL });
+      }
+      if (resolved.url.startsWith("file:")) {
+        const relative = path.relative(root, fileURLToPath(resolved.url));
         const replacement = path.join(baseline, relative);
-        if (!relative.startsWith("..") && relative.endsWith(".ts") && existsSync(replacement)) {
+        if (
+          !relative.startsWith("..") &&
+          /\.[cm]?[jt]s$/.test(relative) &&
+          existsSync(replacement)
+        ) {
           baselineModules.add(relative);
-          // Let the installed TS loader transform replacement bytes, retaining the requested URL.
-          const loaded = nextLoad(pathToFileURL(replacement).href, context);
-          return { format: loaded.format, source: loaded.source, shortCircuit: true };
+          // Physical module URLs keep schema SQL and generated catalogs on the frozen baseline.
+          return { ...resolved, url: pathToFileURL(replacement).href };
         }
       }
-      return nextLoad(url, context);
+      return resolved;
     },
   });
 }
@@ -62,6 +106,10 @@ workerThreads.Worker = class extends NativeWorker {
           : {
               ...(options.env ?? process.env),
               ...(output ? { OPENCLAW_BENCH_RETAINED_WORKER_DIR: output } : {}),
+              ...(output && traceGc ? { OPENCLAW_BENCH_TRACE_GC: "1" } : {}),
+              ...(output && sampleAllocation ? { OPENCLAW_BENCH_SAMPLE_ALLOCATION: "1" } : {}),
+              ...(output && sampleCpu ? { OPENCLAW_BENCH_SAMPLE_CPU: "1" } : {}),
+              ...(output && countSql ? { OPENCLAW_BENCH_COUNT_SQL: "1" } : {}),
               ...(baseline ? { OPENCLAW_BENCH_BASELINE_DIR: baseline } : {}),
             },
     });
@@ -110,15 +158,31 @@ const script = path.basename(process.argv[1] ?? "");
 if (
   output &&
   !isMainThread &&
-  /^(sqlite-store|prepared-model-catalog)\.worker(?:\.baseline)?\.[cm]?[jt]s$/.test(script)
+  /^(?:(sqlite-store|prepared-model-catalog|git-operation|session-accessor\.sqlite-archive|openclaw-state-read|openclaw-state-lease-heartbeat|gateway-state-owner-heartbeat|worker-native-lifecycle|control-ui-file|identity-avatar-file|provider-prompt-state|client-credential)\.worker(?:\.baseline)?|storage-worker)\.[cm]?[jt]s$/.test(
+    script,
+  )
 ) {
   mkdirSync(output, { recursive: true });
   const prefix = path.join(output, `worker-${process.pid}-${threadId}`);
   const commandPath = `${prefix}.command.json`;
-  const identity = { pid: process.pid, threadId, script, node: process.version };
+  const identity = {
+    pid: process.pid,
+    threadId,
+    script,
+    node: process.version,
+    traceGc,
+    sampleAllocation,
+    sampleCpu,
+  };
+  const traceMarker = (marker: string, commandId: string) => {
+    writeSync(1, `${marker} pid=${process.pid} threadId=${threadId} command=${commandId}\n`);
+  };
   const memory = () => ({
     ...process.memoryUsage(),
+    allocatedBytes: Reflect.get(getHeapStatistics(), "total_allocated_bytes"),
     heapSizeLimitBytes: getHeapStatistics().heap_size_limit,
+    heapSpaces: getHeapSpaceStatistics(),
+    code: getHeapCodeStatistics(),
   });
   const publish = (suffix: string, value: object) => {
     const file = `${prefix}.${suffix}.json`;
@@ -126,6 +190,7 @@ if (
       `${file}.tmp`,
       JSON.stringify({
         ...identity,
+        commandId: suffix,
         atEpochMs: Date.now(),
         baselineModules: [...baselineModules],
         ...value,
@@ -134,6 +199,83 @@ if (
     renameSync(`${file}.tmp`, file);
   };
   const profiler = new GCProfiler();
+  const statements: Record<string, number> = {};
+  const fileCalls: Record<string, number> = {};
+  const writerHoldsMs: number[] = [];
+  let writerStartedAt: number | undefined;
+  let sqlMs = 0;
+  const observeStatement = (source: string, durationMs: number) => {
+    if (!measured) {
+      return;
+    }
+    const sql = source.trim();
+    const kind = sql.split(/\s/, 1)[0]!.toUpperCase();
+    statements[kind] = (statements[kind] ?? 0) + 1;
+    sqlMs += durationMs;
+    if (/^BEGIN (?:IMMEDIATE|EXCLUSIVE)/i.test(sql)) {
+      writerStartedAt = performance.now();
+    } else if (/^(?:COMMIT|ROLLBACK)(?:;|$)/i.test(sql) && writerStartedAt !== undefined) {
+      writerHoldsMs.push(performance.now() - writerStartedAt);
+      writerStartedAt = undefined;
+    }
+  };
+  if (countSql) {
+    for (const method of [
+      "lstat",
+      "stat",
+      "realpath",
+      "open",
+      "readFile",
+      "readdir",
+      "opendir",
+    ] as const) {
+      const nativeCall = fsPromises[method];
+      Object.defineProperty(fsPromises, method, {
+        configurable: true,
+        writable: true,
+        value(this: unknown, ...args: unknown[]) {
+          if (measured) {
+            fileCalls[method] = (fileCalls[method] ?? 0) + 1;
+          }
+          return Reflect.apply(nativeCall, this, args);
+        },
+      });
+    }
+    syncBuiltinESMExports();
+    const sources = new WeakMap<StatementSync, string>();
+    for (const method of ["prepare", "exec"] as const) {
+      if (method === "prepare") {
+        const nativeCall = DatabaseSync.prototype[method];
+        DatabaseSync.prototype.prepare = function (this: DatabaseSync, sql) {
+          const statement = nativeCall.call(this, sql);
+          sources.set(statement, sql);
+          return statement;
+        };
+      } else {
+        const nativeCall = DatabaseSync.prototype[method];
+        DatabaseSync.prototype.exec = function (this: DatabaseSync, sql) {
+          const start = performance.now();
+          const result = nativeCall.call(this, sql);
+          observeStatement(sql, performance.now() - start);
+          return result;
+        };
+      }
+    }
+    for (const method of ["get", "all", "run", "iterate"] as const) {
+      const nativeCall = StatementSync.prototype[method];
+      Object.defineProperty(StatementSync.prototype, method, {
+        configurable: true,
+        writable: true,
+        value(this: StatementSync, ...bindings: unknown[]) {
+          const start = performance.now();
+          const result = Reflect.apply(nativeCall, this, bindings);
+          // Iterators count once; their stepping time is intentionally absent from this SQL subtotal.
+          observeStatement(sources.get(this) ?? "unknown", performance.now() - start);
+          return result;
+        },
+      });
+    }
+  }
   const loop = monitorEventLoopDelay({ resolution: 1 });
   let inspector: Session | undefined;
   let measured:
@@ -145,6 +287,9 @@ if (
         gc: Map<string, number[]>;
         count: number;
         complete: boolean;
+        peakHeapUsedBytes: number;
+        heapSamples: number;
+        reclaimedBytes: number;
       }
     | undefined;
   const drainGc = (restart: boolean) => {
@@ -156,6 +301,14 @@ if (
       profiler.start();
     }
     for (const entry of profile?.statistics ?? []) {
+      measured.reclaimedBytes += Math.max(
+        0,
+        entry.beforeGC.heapStatistics.usedHeapSize - entry.afterGC.heapStatistics.usedHeapSize,
+      );
+      measured.peakHeapUsedBytes = Math.max(
+        measured.peakHeapUsedBytes,
+        entry.beforeGC.heapStatistics.usedHeapSize,
+      );
       measured.count++;
       if (measured.count > 100_000) {
         measured.complete = false;
@@ -200,6 +353,38 @@ if (
       if (measured) {
         throw new Error("Worker heap measurement is already active");
       }
+      if (sampleAllocation) {
+        if (!inspector) {
+          inspector = new Session();
+          inspector.connect();
+        }
+        await inspector.post("HeapProfiler.startSampling", {
+          samplingInterval: 32768,
+          includeObjectsCollectedByMajorGC: true,
+          includeObjectsCollectedByMinorGC: true,
+        });
+      }
+      if (sampleCpu) {
+        if (!inspector) {
+          inspector = new Session();
+          inspector.connect();
+        }
+        await inspector.post("Profiler.enable");
+        await inspector.post("Profiler.start");
+      }
+      if (traceGc) {
+        // Identify the isolate before starting counters; forced collections are not workload GC.
+        traceMarker("WORKER_GC_IDENTIFY_BEGIN", command.id);
+        setFlagsFromString("--trace-gc-nvp");
+        try {
+          await collect();
+        } finally {
+          setFlagsFromString("--no-trace-gc-nvp");
+          traceMarker("WORKER_GC_IDENTIFY_END", command.id);
+        }
+        traceMarker("WORKER_GC_BEGIN", command.id);
+        setFlagsFromString("--trace-gc-nvp");
+      }
       measured = {
         startedAtEpochMs: Date.now(),
         startedAt: performance.now(),
@@ -208,7 +393,19 @@ if (
         gc: new Map(),
         count: 0,
         complete: true,
+        peakHeapUsedBytes: process.memoryUsage().heapUsed,
+        heapSamples: 0,
+        reclaimedBytes: 0,
       };
+      for (const key of Object.keys(statements)) {
+        delete statements[key];
+      }
+      for (const key of Object.keys(fileCalls)) {
+        delete fileCalls[key];
+      }
+      writerHoldsMs.length = 0;
+      sqlMs = 0;
+      writerStartedAt = undefined;
       loop.reset();
       loop.enable();
       profiler.start();
@@ -220,20 +417,54 @@ if (
       const endedAtEpochMs = Date.now();
       const elapsedMs = performance.now() - measured.startedAt;
       const cpu = process.threadCpuUsage(measured.cpu);
+      const allocation = sampleAllocation
+        ? (await inspector!.post("HeapProfiler.stopSampling")).profile
+        : undefined;
+      const cpuProfile = sampleCpu ? (await inspector!.post("Profiler.stop")).profile : undefined;
+      if (traceGc) {
+        setFlagsFromString("--no-trace-gc-nvp");
+        traceMarker("WORKER_GC_END", command.id);
+      }
       loop.disable();
       drainGc(false);
       const result = measured;
       measured = undefined;
+      const finalMemory = memory();
+      const allocationProfilePath = allocation ? `${prefix}.${command.id}.heapprofile` : undefined;
+      const cpuProfilePath = cpuProfile ? `${prefix}.${command.id}.cpuprofile` : undefined;
+      if (allocationProfilePath) {
+        writeFileSync(allocationProfilePath, JSON.stringify(allocation));
+      }
+      if (cpuProfilePath) {
+        writeFileSync(cpuProfilePath, JSON.stringify(cpuProfile));
+      }
       publish(command.id, {
         ok: true,
         operation: command.operation,
         complete: result.complete,
+        peakHeapUsedBytes: result.peakHeapUsedBytes,
+        reclaimedBytes: result.reclaimedBytes,
+        heapSamples: result.heapSamples,
         startedAtEpochMs: result.startedAtEpochMs,
         endedAtEpochMs,
         elapsedMs,
         cpu,
+        sql: countSql ? { statements, durationMs: sqlMs, writerHoldsMs } : undefined,
+        fileCalls: countSql ? fileCalls : undefined,
+        allocationProfilePath,
+        cpuProfilePath,
+        ...(allocation
+          ? {
+              allocation: {
+                sampledBytes: allocation.samples.reduce((sum, sample) => sum + sample.size, 0),
+                samples: allocation.samples.length,
+                samplingInterval: 32768,
+                includesCollectedObjects: true,
+              },
+            }
+          : {}),
         initialMemory: result.initialMemory,
-        finalMemory: memory(),
+        finalMemory,
         gc: Object.fromEntries(
           [...result.gc].map(([kind, samples]) => [kind, distribution(samples)]),
         ),
@@ -268,6 +499,16 @@ if (
     }
   };
   let polling = false;
+  // GC boundaries capture synchronous allocation bursts that timer samples can miss.
+  setInterval(() => {
+    if (measured) {
+      measured.peakHeapUsedBytes = Math.max(
+        measured.peakHeapUsedBytes,
+        process.memoryUsage().heapUsed,
+      );
+      measured.heapSamples++;
+    }
+  }, 5).unref();
   setInterval(() => {
     drainGc(true);
     if (polling || !existsSync(commandPath)) {

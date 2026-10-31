@@ -203,6 +203,7 @@ describe("repairSystemAgentWorkspacePin", () => {
     const result = await repair(cfg, { authoredDefaultWorkspace: "~/x" }, env);
     expect(result.config.agents?.entries?.main?.workspace).toBe("~/x/main");
     expect(resolveAgentWorkspaceDir(result.config, "main", env)).toBe(path.join(home, "x", "main"));
+    expect(result.changes).toHaveLength(1);
   });
 
   it("falls back to the resolved path when the authored root does not match", async () => {
@@ -211,13 +212,6 @@ describe("repairSystemAgentWorkspacePin", () => {
       authoredDefaultWorkspace: "${UNSET_WORKSPACE_ROOT}",
     });
     expect(result.config.agents?.entries?.main?.workspace).toBe(path.join(root, "main"));
-  });
-
-  it("pins the agent directory when only it holds the agent's files", async () => {
-    await writePersona(path.join(root, "main"), "subdirectory persona");
-    const result = await repair();
-    expect(result.config.agents?.entries?.main?.workspace).toBe(path.join(root, "main"));
-    expect(result.changes).toHaveLength(1);
   });
 
   it("pins the launch workspace without a shared root, copying the agent directory's files into it", async () => {

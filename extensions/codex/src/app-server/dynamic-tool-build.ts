@@ -27,7 +27,11 @@ import {
 } from "openclaw/plugin-sdk/time-runtime";
 import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "../../native-tool-policy.js";
 import type { CodexComputerContextEpoch } from "./computer-context.js";
-import { isCodexRemoteExecPlacementSandbox, type CodexPluginConfig } from "./config.js";
+import {
+  isCodexPairedNodeRemoteExecPlacementSandbox,
+  isCodexRemoteExecPlacementSandbox,
+  type CodexPluginConfig,
+} from "./config.js";
 import {
   createCodexHostToolSurface,
   resolveCodexToolConstructionPlan,
@@ -562,7 +566,14 @@ export function shouldRequireCodexSandboxExecServerEnvironment(params: {
   sandbox?: OpenClawSandboxContext;
   nativeToolSurfaceEnabled: boolean;
   sandboxExecServerEnabled: boolean;
+  pluginConfig?: CodexPluginConfig;
 }): boolean {
+  if (
+    params.pluginConfig?.appServer?.workerHostedCloud &&
+    isCodexPairedNodeRemoteExecPlacementSandbox(params.sandbox)
+  ) {
+    return false;
+  }
   return Boolean(
     isCodexRemoteExecPlacementSandbox(params.sandbox) ||
     (params.sandbox?.enabled && params.nativeToolSurfaceEnabled && params.sandboxExecServerEnabled),

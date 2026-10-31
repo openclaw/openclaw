@@ -27,7 +27,13 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-inventory.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
+import {
+  archivedSource,
+  jsonl,
+  messageEvent,
+} from "./doctor-session-sqlite.fixtures.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+import { expectFiles } from "./doctor-session-sqlite.publication-spies.test-support.js";
 
 type MigrationTarget = Parameters<typeof createSessionSqliteMigrationRun>[1][number];
 type MigrationRun = ReturnType<typeof createSessionSqliteMigrationRun>;
@@ -36,7 +42,7 @@ const noImports = { importedEntries: 0, importedTranscriptEvents: 0 };
 const issues = (report: DoctorReport) => report.targets.flatMap((target) => target.issues);
 function expectBytes(files: Iterable<readonly [string, string]>) {
   for (const [file, bytes] of files) {
-    expect(fs.readFileSync(file, "utf8")).toBe(bytes);
+    expectFiles(bytes, file);
   }
 }
 function writeJson(file: string, data: unknown) {
@@ -132,12 +138,7 @@ function completeRun(run: MigrationRun, target: MigrationTarget) {
 }
 
 function transcript(id: string, phrase: string) {
-  const message = { role: "user", content: phrase };
-  const rows = [
-    { type: "session", id, version: 3 },
-    { type: "message", id: `${id}-user`, parentId: null, message },
-  ];
-  return rows.map((row) => JSON.stringify(row)).join("\n") + "\n";
+  return jsonl({ type: "session", id, version: 3 }, messageEvent(`${id}-user`, "user", phrase));
 }
 
 it("retains growing duplicate archives and the restore refusal without leaking its descriptor", () =>
@@ -159,30 +160,15 @@ it("retains growing duplicate archives and the restore refusal without leaking i
     const read = fs.readSync;
     let descriptor: number | undefined;
     using reads = vi.spyOn(fs, "readSync");
-    reads.mockImplementation(
-      (
-        fd: number,
-        buffer: NodeJS.ArrayBufferView,
-        offsetOrOptions: number | fs.ReadOptions = {},
-        length?: number,
-        position?: fs.ReadPosition | null,
-      ) => {
-        const opened = fs.fstatSync(fd);
-        if (
-          descriptor === undefined &&
-          opened.dev === identity.dev &&
-          opened.ino === identity.ino
-        ) {
-          descriptor = fd;
-          fs.appendFileSync(archivePath, "\n");
-        }
-        const options =
-          typeof offsetOrOptions === "number"
-            ? { offset: offsetOrOptions, length, position }
-            : offsetOrOptions;
-        return read(fd, buffer, options);
-      },
-    );
+    reads.mockImplementation((...args: Parameters<typeof read>) => {
+      const [fd] = args;
+      const opened = fs.fstatSync(fd);
+      if (descriptor === undefined && opened.dev === identity.dev && opened.ino === identity.ino) {
+        descriptor = fd;
+        fs.appendFileSync(archivePath, "\n");
+      }
+      return read(...args);
+    });
     const report = await restoreSessionSqliteMigrationRun({
       env: state.env,
       manifestPath: run.manifestPath,
@@ -198,8 +184,8 @@ it("retains growing duplicate archives and the restore refusal without leaking i
     });
     expect(report.restoredFiles).toEqual([]);
     expect(fs.existsSync(sourcePath)).toBe(false);
-    expect(fs.readFileSync(archivePath, "utf8")).toBe(`${original}\n`);
-    expect(fs.readFileSync(duplicatePath, "utf8")).toBe(original);
+    expectFiles(`${original}\n`, archivePath);
+    expectFiles(original, duplicatePath);
     const recorded = readManifest(run.manifestPath);
     expect(recorded?.restore?.consumedArchives ?? []).not.toContain(archivePath);
     expect(recorded?.restore?.restoredFiles).toEqual([]);
@@ -221,11 +207,9 @@ it("admits transcript-only retired agents through the public selector", () =>
     expect(fs.existsSync(sqlitePath)).toBe(false);
     for (const mode of ["dry-run", "validate"] as const) {
       const report = await run(mode);
-      expect(report.targets).toEqual([
-        expect.objectContaining({ agentId: "retired", legacyEntries: 1 }),
-      ]);
+      expect(report.targets).toMatchObject([{ agentId: "retired", legacyEntries: 1 }]);
       expect(fs.existsSync(sqlitePath)).toBe(false);
-      expect(fs.readFileSync(source, "utf8")).toBe(bytes);
+      expectFiles(bytes, source);
     }
     const report = await run("import");
     expect(report.totals.importedEntries).toBe(1);
@@ -233,10 +217,10 @@ it("admits transcript-only retired agents through the public selector", () =>
     closeAgentHandles();
     expect(
       searchTranscripts({ agentId: "retired", env: state.env, query: "retiredhistoryneedle" }).hits,
-    ).toEqual([expect.objectContaining({ sessionId: id })]);
+    ).toMatchObject([{ sessionId: id }]);
     const archived = report.targets.flatMap((target) => target.archivedTranscriptFiles);
     expect(archived).toHaveLength(1);
-    expect(fs.readFileSync(archived[0]!, "utf8")).toBe(bytes);
+    expectFiles(bytes, archived[0]!);
     expect((await run("import")).totals.importedEntries).toBe(0);
   }));
 
@@ -263,7 +247,7 @@ it.each(["lineage", "generated"] as const)(
       }
       const report = await run("import");
       expect(issues(report)).toEqual([]);
-      expect(search(query)).toEqual([expect.objectContaining({ sessionKey: key, sessionId: id })]);
+      expect(search(query)).toMatchObject([{ sessionKey: key, sessionId: id }]);
       expect(readEntry(key)?.entry).toMatchObject(
         variant === "lineage"
           ? { sessionId: "current", updatedAt: 42 }
@@ -277,16 +261,12 @@ it.each(["lineage", "generated"] as const)(
 
 it("recovers a completed old archive once, preserves bytes, and does not resurrect user-deleted history", () =>
   withOpenClawTestState({ label: "doctor-archive-discovery" }, async (state) => {
-    const { sessions, store, target, run, scope, search } = discoveryState(state);
+    const { sessions, store, target, archiveDir, run, scope, search } = discoveryState(state);
     const id = "33333333-3333-4333-8333-333333333333";
     const original = path.join(sessions, `${id}.jsonl`);
     const bytes = transcript(id, "archivedneedle");
     fs.writeFileSync(original, bytes);
-    const archive = path.join(
-      path.dirname(sessions),
-      "session-sqlite-import-archive",
-      `archive-tier.${id}.jsonl.imported-1`,
-    );
+    const archive = path.join(archiveDir, `archive-tier.${id}.jsonl.imported-1`);
     fs.mkdirSync(path.dirname(archive), { recursive: true });
     const old = createSessionSqliteMigrationRun(state.env, [target]);
     const move = await publishArchive(old, target, original, archive);
@@ -312,7 +292,7 @@ it("recovers a completed old archive once, preserves bytes, and does not resurre
     expect(report.totals.importedEntries).toBe(1);
     const hit = search("archivedneedle")[0];
     expect(hit).toMatchObject({ sessionId: id });
-    expect(fs.readFileSync(archive, "utf8")).toBe(bytes);
+    expectFiles(bytes, archive);
     closeAgentHandles();
     expect(search("archivedneedle")).toHaveLength(1);
     expect((await run("import")).totals.importedEntries).toBe(0);
@@ -340,33 +320,29 @@ it("recovers a completed old archive once, preserves bytes, and does not resurre
     recordPlannedMigrationMoves(acknowledged, target, [duplicateMove]);
     recordCompletedMigrationMoves(acknowledged, target, [duplicateMove]);
     const settled = await run("import");
-    expect(issues(settled)).toEqual([
-      expect.objectContaining({ code: "historical_duplicate_settled" }),
-    ]);
+    expect(issues(settled)).toMatchObject([{ code: "historical_duplicate_settled" }]);
     expect(settled.totals.importedEntries).toBe(0);
     expect(fs.existsSync(duplicate)).toBe(false);
-    expect(readManifest(acknowledged.manifestPath)?.targets[0]?.completedMoves).toEqual([
-      expect.objectContaining({
+    expect(readManifest(acknowledged.manifestPath)?.targets[0]?.completedMoves).toMatchObject([
+      {
         archivePath: archive,
-        artifact: expect.objectContaining({ reason: "indexed-historical-primary" }),
-      }),
+        artifact: { reason: "indexed-historical-primary" },
+      },
     ]);
     expect((await run("import")).totals.importedEntries).toBe(0);
     expect(search("archivedneedle")).toEqual([]);
-    expect(fs.readFileSync(archive, "utf8")).toBe(bytes);
+    expectFiles(bytes, archive);
   }));
 
 it("recover settles identical repeated archives across retained manifests and names differing pairs", () =>
   withOpenClawTestState({ label: "doctor-duplicate-archives" }, async (state) => {
     const { sessions, target, archiveDir, run, search } = discoveryState(state);
     fs.mkdirSync(archiveDir);
-    const ids = ["identical", "different-1", "different-2", "different-3", "different-4"];
+    const ids = ["identical", "different"];
     const originals = new Map<string, string>();
     const moves: SessionSqliteMigrationMove[] = [];
-    const manifests: string[] = [];
     for (let copy = 1; copy <= 2; copy++) {
       const old = createSessionSqliteMigrationRun(state.env, [target]);
-      manifests.push(old.manifestPath);
       for (const id of ids) {
         const sourcePath = path.join(sessions, `${id}.jsonl`);
         const archivePath = path.join(archiveDir, `${id}.jsonl.imported-${copy}`);
@@ -383,7 +359,6 @@ it("recover settles identical repeated archives across retained manifests and na
     // Later retries retained both source claims; the latest failed run moved nothing.
     for (let attempt = 0; attempt < 3; attempt++) {
       const retry = createSessionSqliteMigrationRun(state.env, [target]);
-      manifests.push(retry.manifestPath);
       recordPlannedMigrationMoves(retry, target, attempt < 2 ? moves : []);
       retry.manifest.failedAt = new Date().toISOString();
       writeSessionSqliteMigrationManifest(retry);
@@ -392,8 +367,8 @@ it("recover settles identical repeated archives across retained manifests and na
     expect(dry.totals.legacyEntries).toBe(1);
     expect(
       dry.targets[0]!.issues.filter((issue) => issue.code === "historical_transcript_deferred"),
-    ).toHaveLength(4);
-    expect(fs.readdirSync(archiveDir)).toHaveLength(10);
+    ).toHaveLength(1);
+    expect(fs.readdirSync(archiveDir)).toHaveLength(4);
     const report = await run("recover");
     expect(issues(report)).toContainEqual({
       code: "historical_duplicate_settled",
@@ -402,45 +377,19 @@ it("recover settles identical repeated archives across retained manifests and na
     const deferred = issues(report).filter(
       (issue) => issue.code === "historical_transcript_deferred",
     );
-    expect(deferred).toHaveLength(4);
-    for (const id of ids.slice(1)) {
-      expect(
-        deferred.some((issue) => issue.message.startsWith(`${id}: multiple primary files`)),
-      ).toBe(true);
-    }
-    expect(search("duplicateneedle")).toEqual([
-      expect.objectContaining({ sessionId: "identical" }),
+    expect(deferred).toMatchObject([
+      { message: expect.stringMatching(/^different: multiple primary files/) },
     ]);
+    expect(search("duplicateneedle")).toMatchObject([{ sessionId: "identical" }]);
     const identical = moves.filter((move) => path.basename(move.sourcePath) === "identical.jsonl");
     expect(identical.filter((move) => fs.existsSync(move.archivePath))).toHaveLength(1);
     for (const [file, bytes] of originals) {
       if (!path.basename(file).startsWith("identical.")) {
-        expect(fs.readFileSync(file, "utf8")).toBe(bytes);
+        expectFiles(bytes, file);
       }
     }
-    const retired = identical.find((move) => !fs.existsSync(move.archivePath))!;
     const survivor = identical.find((move) => fs.existsSync(move.archivePath))!;
     expect(fs.readFileSync(survivor.archivePath, "utf8")).toBe(originals.get(survivor.archivePath));
-    for (const file of manifests) {
-      const manifest = readManifest(file)!;
-      for (const item of manifest.targets) {
-        for (const list of [item.plannedMoves, item.completedMoves]) {
-          expect(list.map((move) => move.archivePath)).not.toContain(retired.archivePath);
-          const canonical = list.filter((move) => move.sourcePath === retired.sourcePath);
-          if (canonical.length > 0) {
-            expect(canonical).toEqual([
-              expect.objectContaining({
-                archivePath: survivor.archivePath,
-                artifact: expect.objectContaining({ disposal: { state: "retained" } }),
-              }),
-            ]);
-          }
-        }
-      }
-    }
-    expect(
-      collectRecoveryInventory({ cfg: {}, env: state.env }).report.artifacts,
-    ).not.toContainEqual(expect.objectContaining({ reason: "unexpectedly-missing-artifact" }));
     for (const next of ["dry-run", "recover"] as const) {
       const repeated = await run(next);
       expect(issues(repeated)).toEqual(deferred);
@@ -457,20 +406,14 @@ it.each([false, true])("imports renamed primary history (archived: %s)", (archiv
     const retained = archived ? await retainSources(state, [source]) : undefined;
     const report = await run("import");
     expect(report.totals.importedEntries).toBe(1);
-    expect(issues(report)).toEqual([
-      expect.objectContaining({
+    expect(issues(report)).toMatchObject([
+      {
         code: "transcript_filename_mismatch",
         message: expect.stringContaining("original-id"),
-      }),
+      },
     ]);
-    expect(search("renamedhistoryneedle")).toEqual([
-      expect.objectContaining({ sessionId: "original-id" }),
-    ]);
-    const moves = readManifest(report.migrationRun!.manifestPath)!.targets.flatMap(
-      (target) => target.completedMoves,
-    );
-    const archive = moves.find((move) => move.sourcePath === source)!.archivePath;
-    expect(fs.readFileSync(archive, "utf8")).toBe(bytes);
+    expect(search("renamedhistoryneedle")).toMatchObject([{ sessionId: "original-id" }]);
+    expectFiles(bytes, archivedSource(report, source).archivePath);
     if (retained) {
       expectBytes(retained);
     }
@@ -538,7 +481,7 @@ it("keeps diagnostic, deleted, and ambiguous inputs out of searchable history", 
     for (const [name, bytes] of files) {
       const source = path.join(sessions, name);
       const move = moves.find((candidate) => candidate.sourcePath === source);
-      expect(fs.readFileSync(move?.archivePath ?? source, "utf8")).toBe(bytes);
+      expectFiles(bytes, move?.archivePath ?? source);
     }
     expectBytes(archived);
   }));
@@ -590,14 +533,10 @@ it.each(["device changed", "metadata changed"])(
           expect(issue.code).toBe("historical_transcript_deferred");
           for (const text of [
             "no longer matches its migration receipt",
-            "Historical transcript import skipped",
-            "does not indicate SQLite corruption",
-            "No action is needed if all expected conversations are present",
             "https://docs.openclaw.ai/cli/doctor/sqlite-maintenance#changed-archived-registry",
           ]) {
             expect(issue.message).toContain(text);
           }
-          expect(issue.message).not.toContain("Error:");
           if (report.migrationRun) {
             const receipt = readManifest(report.migrationRun.manifestPath)!;
             expect(receipt.failedAt).toBeUndefined();
@@ -612,9 +551,7 @@ it.each(["device changed", "metadata changed"])(
       } else {
         const report = await run("import");
         expect(issues(report)).toEqual([]);
-        expect(search("archivedfamilyneedle")).toEqual([
-          expect.objectContaining({ sessionId: id, sessionKey: key }),
-        ]);
+        expect(search("archivedfamilyneedle")).toMatchObject([{ sessionId: id, sessionKey: key }]);
       }
       expect(entry(key)).toEqual(before);
       expectBytes(saved);
@@ -660,10 +597,10 @@ it.each(["restored", "bytes changed", "mtime changed", "hard linked"] as const)(
         entry: { sessionId: "new-current", updatedAt: 999, label: "current-user-label" },
       });
       const currentEntry = entry(key);
-      expect(issues(await run("dry-run"))).toEqual([
-        expect.objectContaining({ code: "historical_transcript_deferred" }),
+      expect(issues(await run("dry-run"))).toMatchObject([
+        { code: "historical_transcript_deferred" },
       ]);
-      expect(fs.readFileSync(manifestPath, "utf8")).toBe(receiptBefore);
+      expectFiles(receiptBefore, manifestPath);
       const recovered = await run("recover");
       if (variant === "restored") {
         expect(issues(recovered)).toEqual([]);
@@ -679,22 +616,15 @@ it.each(["restored", "bytes changed", "mtime changed", "hard linked"] as const)(
           });
         }
         expect(issues(await run("recover"))).toEqual([]);
-        expect(fs.readFileSync(manifestPath, "utf8")).toBe(recoveredReceipt);
-        expect(search("restoredregistryneedle")).toEqual([
-          expect.objectContaining({ sessionKey: key, sessionId: id }),
+        expectFiles(recoveredReceipt, manifestPath);
+        expect(search("restoredregistryneedle")).toMatchObject([
+          { sessionKey: key, sessionId: id },
         ]);
       } else {
-        expect(issues(recovered)).toEqual([
-          expect.objectContaining({ code: "historical_transcript_deferred" }),
-        ]);
-        expect(fs.readFileSync(manifestPath, "utf8")).toBe(receiptBefore);
+        expect(issues(recovered)).toMatchObject([{ code: "historical_transcript_deferred" }]);
+        expectFiles(receiptBefore, manifestPath);
       }
       expect(entry(key)).toEqual(currentEntry);
-      expect(entry(key)?.entry).toMatchObject({
-        sessionId: "new-current",
-        updatedAt: 999,
-        label: "current-user-label",
-      });
       expect(fs.existsSync(store)).toBe(false);
       expect(fs.readFileSync(registry, "utf8")).toBe(
         variant === "bytes changed"

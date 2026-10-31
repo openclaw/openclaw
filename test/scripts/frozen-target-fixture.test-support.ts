@@ -3,7 +3,7 @@ import { cpSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export const frozenTargetEntrypoint = "scripts/preflight-frozen-target-contracts.mjs";
-export const survivorDirectory = "scripts/e2e/lib/upgrade-survivor";
+const survivorDirectory = "scripts/e2e/lib/upgrade-survivor";
 
 /** The cold admission closure, without installing or executing selected-source dependencies. */
 export function copyFrozenTargetTooling(root: string, extra: string[] = []) {
@@ -30,6 +30,7 @@ export function copyFrozenTargetTooling(root: string, extra: string[] = []) {
     "scripts/resolve-fs-safe-native-contract.mjs",
     `${survivorDirectory}/config-recipe.mts`,
     `${survivorDirectory}/config-recipe`,
+    `${survivorDirectory}/installed-recovery-cases.mjs`,
     "scripts/windows-cmd-helpers.mjs",
     "package.json",
     "pnpm-lock.yaml",

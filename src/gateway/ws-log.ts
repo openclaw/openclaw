@@ -70,7 +70,7 @@ export function summarizeSessionListForWsLog(input: unknown): Record<string, unk
   };
 }
 
-function collectWsRestMeta(meta?: Record<string, unknown>): string[] {
+function collectWsRestMeta(meta?: Record<string, unknown>, durationMs?: number): string[] {
   const restMeta: string[] = [];
   if (!meta) {
     return restMeta;
@@ -82,6 +82,12 @@ function collectWsRestMeta(meta?: Record<string, unknown>): string[] {
       continue;
     }
     if (WS_META_SKIP_KEYS.has(key)) {
+      continue;
+    }
+    if (
+      key === "pairingLockWait" &&
+      !(durationMs !== undefined && durationMs >= DEFAULT_WS_SLOW_MS)
+    ) {
       continue;
     }
     restMeta.push(`${chalk.dim(key)}=${formatForLog(value)}`);
@@ -336,7 +342,7 @@ export function logWs(
   const headline = readStringValue(
     kind === "req" || kind === "res" ? meta?.method : kind === "event" ? meta?.event : undefined,
   );
-  const restMeta = collectWsRestMeta(meta);
+  const restMeta = collectWsRestMeta(meta, durationMs);
   const trailing: string[] = [];
   if (connId && (!compact || connId !== wsLastCompactConnId)) {
     trailing.push(`${chalk.dim("conn")}=${chalk.gray(shortId(connId))}`);

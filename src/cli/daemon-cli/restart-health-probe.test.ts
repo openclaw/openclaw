@@ -1,9 +1,7 @@
 // Gateway restart probe and health-detail tests.
-import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { retainGatewayResponsePayload } from "../../../packages/gateway-client/src/protocol-request.js";
-import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
+import { withLoopbackTestServer } from "../../commands/loopback-server.test-support.js";
 import { GatewayCredentialsRequiredError } from "../../gateway/call-device-auth.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { createGatewayCloseTransportError } from "../../gateway/transport-error.js";
@@ -17,6 +15,8 @@ import {
   monotonicClock,
   callGateway,
   gatewayResponseError,
+  gatewayProtocolMismatchError,
+  gatewayVerifiedUserRequiredError,
   requestReadinessProbe,
   requestStartupProbe,
   resetRestartHealthMocks,
@@ -70,17 +70,7 @@ describe("restart health", () => {
       response.statusCode = request.url === "/healthz" ? 200 : 503;
       response.end();
     });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-      throw new Error("expected loopback server address");
-    }
-
-    try {
+    await withLoopbackTestServer(server, async (port) => {
       const { waitForGatewayHttpReadiness } = await import("./restart-health-probe.js");
       const onObservation = vi.fn();
       await expect(
@@ -89,21 +79,11 @@ describe("restart health", () => {
           onObservation,
           deadlineAt: performance.now() + 1_000,
           delayMs: 0,
-          port: address.port,
+          port,
         }),
       ).resolves.toEqual({ healthz: 200, readyz: 503 });
       expect(onObservation).toHaveBeenCalledExactlyOnceWith({ healthz: 200, readyz: 503 });
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        });
-      });
-    }
+    });
   });
 
   it.each([
@@ -195,18 +175,7 @@ describe("restart health", () => {
     { build: "old-build", outcome: "build-id-mismatch" },
   ])("settles an RPC protocol mismatch through HTTP identity ($build)", async (scenario) => {
     // The updater runs the previous package, so a protocol bump or revert rejects its handshake.
-    const mismatch = new GatewayClientRequestError({
-      code: "INVALID_REQUEST",
-      message: "protocol mismatch",
-      details: {
-        code: "PROTOCOL_MISMATCH",
-        clientMinProtocol: 5,
-        clientMaxProtocol: 5,
-        expectedProtocol: 4,
-        minimumProbeProtocol: 3,
-      },
-    });
-    retainGatewayResponsePayload(mismatch, undefined);
+    const mismatch = gatewayProtocolMismatchError();
     callGateway.mockRejectedValue(mismatch);
     inspectPortUsage.mockResolvedValue(ownedPortUsage);
     requestStartupProbe.mockResolvedValue({
@@ -235,6 +204,57 @@ describe("restart health", () => {
       "protocol mismatch: Control UI v5, Gateway v4, connection check min v3",
     );
     expect(snapshot.authenticationError).toBeUndefined();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "matching HTTP identity",
+      requirePluginHealth: false,
+      build: "candidate-build",
+      outcome: "healthy",
+    },
+    {
+      label: "HTTP build mismatch",
+      requirePluginHealth: false,
+      build: "old-build",
+      outcome: "build-id-mismatch",
+    },
+    {
+      label: "strict plugin check",
+      requirePluginHealth: true,
+      build: "candidate-build",
+      outcome: "auth-rejected",
+    },
+  ])("settles a verified-user rejection without another RPC ($label)", async (scenario) => {
+    const rejection = gatewayVerifiedUserRequiredError();
+    callGateway.mockRejectedValue(rejection);
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
+    requestStartupProbe.mockResolvedValue({
+      statusCode: 200,
+      body: JSON.stringify({
+        ok: true,
+        status: "started",
+        version: "2026.10.8",
+        buildId: scenario.build,
+      }),
+    });
+    requestReadinessProbe.mockResolvedValue({
+      statusCode: 200,
+      body: JSON.stringify({ ready: true }),
+    });
+    const snapshot = await waitForRunningGateway({
+      expectedVersion: "2026.10.8",
+      expectedBuildId: "candidate-build",
+      requirePluginHealth: scenario.requirePluginHealth,
+      requireChannelHealth: false,
+      timeoutMs: 1_800_000,
+      delayMs: 30_000,
+    });
+    expect(snapshot.waitOutcome).toBe(scenario.outcome);
+    expect(snapshot.healthy).toBe(scenario.outcome === "healthy");
+    expect(snapshot.authenticationError).toBe(rejection.message);
+    expect(callGateway).toHaveBeenCalledOnce();
     expect(sleep).not.toHaveBeenCalled();
   });
 

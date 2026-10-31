@@ -13,12 +13,13 @@ import {
   waitForExecSession,
 } from "../../agents/bash-process-registry.js";
 import { resetProcessRegistryForTests } from "../../agents/bash-process-registry.test-support.js";
+import { runExecFixture } from "../../agents/bash-tools.exec-fixture.test-support.js";
 import { createExecTool } from "../../agents/bash-tools.exec-run.js";
-import { runExecProcess } from "../../agents/bash-tools.exec-runtime.js";
 import {
   createRunExit,
   runtimeManagedRun,
 } from "../../agents/bash-tools.exec-runtime.test-support.js";
+import { fullGatewayExec } from "../../agents/bash-tools.lifecycle.test-support.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import type { SpawnInput } from "../../process/supervisor/types.js";
@@ -62,20 +63,7 @@ function prepareProcess(onCancel?: () => void) {
   return { exit, cancelled, cancel };
 }
 
-function launchOwnedProcess() {
-  return runExecProcess({
-    agentId: "doomed",
-    command: "fixture-service",
-    workdir: "/tmp",
-    env: {},
-    usePty: false,
-    warnings: [],
-    maxOutput: 1000,
-    pendingMaxOutput: 1000,
-    notifyOnExit: false,
-    timeoutSec: null,
-  });
-}
+const launchOwnedProcess = () => runExecFixture({ agentId: "doomed", command: "fixture-service" });
 
 function routeCancellation(...processes: Array<{ id: string; cancel: () => void }>) {
   supervisor.cancel.mockImplementation((id: string) => {
@@ -96,9 +84,7 @@ it("drains an independent agent service through exit while preserving another ag
         createExecTool({
           ...identity,
           config: getRuntimeConfig(),
-          host: "gateway",
-          security: "full",
-          ask: "off",
+          ...fullGatewayExec,
           allowBackground: true,
           notifyOnExit: false,
           preparedStoreEnvironment: {},

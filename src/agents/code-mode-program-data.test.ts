@@ -4,14 +4,19 @@ import { CodeModeProgramDataInbox } from "./code-mode-program-data.js";
 const limits = { memoryLimitBytes: 1024, maxSnapshotBytes: 2048, maxOutputBytes: 1024 };
 
 describe("Code Mode reply leases", () => {
-  it.each([true, false])(
-    "charges complete success/error JSON at settlement and reuses released capacity (ok=%s)",
-    (ok) => {
+  it.each(["success", "error", "encoded"] as const)(
+    "charges complete %s JSON at settlement and reuses released capacity",
+    (mode) => {
+      const ok = mode !== "error";
       const inbox = new CodeModeProgramDataInbox(limits);
       const first = inbox.createReply("first");
       const second = inbox.createReply("second");
       const payload = "x".repeat(1022);
-      first.settle(ok, payload);
+      if (mode === "encoded") {
+        first.settleJson(true, JSON.stringify(payload));
+      } else {
+        first.settle(ok, payload);
+      }
       second.settle(true, null);
       const retained = first.take();
       expect(retained).toEqual({ id: "first", ok, json: JSON.stringify(payload) });
@@ -68,6 +73,7 @@ describe("Code Mode reply leases", () => {
     for (const reply of [canceled, closed, late]) {
       reply.settle(true, { toJSON });
       reply.settle(false, "late failure".repeat(10000));
+      reply.settleJson(true, '"late encoded result"');
       expect(() => reply.take()).toThrow("unavailable");
     }
     expect(toJSON).not.toHaveBeenCalled();

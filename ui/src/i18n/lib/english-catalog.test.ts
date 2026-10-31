@@ -13,10 +13,12 @@ import { i18n } from "./translate.ts";
 
 vi.hoisted(() => vi.resetModules());
 
-it("keeps shared session labels eager while lazy renderers extend their retained namespaces", async () => {
+it("registers shared session copy before optional copy while preserving namespace identities", async () => {
   const restoreI18n = captureI18nStateForTesting();
   const details = en.chat.sessionDetails;
   const diff = en.chat.sessionDiff;
+  const agentUpdate = en.chat.pendingInputs.agentUpdate;
+  const suggestionState = en.chat.sessionSuggestions.state;
   try {
     await i18n.setLocale("en");
     expect(t("chat.sessionDetails.progressOptions")).toBe("Task progress options");
@@ -24,10 +26,22 @@ it("keeps shared session labels eager while lazy renderers extend their retained
     expect(t("chat.activityPills.label")).toBe("chat.activityPills.label");
 
     registerEnglishCatalog(registerChatSessionEnglish);
+    expect(t("chat.savedConversation", { status: "Reconnecting…" })).toBe(
+      "Saved conversation · Reconnecting…",
+    );
+    expect(en).toMatchObject(registerChatSessionEnglish.catalog);
+    expect(t("chat.activityPills.label")).toBe("chat.activityPills.label");
+    expect(t("chat.sessionDiff.modeUnified")).toBe("chat.sessionDiff.modeUnified");
+    expect(t("chat.workspaceFiles.showFiles")).toBe("Show session files");
+    const { registerChatSessionOptionalEnglish } =
+      await import("../locales/en-chat-session-optional.ts");
+    registerEnglishCatalog(registerChatSessionOptionalEnglish);
     expect(t("chat.activityPills.label")).toBe("Session activity");
     expect(t("chat.sessionDiff.modeUnified")).toBe("Unified");
     expect(en.chat.sessionDetails).toBe(details);
     expect(en.chat.sessionDiff).toBe(diff);
+    expect(en.chat.pendingInputs.agentUpdate).toBe(agentUpdate);
+    expect(en.chat.sessionSuggestions.state).toBe(suggestionState);
   } finally {
     await restoreI18n();
   }

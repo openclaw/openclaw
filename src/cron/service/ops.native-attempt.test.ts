@@ -28,6 +28,12 @@ import { occupyWorkers, readJob, withCronGatewayState } from "./ops.gateway.test
 
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
+const sessionKey = "agent:main:native-cron-admission";
+
+function toolGeneration(signal?: AbortSignal) {
+  const released = createDeferredCore();
+  return { signal, released, cleanup: vi.fn(async () => released.resolve()) };
+}
 
 describe("native attempt queued automation admission", () => {
   beforeAll(preloadRunEmbeddedAttemptForTests);
@@ -46,7 +52,7 @@ describe("native attempt queued automation admission", () => {
     "revoke",
     "stop",
   ] as const)(
-    "retains its real tool generation until activation, not payload completion: %s",
+    "keeps accepted automation independent of its tool generation's lifetime: %s",
     async (outcome) => {
       await withCronGatewayState(async (fixture) => {
         const { cfg, context, cron, finished } = fixture;
@@ -60,36 +66,22 @@ describe("native attempt queued automation admission", () => {
         const job = createDueIsolatedJob({ id: "native-queued-run", nowMs: now, nextRunAtMs: now });
         const payloadStarted = createDeferredCore();
         const releasePayload = createDeferredCore();
-        const generationReleased = createDeferredCore();
-        const cleanup = vi.fn(async () => {
-          generationReleased.resolve();
-        });
         const requesterWork = new AsyncWorkScope();
         const controller = new AbortController();
         let current = true;
         let tool: AnyAgentTool;
         let toolSignal: AbortSignal | undefined;
-        const generations: Array<{
-          signal: AbortSignal | undefined;
-          cleanup: typeof cleanup;
-          released: typeof generationReleased;
-        }> = [];
+        const generations: ReturnType<typeof toolGeneration>[] = [];
         hoisted.createOpenClawCodingToolsMock.mockImplementation((input) => {
           const options = input as OpenClawCodingToolsOptions;
-          const released = generations.length === 0 ? generationReleased : createDeferredCore();
-          const generationCleanup =
-            generations.length === 0
-              ? cleanup
-              : vi.fn(async () => {
-                  released.resolve();
-                });
-          generations.push({ signal: options.abortSignal, cleanup: generationCleanup, released });
-          options.registerRunCleanup?.(generationCleanup);
+          const generation = toolGeneration(options.abortSignal);
+          generations.push(generation);
+          options.registerRunCleanup?.(generation.cleanup);
           toolSignal ??= options.abortSignal;
           tool = wrapToolWithAbortSignal(
             wrapToolWithGatewayCallerIdentity(createCronTool({ config: cfg }), {
               agentId: "main",
-              sessionKey: "agent:main:native-cron-admission",
+              sessionKey,
               operationalRunInstance: options.operationalRunInstance,
               receiptAuthority: () => current,
               approvalSignals: options.abortSignal ? [options.abortSignal] : [],
@@ -112,7 +104,7 @@ describe("native attempt queued automation admission", () => {
           const result = await requesterWork.run(() =>
             createContextEngineAttemptRunner({
               contextEngine: createContextEngineBootstrapAndAssemble(),
-              sessionKey: "agent:main:native-cron-admission",
+              sessionKey,
               tempPaths,
               attemptOverrides: {
                 config: cfg,
@@ -131,9 +123,7 @@ describe("native attempt queued automation admission", () => {
                       });
                       expect(ack.details).toMatchObject({ ok: true, enqueued: true });
                       if (outcome === "permission change") {
-                        const operation = getSessionControllerOperation(
-                          "agent:main:native-cron-admission",
-                        );
+                        const operation = getSessionControllerOperation(sessionKey);
                         const target =
                           operation && getSessionControllerEntryForOperation(operation).target;
                         if (!target) {
@@ -166,8 +156,19 @@ describe("native attempt queued automation admission", () => {
           expect(result.terminal.kind).toBe(
             outcome === "abort before completion" ? "aborted" : "ok",
           );
+          const firstGeneration = generations[0];
+          if (!firstGeneration) {
+            throw new Error("Native attempt did not construct a tool generation");
+          }
+          const { cleanup, released: generationReleased } = firstGeneration;
           const abortedAtCompletion = toolSignal?.aborted;
           const cleanupCallsAtCompletion = cleanup.mock.calls.length;
+          const closedBeforeCompletion =
+            outcome === "abort before completion" || outcome === "permission change";
+          const cleanupReason =
+            outcome === "abort" || outcome === "owner abort" || closedBeforeCompletion
+              ? "cancel"
+              : "completion";
           const replacement = outcome === "permission change" ? generations[1] : undefined;
           if (outcome === "permission change") {
             expect(generations).toHaveLength(2);
@@ -195,7 +196,7 @@ describe("native attempt queued automation admission", () => {
           }
           releaseBlocker.resolve();
           await blocker;
-          if (outcome === "execute") {
+          if (outcome !== "stop") {
             await Promise.race([
               payloadStarted.promise,
               finished(job.id).then((event) => {
@@ -205,7 +206,7 @@ describe("native attempt queued automation admission", () => {
               }),
             ]);
             await generationReleased.promise;
-            expect(cleanup).toHaveBeenCalledExactlyOnceWith("completion");
+            expect(cleanup).toHaveBeenCalledExactlyOnceWith(cleanupReason);
             expect(targetCalls()).toHaveLength(1);
           }
           releasePayload.resolve();
@@ -215,20 +216,12 @@ describe("native attempt queued automation admission", () => {
             expect(replacement.signal?.aborted).toBe(true);
             expect(replacement.cleanup).toHaveBeenCalledExactlyOnceWith("completion");
           }
-          expect(terminal.status).toBe(outcome === "execute" ? "ok" : "skipped");
-          const closedBeforeCompletion =
-            outcome === "abort before completion" || outcome === "permission change";
+          expect(terminal.status).toBe(outcome === "stop" ? "skipped" : "ok");
           expect(abortedAtCompletion).toBe(closedBeforeCompletion);
           expect(cleanupCallsAtCompletion).toBe(closedBeforeCompletion ? 1 : 0);
           expect(toolSignal?.aborted).toBe(true);
-          expect(cleanup).toHaveBeenCalledExactlyOnceWith(
-            outcome === "abort" || outcome === "owner abort" || closedBeforeCompletion
-              ? "cancel"
-              : "completion",
-          );
-          if (outcome !== "execute") {
-            expect(targetCalls()).toHaveLength(0);
-          }
+          expect(cleanup).toHaveBeenCalledExactlyOnceWith(cleanupReason);
+          expect(targetCalls()).toHaveLength(outcome === "stop" ? 0 : 1);
           expect((await readJob(fixture, job.id))?.state.queuedAtMs).toBeUndefined();
         } finally {
           releaseBlocker.resolve();

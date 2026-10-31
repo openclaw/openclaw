@@ -1,9 +1,9 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
-  makeRestartRecoveryRun,
-  useSubagentRestartRecoveryFixture,
-} from "./subagent-restart-recovery.test-support.js";
+  makeRegistryRun,
+  useSubagentRegistryFixture,
+} from "./subagent-registry-live.test-support.js";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
@@ -46,8 +46,8 @@ const temporalFact = {
   kind: "conversation-data",
   text: expect.stringContaining("## Temporal Context\n"),
 };
-function completedChild(overrides: Parameters<typeof makeRestartRecoveryRun>[0]) {
-  return makeRestartRecoveryRun({
+function completedChild(overrides: Parameters<typeof makeRegistryRun>[0]) {
+  return makeRegistryRun({
     childSessionKey: CHILD,
     requesterSessionKey: PARENT,
     requesterAgentId: "main",
@@ -71,7 +71,7 @@ const factParams = (sessionKey = PARENT) => ({
 const factsText = (facts: Awaited<ReturnType<typeof buildRuntimeFactsContext>>) =>
   facts.map((fragment) => fragment.text).join("\n");
 
-const fixture = useSubagentRestartRecoveryFixture();
+const fixture = useSubagentRegistryFixture();
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1");
   setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
@@ -164,7 +164,6 @@ it("reads a cold private envelope without changing delivery or processing receip
   expect(fixture.dispatchAgent).not.toHaveBeenCalled();
   expect(fixture.gatewayRuntime.dispatchSessionMethod).not.toHaveBeenCalled();
   expect(fixture.gatewayRuntime.waitForAgent).not.toHaveBeenCalled();
-  expect(fixture.gatewayRuntime.sendRecoveryNotice).not.toHaveBeenCalled();
   expect(rows()).toEqual(before);
   expect(receipts()).toEqual(beforeReceipts);
   expect(shared.prepare("SELECT total_changes() AS count").get()).toEqual(sharedWrites);
@@ -199,7 +198,7 @@ it.each(["fallback result", "requester final pending", "older generation"])(
     await addSubagentRunForTests(child);
     if (scenario === "older generation") {
       await addSubagentRunForTests(
-        makeRestartRecoveryRun({
+        makeRegistryRun({
           runId: "catchup-successor",
           childSessionKey: CHILD,
           requesterSessionKey: PARENT,

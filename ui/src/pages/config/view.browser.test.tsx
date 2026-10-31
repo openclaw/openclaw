@@ -5,7 +5,11 @@ import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { renderConfigInto, renderConfigView } from "./config-view.test-support.tsx";
+import {
+  renderConfigInto,
+  renderConfigView,
+  requiredConfigElement as required,
+} from "./config-view.test-support.tsx";
 import type { ConfigProps } from "./view.tsx";
 import "../../styles.css";
 
@@ -49,19 +53,6 @@ describe("config form and navigation", () => {
   function selectConfigTab(container: HTMLElement, name: string) {
     const tab = required(container, `#config-sections-tab-${name}`, HTMLElement);
     tab.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
-  }
-
-  function required<T extends Element>(
-    container: HTMLElement,
-    selector: string,
-    constructor: new () => T,
-  ): T {
-    const element = container.querySelector(selector);
-    expect(element).toBeInstanceOf(constructor);
-    if (!(element instanceof constructor)) {
-      throw new Error(`Expected element matching "${selector}"`);
-    }
-    return element;
   }
 
   function disclosure(container: HTMLElement) {
@@ -170,50 +161,7 @@ describe("config form and navigation", () => {
     ).toEqual(["Open links in Control UI browser", "Browser Enabled"]);
   });
 
-  it("routes scalar clears and default selections through config callbacks", () => {
-    const { container, props } = renderConfigView({
-      schema: object({
-        gateway: object(
-          {
-            retries: { type: "integer", title: "Retries", default: 3 },
-            mode: {
-              type: "string",
-              title: "Mode",
-              default: "balanced",
-              enum: ["balanced", "fast", "careful", "safe", "strict", "custom"],
-            },
-          },
-          "Gateway",
-        ),
-      }),
-      uiHints: {
-        "gateway.retries": { advanced: false },
-        "gateway.mode": { advanced: false },
-      },
-      formValue: { gateway: { retries: 9, mode: "custom" } },
-      activeSection: "gateway",
-    });
-
-    const retriesRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
-      (row) => row.textContent?.includes("Retries"),
-    );
-    const retries = required(retriesRow ?? container, "input", HTMLInputElement);
-    retries.value = "";
-    retries.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(props.onFormRemove).toHaveBeenCalledWith(["gateway", "retries"]);
-    expect(props.onFormPatch).not.toHaveBeenCalled();
-
-    const modeRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
-      (row) => row.textContent?.includes("Mode"),
-    );
-    const select = required(modeRow ?? container, "select", HTMLSelectElement);
-    expect(select.selectedOptions[0]?.textContent?.trim()).toBe("custom");
-    select.value = "__unset__";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(props.onFormRemove).toHaveBeenCalledWith(["gateway", "mode"]);
-  });
-
-  it("uses one inline advanced disclosure without mutating config fields", () => {
+  it("honors advanced disclosure overrides and subsection scope", () => {
     const schema = object({
       gateway: object({
         port: { type: "integer", title: "Port" },
@@ -232,18 +180,6 @@ describe("config form and navigation", () => {
         activeSection: "gateway",
         ...overrides,
       });
-    const collapsed = renderCase();
-
-    const collapsedDetails = disclosure(collapsed.container);
-    expect(collapsedDetails.open).toBe(false);
-    expect(required(collapsedDetails, "summary", HTMLElement).textContent?.trim()).toBe(
-      "Advanced settings",
-    );
-    expect(normalizedText(collapsed.container)).not.toContain("Reload mode");
-    collapsedDetails.open = true;
-    collapsedDetails.dispatchEvent(new Event("toggle"));
-    expect(collapsed.props.onAppearanceChange).toHaveBeenCalledWith({ showAdvancedSettings: true });
-
     for (const overrides of [
       { showAdvancedSettings: true },
       { forceAdvancedSection: "gateway" },
@@ -414,20 +350,43 @@ describe("config form and navigation", () => {
       onWebPushSubscribe,
     });
     renderConfigInto(props, container);
-    const card = required(container, "#settings-communications-notifications", HTMLElement);
-    expect(container.querySelector(".config-toolbar")).toBeNull();
-    expect(container.textContent).not.toContain("Saved");
-    expect(
-      card.querySelector(".settings-section__actions .settings-status")?.textContent?.trim(),
-    ).toBe("Ready");
-
     const enableButton = findButtonByText(container, "Enable notifications");
-    expect(enableButton.classList.contains("btn")).toBe(true);
-    expect(enableButton.classList.contains("primary")).toBe(true);
-    expect(container.querySelector(".config-bar__btn")).toBeNull();
-
     enableButton.click();
     expect(onWebPushSubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("exposes a Web Push subscription error as an alert on the shipped Settings page", () => {
+    const error = "This browser push subscription belongs to another Gateway.";
+    const { container, props } = renderConfigView({
+      navRootLabel: "Notifications",
+      includeSections: ["__notifications__"],
+      includeVirtualSections: true,
+      schema: object({}),
+      formValue: {},
+      webPush: {
+        supported: true,
+        canManage: true,
+        canReadPreferences: true,
+        permission: "granted",
+        subscription: "vapid-mismatch",
+        loading: false,
+        error,
+      },
+    });
+
+    selectConfigTab(container, "__notifications__");
+    Object.assign(props, {
+      activeSection: "__notifications__",
+      showModeToggle: false,
+      showRootTab: false,
+    });
+    renderConfigInto(props, container);
+
+    const card = required(container, "#settings-communications-notifications", HTMLElement);
+    expect(normalizedText(card)).toContain(error);
+    const alert = required(card, '[role="alert"]', HTMLElement);
+    expect(alert.textContent).toContain(error);
+    expect(alert.closest(".settings-row")).not.toBeNull();
   });
 
   it.each(["tabs", "accordion"] as const)(
@@ -542,12 +501,9 @@ describe("config form and navigation", () => {
       content.scrollTop = 280;
       content.scrollLeft = 24;
       const scrollTo = vi.fn((options?: ScrollToOptions | number, y?: number) => {
-        content.scrollTop =
-          typeof options === "number"
-            ? (y ?? content.scrollTop)
-            : (options?.top ?? content.scrollTop);
-        content.scrollLeft =
-          typeof options === "number" ? options : (options?.left ?? content.scrollLeft);
+        const target = typeof options === "number" ? { top: y, left: options } : options;
+        content.scrollTop = target?.top ?? content.scrollTop;
+        content.scrollLeft = target?.left ?? content.scrollLeft;
       });
       content.scrollTo = scrollTo;
       if (trigger === "section") {

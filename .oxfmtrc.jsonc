@@ -35,6 +35,9 @@
     "dist/",
     "extensions/diffs/assets/viewer-runtime.js",
     "extensions/browser/chrome-extension/modules/copilot-runtime.js",
+    // Knowledge vault fixtures are byte-exact record data, not authored prose.
+    "extensions/knowledge/fixtures/",
+    "extensions/knowledge/test-fixtures/",
     "**/*.json",
     "node_modules/",
     "patches/",

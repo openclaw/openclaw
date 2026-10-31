@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -11,6 +11,7 @@ import {
   readUpdateDatabaseGenerationsIsolated,
   readUpdateStateSchemaVersions,
 } from "./update-candidate-state.js";
+import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-support.js";
 import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -30,6 +31,39 @@ function createDatabase(file: string, sql: string, registered?: string) {
 function agentFile(stateDir: string, agent = "main") {
   return path.join(stateDir, "agents", agent, "agent", "openclaw-agent.sqlite");
 }
+
+it.each(["inspection", "snapshot"] as const)(
+  "%s keeps the selected state root when another profile has a newer schema",
+  async (mode) => {
+    const home = fs.realpathSync(dirs.make("update-schema-profile-"));
+    const stateDir = path.join(home, "selected");
+    const shared = path.join(stateDir, "state", "openclaw.sqlite");
+    const unrelated = path.join(home, ".openclaw", "state", "openclaw.sqlite");
+    createDatabase(shared, "PRAGMA user_version=7;");
+    createDatabase(unrelated, "PRAGMA user_version=999;");
+    const before = fs.readFileSync(unrelated);
+
+    const env = {
+      HOME: home,
+      OPENCLAW_HOME: home,
+      OPENCLAW_STATE_DIR: path.dirname(path.dirname(unrelated)),
+    };
+    const versions =
+      mode === "inspection"
+        ? await inspect(stateDir, { env: { ...process.env, ...env } })
+        : await runUpdateCandidateSnapshotWorker({
+            stateDir,
+            targetStateDir: path.join(home, "snapshot"),
+            candidateRoot: fileURLToPath(new URL("../../", import.meta.url)),
+            config: {},
+            env,
+          });
+
+    expect(versions).toContainEqual({ path: shared, userVersion: 7, contentVersion: 7 });
+    expect(versions.some((entry) => entry.path === unrelated)).toBe(false);
+    expect(fs.readFileSync(unrelated)).toEqual(before);
+  },
+);
 
 it.each(["malformed", "nonregular-wal", "empty-worker"])(
   "reports an actionable schema inspection failure: %s",
@@ -223,8 +257,8 @@ it("fences WAL schema migration without copying a large registered agent payload
     sharedPath,
     `
     PRAGMA user_version=15;
-    CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT);
-    INSERT INTO config_machine_state VALUES('state.schema.contentVersion','16');
+    CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER);
+    INSERT INTO config_machine_state VALUES('state.schema.contentVersion','16',0);
     CREATE TABLE agent_databases(path TEXT);
   `,
     agentPath,

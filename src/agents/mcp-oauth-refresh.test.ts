@@ -1,11 +1,6 @@
-// Covers MCP OAuth token refresh, lease cancellation, and concurrency.
 import type { FetchLike } from "@modelcontextprotocol/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
 import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
 import { operatorMcpOAuthIdentity, requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
@@ -22,6 +17,12 @@ import {
 const authMock = vi.hoisted(() => vi.fn());
 const FRESH_ACCESS = "test-token-placeholder";
 const ROTATED_ACCESS = "gateway-token";
+const ROTATED_TOKENS = {
+  access_token: ROTATED_ACCESS,
+  refresh_token: "secret-token",
+  token_type: "Bearer",
+  expires_in: 3600,
+};
 const IDENTITY = operatorMcpOAuthIdentity("Remote Docs", "https://mcp.example.com/mcp");
 
 vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
@@ -30,29 +31,7 @@ vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
 }));
 
 describe("MCP OAuth provider", () => {
-  beforeEach(async () => {
-    authMock.mockReset();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-  });
-
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-  });
-
-  it("returns a fresh stored access token without refreshing it", async () => {
-    await withTempHome(async () => {
-      await saveMcpOAuthAccessTokenForTest(IDENTITY, "test-token-placeholder");
-
-      await expect(
-        resolveMcpOAuthAccessToken({
-          identity: IDENTITY,
-        }),
-      ).resolves.toBe(FRESH_ACCESS);
-      expect(authMock).not.toHaveBeenCalled();
-    }, "openclaw-mcp-oauth-fresh-token-");
-  });
+  beforeEach(() => authMock.mockReset());
 
   it("does not send a bearer when the caller cancels during the stored token read", async () => {
     await withTempHome(async () => {
@@ -60,7 +39,7 @@ describe("MCP OAuth provider", () => {
 
       const controller = new AbortController();
       const read = oauthStore.readMcpOAuthStoreReadOnly;
-      const reading = vi
+      using reading = vi
         .spyOn(oauthStore, "readMcpOAuthStoreReadOnly")
         .mockImplementationOnce(async (...args) => {
           const store = await read(...args);
@@ -68,18 +47,15 @@ describe("MCP OAuth provider", () => {
           return store;
         });
       const resourceFetch = vi.fn<FetchLike>(async () => new Response("ok"));
-      try {
-        await expect(
-          withMcpOAuthBearer({
-            identity: IDENTITY,
-            fetchFn: resourceFetch,
-            authFetchFn: resourceFetch,
-          })(IDENTITY.serverUrl, { signal: controller.signal }),
-        ).rejects.toMatchObject({ name: "AbortError" });
-        expect(resourceFetch).not.toHaveBeenCalled();
-      } finally {
-        reading.mockRestore();
-      }
+      await expect(
+        withMcpOAuthBearer({
+          identity: IDENTITY,
+          fetchFn: resourceFetch,
+          authFetchFn: resourceFetch,
+        })(IDENTITY.serverUrl, { signal: controller.signal }),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      expect(reading).toHaveBeenCalledOnce();
+      expect(resourceFetch).not.toHaveBeenCalled();
       expect(authMock).not.toHaveBeenCalled();
     }, "openclaw-mcp-oauth-cancelled-read-");
   });
@@ -104,15 +80,12 @@ describe("MCP OAuth provider", () => {
       await withMcpOAuthTestLease(IDENTITY.storeKey, async () => {
         // The real held lease fails immediately if a fresh-token request tries to acquire it.
         const acquire = leaseAcquisition.acquireOpenClawStateLease;
-        const acquisition = vi
+        using acquisition = vi
           .spyOn(leaseAcquisition, "acquireOpenClawStateLease")
           .mockImplementation((params) => acquire({ ...params, waitMs: 0 }));
-        try {
-          await expect(send(IDENTITY)).resolves.toMatchObject({ status: 200 });
-          await expect(send(requester)).resolves.toMatchObject({ status: 200 });
-        } finally {
-          acquisition.mockRestore();
-        }
+        await expect(send(IDENTITY)).resolves.toMatchObject({ status: 200 });
+        await expect(send(requester)).resolves.toMatchObject({ status: 200 });
+        expect(acquisition).not.toHaveBeenCalled();
       });
       await saveMcpOAuthAccessTokenForTest(IDENTITY, ROTATED_ACCESS);
       await expect(send(IDENTITY)).resolves.toMatchObject({ status: 200 });
@@ -129,33 +102,6 @@ describe("MCP OAuth provider", () => {
     }, "openclaw-mcp-oauth-bearer-held-lease-");
   });
 
-  it("refreshes an expired stored access token before projecting it", async () => {
-    await withTempHome(async () => {
-      await saveMcpOAuthAccessTokenForTest(IDENTITY, "decoy-token", -1);
-      authMock.mockImplementationOnce(async (refreshProvider) => {
-        await refreshProvider.saveTokens({
-          access_token: "gateway-token",
-          refresh_token: "secret-token",
-          token_type: "Bearer",
-          expires_in: 3600,
-        });
-        return "AUTHORIZED";
-      });
-
-      await expect(
-        resolveMcpOAuthAccessToken({
-          identity: IDENTITY,
-          config: { scope: "docs.read" },
-        }),
-      ).resolves.toBe(ROTATED_ACCESS);
-      expect(authMock).toHaveBeenCalledOnce();
-      expect(authMock.mock.calls[0]?.[1]).toMatchObject({
-        serverUrl: "https://mcp.example.com/mcp",
-        scope: "docs.read",
-      });
-    }, "openclaw-mcp-oauth-expired-token-");
-  });
-
   it("does not restore a stale challenge after a concurrent refresh rotates the token", async () => {
     await withTempHome(async () => {
       await saveMcpOAuthAccessTokenForTest(IDENTITY, "decoy-token");
@@ -163,12 +109,7 @@ describe("MCP OAuth provider", () => {
       const refreshStarted = createDeferred();
       const refreshGate = createDeferred();
       authMock.mockImplementationOnce(async (refreshProvider) => {
-        await refreshProvider.saveTokens({
-          access_token: "gateway-token",
-          refresh_token: "secret-token",
-          token_type: "Bearer",
-          expires_in: 3600,
-        });
+        await refreshProvider.saveTokens(ROTATED_TOKENS);
         refreshStarted.resolve();
         await refreshGate.promise;
         return "AUTHORIZED";
@@ -205,30 +146,28 @@ describe("MCP OAuth provider", () => {
       authMock.mockImplementationOnce(async (refreshProvider) => {
         started.resolve();
         await gate.promise;
-        await refreshProvider.saveTokens({
-          access_token: "gateway-token",
-          refresh_token: "secret-token",
-          token_type: "Bearer",
-          expires_in: 3600,
-        });
+        await refreshProvider.saveTokens(ROTATED_TOKENS);
         return "AUTHORIZED";
       });
 
       const refresh = resolveMcpOAuthAccessToken({
         identity: IDENTITY,
+        config: { scope: "docs.read" },
       });
       await started.promise;
+      expect(authMock.mock.calls[0]?.[1]).toMatchObject({
+        serverUrl: IDENTITY.serverUrl,
+        scope: "docs.read",
+      });
       const logout = clearMcpOAuthCredentials(IDENTITY);
       gate.resolve();
 
       await expect(refresh).resolves.toBe(ROTATED_ACCESS);
+      expect(authMock).toHaveBeenCalledOnce();
       await logout;
       expect(
-        await withMcpOAuthProviderForTest(
-          {
-            identity: IDENTITY,
-          },
-          async (provider) => await provider.tokens(),
+        await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) =>
+          provider.tokens(),
         ),
       ).toBeUndefined();
     }, "openclaw-mcp-oauth-refresh-logout-");

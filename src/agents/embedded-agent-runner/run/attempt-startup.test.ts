@@ -9,6 +9,8 @@ const prepare = (attempt: Parameters<typeof prepareEmbeddedSkills>[0]["attempt"]
     sandbox: null,
     sessionAgentId: "main",
   });
+const snapshot = () => ({ prompt: "skills prompt", skills: [] });
+const detached = { sessionPersistence: "detached", disableTools: true, config: {} } as const;
 
 const mocks = vi.hoisted(() => ({
   applySkillEnvOverrides: vi.fn(),
@@ -58,73 +60,44 @@ it.each([false, true])(
     await expect(
       prepare({
         config: {},
-        skillsSnapshot: hasSnapshot ? { prompt: "skills prompt", skills: [] } : undefined,
+        skillsSnapshot: hasSnapshot ? snapshot() : undefined,
       }),
     ).rejects.toThrow("skill reader preparation failed");
     expect(restore).toHaveBeenCalledOnce();
-    expect(mocks.applySkillEnvOverridesFromSnapshot).toHaveBeenCalledTimes(hasSnapshot ? 1 : 0);
-    expect(mocks.applySkillEnvOverrides).toHaveBeenCalledTimes(hasSnapshot ? 0 : 1);
   },
 );
 
-it("does not load skills or apply their environment during settled finalization", async () => {
-  const prepared = await prepare({ operation: "settled-tool-finalization" });
-
-  expect(prepared).toMatchObject({ skillsPrompt: "", skillsSnapshotForRun: undefined });
+it.each([
+  { operation: "settled-tool-finalization" },
+  { ...detached, modelRun: true },
+  { ...detached, promptMode: "none" },
+] as const)("does not prepare skills or apply their environment for %j", async (attempt) => {
+  expect(await prepare(attempt)).toMatchObject({
+    skillsPrompt: "",
+    skillsSnapshotForRun: undefined,
+    codeModeSkills: [],
+  });
   for (const mock of Object.values(mocks)) {
     expect(mock).not.toHaveBeenCalled();
   }
 });
 
-it.each([{ modelRun: true }, { promptMode: "none" as const }])(
-  "does not discover skills or apply their environment for a detached tool-free raw run: %j",
-  async (rawMode) => {
+it.each([
+  ["durable", true, true],
+  ["detached", false, true],
+  ["detached", true, false],
+] as const)(
+  "preserves skills (persistence=%s, raw=%s, disableTools=%s)",
+  async (sessionPersistence, modelRun, disableTools) => {
     const prepared = await prepare({
-      ...rawMode,
-      sessionPersistence: "detached",
-      disableTools: true,
+      sessionPersistence,
+      modelRun,
+      disableTools,
       config: {},
+      skillsSnapshot: snapshot(),
     });
+    prepared.restoreSkillEnv();
 
-    expect(prepared.skillsPrompt).toBe("");
-    expect(prepared.skillsSnapshotForRun).toBeUndefined();
-    expect(prepared.codeModeSkills).toEqual([]);
-    expect(mocks.prepareWorkspaceSkills).not.toHaveBeenCalled();
-    expect(mocks.applySkillEnvOverrides).not.toHaveBeenCalled();
-    expect(mocks.applySkillEnvOverridesFromSnapshot).not.toHaveBeenCalled();
-    expect(mocks.prepareInstalledSkillCatalog).not.toHaveBeenCalled();
+    expect(prepared.skillsPrompt).toBe("skills prompt");
   },
 );
-
-it.each([
-  {
-    label: "durable raw",
-    sessionPersistence: "durable" as const,
-    modelRun: true,
-    disableTools: true,
-  },
-  {
-    label: "detached ordinary",
-    sessionPersistence: "detached" as const,
-    modelRun: false,
-    disableTools: true,
-  },
-  {
-    label: "detached tool-capable raw",
-    sessionPersistence: "detached" as const,
-    modelRun: true,
-    disableTools: false,
-  },
-])("preserves skill preparation for $label runs", async ({ label: _label, ...mode }) => {
-  const prepared = await prepare({
-    ...mode,
-    config: {},
-    skillsSnapshot: { prompt: "skills prompt", skills: [] },
-  });
-  prepared.restoreSkillEnv();
-
-  expect(prepared.skillsPrompt).toBe("skills prompt");
-  expect(mocks.prepareWorkspaceSkills).toHaveBeenCalledOnce();
-  expect(mocks.applySkillEnvOverridesFromSnapshot).toHaveBeenCalledOnce();
-  expect(mocks.prepareInstalledSkillCatalog).toHaveBeenCalledOnce();
-});

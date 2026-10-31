@@ -104,6 +104,18 @@ export class AcpTranslatorSessionUpdates {
     }
   }
 
+  async readLedgerSessionKey(sessionId: string): Promise<string | undefined> {
+    if (this.stopped) {
+      return undefined;
+    }
+    try {
+      return await this.track(this.options.eventLedger.readSessionKey({ sessionId }));
+    } catch (err) {
+      this.options.log(`event ledger session-key lookup failed for ${sessionId}: ${String(err)}`);
+      return undefined;
+    }
+  }
+
   readLedgerReplay(params: {
     sessionId: string;
     sessionKey: string;
@@ -176,16 +188,24 @@ export class AcpTranslatorSessionUpdates {
         update: params.update,
       }),
     );
-    const recording =
-      params.record && params.sessionKey
-        ? this.recordLedgerUpdate({
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
-            ...(params.runId ? { runId: params.runId } : {}),
-            update: params.update,
-          })
-        : undefined;
+    let recording: Promise<void> | undefined;
+    if (params.record && params.sessionKey) {
+      const ledgerUpdate = {
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
+        ...(params.runId ? { runId: params.runId } : {}),
+        update: params.update,
+      };
+      recording = this.recordLedgerMutation(ledgerUpdate, "update", () =>
+        this.options.eventLedger.recordUpdate({
+          sessionId: resolveLedgerSessionId(ledgerUpdate),
+          sessionKey: ledgerUpdate.sessionKey,
+          ...(ledgerUpdate.runId ? { runId: ledgerUpdate.runId } : {}),
+          update: ledgerUpdate.update,
+        }),
+      );
+    }
     if (params.waitForDelivery === false) {
       void delivery.catch((err: unknown) => {
         this.options.log(`session update delivery failed for ${params.sessionId}: ${String(err)}`);
@@ -210,23 +230,6 @@ export class AcpTranslatorSessionUpdates {
         availableCommands: AVAILABLE_COMMANDS,
       },
     });
-  }
-
-  private recordLedgerUpdate(params: {
-    sessionId: string;
-    sessionKey: string;
-    ledgerSessionId?: string;
-    runId?: string;
-    update: SessionUpdate;
-  }): Promise<void> {
-    return this.recordLedgerMutation(params, "update", () =>
-      this.options.eventLedger.recordUpdate({
-        sessionId: resolveLedgerSessionId(params),
-        sessionKey: params.sessionKey,
-        ...(params.runId ? { runId: params.runId } : {}),
-        update: params.update,
-      }),
-    );
   }
 
   private recordLedgerMutation(

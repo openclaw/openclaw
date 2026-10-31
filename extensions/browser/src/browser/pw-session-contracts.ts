@@ -89,6 +89,7 @@ export type ConnectedBrowser = {
 
 export type ActionDownloadCapture = {
   beforeSave?: (download: BrowserDownloadCandidate) => Promise<void> | void;
+  /** Monotonic reading (`performance.now()`), never comparable with wall-clock timestamps. */
   lastEventAtMs?: number;
   pending: Array<Promise<BrowserDownloadResult>>;
   waiters: Array<() => void>;

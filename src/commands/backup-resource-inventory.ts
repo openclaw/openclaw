@@ -50,6 +50,8 @@ type BackupResourcePolicy = Readonly<{
   stateDir: string;
   agentRoots: readonly BackupAgentRoot[];
   regenerableRoots: readonly BackupRegenerableRoot[];
+  /** Owner selection for absolute paths; traversal separately enforces filesystem privacy. */
+  isIncludedByOwner: (sourcePath: string) => boolean;
   isIncluded: (sourcePath: string) => boolean;
   isTraversable: (sourcePath: string) => boolean;
   isPackageContent: (sourcePath: string) => boolean;
@@ -300,6 +302,7 @@ function createBackupPathPolicy({
     stateDir,
     agentRoots,
     regenerableRoots,
+    isIncludedByOwner,
     isIncluded,
     isTraversable,
     isPackageContent,

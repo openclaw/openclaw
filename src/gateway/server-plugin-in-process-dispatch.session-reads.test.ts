@@ -178,12 +178,7 @@ it.each(methods)("honors role revocation during projection readiness on %s", (me
   withSyntheticReader(async ({ readerId, dispatch, blockCatalog }) => {
     const gate = blockCatalog();
     const pending =
-      method === "sessions.list"
-        ? dispatch(method).then(
-            () => undefined,
-            (error: unknown) => error,
-          )
-        : undefined;
+      method === "sessions.list" ? dispatch(method).catch((error: unknown) => error) : undefined;
     try {
       await gate.entered;
       if (pending) {

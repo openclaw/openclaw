@@ -1,4 +1,4 @@
-import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
+import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import type { BrowserTabPreview } from "./chat-tool-cards.ts";
 
 export function TranscriptWorkPreviews(props: { previews: readonly BrowserTabPreview[] }) {

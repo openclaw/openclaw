@@ -14,8 +14,11 @@ import {
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
-import { projectAgentIdentity, projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
+import {
+  sharedAgentIdentityProjection,
+  sharedAgentsProjection,
+} from "../../lib/reactive/shared-application-projections.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { personActivityLink, type PersonActivityRouting } from "../person-activity-link.ts";
 import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
@@ -101,6 +104,8 @@ export type ViewerFacepileProps = {
   staticParticipants?: readonly SessionParticipant[];
   staticUsers?: readonly PresenceViewer[];
   maxVisible?: number;
+  /** The "+N" face takes the last of maxVisible slots instead of adding one. */
+  overflowInSlots?: boolean;
   totalCount?: number;
   personActivity?: PersonActivityRouting;
   registerLink?: (element: HTMLAnchorElement) => (() => void) | undefined;
@@ -134,10 +139,14 @@ export const ViewerFacepile = defineSolidBridge<ViewerFacepileProps>(
             props.excludeIdentities ?? EMPTY_VIEWER_IDENTITIES,
           )),
     );
-    const visible = createMemo(() => users().slice(0, props.maxVisible ?? 3));
-    const overflowCount = () => Math.max(users().length, props.totalCount ?? 0) - visible().length;
+    const total = () => Math.max(users().length, props.totalCount ?? 0);
+    const visible = createMemo(() => {
+      const slots = props.maxVisible ?? 3;
+      return users().slice(0, props.overflowInSlots && total() > slots ? slots - 1 : slots);
+    });
+    const overflowCount = () => total() - visible().length;
     const overflowLabel = () => {
-      const overflow = users().slice(props.maxVisible ?? 3);
+      const overflow = users().slice(visible().length);
       return overflow.length === overflowCount()
         ? overflow.map(presenceViewerLabel).join("\n")
         : t("sessionHovercard.moreParticipantsLabel", { count: String(overflowCount()) });
@@ -146,7 +155,7 @@ export const ViewerFacepile = defineSolidBridge<ViewerFacepileProps>(
       <Show when={users().length > 0}>
         <span
           class="viewer-facepile viewer-facepile--session"
-          data-viewer-count={Math.max(users().length, props.totalCount ?? 0)}
+          data-viewer-count={total()}
           aria-label={users().map(presenceViewerLabel).join(", ")}
         >
           <For
@@ -185,6 +194,7 @@ export const ViewerFacepile = defineSolidBridge<ViewerFacepileProps>(
       staticParticipants: { default: undefined, attribute: false },
       staticUsers: { default: undefined, attribute: false },
       maxVisible: { default: 3, attribute: "max-visible", type: Number },
+      overflowInSlots: { default: false, attribute: false },
       totalCount: { default: undefined, attribute: false },
       personActivity: { default: undefined, attribute: false },
       registerLink: { default: undefined, attribute: false },
@@ -259,20 +269,13 @@ export function ParticipantAvatar(props: {
     >
       {(identity) => {
         const app = useOptionalApplication();
-        const agents = app ? projectAgents(app.agents) : undefined;
-        const agentIdentity = app
-          ? projectAgentIdentity({
-              identities: app.agentIdentity,
-              get agentId() {
-                return identity().id;
-              },
-            })
-          : undefined;
+        const agents = app ? sharedAgentsProjection(app.agents) : undefined;
+        const agentIdentity = app ? sharedAgentIdentityProjection(app.agentIdentity) : undefined;
         const avatar = createMemo(() => {
           const rosterAgent = agents
             ?.read()
             .agentsList?.agents.find((entry) => entry.id === identity().id);
-          const hydrated = agentIdentity?.read();
+          const hydrated = agentIdentity?.read().get(identity().id);
           const resolved = resolveAvatar({
             identity: identity(),
             id: props.user.id,

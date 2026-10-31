@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import {
   createQaBusState,
@@ -10,11 +8,7 @@ import {
   startQaMockOpenAiServer,
   type MockOpenAiRequestSnapshot,
 } from "../../../../extensions/qa-lab/api.js";
-import {
-  BUILD_STAMP_FILE,
-  resolveGitHead,
-  RUNTIME_POSTBUILD_STAMP_FILE,
-} from "../../../../scripts/lib/local-build-metadata.mts";
+import { verifyBuiltGatewayHead } from "../../../helpers/gateway-built-fixture.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { waitForRun } from "./gateway-recovery.test-support.js";
 
@@ -23,18 +17,9 @@ import { waitForRun } from "./gateway-recovery.test-support.js";
 it(
   "keeps one native session and static request bytes across alternating Gateway turns",
   { timeout: 240_000 },
-  async () => {
+  async ({ signal }) => {
     const repoRoot = process.cwd();
-    const head = resolveGitHead({ cwd: repoRoot });
-    expect(head).toMatch(/^[0-9a-f]{40}$/u);
-    for (const [file, field] of [
-      [BUILD_STAMP_FILE, "head"],
-      [RUNTIME_POSTBUILD_STAMP_FILE, "head"],
-      ["build-info.json", "commit"],
-    ] as const) {
-      const metadata = JSON.parse(await fs.readFile(path.join(repoRoot, "dist", file), "utf8"));
-      expect(metadata[field], file).toBe(head);
-    }
+    await verifyBuiltGatewayHead(repoRoot, signal);
     const state = createQaBusState();
     const transport = createQaChannelTransport(state);
     const owner = createQaGatewayChild();

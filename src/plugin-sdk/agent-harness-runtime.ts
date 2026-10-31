@@ -35,6 +35,10 @@ import {
   snapshotStructuredInput,
 } from "../agents/harness/structured-input.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
+import {
+  buildSkillWorkshopPromptSection as buildCoreSkillWorkshopPromptSection,
+  SKILL_WORKSHOP_TOOL_NAME as CORE_SKILL_WORKSHOP_TOOL_NAME,
+} from "../agents/skill-workshop-prompt.js";
 import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
 import { expandToolGroups } from "../agents/tool-policy-shared.js";
 import {
@@ -172,6 +176,7 @@ export const agentHarnessAttemptTerminal = {
 };
 export { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
 export { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
+export { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 export { restorePreparedUserTurnOperationalMetaForRuntime } from "../sessions/user-turn-transcript.metadata.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
@@ -187,6 +192,7 @@ type EmbeddedRunAttemptParamsBase = Omit<
   | "admittedRunContext"
   | "disableToolSearch"
   | "sessionReadScopeKey"
+  | "blindPrompt"
   | "authoredContextTokenCap"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
@@ -339,10 +345,17 @@ export const agentHarnessStructuredInput = Object.freeze({
   run: runStructuredInput,
   snapshot: snapshotStructuredInput,
 });
-export {
-  buildSkillWorkshopPromptSection,
-  SKILL_WORKSHOP_TOOL_NAME,
-} from "../agents/skill-workshop-prompt.js";
+export { listToolPromptGuidance } from "../agents/tool-prompt-guidance.js";
+/**
+ * @deprecated Pass the run's callable tool names to listToolPromptGuidance; it includes
+ * this section while `skill_workshop` is callable.
+ */
+export const SKILL_WORKSHOP_TOOL_NAME = CORE_SKILL_WORKSHOP_TOOL_NAME;
+/**
+ * @deprecated Pass the run's callable tool names to listToolPromptGuidance; it includes
+ * this section while `skill_workshop` is callable.
+ */
+export const buildSkillWorkshopPromptSection = buildCoreSkillWorkshopPromptSection;
 export {
   buildDelegationGuidanceSection,
   resolveMainSessionDelegationMode,

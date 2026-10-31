@@ -1,20 +1,48 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import {
+  asOptionalObjectRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { RuntimeEnv } from "../runtime-api.js";
-import { readCachedFeishuBotIdentity, writeCachedFeishuBotIdentity } from "./bot-identity-cache.js";
 import { resolveStartupProbeTimeoutMs } from "./monitor-startup-timeout.js";
 import { probeFeishu, registerFeishuAiAgent } from "./probe.js";
+import { getFeishuRuntime } from "./runtime.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
-const FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS = resolveStartupProbeTimeoutMs();
+const FEISHU_BOT_IDENTITY_CACHE_NAMESPACE = "feishu.bot-identity-cache";
 
-type FetchBotOpenIdOptions = {
-  runtime?: RuntimeEnv;
-  abortSignal?: AbortSignal;
-  allowCachedFallback?: boolean;
+const FEISHU_BOT_IDENTITY_CACHE_MAX_ENTRIES = 128;
+
+type FeishuBotIdentityCacheState = {
+  appId: string;
+  botOpenId: string;
+  botName?: string;
+  fetchedAt: string;
 };
+
+function openFeishuBotIdentityCache() {
+  return getFeishuRuntime().state.openKeyedStore<FeishuBotIdentityCacheState>({
+    namespace: FEISHU_BOT_IDENTITY_CACHE_NAMESPACE,
+    maxEntries: FEISHU_BOT_IDENTITY_CACHE_MAX_ENTRIES,
+  });
+}
+
+function parseCachedFeishuBotIdentity(value: unknown): FeishuBotIdentityCacheState | null {
+  const state = asOptionalObjectRecord(value);
+  if (!state) {
+    return null;
+  }
+  const appId = normalizeOptionalString(state.appId);
+  const botOpenId = normalizeOptionalString(state.botOpenId);
+  const fetchedAt = normalizeOptionalString(state.fetchedAt);
+  if (!appId || !botOpenId || !fetchedAt || Number.isNaN(Date.parse(fetchedAt))) {
+    return null;
+  }
+  return { appId, botOpenId, fetchedAt };
+}
+
+const FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS = resolveStartupProbeTimeoutMs();
 
 export type FeishuMonitorBotIdentity = {
   botOpenId?: string;
@@ -23,7 +51,11 @@ export type FeishuMonitorBotIdentity = {
 
 export async function fetchBotIdentityForMonitor(
   account: ResolvedFeishuAccount,
-  options: FetchBotOpenIdOptions = {},
+  options: {
+    runtime?: RuntimeEnv;
+    abortSignal?: AbortSignal;
+    allowCachedFallback?: boolean;
+  } = {},
 ): Promise<FeishuMonitorBotIdentity> {
   if (options.abortSignal?.aborted) {
     return {};
@@ -54,14 +86,19 @@ export async function fetchBotIdentityForMonitor(
         );
       });
     try {
-      await writeCachedFeishuBotIdentity({
-        accountId: account.accountId,
-        appId: account.appId,
-        botOpenId: result.botOpenId,
-        botName: result.botName,
-      });
+      const appId = normalizeOptionalString(account.appId);
+      const botOpenId = normalizeOptionalString(result.botOpenId);
+      if (appId && botOpenId) {
+        const botName = normalizeOptionalString(result.botName);
+        await openFeishuBotIdentityCache().register(normalizeAccountId(account.accountId), {
+          appId,
+          botOpenId,
+          botName,
+          fetchedAt: new Date().toISOString(),
+        });
+      }
     } catch {
-      options.runtime?.log?.(
+      options.runtime?.log(
         `feishu[${account.accountId}]: bot identity cache write failed; continuing startup`,
       );
     }
@@ -93,19 +130,24 @@ export async function fetchBotIdentityForMonitor(
     return {};
   }
   try {
-    const cached = await readCachedFeishuBotIdentity({
-      accountId: account.accountId,
-      appId: account.appId,
-    });
-    if (!cached) {
+    const appId = normalizeOptionalString(account.appId);
+    if (!appId) {
       return {};
     }
-    options.runtime?.log?.(
+    const cached = parseCachedFeishuBotIdentity(
+      await openFeishuBotIdentityCache().lookup(normalizeAccountId(account.accountId)),
+    );
+    // The app id is the stable provider identity boundary. Secret rotation keeps
+    // this cache valid; changing apps must never reuse another bot's identity.
+    if (!cached || cached.appId !== appId) {
+      return {};
+    }
+    options.runtime?.log(
       `feishu[${account.accountId}]: using cached provider-verified bot identity while the fresh check is unavailable`,
     );
     return { botOpenId: cached.botOpenId, source: "cache" };
   } catch {
-    options.runtime?.log?.(
+    options.runtime?.log(
       `feishu[${account.accountId}]: bot identity cache read failed; continuing without cached identity`,
     );
     return {};

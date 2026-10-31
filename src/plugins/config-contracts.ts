@@ -67,18 +67,14 @@ export function resolvePluginConfigContractsById(params: {
     for (const plugin of registry.plugins) {
       bundledContractFallbacks.set(plugin.id, plugin.configContracts);
     }
-    if (bundledContractFallbacks.get(pluginId) === undefined) {
-      const bundledMetadata = findBundledPluginMetadataById(pluginId, {
+    let contracts = bundledContractFallbacks.get(pluginId);
+    if (contracts === undefined) {
+      contracts = findBundledPluginMetadataById(pluginId, {
         includeChannelConfigs: false,
-      });
-      if (bundledMetadata?.manifest.configContracts) {
-        bundledContractFallbacks.set(pluginId, bundledMetadata.manifest.configContracts);
-      }
+      })?.manifest.configContracts;
+      bundledContractFallbacks.set(pluginId, contracts);
     }
-    if (!bundledContractFallbacks.has(pluginId)) {
-      bundledContractFallbacks.set(pluginId, undefined);
-    }
-    return bundledContractFallbacks.get(pluginId);
+    return contracts;
   };
 
   const resolvedPluginOrigins = new Map<string, PluginOrigin>();

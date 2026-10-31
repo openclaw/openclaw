@@ -69,9 +69,7 @@ describe("OpenRouter music HTTP deadline", () => {
       chunks.unsubscribe(onChunk);
       vi.useRealTimers();
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server[Symbol.asyncDispose]();
       await outcome;
       resolveContext.mockReset();
     }

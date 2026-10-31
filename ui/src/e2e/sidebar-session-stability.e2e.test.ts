@@ -7,6 +7,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
@@ -27,18 +28,10 @@ function treeList(parentKey: string, roots: unknown[], children: unknown[]) {
 }
 
 function withPage(run: (page: Page) => Promise<void>, options: BrowserContextOptions = {}) {
-  return suite.withPage(
-    {
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      ...options,
-    },
-    async ({ page }) => {
-      await page.clock.install();
-      await run(page);
-    },
-  );
+  return suite.withPage({ ...createControlUiE2eContextOptions(), ...options }, async ({ page }) => {
+    await page.clock.install();
+    await run(page);
+  });
 }
 
 async function invalidateSessions(page: Page, gateway: MockGatewayControls, payload: unknown) {
@@ -123,8 +116,8 @@ suite.define(() => {
             const menu = parent.locator("[data-sidebar-session-menu]");
             const toggleBox = (await childToggle.boundingBox())!;
             const menuBox = (await menu.boundingBox())!;
-            expect(menuBox).toMatchObject({ width: 44, height: 44 });
-            expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(toggleBox.x);
+            expect(menuBox).toMatchObject({ width: 36, height: 44 });
+            expect(toggleBox.x + toggleBox.width).toBeLessThanOrEqual(menuBox.x);
             for (const control of [childToggle, menu]) {
               expect(
                 await control.evaluate((element) => {
@@ -158,7 +151,7 @@ suite.define(() => {
             rowHeight: element.parentElement!.getBoundingClientRect().height,
           }));
           if (textScale === 100) {
-            expect(loadingGeometry.rowHeight).toBe(width === 390 ? 44 : 30);
+            expect(loadingGeometry.rowHeight).toBe(width === 390 ? 44 : 32);
           } else {
             expect(loadingGeometry.rowHeight).toBeGreaterThan(30);
           }

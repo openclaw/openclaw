@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { Show } from "solid-js";
+import { createSignal, lazy, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
@@ -8,15 +8,16 @@ import { useScrollState } from "../../components/solid/scroll-state.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { PresentationValue } from "../../lib/presentation.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import type { ChatBoardResetConfirmationProps } from "./chat-board-reset-confirmation.tsx";
 import { PaneSubagentStop } from "./chat-pane-header-view.tsx";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
-import { ChatBoardResetConfirmation } from "./chat-pane-surfaces.tsx";
 import { renderChatTopbarNotices } from "./chat-view-notices.tsx";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
 import type { ComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatDetails, type ChatDetailsViewProps } from "./components/chat-details.tsx";
 import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
+import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import { PaneHeaderView } from "./components/chat-pane-header.tsx";
 import type { ChatPaneHeaderPresentation } from "./components/chat-pane-header.types.ts";
 import type { SidebarRegionViewProps } from "./components/chat-sidebar-region-types.ts";
@@ -25,8 +26,13 @@ import {
   ChatSubagentMobileHeader,
   type ChatSubagentMobileStop,
 } from "./components/chat-subagent-mobile-header.tsx";
+import { isSidebarSlotVisible } from "./sidebar-layout.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+
+const ChatBoardResetConfirmation = lazy(() => import("./chat-board-reset-confirmation.tsx"), {
+  export: "ChatBoardResetConfirmation",
+});
 
 function PaneSubagentHeader(props: {
   sessionKey: string;
@@ -178,12 +184,18 @@ export type PaneLayoutData = {
     presentation: PresentationValue;
     image: ImageLightboxItem | null;
     onCloseImage: () => void;
-    reset: Parameters<typeof ChatBoardResetConfirmation>[0] | null;
+    reset: ChatBoardResetConfirmationProps | null;
   };
 };
 
 function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions }) {
   const presented = usePanePresentation(() => props.data.overlays.presentation);
+  // A restored tool-only layout needs no conversation root until first revealed.
+  // Once mounted, keep its composer and transcript DOM through later panel changes.
+  const [conversationMounted] = createSignal(
+    (previous = false) =>
+      previous || (presented() && isSidebarSlotVisible(props.data.region.layout, "conversation")),
+  );
   const header = (
     <Show
       when={props.data.subagentHeader}
@@ -195,15 +207,21 @@ function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions
     </Show>
   );
   const primary = (
-    <div class="chat-pane-primary-column">
-      <ChatView
-        props={props.data.primary.chat}
-        application={props.data.primary.application}
-        questions={props.questions}
-      />
-    </div>
+    <Show when={conversationMounted()}>
+      <div class="chat-pane-primary-column">
+        <ChatView
+          props={props.data.primary.chat}
+          application={props.data.primary.application}
+          questions={props.questions}
+        />
+      </div>
+    </Show>
   );
-  const background = <SessionBackgroundView {...props.data.background} />;
+  const background = (
+    <Show when={conversationMounted()}>
+      <SessionBackgroundView {...props.data.background} />
+    </Show>
+  );
   return (
     <>
       <SidebarRegionView
@@ -218,7 +236,11 @@ function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions
           onClose={() => props.data.overlays.onCloseImage()}
         />
         <Show when={props.data.overlays.reset}>
-          {(reset) => <ChatBoardResetConfirmation {...reset()} />}
+          {(reset) => (
+            <ChatLazyBoundary onClose={() => reset().onResolve(false)}>
+              <ChatBoardResetConfirmation {...reset()} />
+            </ChatLazyBoundary>
+          )}
         </Show>
       </Show>
     </>

@@ -1,91 +1,44 @@
 import { expect, it } from "vitest";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 import type { MemoryPluginCapability } from "./registry-contribution-types.js";
-import { expectDiagnostic, registrationFixture } from "./registry-registration.test-support.js";
+import { registrationFixture } from "./registry-registration.test-support.js";
 
 const memoryRuntime = () => ({
   getMemorySearchManager: async () => ({ manager: null, error: "missing" }) as const,
   resolveMemoryBackendConfig: () => ({ backend: "builtin" as const }),
 });
 const publicArtifacts = () => ({ listArtifacts: async () => [] });
-const consolidation = (prompt: string) => ({
-  promptBuilder: () => [prompt],
-  flushPlanResolver: () => null,
-  publicArtifacts: publicArtifacts(),
-});
 
 function fixture() {
   const base = registrationFixture();
   const add = (
     id: string,
-    capability: MemoryPluginCapability | MemoryPluginCapability[],
+    capability: MemoryPluginCapability,
     fields: Partial<Parameters<typeof base.register>[0]> = {},
   ) =>
     base.register({ id, kind: "memory", ...fields }, (api) => {
-      for (const value of Array.isArray(capability) ? capability : [capability]) {
-        api.registerMemoryCapability(value);
-      }
+      api.registerMemoryCapability(capability);
     });
   const selected = () => resolveMemoryCapabilityRegistration(base.registry.memoryCapabilities);
-  const inspect = async () => {
-    const capability = selected()?.capability;
-    const params = { cfg: base.config, agentId: "main" };
-    return {
-      backend: capability?.runtime?.resolveMemoryBackendConfig(params),
-      search: await capability?.runtime?.getMemorySearchManager(params),
-      prompt: capability?.promptBuilder?.({ availableTools: new Set() }),
-      flush: capability?.flushPlanResolver?.(params),
-      artifacts: await capability?.publicArtifacts?.listArtifacts(params),
-    };
-  };
-  const check = async (pluginId: string, prompt?: string) => {
-    expect(selected()).toMatchObject({ pluginId, memorySlotSelected: true });
-    await expect(inspect()).resolves.toEqual({
-      ...runtimeResult,
-      prompt: prompt ? [prompt] : undefined,
-      flush: null,
-      artifacts: prompt ? [] : undefined,
-    });
-  };
-  return { ...base, add, selected, check };
+  return { ...base, add, selected };
 }
-const runtimeResult = {
-  backend: { backend: "builtin" },
-  search: { manager: null, error: "missing" },
-};
 
 it("blocks an unselected dual-kind plugin", () => {
   const { registry, add } = fixture();
   add("dual-plugin", { runtime: memoryRuntime() }, { kind: ["memory", "context-engine"] });
   expect(registry.memoryCapabilities).toEqual([]);
-  expect(registry.diagnostics).toHaveLength(1);
-  expectDiagnostic(registry, {
-    pluginId: "dual-plugin",
-    level: "warn",
-    message:
-      "dual-kind plugin not selected for memory slot; skipping memory capability registration",
-  });
-});
-
-it("layers public artifacts over the selected dual-kind runtime", async () => {
-  const { registry, add, check } = fixture();
-  const { publicArtifacts: artifacts, ...capability } = consolidation("memory capability");
-  add(
-    "memory-core",
-    [{ runtime: memoryRuntime(), ...capability }, { publicArtifacts: artifacts }],
-    { kind: ["memory", "context-engine"], memorySlotSelected: true },
-  );
-  await check("memory-core", "memory capability");
-  expect(registry.diagnostics).toEqual([]);
+  expect(registry.diagnostics).toMatchObject([{ pluginId: "dual-plugin", level: "warn" }]);
 });
 
 it("preserves an earlier capability when an artifact bridge fails", async () => {
-  const { registry, register, rollback, add, selected, check } = fixture();
+  const { registry, register, rollback, add, selected } = fixture();
   add(
     "memory-core",
     { runtime: memoryRuntime(), flushPlanResolver: () => null },
     { memorySlotSelected: true },
   );
+  const before = selected();
+  expect(before).toMatchObject({ pluginId: "memory-core", memorySlotSelected: true });
   expect(() =>
     register({ id: "memory-bridge", kind: "memory" }, (api) => {
       api.registerMemoryCapability({ publicArtifacts: publicArtifacts() });
@@ -95,8 +48,7 @@ it("preserves an earlier capability when an artifact bridge fails", async () => 
   const bridge = registry.plugins.find(({ id }) => id === "memory-bridge")!;
   rollback(bridge.id, bridge);
   expect(registry.memoryCapabilities).toHaveLength(1);
-  expect(selected()?.capability.publicArtifacts).toBeUndefined();
-  await check("memory-core");
+  expect(selected()).toEqual(before);
 });
 
 it("uses the last registration when neither owns the slot", () => {
@@ -113,15 +65,18 @@ it("uses the last registration when neither owns the slot", () => {
   });
 });
 
-it("merges sidecar consolidation without lending its recall authorization", async () => {
-  const { add, selected, check } = fixture();
+it("merges sidecar consolidation without lending its recall authorization", () => {
+  const { registry, add, selected } = fixture();
   add(
     "acme-memory",
     { runtime: memoryRuntime(), recallToolNames: ["acme_recall"] },
-    { memorySlotSelected: true },
+    { kind: ["memory", "context-engine"], memorySlotSelected: true },
   );
+  const runtime = selected()?.capability.runtime;
   add("memory-core", {
-    ...consolidation("sidecar prompt"),
+    promptBuilder: () => ["sidecar prompt"],
+    flushPlanResolver: () => null,
+    publicArtifacts: publicArtifacts(),
     runtime: memoryRuntime(),
     providerRuntime: { open: async () => ({ provider: null }) },
     recallToolNames: ["memory_search", "memory_get"],
@@ -131,11 +86,13 @@ it("merges sidecar consolidation without lending its recall authorization", asyn
     learnGuidanceBuilder: () => ["sidecar learn"],
   });
   const owner = selected();
-  expect(owner?.capability.recallToolNames).toEqual(["acme_recall"]);
-  expect(owner?.capability.learnToolNames).toBeUndefined();
-  expect(owner?.capability.learnGuidanceBuilder).toBeUndefined();
-  expect(owner?.capability.providerRuntime).toBeUndefined();
-  expect(owner?.capability.deterministicRecallToolName).toBeUndefined();
-  expect(owner?.capability.supportsPrivateTranscriptRecall).toBeUndefined();
-  await check("acme-memory", "sidecar prompt");
+  expect(owner).toMatchObject({ pluginId: "acme-memory", memorySlotSelected: true });
+  const sidecar = registry.memoryCapabilities[1]!.capability;
+  expect(owner?.capability).toEqual({
+    runtime,
+    recallToolNames: ["acme_recall"],
+    promptBuilder: sidecar.promptBuilder,
+    flushPlanResolver: sidecar.flushPlanResolver,
+    publicArtifacts: sidecar.publicArtifacts,
+  });
 });

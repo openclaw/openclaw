@@ -11,6 +11,7 @@ import {
   withinTest,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { isProcessAlive as isProcessRunning } from "../../../test-support/process.test-support.js";
 import { removeLegacyMantisWorktrees, removeMantisWorktree } from "./run-cleanup.runtime.js";
 import { defaultMantisCommandRunner, type MantisCommandRunner } from "./run-command.runtime.js";
 import { captureMantisDirectoryOwnership } from "./run-directory.runtime.js";
@@ -42,15 +43,6 @@ const readText = (file: string) => fs.readFile(file, "utf8");
 const expectText = (file: string, text: string) => expect(readText(file)).resolves.toBe(text);
 const expectMissing = (file: string) =>
   expect(fs.lstat(file)).rejects.toMatchObject({ code: "ENOENT" });
-
-function isProcessRunning(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 type SettledRun = { status: "fulfilled" } | { error: unknown; status: "rejected" };
 

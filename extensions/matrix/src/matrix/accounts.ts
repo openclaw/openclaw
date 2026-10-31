@@ -39,12 +39,7 @@ function resolveMatrixAccountAuthView(params: {
   cfg: CoreConfig;
   accountId: string;
   env: NodeJS.ProcessEnv;
-}): {
-  homeserver: string;
-  userId: string;
-  accessToken?: string;
-  password?: string;
-} {
+}) {
   const normalizedAccountId = normalizeAccountId(params.accountId);
   const matrix = resolveMatrixBaseConfig(params.cfg);
   const account = findMatrixAccountConfig(params.cfg, normalizedAccountId) ?? {};

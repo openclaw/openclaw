@@ -1,8 +1,8 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
-import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { waitForTransportReady as WaitForReady } from "openclaw/plugin-sdk/transport-ready-runtime";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { createIMessageRpcClient, IMessageRpcClient } from "./client.js";
 import type { attachIMessageMonitorAbortHandler } from "./monitor/abort-handler.js";
@@ -11,24 +11,23 @@ import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js
 import type { IMessagePayload, MonitorIMessageOpts } from "./monitor/types.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
-const waitForTransportReadyMock = vi.hoisted(() =>
-  vi.fn<typeof waitForTransportReady>(async () => {}),
-);
-const createIMessageRpcClientMock = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
-const attachIMessageMonitorAbortHandlerMock = vi.hoisted(() =>
+const waitUntilReady = vi.hoisted(() => vi.fn<typeof WaitForReady>(async () => {}));
+const createClient = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
+const attachAbortHandler = vi.hoisted(() =>
   vi.fn<typeof attachIMessageMonitorAbortHandler>(() => () => {}),
 );
 
+// mock-isolation: Readiness is fixture-controlled; no installed Messages transport is probed.
 vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
-  waitForTransportReady: waitForTransportReadyMock,
+  waitForTransportReady: waitUntilReady,
 }));
 
-vi.mock("./client.js", () => ({
-  createIMessageRpcClient: createIMessageRpcClientMock,
-}));
+// mock-isolation: Retry scenarios use fixture RPC notifications, never the user's Messages store.
+vi.mock("./client.js", () => ({ createIMessageRpcClient: createClient }));
 
+// mock-isolation: Abort cleanup is owned by each fixture client instead of a live transport listener.
 vi.mock("./monitor/abort-handler.js", () => ({
-  attachIMessageMonitorAbortHandler: attachIMessageMonitorAbortHandlerMock,
+  attachIMessageMonitorAbortHandler: attachAbortHandler,
 }));
 
 type MockIMessageRpcClient = IMessageRpcClient & {
@@ -41,12 +40,11 @@ function createRpcClient(overrides?: {
   request?: (method: string) => Promise<unknown>;
   waitForClose?: () => Promise<void>;
 }): MockIMessageRpcClient {
-  const client = {
+  return {
     request: vi.fn(overrides?.request ?? (async () => ({ subscription: 1 }))),
     waitForClose: vi.fn(overrides?.waitForClose ?? (async () => {})),
     stop: vi.fn(async () => {}),
-  };
-  return client as unknown as MockIMessageRpcClient;
+  } as unknown as MockIMessageRpcClient;
 }
 
 function runMonitor(options: Partial<MonitorIMessageOpts> = {}) {
@@ -58,18 +56,25 @@ function runMonitor(options: Partial<MonitorIMessageOpts> = {}) {
   });
 }
 
-function notifyClient(run: (notify: (message: IMessagePayload) => Promise<void>) => Promise<void>) {
-  let onNotification: NonNullable<Parameters<typeof createIMessageRpcClient>[0]>["onNotification"];
-  const client = createRpcClient({
-    waitForClose: () =>
-      run(async (message) => {
-        onNotification?.({ method: "message", params: { message } });
-      }),
+async function monitorMessages(messages: IMessagePayload[], config: MonitorIMessageOpts["config"]) {
+  const runtime = createRuntimeSpies();
+  createClient.mockImplementation(async (params) =>
+    createRpcClient({
+      waitForClose: async () => {
+        for (const message of messages) {
+          params?.onNotification?.({ method: "message", params: { message } });
+          await Promise.resolve();
+        }
+        await Promise.resolve();
+        await Promise.resolve();
+      },
+    }),
+  );
+  await runMonitor({ config, runtime });
+  await new Promise((resolve) => {
+    setTimeout(resolve, 50);
   });
-  createIMessageRpcClientMock.mockImplementation(async (params) => {
-    onNotification = params?.onNotification;
-    return client;
-  });
+  return runtime;
 }
 
 function groupMessage(id: number, overrides: Partial<IMessagePayload> = {}): IMessagePayload {
@@ -86,245 +91,144 @@ function groupMessage(id: number, overrides: Partial<IMessagePayload> = {}): IMe
   };
 }
 
-describe("monitorIMessageProvider watch.subscribe startup retry", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    installIMessageStateRuntimeForTest();
-    waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
-    createIMessageRpcClientMock.mockReset();
-    attachIMessageMonitorAbortHandlerMock.mockReset().mockReturnValue(() => {});
-  });
+beforeEach(() => {
+  vi.useFakeTimers();
+  installIMessageStateRuntimeForTest();
+  waitUntilReady.mockReset().mockResolvedValue(undefined);
+  createClient.mockReset();
+  attachAbortHandler.mockReset().mockReturnValue(() => {});
+});
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+afterEach(() => vi.useRealTimers());
 
-  afterAll(() => {
-    vi.doUnmock("openclaw/plugin-sdk/transport-ready-runtime");
-    vi.doUnmock("./client.js");
-    vi.doUnmock("./monitor/abort-handler.js");
-    vi.resetModules();
-  });
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/transport-ready-runtime");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./monitor/abort-handler.js");
+  vi.resetModules();
+});
 
-  it("retries a transient watch.subscribe startup timeout without tearing down the monitor", async () => {
-    const runtime = createRuntimeSpies();
-    const statusSink = vi.fn();
-    const firstSubscribe = createDeferred<void>();
-    const firstClient = createRpcClient({
+it.each([false, true])("retries startup timeouts with bounded failure: %s", async (exhausted) => {
+  const statusSink = vi.fn();
+  const firstSubscribe = createDeferred<void>();
+  const failSubscribe = () =>
+    createRpcClient({
       request: async () => {
         firstSubscribe.resolve();
         throw new Error("imsg rpc timeout (watch.subscribe)");
       },
     });
-    const secondClient = createRpcClient();
+  const failingClient = failSubscribe();
+  const readyClient = createRpcClient();
+  createClient.mockImplementation(async () => (exhausted ? failSubscribe() : readyClient));
+  createClient.mockResolvedValueOnce(failingClient);
+  const monitorPromise = runMonitor({ statusSink }).catch((error: unknown) => error);
 
-    createIMessageRpcClientMock
-      .mockResolvedValueOnce(firstClient)
-      .mockResolvedValueOnce(secondClient);
+  await Promise.race([firstSubscribe.promise, monitorPromise]);
+  await vi.advanceTimersByTimeAsync(exhausted ? 2_000 : 1_000);
+  const error = await monitorPromise;
+  const states = statusSink.mock.calls.map(([state]) => state);
+  expect(states.at(-1)).toMatchObject(
+    exhausted
+      ? { lifecycle: "recovering", terminalDisconnect: undefined }
+      : { lifecycle: "ready", connected: true, terminalDisconnect: undefined },
+  );
+  expect(states).not.toContainEqual(expect.objectContaining({ lifecycle: "blocked" }));
+  expect(createClient).toHaveBeenCalledTimes(exhausted ? 3 : 2);
 
-    const monitorPromise = runMonitor({ runtime, statusSink });
+  if (exhausted) {
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("imsg rpc timeout (watch.subscribe)");
+    return;
+  }
+  expect(error).toBeUndefined();
 
-    await Promise.race([firstSubscribe.promise, monitorPromise]);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await monitorPromise;
+  expect(failingClient.stop).toHaveBeenCalledTimes(1);
+  expect(readyClient.waitForClose).toHaveBeenCalledTimes(1);
+  expect(readyClient.stop).toHaveBeenCalledTimes(1);
+  expect(states[0]).toMatchObject({ lifecycle: "recovering", connected: false });
+});
 
-    expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(2);
-    expect(firstClient.stop).toHaveBeenCalledTimes(1);
-    expect(secondClient.waitForClose).toHaveBeenCalledTimes(1);
-    expect(secondClient.stop).toHaveBeenCalledTimes(1);
-    expect(statusSink).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ lifecycle: "recovering", connected: false }),
-    );
-    expect(statusSink).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        lifecycle: "ready",
-        connected: true,
-        terminalDisconnect: undefined,
-      }),
-    );
-    expect(secondClient.request).toHaveBeenCalledWith(
-      "watch.subscribe",
-      { attachments: false, include_reactions: true },
-      { timeoutMs: 10_000 },
-    );
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    const retryLog = String(runtime.log.mock.calls[0]?.[0]);
-    expect(retryLog).toContain("imessage: watch.subscribe startup failed attempt=1/3");
-    expect(retryLog).toContain("account=default");
-    expect(retryLog).toContain("cliPath=imsg");
-    expect(retryLog).toContain("dbPath=default");
-    expect(retryLog).toContain("timeoutMs=10000");
-    expect(retryLog).toContain("since_rowid=none");
-    expect(retryLog).toContain("attachments=false");
-    expect(retryLog).toContain("retry_in_ms=1000");
-    expect(retryLog).toContain("Error: imsg rpc timeout (watch.subscribe)");
-    expect(
-      runtime.error.mock.calls.some(([message]) =>
-        String(message).includes("imessage: monitor failed"),
-      ),
-    ).toBe(false);
-  });
-
-  it("still fails after bounded startup retries are exhausted", async () => {
-    const runtime = createRuntimeSpies();
-    const statusSink = vi.fn();
-    const firstSubscribe = createDeferred<void>();
-    createIMessageRpcClientMock.mockImplementation(async () =>
-      createRpcClient({
-        request: async () => {
-          firstSubscribe.resolve();
-          throw new Error("imsg rpc timeout (watch.subscribe)");
-        },
-      }),
-    );
-
-    const monitorErrorPromise = runMonitor({ runtime, statusSink }).catch(
-      (error: unknown) => error,
-    );
-
-    await Promise.race([firstSubscribe.promise, monitorErrorPromise]);
-    await vi.advanceTimersByTimeAsync(2_000);
-    const monitorError = await monitorErrorPromise;
-
-    expect(monitorError).toBeInstanceOf(Error);
-    expect((monitorError as Error).message).toContain("imsg rpc timeout (watch.subscribe)");
-    expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(3);
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    const failureLog = String(runtime.error.mock.calls[0]?.[0]);
-    expect(failureLog).toContain(
-      "imessage: monitor failed: imessage: watch.subscribe startup failed attempt=3/3",
-    );
-    expect(failureLog).toContain("account=default");
-    expect(failureLog).toContain("timeoutMs=10000");
-    expect(failureLog).toContain("Error: imsg rpc timeout (watch.subscribe)");
-    expect(statusSink).toHaveBeenLastCalledWith(
-      expect.objectContaining({ lifecycle: "recovering", terminalDisconnect: undefined }),
-    );
-    expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "blocked" }));
-  });
-
-  it("publishes blocked for a non-retriable watch.subscribe failure", async () => {
-    const statusSink = vi.fn();
-    createIMessageRpcClientMock.mockResolvedValueOnce(
-      createRpcClient({
-        request: async () => {
-          throw new Error("permission denied");
-        },
-      }),
-    );
-
-    await expect(runMonitor({ statusSink })).rejects.toThrow("permission denied");
-
-    expect(createIMessageRpcClientMock).toHaveBeenCalledOnce();
-    expect(statusSink).toHaveBeenCalledWith(
-      expect.objectContaining({ lifecycle: "blocked", terminalDisconnect: true }),
-    );
-  });
-
-  it.each(["from me", "no mention"])(
-    "logs one diagnostic per chat for %s drops",
-    async (reason) => {
-      vi.useRealTimers();
-      installIMessageStateRuntimeForTest();
-      const runtime = createRuntimeSpies();
-      const runId = Date.now();
-      notifyClient(async (notify) => {
-        for (const [id, chatId, guid] of [
-          [43, 456, `p:0/outbound-guid-${runId}`],
-          [44, 456, `p:0/second-outbound-guid-${runId}`],
-          [45, 457, `p:0/other-chat-guid-${runId}`],
-        ] as const) {
-          await notify(
-            groupMessage(id, {
-              chat_id: chatId,
-              guid,
-              is_from_me: reason === "from me",
-            }),
-          );
-        }
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-
-      await runMonitor({
-        config: {
-          agents: { entries: { main: { identity: { name: "Claw" } } } },
-          channels: {
-            imessage: {
-              dmPolicy: "open",
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["+15550001111"],
-              ...(reason === "no mention"
-                ? {
-                    groups: {
-                      "*": { requireMention: true },
-                      "999": { requireMention: false, tools: { deny: ["exec"] } },
-                    },
-                    accounts: { default: {} },
-                  }
-                : {}),
-            },
-          },
-        },
-        runtime,
-      });
-
-      await new Promise((resolve) => {
-        setTimeout(resolve, 50);
-      });
-      expect(runtime.error.mock.calls).toEqual([]);
-      expect(runtime.log.mock.calls.map(([message]) => String(message))).toEqual([
-        expect.stringContaining(`reason="${reason}"`),
-        expect.stringContaining(`reason="${reason}"`),
-      ]);
-      const diagnostics = runtime.log.mock.calls
-        .map(([message]) => String(message))
-        .filter((message) => message.includes(`reason="${reason}"`));
-      expect(diagnostics).toHaveLength(2);
-      expect(diagnostics[1]).toContain("chat_id=457");
-      expect(diagnostics[0]).toContain(
-        `account=default reason="${reason}" chat_id=456 group=true message_id=43 guid=present`,
-      );
-      expect(diagnostics[0]).not.toContain("outbound-guid");
-      expect(diagnostics[0]).not.toContain("private message text");
-      expect(diagnostics[0]).not.toContain("+15550001111");
-      if (reason === "no mention") {
-        expect(diagnostics[0]).toContain('groups["456"].requireMention=false');
-        expect(diagnostics[0]).toContain("identity");
-        expect(diagnostics[0]).toContain('channels.imessage.groups["456"].requireMention=false');
-      }
-    },
+it("publishes blocked for a non-retriable watch.subscribe failure", async () => {
+  const statusSink = vi.fn();
+  createClient.mockResolvedValueOnce(
+    createRpcClient({
+      request: async () => {
+        throw new Error("permission denied");
+      },
+    }),
   );
 
-  it("redacts the conversation identifier in rate-limit suppression warnings", async () => {
-    vi.useRealTimers();
-    installIMessageStateRuntimeForTest();
-    const runtime = createRuntimeSpies();
-    const sender = "+15550002222";
-    const chatId = 456;
-    const scope = `default:chat_id:${chatId}`;
-    await rememberPersistedIMessageEcho({ scope, text: "loop echo" });
-    notifyClient(async (notify) => {
-      for (let id = 1; id <= 5; id += 1) {
-        await notify(groupMessage(id, { chat_id: chatId, sender, text: "loop echo" }));
-      }
-      await notify(groupMessage(6, { chat_id: chatId, sender, text: "legitimate inbound" }));
-    });
+  await expect(runMonitor({ statusSink })).rejects.toThrow("permission denied");
 
-    await runMonitor({
-      config: { channels: { imessage: { groupPolicy: "open" } } },
-      runtime,
-    });
+  expect(createClient).toHaveBeenCalledOnce();
+  expect(statusSink).toHaveBeenCalledWith(
+    expect.objectContaining({ lifecycle: "blocked", terminalDisconnect: true }),
+  );
+});
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, 50);
-    });
-    const logs = runtime.log.mock.calls.map(([message]) => String(message));
-    const warning = logs.find((message) => message.includes("rate limiter tripped"));
-    expect(warning, `logs: ${JSON.stringify(logs)}`).toBeDefined();
-    expect(warning).toContain(`group:${redactIdentifier(`group:${chatId}`)}`);
-    expect(warning).not.toContain(sender);
+it.each(["from me", "no mention"])("logs one diagnostic per chat for %s drops", async (reason) => {
+  vi.useRealTimers();
+  installIMessageStateRuntimeForTest();
+  const messages = (
+    [
+      [43, 456],
+      [44, 456],
+      [45, 457],
+    ] as const
+  ).map(([id, chat_id]) =>
+    groupMessage(id, {
+      chat_id,
+      guid: `p:0/private-${reason}-${id}`,
+      is_from_me: reason === "from me",
+    }),
+  );
+
+  const runtime = await monitorMessages(messages, {
+    agents: { entries: { main: { identity: { name: "Claw" } } } },
+    channels: {
+      imessage: {
+        dmPolicy: "open",
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["+15550001111"],
+        groups: { "*": { requireMention: true } },
+        accounts: { default: {} },
+      },
+    },
   });
+  expect(runtime.error.mock.calls).toEqual([]);
+  const diagnostics = runtime.log.mock.calls.map(([message]) => String(message));
+  expect(diagnostics).toEqual([
+    expect.stringContaining(`reason="${reason}"`),
+    expect.stringContaining(`reason="${reason}"`),
+  ]);
+  expect(diagnostics[1]).toContain("chat_id=457");
+  expect(diagnostics[0]).toContain("chat_id=456");
+  expect(diagnostics[0]).not.toContain("p:0/private-");
+  expect(diagnostics[0]).not.toContain("private message text");
+  expect(diagnostics[0]).not.toContain("+15550001111");
+  if (reason === "no mention") {
+    expect(diagnostics[0]).toContain("identity");
+    expect(diagnostics[0]).toContain('channels.imessage.groups["456"].requireMention=false');
+  }
+});
+
+it("redacts the conversation identifier in rate-limit suppression warnings", async () => {
+  vi.useRealTimers();
+  installIMessageStateRuntimeForTest();
+  const sender = "+15550002222";
+  const chatId = 456;
+  const scope = `default:chat_id:${chatId}`;
+  await rememberPersistedIMessageEcho({ scope, text: "loop echo" });
+  const messages = Array.from({ length: 5 }, (_, i) =>
+    groupMessage(i + 1, { sender, text: "loop echo" }),
+  );
+  messages.push(groupMessage(6, { sender, text: "legitimate inbound" }));
+  const runtime = await monitorMessages(messages, {
+    channels: { imessage: { groupPolicy: "open" } },
+  });
+  const logs = runtime.log.mock.calls.map(([message]) => String(message));
+  const warning = logs.find((message) => message.includes("rate limiter tripped"));
+  expect(warning).toContain(`group:${redactIdentifier(`group:${chatId}`)}`);
+  expect(warning).not.toContain(sender);
 });

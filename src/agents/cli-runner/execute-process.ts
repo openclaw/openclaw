@@ -439,7 +439,9 @@ export async function executeCliProcess(params: {
               cwd: context.cwd ?? context.workspaceDir,
               env: params.env,
               input: params.stdin ?? "",
-              secretInput: context.preparedBackend.secretInput,
+              secretInput: runParams.nativeAuthOnly
+                ? undefined
+                : context.preparedBackend.secretInput,
               captureOutput: false,
               onStdout: consumeStdout,
               onStderr: consumeStderr,

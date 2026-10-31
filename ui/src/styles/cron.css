@@ -8,6 +8,17 @@
   min-width: 0;
 }
 
+@media (forced-colors: active) {
+  .cron-page .session-css-icon {
+    forced-color-adjust: none;
+    background: ButtonText;
+  }
+
+  .cron-page :is(:disabled, [aria-disabled="true"]) .session-css-icon {
+    background: GrayText;
+  }
+}
+
 /* Popover menus (row actions, filters) must escape the group surface;
    .settings-group clips overflow by default. */
 .cron-page .settings-group:has(> .cron-table),
@@ -77,10 +88,11 @@
 .cron-toolbar .btn {
   height: var(--settings-control-height);
   padding-block: 0;
-  box-sizing: border-box;
 }
 
 .cron-search-box {
+  /* Text edits should repaint the search field without repainting every row. */
+  will-change: transform;
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
@@ -177,7 +189,6 @@
   padding: var(--space-3);
   display: grid;
   gap: var(--space-3);
-  box-shadow: var(--overlay-shadow);
 }
 
 .cron-error-banner {
@@ -221,6 +232,8 @@
 }
 
 .cron-table__row {
+  /* Keep row paint local; action menus live in the top layer. */
+  contain: layout paint;
   cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
@@ -231,7 +244,7 @@
 
 .cron-table__row:hover,
 .cron-table__row:focus-within {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .cron-table__row--paused .cron-table__name-text,
@@ -920,7 +933,6 @@
   align-items: baseline;
   gap: var(--space-2);
   width: 100%;
-  box-sizing: border-box;
 }
 
 @media (min-width: 1400px) {
@@ -962,7 +974,6 @@
   line-height: 1.45;
   min-width: 0;
   width: 100%;
-  box-sizing: border-box;
 }
 
 .cron-run-entry__body pre,
@@ -976,25 +987,17 @@
   width: 100%;
 }
 
-.cron-run-entry__body.chat-text pre,
-.cron-run-entry__body.chat-text blockquote {
+.cron-run-entry__body.chat-text :is(pre, blockquote) {
   width: 100%;
   max-width: 100%;
-  box-sizing: border-box;
 }
 
-.cron-run-entry__body.chat-text pre + p,
-.cron-run-entry__body.chat-text blockquote + p,
-.cron-run-entry__body.chat-text table + p,
-.cron-run-entry__body.chat-text p + pre,
-.cron-run-entry__body.chat-text p + blockquote,
-.cron-run-entry__body.chat-text p + table {
+.cron-run-entry__body.chat-text :is(pre, blockquote, table) + p,
+.cron-run-entry__body.chat-text p + :is(pre, blockquote, table) {
   margin-top: 0.75em;
 }
 
-.cron-run-entry__body.chat-text pre,
-.cron-run-entry__body.chat-text blockquote,
-.cron-run-entry__body.chat-text table {
+.cron-run-entry__body.chat-text :is(pre, blockquote, table) {
   margin-bottom: 0.75em;
 }
 
@@ -1133,13 +1136,6 @@
 }
 
 /* Owned surfaces keep positioning and dismissal with the overlay lifecycle. */
-.cron-job-menu > .oc-menu,
-.cron-filter-dropdown__details > .oc-menu {
-  border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
-}
-
 .cron-job-menu > .oc-menu {
   min-width: 170px;
 }

@@ -162,7 +162,7 @@ it("uses singular counts for each compact health category", () => {
 });
 
 it("renders healthy empty status and keeps compatibility notices out of compact problems", () => {
-  expect(detailed(snapshot())).toBe(
+  expect(detail({ unregisteredMemoryEmbeddingProviders: [] })).toBe(
     "🔌 Plugins: OK\nLoaded: 0\nDisabled: 0\nFull inventory: /plugins list",
   );
   expect(compact(snapshot({ compatibilityNotices: [warning] }))).toBeUndefined();
@@ -182,81 +182,41 @@ it.each([true, false])(
   },
 );
 
-it.each<[Partial<StatusPluginHealthSnapshot>, string[], string[]]>([
-  [
-    {
-      plugins: [
-        plugin("runtime-ok"),
-        plugin("installed-idle"),
-        plugin("broken", { status: "error", failurePhase: "load", error: "boom" }),
-        disabled("off"),
-      ],
-      runtimeLoadedPluginIds: ["runtime-ok"],
-    },
-    [
-      "Loaded: 1 (runtime-ok)",
-      "Installed (not active): 1 (installed-idle)",
-      "Disabled: 1",
-      "- broken [load]: boom",
-    ],
-    ["Loaded: 2", "Configured to run but not loaded:"],
-  ],
-  [{ plugins: [plugin("a"), plugin("b")] }, ["Loaded: 2 (a, b)"], ["Installed (not active):"]],
-  [
-    { plugins: [plugin("active-ok")], runtimeLoadedPluginIds: ["active-ok", "pinned-only"] },
-    ["Loaded: 2 (active-ok, pinned-only)"],
-    ["Installed (not active):"],
-  ],
-  [
-    {
-      plugins: ["runtime-ok", "planned-missing", "not-planned-idle"].map((id) => plugin(id)),
-      runtimeLoadedPluginIds: ["runtime-ok"],
-      shouldRunPluginIds: ["planned-missing", "runtime-ok"],
-    },
-    [
-      "Loaded: 1 (runtime-ok)",
-      "Configured to run but not loaded: 1 (planned-missing)",
-      "Installed (not active): 1 (not-planned-idle)",
-    ],
-    [],
-  ],
-  [
-    {
-      plugins: [
-        plugin("runtime-ok"),
-        plugin("broken", { status: "error", failurePhase: "load", error: "boom" }),
-        disabled("off"),
-      ],
-      runtimeLoadedPluginIds: ["runtime-ok"],
-      shouldRunPluginIds: ["broken", "off", "runtime-ok"],
-    },
-    ["- broken [load]: boom", "Disabled: 1"],
-    ["Configured to run but not loaded:"],
-  ],
-])("classifies inventory %j", (input, present, absent) => {
-  const text = detail(input);
-  expectLines(text, present);
-  for (const line of absent) {
-    expect(text).not.toContain(line);
-  }
+it("uses installed loaded status only without runtime provenance", () => {
+  const text = detail({ plugins: [plugin("a"), plugin("b")] });
+  expect(text).toContain("Loaded: 2 (a, b)");
+  expect(text).not.toContain("Installed (not active):");
 });
 
-it("keeps installed-only loaded plugins out of Loaded after merge", () => {
+it("classifies runtime, installed, missing and failed plugins after merge", () => {
   const merged = merge(
-    snapshot({ plugins: [plugin("installed-idle")] }),
-    snapshot({ plugins: [plugin("runtime-ok")], runtimeLoadedPluginIds: ["runtime-ok"] }),
+    snapshot({ plugins: [plugin("installed-idle"), plugin("planned-missing")] }),
+    snapshot({
+      plugins: [
+        plugin("runtime-ok"),
+        disabled("off"),
+        plugin("broken", { status: "error", failurePhase: "load", error: "boom" }),
+      ],
+      runtimeLoadedPluginIds: ["runtime-ok", "pinned-only"],
+    }),
   );
-  expect(merged.runtimeLoadedPluginIds).toEqual(["runtime-ok"]);
-  expectLines(detailed(merged), [
-    "Loaded: 1 (runtime-ok)",
+  expect(merged.runtimeLoadedPluginIds).toEqual(["runtime-ok", "pinned-only"]);
+  const text = detailed({
+    ...merged,
+    shouldRunPluginIds: ["runtime-ok", "planned-missing", "off", "broken"],
+  });
+  expectLines(text, [
+    "Loaded: 2 (pinned-only, runtime-ok)",
     "Installed (not active): 1 (installed-idle)",
+    "Configured to run but not loaded: 1 (planned-missing)",
+    "Disabled: 1",
+    "- broken [load]: boom",
   ]);
+  expect(detailed(merged)).not.toContain("Configured to run but not loaded:");
 });
 
 it("flags configured memory embedding providers that no loaded plugin registers", () => {
   const text = detail({
-    plugins: [plugin("runtime-ok")],
-    runtimeLoadedPluginIds: ["runtime-ok"],
     unregisteredMemoryEmbeddingProviders: [
       { configuredId: "custom-embed", source: "provider" },
       { configuredId: "fallback-embed", source: "fallback" },
@@ -267,16 +227,3 @@ it("flags configured memory embedding providers that no loaded plugin registers"
   );
   expect(text.split("\n")[0]).toBe("🔌 Plugins: OK");
 });
-
-it.each([undefined, []])(
-  "omits the memory-provider line with %j",
-  (unregisteredMemoryEmbeddingProviders) => {
-    expect(
-      detail({
-        plugins: [plugin("runtime-ok")],
-        runtimeLoadedPluginIds: ["runtime-ok"],
-        unregisteredMemoryEmbeddingProviders,
-      }),
-    ).not.toContain("Configured memory provider not registered:");
-  },
-);

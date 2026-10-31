@@ -27,6 +27,7 @@ import {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const targets: Array<{
   outputBase: string;
+  declarationImports?: readonly string[];
   lintRules?: readonly string[];
   additionalLintRules?: readonly string[];
   entries: Array<{ name: string; schema: XSchema; type: string }>;
@@ -106,11 +107,14 @@ const targets: Array<{
   },
   {
     outputBase: "src/gateway/server-methods/presence-location-validator.generated",
+    declarationImports: [
+      'import type { PresenceLocationResult } from "./presence-location-schema.js";',
+    ],
     entries: [
       {
         name: "validatePresenceLocationResult",
         schema: PresenceLocationResultSchema,
-        type: 'import("./presence-location-schema.js").PresenceLocationResult',
+        type: "PresenceLocationResult",
       },
     ],
   },
@@ -141,11 +145,20 @@ if (args.some((arg) => arg !== "--check")) {
   throw new Error("Usage: pnpm static:validators:gen [--check]");
 }
 const check = args.includes("--check");
-for (const { outputBase, entries, lintRules, additionalLintRules } of targets) {
+for (const {
+  outputBase,
+  declarationImports = [],
+  entries,
+  lintRules,
+  additionalLintRules,
+} of targets) {
   const runtime = await compileStandaloneValidators(entries, { resolveDir: repoRoot });
-  const declaration = entries
-    .map(({ name, type }) => `export function ${name}(value: unknown): value is ${type};`)
-    .join("\n");
+  const declaration = [
+    ...declarationImports,
+    ...entries.map(
+      ({ name, type }) => `export function ${name}(value: unknown): value is ${type};`,
+    ),
+  ].join("\n");
   for (const [extension, content] of [
     ["js", runtime],
     ["d.ts", declaration],

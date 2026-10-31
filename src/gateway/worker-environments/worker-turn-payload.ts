@@ -50,10 +50,8 @@ import { capturePresenceToolAuthority } from "../../agents/tools/presence-tool-a
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import {
-  runWithoutOwnedSessionTranscriptWrites,
-  withSessionTranscriptWriteAssertion,
-} from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";

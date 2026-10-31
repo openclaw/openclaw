@@ -242,18 +242,21 @@ describe("browser manage output", () => {
   });
 
   it.each([
-    ["select", "1.9"],
-    ["close", "abc"],
-  ])("rejects tab %s %s before actions", async (action, index) => {
-    await expect(run(["tab", action, index])).rejects.toThrow("__exit__:1");
-    expect(capture.runtimeErrors.at(-1)).toContain("index must be a positive integer");
-    expect(gateway).not.toHaveBeenCalledWith(
-      "browser.request",
-      expect.anything(),
-      expect.objectContaining({ path: "/tabs/action" }),
-      expect.anything(),
-    );
-  });
+    { action: "select", index: "1.9", json: false },
+    { action: "close", index: "abc", json: false },
+    { action: "select", index: "0", json: true },
+    { action: "close", index: "abc", json: true },
+  ])(
+    "rejects tab $action $index with json=$json before actions",
+    async ({ action, index, json }) => {
+      await expect(run([...(json ? ["--json"] : []), "tab", action, index])).rejects.toThrow(
+        json ? "index must be a positive integer" : "__exit__:1",
+      );
+      expect(capture.runtimeErrors).toEqual(json ? [] : ["index must be a positive integer"]);
+      expect(runtime.exit).toHaveBeenCalledTimes(json ? 0 : 1);
+      expect(gateway).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects unsupported profile drivers before creating a profile", async () => {
     await expect(run(["create-profile", "--name", "test", "--driver", "chromium"])).rejects.toThrow(

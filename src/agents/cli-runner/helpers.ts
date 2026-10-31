@@ -139,6 +139,7 @@ export function buildCliAgentSystemPrompt(params: {
       chatType: params.runtimeChatType,
       capabilities: params.runtimeCapabilities,
       customInlineButtonHint: params.customInlineButtonHint,
+      blind: params.preparedSessionEntry?.blindPrompt,
     },
   });
   return buildConfiguredAgentSystemPrompt({

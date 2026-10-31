@@ -1,40 +1,48 @@
-// Owner-only retention proof. Run on the benchmark host, never against a live Gateway.
-// node --expose-gc scripts/perf/session-fork-retention-measure.mjs BASE_ROOT CANDIDATE_ROOT
+// Fork-capture owner proof; synthetic transport, never a live Gateway.
+// node --expose-gc scripts/perf/session-fork-retention-measure.mjs SOURCE_ROOT --mode retention
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
+import {
+  constants,
+  monitorEventLoopDelay,
+  PerformanceObserver,
+  performance,
+} from "node:perf_hooks";
+import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
-const [baselineRoot, candidateRoot] = process.argv.slice(2);
-assert(baselineRoot && candidateRoot, "supply baseline and candidate source roots");
-assert(globalThis.gc, "--expose-gc is required");
-const samples = 6;
-const rounds = 3;
-const MiB = 1024 * 1024;
-const workloads = [
-  { name: "near-cap", sessions: 64, payloadBytes: MiB - 1024, optionNodes: 0, blobBytes: 0 },
-  { name: "graph-options", sessions: 1000, payloadBytes: 1024, optionNodes: 128, blobBytes: 0 },
-  {
-    name: "opaque-publication",
-    sessions: 3,
-    payloadBytes: 1024,
-    optionNodes: 0,
-    blobBytes: 22 * MiB,
-    sourceBlobBytes: 64 * MiB,
-  },
-];
+const [sourceRoot, ...args] = process.argv.slice(2);
+const value = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback);
+assert(sourceRoot, "supply a source root");
+const mode = value("--mode", "timing");
+assert(["timing", "allocation", "count", "retention"].includes(mode));
+const operations = Number(value("--operations", "27000"));
+const sessions = Number(value("--sessions", "200"));
+const payloadBytes = Number(value("--payload-bytes", String(256 * 1024)));
+const warmup = Number(value("--warmup", String(sessions)));
+const output = value("--output");
+const warmReady = value("--warm-ready-file");
+const warmStart = value("--warm-start-file");
+const ready = value("--ready-file");
+const start = value("--start-file");
+assert(operations > 0 && sessions > 0 && payloadBytes >= 1024);
+assert(mode !== "retention" || globalThis.gc, "retention mode requires --expose-gc");
+
 const sourcePaths = [
   "src/agents/embedded-agent-runner/session-fork.ts",
+  "src/agents/embedded-agent-runner/stream-resolution.ts",
   "src/shared/immutable-data.ts",
   "packages/ai/src/transports/model-request-body.ts",
   "packages/normalization-core/src/record-coerce.ts",
 ];
 const sourceNames = new Set(sourcePaths.map((file) => path.basename(file, ".ts")));
 const adapters = `
-// Host, network and accounting adapters only; storage/capture/encoding owners are unchanged.
+// Only unrelated host/provider/authority boundaries are adapted.
 export const getAiTransportHost = () => ({
   runInDetachedAsyncContext: fn => fn(),
   inheritManagedTransport: (_model, replacement) => replacement,
@@ -50,72 +58,95 @@ export const normalizeUsage = () => undefined;
 export const createUsageAccumulator = () => ({});
 export const mergeUsageIntoAccumulator = () => {};
 export const toNormalizedUsage = () => undefined;
+export const notifyLlmRequestActivity = () => {};
+export const onLlmRequestActivity = () => {};
+export const stripSystemPromptCacheBoundary = text => text;
+let measuredTransport;
+export const setMeasuredTransport = transport => { measuredTransport = transport; };
+export const createBoundaryAwareStreamFnForModel = () => measuredTransport;
+export const hasNonEmptyString = value => typeof value === "string" && value.trim().length > 0;
+export const getStreamLlmRuntime = () => undefined;
+export const admitProviderRateLimitStream = (_model, options, send, check) => { check?.(); return send(options); };
+export const createAnthropicVertexStreamFnForModel = () => { throw new Error("Wrong route"); };
 `;
 const adapterNames = new Set([
   "@openclaw/ai",
   "@openclaw/ai/internal/runtime",
   "@openclaw/ai/internal/shared",
+  "@openclaw/ai/transports",
+  "@openclaw/normalization-core/string-coerce",
   "fetch-request-authority",
   "content-blocks",
   "usage",
   "usage-accumulator",
+  "model-runtime-binding",
+  "provider-rate-limit-stream",
+  "ai-transport-runtime-host",
+  "anthropic-vertex-stream",
 ]);
-const localRoot = path.resolve(".local");
-mkdirSync(localRoot, { recursive: true });
-const generatedRoot = mkdtempSync(path.join(localRoot, "session-fork-retention-"));
-process.once("exit", () => rmSync(generatedRoot, { recursive: true, force: true }));
-const capsules = new Map();
+const generatedRoot = mkdtempSync(path.join(tmpdir(), "session-fork-measure-"));
+const url = `${pathToFileURL(generatedRoot).href}/`;
+const hashes = {};
+for (const file of sourcePaths) {
+  const source = readFileSync(path.join(sourceRoot, file), "utf8");
+  hashes[file] = createHash("sha256").update(source).digest("hex");
+  writeFileSync(path.join(generatedRoot, path.basename(file)), source);
+}
+writeFileSync(path.join(generatedRoot, "adapters.mjs"), adapters);
+writeFileSync(
+  path.join(generatedRoot, "openai.mjs"),
+  'export { modelRequestBodyState } from "./model-request-body.ts";\n' +
+    'export { independentResponsesRequest, responsesRequestLifecycle } from "./adapters.mjs";\n',
+);
+writeFileSync(
+  path.join(generatedRoot, "v8-count.mjs"),
+  `import { serialize as encode, deserialize } from "node:v8";
+export { deserialize };
+export const counts = { calls: 0, bytes: 0 };
+export function serialize(value) {
+  const encoded = encode(value);
+  counts.calls++;
+  counts.bytes += encoded.byteLength;
+  return encoded;
+}
+`,
+);
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
-    const capsule = [...capsules.values()].find((entry) =>
-      context.parentURL?.startsWith(entry.url),
-    );
-    if (!capsule || specifier.startsWith("node:")) {
+    if (
+      mode === "count" &&
+      specifier === "node:v8" &&
+      context.parentURL?.startsWith(url) &&
+      !context.parentURL.endsWith("v8-count.mjs")
+    ) {
+      return { url: `${url}v8-count.mjs`, shortCircuit: true };
+    }
+    if (!context.parentURL?.startsWith(url) || specifier.startsWith("node:")) {
       return nextResolve(specifier, context);
     }
     if (specifier === "@openclaw/ai/internal/openai") {
-      return { url: `${capsule.url}openai.mjs`, shortCircuit: true };
+      return { url: `${url}openai.mjs`, shortCircuit: true };
     }
-    const name = path.basename(specifier).replace(/\.js$/, "");
+    const name = path.basename(specifier).replace(/\.(?:js|ts)$/, "");
     if (sourceNames.has(name)) {
-      return { url: `${capsule.url}${name}.ts`, shortCircuit: true };
+      return { url: `${url}${name}.ts`, shortCircuit: true };
     }
     if (adapterNames.has(specifier) || adapterNames.has(name)) {
-      return { url: `${capsule.url}adapters.mjs`, shortCircuit: true };
+      return { url: `${url}adapters.mjs`, shortCircuit: true };
     }
-    if (specifier.startsWith("./")) {
+    if (specifier === "./adapters.mjs") {
       return nextResolve(specifier, context);
     }
-    throw new Error(`Unreviewed owner dependency: ${specifier}`);
+    throw new Error(`Unreviewed dependency: ${specifier}`);
   },
 });
-
-async function load(side, root) {
-  const directory = path.join(generatedRoot, side);
-  mkdirSync(directory);
-  const url = `${pathToFileURL(directory).href}/`;
-  const owner = { url, hashes: {} };
-  for (const file of sourcePaths) {
-    const source = readFileSync(path.join(root, file), "utf8");
-    owner.hashes[file] = createHash("sha256").update(source).digest("hex");
-    writeFileSync(path.join(directory, path.basename(file)), source);
-  }
-  writeFileSync(path.join(directory, "adapters.mjs"), adapters);
-  writeFileSync(
-    path.join(directory, "openai.mjs"),
-    'export { modelRequestBodyState } from "./model-request-body.ts";\n' +
-      'export { independentResponsesRequest, responsesRequestLifecycle } from "./adapters.mjs";\n',
-  );
-  capsules.set(side, owner);
-  Object.assign(
-    owner,
-    await import(`${url}session-fork.ts`),
-    await import(`${url}model-request-body.ts`),
-  );
-  owner.transport = createTransport(owner);
-  return owner;
-}
-
+process.once("exit", () => rmSync(generatedRoot, { recursive: true, force: true }));
+const owner = {
+  ...(await import(`${url}session-fork.ts`)),
+  ...(await import(`${url}stream-resolution.ts`)),
+  ...(await import(`${url}model-request-body.ts`)),
+};
+const { counts: v8Counts } = await import(`${url}v8-count.mjs`);
 const model = {
   id: "synthetic-model",
   name: "Synthetic",
@@ -128,279 +159,245 @@ const model = {
   maxTokens: 1000,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
-const identity = (workload, index) => ({
-  sessionId: `${workload.name}-${index}`,
-  agentId: "synthetic-agent",
-  runId: "synthetic-run",
-});
-const label = (workload, index, round) => `${workload.name}:${index}:${round}`;
-const payload = (messages) => ({ model: model.id, input: messages, stream: true });
-
-function parentMessage(workload, index, round) {
-  const message = { role: "user", content: `${label(workload, index, round)}|`, timestamp: round };
-  const padding = workload.payloadBytes - Buffer.byteLength(JSON.stringify(payload([message])));
-  assert(padding >= 0);
-  message.content += "x".repeat(padding);
-  return message;
-}
-
-// One transport per source capsule, shared by all sessions; no request state in its closure.
-function createTransport(owner) {
-  return async (requestModel, context, options) => {
-    const isFork = options.asyncToolExecution === false;
-    const encode = isFork ? undefined : owner.prepareModelRequestBody(options);
-    const prepared = await options.onPayload(payload(context.messages), requestModel);
-    if (!isFork) {
-      await encode(
-        context.messages[0].timestamp === 0
-          ? prepared
-          : { ...prepared, input: [], previous_response_id: "synthetic-previous-response" },
-      );
-    } else {
-      const question = context.messages.at(-1).content;
-      const { name, index, round } = JSON.parse(question);
-      const workload = workloads.find((item) => item.name === name);
-      assert(workload, "unknown replay workload");
-      assert.equal(prepared.input.length, 3, "one prefix, one publication, one question");
-      assert.deepEqual(prepared.input[0], parentMessage(workload, index, round));
-      assert.equal(prepared.input[1].content[0].text, `published:${label(workload, index, round)}`);
-      assert.equal(prepared.input[2].content, question);
-      assert.equal(prepared.previous_response_id, undefined);
-      if (workload.optionNodes) {
-        assert.equal(options.metadata.nodes.length, workload.optionNodes);
-        assert.equal(options.metadata.nodes[0].label, `${label(workload, index, round)}:0`);
-      }
-      if (workload.blobBytes) {
-        const details = context.messages[0].details;
-        assert(details.blob instanceof Blob);
-        assert.equal(details.blob.size, workload.blobBytes);
-        assert.equal(details.bytes[0], 7, "forks must not mutate retained opaque data");
-        details.bytes[0] = 99;
-      }
-    }
-    return {
-      result: async () => ({ content: [{ type: "text", text: "verified" }], stopReason: "stop" }),
-    };
-  };
-}
-
-async function captureRound(owner, workload, round) {
-  for (let index = 0; index < workload.sessions; index++) {
-    const current = identity(workload, index);
-    const parent = owner.wrapStreamFnWithSessionFork(owner.transport, current);
-    const options = workload.optionNodes
+const result = {
+  role: "assistant",
+  api: model.api,
+  provider: model.provider,
+  model: model.id,
+  content: [{ type: "text", text: "Synthetic completed answer. ".repeat(40) }],
+  stopReason: "stop",
+  timestamp: 2,
+};
+let sent = 0;
+let encodedBytes = 0;
+const transport = async (_model, context, options) => {
+  const encode = owner.prepareModelRequestBody(options);
+  const payload = { model: model.id, input: context.messages, stream: true };
+  const prepared = (await options.onPayload?.(payload, model)) ?? payload;
+  // Three quarters of requests use the existing HTTP continuation suffix path.
+  const continuation = sent++ % 4 !== 0;
+  const encoded = await encode(
+    continuation
       ? {
-          metadata: {
-            nodes: Array.from({ length: workload.optionNodes }, (_, node) => ({
-              label: `${label(workload, index, round)}:${node}`,
-              enabled: true,
-              values: [node, node + 1, node + 2],
-            })),
-          },
+          ...prepared,
+          input: [{ role: "user", content: "Continue" }],
+          previous_response_id: "resp_synthetic",
         }
-      : {};
-    await (
-      await parent(model, { messages: [parentMessage(workload, index, round)] }, options)
-    ).result();
-    owner.recordEmbeddedSessionForkMessage(current.sessionId, current.runId, {
-      role: "toolResult",
-      toolCallId: "synthetic-call",
-      toolName: "synthetic-tool",
-      content: [{ type: "text", text: `published:${label(workload, index, round)}` }],
-      isError: false,
-      timestamp: round,
-      ...(workload.blobBytes
-        ? {
-            details: {
-              // Each publication owns a fresh source; its visible slice pins that source on base.
-              blob: new Blob([new Uint8Array(workload.sourceBlobBytes)]).slice(
-                0,
-                workload.blobBytes,
-              ),
-              bytes: new Uint8Array([7]),
-            },
-          }
-        : {}),
-    });
+      : prepared,
+  );
+  encodedBytes += encoded.body.size;
+  return { result: async () => result };
+};
+const { setMeasuredTransport } = await import(`${url}adapters.mjs`);
+setMeasuredTransport(transport);
+const llmRuntime = { streamSimple: transport, registry: { getApiProvider: () => undefined } };
+const fixtures = Array.from({ length: sessions }, (_, index) => {
+  const identity = { sessionId: `synthetic-${index}`, runId: `run-${index}`, agentId: "synthetic" };
+  const context = {
+    systemPrompt: "Stable synthetic instructions",
+    messages: [
+      { role: "user", content: `${index}:` + "x".repeat(payloadBytes - 128), timestamp: 1 },
+    ],
+  };
+  // The actual selection owner installs capture on baseline and has no such path on candidate.
+  const { streamFn, strategy } = owner.resolveEmbeddedAgentStream({
+    llmRuntime,
+    currentStreamFn: transport,
+    sessionId: identity.sessionId,
+    promptCacheKey: identity.sessionId,
+    model,
+    sessionFork: identity,
+  });
+  assert.equal(strategy, "boundary-aware:openai-responses");
+  return { identity, context, streamFn };
+});
+async function work(count, latencies) {
+  for (let index = 0; index < count; index++) {
+    const fixture = fixtures[index % sessions];
+    const before = latencies ? performance.now() : 0;
+    await (await fixture.streamFn(model, fixture.context, {})).result();
+    // The subscription dispatcher called this owner before the capture path was retired.
+    owner.recordEmbeddedSessionForkMessage?.(
+      fixture.identity.sessionId,
+      fixture.identity.runId,
+      result,
+    );
+    if (latencies) {
+      latencies.push(performance.now() - before);
+    }
+    if (index % 16 === 15) {
+      await nextTurn();
+    }
   }
 }
-
-async function memoryAfterGc() {
-  // Leave fixture-creation jobs before collection; timers/maintenance remain enabled.
+async function barrier(readyPath, startPath) {
+  if (!startPath) {
+    return;
+  }
+  assert(readyPath, "barriers require ready and start paths");
+  writeFileSync(readyPath, String(process.pid));
+  while (!existsSync(startPath)) {
+    await delay(25);
+  }
+  const epoch = Number(readFileSync(startPath, "utf8"));
+  assert(epoch > Date.now(), "missed synchronized start");
+  await delay(epoch - Date.now());
+}
+async function settledMemory() {
   for (let pass = 0; pass < 3; pass++) {
     await nextTurn();
     globalThis.gc();
   }
-  const { heapUsed, external, arrayBuffers } = process.memoryUsage();
-  // External and ArrayBuffer reporting can overlap; expose each component and
-  // use their conservative sum so neither serialized nor Blob storage is omitted.
+  return process.memoryUsage();
+}
+function distribution(values) {
+  const sorted = values.toSorted((a, b) => a - b);
+  const quantile = (fraction) =>
+    sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * fraction) - 1)] ?? null;
   return {
-    heapUsed,
-    external,
-    arrayBuffers,
-    conservativeAggregateBytes: heapUsed + external + arrayBuffers,
+    samples: sorted.length,
+    totalMs: sorted.reduce((a, b) => a + b, 0),
+    p95Ms: quantile(0.95),
+    p99Ms: quantile(0.99),
+    maxMs: sorted.at(-1) ?? null,
   };
 }
-
-async function countAndVerify(owner, workload, round) {
-  let liveSnapshots = 0;
-  let newestSurvives = false;
-  for (let index = 0; index < workload.sessions; index++) {
-    const fork = () =>
-      owner.runEmbeddedSessionFork({
-        ...identity(workload, index),
-        model,
-        question: JSON.stringify({ name: workload.name, index, round }),
-        assertCurrent() {},
-      });
-    try {
-      assert.equal(await fork(), "verified");
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.startsWith("Cache-parity session fork requires a parent turn")
-      ) {
-        continue;
-      }
-      throw error;
-    }
-    liveSnapshots++;
-    newestSurvives ||= index === workload.sessions - 1;
-    assert.equal(await fork(), "verified", "second fork preserves opaque publication isolation");
-  }
-  assert(newestSurvives, "workload must leave a forkable newest prefix");
-  return liveSnapshots;
+await barrier(warmReady, warmStart);
+await work(warmup);
+owner.clearEmbeddedSessionForkSnapshot?.();
+await nextTurn();
+const beforeMemory = mode === "retention" ? await settledMemory() : process.memoryUsage();
+const inspector = mode === "allocation" ? new Session() : undefined;
+if (inspector) {
+  inspector.connect();
+  await inspector.post("HeapProfiler.startSampling", {
+    samplingInterval: 32768,
+    includeObjectsCollectedByMajorGC: true,
+    includeObjectsCollectedByMinorGC: true,
+  });
 }
-
-async function measure(owner, workload, side, sample) {
-  owner.clearEmbeddedSessionForkSnapshot();
-  const before = await memoryAfterGc();
-  const rows = [];
-  try {
-    for (let round = 0; round < rounds; round++) {
-      await captureRound(owner, workload, round);
-      // Await retained-data normalization through public replay, then collect
-      // replay's temporary decoded graphs before measuring the settled store.
-      const liveSnapshots = await countAndVerify(owner, workload, round);
-      const after = await memoryAfterGc();
-      const retainedDeltaBytes =
-        after.conservativeAggregateBytes - before.conservativeAggregateBytes;
-      rows.push({
-        workload: workload.name,
-        side,
-        sample,
-        rounds: round + 1,
-        refreshWaves: round,
-        sessionResets: 1,
-        captureCalls: workload.sessions * (round + 1),
-        publicationCalls: workload.sessions * (round + 1),
-        liveSnapshots,
-        replayChecks: liveSnapshots * 2,
-        retainedRequestPayloadBytes: liveSnapshots * workload.payloadBytes,
-        retainedOpaqueBlobBytes: liveSnapshots * workload.blobBytes,
-        sourceBlobBytesPerSnapshot: workload.sourceBlobBytes ?? 0,
-        visibleBlobBytesPerSnapshot: workload.blobBytes,
-        before,
-        after,
-        heapUsedDeltaBytes: after.heapUsed - before.heapUsed,
-        externalDeltaBytes: after.external - before.external,
-        arrayBuffersDeltaBytes: after.arrayBuffers - before.arrayBuffers,
-        retainedDeltaBytes,
-        retainedBytesPerCapture: retainedDeltaBytes / (workload.sessions * (round + 1)),
-        retainedBytesPerLiveSnapshot: retainedDeltaBytes / liveSnapshots,
-      });
-    }
-    return rows;
-  } finally {
-    owner.clearEmbeddedSessionForkSnapshot();
+await barrier(ready, start);
+const gcRows = [];
+const observer = new PerformanceObserver((list) => {
+  for (const entry of list.getEntries()) {
+    gcRows.push({ kind: entry.detail.kind, duration: entry.duration });
   }
+});
+observer.observe({ entryTypes: ["gc"] });
+const loop = monitorEventLoopDelay({ resolution: 10 });
+loop.enable();
+const counts = { jsonStringify: 0, jsonBytes: 0, blobs: 0, timers: 0 };
+const realStringify = JSON.stringify;
+const RealBlob = globalThis.Blob;
+const realSetTimeout = globalThis.setTimeout;
+if (mode === "count") {
+  JSON.stringify = (...input) => {
+    const json = realStringify(...input);
+    counts.jsonStringify++;
+    counts.jsonBytes += Buffer.byteLength(json ?? "");
+    return json;
+  };
+  globalThis.Blob = new Proxy(RealBlob, {
+    construct(target, input) {
+      counts.blobs++;
+      return Reflect.construct(target, input);
+    },
+  });
+  globalThis.setTimeout = (...input) => {
+    counts.timers++;
+    return realSetTimeout(...input);
+  };
 }
-
-const owners = {
-  baseline: await load("baseline", baselineRoot),
-  candidate: await load("candidate", candidateRoot),
+v8Counts.calls = 0;
+v8Counts.bytes = 0;
+const beforeCpu = process.cpuUsage();
+const beforeThreadCpu = process.threadCpuUsage();
+const startedAt = Date.now();
+const started = performance.now();
+sent = 0;
+encodedBytes = 0;
+const latencies = [];
+await work(operations, mode === "timing" ? latencies : undefined);
+const elapsedMs = performance.now() - started;
+const cpu = process.cpuUsage(beforeCpu);
+const threadCpu = process.threadCpuUsage(beforeThreadCpu);
+loop.disable();
+await nextTurn();
+observer.disconnect();
+JSON.stringify = realStringify;
+globalThis.Blob = RealBlob;
+globalThis.setTimeout = realSetTimeout;
+let sampledBytes;
+if (inspector) {
+  const { profile } = await inspector.post("HeapProfiler.stopSampling");
+  sampledBytes = profile.samples.reduce((sum, sample) => sum + sample.size, 0);
+  inspector.disconnect();
+}
+const afterMemory = mode === "retention" ? await settledMemory() : process.memoryUsage();
+const kinds = {
+  minor: constants.NODE_PERFORMANCE_GC_MINOR,
+  major: constants.NODE_PERFORMANCE_GC_MAJOR,
+  incremental: constants.NODE_PERFORMANCE_GC_INCREMENTAL,
+  weak: constants.NODE_PERFORMANCE_GC_WEAKCB,
 };
-const results = [];
-const mean = (rows, field) => rows.reduce((sum, row) => sum + row[field], 0) / rows.length;
-try {
-  console.log(
-    JSON.stringify({
-      protocol: "session-fork-retention-owner-v1",
-      runtime: process.version,
-      samplesPerSide: samples,
-      rounds,
-      workloads,
-      hashes: { baseline: owners.baseline.hashes, candidate: owners.candidate.hashes },
-      scope:
-        "Actual capture/retention/replay owners; adapted host/network/accounting; stateless synthetic transport",
-      measurement:
-        "Post-replay/post-GC whole-process heapUsed + external + arrayBuffers delta: conservative aggregate, not an exact retained graph or RSS. External and ArrayBuffer reporting can overlap; all components are reported separately",
-      limits:
-        "No live Gateway, real-provider, arbitrary transport-closure, CPU, GC-time or promotion claim",
-    }),
-  );
-  for (const workload of workloads) {
-    // Warm both capsules with the same complete workload before paired measurements.
-    for (const side of ["baseline", "candidate"]) {
-      await measure(owners[side], workload, side, -1);
-    }
-    for (let sample = 0; sample < samples; sample++) {
-      for (const side of sample % 2 === 0 ? ["baseline", "candidate"] : ["candidate", "baseline"]) {
-        const rows = await measure(owners[side], workload, side, sample);
-        results.push(...rows);
-        for (const row of rows) {
-          console.log(JSON.stringify(row));
-        }
-      }
-    }
-    for (let round = 1; round <= rounds; round++) {
-      const selected = results.filter(
-        (row) => row.workload === workload.name && row.rounds === round,
-      );
-      const sides = Object.fromEntries(
-        ["baseline", "candidate"].map((side) => {
-          const rows = selected.filter((row) => row.side === side);
-          return [
-            side,
-            {
-              samples: rows.length,
-              meanHeapUsedDeltaBytes: mean(rows, "heapUsedDeltaBytes"),
-              meanExternalDeltaBytes: mean(rows, "externalDeltaBytes"),
-              meanArrayBuffersDeltaBytes: mean(rows, "arrayBuffersDeltaBytes"),
-              meanRetainedDeltaBytes: mean(rows, "retainedDeltaBytes"),
-              minRetainedDeltaBytes: Math.min(...rows.map((row) => row.retainedDeltaBytes)),
-              maxRetainedDeltaBytes: Math.max(...rows.map((row) => row.retainedDeltaBytes)),
-              meanLiveSnapshots: mean(rows, "liveSnapshots"),
-              meanRetainedBytesPerCapture: mean(rows, "retainedBytesPerCapture"),
-              meanRetainedBytesPerLiveSnapshot: mean(rows, "retainedBytesPerLiveSnapshot"),
-            },
-          ];
-        }),
-      );
-      const pairedDeltas = Array.from({ length: samples }, (_, sample) => {
-        const pair = selected.filter((row) => row.sample === sample);
-        return (
-          pair.find((row) => row.side === "candidate").retainedDeltaBytes -
-          pair.find((row) => row.side === "baseline").retainedDeltaBytes
-        );
-      });
-      const meanPairedDeltaBytes = pairedDeltas.reduce((sum, value) => sum + value, 0) / samples;
-      console.log(
-        JSON.stringify({
-          summary: workload.name,
-          rounds: round,
-          ...sides,
-          pairedDeltas,
-          meanPairedDeltaBytes,
-          meanPairedDeltaPercent:
-            (100 * meanPairedDeltaBytes) / sides.baseline.meanRetainedDeltaBytes,
-        }),
-      );
-    }
-  }
-} finally {
-  for (const owner of Object.values(owners)) {
-    owner.clearEmbeddedSessionForkSnapshot();
-  }
-  hooks.deregister();
+const report = {
+  protocol: "session-fork-pay-on-fork-owner-v2",
+  runtime: process.version,
+  mode,
+  hashes,
+  workload: {
+    operations,
+    sessions,
+    payloadBytes,
+    continuationFraction: 0.75,
+    warmup,
+    equivalentTrafficMinutesAt450Rpm: operations / 450,
+  },
+  scope:
+    "Actual stream-selection/capture/encoding owners; synthetic provider and adapted host boundaries. No Gateway or paid provider calls.",
+  limits:
+    "Retention is a compressed one-hour-equivalent traffic sequence, not an elapsed-hour Gateway soak. Fixture messages remain live equally on both sides. No promotion measurement. Heap/external/ArrayBuffers overlap and are reported separately.",
+  captureApiPresent: typeof owner.wrapStreamFnWithSessionFork === "function",
+  startedAt,
+  elapsedMs,
+  cpuUsPerTurn: (cpu.user + cpu.system) / operations,
+  mainThreadCpuUsPerTurn: (threadCpu.user + threadCpu.system) / operations,
+  encodedBytes,
+  sent,
+  counts:
+    mode === "count"
+      ? { ...counts, v8Serialize: v8Counts.calls, v8Bytes: v8Counts.bytes }
+      : undefined,
+  sampledBytes,
+  sampledBytesPerTurn: sampledBytes === undefined ? undefined : sampledBytes / operations,
+  latency: distribution(latencies),
+  gc: distribution(gcRows.map((row) => row.duration)),
+  gcMsPerTurn: gcRows.reduce((sum, row) => sum + row.duration, 0) / operations,
+  gcByKind: Object.fromEntries(
+    Object.entries(kinds).map(([name, kind]) => [
+      name,
+      distribution(gcRows.filter((row) => row.kind === kind).map((row) => row.duration)),
+    ]),
+  ),
+  loop: {
+    samples: loop.count,
+    p95Ms: loop.percentile(95) / 1e6,
+    p99Ms: loop.percentile(99) / 1e6,
+    maxMs: loop.max / 1e6,
+  },
+  beforeMemory,
+  afterMemory,
+  retainedDelta: Object.fromEntries(
+    ["heapUsed", "external", "arrayBuffers", "rss"].map((key) => [
+      key,
+      afterMemory[key] - beforeMemory[key],
+    ]),
+  ),
+};
+if (output) {
+  mkdirSync(path.dirname(output), { recursive: true });
+  writeFileSync(output, JSON.stringify(report, null, 2));
 }
+console.log(JSON.stringify(report));
+owner.clearEmbeddedSessionForkSnapshot?.();
+hooks.deregister();

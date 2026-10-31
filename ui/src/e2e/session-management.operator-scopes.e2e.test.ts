@@ -169,10 +169,9 @@ suite.define(() => {
         const sharing = ui.button(activePane, "Session sharing");
         expect((await sharing.count()) > 0 && !(await sharing.isDisabled())).toBe(false);
         await openOwnMenu();
-        for (const control of [rename, archive]) {
+        for (const control of [rename, archive, fork]) {
           expect((await control.getAttribute("disabled")) === null).toBe(canOrganize);
         }
-        expect(await fork.getAttribute("disabled")).not.toBeNull();
         const unread = menu.locator('[data-value="toggle-unread"]');
         expect(await unread.isDisabled()).toBe(!canOrganize);
         if (canOrganize) {

@@ -252,6 +252,13 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     execOverridePromptHint,
   ].filter(Boolean);
   const extraSystemPromptParts = [inboundMetaPrompt, ...staticSystemPromptParts].filter(Boolean);
+  // Metadata and conversation guidance vary per turn; configured policy and exec hints do not.
+  const turnContextText = [inboundMetaPrompt, sessionStableConversationContext, groupIntro]
+    .filter(Boolean)
+    .join("\n\n");
+  const extraSystemPromptTurnContext = turnContextText
+    ? { start: 0, text: turnContextText }
+    : undefined;
   const sourceConversationContextPromptOffset = sessionStableConversationContext
     ? inboundMetaPrompt
       ? inboundMetaPrompt.length + 2
@@ -438,11 +445,14 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       })
     : () => false;
   // Current human context reaches all harnesses without changing the stable system/tool prefix.
-  const attributionPrompt = () =>
-    `${markInboundContextLabel("PR attribution:")}
-${buildPrAttributionPrompt(
-  Boolean(requester?.isCurrent()) && attributionEnabled() && !inboundContextSessionEntry?.incognito,
-)}`;
+  const attributionPrompt = () => {
+    const prompt = buildPrAttributionPrompt(
+      Boolean(requester?.isCurrent()) &&
+        attributionEnabled() &&
+        !inboundContextSessionEntry?.incognito,
+    );
+    return prompt ? `${markInboundContextLabel("PR attribution:")}\n${prompt}` : "";
+  };
   // Synthetic turns retain routing facts without inventing user-role inbound context.
   const buildInboundContextState = () => ({
     activeGoalContext: formatActiveGoalContext(inboundContextSessionEntry),
@@ -680,6 +690,7 @@ ${buildPrAttributionPrompt(
     fullAccessState,
     isFirstTurnInSession,
     extraSystemPromptParts,
+    extraSystemPromptTurnContext,
     sourceConversationContextByMode,
     sourceConversationContextPromptOffset,
     extraSystemPromptStatic,

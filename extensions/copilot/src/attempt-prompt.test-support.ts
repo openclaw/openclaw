@@ -64,44 +64,13 @@ export function registerCopilotPromptTests({
       },
     );
 
-    it.each([
-      { tools: [" sessions_spawn ", "sessions_spawn"], delegates: true },
-      { tools: ["sessions_yield", "subagents"], delegates: false },
-    ])("renders only callable delegation operations: $tools", async ({ tools, delegates }) => {
+    it("wraps minimal context without inventing workspace sections", async () => {
       const { sdk, run } = makeAttempt();
-      stubToolBridge(() => createStubToolBridge(tools.map(makeSdkTool)));
-      await run({
-        agentId: "main",
-        disableTools: false,
-        sessionKey: "agent:main:main",
-        sourceReplyDeliveryMode: "automatic",
-      });
+      await run({ extraSystemPrompt: "Child policy.", promptMode: "minimal" });
       const content = requireSystemMessage(sdk);
-      if (delegates) {
-        expect(content).toContain("## Delegation");
-        expect(content).toContain(
-          "Announced completion is push-based; collectors require explicit result collection.",
-        );
-        expect(content).not.toContain("sessions_yield");
-        expect(content).not.toContain("subagents(action=list)");
-      } else {
-        expect(content).not.toContain("## Delegation");
-      }
+      expect(content).toContain("## Subagent Context\nChild policy.");
+      expect(content).not.toContain("## Workspace");
     });
-
-    it.each([
-      { extraSystemPrompt: "Conversation policy.", promptMode: undefined, heading: "Conversation" },
-      { extraSystemPrompt: "Child policy.", promptMode: "minimal" as const, heading: "Subagent" },
-    ])(
-      "wraps $heading context without inventing workspace sections",
-      async ({ heading, ...context }) => {
-        const { sdk, run } = makeAttempt();
-        await run(context);
-        const content = requireSystemMessage(sdk);
-        expect(content).toContain(`## ${heading} Context\n${context.extraSystemPrompt}`);
-        expect(content).not.toContain("## Workspace");
-      },
-    );
 
     it("sends the final appended developer instructions to the SDK and llm_input", async () => {
       const rendered = "# Project Context\nSoul voice goes here.";
@@ -112,10 +81,9 @@ export function registerCopilotPromptTests({
       const toolNames = [
         "message",
         "sessions_send",
+        " sessions_spawn ",
         "sessions_spawn",
-        "sessions_yield",
         "skill_workshop",
-        "subagents",
       ];
 
       stubToolBridge(() => createStubToolBridge(toolNames.map(makeSdkTool)));
@@ -132,9 +100,12 @@ export function registerCopilotPromptTests({
       expect(content).toContain(
         `${rendered}\n\n## Conversation Context\nOnly answer in the current group thread.`,
       );
-      expect(content).toContain("You are a personal agent running inside OpenClaw.");
       expect(content).toContain("## Skill Workshop");
-      expect(content).toContain("## Delegation");
+      expect(content).toContain(
+        "Announced completion is push-based; collectors require explicit result collection.",
+      );
+      expect(content).not.toContain("sessions_yield");
+      expect(content).not.toContain("subagents(action=list)");
       expect(content).toContain("spawn `sessions_spawn` with `visible=true`");
       expect(content).toContain("automatically to the caller.");
       expect(llmInput).toHaveBeenCalledWith(

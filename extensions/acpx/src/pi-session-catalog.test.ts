@@ -226,7 +226,7 @@ describe("Pi session catalog", () => {
         const file = path.join(directory, `session-${String(index)}.jsonl`);
         const entries = [
           header(`pi-session-${String(index)}`),
-          sessionInfo(`info-${String(index)}`, `Pi history ${String(index)}`),
+          sessionInfo(`info-${String(index)}`, `Cafe\u0301 history ${String(index)}`),
         ];
         await fs.writeFile(file, piJsonl(entries));
         await fs.utimes(file, baseTime + index, baseTime + index);
@@ -240,7 +240,7 @@ describe("Pi session catalog", () => {
     expect(second.sessions).toHaveLength(5);
     expect(second.nextCursor).toBeUndefined();
     await expect(
-      listLocalPiSessionPage({ limit: 20, searchTerm: "Pi history 0" }),
+      listLocalPiSessionPage({ limit: 20, searchTerm: "CAFÉ history 0" }),
     ).resolves.toMatchObject({
       sessions: [expect.objectContaining({ threadId: "pi-session-0" })],
     });
