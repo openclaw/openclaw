@@ -5,7 +5,11 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-import { filterAndSortSessionEntries, prepareSessionRowSelection } from "./session-utils-list.js";
+import {
+  filterAndSortSessionEntries,
+  prepareSessionRowSelection,
+  selectSessionEntries,
+} from "./session-utils-list.js";
 
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
@@ -66,6 +70,47 @@ test.each(["München", "한국어"])("search finds both canonical forms of %s", 
       "agent:main:composed",
     ]);
   }
+});
+
+test("sigma variants preserve permitted membership, totals and page boundaries", () => {
+  const searchConfig = { agents: { entries: { main: {}, other: {} } } };
+  setRuntimeConfigSnapshot(searchConfig);
+  const first = "agent:main:first";
+  const second = "agent:main:second";
+  const denied = "agent:main:denied";
+  projection = createSessionRowProjectionFixture({
+    cfg: searchConfig,
+    store: {
+      [first]: entry("first", 3, { label: "Handoff review — ΕΛΕΓΧΟΣ" }),
+      [second]: entry("second", 1, { displayName: "κόσμος" }),
+      [denied]: entry("denied", 4, { label: "ΕΛΕΓΧΟΣ" }),
+      "agent:other:outside": entry("outside", 5, { label: "ΕΛΕΓΧΟΣ" }),
+      "agent:main:unrelated": entry("unrelated", 6, { label: "Review notes" }),
+    },
+  });
+  const select = (search: string, offset = 0) =>
+    selectSessionEntries({
+      ...prepareSessionRowSelection(projection!, { search, agentId: "main", limit: 1, offset }),
+      entryFilter: (key) => key !== denied,
+    });
+  for (const search of ["Σ", "σ", "ς", " Σ "]) {
+    for (const [offset, expected] of [first, second].entries()) {
+      const result = select(search, offset);
+      expect(
+        result.entries.map(([key]) => key),
+        search,
+      ).toEqual([expected]);
+      expect(result, search).toMatchObject({
+        totalCount: 2,
+        offset,
+        nextOffset: offset === 0 ? 1 : null,
+        hasMore: offset === 0,
+      });
+    }
+  }
+  projection.setEntry(first, entry("first", 3, { label: "Ready" }));
+  expect(select("Σ")).toMatchObject({ totalCount: 1, hasMore: false });
+  expect(select("Σ").entries.map(([key]) => key)).toEqual([second]);
 });
 
 test("search reuses row owners and reads model facts only after the resolved identity misses", () => {

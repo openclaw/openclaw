@@ -132,6 +132,60 @@ afterEach(() => {
 });
 
 describe("chat Details presentation", () => {
+  it("resolves composer observation after refs attach", () => {
+    const observe = vi.spyOn(ResizeObserver.prototype, "observe");
+    const pane = document.createElement("div");
+    document.body.append(pane);
+    mounted.push(pane);
+    let input: HTMLTextAreaElement | null = null;
+    try {
+      mountSolid(
+        () => {
+          const details = createComponent(ChatDetails, {
+            chat: props(),
+            presentation: true,
+            mobile: false,
+            elements: { pane, getComposerInput: () => input },
+            setRef: () => {},
+          });
+          input = document.createElement("textarea");
+          pane.append(input);
+          return details;
+        },
+        { container: pane },
+      );
+      flush();
+      expect(observe.mock.calls.some(([target]) => target === input)).toBe(true);
+    } finally {
+      observe.mockRestore();
+    }
+  });
+
+  it("keeps native resize subscriptions across equivalent parent snapshots", async () => {
+    const observe = vi.spyOn(ResizeObserver.prototype, "observe");
+    const unobserve = vi.spyOn(ResizeObserver.prototype, "unobserve");
+    try {
+      const { pane, frame, footer, update } = await fixture();
+      const targets = new Set<Element>([pane, frame, footer]);
+      const calls = () => observe.mock.calls.filter(([target]) => targets.has(target)).length;
+      const initial = calls();
+      expect(initial).toBeGreaterThan(0);
+      update({ elements: { pane, frame, footer } });
+      flush();
+      expect(calls()).toBe(initial);
+      expect(unobserve.mock.calls.filter(([target]) => targets.has(target))).toHaveLength(0);
+      const replacement = document.createElement("div");
+      pane.append(replacement);
+      update({ elements: { pane, frame: replacement, footer } });
+      flush();
+      expect(observe.mock.calls.some(([target]) => target === replacement)).toBe(true);
+      expect(unobserve.mock.calls.some(([target]) => target === frame)).toBe(true);
+    } finally {
+      observe.mockRestore();
+      unobserve.mockRestore();
+    }
+  });
+
   it.each([undefined, "desktop"] as const)(
     "reserves automatic Details before the first resize delivery (presentation: %s)",
     async (nativePresentation) => {

@@ -1715,10 +1715,20 @@ AFTER_CD
     const manualDispatch = { ...releaseChild, dispatchId: "" };
     expect(evaluateWorkflowExpression(job["runs-on"], manualDispatch)).toBe("ubuntu-24.04");
     expect(evaluateWorkflowExpression(parallelism!, manualDispatch)).toBe(1);
-    expect(prepare.run).toContain("pnpm build:ci-artifacts");
-    expect(prepare.run).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
-    expect(prepare.run).not.toContain("--skip-check");
-    expect(prepare.run).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ=");
+    const prepareRun = expectDefined(prepare.run, "Docker smoke package preparation");
+    expect(prepareRun).toContain("pnpm build:ci-artifacts");
+    const declarations =
+      "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts";
+    expect(prepareRun).toContain(declarations);
+    expect(prepareRun.indexOf("pnpm build:ci-artifacts")).toBeLessThan(
+      prepareRun.indexOf(declarations),
+    );
+    expect(prepareRun.indexOf(declarations)).toBeLessThan(
+      prepareRun.indexOf("node scripts/package-openclaw-for-docker.mjs --skip-build"),
+    );
+    expect(prepareRun).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
+    expect(prepareRun).not.toContain("--skip-check");
+    expect(prepareRun).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ=");
     expect(job.steps.indexOf(prepare)).toBeLessThan(job.steps.indexOf(run));
     const baseline = requiredWorkflowStep(
       job.steps,

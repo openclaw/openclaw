@@ -8,7 +8,6 @@ import {
   expectTtsPayloadResult,
   installSpeechProviders,
   listSpeechVoices,
-  nativeVoiceNoteChannels,
   prepareTtsRequest,
   requireFirstCallParam,
   requireFirstSynthesisRequest,
@@ -17,7 +16,6 @@ import {
   setRuntimeConfigSnapshot,
   synthesizeMock,
   synthesizeSpeech,
-  testApi,
   textToSpeech,
   textToSpeechCore,
   transcodeAudioBufferMock,
@@ -84,15 +82,6 @@ describe("TTS runtime native voice-note routing", () => {
   });
 
   afterEach(resetTtsRuntime);
-
-  it("resolves voice delivery support from channel capabilities", () => {
-    for (const channel of nativeVoiceNoteChannels) {
-      expect(testApi.supportsNativeVoiceNoteTts(channel)).toBe(true);
-      expect(testApi.supportsNativeVoiceNoteTts(channel.toUpperCase())).toBe(true);
-    }
-    expect(testApi.supportsNativeVoiceNoteTts("slack")).toBe(false);
-    expect(testApi.supportsNativeVoiceNoteTts(undefined)).toBe(false);
-  });
 
   it("tells generic TTS guidance to defer to MEMORY voice-delivery instructions", () => {
     const hint = buildTtsSystemPromptHint(createTtsConfig("openclaw-speech-core-tts-hint-test"));

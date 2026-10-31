@@ -9,87 +9,135 @@ const composer = `${pane} .agent-chat__composer-combobox textarea`;
 const route = controlUiSessionPath("agent:main:interaction-a");
 
 /** Observe native events in-page: Playwright assertion latency is not input latency. */
-export async function installChatActionObservation(page: Page) {
-  await page.evaluate(() => {
-    const data = {
-      inputFramesMs: [] as number[],
-      longTasksMs: [] as number[],
-      layoutShift: 0,
-      recentInputLayoutShift: 0,
-      insertedRows: 0,
-      removedRows: 0,
-    };
-    const initialRows = new Map(
-      [...document.querySelectorAll(".chat-pane-cache__pane--active [data-chat-row-key]")].map(
-        (row) => [row.getAttribute("data-chat-row-key"), row],
-      ),
-    );
-    const recordInput = () => {
-      const start = performance.now();
-      requestAnimationFrame(() => data.inputFramesMs.push(performance.now() - start));
-    };
-    const events = ["input", "keydown", "pointerdown", "pointerover", "paste", "drop"];
-    events.forEach((event) => document.addEventListener(event, recordInput, true));
-    const supported = PerformanceObserver.supportedEntryTypes;
-    const observers: PerformanceObserver[] = [];
-    if (supported.includes("longtask")) {
-      const observer = new PerformanceObserver((list) => {
-        data.longTasksMs.push(...list.getEntries().map((entry) => entry.duration));
-      });
-      observer.observe({ type: "longtask" });
-      observers.push(observer);
-    }
-    if (supported.includes("layout-shift")) {
-      const observer = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) {
-          const value: unknown = Reflect.get(entry, "value");
-          if (typeof value !== "number") {
-            throw new Error("Layout shift entry missing value");
+export async function installChatActionObservation(
+  page: Page,
+  collectAttribution = false,
+  followPaneChanges = false,
+) {
+  await page.evaluate(
+    ({ attribution, trackPaneChanges }) => {
+      const data = {
+        inputFramesMs: [] as number[],
+        longTasksMs: [] as number[],
+        layoutShift: 0,
+        recentInputLayoutShift: 0,
+        insertedRows: 0,
+        removedRows: 0,
+        layoutShiftSources: [] as unknown[],
+      };
+      const initialPane = document.querySelector(".chat-pane-cache__pane--active");
+      const transcript = initialPane?.querySelector(".chat-thread");
+      const observationRoot = trackPaneChanges
+        ? initialPane?.closest(".chat-pane-cache")
+        : transcript;
+      if (!transcript || !observationRoot || !initialPane) {
+        throw new Error("Chat action observation requires the prepared transcript");
+      }
+      const initialRows = new Map(
+        [...initialPane.querySelectorAll("[data-chat-row-key]")].map((row) => [
+          row.getAttribute("data-chat-row-key"),
+          row,
+        ]),
+      );
+      const recordInput = () => {
+        const start = performance.now();
+        requestAnimationFrame(() => data.inputFramesMs.push(performance.now() - start));
+      };
+      const events = ["input", "keydown", "pointerdown", "pointerover", "paste", "drop"];
+      events.forEach((event) => document.addEventListener(event, recordInput, true));
+      const supported = PerformanceObserver.supportedEntryTypes;
+      const observers: PerformanceObserver[] = [];
+      if (supported.includes("longtask")) {
+        const observer = new PerformanceObserver((list) => {
+          data.longTasksMs.push(...list.getEntries().map((entry) => entry.duration));
+        });
+        observer.observe({ type: "longtask" });
+        observers.push(observer);
+      }
+      if (supported.includes("layout-shift")) {
+        const observer = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            const value: unknown = Reflect.get(entry, "value");
+            if (typeof value !== "number") {
+              throw new Error("Layout shift entry missing value");
+            }
+            if (Reflect.get(entry, "hadRecentInput")) {
+              data.recentInputLayoutShift += value;
+            } else {
+              data.layoutShift += value;
+            }
+            if (attribution) {
+              // SAFETY: The LayoutShift API supplies source nodes and both rectangles.
+              const sources = Reflect.get(entry, "sources") as Array<{
+                node?: Node;
+                previousRect: DOMRectReadOnly;
+                currentRect: DOMRectReadOnly;
+              }>;
+              data.layoutShiftSources.push({
+                time: entry.startTime,
+                value,
+                hadRecentInput: Reflect.get(entry, "hadRecentInput"),
+                sources: sources.map(({ node, previousRect, currentRect }) => ({
+                  tag: node instanceof Element ? node.tagName : node?.nodeName,
+                  classes: node instanceof Element ? node.getAttribute("class") : null,
+                  row:
+                    node instanceof Element
+                      ? node.closest("[data-chat-row-key]")?.getAttribute("data-chat-row-key")
+                      : null,
+                  previous: {
+                    x: previousRect.x,
+                    y: previousRect.y,
+                    width: previousRect.width,
+                    height: previousRect.height,
+                  },
+                  current: {
+                    x: currentRect.x,
+                    y: currentRect.y,
+                    width: currentRect.width,
+                    height: currentRect.height,
+                  },
+                })),
+              });
+            }
           }
-          if (Reflect.get(entry, "hadRecentInput")) {
-            data.recentInputLayoutShift += value;
-          } else {
-            data.layoutShift += value;
-          }
+        });
+        observer.observe({ type: "layout-shift" });
+        observers.push(observer);
+      }
+      const rows = (nodes: NodeList) =>
+        [...nodes].reduce(
+          (count, node) =>
+            count +
+            (node instanceof Element
+              ? Number(node.matches("[data-chat-row-key]")) +
+                node.querySelectorAll("[data-chat-row-key]").length
+              : 0),
+          0,
+        );
+      const mutations = new MutationObserver((records) => {
+        for (const record of records) {
+          data.insertedRows += rows(record.addedNodes);
+          data.removedRows += rows(record.removedNodes);
         }
       });
-      observer.observe({ type: "layout-shift" });
-      observers.push(observer);
-    }
-    const rows = (nodes: NodeList) =>
-      [...nodes].reduce(
-        (count, node) =>
-          count +
-          (node instanceof Element
-            ? Number(node.matches("[data-chat-row-key]")) +
-              node.querySelectorAll("[data-chat-row-key]").length
-            : 0),
-        0,
-      );
-    const mutations = new MutationObserver((records) => {
-      for (const record of records) {
-        data.insertedRows += rows(record.addedNodes);
-        data.removedRows += rows(record.removedNodes);
-      }
-    });
-    const transcript = document.querySelector(".chat-pane-cache__pane--active .chat-thread");
-    if (!transcript) {
-      throw new Error("Chat action observation requires the prepared transcript");
-    }
-    mutations.observe(transcript, {
-      childList: true,
-      subtree: true,
-    });
-    Reflect.set(window, "__chatActionObservation", {
-      data,
-      initialRows,
-      stop: () => {
-        events.forEach((event) => document.removeEventListener(event, recordInput, true));
-        observers.forEach((observer) => observer.disconnect());
-        mutations.disconnect();
-      },
-    });
-  });
+      // Fork mounts its destination in another retained pane under this cache.
+      mutations.observe(observationRoot, {
+        childList: true,
+        subtree: true,
+      });
+      Reflect.set(window, "__chatActionObservation", {
+        data,
+        initialPane,
+        initialRows,
+        stop: () => {
+          events.forEach((event) => document.removeEventListener(event, recordInput, true));
+          observers.forEach((observer) => observer.disconnect());
+          mutations.disconnect();
+        },
+      });
+    },
+    { attribution: collectAttribution, trackPaneChanges: followPaneChanges },
+  );
 }
 
 export async function readChatActionObservation(page: Page) {
@@ -98,12 +146,14 @@ export async function readChatActionObservation(page: Page) {
     const observation = Reflect.get(window, "__chatActionObservation");
     observation.stop();
     const data = observation.data;
-    const currentRows = [
-      ...document.querySelectorAll(".chat-pane-cache__pane--active [data-chat-row-key]"),
-    ];
-    const survivingRows = currentRows.filter((row) =>
-      observation.initialRows.has(row.getAttribute("data-chat-row-key")),
-    );
+    const currentPane = document.querySelector(".chat-pane-cache__pane--active");
+    const currentRows = [...(currentPane?.querySelectorAll("[data-chat-row-key]") ?? [])];
+    const survivingRows =
+      currentPane === observation.initialPane
+        ? currentRows.filter((row) =>
+            observation.initialRows.has(row.getAttribute("data-chat-row-key")),
+          )
+        : [];
     const times: number[] = data.inputFramesMs.toSorted((a: number, b: number) => a - b);
     const longTasksSupported = PerformanceObserver.supportedEntryTypes.includes("longtask");
     const layoutShiftSupported = PerformanceObserver.supportedEntryTypes.includes("layout-shift");
@@ -127,10 +177,14 @@ export async function readChatActionObservation(page: Page) {
         ? {
             layoutShift: data.layoutShift,
             recentInputLayoutShift: data.recentInputLayoutShift,
+            ...(data.layoutShiftSources.length
+              ? { layoutShiftSources: data.layoutShiftSources }
+              : {}),
           }
         : {}),
       insertedRows: data.insertedRows,
       removedRows: data.removedRows,
+      connectedRows: currentRows.length,
       survivingRows: survivingRows.length,
       replacedRows: survivingRows.filter(
         (row) => observation.initialRows.get(row.getAttribute("data-chat-row-key")) !== row,
