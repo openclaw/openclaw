@@ -1,5 +1,3 @@
-// Diagnostic flag/event helpers for plugins that want narrow runtime gating.
-
 import { redactSensitiveText } from "../logging/redact.js";
 
 const LOW_CARDINALITY_DIAGNOSTIC_VALUE_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
@@ -67,5 +65,6 @@ export {
   isValidDiagnosticSpanId,
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
+  normalizeDiagnosticTraceContext,
   parseDiagnosticTraceparent,
 } from "../infra/diagnostic-trace-context.js";

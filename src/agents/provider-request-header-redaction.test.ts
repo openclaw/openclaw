@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redactProviderResponseErrorText } from "./provider-request-header-redaction.js";
+import { redactProviderResponseErrorText as redact } from "./provider-request-header-redaction.js";
 
 function mixPercentEscapeCase(value: string): string {
   let useLowerCase = true;
@@ -10,14 +10,15 @@ function mixPercentEscapeCase(value: string): string {
 }
 
 describe("provider request header redaction", () => {
-  it.each(["utf8"] as const)("redacts decoded Basic credentials encoded as %s", (encoding) => {
+  it("redacts decoded UTF-8 Basic credentials", () => {
     const password = "fixture-päss:word";
     const pair = `fixture-user:${password}`;
-    const token = Buffer.from(pair, encoding).toString("base64");
+    const token = Buffer.from(pair, "utf8").toString("base64");
     const text = `pair=${pair} pass=${password} encoded=${encodeURIComponent(password)} user=fixture-user`;
     for (const header of ["Authorization", "Proxy-Authorization"]) {
-      const redacted = redactProviderResponseErrorText(text, { [header]: `bAsIc ${token}` });
-      expect(redacted).toBe("pair=*** pass=*** encoded=*** user=fixture-user");
+      expect(redact(text, { [header]: `bAsIc ${token}` })).toBe(
+        "pair=*** pass=*** encoded=*** user=fixture-user",
+      );
     }
   });
 
@@ -25,33 +26,20 @@ describe("provider request header redaction", () => {
     { headers: new Headers({ "X-Proxy-Auth": "opaque-credential" }) },
     { headers: [["X-Proxy-Auth", "opaque-credential"]] satisfies HeadersInit },
   ])("redacts credentials supplied through HeadersInit", ({ headers }) => {
-    expect(redactProviderResponseErrorText("Rejected opaque-credential", headers)).toBe(
-      "Rejected ***",
-    );
+    expect(redact("Rejected opaque-credential", headers)).toBe("Rejected ***");
   });
 
   it("redacts configured header values and bare authorization credentials", () => {
-    const secrets = [
-      "Bearer bearer-credential",
-      "bearer-credential",
-      "Basic proxy-credential",
-      "proxy-credential",
-      "custom-credential",
-    ];
-    const redacted = redactProviderResponseErrorText(
-      `content-type=application/json reflected=${secrets.join(" ")}`,
-      {
-        "Content-Type": "application/json",
-        Authorization: "Bearer bearer-credential",
-        "Proxy-Authorization": "Basic proxy-credential",
-        "X-Proxy-Auth": "custom-credential",
-      },
-    );
+    const text =
+      "content-type=application/json reflected=Bearer bearer-credential bearer-credential Basic proxy-credential proxy-credential custom-credential";
+    const redacted = redact(text, {
+      "Content-Type": "application/json",
+      Authorization: "Bearer bearer-credential",
+      "Proxy-Authorization": "Basic proxy-credential",
+      "X-Proxy-Auth": "custom-credential",
+    });
 
-    expect(redacted).toContain("content-type=application/json");
-    for (const secret of secrets) {
-      expect(redacted).not.toContain(secret);
-    }
+    expect(redacted).toBe("content-type=application/json reflected=*** *** *** *** ***");
   });
 
   it("redacts raw, JSON, URI, and form representations without rewriting unrelated escapes", () => {
@@ -61,41 +49,28 @@ describe("provider request header redaction", () => {
       new URLSearchParams([["value", secret]]).toString().slice("value=".length),
     );
     const jsonEncoded = JSON.stringify(secret).slice(1, -1);
-    const text = [
-      `raw=${secret}`,
-      `json={"opaque":"${jsonEncoded}"}`,
-      `uri=${uriEncoded}`,
-      `form=${formEncoded}`,
-      "safe=id%2fpart keep%afcase",
-    ].join(" ");
-
-    const redacted = redactProviderResponseErrorText(text, { "X-Proxy-Auth": secret });
-
-    for (const representation of [secret, jsonEncoded, uriEncoded, formEncoded]) {
-      expect(redacted).not.toContain(representation);
-    }
-    expect(redacted).toContain("safe=id%2fpart keep%afcase");
+    const text = `raw=${secret} json={"opaque":"${jsonEncoded}"} uri=${uriEncoded} form=${formEncoded} safe=id%2fpart keep%afcase`;
+    expect(redact(text, { "X-Proxy-Auth": secret })).toBe(
+      'raw=*** json={"opaque":"***"} uri=*** form=*** safe=id%2fpart keep%afcase',
+    );
   });
 
-  it("redacts a secret prefix only when the response was truncated", () => {
-    const secret = "boundary-credential-secret";
-    const retainedPrefix = secret.slice(0, -4);
-    const text = `safe diagnostic ${retainedPrefix}`;
-
-    expect(
-      redactProviderResponseErrorText(text, { "X-Auth": secret }, { sourceTruncated: true }),
-    ).toBe("safe diagnostic ***");
-    expect(redactProviderResponseErrorText(text, { "X-Auth": secret })).toBe(text);
+  it.each([
+    ["raw", "boundary-credential-secret", "boundary-credential-se"],
+    ["URI", 'river +17/GLASS~MOTH%"tail', "river%20%2b17%2fGLASS~MOTH%25%22"],
+    ["form", 'river +17/GLASS~MOTH%"tail', "river+%2b17%2fGLASS%7eMOTH%25%22"],
+  ])("redacts a %s secret prefix only when the response was truncated", (_name, secret, prefix) => {
+    const text = `safe id%afpart diagnostic ${prefix}`;
+    const headers = { "X-Auth": secret, "X-Other": "another +% credential" };
+    expect(redact(text, headers, { sourceTruncated: true })).toBe("safe id%afpart diagnostic ***");
+    expect(redact(text, headers)).toBe(text);
   });
 
   it("redacts raw and JSON forms when a value contains a lone surrogate", () => {
     const secret = "lone-\ud800-surrogate-secret";
     const jsonEncoded = JSON.stringify(secret).slice(1, -1);
-    const redacted = redactProviderResponseErrorText(`raw=${secret} json=${jsonEncoded}`, {
-      "X-Auth": secret,
-    });
-
-    expect(redacted).not.toContain(secret);
-    expect(redacted).not.toContain(jsonEncoded);
+    expect(redact(`raw=${secret} json=${jsonEncoded}`, { "X-Auth": secret })).toBe(
+      "raw=*** json=***",
+    );
   });
 });

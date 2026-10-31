@@ -1,12 +1,14 @@
+import { EventEmitter } from "node:events";
 import { createServer } from "node:net";
 import { serialize } from "node:v8";
+import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { encodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import type {
   NativeWorkerResourceModule,
   NativeWorkerResourceOwner,
+  NativeWorkerResourcePort,
 } from "../../infra/worker-native-lifecycle.types.js";
 import { MAX_PENDING_BYTES, MAX_PENDING_MESSAGES } from "./ipc.js";
-import { BrokerResourcePort } from "./resource-port.js";
 import {
   SPAWN_BROKER_STARTUP_TIMEOUT_MS,
   type BrokerResourceAttachment,
@@ -14,6 +16,37 @@ import {
   type BrokerResourceResponse,
 } from "./resource-protocol.js";
 import { createBrokerResourceSocket } from "./resource-socket.js";
+
+type PortEvents = { message: [unknown]; close: []; messageerror: [unknown] };
+
+/** A logical resource port; closing it does not assert anything about a native child. */
+class BrokerResourcePort extends EventEmitter<PortEvents> implements NativeWorkerResourcePort {
+  private closed = false;
+
+  constructor(private readonly send: (value: unknown) => void) {
+    super();
+  }
+
+  postMessage(value: unknown): void {
+    if (this.closed) {
+      throw new Error("Native resource message port is closed");
+    }
+    this.send(value);
+  }
+
+  receive(value: unknown): void {
+    if (!this.closed) {
+      this.emit("message", value);
+    }
+  }
+
+  close(): void {
+    if (!this.closed) {
+      this.closed = true;
+      this.emit("close");
+    }
+  }
+}
 
 type ResourceSocket = ReturnType<typeof createBrokerResourceSocket>;
 type ResourceRequest = Exclude<BrokerResourceRequest, { type: "resource-attach" }>;
@@ -33,10 +66,6 @@ type Resource = {
   sequence: number;
   ownerSequence: number;
   ownerMessages: Map<number, { value: unknown; size: number }>;
-  ownerFailures: Map<
-    number,
-    { response: Extract<BrokerResourceResponse, { type: "resource-owner-rejected" }>; size: number }
-  >;
 };
 
 /** The broker retains resource owners independently of their submitting Worker's socket. */
@@ -169,20 +198,8 @@ export async function createBrokerNativeResourceServer(options: {
     resource: Resource,
     request: Extract<ResourceRequest, { type: "resource-owner" }>,
   ) => {
-    const acknowledge = (sequence: number) =>
-      publish(
-        resource,
-        resource.ownerFailures.get(sequence)?.response ?? {
-          type: "resource-owner-received",
-          id: resource.attachment.id,
-          sequence,
-        },
-      );
-    if (!Number.isSafeInteger(request.sequence) || request.sequence <= 0) {
-      throw new Error("Invalid native resource owner sequence");
-    }
     if (request.sequence <= resource.ownerSequence) {
-      acknowledge(request.sequence);
+      // The original receipt is already queued on both ordered return transports.
       return;
     }
     if (!resource.ownerPort || resource.closed || !resource.created) {
@@ -195,29 +212,20 @@ export async function createBrokerNativeResourceServer(options: {
         ownerPort.receive(value);
       } catch (error) {
         try {
-          const response: Extract<BrokerResourceResponse, { type: "resource-owner-rejected" }> = {
+          publish(resource, {
             type: "resource-owner-rejected",
             id: resource.attachment.id,
             sequence,
             error: encodeNativeWorkerFailure(error),
-          };
-          const size = serialize(response).length;
-          if (
-            ownerBufferedBytes + size > MAX_PENDING_BYTES ||
-            ownerBufferedMessages >= MAX_PENDING_MESSAGES
-          ) {
-            throw new Error("Native resource owner receipt capacity exceeded", { cause: error });
-          }
-          resource.ownerFailures.set(sequence, { response, size });
-          ownerBufferedBytes += size;
-          ownerBufferedMessages++;
+          });
+          return true;
         } catch (receiptError) {
           failed(resource, receiptError);
           disconnect();
           return false;
         }
       }
-      acknowledge(sequence);
+      publish(resource, { type: "resource-owner-received", id: resource.attachment.id, sequence });
       return true;
     };
     if (request.sequence !== resource.ownerSequence + 1) {
@@ -265,17 +273,6 @@ export async function createBrokerNativeResourceServer(options: {
       }
       return;
     }
-    if (
-      request.type === "resource-close" &&
-      (!Number.isSafeInteger(request.requestId) || request.requestId === 0)
-    ) {
-      publishParent({
-        type: "resource-failed",
-        id: request.id,
-        error: encodeNativeWorkerFailure(new Error("Invalid native resource close request ID")),
-      });
-      return;
-    }
     const resource = resources.get(request.id);
     if (!resource) {
       if (sourceSealed && request.type === "resource-close") {
@@ -309,11 +306,6 @@ export async function createBrokerNativeResourceServer(options: {
         ownerBufferedMessages--;
       }
       resource.ownerMessages.clear();
-      for (const outcome of resource.ownerFailures.values()) {
-        ownerBufferedBytes -= outcome.size;
-        ownerBufferedMessages--;
-      }
-      resource.ownerFailures.clear();
       resource.socket?.close();
     } else if (
       !resource.created ||
@@ -410,7 +402,6 @@ export async function createBrokerNativeResourceServer(options: {
           sequence: 0,
           ownerSequence: 0,
           ownerMessages: new Map(),
-          ownerFailures: new Map(),
         };
         if (attachment.ownerPort) {
           current.ownerPort = new BrokerResourcePort((message) => {
@@ -502,12 +493,7 @@ export async function createBrokerNativeResourceServer(options: {
         }),
       );
       await serverClosed;
-      const errors = outcomes.flatMap((outcome) =>
-        outcome.status === "rejected" ? [outcome.reason] : [],
-      );
-      if (errors.length) {
-        throw new AggregateError(errors, "Spawn broker native resource cleanup failed");
-      }
+      throwSettledAggregate(outcomes, "Spawn broker native resource cleanup failed");
       resources.clear();
     });
     disconnect();

@@ -78,6 +78,10 @@
       "label": "Twilio Region",
       "advanced": true
     },
+    "twilio.record": {
+      "label": "Record Outbound Twilio Calls",
+      "help": "Off by default. Records every outbound call for this account in Twilio storage from answer. Obtain required participant consent before calling; no automatic recording announcement is played."
+    },
     "outbound.defaultMode": {
       "label": "Default Call Mode"
     },
@@ -382,6 +386,10 @@
           "region": {
             "type": "string",
             "enum": ["us1", "ie1", "au1"]
+          },
+          "record": {
+            "type": "boolean",
+            "default": false
           }
         }
       },
@@ -930,7 +938,13 @@
             "type": "object",
             "additionalProperties": {
               "type": "object",
-              "additionalProperties": true
+              "additionalProperties": true,
+              "properties": {
+                "inputTranscriptionModel": {
+                  "type": "string",
+                  "description": "Input transcription model or deployment name. Omit to keep the provider default."
+                }
+              }
             }
           }
         }
@@ -1243,7 +1257,8 @@
         { "path": "twilio.authToken", "expected": "string" },
         { "path": "realtime.providers.*.apiKey", "expected": "string" },
         { "path": "streaming.providers.*.apiKey", "expected": "string" },
-        { "path": "tts.providers.*.apiKey", "expected": "string" }
+        { "path": "tts.providers.*.apiKey", "expected": "string" },
+        { "path": "numbers.*.tts.providers.*.apiKey", "expected": "string" }
       ]
     }
   }

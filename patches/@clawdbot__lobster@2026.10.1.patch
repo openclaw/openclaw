@@ -1,0 +1,1271 @@
+diff --git a/dist/src/commands/stdlib/llm_invoke.js b/dist/src/commands/stdlib/llm_invoke.js
+index ef3f3b441a8eb47fc797b120e0a0984f5e24eb15..c7cf326b867b5362893f780f41d2ace25e0baa22 100644
+--- a/dist/src/commands/stdlib/llm_invoke.js
++++ b/dist/src/commands/stdlib/llm_invoke.js
+@@ -6,89 +6,9 @@ import { Ajv } from "ajv";
+ import { diffAndStore, ensureDirectory, atomicWriteWasPublished, isJsonSyntaxError, readStateJsonWithLock, stableStringify, withFileLock, writeFileAtomic, } from "../../state/store.js";
+ import { createCompileCached } from "../../validation.js";
+ import { httpResponseLimitFromEnv, readResponseTextCapped } from "../../read_response_text.js";
++import { validatePayload, validateResponseEnvelope } from "./llm_invoke_validators.generated.js";
+ const ajv = new Ajv({ allErrors: true, strict: false });
+ const compileCachedLocal = createCompileCached(ajv);
+-const artifactSchema = {
+-    type: "object",
+-    properties: {
+-        kind: { type: "string" },
+-        role: { type: "string" },
+-        name: { type: "string" },
+-        mimeType: { type: "string" },
+-        text: { type: "string" },
+-        data: {},
+-        uri: { type: "string" },
+-    },
+-    additionalProperties: true,
+-};
+-const payloadSchema = {
+-    type: "object",
+-    properties: {
+-        prompt: { type: "string", minLength: 1 },
+-        model: { type: "string", minLength: 1 },
+-        artifacts: { type: "array", items: artifactSchema },
+-        artifactHashes: { type: "array", items: { type: "string", minLength: 10 } },
+-        schemaVersion: { type: "string" },
+-        metadata: { type: "object", additionalProperties: true },
+-        outputSchema: { type: "object", additionalProperties: true },
+-        temperature: { type: "number" },
+-        maxOutputTokens: { type: "number" },
+-        retryContext: {
+-            type: "object",
+-            properties: {
+-                attempt: { type: "number" },
+-                validationErrors: { type: "array", items: { type: "string" } },
+-            },
+-            additionalProperties: false,
+-        },
+-    },
+-    required: ["prompt", "artifacts", "artifactHashes"],
+-    additionalProperties: false,
+-};
+-const responseSchema = {
+-    type: "object",
+-    properties: {
+-        ok: { type: "boolean" },
+-        result: {
+-            type: "object",
+-            properties: {
+-                runId: { type: "string" },
+-                model: { type: "string" },
+-                prompt: { type: "string" },
+-                status: { type: "string" },
+-                output: {
+-                    type: "object",
+-                    properties: {
+-                        text: { type: "string" },
+-                        data: {},
+-                        format: { type: "string" },
+-                    },
+-                    required: [],
+-                    additionalProperties: true,
+-                },
+-                usage: {
+-                    type: "object",
+-                    properties: {
+-                        inputTokens: { type: "number" },
+-                        outputTokens: { type: "number" },
+-                        totalTokens: { type: "number" },
+-                    },
+-                    additionalProperties: true,
+-                },
+-                warnings: { type: "array", items: { type: "string" } },
+-                metadata: { type: "object", additionalProperties: true },
+-                diagnostics: { type: "object", additionalProperties: true },
+-            },
+-            required: ["output"],
+-            additionalProperties: true,
+-        },
+-        error: { type: "object", additionalProperties: true },
+-    },
+-    required: ["ok"],
+-    additionalProperties: true,
+-};
+-const validatePayload = ajv.compile(payloadSchema);
+-const validateResponseEnvelope = ajv.compile(responseSchema);
+ const DEFAULT_MAX_VALIDATION_RETRIES = 1;
+ const STATE_VERSION = 1;
+ // Identity version of the response cache key. See computeCacheKey.
+@@ -981,4 +901,3 @@ async function* streamOf(items) {
+     for (const item of items)
+         yield item;
+ }
+-//# sourceMappingURL=llm_invoke.js.map
+\ No newline at end of file
+diff --git a/dist/src/commands/stdlib/llm_invoke_schemas.js b/dist/src/commands/stdlib/llm_invoke_schemas.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..028391924b0aab5a66c4c10259708b35a9a85be5
+--- /dev/null
++++ b/dist/src/commands/stdlib/llm_invoke_schemas.js
+@@ -0,0 +1,79 @@
++const artifactSchema = {
++    type: "object",
++    properties: {
++        kind: { type: "string" },
++        role: { type: "string" },
++        name: { type: "string" },
++        mimeType: { type: "string" },
++        text: { type: "string" },
++        data: {},
++        uri: { type: "string" },
++    },
++    additionalProperties: true,
++};
++export const payloadSchema = {
++    type: "object",
++    properties: {
++        prompt: { type: "string", minLength: 1 },
++        model: { type: "string", minLength: 1 },
++        artifacts: { type: "array", items: artifactSchema },
++        artifactHashes: { type: "array", items: { type: "string", minLength: 10 } },
++        schemaVersion: { type: "string" },
++        metadata: { type: "object", additionalProperties: true },
++        outputSchema: { type: "object", additionalProperties: true },
++        temperature: { type: "number" },
++        maxOutputTokens: { type: "number" },
++        retryContext: {
++            type: "object",
++            properties: {
++                attempt: { type: "number" },
++                validationErrors: { type: "array", items: { type: "string" } },
++            },
++            additionalProperties: false,
++        },
++    },
++    required: ["prompt", "artifacts", "artifactHashes"],
++    additionalProperties: false,
++};
++export const responseSchema = {
++    type: "object",
++    properties: {
++        ok: { type: "boolean" },
++        result: {
++            type: "object",
++            properties: {
++                runId: { type: "string" },
++                model: { type: "string" },
++                prompt: { type: "string" },
++                status: { type: "string" },
++                output: {
++                    type: "object",
++                    properties: {
++                        text: { type: "string" },
++                        data: {},
++                        format: { type: "string" },
++                    },
++                    required: [],
++                    additionalProperties: true,
++                },
++                usage: {
++                    type: "object",
++                    properties: {
++                        inputTokens: { type: "number" },
++                        outputTokens: { type: "number" },
++                        totalTokens: { type: "number" },
++                    },
++                    additionalProperties: true,
++                },
++                warnings: { type: "array", items: { type: "string" } },
++                metadata: { type: "object", additionalProperties: true },
++                diagnostics: { type: "object", additionalProperties: true },
++            },
++            required: ["output"],
++            additionalProperties: true,
++        },
++        error: { type: "object", additionalProperties: true },
++    },
++    required: ["ok"],
++    additionalProperties: true,
++};
+diff --git a/dist/src/commands/stdlib/llm_invoke_validators.generated.js b/dist/src/commands/stdlib/llm_invoke_validators.generated.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..e66540426b87dba74046a297e81fa28b1cddedc3
+--- /dev/null
++++ b/dist/src/commands/stdlib/llm_invoke_validators.generated.js
+@@ -0,0 +1,1008 @@
++// Generated by pnpm lobster:validators:gen. Do not edit.
++// Ajv 8.20.0 standalone validators.
++// Unicode-length helper SHA-256: 5c6046751d39c9fa014b557a89c28c56fc190aa659892bd8bdb74a8fc64e59c4
++"use strict";
++export const validatePayload = validate10;
++const schema11 = {
++  type: "object",
++  properties: {
++    prompt: { type: "string", minLength: 1 },
++    model: { type: "string", minLength: 1 },
++    artifacts: {
++      type: "array",
++      items: {
++        type: "object",
++        properties: {
++          kind: { type: "string" },
++          role: { type: "string" },
++          name: { type: "string" },
++          mimeType: { type: "string" },
++          text: { type: "string" },
++          data: {},
++          uri: { type: "string" },
++        },
++        additionalProperties: true,
++      },
++    },
++    artifactHashes: { type: "array", items: { type: "string", minLength: 10 } },
++    schemaVersion: { type: "string" },
++    metadata: { type: "object", additionalProperties: true },
++    outputSchema: { type: "object", additionalProperties: true },
++    temperature: { type: "number" },
++    maxOutputTokens: { type: "number" },
++    retryContext: {
++      type: "object",
++      properties: {
++        attempt: { type: "number" },
++        validationErrors: { type: "array", items: { type: "string" } },
++      },
++      additionalProperties: false,
++    },
++  },
++  required: ["prompt", "artifacts", "artifactHashes"],
++  additionalProperties: false,
++};
++const func2 = Object.prototype.hasOwnProperty;
++const func3 = function ucs2length(str) {
++  const len = str.length;
++  let length = 0;
++  let pos = 0;
++  let value;
++  while (pos < len) {
++    length++;
++    value = str.charCodeAt(pos++);
++    if (value >= 0xd800 && value <= 0xdbff && pos < len) {
++      // high surrogate, and there is a next character
++      value = str.charCodeAt(pos);
++      if ((value & 0xfc00) === 0xdc00) pos++; // low surrogate
++    }
++  }
++  return length;
++};
++
++function validate10(
++  data,
++  { instancePath = "", parentData, parentDataProperty, rootData = data } = {},
++) {
++  let vErrors = null;
++  let errors = 0;
++  if (data && typeof data == "object" && !Array.isArray(data)) {
++    if (data.prompt === undefined) {
++      const err0 = {
++        instancePath,
++        schemaPath: "#/required",
++        keyword: "required",
++        params: { missingProperty: "prompt" },
++        message: "must have required property '" + "prompt" + "'",
++      };
++      if (vErrors === null) {
++        vErrors = [err0];
++      } else {
++        vErrors.push(err0);
++      }
++      errors++;
++    }
++    if (data.artifacts === undefined) {
++      const err1 = {
++        instancePath,
++        schemaPath: "#/required",
++        keyword: "required",
++        params: { missingProperty: "artifacts" },
++        message: "must have required property '" + "artifacts" + "'",
++      };
++      if (vErrors === null) {
++        vErrors = [err1];
++      } else {
++        vErrors.push(err1);
++      }
++      errors++;
++    }
++    if (data.artifactHashes === undefined) {
++      const err2 = {
++        instancePath,
++        schemaPath: "#/required",
++        keyword: "required",
++        params: { missingProperty: "artifactHashes" },
++        message: "must have required property '" + "artifactHashes" + "'",
++      };
++      if (vErrors === null) {
++        vErrors = [err2];
++      } else {
++        vErrors.push(err2);
++      }
++      errors++;
++    }
++    for (const key0 in data) {
++      if (!func2.call(schema11.properties, key0)) {
++        const err3 = {
++          instancePath,
++          schemaPath: "#/additionalProperties",
++          keyword: "additionalProperties",
++          params: { additionalProperty: key0 },
++          message: "must NOT have additional properties",
++        };
++        if (vErrors === null) {
++          vErrors = [err3];
++        } else {
++          vErrors.push(err3);
++        }
++        errors++;
++      }
++    }
++    if (data.prompt !== undefined) {
++      let data0 = data.prompt;
++      if (typeof data0 === "string") {
++        if (func3(data0) < 1) {
++          const err4 = {
++            instancePath: instancePath + "/prompt",
++            schemaPath: "#/properties/prompt/minLength",
++            keyword: "minLength",
++            params: { limit: 1 },
++            message: "must NOT have fewer than 1 characters",
++          };
++          if (vErrors === null) {
++            vErrors = [err4];
++          } else {
++            vErrors.push(err4);
++          }
++          errors++;
++        }
++      } else {
++        const err5 = {
++          instancePath: instancePath + "/prompt",
++          schemaPath: "#/properties/prompt/type",
++          keyword: "type",
++          params: { type: "string" },
++          message: "must be string",
++        };
++        if (vErrors === null) {
++          vErrors = [err5];
++        } else {
++          vErrors.push(err5);
++        }
++        errors++;
++      }
++    }
++    if (data.model !== undefined) {
++      let data1 = data.model;
++      if (typeof data1 === "string") {
++        if (func3(data1) < 1) {
++          const err6 = {
++            instancePath: instancePath + "/model",
++            schemaPath: "#/properties/model/minLength",
++            keyword: "minLength",
++            params: { limit: 1 },
++            message: "must NOT have fewer than 1 characters",
++          };
++          if (vErrors === null) {
++            vErrors = [err6];
++          } else {
++            vErrors.push(err6);
++          }
++          errors++;
++        }
++      } else {
++        const err7 = {
++          instancePath: instancePath + "/model",
++          schemaPath: "#/properties/model/type",
++          keyword: "type",
++          params: { type: "string" },
++          message: "must be string",
++        };
++        if (vErrors === null) {
++          vErrors = [err7];
++        } else {
++          vErrors.push(err7);
++        }
++        errors++;
++      }
++    }
++    if (data.artifacts !== undefined) {
++      let data2 = data.artifacts;
++      if (Array.isArray(data2)) {
++        const len0 = data2.length;
++        for (let i0 = 0; i0 < len0; i0++) {
++          let data3 = data2[i0];
++          if (data3 && typeof data3 == "object" && !Array.isArray(data3)) {
++            if (data3.kind !== undefined) {
++              if (typeof data3.kind !== "string") {
++                const err8 = {
++                  instancePath: instancePath + "/artifacts/" + i0 + "/kind",
++                  schemaPath: "#/properties/artifacts/items/properties/kind/type",
++                  keyword: "type",
++                  params: { type: "string" },
++                  message: "must be string",
++                };
++                if (vErrors === null) {
++                  vErrors = [err8];
++                } else {
++                  vErrors.push(err8);
++                }
++                errors++;
++              }
++            }
++            if (data3.role !== undefined) {
++              if (typeof data3.role !== "string") {
++                const err9 = {
++                  instancePath: instancePath + "/artifacts/" + i0 + "/role",
++                  schemaPath: "#/properties/artifacts/items/properties/role/type",
++                  keyword: "type",
++                  params: { type: "string" },
++                  message: "must be string",
++                };
++                if (vErrors === null) {
++                  vErrors = [err9];
++                } else {
++                  vErrors.push(err9);
++                }
++                errors++;
++              }
++            }
++            if (data3.name !== undefined) {
++              if (typeof data3.name !== "string") {
++                const err10 = {
++                  instancePath: instancePath + "/artifacts/" + i0 + "/name",
++                  schemaPath: "#/properties/artifacts/items/properties/name/type",
++                  keyword: "type",
++                  params: { type: "string" },
++                  message: "must be string",
++                };
++                if (vErrors === null) {
++                  vErrors = [err10];
++                } else {
++                  vErrors.push(err10);
++                }
++                errors++;
++              }
++            }
++            if (data3.mimeType !== undefined) {
++              if (typeof data3.mimeType !== "string") {
++                const err11 = {
++                  instancePath: instancePath + "/artifacts/" + i0 + "/mimeType",
++                  schemaPath: "#/properties/artifacts/items/properties/mimeType/type",
++                  keyword: "type",
++                  params: { type: "string" },
++                  message: "must be string",
++                };
++                if (vErrors === null) {
++                  vErrors = [err11];
++                } else {
++                  vErrors.push(err11);
++                }
++                errors++;
++              }
++            }
++            if (data3.text !== undefined) {
++              if (typeof data3.text !== "string") {
++                const err12 = {
++                  instancePath: instancePath + "/artifacts/" + i0 + "/text",
++                  schemaPath: "#/properties/artifacts/items/properties/text/type",
++                  keyword: "type",
++                  params: { type: "string" },
++                  message: "must be string",
++                };
++                if (vErrors === null) {
++                  vErrors = [err12];
++                } else {
++                  vErrors.push(err12);
++                }
++                errors++;
++              }
++            }
++            if (data3.uri !== undefined) {
++              if (typeof data3.uri !== "string") {
++                const err13 = {
++                  instancePath: instancePath + "/artifacts/" + i0 + "/uri",
++                  schemaPath: "#/properties/artifacts/items/properties/uri/type",
++                  keyword: "type",
++                  params: { type: "string" },
++                  message: "must be string",
++                };
++                if (vErrors === null) {
++                  vErrors = [err13];
++                } else {
++                  vErrors.push(err13);
++                }
++                errors++;
++              }
++            }
++          } else {
++            const err14 = {
++              instancePath: instancePath + "/artifacts/" + i0,
++              schemaPath: "#/properties/artifacts/items/type",
++              keyword: "type",
++              params: { type: "object" },
++              message: "must be object",
++            };
++            if (vErrors === null) {
++              vErrors = [err14];
++            } else {
++              vErrors.push(err14);
++            }
++            errors++;
++          }
++        }
++      } else {
++        const err15 = {
++          instancePath: instancePath + "/artifacts",
++          schemaPath: "#/properties/artifacts/type",
++          keyword: "type",
++          params: { type: "array" },
++          message: "must be array",
++        };
++        if (vErrors === null) {
++          vErrors = [err15];
++        } else {
++          vErrors.push(err15);
++        }
++        errors++;
++      }
++    }
++    if (data.artifactHashes !== undefined) {
++      let data10 = data.artifactHashes;
++      if (Array.isArray(data10)) {
++        const len1 = data10.length;
++        for (let i1 = 0; i1 < len1; i1++) {
++          let data11 = data10[i1];
++          if (typeof data11 === "string") {
++            if (func3(data11) < 10) {
++              const err16 = {
++                instancePath: instancePath + "/artifactHashes/" + i1,
++                schemaPath: "#/properties/artifactHashes/items/minLength",
++                keyword: "minLength",
++                params: { limit: 10 },
++                message: "must NOT have fewer than 10 characters",
++              };
++              if (vErrors === null) {
++                vErrors = [err16];
++              } else {
++                vErrors.push(err16);
++              }
++              errors++;
++            }
++          } else {
++            const err17 = {
++              instancePath: instancePath + "/artifactHashes/" + i1,
++              schemaPath: "#/properties/artifactHashes/items/type",
++              keyword: "type",
++              params: { type: "string" },
++              message: "must be string",
++            };
++            if (vErrors === null) {
++              vErrors = [err17];
++            } else {
++              vErrors.push(err17);
++            }
++            errors++;
++          }
++        }
++      } else {
++        const err18 = {
++          instancePath: instancePath + "/artifactHashes",
++          schemaPath: "#/properties/artifactHashes/type",
++          keyword: "type",
++          params: { type: "array" },
++          message: "must be array",
++        };
++        if (vErrors === null) {
++          vErrors = [err18];
++        } else {
++          vErrors.push(err18);
++        }
++        errors++;
++      }
++    }
++    if (data.schemaVersion !== undefined) {
++      if (typeof data.schemaVersion !== "string") {
++        const err19 = {
++          instancePath: instancePath + "/schemaVersion",
++          schemaPath: "#/properties/schemaVersion/type",
++          keyword: "type",
++          params: { type: "string" },
++          message: "must be string",
++        };
++        if (vErrors === null) {
++          vErrors = [err19];
++        } else {
++          vErrors.push(err19);
++        }
++        errors++;
++      }
++    }
++    if (data.metadata !== undefined) {
++      let data13 = data.metadata;
++      if (data13 && typeof data13 == "object" && !Array.isArray(data13)) {
++      } else {
++        const err20 = {
++          instancePath: instancePath + "/metadata",
++          schemaPath: "#/properties/metadata/type",
++          keyword: "type",
++          params: { type: "object" },
++          message: "must be object",
++        };
++        if (vErrors === null) {
++          vErrors = [err20];
++        } else {
++          vErrors.push(err20);
++        }
++        errors++;
++      }
++    }
++    if (data.outputSchema !== undefined) {
++      let data14 = data.outputSchema;
++      if (data14 && typeof data14 == "object" && !Array.isArray(data14)) {
++      } else {
++        const err21 = {
++          instancePath: instancePath + "/outputSchema",
++          schemaPath: "#/properties/outputSchema/type",
++          keyword: "type",
++          params: { type: "object" },
++          message: "must be object",
++        };
++        if (vErrors === null) {
++          vErrors = [err21];
++        } else {
++          vErrors.push(err21);
++        }
++        errors++;
++      }
++    }
++    if (data.temperature !== undefined) {
++      if (!(typeof data.temperature == "number")) {
++        const err22 = {
++          instancePath: instancePath + "/temperature",
++          schemaPath: "#/properties/temperature/type",
++          keyword: "type",
++          params: { type: "number" },
++          message: "must be number",
++        };
++        if (vErrors === null) {
++          vErrors = [err22];
++        } else {
++          vErrors.push(err22);
++        }
++        errors++;
++      }
++    }
++    if (data.maxOutputTokens !== undefined) {
++      if (!(typeof data.maxOutputTokens == "number")) {
++        const err23 = {
++          instancePath: instancePath + "/maxOutputTokens",
++          schemaPath: "#/properties/maxOutputTokens/type",
++          keyword: "type",
++          params: { type: "number" },
++          message: "must be number",
++        };
++        if (vErrors === null) {
++          vErrors = [err23];
++        } else {
++          vErrors.push(err23);
++        }
++        errors++;
++      }
++    }
++    if (data.retryContext !== undefined) {
++      let data17 = data.retryContext;
++      if (data17 && typeof data17 == "object" && !Array.isArray(data17)) {
++        for (const key1 in data17) {
++          if (!(key1 === "attempt" || key1 === "validationErrors")) {
++            const err24 = {
++              instancePath: instancePath + "/retryContext",
++              schemaPath: "#/properties/retryContext/additionalProperties",
++              keyword: "additionalProperties",
++              params: { additionalProperty: key1 },
++              message: "must NOT have additional properties",
++            };
++            if (vErrors === null) {
++              vErrors = [err24];
++            } else {
++              vErrors.push(err24);
++            }
++            errors++;
++          }
++        }
++        if (data17.attempt !== undefined) {
++          if (!(typeof data17.attempt == "number")) {
++            const err25 = {
++              instancePath: instancePath + "/retryContext/attempt",
++              schemaPath: "#/properties/retryContext/properties/attempt/type",
++              keyword: "type",
++              params: { type: "number" },
++              message: "must be number",
++            };
++            if (vErrors === null) {
++              vErrors = [err25];
++            } else {
++              vErrors.push(err25);
++            }
++            errors++;
++          }
++        }
++        if (data17.validationErrors !== undefined) {
++          let data19 = data17.validationErrors;
++          if (Array.isArray(data19)) {
++            const len2 = data19.length;
++            for (let i2 = 0; i2 < len2; i2++) {
++              if (typeof data19[i2] !== "string") {
++                const err26 = {
++                  instancePath: instancePath + "/retryContext/validationErrors/" + i2,
++                  schemaPath: "#/properties/retryContext/properties/validationErrors/items/type",
++                  keyword: "type",
++                  params: { type: "string" },
++                  message: "must be string",
++                };
++                if (vErrors === null) {
++                  vErrors = [err26];
++                } else {
++                  vErrors.push(err26);
++                }
++                errors++;
++              }
++            }
++          } else {
++            const err27 = {
++              instancePath: instancePath + "/retryContext/validationErrors",
++              schemaPath: "#/properties/retryContext/properties/validationErrors/type",
++              keyword: "type",
++              params: { type: "array" },
++              message: "must be array",
++            };
++            if (vErrors === null) {
++              vErrors = [err27];
++            } else {
++              vErrors.push(err27);
++            }
++            errors++;
++          }
++        }
++      } else {
++        const err28 = {
++          instancePath: instancePath + "/retryContext",
++          schemaPath: "#/properties/retryContext/type",
++          keyword: "type",
++          params: { type: "object" },
++          message: "must be object",
++        };
++        if (vErrors === null) {
++          vErrors = [err28];
++        } else {
++          vErrors.push(err28);
++        }
++        errors++;
++      }
++    }
++  } else {
++    const err29 = {
++      instancePath,
++      schemaPath: "#/type",
++      keyword: "type",
++      params: { type: "object" },
++      message: "must be object",
++    };
++    if (vErrors === null) {
++      vErrors = [err29];
++    } else {
++      vErrors.push(err29);
++    }
++    errors++;
++  }
++  validate10.errors = vErrors;
++  return errors === 0;
++}
++
++export const validateResponseEnvelope = validate11;
++const schema12 = {
++  type: "object",
++  properties: {
++    ok: { type: "boolean" },
++    result: {
++      type: "object",
++      properties: {
++        runId: { type: "string" },
++        model: { type: "string" },
++        prompt: { type: "string" },
++        status: { type: "string" },
++        output: {
++          type: "object",
++          properties: { text: { type: "string" }, data: {}, format: { type: "string" } },
++          required: [],
++          additionalProperties: true,
++        },
++        usage: {
++          type: "object",
++          properties: {
++            inputTokens: { type: "number" },
++            outputTokens: { type: "number" },
++            totalTokens: { type: "number" },
++          },
++          additionalProperties: true,
++        },
++        warnings: { type: "array", items: { type: "string" } },
++        metadata: { type: "object", additionalProperties: true },
++        diagnostics: { type: "object", additionalProperties: true },
++      },
++      required: ["output"],
++      additionalProperties: true,
++    },
++    error: { type: "object", additionalProperties: true },
++  },
++  required: ["ok"],
++  additionalProperties: true,
++};
++
++function validate11(
++  data,
++  { instancePath = "", parentData, parentDataProperty, rootData = data } = {},
++) {
++  let vErrors = null;
++  let errors = 0;
++  if (data && typeof data == "object" && !Array.isArray(data)) {
++    if (data.ok === undefined) {
++      const err0 = {
++        instancePath,
++        schemaPath: "#/required",
++        keyword: "required",
++        params: { missingProperty: "ok" },
++        message: "must have required property '" + "ok" + "'",
++      };
++      if (vErrors === null) {
++        vErrors = [err0];
++      } else {
++        vErrors.push(err0);
++      }
++      errors++;
++    }
++    if (data.ok !== undefined) {
++      if (typeof data.ok !== "boolean") {
++        const err1 = {
++          instancePath: instancePath + "/ok",
++          schemaPath: "#/properties/ok/type",
++          keyword: "type",
++          params: { type: "boolean" },
++          message: "must be boolean",
++        };
++        if (vErrors === null) {
++          vErrors = [err1];
++        } else {
++          vErrors.push(err1);
++        }
++        errors++;
++      }
++    }
++    if (data.result !== undefined) {
++      let data1 = data.result;
++      if (data1 && typeof data1 == "object" && !Array.isArray(data1)) {
++        if (data1.output === undefined) {
++          const err2 = {
++            instancePath: instancePath + "/result",
++            schemaPath: "#/properties/result/required",
++            keyword: "required",
++            params: { missingProperty: "output" },
++            message: "must have required property '" + "output" + "'",
++          };
++          if (vErrors === null) {
++            vErrors = [err2];
++          } else {
++            vErrors.push(err2);
++          }
++          errors++;
++        }
++        if (data1.runId !== undefined) {
++          if (typeof data1.runId !== "string") {
++            const err3 = {
++              instancePath: instancePath + "/result/runId",
++              schemaPath: "#/properties/result/properties/runId/type",
++              keyword: "type",
++              params: { type: "string" },
++              message: "must be string",
++            };
++            if (vErrors === null) {
++              vErrors = [err3];
++            } else {
++              vErrors.push(err3);
++            }
++            errors++;
++          }
++        }
++        if (data1.model !== undefined) {
++          if (typeof data1.model !== "string") {
++            const err4 = {
++              instancePath: instancePath + "/result/model",
++              schemaPath: "#/properties/result/properties/model/type",
++              keyword: "type",
++              params: { type: "string" },
++              message: "must be string",
++            };
++            if (vErrors === null) {
++              vErrors = [err4];
++            } else {
++              vErrors.push(err4);
++            }
++            errors++;
++          }
++        }
++        if (data1.prompt !== undefined) {
++          if (typeof data1.prompt !== "string") {
++            const err5 = {
++              instancePath: instancePath + "/result/prompt",
++              schemaPath: "#/properties/result/properties/prompt/type",
++              keyword: "type",
++              params: { type: "string" },
++              message: "must be string",
++            };
++            if (vErrors === null) {
++              vErrors = [err5];
++            } else {
++              vErrors.push(err5);
++            }
++            errors++;
++          }
++        }
++        if (data1.status !== undefined) {
++          if (typeof data1.status !== "string") {
++            const err6 = {
++              instancePath: instancePath + "/result/status",
++              schemaPath: "#/properties/result/properties/status/type",
++              keyword: "type",
++              params: { type: "string" },
++              message: "must be string",
++            };
++            if (vErrors === null) {
++              vErrors = [err6];
++            } else {
++              vErrors.push(err6);
++            }
++            errors++;
++          }
++        }
++        if (data1.output !== undefined) {
++          let data6 = data1.output;
++          if (data6 && typeof data6 == "object" && !Array.isArray(data6)) {
++            if (data6.text !== undefined) {
++              if (typeof data6.text !== "string") {
++                const err7 = {
++                  instancePath: instancePath + "/result/output/text",
++                  schemaPath: "#/properties/result/properties/output/properties/text/type",
++                  keyword: "type",
++                  params: { type: "string" },
++                  message: "must be string",
++                };
++                if (vErrors === null) {
++                  vErrors = [err7];
++                } else {
++                  vErrors.push(err7);
++                }
++                errors++;
++              }
++            }
++            if (data6.format !== undefined) {
++              if (typeof data6.format !== "string") {
++                const err8 = {
++                  instancePath: instancePath + "/result/output/format",
++                  schemaPath: "#/properties/result/properties/output/properties/format/type",
++                  keyword: "type",
++                  params: { type: "string" },
++                  message: "must be string",
++                };
++                if (vErrors === null) {
++                  vErrors = [err8];
++                } else {
++                  vErrors.push(err8);
++                }
++                errors++;
++              }
++            }
++          } else {
++            const err9 = {
++              instancePath: instancePath + "/result/output",
++              schemaPath: "#/properties/result/properties/output/type",
++              keyword: "type",
++              params: { type: "object" },
++              message: "must be object",
++            };
++            if (vErrors === null) {
++              vErrors = [err9];
++            } else {
++              vErrors.push(err9);
++            }
++            errors++;
++          }
++        }
++        if (data1.usage !== undefined) {
++          let data9 = data1.usage;
++          if (data9 && typeof data9 == "object" && !Array.isArray(data9)) {
++            if (data9.inputTokens !== undefined) {
++              if (!(typeof data9.inputTokens == "number")) {
++                const err10 = {
++                  instancePath: instancePath + "/result/usage/inputTokens",
++                  schemaPath: "#/properties/result/properties/usage/properties/inputTokens/type",
++                  keyword: "type",
++                  params: { type: "number" },
++                  message: "must be number",
++                };
++                if (vErrors === null) {
++                  vErrors = [err10];
++                } else {
++                  vErrors.push(err10);
++                }
++                errors++;
++              }
++            }
++            if (data9.outputTokens !== undefined) {
++              if (!(typeof data9.outputTokens == "number")) {
++                const err11 = {
++                  instancePath: instancePath + "/result/usage/outputTokens",
++                  schemaPath: "#/properties/result/properties/usage/properties/outputTokens/type",
++                  keyword: "type",
++                  params: { type: "number" },
++                  message: "must be number",
++                };
++                if (vErrors === null) {
++                  vErrors = [err11];
++                } else {
++                  vErrors.push(err11);
++                }
++                errors++;
++              }
++            }
++            if (data9.totalTokens !== undefined) {
++              if (!(typeof data9.totalTokens == "number")) {
++                const err12 = {
++                  instancePath: instancePath + "/result/usage/totalTokens",
++                  schemaPath: "#/properties/result/properties/usage/properties/totalTokens/type",
++                  keyword: "type",
++                  params: { type: "number" },
++                  message: "must be number",
++                };
++                if (vErrors === null) {
++                  vErrors = [err12];
++                } else {
++                  vErrors.push(err12);
++                }
++                errors++;
++              }
++            }
++          } else {
++            const err13 = {
++              instancePath: instancePath + "/result/usage",
++              schemaPath: "#/properties/result/properties/usage/type",
++              keyword: "type",
++              params: { type: "object" },
++              message: "must be object",
++            };
++            if (vErrors === null) {
++              vErrors = [err13];
++            } else {
++              vErrors.push(err13);
++            }
++            errors++;
++          }
++        }
++        if (data1.warnings !== undefined) {
++          let data13 = data1.warnings;
++          if (Array.isArray(data13)) {
++            const len0 = data13.length;
++            for (let i0 = 0; i0 < len0; i0++) {
++              if (typeof data13[i0] !== "string") {
++                const err14 = {
++                  instancePath: instancePath + "/result/warnings/" + i0,
++                  schemaPath: "#/properties/result/properties/warnings/items/type",
++                  keyword: "type",
++                  params: { type: "string" },
++                  message: "must be string",
++                };
++                if (vErrors === null) {
++                  vErrors = [err14];
++                } else {
++                  vErrors.push(err14);
++                }
++                errors++;
++              }
++            }
++          } else {
++            const err15 = {
++              instancePath: instancePath + "/result/warnings",
++              schemaPath: "#/properties/result/properties/warnings/type",
++              keyword: "type",
++              params: { type: "array" },
++              message: "must be array",
++            };
++            if (vErrors === null) {
++              vErrors = [err15];
++            } else {
++              vErrors.push(err15);
++            }
++            errors++;
++          }
++        }
++        if (data1.metadata !== undefined) {
++          let data15 = data1.metadata;
++          if (data15 && typeof data15 == "object" && !Array.isArray(data15)) {
++          } else {
++            const err16 = {
++              instancePath: instancePath + "/result/metadata",
++              schemaPath: "#/properties/result/properties/metadata/type",
++              keyword: "type",
++              params: { type: "object" },
++              message: "must be object",
++            };
++            if (vErrors === null) {
++              vErrors = [err16];
++            } else {
++              vErrors.push(err16);
++            }
++            errors++;
++          }
++        }
++        if (data1.diagnostics !== undefined) {
++          let data16 = data1.diagnostics;
++          if (data16 && typeof data16 == "object" && !Array.isArray(data16)) {
++          } else {
++            const err17 = {
++              instancePath: instancePath + "/result/diagnostics",
++              schemaPath: "#/properties/result/properties/diagnostics/type",
++              keyword: "type",
++              params: { type: "object" },
++              message: "must be object",
++            };
++            if (vErrors === null) {
++              vErrors = [err17];
++            } else {
++              vErrors.push(err17);
++            }
++            errors++;
++          }
++        }
++      } else {
++        const err18 = {
++          instancePath: instancePath + "/result",
++          schemaPath: "#/properties/result/type",
++          keyword: "type",
++          params: { type: "object" },
++          message: "must be object",
++        };
++        if (vErrors === null) {
++          vErrors = [err18];
++        } else {
++          vErrors.push(err18);
++        }
++        errors++;
++      }
++    }
++    if (data.error !== undefined) {
++      let data17 = data.error;
++      if (data17 && typeof data17 == "object" && !Array.isArray(data17)) {
++      } else {
++        const err19 = {
++          instancePath: instancePath + "/error",
++          schemaPath: "#/properties/error/type",
++          keyword: "type",
++          params: { type: "object" },
++          message: "must be object",
++        };
++        if (vErrors === null) {
++          vErrors = [err19];
++        } else {
++          vErrors.push(err19);
++        }
++        errors++;
++      }
++    }
++  } else {
++    const err20 = {
++      instancePath,
++      schemaPath: "#/type",
++      keyword: "type",
++      params: { type: "object" },
++      message: "must be object",
++    };
++    if (vErrors === null) {
++      vErrors = [err20];
++    } else {
++      vErrors.push(err20);
++    }
++    errors++;
++  }
++  validate11.errors = vErrors;
++  return errors === 0;
++}
+diff --git a/dist/src/core/index.js b/dist/src/core/index.js
+index 9b02074587ed93e4114c06912e25e16c90d012b3..524255f8f83d2f8fedfe27d51409e6a452a33076 100644
+--- a/dist/src/core/index.js
++++ b/dist/src/core/index.js
+@@ -4,4 +4,4 @@ export { runPipeline } from "../runtime.js";
+ export { runWorkflowFile } from "../workflows/file.js";
+ export { decodeResumeToken } from "../resume.js";
+ export { runToolRequest, resumeToolRequest, createToolContext } from "./tool_runtime.js";
+-//# sourceMappingURL=index.js.map
+\ No newline at end of file
++export { withSchemaCompiler } from "../validation.js";
+diff --git a/dist/src/validation.js b/dist/src/validation.js
+index 4371a41ea77957c0499ecace6728b7bf3820b3ca..d600546d06fa0055d689d26e58794520ffba8161 100644
+--- a/dist/src/validation.js
++++ b/dist/src/validation.js
+@@ -1,3 +1,4 @@
++import { AsyncLocalStorage } from "node:async_hooks";
+ import { Ajv } from "ajv";
+ import { stableStringify } from "./state/store.js";
+ export const sharedAjv = new Ajv({
+@@ -6,6 +7,11 @@ export const sharedAjv = new Ajv({
+     // User-provided schemas may repeat `$id` across runs/resumes.
+     addUsedSchema: false,
+ });
++const schemaCompilerScope = new AsyncLocalStorage();
++/** Run one host request with its schema compiler, without changing other requests. */
++export function withSchemaCompiler(compiler, callback) {
++    return schemaCompilerScope.run(compiler, callback);
++}
+ /**
+  * Build a memoized `compile()` for a given Ajv instance.
+  *
+@@ -22,17 +28,32 @@ export const sharedAjv = new Ajv({
+  * interchangeable across different Ajv configurations.
+  */
+ export function createCompileCached(ajv) {
+-    const cache = new Map();
++    const defaultCache = new Map();
++    const scopedCaches = new WeakMap();
+     return function compileCached(schema) {
++        const compiler = schemaCompilerScope.getStore();
++        let cache = defaultCache;
++        if (compiler) {
++            cache = scopedCaches.get(compiler);
++            if (!cache) {
++                cache = new Map();
++                scopedCaches.set(compiler, cache);
++            }
++        }
+         const key = stableStringify(schema);
+         let validator = cache.get(key);
+         if (!validator) {
+-            validator = ajv.compile(schema);
++            validator = compiler
++                ? compiler(schema, {
++                    scope: ajv,
++                    allErrors: ajv.opts.allErrors === true,
++                    addUsedSchema: ajv.opts.addUsedSchema !== false,
++                })
++                : ajv.compile(schema);
+             cache.set(key, validator);
+         }
+         return validator;
+     };
+ }
+ /** Memoized compile bound to the module-level `sharedAjv` instance. */
+-export const compileCached = createCompileCached(sharedAjv);
+-//# sourceMappingURL=validation.js.map
+\ No newline at end of file
++export const compileCached = createCompileCached(sharedAjv);
+\ No newline at end of file

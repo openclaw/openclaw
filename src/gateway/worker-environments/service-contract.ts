@@ -8,8 +8,10 @@ import type {
   WorkerDesktopLaunchResult,
   WorkerDesktopObserveResult as ProtocolWorkerDesktopObserveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type { RequiredSessionPlacementAdmission } from "../../agents/session-placement-admission.types.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type {
   WorkerDesktopApp,
   WorkerMachineOption,
@@ -58,6 +60,7 @@ export function deriveEnvironmentIntent(idempotencyKey: string): {
 
 /** Non-secret worker projection available to Gateway request handlers. */
 export type WorkerEnvironmentServiceRecord = {
+  startStatus?: import("../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
   environmentId: string;
   providerId: string;
   profileId: string;
@@ -179,6 +182,8 @@ export type WorkerEnvironmentServiceContract = {
     runSetupScript?: boolean,
   ): Promise<WorkerEnvironmentServiceRecord>;
   destroy(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
+  /** Stop session work and return after provider acceptance; physical cleanup remains owned. */
+  reclaim(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   destroyUnattached(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   observeDesktop(request: {
     environmentId: string;
@@ -197,6 +202,8 @@ export type WorkerPlacementDispatchRequest = WorkerSessionPlacementDispatchIdent
   requiredProfile?: string;
   /** Current dispatch caller's setup authority; never inherited by a new caller. */
   runSetupScript?: boolean;
+  /** Current request only; never persisted or sent over RPC. */
+  readNativeCredential?: GitHubCredentialReader;
   devicePlacement?: DevicePlacementRequirement;
   idempotencyKey?: string;
   deviceId?: string;
@@ -211,7 +218,7 @@ export type WorkerPlacementDispatchRequest = WorkerSessionPlacementDispatchIdent
 export type WorkerPlacementDispatchAdmission = <T>(
   request: Pick<WorkerPlacementDispatchRequest, "sessionId" | "sessionKey" | "agentId">,
   run: (signal?: AbortSignal, assertSessionCurrent?: () => void) => Promise<T>,
-  authorize?: () => void,
+  authorize?: SessionSourceAssertion,
   signal?: AbortSignal,
 ) => Promise<T>;
 

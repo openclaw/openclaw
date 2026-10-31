@@ -5,10 +5,18 @@ import { FailoverReasonSchema } from "./failover-reason.js";
 import { withSince } from "./since.js";
 import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "./worker-computer.js";
 import {
+  WORKER_EXEC_APPROVAL_METHOD,
+  WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
+} from "./worker-exec-approval-schemas.js";
+import {
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOL_METHODS,
   WorkerToolSurfaceSchema,
 } from "./worker-gateway-tool.js";
+import {
+  WORKER_PROTOCOL_MAX_FEATURES,
+  WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
+} from "./worker-protocol-constants.js";
 import {
   LiveIntegerSchema,
   LiveSequenceSchema,
@@ -25,6 +33,7 @@ import {
   workerRequestSchema,
   workerResponseSchema,
 } from "./worker-protocol-primitives.js";
+import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "./worker-turn-admission.js";
 
 export * from "./worker-session-tools.js";
 export {
@@ -44,11 +53,13 @@ export {
 export const WORKER_RPC_SET_VERSION = 1;
 export const WORKER_BUNDLE_PREWARM_VERSION = 1;
 export const WORKER_HEARTBEAT_INTERVAL_MS = 15_000;
+export const WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE = "worker-github-refresh";
 export const WORKER_PROTOCOL_METHODS = [
   "worker.heartbeat",
   "worker.transcript.commit",
   "worker.live-event",
   "worker.computer",
+  WORKER_EXEC_APPROVAL_METHOD,
   WORKER_GATEWAY_TOOL_METHODS.invoke,
   WORKER_GATEWAY_TOOL_METHODS.cancel,
 ] as const;
@@ -59,12 +70,17 @@ export const WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE = "worker-execution-conte
 export const WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE = "worker-execution-authority-v1";
 export const WORKER_LINEAGE_START_PROTOCOL_FEATURE = "worker-lineage-start-v1";
 export const WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE = "worker-native-process-owner-v1";
+// V1 workers couple an inherited native owner to Linux subreaper ownership.
+export const WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE = "worker-native-process-owner-v2";
 export const NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE = "node-worker-idle-retention-v1";
+export const NODE_WORKER_PROCESS_CHANGES_PROTOCOL_FEATURE = "node-worker-process-changes-v1";
 export const WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE = "worker-local-inference-v1";
 export const WORKER_PROTOCOL_FEATURES = [
+  WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
   WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE,
   "skill-resources-v1",
   "worker-heartbeat-v1",
+  WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE,
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   // Execution context is a build-bound V2 dialect. Do not advertise legacy
@@ -73,14 +89,19 @@ export const WORKER_PROTOCOL_FEATURES = [
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
   WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
+  WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE,
   NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
+  NODE_WORKER_PROCESS_CHANGES_PROTOCOL_FEATURE,
   WORKER_COMPUTER_PROTOCOL_FEATURE,
+  WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   "worker-inference-v1",
 ] as const;
 export const WORKER_PROTOCOL_MAX_METHOD_LENGTH = 64;
-export const WORKER_PROTOCOL_MAX_FEATURES = 64;
-export const WORKER_PROTOCOL_MAX_FEATURE_LENGTH = 128;
+export {
+  WORKER_PROTOCOL_MAX_FEATURES,
+  WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
+} from "./worker-protocol-constants.js";
 export const WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES = 64;
 
 const WorkerCredentialSchema = Type.String({ minLength: 16, maxLength: 256 });
@@ -178,12 +199,20 @@ const WorkerStatusSchema = Type.Union([
 export const WorkerHeartbeatParamsSchema = closedObject({
   sentAtMs: Type.Integer({ minimum: 0 }),
   status: WorkerStatusSchema,
+  githubGeneration: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+});
+
+const WorkerGitHubRefreshSchema = closedObject({
+  generation: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  token: Type.String({ minLength: 1, maxLength: 4_096 }),
+  expiresAtMs: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
 });
 
 const WorkerHeartbeatResultSchema = closedObject({
   receivedAtMs: Type.Integer({ minimum: 0 }),
   status: Type.Literal("ok"),
   ownerEpoch: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  github: Type.Optional(WorkerGitHubRefreshSchema),
 });
 
 export const WorkerHeartbeatRequestFrameSchema = workerRequestSchema(

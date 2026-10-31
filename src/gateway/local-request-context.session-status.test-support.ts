@@ -21,6 +21,7 @@ export function mockSessionStatusModelDependencies() {
           inlineProviderModels: snapshot.inlineProviderModels,
           configuredCatalogEntries: snapshot.modelCatalog.entries,
         },
+        run: <T>(run: () => T): T => run(),
         async [Symbol.asyncDispose]() {},
       };
     });

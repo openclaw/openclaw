@@ -1,10 +1,6 @@
-import {
-  normalizeStringEntries,
-  normalizeUniqueStringEntries,
-} from "@openclaw/normalization-core/string-normalization";
+import { normalizePluginCliRegistrationMetadata } from "../cli/program/command-descriptor-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { StorageProvider } from "../storage/types.js";
-import type { AgentExecutorController } from "./agent-executor-controller.types.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
@@ -15,7 +11,6 @@ import {
 } from "./agent-tool-result-middleware.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import { resolveCapabilityProviderRegistration } from "./capability-catalog.js";
-import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import type {
   PluginAgentEventSubscriptionRegistration,
@@ -45,7 +40,6 @@ import type {
   MusicGenerationProviderPlugin,
   OpenClawPluginCliRootCommandDescriptor,
   OpenClawPluginCliRegistrar,
-  PluginTextTransformRegistration,
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -91,11 +85,8 @@ export function createCapturedPluginRegistration(params?: {
   const captured = {
     providers: new Array<ProviderPlugin>(),
     agentHarnesses: new Array<AgentHarness>(),
-    agentExecutorControllers: new Array<AgentExecutorController>(),
     cliRegistrars: new Array<CapturedPluginCliRegistration>(),
     cliBackends: new Array<CliBackendPlugin>(),
-    textTransforms: new Array<PluginTextTransformRegistration>(),
-    codexAppServerExtensionFactories: new Array<CodexAppServerExtensionFactory>(),
     agentToolResultMiddlewares: new Array<PluginAgentToolResultMiddlewareRegistration>(),
     embeddingProviders: new Array<EmbeddingProviderAdapter>(),
     speechProviders: new Array<SpeechProviderPlugin>(),
@@ -151,46 +142,19 @@ export function createCapturedPluginRegistration(params?: {
       resolvePath: (input) => input,
       handlers: {
         registerCli(registrar, opts) {
-          const parentPath = normalizeStringEntries(opts?.parentPath ?? []);
-          const rootRegistration = parentPath.length === 0;
-          const descriptors = (opts?.descriptors ?? [])
-            .map((descriptor) => {
-              const machineOutput = rootRegistration
-                ? (descriptor as OpenClawPluginCliRootCommandDescriptor).machineOutput
-                : undefined;
-              const normalized: OpenClawPluginCliRootCommandDescriptor = {
-                name: descriptor.name.trim(),
-                description: descriptor.description.trim(),
-                hasSubcommands: descriptor.hasSubcommands,
-              };
-              if (machineOutput) {
-                normalized.machineOutput = machineOutput;
-              }
-              return normalized;
-            })
-            .filter((descriptor) => descriptor.name && descriptor.description);
-          const commands = normalizeUniqueStringEntries([
-            ...(opts?.commands ?? []),
-            ...descriptors.map((descriptor) => descriptor.name),
-          ]);
-          if (commands.length === 0) {
+          const metadata = normalizePluginCliRegistrationMetadata(opts, () => {});
+          if (!metadata) {
             return;
           }
           captured.cliRegistrars.push({
             register: registrar,
-            parentPath,
-            commands,
-            descriptors,
+            ...metadata,
           });
         },
         registerProvider: captureInto(captured.providers),
         registerModelCatalogProvider: captureInto(captured.modelCatalogProviders),
         registerSessionCatalog: captureInto(captured.sessionCatalogs),
         registerAgentHarness: captureInto(captured.agentHarnesses),
-        registerAgentExecutorController: captureInto(captured.agentExecutorControllers),
-        registerCodexAppServerExtensionFactory: captureInto(
-          captured.codexAppServerExtensionFactories,
-        ),
         registerAgentToolResultMiddleware(
           handler: AgentToolResultMiddleware,
           options?: AgentToolResultMiddlewareOptions,
@@ -229,7 +193,6 @@ export function createCapturedPluginRegistration(params?: {
           captured.agentToolResultMiddlewares.push(registration);
         },
         registerCliBackend: captureInto(captured.cliBackends),
-        registerTextTransforms: captureInto(captured.textTransforms),
         registerEmbeddingProvider: captureInto(captured.embeddingProviders),
         registerSpeechProvider: captureCapabilityInto(captured.speechProviders),
         registerRealtimeTranscriptionProvider: captureCapabilityInto(

@@ -5,6 +5,7 @@ import {
 } from "../agents/sanitize-for-prompt.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
+import { resolveSessionCreatorActor } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -18,7 +19,11 @@ import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "./session-state-event-kinds.js";
-import { recordSessionStateEventAsync } from "./session-state-events.js";
+import {
+  createSubagentSpawnedEvent,
+  recordSessionStateEventsAsync,
+} from "./session-state-events.js";
+import type { SessionStateEventInput } from "./session-state-events.kernel.js";
 
 const log = createSubsystemLogger("sessions/state-events");
 const CREATION_SUMMARY_MAX_CHARS = 8192;
@@ -32,10 +37,15 @@ function reportCreationSignalFailure(error: unknown): void {
 /** Notify Home of a new logical session and record its trusted creation attribution. */
 export async function recordSessionCreated(
   cfg: OpenClawConfig,
-  params: { sessionKey: string; entry: SessionEntry; agentId?: string },
+  params: {
+    sessionKey: string;
+    entry: SessionEntry;
+    agentId?: string;
+    spawned?: { runId: string; requesterSessionKey: string };
+  },
 ): Promise<void> {
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-  const actor = params.entry.createdActor;
+  const actor = resolveSessionCreatorActor(params.entry.createdActor);
   const event = actor
     ? {
         sessionKey: params.sessionKey,
@@ -48,8 +58,19 @@ export async function recordSessionCreated(
         summary: "session created",
       }
     : undefined;
+  const events: SessionStateEventInput[] = event ? [event] : [];
+  if (params.spawned) {
+    events.push(
+      createSubagentSpawnedEvent({
+        childSessionKey: params.sessionKey,
+        childRunId: params.spawned.runId,
+        requesterSessionKey: params.spawned.requesterSessionKey,
+        agentId,
+      }),
+    );
+  }
   let context: OpenClawStateWorkerContext | undefined;
-  if (event) {
+  if (events.length > 0) {
     try {
       context = captureOpenClawStateWorkerContext();
     } catch (error) {
@@ -61,8 +82,8 @@ export async function recordSessionCreated(
   } catch (error) {
     reportCreationSignalFailure(error);
   }
-  if (event && context) {
-    await recordSessionStateEventAsync(event, { context });
+  if (context) {
+    await recordSessionStateEventsAsync(events, { context });
   }
 }
 
@@ -98,7 +119,7 @@ async function enqueueSessionCreatedNotice(params: {
   if (sessionKey === mainSessionKey) {
     return;
   }
-  const actor = entry.createdActor;
+  const actor = resolveSessionCreatorActor(entry.createdActor);
   const details = {
     sessionKey,
     title: noticeLabel(entry.label ?? entry.displayName ?? entry.subject),

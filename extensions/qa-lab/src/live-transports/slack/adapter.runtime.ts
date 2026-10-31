@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import * as proxyCapture from "openclaw/plugin-sdk/proxy-capture";
 import type { AsyncDebugProxyCaptureReader } from "openclaw/plugin-sdk/proxy-capture";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { createQaPollingErrorState } from "../../qa-transport.js";
 import { releaseQaCredentialLease } from "../shared/credential-lease-cleanup.js";
 import {
   acquireQaCredentialLease,
@@ -122,9 +122,6 @@ export async function createSlackQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const { createDebugProxyCaptureReaderAsync } = proxyCapture;
-  if (typeof createDebugProxyCaptureReaderAsync !== "function") {
-    throw new Error("Slack QA requires async proxy capture support. Upgrade the OpenClaw host.");
-  }
   const { createSlackWebClient, createSlackWriteClient, resolveSlackWebClientOptions } =
     loadSlackQaRuntime();
   const options = context.adapterOptions ?? {};
@@ -202,7 +199,7 @@ export async function createSlackQaTransportAdapter(
   const waitReady: AdapterDefinition["waitReady"] = async ({ gateway }) =>
     await waitForSlackChannelStable(gateway as never, accountId, "connected");
   let oldestTs = `${Math.floor(Date.now() / 1_000)}.000000`;
-  let pollingError: Error | undefined;
+  const pollingError = createQaPollingErrorState(() => stopped);
   let logicalConversationId = runtimeEnv.channelId;
   const observedText = new Map<string, string>();
   const nativeMessageIds = new Map<string, string>();
@@ -258,11 +255,7 @@ export async function createSlackQaTransportAdapter(
         }
         await waitForSlackPoll(SLACK_POLL_INTERVAL_MS, pollingAbort.signal);
       }
-    })().catch((error: unknown) => {
-      if (!stopped) {
-        pollingError = toStringifiedError(error);
-      }
-    });
+    })().catch(pollingError.capture);
   };
 
   const scenarioEnvironment = createSlackQaScenarioEnvironment({
@@ -300,9 +293,7 @@ export async function createSlackQaTransportAdapter(
     supportedActions: [],
     whenUnhealthy: options.agentE2e ? heartbeat.whenFailed : undefined,
     assertTransportHealthy() {
-      if (pollingError) {
-        throw pollingError;
-      }
+      pollingError.assertHealthy();
       heartbeat.throwIfFailed();
       if (stopped) {
         throw new Error("Slack QA adapter is stopped");

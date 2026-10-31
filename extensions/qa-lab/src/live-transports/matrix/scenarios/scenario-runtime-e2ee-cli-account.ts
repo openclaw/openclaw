@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { startMatrixQaFaultProxy } from "../substrate/fault-proxy.js";
 import {
   assertMatrixQaCliAccountAddBootstrapStatus,
@@ -20,7 +19,6 @@ import {
   writeMatrixQaCliOutputArtifacts,
 } from "./scenario-runtime-e2ee-cli-shared.js";
 import { buildRoomKeyBackupUnavailableFaultRule } from "./scenario-runtime-e2ee-room.js";
-import { MATRIX_QA_ROOM_KEY_BACKUP_FAULT_RULE_ID } from "./scenario-runtime-e2ee-shared.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
@@ -99,14 +97,6 @@ export async function runMatrixQaE2eeCliAccountAddEnableE2eeScenario(
     const cliDeviceId = status.deviceId ?? null;
 
     return {
-      artifacts: {
-        accountId,
-        backupVersion: added.verificationBootstrap.backupVersion ?? null,
-        cliDeviceId,
-        encryptionEnabled: added.encryptionEnabled,
-        verificationBootstrapAttempted: added.verificationBootstrap.attempted,
-        verificationBootstrapSuccess: added.verificationBootstrap.success,
-      },
       details: [
         "Matrix CLI account add --enable-e2ee created an encrypted account and bootstrapped recovery state",
         `account add stdout: ${addArtifacts.stdoutPath}`,
@@ -196,13 +186,6 @@ async function runMatrixQaCliEncryptionSetup(
       assertMatrixQaCliE2eeStatus("Matrix CLI encryption setup status", status);
 
       return {
-        artifacts: {
-          accountId,
-          cliDeviceId: status.deviceId ?? cliDevice.deviceId,
-          encryptionChanged: setup.encryptionChanged,
-          setupSuccess: setup.success,
-          verificationBootstrapSuccess: setup.bootstrap.success,
-        },
         details: [
           "Matrix CLI encryption setup upgraded an existing account and bootstrapped verification",
           `encryption setup stdout: ${setupArtifacts.stdoutPath}`,
@@ -238,14 +221,6 @@ async function runMatrixQaCliEncryptionSetup(
     const { artifacts: secondArtifacts, setup: second } = await runIdempotentSetup("second");
 
     return {
-      artifacts: {
-        accountId,
-        cliDeviceId: second.status.deviceId ?? cliDevice.deviceId,
-        firstEncryptionChanged: first.encryptionChanged,
-        secondEncryptionChanged: second.encryptionChanged,
-        setupSuccess: second.success,
-        verificationBootstrapSuccess: second.bootstrap.success,
-      },
       details: [
         "Matrix CLI encryption setup stayed idempotent on an already encrypted account",
         `first setup stdout: ${firstArtifacts.stdoutPath}`,
@@ -329,15 +304,6 @@ export async function runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario(
     outcome = {
       status: "fulfilled",
       value: {
-        artifacts: {
-          accountId,
-          bootstrapErrorPreview: truncateUtf16Safe(bootstrapError, 240),
-          bootstrapSuccess: false,
-          cliDeviceId: cliDevice.deviceId,
-          faultedEndpoint: faultHits[0]?.path,
-          faultHitCount: faultHits.length,
-          faultRuleId: MATRIX_QA_ROOM_KEY_BACKUP_FAULT_RULE_ID,
-        },
         details: [
           "Matrix CLI encryption setup surfaced a bootstrap failure from a faulted room-key backup endpoint",
           `failure stdout: ${artifacts.stdoutPath}`,

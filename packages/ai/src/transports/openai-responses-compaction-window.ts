@@ -1,8 +1,12 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInputItem } from "openai/resources/responses/responses.js";
+import { getAiTransportHost } from "../host.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
-import type { ReplayableResponseCompactionItem } from "./openai-responses-contracts.js";
+import type {
+  ReplayableResponseCompactionItem,
+  ReplayableResponseOutputMessage,
+} from "./openai-responses-contracts.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
@@ -12,11 +16,48 @@ import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitiz
 // This is the host's response/storage ceiling, not a provider context-token limit.
 const COMPACTION_WINDOW_MAX_BYTES = 16 * 1024 * 1024;
 export type OpenAIResponsesCompactionOutput = Array<
-  ResponseInputItem.Message | ReplayableResponseCompactionItem
+  ResponseInputItem.Message | ReplayableResponseOutputMessage | ReplayableResponseCompactionItem
 >;
 export type OpenAIResponsesCompactedWindow =
   | { state: "ready"; output: string; outputTokens?: number }
   | { state: "refresh-required" };
+
+// Retain identity only, never parsed windows or their image data, alongside saved replay state.
+const compactionInputIdentities = new WeakMap<object, object[]>();
+const preparedCompactionInputs = new WeakMap<object, object>();
+
+export function getResponsesCompactionInputIdentity(item: object): object | undefined {
+  return preparedCompactionInputs.get(item);
+}
+
+export function publishResponsesCompactionInput<T extends object[]>(source: object, input: T): T {
+  const immutable = getAiTransportHost().immutableData;
+  if (!immutable?.isDeeplyFrozenPlainData(source)) {
+    return input;
+  }
+  let identities = compactionInputIdentities.get(source);
+  if (!identities) {
+    identities = [];
+    compactionInputIdentities.set(source, identities);
+  }
+  let index = 0;
+  for (const item of input) {
+    immutable.freezeJsonSnapshot(item);
+    preparedCompactionInputs.set(item, (identities[index++] ??= {}));
+  }
+  return input;
+}
+
+/** Provenance is off-wire; an alias of prepared immutable input keeps its byte identity. */
+export function tagResponsesCompactionInput<T extends object>(item: T, marker: symbol): T {
+  const tagged = { ...item, [marker]: true };
+  const identity = preparedCompactionInputs.get(item);
+  if (identity) {
+    Object.freeze(tagged);
+    preparedCompactionInputs.set(tagged, identity);
+  }
+  return tagged;
+}
 
 // Schema validation, not coercion: supplied non-string fields must be rejected.
 function isOptionalCompactionString(value: unknown): boolean {
@@ -52,6 +93,8 @@ function isInputContent(value: unknown): boolean {
   switch (value.type) {
     case "input_text":
       return typeof value.text === "string";
+    case "output_text":
+      return typeof value.text === "string" && Array.isArray(value.annotations);
     case "input_image":
       return (
         typeof value.detail === "string" &&
@@ -82,42 +125,65 @@ export function isOpenAIResponsesCompactionOutput(
   value: unknown,
   model?: Model,
 ): value is OpenAIResponsesCompactionOutput {
-  if (!Array.isArray(value) || value.length === 0 || !isBoundedJson(value)) {
-    return false;
+  return getOpenAIResponsesCompactionOutputError(value, model) === undefined;
+}
+
+/** Return a safe rule failure, never provider content or encrypted checkpoint bytes. */
+export function getOpenAIResponsesCompactionOutputError(
+  value: unknown,
+  model?: Model,
+): string | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return "output must be a nonempty array";
+  }
+  if (!isBoundedJson(value)) {
+    return "output must contain finite JSON values nested at most 64 levels";
   }
   const item: unknown = value.at(-1);
-  const valid =
-    isRecord(item) &&
-    item.type === "compaction" &&
-    typeof item.encrypted_content === "string" &&
-    item.encrypted_content.length > 0 &&
-    isOptionalCompactionString(item.id) &&
-    isOptionalCompactionString(item.created_by) &&
-    value
-      .slice(0, -1)
-      .every(
-        (message: unknown) =>
-          isRecord(message) &&
-          message.type === "message" &&
-          typeof message.role === "string" &&
-          ["user", "developer", "system"].includes(message.role) &&
-          isOptionalCompactionString(message.id) &&
-          (message.status === undefined ||
-            (typeof message.status === "string" &&
-              ["in_progress", "completed", "incomplete"].includes(message.status))) &&
-          Array.isArray(message.content) &&
-          message.content.every(isInputContent),
-      );
+  if (!isRecord(item) || item.type !== "compaction") {
+    return "output must end with a compaction item";
+  }
+  if (typeof item.encrypted_content !== "string" || item.encrypted_content.length === 0) {
+    return "trailing compaction item must have nonempty encrypted_content";
+  }
+  if (!isOptionalCompactionString(item.id) || !isOptionalCompactionString(item.created_by)) {
+    return "trailing compaction item metadata must be strings";
+  }
+  for (let index = 0; index < value.length - 1; index += 1) {
+    const message: unknown = value[index];
+    if (isRecord(message) && message.type === "compaction") {
+      return "output must contain exactly one compaction item";
+    }
+    if (
+      !isRecord(message) ||
+      message.type !== "message" ||
+      typeof message.role !== "string" ||
+      !["user", "developer", "system", "assistant"].includes(message.role)
+    ) {
+      return `output item ${index} must be a user, developer, system, or assistant message`;
+    }
+    if (
+      !isOptionalCompactionString(message.id) ||
+      (message.status !== undefined &&
+        (typeof message.status !== "string" ||
+          !["in_progress", "completed", "incomplete"].includes(message.status)))
+    ) {
+      return `output message ${index} has invalid metadata`;
+    }
+    if (!Array.isArray(message.content) || !message.content.every(isInputContent)) {
+      return `output message ${index} has unsupported content`;
+    }
+  }
   // Storage accepts some image formats that Responses egress would replace.
   // A canonical window must survive that existing policy without any rewrite.
-  if (!valid) {
-    return false;
-  }
   const payload = sanitizeResponsesImagePayload({ input: value });
   if (model) {
     applyOpenAIResponsesPayloadPolicy(payload, resolveOpenAIResponsesPayloadPolicy(model));
   }
-  return JSON.stringify(payload.input) === JSON.stringify(value);
+  if (JSON.stringify(payload.input) !== JSON.stringify(value)) {
+    return "output would be rewritten by the Responses payload policy";
+  }
+  return undefined;
 }
 
 /** Read the saved canonical window only when it still matches its opaque checkpoint. */
@@ -156,11 +222,22 @@ export function readOpenAIResponsesCompactionWindow(
       return undefined;
     }
     const item = output.at(-1);
-    return item?.type === "compaction" &&
-      item.encrypted_content === replay.data &&
-      item.id === replay.id
-      ? output
-      : undefined;
+    if (
+      item?.type !== "compaction" ||
+      item.encrypted_content !== replay.data ||
+      item.id !== replay.id
+    ) {
+      return undefined;
+    }
+    // These IDs refer to reasoning items absorbed by the checkpoint. Replaying
+    // them makes OpenAI require those missing items; keep the saved window intact
+    // but emit retained assistants as inline messages, with content and phase unchanged.
+    for (const message of output) {
+      if (message.type === "message" && message.role === "assistant") {
+        delete message.id;
+      }
+    }
+    return publishResponsesCompactionInput(replay, output);
   } catch {
     return undefined;
   }

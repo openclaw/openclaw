@@ -5,13 +5,12 @@ import { describe, expect, it } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
 import { MessageGroup } from "./chat-message-group-view.tsx";
-import { renderMessageGroup } from "./chat-message-group.ts";
 import { StreamGroup, type StreamGroupPart } from "./chat-message-stream-view.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 import {
   installTranscriptDomMocks,
-  mountTestTranscript,
   resetTranscriptTestDom,
 } from "./chat-transcript.test-support.ts";
 
@@ -136,11 +135,13 @@ describe("chat message headings", () => {
     const rows = Array.from({ length: 100 }, (_, index) => ({
       kind: "content" as const,
       key: `turn:${index}`,
-      content: renderMessageGroup(
-        createMessageGroup({ role: "assistant", content: `Reply ${index}` }, "assistant", {
-          key: `turn:${index}`,
-        }),
-        { assistantName: `Assistant ${index}`, showReasoning: false },
+      content: () => (
+        <MessageGroup
+          group={createMessageGroup({ role: "assistant", content: `Reply ${index}` }, "assistant", {
+            key: `turn:${index}`,
+          })}
+          options={{ assistantName: `Assistant ${index}`, showReasoning: false }}
+        />
       ),
     }));
     const { container, transcript, renderRows } = await mountTestTranscript("heading-window", rows);
@@ -164,7 +165,7 @@ describe("chat message headings", () => {
       expect(headings().length).toBeLessThan(rows.length);
       expect(oldHeadings.every((heading) => !heading.isConnected)).toBe(true);
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
       resetTranscriptTestDom();
     }
   });

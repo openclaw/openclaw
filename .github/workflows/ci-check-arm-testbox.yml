@@ -38,6 +38,7 @@ on:
       - "scripts/windows-cmd-helpers.mjs"
       - "scripts/preinstall-package-manager-warning.mjs"
       - "scripts/prepare-git-hooks.mjs"
+      - "!patches/README.md"
 
 permissions:
   contents: read
@@ -89,6 +90,8 @@ jobs:
     if: ${{ !cancelled() && ((github.event_name == 'pull_request' && !github.event.pull_request.draft) || needs.admission.result == 'success') }}
     concurrency:
       group: ${{ github.event_name == 'workflow_dispatch' && needs.admission.outputs.group || format('testbox-validation-{0}-{1}', github.workflow, github.run_id) }}
+      # Preserve earlier waiters when unrelated leases share a budget slot.
+      queue: max
       cancel-in-progress: false
     permissions:
       contents: read
@@ -131,7 +134,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: ${{ github.event_name == 'pull_request' && '2' || '0' }}
+          fetch-depth: ${{ github.event_name == 'pull_request' && '2' || '1' }}
           persist-credentials: false
       - name: Bound Testbox idle lifetime
         if: github.event_name == 'workflow_dispatch'
@@ -145,8 +148,8 @@ jobs:
       - name: Prepare Testbox shell
         uses: ./.github/actions/prepare-testbox-shell
         with:
-          base-ref: ${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}
-          go-version: "1.27.1"
+          base-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD' }}
+          go-version: "1.27.3"
 
       - name: Hydrate Testbox provider env helper
         shell: bash

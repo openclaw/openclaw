@@ -13,7 +13,9 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
-import { SessionCatalogListLifetime } from "./session-catalog-list-lifetime.js";
+import { catalogLog } from "./session-catalog-log.test-support.js";
+
+const { SessionCatalogListLifetime } = await import("./session-catalog-list-lifetime.js");
 
 const host: SessionCatalogHost = {
   hostId: "node:late",
@@ -29,31 +31,69 @@ const catalog = {
   hosts: [host],
 };
 
+const ignore = () => undefined;
+const current = () => true;
+function admit(origin: string, signals: AbortSignal[] = []) {
+  const before = getActiveGatewayRootWorkHolders();
+  const root = tryBeginGatewayRootWorkAdmission(origin);
+  expect(root).not.toBeNull();
+  const lifetime = new SessionCatalogListLifetime(signals);
+  const run: typeof lifetime.runProvider = (publish, provider) =>
+    root!.run(() => lifetime.runProvider(publish, provider));
+  return {
+    before,
+    root: root!,
+    lifetime,
+    run,
+    release: createDeferredCore(),
+    finish: () => {
+      lifetime.finishListing();
+      root!.release();
+    },
+  };
+}
+
+function preparationGate() {
+  const release = createDeferredCore();
+  let ready = false;
+  const preparation = release.promise.then(() => {
+    ready = true;
+  });
+  return { release, prepare: vi.fn(() => (ready ? undefined : preparation)) };
+}
+
 describe("catalog list completion ownership", () => {
-  it.each([false, true])(
-    "owns deferred subscriber delivery and rechecks retirement (retired=%s)",
-    async (retired) => {
-      const before = getActiveGatewayRootWorkCount();
-      const root = tryBeginGatewayRootWorkAdmission("catalog-deferred-subscriber");
-      expect(root).not.toBeNull();
+  it.each([
+    { stage: "success", retirement: "none" },
+    { stage: "success", retirement: "lifetime" },
+    { stage: "preparation", retirement: "none" },
+    { stage: "publication", retirement: "none" },
+    { stage: "preparation", retirement: "lifetime" },
+    { stage: "preparation", retirement: "subscriber" },
+  ])(
+    "settles deferred $stage delivery without losing ownership (retirement=$retirement)",
+    async ({ stage, retirement }) => {
+      const { before, root, lifetime, finish } = admit("catalog-late-delivery-failure");
       const owner = new GatewayConnectionWork();
-      const lifetime = new SessionCatalogListLifetime([], [catalog.id]);
-      const release = createDeferredCore();
-      const delivered = vi.fn();
-      let ready = false;
-      const preparation = release.promise.then(() => {
-        ready = true;
+      const preparation = createDeferredCore();
+      const failure = new Error("private fixture session details");
+      let subscriberCurrent = true;
+      const delivered = vi.fn(() => {
+        if (stage === "publication") {
+          throw failure;
+        }
       });
+      catalogLog.warn.mockClear();
       let drained = false;
       try {
         await owner.track(() =>
-          root!.run(async () => {
+          root.run(async () => {
             lifetime.subscribe(
               "active",
               delivered,
-              () => true,
+              () => subscriberCurrent,
               undefined,
-              () => (ready ? undefined : preparation),
+              () => preparation.promise,
             );
             await lifetime.runProvider(
               () => lifetime.publish(catalog, new Map()),
@@ -61,25 +101,36 @@ describe("catalog list completion ownership", () => {
             );
           }),
         );
-        root!.release();
-        lifetime.finishListing();
+        finish();
         const closing = owner.drain().then(() => {
           drained = true;
         });
         await nextTurn();
         expect(drained).toBe(false);
-        expect(getActiveGatewayRootWorkCount()).toBe(before + 1);
-        if (retired) {
+        expect(getActiveGatewayRootWorkCount()).toBe(before.length + 1);
+        if (retirement === "lifetime") {
           lifetime.retire();
+        } else if (retirement === "subscriber") {
+          subscriberCurrent = false;
         }
-        release.resolve();
+        if (stage === "preparation") {
+          preparation.reject(failure);
+        } else {
+          preparation.resolve();
+        }
         await closing;
-        expect(delivered).toHaveBeenCalledTimes(retired ? 0 : 1);
-        expect(getActiveGatewayRootWorkCount()).toBe(before);
+        expect(delivered).toHaveBeenCalledTimes(
+          stage === "publication" || (stage === "success" && retirement === "none") ? 1 : 0,
+        );
+        expect(catalogLog.warn.mock.calls).toEqual(
+          retirement !== "none" || stage === "success"
+            ? []
+            : [["Session catalog progress update failed; refresh the catalog to retry."]],
+        );
+        expect(getActiveGatewayRootWorkHolders()).toEqual(before);
       } finally {
-        release.resolve();
-        lifetime.finishListing();
-        root!.release();
+        preparation.resolve();
+        finish();
         await owner.drain();
       }
     },
@@ -88,16 +139,11 @@ describe("catalog list completion ownership", () => {
   it("retains each catalog host's latest late publication while subscriber preparation waits", async () => {
     const catalogIds = ["alpha", "beta"];
     const hostIds = ["node:first", "node:second"];
-    const lifetime = new SessionCatalogListLifetime([], catalogIds);
+    const lifetime = new SessionCatalogListLifetime([]);
     const owner = new GatewayConnectionWork();
     const publish = createDeferredCore();
-    const release = createDeferredCore();
+    const { release, prepare } = preparationGate();
     const publications: Promise<void>[] = [];
-    let ready = false;
-    const preparation = release.promise.then(() => {
-      ready = true;
-    });
-    const prepare = vi.fn(() => (ready ? undefined : preparation));
     const delivered = vi.fn();
     try {
       await owner.track(async () => {
@@ -155,45 +201,6 @@ describe("catalog list completion ownership", () => {
     }
   });
 
-  it("keeps work started before retirement owned when registration follows an await", async () => {
-    const before = getActiveGatewayRootWorkCount();
-    const root = tryBeginGatewayRootWorkAdmission("catalog-register-after-retirement");
-    expect(root).not.toBeNull();
-    const lifetime = new SessionCatalogListLifetime([], [catalog.id]);
-    const releaseListing = createDeferredCore();
-    const releaseWork = createDeferredCore();
-    const publish = vi.fn();
-    let publication: Promise<void> | undefined;
-    let signal: AbortSignal | undefined;
-    const listing = root!.run(() =>
-      lifetime.runProvider(publish, async (params) => {
-        signal = params.signal;
-        publication = releaseWork.promise.then(() => params.onHost(host));
-        await releaseListing.promise;
-        params.waitUntil(publication);
-      }),
-    );
-    try {
-      lifetime.retire();
-      releaseListing.resolve();
-      await expect(listing).resolves.toBeUndefined();
-      root!.release();
-      lifetime.finishListing();
-      expect(signal?.aborted).toBe(true);
-      expect(getActiveGatewayRootWorkCount()).toBe(before + 1);
-      releaseWork.resolve();
-      await publication;
-      expect(publish).not.toHaveBeenCalled();
-      expect(getActiveGatewayRootWorkCount()).toBe(before);
-    } finally {
-      releaseListing.resolve();
-      releaseWork.resolve();
-      await Promise.allSettled([listing, publication]);
-      lifetime.finishListing();
-      root!.release();
-    }
-  });
-
   it.each([
     { background: false, throws: false },
     { background: false, throws: true },
@@ -202,16 +209,8 @@ describe("catalog list completion ownership", () => {
   ])(
     "closes callbacks and retains roots through publication (background=$background, throws=$throws)",
     async ({ background, throws }) => {
-      const before = getActiveGatewayRootWorkHolders();
-      const root = tryBeginGatewayRootWorkAdmission("catalog-callback-ownership");
-      expect(root).not.toBeNull();
-      const lifetime = new SessionCatalogListLifetime([], [catalog.id]);
-      lifetime.subscribe(
-        "active",
-        () => undefined,
-        () => true,
-      );
-      const release = createDeferredCore();
+      const { before, root, lifetime, run, release, finish } = admit("catalog-callback-ownership");
+      lifetime.subscribe("active", ignore, current);
       let publication: Promise<void> | undefined;
       let retained: SessionCatalogListProviderParams | undefined;
       const publish = vi.fn(() => {
@@ -221,21 +220,19 @@ describe("catalog list completion ownership", () => {
         }
       });
       try {
-        const listing = root!.run(() =>
-          lifetime.runProvider(publish, async (params) => {
-            retained = params;
-            if (background) {
-              publication = release.promise.then(() => params.onHost(host));
-              params.waitUntil(publication);
-            } else {
-              params.onHost(host);
-              if (throws) {
-                throw new Error("catalog list failed");
-              }
+        const listing = run(publish, async (params) => {
+          retained = params;
+          if (background) {
+            publication = release.promise.then(() => params.onHost(host));
+            params.waitUntil(publication);
+          } else {
+            params.onHost(host);
+            if (throws) {
+              throw new Error("catalog list failed");
             }
-            return [];
-          }),
-        );
+          }
+          return [];
+        });
         if (!background && throws) {
           await expect(listing).rejects.toThrow("catalog list failed");
         } else {
@@ -257,8 +254,7 @@ describe("catalog list completion ownership", () => {
       } finally {
         release.resolve();
         await publication?.catch(() => undefined);
-        lifetime.finishListing();
-        root!.release();
+        finish();
       }
     },
   );
@@ -273,12 +269,8 @@ describe("catalog list completion ownership", () => {
     expect(foreignRoot).not.toBeNull();
     const owner = new GatewayConnectionWork();
     const foreign = new GatewayConnectionWork();
-    const lifetime = new SessionCatalogListLifetime([owner.signal], [catalog.id]);
-    lifetime.subscribe(
-      "active",
-      () => undefined,
-      () => true,
-    );
+    const lifetime = new SessionCatalogListLifetime([owner.signal]);
+    lifetime.subscribe("active", ignore, current);
     const callback = new EventEmitter();
     const registered = createDeferredCore();
     const release = createDeferredCore();
@@ -342,10 +334,9 @@ describe("catalog list completion ownership", () => {
   it.each([false, true])(
     "disconnects a subscriber without cancelling native completion (last=%s)",
     async (last) => {
-      const before = getActiveGatewayRootWorkCount();
-      const root = tryBeginGatewayRootWorkAdmission("catalog-subscriber-disconnect");
-      expect(root).not.toBeNull();
-      const lifetime = new SessionCatalogListLifetime([], [catalog.id]);
+      const { before, root, lifetime, run, release, finish } = admit(
+        "catalog-subscriber-disconnect",
+      );
       const connection = new AbortController();
       const disconnected = vi.fn();
       const live = vi.fn();
@@ -354,74 +345,74 @@ describe("catalog list completion ownership", () => {
         lifetime.subscribe("live", live, () => true);
       }
       const publish = vi.fn(() => lifetime.publish(catalog, new Map()));
-      const release = createDeferredCore();
       let publication: Promise<void> | undefined;
       let signal: AbortSignal | undefined;
       try {
-        await root!.run(() =>
-          lifetime.runProvider(publish, async (params) => {
-            signal = params.signal;
-            publication = release.promise.then(() => params.onHost(host));
-            params.waitUntil(publication);
-          }),
-        );
+        await run(publish, async (params) => {
+          signal = params.signal;
+          publication = release.promise.then(() => params.onHost(host));
+          params.waitUntil(publication);
+        });
         root!.release();
         lifetime.finishListing();
         connection.abort();
         expect(signal?.aborted).toBe(false);
-        expect(getActiveGatewayRootWorkCount()).toBe(before + 1);
+        expect(getActiveGatewayRootWorkCount()).toBe(before.length + 1);
         release.resolve();
         await publication;
         expect(disconnected).not.toHaveBeenCalled();
         expect(live).toHaveBeenCalledTimes(last ? 0 : 1);
         expect(publish).toHaveBeenCalledTimes(last ? 0 : 1);
-        expect(getActiveGatewayRootWorkCount()).toBe(before);
+        expect(getActiveGatewayRootWorkCount()).toBe(before.length);
       } finally {
         release.resolve();
         await publication;
-        lifetime.finishListing();
-        root!.release();
+        finish();
       }
     },
   );
 
-  it.each(["signal", "aggregate-failure", "provider-failure", "gateway-drain"] as const)(
+  it.each([
+    "signal",
+    "aggregate-failure",
+    "provider-failure",
+    "gateway-drain",
+    "late-registration",
+  ] as const)(
     "retires delivery on %s without declaring an ignoring producer finished",
     async (retirement) => {
-      const before = getActiveGatewayRootWorkCount();
-      const root = tryBeginGatewayRootWorkAdmission("catalog-retirement-test");
-      expect(root).not.toBeNull();
       const controller = new AbortController();
-      const lifetime = new SessionCatalogListLifetime(
-        [retirement === "gateway-drain" ? getGatewayRestartDrainSignal() : controller.signal],
-        [catalog.id],
-      );
-      lifetime.subscribe(
-        "active",
-        () => undefined,
-        () => true,
-      );
+      const { before, root, lifetime, run, release, finish } = admit("catalog-retirement-test", [
+        retirement === "gateway-drain" ? getGatewayRestartDrainSignal() : controller.signal,
+      ]);
+      lifetime.subscribe("active", ignore, current);
       const publish = vi.fn();
-      const release = createDeferredCore();
+      const registration = createDeferredCore();
+      let listing: Promise<unknown> | undefined;
       let publication: Promise<void> | undefined;
       let signal: AbortSignal | undefined;
       try {
-        const listing = root!.run(() =>
-          lifetime.runProvider(publish, async (params) => {
-            signal = params.signal;
-            const completion =
-              retirement === "gateway-drain"
-                ? new Promise<void>((resolve) => {
-                    params.signal.addEventListener("abort", () => resolve(), { once: true });
-                  })
-                : release.promise;
-            publication = completion.then(() => params.onHost(host));
-            params.waitUntil(publication);
-            if (retirement === "provider-failure") {
-              throw new Error("provider failed");
-            }
-          }),
-        );
+        listing = run(publish, async (params) => {
+          signal = params.signal;
+          const completion =
+            retirement === "gateway-drain"
+              ? new Promise<void>((resolve) => {
+                  params.signal.addEventListener("abort", () => resolve(), { once: true });
+                })
+              : release.promise;
+          publication = completion.then(() => params.onHost(host));
+          if (retirement === "late-registration") {
+            await registration.promise;
+          }
+          params.waitUntil(publication);
+          if (retirement === "provider-failure") {
+            throw new Error("provider failed");
+          }
+        });
+        if (retirement === "late-registration") {
+          lifetime.retire();
+          registration.resolve();
+        }
         if (retirement === "provider-failure") {
           await expect(listing).rejects.toThrow("provider failed");
         } else {
@@ -429,7 +420,7 @@ describe("catalog list completion ownership", () => {
         }
         root!.release();
         lifetime.finishListing();
-        expect(getActiveGatewayRootWorkCount()).toBe(before + 1);
+        expect(getActiveGatewayRootWorkCount()).toBe(before.length + 1);
         if (retirement === "gateway-drain") {
           markGatewayRestartDraining();
           expect(tryBeginGatewayRootWorkAdmission("after-drain")).toBeNull();
@@ -439,17 +430,17 @@ describe("catalog list completion ownership", () => {
           lifetime.retire(new Error("response failed"));
         }
         expect(signal?.aborted).toBe(true);
-        expect(getActiveGatewayRootWorkCount()).toBe(before + 1);
+        expect(getActiveGatewayRootWorkCount()).toBe(before.length + 1);
         release.resolve();
         await publication;
         expect(publish).not.toHaveBeenCalled();
-        expect(getActiveGatewayRootWorkCount()).toBe(before);
+        expect(getActiveGatewayRootWorkCount()).toBe(before.length);
       } finally {
+        registration.resolve();
         release.resolve();
         lifetime.retire();
-        await publication;
-        lifetime.finishListing();
-        root!.release();
+        await Promise.allSettled([listing, publication]);
+        finish();
         if (retirement === "gateway-drain") {
           resetGatewayWorkAdmission();
         }

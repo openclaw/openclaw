@@ -1,0 +1,2 @@
+# Four browser scenarios replace obsolete banner-rendering unit coverage.
+16

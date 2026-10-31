@@ -15,9 +15,10 @@ import { isOpencodeGoKimiNoReasoningModelId } from "./provider-policy-api.js";
 
 const PROVIDER_ID = "opencode-go";
 
-const OPENCODE_GO_OPENAI_BASE_URL = "https://opencode.ai/zen/go/v1";
-const OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/zen/go";
-const OPENCODE_GO_MODELS_ENDPOINT = "https://opencode.ai/zen/go/v1/models";
+const OPENCODE_GO_OPENAI_BASE_URL = "https://opencode.ai/inference/go/openai/v1";
+const OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/inference/go/anthropic";
+const OPENCODE_GO_GOOGLE_BASE_URL = "https://opencode.ai/inference/go/google/v1beta";
+const OPENCODE_GO_MODELS_ENDPOINT = "https://opencode.ai/inference/go/v1/models";
 const OPENCODE_UPSTREAM_CATALOG_ENDPOINT = "https://models.opencode.ai/api.json";
 const OPENCODE_GO_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_GO_MODELS_CACHE_TTL_MS = 60_000;
@@ -87,10 +88,14 @@ const opencodeGoCatalog = createUpstreamProviderCatalog({
   auditContext: "opencode-go-model-discovery",
   starterModelAuditContext: "opencode-go-onboarding-model-discovery",
   isStaticEntryActive: (entry) => !entry?.status,
-  decorateModel: (model) =>
-    model.api === "anthropic-messages" && model.id.startsWith("qwen")
-      ? { ...model, compat: { ...model.compat, thinkingFormat: "qwen" } }
-      : model,
+  decorateModel: (model) => ({
+    ...model,
+    baseUrl:
+      normalizeOpencodeGoBaseUrl({ api: model.api, baseUrl: model.baseUrl }) ?? model.baseUrl,
+    ...(model.api === "anthropic-messages" && model.id.startsWith("qwen")
+      ? { compat: { ...model.compat, thinkingFormat: "qwen" } }
+      : {}),
+  }),
 });
 
 export const {
@@ -114,10 +119,7 @@ export function normalizeOpencodeGoResolvedModel(
   if (!isOpencodeGoKimiNoReasoningModelId(model.id)) {
     return undefined;
   }
-  const compat =
-    model.compat && typeof model.compat === "object" && !Array.isArray(model.compat)
-      ? model.compat
-      : undefined;
+  const compat = model.compat;
   if (!model.reasoning && !compat?.supportsReasoningEffort) {
     return undefined;
   }
@@ -139,19 +141,30 @@ export function normalizeOpencodeGoBaseUrl(params: {
   if (!normalized) {
     return undefined;
   }
-  if (normalized === OPENCODE_GO_OPENAI_BASE_URL) {
+  const legacyRoot =
+    normalized === "https://opencode.ai/go" || normalized === "https://opencode.ai/zen/go";
+  const legacyVersioned =
+    normalized === "https://opencode.ai/go/v1" || normalized === "https://opencode.ai/zen/go/v1";
+  if (
+    !legacyRoot &&
+    !legacyVersioned &&
+    !manifest.providerEndpoints.some(({ baseUrls }) => baseUrls.includes(normalized))
+  ) {
+    return undefined;
+  }
+  // A saved shared Go base must follow the model API, not pin every family to OpenAI.
+  if (params.api === "anthropic-messages" || (!params.api && legacyRoot)) {
+    return OPENCODE_GO_ANTHROPIC_BASE_URL;
+  }
+  if (params.api === "google-generative-ai") {
+    return OPENCODE_GO_GOOGLE_BASE_URL;
+  }
+  if (
+    params.api === "openai-completions" ||
+    params.api === "openai-responses" ||
+    (!params.api && legacyVersioned)
+  ) {
     return OPENCODE_GO_OPENAI_BASE_URL;
   }
-  if (normalized === OPENCODE_GO_ANTHROPIC_BASE_URL) {
-    return OPENCODE_GO_ANTHROPIC_BASE_URL;
-  }
-  if (normalized === "https://opencode.ai/go") {
-    return OPENCODE_GO_ANTHROPIC_BASE_URL;
-  }
-  if (normalized === "https://opencode.ai/go/v1") {
-    return params.api === "anthropic-messages"
-      ? OPENCODE_GO_ANTHROPIC_BASE_URL
-      : OPENCODE_GO_OPENAI_BASE_URL;
-  }
-  return undefined;
+  return normalized;
 }

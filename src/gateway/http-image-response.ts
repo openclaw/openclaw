@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
-import { fileTypeFromBuffer } from "file-type";
 import { isSelfContainedSvg } from "../../packages/gateway-protocol/src/svg-image.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 
@@ -57,6 +56,7 @@ export async function resolveHttpImageRepresentation(
         ? SVG_MIME_TYPE
         : undefined;
   } else {
+    const { fileTypeFromBuffer } = await import("file-type");
     contentType = resolveHttpImageMimeType((await fileTypeFromBuffer(body))?.mime);
   }
   if (!contentType) {

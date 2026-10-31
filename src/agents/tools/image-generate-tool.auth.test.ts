@@ -1,4 +1,5 @@
 import { assert, describe, expect, it, vi } from "vitest";
+import { createProviderConfigFixture } from "../../config/runtime-snapshot.test-fixtures.js";
 import type { ImageGenerationProvider } from "../../image-generation/types.js";
 import * as mediaGenerationRegistry from "../../media-generation/registry.js";
 import { withEnv } from "../../test-utils/env.js";
@@ -8,6 +9,7 @@ import {
   createAuthProfileStoreFixture,
   createOAuthRefreshCredential,
 } from "../auth-profiles/credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshotCore,
   setRuntimeAuthProfileStoreSnapshot,
@@ -21,11 +23,7 @@ describe("image generation credential availability", () => {
       const agentDir = state.agentDir();
       const provider: ImageGenerationProvider = {
         id: "fixture-image",
-        defaultModel: "fixture-model",
-        capabilities: {
-          generate: { maxCount: 1 },
-          edit: { enabled: false, maxInputImages: 0 },
-        },
+        capabilities: { generate: {}, edit: { enabled: false } },
         generateImage: async () => {
           throw new Error("Provider listing must not generate images");
         },
@@ -34,6 +32,7 @@ describe("image generation credential availability", () => {
         .spyOn(mediaGenerationRegistry, "withImageGenerationProviders")
         .mockImplementation(async (_config, run) => await run([provider]));
       try {
+        prepareSharedAuthStoreOwnershipForNative(state.env);
         setRuntimeAuthProfileStoreSnapshot(createAuthProfileStoreFixture({}), agentDir);
         const authProfileStoreSource = await hasAnyAuthProfileStoreSourceAsync(agentDir);
         expect(authProfileStoreSource).toBe(false);
@@ -98,19 +97,7 @@ describe("image generation credential availability", () => {
         const tool = createImageGenerateTool({
           config: {
             plugins: { allow: ["openai"] },
-            ...(pinned
-              ? {
-                  models: {
-                    providers: {
-                      openai: {
-                        baseUrl: "https://api.openai.com/v1",
-                        apiKey: "openai:siwc",
-                        models: [],
-                      },
-                    },
-                  },
-                }
-              : {}),
+            ...(pinned ? createProviderConfigFixture("openai:siwc") : {}),
           },
           authProfileStore: createAuthProfileStoreFixture({
             "openai:siwc": { ...oauth, authFlow },

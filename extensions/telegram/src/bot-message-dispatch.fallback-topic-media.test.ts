@@ -17,21 +17,20 @@ const statusTable = (rowHeaderColumnIndex?: number) => ({
   rows: [["Gateway", "running"]],
   ...(rowHeaderColumnIndex === undefined ? {} : { rowHeaderColumnIndex }),
 });
-const droppedButtons = (...labels: string[]) => ({
+const buttons = (label: string, url?: string) => ({
   type: "buttons" as const,
-  buttons: labels.map((label) => ({ label, value: "x".repeat(65) })),
+  buttons: [
+    url ? { label, action: { type: "web-app" as const, url } } : { label, value: "x".repeat(65) },
+  ],
 });
-async function dispatchPresentationFinal(params: {
-  payload: ReplyPayload;
-  context?: TelegramMessageContext;
-}) {
+async function dispatchPresentationFinal(payload: ReplyPayload, context = createContext()) {
   const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
   dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-    await dispatcherOptions.deliver(params.payload, { kind: "final" });
+    await dispatcherOptions.deliver(payload, { kind: "final" });
     return { queuedFinal: true };
   });
   await dispatchWithContext({
-    context: params.context ?? createContext(),
+    context,
     streamMode: "partial",
     telegramCfg: { richMessages: true, streaming: { mode: "partial" } },
   });
@@ -44,6 +43,7 @@ function expectPresentation(
   contains = labels.map((x) => `- ${x}`),
 ) {
   expect(text).toContain("<table><caption>Status</caption>");
+  expect(text).toContain("<td>running</td>");
   for (const value of contains) {
     expect(text).toContain(value);
   }
@@ -52,100 +52,49 @@ function expectPresentation(
   }
   expect(text).not.toBe("Gateway status as plain text");
 }
-describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
-  it("respects richMessages=true on the finalized status preview", async () => {
-    const finalUpdate = await dispatchPresentationFinal({
-      payload: {
-        text: "Gateway status as plain text",
-        presentationTextMode: "fallback",
-        presentation: { blocks: [statusTable(0)] },
-      },
-    });
-    expect(finalUpdate).toContain("<table><caption>Status</caption>");
-    expect(finalUpdate).toContain("<td>running</td>");
-  });
-  it.each<{
-    name: string;
-    payload: ReplyPayload;
-    labels: string[];
-    authoredText?: string;
-    context?: () => TelegramMessageContext;
-    contains?: string[];
-  }>([
-    ...(["Status summary\n\n- Legacy\n- Presentation"] as const).map((text) => ({
-      name: `unset mixed ${text || "empty"}`,
-      payload: {
-        text,
-        presentation: { blocks: [statusTable(), droppedButtons("Presentation")] },
-        interactive: { blocks: [droppedButtons("Legacy")] },
-      },
-      labels: ["Presentation", "Legacy"],
-      authoredText: text.split("\n\n")[0],
-    })),
-    {
-      name: "group web-app control",
-      payload: {
-        text: "Gateway status as plain text",
-        presentationTextMode: "fallback" as const,
-        presentation: {
-          blocks: [
-            statusTable(0),
-            {
-              type: "buttons",
-              buttons: [
-                { label: "Launch", action: { type: "web-app", url: "https://example.com/app" } },
-              ],
-            },
-          ],
-        },
-      },
-      context: () =>
-        createContext({
-          chatId: -1001234,
-          isGroup: true,
-          msg: {
-            chat: { id: -1001234, type: "supergroup" },
-            message_id: 456,
-            message_thread_id: 777,
-          } as TelegramMessageContext["msg"],
-          threadSpec: { id: 777, scope: "forum" },
-        }),
-      labels: ["Launch"],
-      contains: ["Launch: https://example.com/app"],
-    },
-  ])(
-    "keeps dropped labels: $name",
-    async ({ payload, labels, authoredText, context, contains }) => {
-      const finalUpdate = await dispatchPresentationFinal({ payload, context: context?.() });
-      if (authoredText) {
-        expect(finalUpdate).toContain(authoredText);
-      }
-      expectPresentation(finalUpdate, labels, contains);
-    },
-  );
-});
-
 function createMessageToolOnlyGroupContext(): TelegramMessageContext {
+  const chat = { id: -1001234, type: "supergroup" };
   return createContext({
-    chatId: -1001234,
+    chatId: chat.id,
     isGroup: true,
     ctxPayload: {
       SessionKey: "agent:test:telegram:group:-1001234",
       ChatType: "group",
     } as TelegramMessageContext["ctxPayload"],
-    primaryCtx: {
-      message: { chat: { id: -1001234, type: "supergroup" } },
-    } as TelegramMessageContext["primaryCtx"],
-    msg: {
-      chat: { id: -1001234, type: "supergroup" },
-      message_id: 456,
-    } as TelegramMessageContext["msg"],
+    primaryCtx: { message: { chat } } as TelegramMessageContext["primaryCtx"],
+    msg: { chat, message_id: 456 } as TelegramMessageContext["msg"],
     threadSpec: { id: undefined, scope: "none" },
     replyThreadId: undefined,
   });
 }
-
-describeTelegramDispatch("dispatchTelegramMessage fallback send policy", () => {
+describeTelegramDispatch("dispatchTelegramMessage presentation and fallback policy", () => {
+  it("keeps dropped labels: unset mixed", async () => {
+    const finalUpdate = await dispatchPresentationFinal({
+      text: "Status summary\n\n- Legacy\n- Presentation",
+      presentation: { blocks: [statusTable(), buttons("Presentation")] },
+      interactive: { blocks: [buttons("Legacy")] },
+    });
+    expect(finalUpdate).toContain("Status summary");
+    expectPresentation(finalUpdate, ["Presentation", "Legacy"]);
+  });
+  it("keeps dropped labels: group web-app control", async () => {
+    const finalUpdate = await dispatchPresentationFinal(
+      {
+        text: "Gateway status as plain text",
+        presentationTextMode: "fallback",
+        presentation: {
+          blocks: [statusTable(0), buttons("Launch", "https://example.com/app")],
+        },
+      },
+      createContext({
+        chatId: -1001234,
+        isGroup: true,
+        msg: { chat: { id: -1001234, type: "supergroup" } } as TelegramMessageContext["msg"],
+        threadSpec: { id: 777, scope: "forum" },
+      }),
+    );
+    expectPresentation(finalUpdate, ["Launch"], ["Launch: https://example.com/app"]);
+  });
   it("honors send-policy denial when final delivery fails", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       dispatcherOptions.onSkip?.({}, { kind: "final", reason: "empty" });
@@ -156,21 +105,15 @@ describeTelegramDispatch("dispatchTelegramMessage fallback send policy", () => {
         sendPolicyDenied: true,
       };
     });
-
     await dispatchWithContext({
       cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
       context: createMessageToolOnlyGroupContext(),
       streamMode: "off",
     });
-
     expect(deliverReplies).not.toHaveBeenCalled();
   });
-});
-
-describeTelegramDispatch("dispatchTelegramMessage room-event failure policy", () => {
   it("does not send visible error fallbacks for room events", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("provider down"));
-
     await dispatchWithContext({
       context: createContext({
         ctxPayload: {
@@ -194,7 +137,6 @@ describeTelegramDispatch("dispatchTelegramMessage room-event failure policy", ()
       }),
       streamMode: "partial",
     });
-
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 });

@@ -16,11 +16,11 @@ export function useNativeAttachmentCapture(): boolean {
   );
 }
 
-export function useSingleAttachmentPicker(): boolean {
+export function useNativeAttachmentSourceMenu(): boolean {
   if (!isIosBrowserPlatform() || isNativeEmbedHost() || isNativeWebChromeHost()) {
     return false;
   }
-  // Safari's iOS upload panel already offers library, camera, and files.
+  // Safari's iOS upload panel owns capture alongside library and file sources.
   // Width/touch are not picker capabilities. Other browsers and WKWebView hosts
   // can replace that panel; retain their explicit input paths unless verified.
   // This conservative Safari identity hint is not proof of a native picker contract.

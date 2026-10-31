@@ -1,4 +1,3 @@
-// Plugin-provided node.invoke policy adapter.
 // Lets plugin policies gate dangerous node commands before transport dispatch.
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -21,6 +20,7 @@ import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import {
   consumeNodeInvokePlacementGrant,
+  prepareNodeInvokePlacementGrant,
   type NodeInvokePlacementGrantAuthorization,
 } from "./node-invoke-placement-grant.js";
 import { createPluginNodeInvokeApprovalRuntime } from "./node-invoke-plugin-approval.js";
@@ -86,6 +86,7 @@ export type PluginNodeInvokePrivateTransport = {
     timeoutMs?: number;
     signal?: AbortSignal;
     idempotencyKey?: string;
+    authorizeDispatch?: () => Promise<boolean>;
     isDispatchAuthorized: () => boolean;
     onDispatchReady: (invokeId: string) => void;
   }) => Promise<NodeInvokeResult>;
@@ -390,6 +391,15 @@ export async function applyPluginNodeInvokePolicy(params: {
         onProgress: params.nodeInvokeStream.onProgress,
         idleTimeoutMs: params.nodeInvokeStream.idleTimeoutMs,
       }),
+      ...(standingGrantAuthorization.binding
+        ? {
+            authorizeDispatch: () =>
+              prepareNodeInvokePlacementGrant({
+                runtime: params.context.placementStandingGrants,
+                authorization: standingGrantAuthorization,
+              }),
+          }
+        : {}),
       isDispatchAuthorized: () => {
         try {
           sessionAuthority?.assertCurrent();

@@ -5,6 +5,10 @@ import {
   type Context,
   type ProviderStreamOptions,
 } from "openclaw/plugin-sdk/llm";
+import {
+  mapAssistantMessageStream,
+  wrapProviderPayloadHook,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 // Ollama 0.40.1 tools.findTool searches the retained envelope before the JSON
@@ -16,31 +20,20 @@ const TOOL_CALL_ENVELOPES = [
   "<|tool▁calls▁begin|><|tool▁call▁begin|>function<|tool▁sep|>",
   '{"name":"","arguments":',
 ];
-const TOOL_CALL_REFERENCE_RE =
-  /(?<![\p{L}\p{N}_./:-])tool_call(?![\p{L}\p{N}_/:-]|\.[\p{L}\p{N}_])/gu;
 
 export function normalizeOllamaToolCallName(
   rawName: string,
   options: { availableToolNames?: ReadonlySet<string> } = {},
 ): string {
   const trimmed = rawName.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
   const availableToolNames = options.availableToolNames;
-  if (availableToolNames?.has(trimmed)) {
+  // The shipped dispatcher is a durable name, not a tools.call prefix.
+  if (!trimmed || trimmed === "tool_call" || availableToolNames?.has(trimmed)) {
     return trimmed;
-  }
-  const strippedAnySeparator = trimmed.replace(/^(?:functions?|tools?)[./_-]+/iu, "").trim();
-  if (
-    availableToolNames &&
-    strippedAnySeparator !== trimmed &&
-    availableToolNames.has(strippedAnySeparator)
-  ) {
-    return strippedAnySeparator;
   }
   if (availableToolNames) {
-    return trimmed;
+    const stripped = trimmed.replace(/^(?:functions?|tools?)[./_-]+/iu, "").trim();
+    return availableToolNames.has(stripped) ? stripped : trimmed;
   }
   return trimmed.replace(/^(?:functions?|tools?)[./]+/iu, "").trim();
 }
@@ -133,9 +126,12 @@ function mapToolChoice(choice: unknown, mapName: (name: string) => string): unkn
 export function wrapOllamaToolNames(baseFn: StreamFn | undefined): StreamFn {
   const underlying = baseFn ?? streamSimple;
   return (model, context, options) => {
+    const activeNames = new Set(context.tools?.map((tool) => tool.name));
     const names = collectToolNames(context);
     const toWire = new Map<string, string>();
-    for (const name of [...names].toSorted()) {
+    // Only advertised names participate in findTool. Completed history is data,
+    // including the retired dispatcher spelling; reserve it without translating it.
+    for (const name of [...activeNames].toSorted()) {
       if (!name || !TOOL_CALL_ENVELOPES.some((envelope) => envelope.includes(name))) {
         continue;
       }
@@ -149,36 +145,23 @@ export function wrapOllamaToolNames(baseFn: StreamFn | undefined): StreamFn {
     if (toWire.size === 0) {
       return underlying(model, context, options);
     }
-    const activeNames = new Set(context.tools?.map((tool) => tool.name));
     const mapName = (name: string) =>
       toWire.get(
         normalizeOllamaToolCallName(name, {
           availableToolNames: activeNames.size ? activeNames : undefined,
         }),
       ) ?? name;
-    const instructions = [...toWire]
-      .filter(([name]) => activeNames.has(name))
-      .map(([name, alias]) => `${name}: use ${alias}`);
-    const toolCallAlias = activeNames.has("tool_call") ? toWire.get("tool_call") : undefined;
+    const instructions = [...toWire].map(([name, alias]) => `${name}: use ${alias}`);
     const wireContext: Context = {
       ...context,
-      systemPrompt: instructions.length
-        ? [
-            context.systemPrompt,
-            "## Tool wire names\nUse these function names for the tools referenced in instructions; arguments and tool IDs are unchanged:",
-            ...instructions,
-          ]
-            .filter(Boolean)
-            .join("\n")
-        : context.systemPrompt,
-      tools: context.tools?.map((tool) => ({
-        ...tool,
-        name: mapName(tool.name),
-        description:
-          toolCallAlias && (tool.name === "tool_search" || tool.name === "tool_describe")
-            ? tool.description.replace(TOOL_CALL_REFERENCE_RE, toolCallAlias)
-            : tool.description,
-      })),
+      systemPrompt: [
+        context.systemPrompt,
+        "## Tool wire names\nUse these function names for the tools referenced in instructions; arguments and tool IDs are unchanged:",
+        ...instructions,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      tools: context.tools?.map((tool) => ({ ...tool, name: mapName(tool.name) })),
       messages: context.messages.map((message) => {
         if (message.role === "assistant") {
           return mapAssistantNames(message, mapName);
@@ -192,10 +175,9 @@ export function wrapOllamaToolNames(baseFn: StreamFn | undefined): StreamFn {
     if ("toolChoice" in providerOptions) {
       providerOptions.toolChoice = mapToolChoice(providerOptions.toolChoice, mapName);
     }
-    const maybeStream = underlying(model, wireContext, {
-      ...providerOptions,
-      onPayload: async (payload, selectedModel) => {
-        const replacement = await options?.onPayload?.(payload, selectedModel);
+    providerOptions.onPayload = wrapProviderPayloadHook(
+      options?.onPayload,
+      (payload, replacement) => {
         const request = replacement === undefined ? payload : replacement;
         // OpenAI-compatible callers can choose a function through a payload hook.
         if (isRecord(request) && "tool_choice" in request) {
@@ -203,10 +185,9 @@ export function wrapOllamaToolNames(baseFn: StreamFn | undefined): StreamFn {
         }
         return replacement;
       },
-    });
+    );
+    const maybeStream = underlying(model, wireContext, providerOptions);
     const fromWire = new Map([...toWire].map(([name, alias]) => [alias, name]));
-    return "then" in maybeStream
-      ? maybeStream.then((stream) => restoreStreamNames(stream, fromWire))
-      : restoreStreamNames(maybeStream, fromWire);
+    return mapAssistantMessageStream(maybeStream, (stream) => restoreStreamNames(stream, fromWire));
   };
 }

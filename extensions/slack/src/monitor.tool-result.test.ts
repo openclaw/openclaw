@@ -1,9 +1,12 @@
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  PluginStateActionAuthority,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
-import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
+import { resetInboundDedupe, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -276,7 +279,7 @@ describe("Slack monitor dispatch", () => {
     await runMention();
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock.mock.calls[0]?.[1]).toBe(
-      "PFX ⚠️ OpenClaw couldn't produce or deliver a reply. Please try again. If this keeps happening, ask the operator to check the gateway logs.",
+      "PFX No answer was returned. Ask again if you still need one.",
     );
     await expectAck();
   });
@@ -481,6 +484,30 @@ describe("Slack thread failure notices", () => {
     configureFailureNotices();
   });
 
+  it("retains each queued message's mention policy after the originating Slack dispatch closes", async () => {
+    const sources: NonNullable<GetReplyOptions["queuedDeliveryCorrelations"]>[number][] = [];
+    mockReplySequence({ text: "Ready" });
+    await dispatchEvent({ text: "<@bot-user> please help", ts: "109.000000" });
+    slackTestState.replyMock.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[1] ?? {}) as GetReplyOptions;
+      sources.push(...(opts.queuedDeliveryCorrelations ?? []));
+      return undefined;
+    });
+    await threadReply("109.000001", "109.000000");
+    await threadReply("109.000002", "109.000000");
+    await threadReply("109.000003", "109.000000", "<@bot-user> retry please");
+    expect(sources).toHaveLength(3);
+    const failure = { text: AUTH_FAILURE, isError: true };
+    for (const [index, source] of sources.entries()) {
+      const end = source.begin();
+      expect(source.shouldSuppressReply?.(failure)).toBe(index === 1);
+      if (index !== 1) {
+        source.onReplyDelivered?.(failure);
+      }
+      end?.({ visibleReplySent: index !== 1, failed: true });
+    }
+  });
+
   it("announces the first failure for participation restored after a restart", async () => {
     const threadTs = "101.100000";
     const openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
@@ -495,7 +522,17 @@ describe("Slack thread failure notices", () => {
       { ttlMs: 60_000 },
     );
     const runtime = getSlackRuntime();
-    setSlackRuntime({ ...runtime, state: { ...runtime.state, openKeyedStore } });
+    setSlackRuntime({
+      ...runtime,
+      state: {
+        ...runtime.state,
+        openKeyedStore,
+        openKeyedStoreV2: <T>(
+          options: OpenAsyncKeyedStoreOptions,
+          authority?: PluginStateActionAuthority,
+        ) => openKeyedStore<T>(options).withCurrent(authority ?? { assertCurrent() {} }),
+      },
+    });
     expect(hasSlackThreadParticipation("default", "C1", threadTs)).toBe(false);
     mockReplySequence({ text: AUTH_FAILURE, isError: true });
 

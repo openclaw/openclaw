@@ -2,11 +2,12 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 /** Registry projections must agree with admitted execution and queue owners. */
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { buildSubagentsStatusLine } from "../../../auto-reply/reply/commands-status-subagents.js";
 import { resolveSubagentEntryForToken } from "../../../auto-reply/reply/commands-subagents/shared.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { projectGatewaySessionRunState } from "../../../gateway/session-utils-display.js";
 import {
   claimAgentRunContext,
@@ -28,6 +29,7 @@ import {
 import { resolveSpawnAdmission } from "../../spawn-plan.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
+import { withPreparedSessionCapabilityRead } from "../spawn/subagent-session-store.js";
 import {
   activateSwarmRun,
   isSwarmRunWaitingForCapacity,
@@ -47,7 +49,6 @@ import {
   isSubagentSessionRunActive,
   listActiveSubagentSessionKeys,
 } from "./subagent-registry-read.js";
-import { preserveSubagentRunForRestart } from "./subagent-registry-run-pause.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
   countActiveRunsForSession,
@@ -60,6 +61,9 @@ import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
+beforeEach(() => {
+  setRuntimeConfigSnapshot({ agents: { defaults: { workspace: fixture.stateDir } } });
+});
 const parent = "agent:main:liveness-parent";
 const start = Date.parse("2026-09-13T12:00:00Z");
 const olderThanCutoff = start + 2 * 60 * 60 * 1000 + 1;
@@ -80,6 +84,8 @@ async function register(id: string, collect = false, expectsCompletionMessage = 
   await registerSubagentRun({
     runId: id,
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: `${id}-session`, lifecycleRevision: `${id}-revision` },
     requesterSessionKey: parent,
     requesterAgentId: "main",
     requesterDisplayKey: parent,
@@ -118,15 +124,17 @@ it("admits new work at the child cap when finished descendants have suspended de
     });
   }
   const admission = () =>
-    resolveSpawnAdmission({
-      cfg: { agents: { defaults: { subagents: { maxChildrenPerAgent: 5 } } } },
-      requesterSessionKey: parent,
-      requesterAgentId: "main",
-      targetAgentId: "main",
-      configuredAgentIds: ["main"],
-    });
+    withPreparedSessionCapabilityRead(() =>
+      resolveSpawnAdmission({
+        cfg: { agents: { defaults: { subagents: { maxChildrenPerAgent: 5 } } } },
+        requesterSessionKey: parent,
+        requesterAgentId: "main",
+        targetAgentId: "main",
+        configuredAgentIds: ["main"],
+      }),
+    );
 
-  expect(admission().ok).toBe(true);
+  expect((await admission()).ok).toBe(true);
   expect(countActiveRunsForSession(parent)).toBe(0);
   expect(subagentRuns.size).toBe(10);
 
@@ -140,7 +148,7 @@ it("admits new work at the child cap when finished descendants have suspended de
       execution: { status: "running", startedAt: now },
     });
   }
-  expect(admission()).toMatchObject({
+  expect(await admission()).toMatchObject({
     ok: false,
     governingCap: "subagents.maxChildrenPerAgent",
   });
@@ -184,19 +192,33 @@ it("retains quiet admitted execution in listing, admission count, and requester 
     expect(isSubagentRunLive(entry)).toBe(true);
     expect(isSubagentRunLive(updated)).toBe(true);
     expect(isSubagentRunLive({ ...updated })).toBe(false);
+    const displayed = buildSubagentSessionListReadIndex().getDisplaySubagentRun(
+      entry.childSessionKey,
+    );
+    expect(displayed).not.toBe(updated);
+    const serialize = vi.spyOn(JSON, "stringify");
+    const live = Array.from({ length: 100 }, () => isSubagentRunLive(displayed));
+    const serializations = serialize.mock.calls.length;
+    serialize.mockRestore();
+    expect(live.every(Boolean)).toBe(true);
+    expect(serializations).toBe(0);
     expect(sweepStaleRunContexts()).toBe(0);
     await testing.sweepOnceForTests();
     expect(entry.execution.endedAt).toBeUndefined();
     expect(getAgentRunContext(entry.runId)).toBeDefined();
     expect
       .soft(
-        resolveSpawnAdmission({
-          cfg: { agents: { defaults: { subagents: { maxChildrenPerAgent: 1 } } } },
-          requesterSessionKey: parent,
-          requesterAgentId: "main",
-          targetAgentId: "main",
-          configuredAgentIds: ["main"],
-        }).ok,
+        (
+          await withPreparedSessionCapabilityRead(() =>
+            resolveSpawnAdmission({
+              cfg: { agents: { defaults: { subagents: { maxChildrenPerAgent: 1 } } } },
+              requesterSessionKey: parent,
+              requesterAgentId: "main",
+              targetAgentId: "main",
+              configuredAgentIds: ["main"],
+            }),
+          )
+        ).ok,
       )
       .toBe(false);
     expect.soft(countActiveRunsForSession(parent)).toBe(1);
@@ -213,7 +235,7 @@ it("retains quiet admitted execution in listing, admission count, and requester 
         ).active.map((row) => ({ runId: row.runId, execution: row.execution.state })),
       )
       .toEqual([{ runId: entry.runId, execution: "running" }]);
-    // A persisted completed sibling already owns an unfrozen settle outbox.
+    // This sibling owes a continuation; fire-and-forget wakes retire independently.
     await addSubagentRunForTests({
       runId: "settled-sibling",
       childSessionKey: "agent:main:subagent:settled-sibling",
@@ -227,21 +249,23 @@ it("retains quiet admitted execution in listing, admission count, and requester 
       endedAt: start + 1,
       outcome: { status: "ok" },
       cleanupCompletedAt: start + 2,
-      expectsCompletionMessage: false,
+      expectsCompletionMessage: true,
+      completion: { required: true },
+      delivery: { status: "pending" },
       requesterSettleWake: { status: "pending", attemptCount: 0 },
     });
     const sibling = subagentRuns.get("settled-sibling")!;
     const completeBatch = vi.fn();
-    const transitionBatch = vi.fn();
     await maybeWakeRequesterAfterAllChildrenSettled({
       isSourceCurrent: () => true,
       requesterSessionKey: parent,
       settledEntry: sibling,
+      transitionBatch: () => {
+        throw new Error("A live sibling cannot transition requester delivery");
+      },
       completeBatch,
-      transitionBatch,
     });
     expect.soft(completeBatch).not.toHaveBeenCalled();
-    expect.soft(transitionBatch).not.toHaveBeenCalled();
   } finally {
     finish.resolve();
     await task;
@@ -617,37 +641,6 @@ it("retains durable suspended completion debt without reporting a live executor 
     childSessionKey: entry.childSessionKey,
     requesterSessionKey: parent,
     execution: entry.execution,
-  });
-});
-
-it("keeps a restart-preserved native record distinct from an executor", async () => {
-  const now = vi.spyOn(Date, "now").mockReturnValue(start);
-  const entry = await register("interrupted-task");
-  expect(
-    (
-      await preserveSubagentRunForRestart({
-        entry,
-        terminal: {
-          reason: "cancelled",
-          status: "error",
-          stopReason: "restart",
-          endedAt: start + 1,
-        },
-        runs: subagentRuns,
-      })
-    ).preserved,
-  ).toBe(true);
-  const interrupted = subagentRuns.get(entry.runId)!;
-  now.mockReturnValue(olderThanCutoff);
-  expect(interrupted.execution.status).toBe("interrupted");
-  expect(interrupted.execution.endedAt).toBeUndefined();
-  expect(isSubagentRunLive(interrupted)).toBe(false);
-  expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
-  subagentRuns.clear();
-  expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toMatchObject({
-    childSessionKey: entry.childSessionKey,
-    requesterSessionKey: parent,
-    execution: interrupted.execution,
   });
 });
 

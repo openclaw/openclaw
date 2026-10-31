@@ -1,6 +1,14 @@
+import { randomUUID } from "node:crypto";
+import { BroadcastChannel, getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import * as runtimeProcess from "../infra/runtime-process-url.js";
 import { CodeModeHeadlessAbortError, CodeModeHeadlessTimeoutError } from "./code-mode-errors.js";
+import { resolveCodeModeConfig } from "./code-mode-runtime.js";
 import { runCodeModeScriptHeadless } from "./code-mode.js";
 import {
   createHeadlessCodeModeHarness,
@@ -8,7 +16,6 @@ import {
   resetCodeModeTestState,
   testing,
 } from "./code-mode.test-support.js";
-import { jsonResult } from "./tools/common.js";
 
 describe("headless Code Mode cancellation", () => {
   afterEach(async () => {
@@ -21,47 +28,27 @@ describe("headless Code Mode cancellation", () => {
   });
 
   it("classifies a wall-clock expiry observed during a real tool leg as timeout", async () => {
-    // Only the timer clock is virtual here: the production headless entry, its deadline
-    // scope, a real worker and real tools all run unchanged. The first leg parks the run
-    // for a known span of real time, and the scope measures its remaining budget with an
-    // unfaked performance clock, so the second leg's deadline observation is always armed
-    // at least that far ahead of the scope's abort timer - the ordering the classification
-    // lost - no matter how fast this run starts.
-    const realSetTimeout = globalThis.setTimeout;
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const wallClockMs = 15_000;
-    const separationMs = 200;
     const toolStarted = createDeferred();
-    const warmUp = pluginToolWithExecute("warm_up", "Parks for a fixed real span", async () => {
-      await new Promise<void>((resolve) => {
-        realSetTimeout(resolve, separationMs);
-      });
-      return jsonResult({ ok: true });
-    });
     const slowLeg = pluginToolWithExecute("slow_leg", "Never settles on its own", async () => {
       toolStarted.resolve();
       return await new Promise<never>(() => {});
     });
-    const startedAt = performance.now();
 
     const resultPromise = runCodeModeScriptHeadless({
-      ctx: createHeadlessCodeModeHarness([warmUp, slowLeg]),
-      code: "await warm_up({}); await slow_leg({}); return true;",
+      ctx: createHeadlessCodeModeHarness([slowLeg]),
+      code: "await slow_leg({}); return true;",
       wallClockMs,
     });
     await toolStarted.promise;
-    // Assert the separation before advancing: the second leg's deadline is armed no later
-    // than wallClockMs - separationMs, which this advance reaches while the abort timer at
-    // wallClockMs stays pending.
-    expect(performance.now() - startedAt).toBeGreaterThanOrEqual(separationMs);
-
-    await vi.advanceTimersByTimeAsync(wallClockMs - separationMs / 2);
+    await vi.advanceTimersByTimeAsync(wallClockMs);
     const result = await resultPromise;
 
     expect(result, JSON.stringify(result)).toMatchObject({
       status: "failed",
       code: "timeout",
-      toolCallCount: 2,
+      toolCallCount: 1,
     });
   });
 
@@ -86,14 +73,32 @@ describe("headless Code Mode cancellation", () => {
     });
   });
 
-  it("terminates an in-flight worker leg when aborted", async () => {
+  it("terminates an in-flight worker leg when aborted", async ({ signal }) => {
     const ctx = createHeadlessCodeModeHarness();
-    const config = testing.resolveCodeModeHeadlessConfig(ctx);
+    const config = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
     const controller = new AbortController();
+    const published = createDeferred();
+    const notifications = new BroadcastChannel(randomUUID());
+    notifications.addEventListener("message", ({ data }) => {
+      if (data === 1) {
+        published.resolve();
+      }
+    });
+    const environmentKey = "openclaw.codeModeTimeoutOutputTest";
+    const previousEnvironment = getEnvironmentData(environmentKey);
+    setEnvironmentData(environmentKey, notifications.name);
+    const worker = new URL(
+      "../../test/helpers/code-mode-node.timeout.test-support.ts",
+      import.meta.url,
+    );
+    const resolveWorker = runtimeProcess.resolveRuntimeProcessEntrypointUrl;
+    using _ = vi
+      .spyOn(runtimeProcess, "resolveRuntimeProcessEntrypointUrl")
+      .mockImplementation((name) => (name === "codeModeNode" ? worker : resolveWorker(name)));
     const resultPromise = testing.runCodeModeExecutor(
       {
         kind: "exec",
-        source: "while (true) {}",
+        source: 'text("started"); while (true) {}',
         config,
         catalog: [],
         apiFiles: [],
@@ -101,13 +106,30 @@ describe("headless Code Mode cancellation", () => {
       },
       { timeoutMs: 5000, executor: config.executor, signal: controller.signal },
     );
-    setTimeout(() => controller.abort(), 100);
-
-    await expect(resultPromise).resolves.toMatchObject({
-      status: "failed",
-      code: "aborted",
-      error: "code mode execution aborted",
-    });
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          published.promise,
+          resultPromise,
+          "Execution ended before the guest published output",
+        ),
+        signal,
+      );
+      controller.abort();
+      await expect(withinTest(resultPromise, signal)).resolves.toMatchObject({
+        status: "failed",
+        code: "aborted",
+        error: "code mode execution aborted",
+      });
+    } finally {
+      controller.abort();
+      try {
+        await resultPromise;
+      } finally {
+        setEnvironmentData(environmentKey, previousEnvironment);
+        notifications.close();
+      }
+    }
   });
 
   it("classifies caller aborts before the worker leg as aborted", async () => {
@@ -144,7 +166,7 @@ describe("headless Code Mode cancellation", () => {
     "classifies a host exchange that rejects with the scope $name error before its signal settles",
     async ({ createError, code, error }) => {
       const ctx = createHeadlessCodeModeHarness();
-      const config = testing.resolveCodeModeHeadlessConfig(ctx);
+      const config = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
       // The scope observes its own deadline inside the host exchange, so the run
       // can reject before the abort controller that shares that deadline settles.
       const scopeSignal = new AbortController().signal;

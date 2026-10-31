@@ -1,15 +1,18 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../test/helpers/cron/runtime-mutation.js";
+import {
+  deleteCronJobScratch,
+  writeCronJobScratchForMaintenance,
+} from "../../test/helpers/cron/scratch-store.js";
 import { createCronRegressionState } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { writeConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -17,387 +20,307 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createCronMutationCompletion } from "./mutation-completion.js";
-import { CRON_JOB_SCRATCH_MAX_BYTES } from "./scratch-contract.js";
-import { readCronScratchSnapshot } from "./scratch-read.js";
 import {
-  deleteCronJobScratch,
-  hashCronScratchSource,
-  readCronJobScratchState,
-} from "./scratch-store.js";
-import { writeCronJobScratchForMaintenance } from "./scratch-write.kernel.js";
+  createOpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import { prepareCronAutomationPrompt } from "./isolated-agent/run-automation-context.js";
+import { createCronMutationCompletion } from "./mutation-completion.js";
+import { CRON_JOB_SCRATCH_MAX_BYTES, type CronScratchReadCommand } from "./scratch-contract.js";
+import { readCronScratchSnapshot } from "./scratch-read.js";
+import { readCronScratchSnapshotInDatabase } from "./scratch-read.kernel.js";
+import { hashCronScratchSource, readCronJobScratchState } from "./scratch-store.js";
+import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import * as runtimeMutation from "./service/runtime-mutation.js";
 import * as cronStore from "./store.js";
-import { loadCronJobsStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { replaceCronRows, upsertCronJobRow } from "./store/row-codec.js";
-import { getCronStoreKysely } from "./store/schema.js";
 import type { CronJob } from "./types.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  closeOpenClawStateDatabaseForTest();
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+const testStates: Awaited<ReturnType<typeof createOpenClawTestState>>[] = [];
+const services: CronService[] = [];
+const scratchReceipt = () =>
+  expectDefined(createCronMutationCompletion("cron.scratch.set"), "scratch receipt");
+const settle = <T>(pending: Promise<T>) =>
+  pending.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+const conflict = (currentRevision: number) => ({
+  ok: false,
+  reason: "revision-conflict",
+  currentRevision,
 });
-
-async function withScratchService(
-  run: (params: {
-    service: CronService;
-    job: CronJob;
-    storePath: string;
-    databasePath: string;
-  }) => Promise<void>,
-) {
-  await withOpenClawTestState({ label: "cron-scratch-worker" }, async (fixture) => {
-    const storePath = fixture.statePath("cron", "jobs.json");
-    const state = createCronRegressionState({
+const scratchState = (content: string | null, revision: number, updatedAtMs?: number) => ({
+  currentRevision: revision,
+  ...(content !== null
+    ? { scratch: { content, revision, ...(updatedAtMs === undefined ? {} : { updatedAtMs }) } }
+    : {}),
+});
+const written = (...input: Parameters<typeof scratchState>) => ({
+  ok: true,
+  ...scratchState(...input),
+});
+const createService = (storePath: string, nowMs = () => Date.now()) =>
+  new CronService(
+    createCronRegressionState({
       storePath,
       defaultAgentId: "alpha",
-      nowMs: () => 1_000,
       runIsolatedAgentJob: async () => ({ status: "skipped" }),
-    });
-    const service = new CronService(state.deps);
-    try {
-      const added = await service.add({
-        id: "scratch-owner",
-        name: "scratch owner",
-        agentId: "alpha",
-        enabled: false,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "synthetic event" },
-      });
-      const job = "job" in added ? added.job : added;
-      await service.readJob(job.id);
-      await run({
-        service,
-        job,
-        storePath,
-        databasePath: resolveOpenClawStateSqlitePath(fixture.env),
-      });
-    } finally {
-      service.stop();
-    }
-  });
+      nowMs,
+    }).deps,
+  );
+
+async function withoutCallerSql<T>(run: () => Promise<T>) {
+  const sql = observeMainThreadSql();
+  using _ = { [Symbol.dispose]: () => sql.restore() };
+  sql.calibrate();
+  const result = await run();
+  expect(sql.count()).toBe(0);
+  return result;
+}
+
+afterEach(async () => {
+  for (const service of services.splice(0)) {
+    service.stop();
+  }
+  closeOpenClawStateDatabaseForTest();
+  await Promise.all(testStates.splice(0).map((state) => state.cleanup()));
+});
+
+async function createWorkerFixture() {
+  const fixture = await createFixture(["scratch-owner"], true);
+  const { job, storePath } = fixture;
+  const service = createService(storePath, () => 1_000);
+  services.push(service);
+  await service.readJob(job.id);
+  return {
+    ...fixture,
+    service,
+    read: () => service.readScratch(job.id),
+    write: (content: string | null, expectedRevision?: number, commitGuard?: () => void) =>
+      service.writeScratch(job.id, { content, expectedRevision, commitGuard }),
+    stored: fixture.read,
+  };
 }
 
 describe("cron scratch worker service", () => {
+  it("prepares fresh scratch from the selected cron partition without caller SQL", async () => {
+    const { write, job, storePath } = await createWorkerFixture();
+    await write("first scratch", 0);
+    await writeConfigMachineStateAsync("cron.store", `${storePath}.other`);
+    const params = {
+      cfg: {},
+      job,
+      agentId: "alpha",
+      runSessionKey: "agent:alpha:cron:scratch-owner",
+      message: "synthetic prompt",
+      storePath: `${storePath}.sessions`,
+      cronStorePath: storePath,
+      assertCurrent: () => {},
+      baseSessionKey: "agent:alpha:main",
+      formattedTime: "2026-10-22",
+      timeLine: "Current time: 2026-10-22",
+    };
+    const first = await withoutCallerSql(() => prepareCronAutomationPrompt(params));
+    expect(first.commandBody).toContain("Automation scratch (revision 1):\nfirst scratch");
+    await write("updated scratch", 1);
+    const updated = await withoutCallerSql(() => prepareCronAutomationPrompt(params));
+    expect(updated.commandBody).toContain("Automation scratch (revision 2):\nupdated scratch");
+
+    // Standalone callers select the current machine partition through the worker too.
+    const { cronStorePath: _, ...standalone } = params;
+    const prepareStandalone = () => withoutCallerSql(() => prepareCronAutomationPrompt(standalone));
+    expect((await prepareStandalone()).commandBody).not.toContain("Automation scratch");
+    await writeConfigMachineStateAsync("cron.store", storePath);
+    expect((await prepareStandalone()).commandBody).toContain("updated scratch");
+  });
+
   it("initializes missing shared state for a heartbeat scratch read off the caller thread", async () => {
     await withOpenClawTestState({ label: "heartbeat-scratch-cold-read" }, async (fixture) => {
       const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
       await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-      const sql = observeMainThreadSql();
-      let observed: Awaited<ReturnType<typeof readCronScratchSnapshot>>;
-      let callerSql = 0;
-      try {
-        sql.calibrate();
-        observed = await readCronScratchSnapshot(
+      const observed = await withoutCallerSql(() =>
+        readCronScratchSnapshot(
           fixture.statePath("cron", "jobs.json"),
           { kind: "heartbeat", agentId: "alpha" },
-          {
-            path: databasePath,
-            env: fixture.env,
-          },
-        );
-        callerSql = sql.count();
-      } finally {
-        sql.restore();
-      }
+          { path: databasePath, env: fixture.env },
+        ),
+      );
       expect(observed).toBeUndefined();
       expect((await fs.stat(databasePath)).isFile()).toBe(true);
-      const verification = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(
-          verification
-            .prepare(
-              "SELECT (SELECT COUNT(*) FROM cron_jobs) AS jobs, (SELECT COUNT(*) FROM cron_job_scratch) AS scratch",
-            )
-            .get(),
-        ).toEqual({ jobs: 0, scratch: 0 });
-      } finally {
-        verification.close();
-      }
-      expect(callerSql).toBe(0);
+      using verification = new DatabaseSync(databasePath, { readOnly: true });
+      const counts = verification
+        .prepare(
+          "SELECT (SELECT COUNT(*) FROM cron_jobs) AS jobs, (SELECT COUNT(*) FROM cron_job_scratch) AS scratch",
+        )
+        .get();
+      expect(counts).toEqual({ jobs: 0, scratch: 0 });
     });
   });
 
   it("reads a legacy creation fallback without ignoring a persisted definition change", async () => {
-    await withScratchService(async ({ service, job, storePath, databasePath }) => {
-      await service.writeScratch(job.id, {
-        content: "legacy private content",
-        expectedRevision: 0,
-      });
-      const peer = new DatabaseSync(databasePath);
-      const reader = new CronService(
-        createCronRegressionState({
-          storePath,
-          defaultAgentId: "alpha",
-          runIsolatedAgentJob: async () => ({ status: "skipped" }),
-        }).deps,
-      );
-      try {
-        const row = executeSqliteQuerySync(
-          peer,
-          getCronStoreKysely(peer)
-            .selectFrom("cron_jobs")
-            .select("job_json")
-            .where("store_key", "=", cronStoreKey(storePath))
-            .where("job_id", "=", job.id),
-        ).rows[0];
-        const { createdAtMs: _createdAtMs, ...legacy } = expectDefined(
-          safeParseJsonRecord(expectDefined(row, "stored scratch job").job_json),
-          "stored scratch job definition",
-        );
-        const writeDefinition = (definition: unknown) =>
-          executeSqliteQuerySync(
-            peer,
-            getCronStoreKysely(peer)
-              .updateTable("cron_jobs")
-              .set({ job_json: JSON.stringify(definition) })
-              .where("store_key", "=", cronStoreKey(storePath))
-              .where("job_id", "=", job.id),
-          );
-        writeDefinition(legacy);
-        const loadStore = cronStore.loadCronJobsStoreWithConfigJobs;
-        const load = vi
-          .spyOn(cronStore, "loadCronJobsStoreWithConfigJobs")
-          .mockImplementationOnce(async (requestedPath) => {
-            const loaded = await loadStore(requestedPath);
-            // Only pin the clock-derived display fallback; persisted config and worker reads stay real.
-            expectDefined(loaded.store.jobs[0], "loaded legacy row").createdAtMs = 1_000;
-            return loaded;
-          });
-        let loaded: CronJob;
-        try {
-          loaded = expectDefined(await reader.readJob(job.id), "loaded legacy scratch job");
-          expect(loaded.createdAtMs).toBe(1_000);
-        } finally {
-          load.mockRestore();
-        }
-        expect(await reader.readScratch(job.id)).toMatchObject({
-          currentRevision: 1,
-          scratch: { content: "legacy private content" },
+    const { write, job, storePath, databasePath } = await createWorkerFixture();
+    await write("legacy private content", 0);
+    const reader = createService(storePath);
+    const read = () => reader.readScratch(job.id);
+    using peer = new DatabaseSync(databasePath);
+    using _ = { [Symbol.dispose]: () => reader.stop() };
+    const key = cronStoreKey(storePath);
+    // Direct fixture corruption models a legacy row without invoking the writer's normalization.
+    peer
+      .prepare(
+        "UPDATE cron_jobs SET job_json = json_remove(job_json, '$.createdAtMs') WHERE store_key = ? AND job_id = ?",
+      )
+      .run(key, job.id);
+    const loadStore = cronStore.loadCronJobsStoreWithConfigJobs;
+    let loaded: CronJob;
+    {
+      using load = vi
+        .spyOn(cronStore, "loadCronJobsStoreWithConfigJobs")
+        .mockImplementationOnce(async (requestedPath) => {
+          const store = await loadStore(requestedPath);
+          // Only pin the clock-derived display fallback; persisted config and worker reads stay real.
+          expectDefined(store.store.jobs[0], "loaded legacy row").createdAtMs = 1_000;
+          return store;
         });
-        expect(
-          await reader.writeScratch(job.id, {
-            content: "updated legacy private content",
-            expectedRevision: 1,
-          }),
-        ).toMatchObject({ ok: true, currentRevision: 2 });
-        writeDefinition({ ...legacy, createdAtMs: loaded.createdAtMs + 1_000 });
-        await expect(reader.readScratch(job.id)).rejects.toThrow("changed after it was read");
-      } finally {
-        reader.stop();
-        peer.close();
-      }
+      void load;
+      loaded = expectDefined(await reader.readJob(job.id), "loaded legacy scratch job");
+    }
+    expect(await read()).toMatchObject(scratchState("legacy private content", 1));
+    expect(
+      await reader.writeScratch(job.id, {
+        content: "updated legacy private content",
+        expectedRevision: 1,
+      }),
+    ).toMatchObject({
+      ok: true,
+      currentRevision: 2,
     });
+    peer
+      .prepare(
+        "UPDATE cron_jobs SET job_json = json_set(job_json, '$.createdAtMs', ?) WHERE store_key = ? AND job_id = ?",
+      )
+      .run(loaded.createdAtMs + 1_000, key, job.id);
+    await expect(read()).rejects.toThrow("changed after it was read");
   });
 
   it("writes off the caller thread while preserving CAS, tombstones, and actual-write receipts", async () => {
-    await withScratchService(async ({ service, job }) => {
-      const steps = [
-        {
-          content: null,
-          expectedRevision: 0,
-          expected: { ok: true, currentRevision: 0 },
-          committed: false,
-        },
-        {
-          content: "scheduled café",
-          expectedRevision: 0,
-          expected: { ok: true, currentRevision: 1, scratch: { content: "scheduled café" } },
-          committed: true,
-        },
-        {
-          content: null,
-          expectedRevision: 1,
-          expected: { ok: true, currentRevision: 2 },
-          committed: true,
-        },
-        {
-          content: "stale resurrection",
-          expectedRevision: 1,
-          expected: { ok: false, reason: "revision-conflict", currentRevision: 2 },
-          committed: false,
-        },
-      ];
-      const sql = observeMainThreadSql();
-      try {
-        sql.calibrate();
-        for (const step of steps) {
-          sql.clear();
-          const completion = expectDefined(
-            createCronMutationCompletion("cron.scratch.set"),
-            "scratch receipt",
-          );
-          const result = await completion.run(() =>
-            service.writeScratch(job.id, {
-              content: step.content,
-              expectedRevision: step.expectedRevision,
-              commitGuard: () => expect(service.getJob(job.id)?.agentId).toBe("alpha"),
-            }),
-          );
-          expect(result).toMatchObject(step.expected);
-          if (step.expected.currentRevision === 1) {
-            expect(await service.readScratch(job.id)).toMatchObject({
-              currentRevision: 1,
-              scratch: { content: "scheduled café", revision: 1 },
-            });
-          }
-          expect(completion.isCommitted()).toBe(step.committed);
-          expect.soft(sql.count(), `scratch revision ${step.expected.currentRevision}`).toBe(0);
+    const { service, job, write, read } = await createWorkerFixture();
+    expect(await read()).toEqual({ currentRevision: 0 });
+    for (const [content, expectedRevision, expected, committed] of [
+      [null, undefined, written(null, 0), false],
+      ["", undefined, written("", 1, 1_000), true],
+      ["stale", 0, conflict(1), false],
+      ["scheduled café", 1, written("scheduled café", 2, 1_000), true],
+      [null, 2, written(null, 3), true],
+      ["stale resurrection", 2, conflict(3), false],
+      ["recreated", 3, written("recreated", 4, 1_000), true],
+    ] as const) {
+      const completion = scratchReceipt();
+      await withoutCallerSql(async () => {
+        const result = await completion.run(() =>
+          write(content, expectedRevision, () =>
+            expect(service.getJob(job.id)?.agentId).toBe("alpha"),
+          ),
+        );
+        expect(result).toEqual(expected);
+        if (expected.ok) {
+          const { ok: _, ...snapshot } = expected;
+          expect(await read()).toEqual(snapshot);
         }
-      } finally {
-        sql.restore();
-      }
-      expect(await service.readScratch(job.id)).toEqual({ currentRevision: 2 });
-    });
+        expect(completion.isCommitted()).toBe(committed);
+      });
+    }
   });
 
   it.each([
     { change: "caller revocation", boundary: "queued before dispatch" },
     { change: "job owner replacement", boundary: "queued before admission" },
   ] as const)("refuses scratch after $change ($boundary)", async ({ change }) => {
-    await withScratchService(async ({ service, job, storePath, databasePath }) => {
-      await service.writeScratch(job.id, { content: "retained", expectedRevision: 0 });
-      const entered = createDeferred();
-      const release = createDeferred();
-      const execute = runtimeMutation.runCronRuntimeMutation;
-      const held = vi
-        .spyOn(runtimeMutation, "runCronRuntimeMutation")
-        .mockImplementationOnce(async (params) => {
-          entered.resolve();
-          await release.promise;
-          return execute(params);
-        });
-      let callerCurrent = true;
-      const completion = expectDefined(
-        createCronMutationCompletion("cron.scratch.set"),
-        "scratch receipt",
-      );
-      const pending = completion
-        .run(() =>
-          service.writeScratch(job.id, {
-            content: "must not commit",
-            expectedRevision: 1,
-            commitGuard: () => {
-              if (!callerCurrent) {
-                throw new Error("scratch caller revoked");
-              }
-              expect(service.getJob(job.id)?.agentId).toBe("alpha");
-            },
-          }),
-        )
-        .then(
-          (value) => ({ kind: "returned" as const, value }),
-          (error: unknown) => ({ kind: "rejected" as const, error }),
-        );
-      try {
-        expect(
-          await Promise.race([
-            entered.promise.then(() => "queued-before-admission"),
-            pending.then(() => "completed-before-worker-admission"),
-          ]),
-        ).toBe("queued-before-admission");
-        if (change === "caller revocation") {
-          callerCurrent = false;
-        } else {
-          const peer = new DatabaseSync(databasePath);
-          try {
-            runSqliteImmediateTransactionSync(peer, () => {
-              upsertCronJobRow(peer, cronStoreKey(storePath), { ...job, agentId: "beta" }, 0);
-            });
-          } finally {
-            peer.close();
+    const { service, job, storePath, databasePath, write, stored } = await createWorkerFixture();
+    await write("retained", 0);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const execute = runtimeMutation.runCronRuntimeMutation;
+    const held = vi
+      .spyOn(runtimeMutation, "runCronRuntimeMutation")
+      .mockImplementationOnce(async (params) => {
+        entered.resolve();
+        await release.promise;
+        return execute(params);
+      });
+    let callerCurrent = true;
+    const completion = scratchReceipt();
+    const pending = settle(
+      completion.run(() =>
+        write("must not commit", 1, () => {
+          if (!callerCurrent) {
+            throw new Error("scratch caller revoked");
           }
-          expect(
-            (await loadCronJobsStore(storePath)).jobs.find((entry) => entry.id === job.id)?.agentId,
-          ).toBe("beta");
-        }
-        release.resolve();
-        const result = await pending;
-        expect(result).toMatchObject({
-          kind: "rejected",
-          error: {
-            message: expect.stringContaining(
-              change === "caller revocation"
-                ? "scratch caller revoked"
-                : "changed after it was read",
-            ),
-          },
+          expect(service.getJob(job.id)?.agentId).toBe("alpha");
+        }),
+      ),
+    );
+    try {
+      expect(
+        await Promise.race([entered.promise.then(() => true), pending.then(() => false)]),
+      ).toBe(true);
+      if (change === "caller revocation") {
+        callerCurrent = false;
+      } else {
+        using peer = new DatabaseSync(databasePath);
+        runSqliteImmediateTransactionSync(peer, () => {
+          upsertCronJobRow(peer, cronStoreKey(storePath), { ...job, agentId: "beta" }, 0);
         });
-        expect(completion.isCommitted()).toBe(false);
-        expect(readCronJobScratchState(storePath, job.id)).toMatchObject({
-          currentRevision: 1,
-          scratch: { content: "retained" },
-        });
-      } finally {
-        release.resolve();
-        await pending;
-        held.mockRestore();
       }
-    });
+      release.resolve();
+      const message =
+        change === "caller revocation" ? "scratch caller revoked" : "changed after it was read";
+      expect(await pending).toHaveProperty("error.message", expect.stringContaining(message));
+      expect(completion.isCommitted()).toBe(false);
+      expect(stored()).toMatchObject(scratchState("retained", 1));
+    } finally {
+      release.resolve();
+      await pending;
+      held.mockRestore();
+    }
   });
 
   it("retains scratch bytes without claiming completion after reply loss", async () => {
-    await withScratchService(async ({ service, job, storePath }) => {
-      const completion = expectDefined(
-        createCronMutationCompletion("cron.scratch.set"),
-        "scratch receipt",
-      );
-      const dropped = loseFirstCronMutationReply("cron.writeScratch");
-      try {
-        const result = await completion
-          .run(() =>
-            service.writeScratch(job.id, {
-              content: "committed once",
-              expectedRevision: 0,
-            }),
-          )
-          .then(
-            () => "reported",
-            () => "reply-lost",
-          );
-        expect(result).toBe("reply-lost");
-        expect(dropped.wasDropped()).toBe(true);
-        expect(dropped.attempts).toEqual(["cron.writeScratch"]);
-        await dropped.waitForExit();
-        expect(completion.isCommitted()).toBe(false);
-        expect(readCronJobScratchState(storePath, job.id)).toMatchObject({
-          currentRevision: 1,
-          scratch: { content: "committed once", revision: 1 },
-        });
-      } finally {
-        await dropped.close();
-      }
-    });
+    const { write, stored } = await createWorkerFixture();
+    const completion = scratchReceipt();
+    const dropped = loseFirstCronMutationReply("cron.writeScratch");
+    await using _ = { [Symbol.asyncDispose]: () => dropped.close() };
+    expect(await settle(completion.run(() => write("committed once", 0)))).toHaveProperty("error");
+    expect(dropped.wasDropped()).toBe(true);
+    expect(dropped.attempts).toEqual(["cron.writeScratch"]);
+    await dropped.waitForExit();
+    expect(completion.isCommitted()).toBe(false);
+    expect(stored()).toMatchObject(scratchState("committed once", 1));
   });
 });
 
-async function createFixture(jobIds = ["job-1"]) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-scratch-"));
-  tempDirs.push(root);
-  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+type MaintenanceWrite = Partial<
+  Omit<Parameters<typeof writeCronJobScratchForMaintenance>[0], "content" | "options">
+>;
+async function createFixture(jobIds: [string, ...string[]] = ["job-1"], applyEnv = false) {
+  const state = await createOpenClawTestState({ label: "cron-scratch", applyEnv });
+  testStates.push(state);
   const fixture = {
-    storePath: path.join(root, "cron", "jobs.json"),
-    options: { env },
+    storePath: state.statePath("cron", "jobs.json"),
+    options: { env: state.env },
   };
-  const job: CronJob = {
-    id: "job-1",
-    name: "scratch-owner",
-    enabled: true,
+  const job = cronTestJob({
+    id: jobIds[0],
+    agentId: "alpha",
+    enabled: false,
     createdAtMs: 1,
     updatedAtMs: 1,
-    schedule: { kind: "every", everyMs: 60_000, anchorMs: 0 },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "test" },
-    state: {},
-  };
+  });
   runOpenClawStateWriteTransaction(({ db }) => {
     for (const [index, id] of jobIds.entries()) {
       upsertCronJobRow(db, cronStoreKey(fixture.storePath), { ...job, id }, index);
@@ -405,153 +328,101 @@ async function createFixture(jobIds = ["job-1"]) {
   }, fixture.options);
   return {
     ...fixture,
-    write: (
-      content: string | null,
-      input: Partial<
-        Pick<
-          Parameters<typeof writeCronJobScratchForMaintenance>[0],
-          "jobId" | "storePath" | "expectedRevision" | "nowMs" | "sourceSha256"
-        >
-      > = {},
-    ) => writeCronJobScratchForMaintenance({ ...fixture, jobId: "job-1", content, ...input }),
-    read: (jobId = "job-1", storePath = fixture.storePath) =>
+    job,
+    databasePath: resolveOpenClawStateSqlitePath(state.env),
+    write: (content: string | null, input: MaintenanceWrite = {}) =>
+      writeCronJobScratchForMaintenance({ ...fixture, jobId: job.id, content, ...input }),
+    read: (jobId = job.id, storePath = fixture.storePath) =>
       readCronJobScratchState(storePath, jobId, fixture.options),
     remove: (expectedRevision: number) =>
-      deleteCronJobScratch(fixture.storePath, "job-1", fixture.options, { expectedRevision }),
+      deleteCronJobScratch(fixture.storePath, job.id, fixture.options, { expectedRevision }),
   };
 }
 
 describe("cron job scratch store", () => {
+  it("reads current job and missing-heartbeat scratch once without read transactions", async () => {
+    const { requireNativeSqliteDatabase } = await import("../test-utils/native-sqlite.js");
+    const fixture = await createFixture();
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(fixture.options).db);
+    const tracker = trackSqliteStatementExecutions(db, ["reads"], (sql) =>
+      /^\s*select\b/i.test(sql) && /\b(?:cron_jobs|cron_job_scratch)\b/i.test(sql) ? "reads" : null,
+    );
+    const exec = vi.spyOn(db, "exec");
+    using _ = {
+      [Symbol.dispose]: () => {
+        tracker.restore();
+        exec.mockRestore();
+      },
+    };
+    const read = (selector: CronScratchReadCommand["selector"]) => {
+      const beforeReads = tracker.counts.reads;
+      const beforeExec = exec.mock.calls.length;
+      const snapshot = readCronScratchSnapshotInDatabase(db, {
+        type: "cron.scratch",
+        storeKey: cronStoreKey(fixture.storePath),
+        selector,
+      });
+      expect.soft(tracker.counts.reads - beforeReads).toBe(1);
+      expect
+        .soft(
+          exec.mock.calls
+            .slice(beforeExec)
+            .filter(([sql]) => /^\s*(?:BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(sql)),
+        )
+        .toEqual([]);
+      return snapshot;
+    };
+    const readJob = () => {
+      const snapshot = read({ kind: "job", jobId: "job-1", createdAtMsFallback: 1 });
+      expect(snapshot).toMatchObject({ jobId: "job-1", configRevision: expect.any(String) });
+      return snapshot?.state;
+    };
+    expect(readJob()).toEqual(scratchState(null, 0));
+    fixture.write("current scratch", { expectedRevision: 0, nowMs: 10 });
+    expect(readJob()).toEqual(scratchState("current scratch", 1, 10));
+    fixture.write(null, { expectedRevision: 1, nowMs: 20 });
+    expect(readJob()).toEqual(scratchState(null, 2));
+    expect(read({ kind: "heartbeat", agentId: "missing-monitor" })).toBeUndefined();
+  });
+
   it("keeps write guards scoped to the current job and store on a reused connection", async () => {
     const fixture = await createFixture(["job-1", "job-2"]);
     fixture.write("first");
     fixture.write("second");
-    expect(fixture.write("other", { jobId: "job-2", expectedRevision: 0 })).toMatchObject({
-      ok: true,
-      currentRevision: 1,
-    });
-    expect(fixture.write("stale", { expectedRevision: 1 })).toEqual({
-      ok: false,
-      reason: "revision-conflict",
-      currentRevision: 2,
-    });
+    expect(fixture.write("other", { jobId: "job-2", expectedRevision: 0 })).toMatchObject(
+      written("other", 1),
+    );
+    expect(fixture.write("stale", { expectedRevision: 1 })).toEqual(conflict(2));
     const storePath = path.join(path.dirname(fixture.storePath), "other.json");
-    expect(fixture.write("orphan", { storePath, expectedRevision: 0 })).toEqual({
-      ok: false,
-      reason: "revision-conflict",
-      currentRevision: 0,
-    });
+    expect(fixture.write("orphan", { storePath, expectedRevision: 0 })).toEqual(conflict(0));
     expect(fixture.read("job-1", storePath)).toEqual({ currentRevision: 0 });
     expect(fixture.read().scratch?.content).toBe("second");
   });
 
-  it("marks actual writes but not an unset no-op or revision conflict", async () => {
-    const fixture = await createFixture();
-    for (const [content, expectedRevision, expected, committed] of [
-      [null, undefined, { ok: true, currentRevision: 0 }, false],
-      [
-        "committed",
-        undefined,
-        {
-          ok: true,
-          currentRevision: 1,
-          scratch: { content: "committed", revision: 1, updatedAtMs: 10 },
-        },
-        true,
-      ],
-      ["stale", 0, { ok: false, reason: "revision-conflict", currentRevision: 1 }, false],
-    ] as const) {
-      const completion = createCronMutationCompletion("cron.scratch.set")!;
-      expect(
-        await completion.run(async () => fixture.write(content, { expectedRevision, nowMs: 10 })),
-      ).toEqual(expected);
-      expect(completion.isCommitted()).toBe(committed);
-    }
-  });
-
-  it("distinguishes empty content, CAS conflicts, tombstones, and guarded removal", async () => {
-    const fixture = await createFixture();
-    expect(fixture.read()).toEqual({ currentRevision: 0 });
-    for (const [content, expectedRevision, nowMs, expected] of [
-      [
-        "",
-        undefined,
-        10,
-        { ok: true, currentRevision: 1, scratch: { content: "", revision: 1, updatedAtMs: 10 } },
-      ],
-      ["stale", 0, 20, { ok: false, reason: "revision-conflict", currentRevision: 1 }],
-      [
-        "second",
-        1,
-        30,
-        {
-          ok: true,
-          currentRevision: 2,
-          scratch: { content: "second", revision: 2, updatedAtMs: 30 },
-        },
-      ],
-      [null, 2, 40, { ok: true, currentRevision: 3 }],
-      ["resurrected", 2, 50, { ok: false, reason: "revision-conflict", currentRevision: 3 }],
-      [
-        "recreated",
-        3,
-        60,
-        {
-          ok: true,
-          currentRevision: 4,
-          scratch: { content: "recreated", revision: 4, updatedAtMs: 60 },
-        },
-      ],
-    ] as const) {
-      expect(fixture.write(content, { expectedRevision, nowMs })).toEqual(expected);
-      if (expected.ok) {
-        const { ok: _ok, ...snapshot } = expected;
-        expect(fixture.read()).toEqual(snapshot);
-      }
-    }
-    expect(fixture.remove(3)).toBe(false);
-    expect(fixture.read().currentRevision).toBe(4);
-    expect(fixture.remove(4)).toBe(true);
-    expect(fixture.read()).toEqual({ currentRevision: 0 });
-    expect(fixture.remove(0)).toBe(true);
-  });
-
-  it("rejects a late write after the owning job is durably deleted", async () => {
-    const fixture = await createFixture();
-    runOpenClawStateWriteTransaction(
-      ({ db }) => replaceCronRows(db, cronStoreKey(fixture.storePath), { version: 1, jobs: [] }),
-      fixture.options,
-    );
-    expect(fixture.write("orphaned heartbeat scratch", { expectedRevision: 0, nowMs: 10 })).toEqual(
-      { ok: false, reason: "revision-conflict", currentRevision: 0 },
-    );
-    expect(fixture.read()).toEqual({ currentRevision: 0 });
-  });
-
-  it.each(["retained content", null])(
-    "preserves the revision of orphan scratch when rejecting a write (%s)",
-    async (content) => {
+  it.each([
+    { contents: [] },
+    { contents: ["initial", "retained content"] },
+    { contents: ["initial", null] },
+  ])(
+    "rejects writes after job deletion, preserving any orphan revision ($contents)",
+    async ({ contents }) => {
       const fixture = await createFixture();
-      fixture.write("initial");
-      fixture.write(content);
+      for (const content of contents) {
+        fixture.write(content);
+      }
       const previous = fixture.read();
-      // Job removal commits before scratch cleanup, so a late writer can see this state.
-      runOpenClawStateWriteTransaction(
-        ({ db }) =>
-          executeSqliteQuerySync(
-            db,
-            getCronStoreKysely(db)
-              .deleteFrom("cron_jobs")
-              .where("store_key", "=", cronStoreKey(fixture.storePath))
-              .where("job_id", "=", "job-1"),
-          ),
-        fixture.options,
+      runOpenClawStateWriteTransaction(({ db }) => {
+        const key = cronStoreKey(fixture.storePath);
+        if (contents.length === 0) {
+          replaceCronRows(db, key, { version: 1, jobs: [] });
+          return;
+        }
+        // Model the gap after job removal but before scratch cleanup.
+        db.prepare("DELETE FROM cron_jobs WHERE store_key = ? AND job_id = ?").run(key, "job-1");
+      }, fixture.options);
+      expect(fixture.write("late write", { expectedRevision: contents.length, nowMs: 10 })).toEqual(
+        conflict(contents.length),
       );
-      expect(fixture.write("late write", { expectedRevision: previous.currentRevision })).toEqual({
-        ok: false,
-        reason: "revision-conflict",
-        currentRevision: 2,
-      });
       expect(fixture.read()).toEqual(previous);
     },
   );

@@ -1,3 +1,7 @@
+import {
+  getPreparedSharedAuthStoreOwnership,
+  prepareSharedAuthStoreOwnership,
+} from "./auth-profiles/path-resolve.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
@@ -12,7 +16,7 @@ import {
   resolvePreparedModelRuntimeOwnerBySnapshot,
   resolvePublishedOwner,
 } from "./prepared-model-runtime.owner.js";
-import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import { createPreparedModelRuntimeLease } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelCatalogRefreshOptions,
   PreparedModelRuntimeInput,
@@ -56,11 +60,10 @@ export function retainPublishedModelRuntimeOwner(
   if (!pluginGeneration) {
     throw new Error("Published model runtime has no plugin generation");
   }
-  return {
-    snapshot: capturePreparedModelRuntimeCatalog(snapshot, snapshot),
+  return createPreparedModelRuntimeLease(
+    capturePreparedModelRuntimeCatalog(snapshot, snapshot),
     pluginGeneration,
-    [Symbol.asyncDispose]: retainPreparedPluginGeneration(pluginGeneration),
-  };
+  );
 }
 
 type PublishedModelRuntimeContext = {
@@ -81,6 +84,10 @@ export async function loadPreparedModelRuntimeOwner<T>(
   project: (owner: PreparedModelRuntimeOwner, snapshot: PreparedModelRuntimeSnapshot) => T,
 ): Promise<T> {
   const assertLifetime = context.captureLifetime();
+  if (!getPreparedSharedAuthStoreOwnership(rawInput.env ?? process.env)) {
+    await prepareSharedAuthStoreOwnership(rawInput.env);
+  }
+  assertLifetime();
   let input = normalizePreparedModelRuntimeInput({
     ...rawInput,
     preserveWorkspaceDirOnRefresh:
@@ -95,15 +102,16 @@ export async function loadPreparedModelRuntimeOwner<T>(
     input = rebindInputToCommittedConfiguredOwner(context.owners, input);
   }
   try {
-    return await projectPublishedModelRuntimeOwner(input, context, project);
+    return await projectNormalizedModelRuntimeOwner(input, context, project, assertLifetime);
   } catch (error) {
     if (!isPreparedModelRuntimeMissingOwnerError(error)) {
       throw error;
     }
   }
   await activateStandalone(input);
+  assertLifetime();
   // Concurrent reloads may make this request fail; the next request uses the new owner.
-  return await projectPublishedModelRuntimeOwner(input, context, project);
+  return await projectNormalizedModelRuntimeOwner(input, context, project, assertLifetime);
 }
 
 /** Bind passive reads and retained acquisitions to the same publication owner. */
@@ -124,29 +132,50 @@ export function createPublishedModelRuntimeAccess(
   };
 }
 
-/** Project or retain the exact published owner before its snapshot crosses an await. */
+/** Prepare raw read inputs once before projecting their published owner. */
 async function projectPublishedModelRuntimeOwner<T>(
   rawInput: PreparedModelRuntimeInput,
   context: PublishedModelRuntimeContext,
   project: (owner: PreparedModelRuntimeOwner, snapshot: PreparedModelRuntimeSnapshot) => T,
 ): Promise<T> {
   const assertLifetime = context.captureLifetime();
+  if (!getPreparedSharedAuthStoreOwnership(rawInput.env ?? process.env)) {
+    await prepareSharedAuthStoreOwnership(rawInput.env);
+  }
+  assertLifetime();
   const input = normalizePreparedModelRuntimeInput(rawInput);
+  // Explicit empty raw fields constrain lookup even when normalization omits them.
+  return await projectNormalizedModelRuntimeOwner(
+    input,
+    context,
+    project,
+    assertLifetime,
+    rawInput.workspaceDir === undefined ||
+      rawInput.agentId === undefined ||
+      rawInput.runtimePluginSelections === undefined,
+  );
+}
+
+/** Retain normalized read facts, including their lifetime, across publication waits. */
+async function projectNormalizedModelRuntimeOwner<T>(
+  input: PreparedModelRuntimeInput,
+  context: PublishedModelRuntimeContext,
+  project: (owner: PreparedModelRuntimeOwner, snapshot: PreparedModelRuntimeSnapshot) => T,
+  assertLifetime: () => void,
+  allowConfiguredWorkspaceFallback = input.workspaceDir === undefined ||
+    input.agentId === undefined ||
+    input.runtimePluginSelections === undefined,
+): Promise<T> {
   let replacement = context.getPendingReplacement(input);
-  while (replacement) {
-    // Individual owners may finish before a multi-owner publication commits. The lifecycle gate
-    // makes the generation visible atomically only after every owner and auth mutation is ready.
+  // A superseded gate resolves early; follow its successors like lease admission does.
+  for (let waits = 0; replacement && waits < 3; waits += 1) {
     assertPreparedModelRuntimeAdmissionCanWait();
     await replacement.promise;
     assertLifetime();
-    // Superseding a gate wakes its readers before the successor has committed.
     replacement = context.getPendingReplacement(input);
   }
   const existing = resolvePublishedOwner(context.owners, input, {
-    allowConfiguredWorkspaceFallback:
-      rawInput.workspaceDir === undefined ||
-      rawInput.agentId === undefined ||
-      rawInput.runtimePluginSelections === undefined,
+    allowConfiguredWorkspaceFallback,
   });
   if (
     input.readOnly &&
@@ -157,18 +186,12 @@ async function projectPublishedModelRuntimeOwner<T>(
       `prepared read-only model runtime owner was not published for the requested config (${input.agentDir})`,
     );
   }
-  // Generated catalogs are lifecycle artifacts, not a live-edit surface. Config/plugin reload,
-  // doctor/auth repair, and auth publication replace owners; external edits require restart.
   if (existing?.pending) {
-    // Auth republication may be queued behind plugin drainage even for passive metadata reads.
     assertPreparedModelRuntimeAdmissionCanWait(existing);
-    try {
-      await existing.pending;
-    } catch {
-      // Preserve the owner's recorded publication error below.
-    }
+    await existing.pending;
     assertLifetime();
   }
+  // An overlapping reload may fail this read; the next request selects its replacement.
   if (existing?.needsRefresh) {
     throw existing.refreshError ?? new Error("prepared model runtime refresh is pending");
   }

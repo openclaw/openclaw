@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { readFileRangeAsync } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   classifyClaudeCliHistoryMessage,
   classifyClaudeCliHistoryLine,
@@ -8,10 +7,9 @@ import {
   type SessionUpstreamActivity,
   type SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
+import { readSessionCatalogJsonlActivity } from "openclaw/plugin-sdk/session-catalog-runtime";
 import { asSafeIntegerInRange, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
-
-const MAX_CLAUDE_UPSTREAM_SCAN_BYTES = 1024 * 1024;
 
 export async function linkContinued(params: {
   sessionKey: string;
@@ -89,61 +87,19 @@ async function checkClaudeSessionUpstreamActivity(
   if (!filePath || markerOffset === undefined) {
     return undefined;
   }
-  let handle: Awaited<ReturnType<typeof fs.open>>;
-  try {
-    handle = await fs.open(filePath, "r");
-  } catch (error) {
-    return isRecord(error) && error.code === "ENOENT"
-      ? { kind: "missing", sessionKey: probe.sessionKey }
-      : undefined;
-  }
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) {
-      return { kind: "missing", sessionKey: probe.sessionKey };
-    }
-    if (stat.size <= markerOffset) {
-      return undefined;
-    }
-    const readLength = Math.min(stat.size - markerOffset, MAX_CLAUDE_UPSTREAM_SCAN_BYTES);
-    const tail = await readFileRangeAsync(handle, markerOffset, readLength);
-    const lastNewline = tail.lastIndexOf(0x0a);
-    if (lastNewline < 0) {
-      // Cursor movement requires a complete classified row. A row beyond the
-      // fixed per-tick cap stays deferred rather than skipping unknown bytes.
-      return undefined;
-    }
-    const completeTail = tail.subarray(0, lastNewline + 1);
-    let humanTurns = 0;
-    let occurredAt: number | undefined;
-    for (const [lineIndex, line] of completeTail.toString("utf8").split(/\r?\n/).entries()) {
-      if (!line.trim()) {
-        continue;
-      }
+  return readSessionCatalogJsonlActivity({
+    probe,
+    filePath,
+    offset: markerOffset,
+    classifyLine(line, sourceLineNumber) {
       const classification = classifyClaudeCliHistoryLine({
         line,
         cliSessionId: probe.threadId,
-        sourceLineNumber: lineIndex + 1,
+        sourceLineNumber,
       });
-      if (!classification.humanTurn || !isExternalUserText(probe, classification.userText)) {
-        continue;
-      }
-      humanTurns += 1;
-      occurredAt = Math.max(occurredAt ?? 0, classification.occurredAt ?? stat.mtimeMs);
-    }
-    const nextOffset = markerOffset + lastNewline + 1;
-    return {
-      kind: "activity",
-      sessionKey: probe.sessionKey,
-      humanTurns,
-      nextMarker: { offset: nextOffset },
-      ...(humanTurns > 0
-        ? { occurredAt: occurredAt ?? stat.mtimeMs, dedupeId: String(nextOffset) }
-        : {}),
-    };
-  } finally {
-    await handle.close();
-  }
+      return classification.humanTurn ? classification : undefined;
+    },
+  });
 }
 
 function readMarkerUuid(probe: SessionUpstreamProbe): string | null | undefined {

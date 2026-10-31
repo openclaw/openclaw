@@ -6,7 +6,12 @@ import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-superv
 import { runWriteConfigHealth } from "./doctor-health-contribution-runners.config.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import { resolveDoctorMode } from "./doctor-health-contribution-utils.js";
-import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
+import {
+  renderStructuredHealthFindings,
+  recordDoctorHealthWarnings,
+  reportDoctorHealthFinding,
+} from "./doctor-health-contribution.js";
+import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 
 export async function runCommandOwnerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteCommandOwnerHealth } = await import("../commands/doctor-command-owner.js");
@@ -41,13 +46,18 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
   // Stray jobs can disrupt admitted maintenance; managed-service repair stays below the fence.
   const { noteMacForeignLaunchdJobs } = await import("../commands/doctor-foreign-launchd-jobs.js");
   await noteMacForeignLaunchdJobs(ctx.options, ctx.runtime, ctx.env ?? process.env);
-  if (ctx.gatewayMaintenanceActive) {
-    return;
-  }
   if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
     return;
   }
+  const { noteMacGatewayPlatformWarnings } = await import("../commands/doctor-platform-notes.js");
+  // Maintenance pins the launcher fingerprint; inspection here must remain read-only.
+  await noteMacGatewayPlatformWarnings(ctx.cfg, undefined, ctx.env ?? process.env);
+  if (ctx.gatewayMaintenanceActive) {
+    return;
+  }
+  const { maybeRepairNodeServiceConfig } = await import("../commands/doctor-node-services.js");
+  await maybeRepairNodeServiceConfig(ctx.runtime, ctx.prompter, ctx.env ?? process.env);
   if (!(await shouldManageGatewayService(ctx.env ?? process.env))) {
     return;
   }
@@ -56,7 +66,6 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
     maybeResolveDuelingSystemdGatewayScopes,
     maybeScanExtraGatewayServices,
   } = await import("../commands/doctor-gateway-services.js");
-  const { noteMacGatewayPlatformWarnings } = await import("../commands/doctor-platform-notes.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
   await maybeResolveDuelingSystemdGatewayScopes(ctx.runtime, ctx.prompter);
   ctx.cfg = await maybeRepairGatewayServiceConfig(
@@ -66,10 +75,10 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
     ctx.prompter,
     {
       allowExecSecretRefs: ctx.options.allowExec === true,
+      onFinding: (finding) => reportDoctorHealthFinding(ctx, finding),
       writeConfig: (nextConfig) => writeDoctorGatewayConfig(ctx, nextConfig),
     },
   );
-  await noteMacGatewayPlatformWarnings(ctx.cfg);
 }
 
 export async function runHostDesktopHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -84,7 +93,6 @@ export async function runStartupChannelMaintenanceHealth(
     await import("./doctor-startup-channel-maintenance.js");
   await maybeRunDoctorStartupChannelMaintenance({
     cfg: ctx.cfg,
-    env: process.env,
     runtime: ctx.runtime,
     shouldRepair: ctx.prompter.shouldRepair,
   });
@@ -96,7 +104,11 @@ export async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<v
   const { securityAuditFindingToHealthFinding } = await import("./health-check-adapter.js");
   const findings = await noteSecurityWarnings(ctx.cfg);
   recordDoctorHealthWarnings(ctx, findings.map(securityAuditFindingToHealthFinding));
-  await noteInstallPolicyHealth(ctx.cfg, { deep: ctx.options.deep === true, env: ctx.env });
+  await noteInstallPolicyHealth(ctx.cfg, {
+    deep: ctx.options.deep === true,
+    env: ctx.env,
+    onFinding: (finding) => reportDoctorHealthFinding(ctx, finding),
+  });
 }
 
 export async function runWebFetchProxyHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -105,6 +117,20 @@ export async function runWebFetchProxyHealth(ctx: DoctorHealthFlowContext): Prom
   }
   const { noteWebFetchProxyDiagnostic } = await import("../commands/doctor-web-fetch-proxy.js");
   await noteWebFetchProxyDiagnostic({ cfg: ctx.cfg, env: ctx.env ?? process.env });
+}
+
+export async function runBundleLspEnvHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteBundleLspEnvPassthrough } = await import("../commands/doctor-bundle-lsp-env.js");
+  await noteBundleLspEnvPassthrough({
+    cfg: ctx.cfg,
+    workspaceDirs: resolveDoctorWorkspaceSuggestionScopes(ctx.cfg).map(
+      (scope) => scope.workspaceDir,
+    ),
+    env: ctx.env ?? process.env,
+    ...(ctx.runWithPluginMetadataSnapshot
+      ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
+      : {}),
+  });
 }
 
 export async function runGitHubProjectHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -118,8 +144,13 @@ export async function runGitHubProjectHealth(ctx: DoctorHealthFlowContext): Prom
 }
 
 export async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
-  await noteChromeMcpBrowserReadiness(ctx.cfg);
+  const { collectBrowserReadinessFindings } = await import("../commands/doctor-browser.js");
+  const findings = await collectBrowserReadinessFindings(ctx.cfg);
+  // General Doctor stays problem-focused; lint still exposes informational browser guidance.
+  renderStructuredHealthFindings(
+    ctx,
+    findings.filter((finding) => finding.severity !== "info"),
+  );
 }
 
 export async function runOpenAIOAuthTlsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -129,17 +160,28 @@ export async function runOpenAIOAuthTlsHealth(ctx: DoctorHealthFlowContext): Pro
 }
 
 export async function runWhatsappResponsivenessHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteWhatsappResponsivenessHealth } =
+  const { collectWhatsappResponsivenessHealthFindings } =
     await import("../commands/doctor-whatsapp-responsiveness.js");
-  noteWhatsappResponsivenessHealth({
-    cfg: ctx.cfg,
-    status: ctx.gatewayStatus,
-  });
+  renderStructuredHealthFindings(
+    ctx,
+    collectWhatsappResponsivenessHealthFindings({
+      cfg: ctx.cfg,
+      status: ctx.gatewayStatus,
+    }),
+  );
 }
 
 export async function runDevicePairingHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteDevicePairingHealth } = await import("../commands/doctor-device-pairing.js");
-  await noteDevicePairingHealth({ cfg: ctx.cfg, healthOk: ctx.healthOk ?? false, env: ctx.env });
+  const { collectDevicePairingHealthFindings } =
+    await import("../commands/doctor-device-pairing.js");
+  renderStructuredHealthFindings(
+    ctx,
+    await collectDevicePairingHealthFindings({
+      cfg: ctx.cfg,
+      healthOk: ctx.healthOk ?? false,
+      env: ctx.env,
+    }),
+  );
 }
 
 export async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<void> {

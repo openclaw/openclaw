@@ -1,26 +1,41 @@
 import assert from "node:assert/strict";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   enrichAssistantTranscriptMediaForRun,
   publishAssistantTranscriptRewrite,
 } from "../../gateway/server-methods/chat-transcript-persistence.js";
+import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
+import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-admitted-read.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
+import {
+  rewriteAssistantTranscriptMessageForRun,
+  rewriteTranscriptMessageAtAnchor,
+} from "./session-accessor.transcript.js";
+import { bindSessionWorkerBackend } from "./session-entry-patch.worker.js";
 import { rewritePreparedTranscriptMessageAtAnchor } from "./session-message-rewrite.js";
+import {
+  applySessionMessageRewrite,
+  prepareSessionMessageRewrite,
+} from "./session-message-rewrite.worker.js";
+import type { SessionMessageRewriteCommitted } from "./session-transcript-mutation.types.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
@@ -69,6 +84,64 @@ function fixture(agentId = "main", storePath?: string) {
   };
 }
 
+it("commits the exact prepared rewrite without rereading its payload or generation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const f = fixture();
+    const selection = {
+      scope: resolveSqliteTranscriptScope(f.scope),
+      target: { kind: "anchor" as const, anchor: f.anchor },
+    };
+    const expected = prepareSessionMessageRewrite(selection, { open: () => f.database });
+    assert(expected);
+    const backend = runWithSqliteWorkerStateContext(
+      { environment: { ...state.env, OPENCLAW_STATE_DIR: state.stateDir } },
+      () =>
+        bindSessionWorkerBackend<{
+          rewrite: { input: null; output: SessionMessageRewriteCommitted };
+        }>(
+          { agentId: "main" },
+          { database: f.database.db, databasePath: f.database.path, admit() {} },
+          "Rewrite fixture",
+          (context) => () =>
+            applySessionMessageRewrite(
+              { ...selection, expected, message: { role: "user", content: "rewritten" } },
+              context,
+              (_database, candidate) => candidate,
+            ),
+        ),
+    );
+    const sql = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(f.database.db),
+      ["generation", "payload"],
+      (query) =>
+        query.startsWith('select "generation" from "transcript_rewrite_watermarks"')
+          ? "generation"
+          : query.startsWith("select ") &&
+              query.includes('as "event_json" from "transcript_events"')
+            ? "payload"
+            : null,
+    );
+    let committedGeneration: string | undefined;
+    try {
+      const result = backend.execute({ type: "rewrite", input: null });
+      committedGeneration = result.result?.generation;
+      expect(committedGeneration).toEqual(expect.any(String));
+      expect(sql.counts).toEqual({ generation: 0, payload: 0 });
+    } finally {
+      sql.restore();
+      await backend.close();
+    }
+    expect(
+      f.database.db
+        .prepare("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")
+        .get(f.scope.sessionId)?.generation,
+    ).toBe(committedGeneration);
+    const rewritten = f.rows().find((row) => JSON.parse(row.eventJson).id === "admission");
+    assert(rewritten);
+    expect(JSON.parse(rewritten.eventJson).message.content).toBe("rewritten");
+  });
+});
+
 it.each([
   ["anchor", "main"],
   ["terminal", "main"],
@@ -84,7 +157,7 @@ it.each([
       try {
         if (operation === "anchor") {
           await expect(
-            rewritePreparedTranscriptMessageAtAnchor(f.anchor, (message) => {
+            rewriteTranscriptMessageAtAnchor(f.anchor, (message) => {
               if (!isRecord(message)) {
                 throw new Error("invalid fixture message");
               }
@@ -93,12 +166,14 @@ it.each([
           ).resolves.toMatchObject({ message: { __openclaw: { steerTargetRunId: "next-run" } } });
         } else {
           await expect(
-            enrichAssistantTranscriptMediaForRun({
+            rewriteAssistantTranscriptMessageForRun({
               scope: f.scope,
               runId: "first-run",
               expectedLifecycleRevision: null,
-              content: [{ type: "text", text: "display answer" }],
-              mediaUrls: [],
+              rewriteMessage: (message) => ({
+                ...message,
+                openclawDisplayContent: [{ type: "text", text: "display answer" }],
+              }),
             }),
           ).resolves.toEqual({ messageId: "answer" });
         }
@@ -113,51 +188,58 @@ it.each([
   },
 );
 
-it.each(["payload", "lifecycle"] as const)(
-  "refuses a stale %s after preparation with the original error class",
-  async (change) => {
+it.each([
+  { change: "payload", replace: true },
+  { change: "lifecycle", replace: true },
+  { change: "payload", replace: false },
+] as const)(
+  "settles a prepared rewrite after a $change change (replacement: $replace)",
+  async ({ change, replace }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = fixture();
       const source = f.rows().find((row) => JSON.parse(row.eventJson).id === "admission")!;
-      await expect(
-        rewritePreparedTranscriptMessageAtAnchor(
-          f.anchor,
-          (message) => {
-            if (!isRecord(message)) {
-              throw new Error("invalid fixture message");
-            }
-            if (change === "lifecycle") {
-              replaceSessionEntrySync(f.scope, {
-                sessionId: f.scope.sessionId,
-                updatedAt: 2,
-                lifecycleRevision: "successor",
-              });
-            } else {
-              runOpenClawAgentWriteTransaction(
-                (database) => {
-                  rewriteSqliteTranscriptEventRowsInTransaction(
-                    database,
-                    resolveSqliteTranscriptScope(f.scope),
-                    [
-                      {
-                        seq: source.seq,
-                        expectedEventJson: source.eventJson,
-                        event: {
-                          ...JSON.parse(source.eventJson),
-                          message: { ...message, content: "successor" },
-                        },
+      const rewrite = rewritePreparedTranscriptMessageAtAnchor(
+        f.anchor,
+        (message) => {
+          if (!isRecord(message)) {
+            throw new Error("invalid fixture message");
+          }
+          if (change === "lifecycle") {
+            replaceSessionEntrySync(f.scope, {
+              sessionId: f.scope.sessionId,
+              updatedAt: 2,
+              lifecycleRevision: "successor",
+            });
+          } else {
+            runOpenClawAgentWriteTransaction(
+              (database) => {
+                rewriteSqliteTranscriptEventRowsInTransaction(
+                  database,
+                  resolveSqliteTranscriptScope(f.scope),
+                  [
+                    {
+                      seq: source.seq,
+                      expectedEventJson: source.eventJson,
+                      event: {
+                        ...JSON.parse(source.eventJson),
+                        message: { ...message, content: "successor" },
                       },
-                    ],
-                  );
-                },
-                { agentId: "main", path: f.database.path },
-              );
-            }
-            return { ...message, content: "stale replacement" };
-          },
-          { expectedEntry: { lifecycleRevision: null } },
-        ),
-      ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+                    },
+                  ],
+                );
+              },
+              { agentId: "main", path: f.database.path },
+            );
+          }
+          return replace ? { ...message, content: "stale replacement" } : undefined;
+        },
+        { expectedEntry: { lifecycleRevision: null } },
+      );
+      if (replace) {
+        await expect(rewrite).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+      } else {
+        await expect(rewrite).resolves.toBeNull();
+      }
       const current = f.rows().find((row) => row.seq === source.seq)!;
       expect(JSON.parse(current.eventJson).message.content).toBe(
         change === "payload" ? "successor" : "original",

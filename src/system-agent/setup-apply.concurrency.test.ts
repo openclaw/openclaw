@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveAgentDir } from "../agents/agent-scope.js";
 import * as onboarding from "../commands/onboard-agent.js";
 import { readConfigFileSnapshot, resetConfigRuntimeState } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { projectInferenceRoute } from "./inference-route.js";
 import { applySystemAgentSetup } from "./setup-apply.js";
 
 const runtime: RuntimeEnv = {
@@ -55,9 +55,7 @@ describe("applySystemAgentSetup first-agent concurrency", () => {
           applySystemAgentSetup({
             workspace: state.workspaceDir,
             firstAgent: { name: "robby" },
-            expectedAgentId: "main",
-            expectedAgentDir: resolveAgentDir(initialRuntime, "main"),
-            expectedModelRef: model,
+            expectedInferenceRoute: await projectInferenceRoute(initialRuntime),
             expectedConfigHash: initial.hash ?? null,
             surface: "gateway",
             runtime,

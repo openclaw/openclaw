@@ -2,6 +2,7 @@
 // the approval gate and other devices pick them up. The localStorage mirror gives instant boot and
 // stays authoritative when this client cannot write config (viewer scope, offline). Pending local
 // intent shadows server snapshots until the hash-free LWW ack; failed pushes degrade device-local.
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
 import {
@@ -18,7 +19,6 @@ import {
 } from "./server-prefs-profile.ts";
 import {
   isNavigationPref,
-  prefValuesEqual,
   clearSidebarEntriesMetadata,
   isProfilePref,
   SYNCED_PREF_KEYS,
@@ -28,8 +28,8 @@ import {
 } from "./server-prefs-state.ts";
 import {
   PENDING_KEY,
-  LAST_SEEN_KEY,
   parseStoredPrefs,
+  serializeStoredPrefs,
   readRetainedLocalKeys,
   readStorage,
   readStoredPrefs,
@@ -39,7 +39,7 @@ import {
 import type {
   ServerUiPrefsWriter,
   ServerUiPrefsCommit,
-  ServerUiPrefsSync,
+  ConfirmedPrefsFallback,
 } from "./server-prefs-sync-contract.ts";
 import type { UiSettings } from "./settings-contract.ts";
 import { patchSettings } from "./settings.ts";
@@ -52,35 +52,39 @@ type ServerUiPrefsPushHooks = {
 };
 export type { ServerUiPrefProvenance } from "./server-prefs-state.ts";
 
-const preferenceWriteListeners = new Set<() => void>();
+let preferenceWritesChanged: (() => void) | undefined;
 export function subscribeServerUiPrefWrites(listener: () => void): () => void {
-  preferenceWriteListeners.add(listener);
-  return () => preferenceWriteListeners.delete(listener);
+  preferenceWritesChanged = listener;
+  return () => {
+    preferenceWritesChanged = undefined;
+  };
 }
 function publishPreferenceWrites(): void {
-  for (const listener of preferenceWriteListeners) {
-    listener();
-  }
+  preferenceWritesChanged?.();
 }
-class ServerUiPrefsOutbox implements ServerUiPrefsSync {
+class ServerUiPrefsOutbox {
   applyingServerPrefs = false;
   pendingScope = "";
   pendingPrefs: ServerUiPrefs | null = null;
   pendingPersistedKeys = new Set<string>();
-  composeSidebar: ServerUiPrefsSync["composeSidebar"] = null;
+  // The active pin operation alone can observe local successors; foreign adoption detaches it.
+  composeSidebar: ((pending: ServerUiPrefs | null, next: ServerUiPrefs) => void) | null = null;
   pushWriter: ServerUiPrefsWriter | null = null;
   pushScope = "";
-  pushClient: ServerUiPrefsSync["pushClient"] = null;
+  pushClient: GatewayBrowserClient | null = null;
   pushProfileId: string | null = null;
   pushCanWrite = false;
   pushAfterCommit: ((commit: ServerUiPrefsCommit) => void) | undefined;
   pushDraining = false;
   drainRequested = false;
   pushEpoch = 0;
-  confirmedPrefsFallback: ServerUiPrefsSync["confirmedPrefsFallback"] = null;
+  confirmedPrefsFallback: ConfirmedPrefsFallback | null = null;
   lastReconciledScope: string | null = null;
   lastReconciledConfigObject: unknown = null;
-  preferenceWriteFailures: ServerUiPrefsSync["preferenceWriteFailures"] = new Map();
+  preferenceWriteFailures: Map<
+    string,
+    Map<SyncedPrefKey, { value: unknown; error: string; retained: boolean }>
+  > = new Map();
   writePendingStorage = writePendingStorage;
   recordPreferenceWriteFailures = recordPreferenceWriteFailures;
   reconcilePersistedPendingPrefs = reconcilePersistedPendingPrefs;
@@ -140,24 +144,6 @@ function adoptPendingScope(scope: string): void {
   sync.pendingPersistedKeys = new Set(
     stored.available && stored.prefs ? pendingUiPrefKeys(stored.prefs) : [],
   );
-  if (
-    sync.pushProfileId &&
-    stored.prefs?.sidebarEntries &&
-    !Object.hasOwn(stored.prefs, "sidebarEntriesBase")
-  ) {
-    // v2026.9.9 saved pending pins without an edit base. Freeze only its same-profile
-    // recorded baseline before hydration can replace LAST_SEEN with a fresh remote value.
-    const previous = readStoredPrefs(LAST_SEEN_KEY, scope).prefs;
-    const base = SYNCED_PREFS.sidebarEntries.extract(previous?.sidebarEntries);
-    if (
-      previous?.navigationConfirmation === undefined &&
-      base &&
-      prefValuesEqual(base, previous?.sidebarEntries)
-    ) {
-      stored.prefs.sidebarEntriesBase = base;
-      writePendingStorage(stored.prefs);
-    }
-  }
 }
 function writePendingStorage(prefs: ServerUiPrefs | null): void {
   if (prefs && !prefs.sidebarEntries) {
@@ -166,7 +152,7 @@ function writePendingStorage(prefs: ServerUiPrefs | null): void {
   const persisted = writeStorage(
     PENDING_KEY,
     sync.pendingScope,
-    prefs && Object.keys(prefs).length ? JSON.stringify(prefs) : null,
+    prefs && Object.keys(prefs).length ? serializeStoredPrefs(prefs) : null,
   );
   if (persisted) {
     sync.pendingPersistedKeys = new Set(
@@ -203,7 +189,7 @@ function cancelPendingKeys(scope: string, keys: readonly SyncedPrefKey[]): void 
     writePendingStorage(next);
     return;
   }
-  writeStorage(PENDING_KEY, scope, next ? JSON.stringify(next) : null);
+  writeStorage(PENDING_KEY, scope, next ? serializeStoredPrefs(next) : null);
 }
 // localStorage pending is a cross-tab merged pool per gateway. Per-key read-merge-write prevents
 // one tab from clobbering sibling offline intent; its ms-scale race is accepted because storage has
@@ -359,7 +345,6 @@ function startPendingDrain(writer: ServerUiPrefsWriter): void {
     return;
   }
   if (
-    writer.state.connected &&
     writer.canPatch === false &&
     !(sync.pushProfileId && sync.pushCanWrite && Object.keys(sync.pendingPrefs).some(isProfilePref))
   ) {

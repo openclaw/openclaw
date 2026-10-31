@@ -38,6 +38,14 @@ absent rather than failing at call time.
 | `desktop_show` / `desktop_hide`   | Show or hide a remote desktop              | `environmentId`, `sessionKey`, `dock` (default `right`) |
 | `portal_show` / `portal_hide`     | Show or hide a web application portal      | `portalId`, `sessionKey`, `dock` (default `right`)      |
 
+`github_identity_settings` opens the current agent's **Tools** settings in the
+requesting browser so the operator can reconnect GitHub. It requires the
+`ui-agent-github-settings` client capability. Authorization stays in the existing
+Control UI flow; no credentials or authorization codes enter model context.
+After reconnecting, the agent can check `github_identity_status` again. When the
+client or tool policy does not support this action, open **Settings → Agents →
+Tools** manually.
+
 Every action accepts optional `user`, the person's verified `requester_profile.id`
 from the Control UI message's conversation context. When several people have
 steered the turn, `user` is required; the agent chooses the person who asked or
@@ -48,6 +56,16 @@ with its `environmentId`. For a web application, open a portal for the server's
 port, then use `portal_show` with the returned `portalId`. The selected view opens
 in that conversation's side panel. Hiding a view does not stop its application,
 close the portal, or release the environment.
+
+Panel show actions accept `expanded: true` to fill the conversation pane and
+`expanded: false` to restore split view. Expansion keeps the selected panel, its
+tabs, and its dock. For desktop and portal presentation changes, omit `dock` to
+retain the existing dock; showing either panel without `expanded` still defaults
+to the right sidebar.
+
+```json
+{ "action": "browser_show", "expanded": true }
+```
 
 The desktop panel and computer tools address the same environment. `screen`
 only presents it; computer tools perform clicks, typing, and screenshots.

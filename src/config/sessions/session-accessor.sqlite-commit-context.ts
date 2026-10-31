@@ -1,10 +1,8 @@
 import { createDeferredCore } from "../../shared/deferred.js";
 import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admission.js";
+import { retainAgentDatabase } from "../../state/openclaw-agent-db-borrower.js";
 import { isOpenClawAgentDatabasePathCurrent } from "../../state/openclaw-agent-db-identity.js";
-import {
-  agentDatabaseLifecycle,
-  retainAgentDatabase,
-} from "../../state/openclaw-agent-db-lifecycle.js";
+import { agentDatabaseLifecycle } from "../../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
@@ -68,11 +66,10 @@ export async function withNativeSessionCommitContext<T>(
       close: () => completion.promise,
     });
     unregisterState = registerOpenClawStateDatabaseAsyncResource({
-      close: async (identity) => {
-        if (!identity || identity.key === state.identity.key) {
-          revoke();
-          await completion.promise;
-        }
+      admission: state,
+      close: async () => {
+        revoke();
+        await completion.promise;
       },
     });
     const result = commit(context);

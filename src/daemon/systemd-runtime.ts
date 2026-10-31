@@ -3,14 +3,12 @@ import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
-/** systemd service enabled-state and runtime inspection. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { formatErrorMessage } from "../infra/errors.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import {
+  assertServiceInspectionFallbackAllowed,
   sanitizeServiceInspectionError,
-  ServiceInspectionError,
 } from "./service-inspection-error.js";
 import {
   createServiceRuntimeInspectionFailure,
@@ -78,6 +76,9 @@ export async function readSystemdServiceRuntime(
     );
   }
   const timeoutMs = opts?.timeoutMs;
+  if (opts?.commandInspection?.kind === "unavailable") {
+    assertServiceInspectionFallbackAllowed(opts.commandInspection.error);
+  }
   let commandInspectionFailure =
     opts?.commandInspection?.kind === "unavailable"
       ? createServiceRuntimeInspectionFailure(
@@ -88,11 +89,10 @@ export async function readSystemdServiceRuntime(
     try {
       await assertSystemdAvailable(env, timeoutMs);
     } catch (err) {
+      assertServiceInspectionFallbackAllowed(err);
       return {
         ...commandInspectionFailure,
-        status: "unknown",
-        detail: formatErrorMessage(err),
-        ...(err instanceof ServiceInspectionError ? { inspectionReason: err.reason } : {}),
+        ...createServiceRuntimeInspectionFailure(err),
       };
     }
     const inspection: GatewayServiceCommandInspection =
@@ -104,6 +104,7 @@ export async function readSystemdServiceRuntime(
             (error: unknown) => ({ kind: "unavailable", error }) as const,
           ));
     if (inspection.kind === "unavailable") {
+      assertServiceInspectionFallbackAllowed(inspection.error);
       commandInspectionFailure = createServiceRuntimeInspectionFailure(
         sanitizeServiceInspectionError(inspection.error),
       );
@@ -137,10 +138,8 @@ export async function readSystemdServiceRuntime(
     const error = systemdInspectionError(res, detail, installed?.scope);
     return {
       ...commandInspectionFailure,
-      status: "unknown",
-      ...(detail ? { detail } : {}),
+      ...createServiceRuntimeInspectionFailure(error),
       missingUnit: false,
-      ...(error instanceof ServiceInspectionError ? { inspectionReason: error.reason } : {}),
     };
   }
   const entries = parseKeyValueOutput(res.stdout || "", "=");

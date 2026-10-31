@@ -3,7 +3,7 @@
  */
 import { beforeAll, describe, expect, it } from "vitest";
 import {
-  pluginRegistrationContractRegistry,
+  getPluginRegistrationContracts,
   resolveWebSearchProviderContractEntriesForPluginId,
 } from "../../plugins/contracts/registry.js";
 import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../../plugins/web-provider-public-artifacts.explicit.js";
@@ -33,7 +33,7 @@ function resolveWebSearchCredentialValue(provider: {
 
 export function describeWebSearchProviderContracts(pluginId: string) {
   const providerIds =
-    pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId)
+    getPluginRegistrationContracts().find((entry) => entry.pluginId === pluginId)
       ?.webSearchProviderIds ?? [];
 
   let providerEntries: WebSearchContractEntry[] | undefined;

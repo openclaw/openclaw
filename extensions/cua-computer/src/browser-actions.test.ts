@@ -1,20 +1,60 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { driver, execution } from "./commands.test-helpers.js";
+import { driver, execution, type ComputerExecution } from "./commands.test-helpers.js";
 import {
-  CUA_DRIVER_CONTRACT_FIXTURES,
+  CUA_DRIVER_CONTRACT_FIXTURES as fixtures,
   cuaToolResult,
 } from "./cua-driver-contract.test-fixtures.js";
 import type { CuaToolResult } from "./driver-client.js";
+
+async function bindBrowser(computer: ComputerExecution) {
+  const { details } = await computer.read<{
+    details: { browserRef: string; pages: Array<{ pageRef: string }> };
+  }>("get_browser_state", { windowRef: await computer.window() });
+  return { browserRef: details.browserRef, pageRef: details.pages[0]!.pageRef };
+}
+
+type BrowserObservation = {
+  observation: { observationId: string };
+  details: { elements: Array<{ elementRef: string }> };
+};
+async function clickTarget(
+  computer: ComputerExecution,
+  target: Awaited<ReturnType<typeof bindBrowser>>,
+) {
+  const observed = await computer.read<BrowserObservation>("get_browser_state", target);
+  return {
+    ...target,
+    observationId: observed.observation.observationId,
+    elementRef: observed.details.elements[0]!.elementRef,
+  };
+}
+
+function browserDriver(
+  snapshot = () => cuaToolResult(fixtures.browserSnapshot),
+  fallback = () => cuaToolResult(fixtures.browserNavigate),
+) {
+  const active = driver();
+  active.callTool.mockImplementation(async (name, args) => {
+    if (name === "list_windows") {
+      return cuaToolResult(fixtures.listWindows);
+    }
+    if (name === "get_browser_state") {
+      return "target_id" in args ? snapshot() : cuaToolResult(fixtures.browserBinding);
+    }
+    return fallback();
+  });
+  return active;
+}
 
 describe("cua-computer browser actions", () => {
   it("maps every browser action to the pinned driver tool contract", async () => {
     const { session, callTool } = driver();
     let downloadedFile = "";
     const binding = {
-      ...CUA_DRIVER_CONTRACT_FIXTURES.browserBinding,
-      tabs: CUA_DRIVER_CONTRACT_FIXTURES.browserBinding.tabs.map((tab) => ({
+      ...fixtures.browserBinding,
+      tabs: fixtures.browserBinding.tabs.map((tab) => ({
         ...tab,
         title: "",
         active: false,
@@ -22,8 +62,8 @@ describe("cua-computer browser actions", () => {
       })),
     };
     const snapshot = {
-      ...CUA_DRIVER_CONTRACT_FIXTURES.browserSnapshot,
-      refs: CUA_DRIVER_CONTRACT_FIXTURES.browserSnapshot.refs.map((ref) => ({
+      ...fixtures.browserSnapshot,
+      refs: fixtures.browserSnapshot.refs.map((ref) => ({
         ...ref,
         value: "",
         states: [],
@@ -31,328 +71,160 @@ describe("cua-computer browser actions", () => {
       })),
       content_refs: [{ ref: "p7:0", label: "duplicate action reference" }],
     };
+    const responses: Record<string, Record<string, unknown>> = {
+      list_windows: fixtures.listWindows,
+      browser_prepare: fixtures.browserPrepare,
+      browser_navigate: fixtures.browserNavigate,
+      browser_dialog: fixtures.browserDialog,
+      browser_set_input_files: fixtures.browserFiles,
+    };
     callTool.mockImplementation(async (name, args) => {
+      if (Object.hasOwn(responses, name)) {
+        return cuaToolResult(responses[name]!);
+      }
       switch (name) {
-        case "list_windows":
-          return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
         case "get_browser_state":
           return cuaToolResult("target_id" in args ? snapshot : binding, {
             image: "target_id" in args,
           });
-        case "browser_prepare":
-          return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.browserPrepare);
-        case "browser_navigate":
-          return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.browserNavigate);
-        case "browser_dialog":
-          return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.browserDialog);
-        case "browser_set_input_files":
-          return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.browserFiles);
         case "browser_download":
           downloadedFile = path.join(String(args.destination_root), "download.txt");
           await fs.writeFile(downloadedFile, "download");
-          return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.browserDownload);
+          return cuaToolResult(fixtures.browserDownload);
         case "browser_click":
         case "browser_type":
         case "browser_pointer":
           return cuaToolResult(
             {},
-            {
-              action:
-                CUA_DRIVER_CONTRACT_FIXTURES.confirmedBackgroundAction as unknown as CuaToolResult["action"],
-            },
+            { action: fixtures.confirmedBackgroundAction as unknown as CuaToolResult["action"] },
           );
         default:
           return cuaToolResult({});
       }
     });
     const computer = await execution(session);
-    const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-      details: { windows: Array<{ windowRef: string }> };
-    };
-    const windowRef = listed.details.windows[0]!.windowRef;
-
-    await computer.act(
-      JSON.stringify({
-        action: "browser_prepare",
-        windowRef,
-        profile: "isolated_named",
-        profileName: "openclaw-test",
-      }),
+    const checkCall = (name: string, args: Record<string, unknown>) =>
+      expect(callTool).toHaveBeenLastCalledWith(name, args, undefined);
+    const windowRef = await computer.window();
+    await computer.send("browser_prepare", {
+      windowRef,
+      profile: "isolated_named",
+      profileName: "openclaw-test",
+    });
+    checkCall("browser_prepare", {
+      pid: 4242,
+      allow_launch: true,
+      profile: { mode: "isolated_named", name: "openclaw-test" },
+    });
+    const boundJson = await computer.send("get_browser_state", { windowRef });
+    checkCall("get_browser_state", { pid: 4242, window_id: 99 });
+    expect(boundJson).not.toMatch(
+      /native-browser-target-1|native-page-1|private-native-browser-session/,
     );
-    const boundJson = await computer.act(
-      JSON.stringify({ action: "get_browser_state", windowRef }),
-    );
-    expect(boundJson).not.toContain("native-browser-target-1");
-    expect(boundJson).not.toContain("native-page-1");
-    expect(boundJson).not.toContain("private-native-browser-session");
     const bound = JSON.parse(boundJson) as {
       details: { browserRef: string; pages: Array<{ pageRef: string }> };
     };
-    expect(bound.details.browserRef).toMatch(/^cua:v2:browser:/);
-    expect(bound.details.pages[0]!.pageRef).toMatch(/^cua:v2:page:/);
+    const target = {
+      browserRef: bound.details.browserRef,
+      pageRef: bound.details.pages[0]!.pageRef,
+    };
+    const native = { target_id: "native-browser-target-1", tab_id: "native-page-1" };
+    expect(target.browserRef).toMatch(/^cua:v2:browser:/);
+    expect(target.pageRef).toMatch(/^cua:v2:page:/);
     expect(bound.details.pages).toEqual([
       { pageRef: expect.any(String), title: "", url: "https://example.com/", active: false },
     ]);
-    const browserRef = bound.details.browserRef;
-    const pageRef = bound.details.pages[0]!.pageRef;
-
-    const observedJson = await computer.act(
-      JSON.stringify({ action: "get_browser_state", browserRef, pageRef }),
-    );
-    expect(observedJson).not.toContain("p7:0");
-    expect(observedJson).not.toContain("private-native-browser-session");
+    const observedJson = await computer.send("get_browser_state", target);
+    checkCall("get_browser_state", {
+      ...native,
+      snapshot_format: "dom_refs_v1",
+      include_screenshot: true,
+    });
+    expect(observedJson).not.toMatch(/p7:0|private-native-browser-session/);
     const observed = JSON.parse(observedJson) as {
       observation: { kind: string; observationId: string };
       details: { elements: Array<{ elementRef: string }> };
     };
     expect(observed.observation.kind).toBe("browser");
+    const expectedElement = {
+      elementRef: expect.any(String),
+      kind: "action",
+      value: "",
+      states: [],
+      frame: "main",
+    };
     expect(observed.details.elements).toEqual([
-      {
-        elementRef: expect.any(String),
-        kind: "action",
-        node: "BUTTON",
-        label: "Continue",
-        value: "",
-        states: [],
-        frame: "main",
-      },
-      {
-        elementRef: expect.any(String),
-        kind: "action",
-        node: "INPUT",
-        label: "Name",
-        value: "",
-        states: [],
-        frame: "main",
-      },
+      { ...expectedElement, node: "BUTTON", label: "Continue" },
+      { ...expectedElement, node: "INPUT", label: "Name" },
     ]);
-    const observationId = observed.observation.observationId;
-    const [firstElement, secondElement] = observed.details.elements.map(
-      (element) => element.elementRef,
+    const observedTarget = { ...target, observationId: observed.observation.observationId };
+    const [first, second] = observed.details.elements.map((element) => element.elementRef);
+    expect(first).toMatch(/^cua:v2:element:/);
+    const act = async (
+      name: string,
+      input: Record<string, unknown>,
+      args: Record<string, unknown>,
+    ) => {
+      const output = await computer.send(name, { ...observedTarget, ...input });
+      checkCall(name, { ...native, ...args });
+      return output;
+    };
+    await act(
+      "browser_click",
+      { elementRef: first, inputRoute: "dom_event" },
+      { ref: "p7:0", input_route: "dom_event" },
     );
-    expect(firstElement).toMatch(/^cua:v2:element:/);
-
-    await computer.act(
-      JSON.stringify({
-        action: "browser_click",
-        browserRef,
-        pageRef,
-        observationId,
-        elementRef: firstElement,
-        inputRoute: "dom_event",
-      }),
-    );
-    await computer.act(
-      JSON.stringify({
-        action: "browser_type",
-        browserRef,
-        pageRef,
-        observationId,
-        elementRef: secondElement,
-        text: "hello",
-        mode: "keystrokes",
-        replace: true,
-      }),
-    );
-    const dialog = JSON.parse(
-      await computer.act(
-        JSON.stringify({
-          action: "browser_dialog",
-          browserRef,
-          pageRef,
-          dialogAction: "inspect",
-        }),
-      ),
-    ) as { details: { dialogRef: string } };
+    const typing = { text: "hello", mode: "keystrokes", replace: true };
+    await act("browser_type", { ...typing, elementRef: second }, { ...typing, ref: "p7:1" });
+    const dialogJson = await computer.send("browser_dialog", {
+      ...target,
+      dialogAction: "inspect",
+    });
+    checkCall("browser_dialog", { ...native, action: "inspect" });
+    const dialog = JSON.parse(dialogJson) as { details: { dialogRef: string } };
     expect(dialog.details.dialogRef).toMatch(/^cua:v2:dialog:/);
-    const downloadJson = await computer.act(
-      JSON.stringify({
-        action: "browser_download",
-        browserRef,
-        pageRef,
-        observationId,
-        elementRef: firstElement,
-      }),
-    );
+    const downloadJson = await computer.send("browser_download", {
+      ...observedTarget,
+      elementRef: first,
+    });
+    checkCall("browser_download", {
+      ...native,
+      ref: "p7:0",
+      destination_root: path.dirname(downloadedFile),
+    });
     expect(downloadJson).not.toContain(path.dirname(downloadedFile));
     const download = JSON.parse(downloadJson) as {
       details: { fileResourceHandles: string[]; resourceHandle: string };
     };
     expect(download.details.resourceHandle).toMatch(/^openclaw:computer-resource:v1:/u);
     expect(download.details.fileResourceHandles[0]).toMatch(/^openclaw:computer-resource:v1:/u);
-    await computer.act(
-      JSON.stringify({
-        action: "browser_set_input_files",
-        browserRef,
-        pageRef,
-        observationId,
-        elementRef: secondElement,
-        resourceHandles: download.details.fileResourceHandles,
-      }),
+    await act(
+      "browser_set_input_files",
+      { elementRef: second, resourceHandles: download.details.fileResourceHandles },
+      { ref: "p7:1", files: [downloadedFile] },
     );
-    await computer.act(
-      JSON.stringify({
-        action: "browser_pointer",
-        browserRef,
-        pageRef,
-        observationId,
+    await act(
+      "browser_pointer",
+      {
         pointerAction: "drag",
         inputRoute: "dom_event",
-        elementRef: firstElement,
-        destinationElementRef: secondElement,
-      }),
+        elementRef: first,
+        destinationElementRef: second,
+      },
+      { action: "drag", input_route: "dom_event", ref: "p7:0", destination_ref: "p7:1" },
     );
-    await computer.act(
-      JSON.stringify({
-        action: "browser_navigate",
-        browserRef,
-        pageRef,
-        url: "https://example.com/next",
-      }),
-    );
-
-    expect(callTool.mock.calls).toEqual([
-      ["list_windows", {}, undefined],
-      [
-        "browser_prepare",
-        {
-          pid: 4242,
-          allow_launch: true,
-          profile: { mode: "isolated_named", name: "openclaw-test" },
-        },
-        undefined,
-      ],
-      ["get_browser_state", { pid: 4242, window_id: 99 }, undefined],
-      [
-        "get_browser_state",
-        {
-          target_id: "native-browser-target-1",
-          tab_id: "native-page-1",
-          snapshot_format: "dom_refs_v1",
-          include_screenshot: true,
-        },
-        undefined,
-      ],
-      [
-        "browser_click",
-        {
-          target_id: "native-browser-target-1",
-          tab_id: "native-page-1",
-          ref: "p7:0",
-          input_route: "dom_event",
-        },
-        undefined,
-      ],
-      [
-        "browser_type",
-        {
-          target_id: "native-browser-target-1",
-          tab_id: "native-page-1",
-          ref: "p7:1",
-          text: "hello",
-          mode: "keystrokes",
-          replace: true,
-        },
-        undefined,
-      ],
-      [
-        "browser_dialog",
-        {
-          target_id: "native-browser-target-1",
-          tab_id: "native-page-1",
-          action: "inspect",
-        },
-        undefined,
-      ],
-      [
-        "browser_download",
-        {
-          target_id: "native-browser-target-1",
-          tab_id: "native-page-1",
-          ref: "p7:0",
-          destination_root: path.dirname(downloadedFile),
-        },
-        undefined,
-      ],
-      [
-        "browser_set_input_files",
-        {
-          target_id: "native-browser-target-1",
-          tab_id: "native-page-1",
-          ref: "p7:1",
-          files: [downloadedFile],
-        },
-        undefined,
-      ],
-      [
-        "browser_pointer",
-        {
-          target_id: "native-browser-target-1",
-          tab_id: "native-page-1",
-          action: "drag",
-          input_route: "dom_event",
-          ref: "p7:0",
-          destination_ref: "p7:1",
-        },
-        undefined,
-      ],
-      [
-        "browser_navigate",
-        {
-          target_id: "native-browser-target-1",
-          tab_id: "native-page-1",
-          url: "https://example.com/next",
-        },
-        undefined,
-      ],
-    ]);
-
+    const navigation = { url: "https://example.com/next" };
+    await computer.send("browser_navigate", { ...target, ...navigation });
+    checkCall("browser_navigate", { ...native, ...navigation });
     await computer.close("cancel");
     await expect(fs.access(downloadedFile)).rejects.toThrow();
   });
 
   it("invalidates browser capabilities across navigation, generation, and execution", async () => {
-    const first = driver();
-    first.callTool.mockImplementation(async (name, args) => {
-      if (name === "list_windows") {
-        return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
-      }
-      if (name === "get_browser_state") {
-        return cuaToolResult(
-          "target_id" in args
-            ? CUA_DRIVER_CONTRACT_FIXTURES.browserSnapshot
-            : CUA_DRIVER_CONTRACT_FIXTURES.browserBinding,
-        );
-      }
-      return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.browserNavigate);
-    });
+    const first = browserDriver();
     const computer = await execution(first.session);
-    const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-      details: { windows: Array<{ windowRef: string }> };
-    };
-    const bound = JSON.parse(
-      await computer.act(
-        JSON.stringify({
-          action: "get_browser_state",
-          windowRef: listed.details.windows[0]!.windowRef,
-        }),
-      ),
-    ) as { details: { browserRef: string; pages: Array<{ pageRef: string }> } };
-    const browserRef = bound.details.browserRef;
-    const pageRef = bound.details.pages[0]!.pageRef;
-    const observed = JSON.parse(
-      await computer.act(JSON.stringify({ action: "get_browser_state", browserRef, pageRef })),
-    ) as {
-      observation: { observationId: string };
-      details: { elements: Array<{ elementRef: string }> };
-    };
-    const staleAction = {
-      action: "browser_click",
-      browserRef,
-      pageRef,
-      observationId: observed.observation.observationId,
-      elementRef: observed.details.elements[0]!.elementRef,
-    };
+    const target = await bindBrowser(computer);
+    const staleAction = { action: "browser_click", ...(await clickTarget(computer, target)) };
 
     const callsBeforeForgedRefs = first.callTool.mock.calls.length;
     for (const forged of [
@@ -361,130 +233,64 @@ describe("cua-computer browser actions", () => {
       { ...staleAction, observationId: "/tmp/native-observation" },
       { ...staleAction, elementRef: "p7:0" },
     ]) {
-      await expect(computer.act(JSON.stringify(forged))).rejects.toThrow(
-        "COMPUTER_STALE_OBSERVATION",
-      );
+      await expect(computer.send(forged)).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
     }
     expect(first.callTool).toHaveBeenCalledTimes(callsBeforeForgedRefs);
 
-    await computer.act(
-      JSON.stringify({ action: "browser_navigate", browserRef, pageRef, url: "about:blank" }),
-    );
-    await expect(computer.act(JSON.stringify(staleAction))).rejects.toThrow(
+    await computer.send("browser_navigate", { ...target, url: "about:blank" });
+    await expect(computer.send(staleAction)).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
+
+    first.setGeneration("execution-2");
+    await expect(computer.send("get_browser_state", target)).rejects.toThrow(
       "COMPUTER_STALE_OBSERVATION",
     );
 
-    first.setGeneration("execution-2");
-    await expect(
-      computer.act(JSON.stringify({ action: "get_browser_state", browserRef, pageRef })),
-    ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
-
     const second = await execution(first.session);
-    await expect(
-      second.act(JSON.stringify({ action: "get_browser_state", browserRef, pageRef })),
-    ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
+    await expect(second.send("get_browser_state", target)).rejects.toThrow(
+      "COMPUTER_STALE_OBSERVATION",
+    );
   });
 
   it("keeps existing-profile browser attachment outside the accepted contract", async () => {
     const { session, callTool } = driver();
-    callTool.mockResolvedValueOnce(cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows));
+    callTool.mockResolvedValueOnce(cuaToolResult(fixtures.listWindows));
     const computer = await execution(session);
-    const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-      details: { windows: Array<{ windowRef: string }> };
-    };
-    const windowRef = listed.details.windows[0]!.windowRef;
+    const windowRef = await computer.window();
 
     await expect(
-      computer.act(
-        JSON.stringify({
-          action: "browser_prepare",
-          windowRef,
-          profile: "existing_profile",
-        }),
-      ),
+      computer.send("browser_prepare", { windowRef, profile: "existing_profile" }),
     ).rejects.toThrow("COMPUTER_INVALID_REQUEST");
     await expect(
-      computer.act(
-        JSON.stringify({
-          action: "browser_prepare",
-          windowRef,
-          strategy: { kind: "existing_profile" },
-        }),
-      ),
+      computer.send("browser_prepare", { windowRef, strategy: { kind: "existing_profile" } }),
     ).rejects.toThrow("COMPUTER_INVALID_REQUEST");
     expect(callTool).toHaveBeenCalledTimes(1);
   });
 
   it("rechecks browser generation and structured stale refusals after driver calls", async () => {
-    const active = driver();
     let staleOnSnapshot = true;
-    active.callTool.mockImplementation(async (name, args) => {
-      if (name === "list_windows") {
-        return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
-      }
-      if (name === "get_browser_state" && !("target_id" in args)) {
-        return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.browserBinding);
-      }
-      if (name === "get_browser_state" && staleOnSnapshot) {
-        active.setGeneration("execution-2");
-        return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.browserSnapshot);
-      }
-      if (name === "get_browser_state") {
-        return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.browserSnapshot);
-      }
-      return cuaToolResult({
-        status: "refused",
-        refusal: { code: "browser_ref_stale", message: "page changed" },
-      });
-    });
-    const computer = await execution(active.session);
-    const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-      details: { windows: Array<{ windowRef: string }> };
-    };
-    const bind = async () =>
-      JSON.parse(
-        await computer.act(
-          JSON.stringify({
-            action: "get_browser_state",
-            windowRef: listed.details.windows[0]!.windowRef,
-          }),
-        ),
-      ) as { details: { browserRef: string; pages: Array<{ pageRef: string }> } };
-    const firstBinding = await bind();
-    await expect(
-      computer.act(
-        JSON.stringify({
-          action: "get_browser_state",
-          browserRef: firstBinding.details.browserRef,
-          pageRef: firstBinding.details.pages[0]!.pageRef,
+    const active = browserDriver(
+      () => {
+        if (staleOnSnapshot) {
+          active.setGeneration("execution-2");
+        }
+        return cuaToolResult(fixtures.browserSnapshot);
+      },
+      () =>
+        cuaToolResult({
+          status: "refused",
+          refusal: { code: "browser_ref_stale", message: "page changed" },
         }),
-      ),
-    ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
+    );
+    const computer = await execution(active.session);
+    const firstBinding = await bindBrowser(computer);
+    await expect(computer.send("get_browser_state", firstBinding)).rejects.toThrow(
+      "COMPUTER_STALE_OBSERVATION",
+    );
 
     staleOnSnapshot = false;
-    const refreshedWindows = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-      details: { windows: Array<{ windowRef: string }> };
-    };
-    listed.details.windows = refreshedWindows.details.windows;
-    const secondBinding = await bind();
-    const browserRef = secondBinding.details.browserRef;
-    const pageRef = secondBinding.details.pages[0]!.pageRef;
-    const observed = JSON.parse(
-      await computer.act(JSON.stringify({ action: "get_browser_state", browserRef, pageRef })),
-    ) as {
-      observation: { observationId: string };
-      details: { elements: Array<{ elementRef: string }> };
-    };
-    await expect(
-      computer.act(
-        JSON.stringify({
-          action: "browser_click",
-          browserRef,
-          pageRef,
-          observationId: observed.observation.observationId,
-          elementRef: observed.details.elements[0]!.elementRef,
-        }),
-      ),
-    ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
+    const target = await clickTarget(computer, await bindBrowser(computer));
+    await expect(computer.send("browser_click", target)).rejects.toThrow(
+      "COMPUTER_STALE_OBSERVATION",
+    );
   });
 });

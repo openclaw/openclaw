@@ -6,6 +6,8 @@ import type { AgentEntryConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ChatMetadataSnapshotUnavailableError } from "../gateway/server-methods/chat-metadata-facts.js";
 import { createGatewayChatMetadataRuntime } from "../gateway/server-methods/chat-metadata-runtime.js";
+import * as projectionRuntime from "../gateway/server-methods/chat-metadata-session-projection.js";
+import * as commandsRuntime from "../gateway/server-methods/commands-list-result.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
@@ -116,24 +118,26 @@ describe("chat metadata with published model owners", () => {
       let builds = 0;
       // Projection leaves are supplied below; the real roster and published-owner chain is retained.
       const context = {} as GatewayRequestContext;
+      const commandsSpy = vi
+        .spyOn(commandsRuntime, "buildCommandsListResult")
+        .mockResolvedValue({ commands: [] });
+      const projectionSpy = vi
+        .spyOn(projectionRuntime, "prepareChatMetadataModelProjection")
+        .mockImplementation(async ({ facts }) => {
+          builds += 1;
+          expect(facts.owner).toBe(published.get(facts.agentId));
+          return {
+            modelCatalog: facts.modelCatalog.entries,
+            read: () => ({ models: facts.modelCatalog.entries }),
+            isCurrent: facts.owner.isCurrent,
+          };
+        });
       const runtime = createGatewayChatMetadataRuntime({
         getConfig: () => observedConfig,
         getContext: () => context,
         log: {
           warn: (message) => {
             throw new Error(message);
-          },
-        },
-        deps: {
-          buildCommands: async ({ agentId }) => ({ commands: [{ name: agentId }] }),
-          buildProjection: async ({ facts }) => {
-            builds += 1;
-            expect(facts.owner).toBe(published.get(facts.agentId));
-            return {
-              modelCatalog: facts.modelCatalog.entries,
-              read: () => ({ models: facts.modelCatalog.entries }),
-              isCurrent: facts.owner.isCurrent,
-            };
           },
         },
       });
@@ -167,23 +171,28 @@ describe("chat metadata with published model owners", () => {
         expect((await runtime.read({ agentId: "main" })).models).toContainEqual(expectedModel);
         expect(builds).toBe(count + 1);
         const added = await add("added");
-        await expect(runtime.refresh()).rejects.toBeInstanceOf(
+        await runtime.refresh();
+        expect((await runtime.read({ agentId: "main" })).models).toContainEqual(expectedModel);
+        expect(builds).toBe(count + 2);
+        await expect(runtime.read({ agentId: "added" })).rejects.toBeInstanceOf(
           ChatMetadataSnapshotUnavailableError,
         );
         await publish(added);
         await runtime.refresh();
         expect((await runtime.read({ agentId: "added" })).models).toContainEqual(expectedModel);
-        expect(builds).toBe(count + 2);
+        expect(builds).toBe(count + 3);
         delete entries.added;
         await runtime.refresh();
         await expect(runtime.read({ agentId: "added" })).rejects.toBeInstanceOf(
           ChatMetadataSnapshotUnavailableError,
         );
-        expect(builds).toBe(count + 2);
+        expect(builds).toBe(count + 3);
         // Leave substantial linear headroom; fail repeated per-agent roster traversal.
         expect(unchangedReads).toBeLessThanOrEqual(8 * count);
       } finally {
         await runtime.stop();
+        commandsSpy.mockRestore();
+        projectionSpy.mockRestore();
       }
     },
   );

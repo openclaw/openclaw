@@ -3,11 +3,16 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export function projectEmbeddedMessageContext(run: Partial<EmbeddedForegroundPromptContext>) {
   return {
+    requesterOrigin: run.requesterOrigin,
+    operatorProfileId: run.operatorProfileId,
+    conversationId: run.conversationId,
+    sessionPromptDelivery: run.sessionPromptDelivery,
     senderId: run.senderId,
     senderName: run.senderName,
     senderUsername: run.senderUsername,
     senderE164: run.senderE164,
     senderIsOwner: run.senderIsOwner,
+    gitContributorProfileId: run.gitContributorProfileId,
     approvalReviewerDeviceId: run.approvalReviewerDeviceId,
     currentChannelId: run.currentChannelId,
     chatId: run.chatId,

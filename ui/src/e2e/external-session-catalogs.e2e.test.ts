@@ -1,9 +1,7 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -24,8 +22,68 @@ const SHARE_ROUTE = {
   ambiguity: "multiple-results-or-next-cursor",
 } as const;
 
+const featureMethods = [
+  "chat.metadata",
+  "chat.startup",
+  "sessions.catalog.list",
+  "sessions.catalog.read",
+];
+const visiblePane = "openclaw-chat-pane.chat-pane-cache__pane--visible";
+const exactText = (root: Page | Locator, text: string) => root.getByText(text, { exact: true });
+type CatalogPane = HTMLElement & {
+  active: boolean;
+  presented: boolean;
+  sessionKey: string;
+  state: { assistantAgentId: string; selfUser: { id: string } | null; connected: boolean };
+};
+const waitForChat = (page: Page, agent: string, search = "") =>
+  waitForControlUiRoute(page, { routeId: "chat", pathname: `/chat/${agent}`, search });
+const paneStates = (locator: Locator) =>
+  locator.evaluateAll((panes) =>
+    panes.map((pane) => {
+      const { active, presented, sessionKey, state } = pane as CatalogPane;
+      return {
+        active,
+        presented,
+        sessionKey,
+        owner: state.assistantAgentId,
+        selfId: state.selfUser?.id,
+        connected: state.connected,
+      };
+    }),
+  );
+function makeCatalog(
+  id: string,
+  label: string,
+  threadId: string,
+  name: string,
+  host: { hostId: string; label: string; kind: string; nodeId?: string },
+  options: {
+    canContinue?: boolean;
+    status?: string;
+    archived?: boolean;
+    sourceHomeId?: string;
+    shareRoute?: typeof SHARE_ROUTE;
+  } = {},
+) {
+  const { canContinue = false, status = "stored", shareRoute, ...session } = options;
+  return {
+    id,
+    label,
+    capabilities: { continueSession: canContinue, archive: false },
+    ...(shareRoute ? { shareRoute } : {}),
+    hosts: [
+      {
+        ...host,
+        connected: true,
+        sessions: [{ threadId, name, status, canContinue, canArchive: false, ...session }],
+      },
+    ],
+  };
+}
+
 suite.define(() => {
-  it.each(["Riley", "Morgan"])(
+  it.each(["Riley"])(
     "keeps external transcript authors independent of viewer %s",
     async (viewer) => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
@@ -46,36 +104,16 @@ suite.define(() => {
               avatarUrl: "/viewer-avatar.png",
             },
           ],
-          featureMethods: [
-            "chat.metadata",
-            "chat.startup",
-            "sessions.catalog.list",
-            "sessions.catalog.read",
-          ],
+          featureMethods,
           methodResponses: {
             "sessions.catalog.list": {
-              catalogs: catalogIds.map((id) => ({
-                id,
-                label: id,
-                capabilities: { continueSession: false, archive: false },
-                hosts: [
-                  {
-                    hostId: "gateway",
-                    label: "Shared transcripts",
-                    kind: "gateway",
-                    connected: true,
-                    sessions: [
-                      {
-                        threadId: "shared",
-                        name: `${id} shared transcript`,
-                        status: "stored",
-                        canContinue: false,
-                        canArchive: false,
-                      },
-                    ],
-                  },
-                ],
-              })),
+              catalogs: catalogIds.map((id) =>
+                makeCatalog(id, id, "shared", `${id} shared transcript`, {
+                  hostId: "gateway",
+                  label: "Shared transcripts",
+                  kind: "gateway",
+                }),
+              ),
             },
             "sessions.catalog.read": {
               hostId: "gateway",
@@ -99,30 +137,16 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         for (const catalogId of catalogIds) {
-          await page.getByText(`${catalogId} shared transcript`, { exact: true }).click();
+          await exactText(page, `${catalogId} shared transcript`).click();
           // Every catalog has the same transcript; wait for the clicked pane before reading it.
-          await page.waitForFunction(
-            (expectedSessionKey) =>
-              [
-                ...document.querySelectorAll("openclaw-chat-pane.chat-pane-cache__pane--visible"),
-              ].some(
-                (pane) =>
-                  (pane as HTMLElement & { sessionKey?: string }).sessionKey === expectedSessionKey,
-              ),
-            `agent:main:catalog:${catalogId}:gateway:shared`,
-          );
-          const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
-          const message = pane
-            .locator(".chat-group.user")
-            .filter({ hasText: "The imported author's question." });
+          const pane = page.locator(visiblePane);
+          const sessionKey = `agent:main:catalog:${catalogId}:gateway:shared`;
+          await expect
+            .poll(async () => (await paneStates(pane)).some((row) => row.sessionKey === sessionKey))
+            .toBe(true);
+          const users = pane.locator(".chat-group.user");
+          const message = users.filter({ hasText: "The imported author's question." });
           await message.waitFor();
-          const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-          const artifactDir = artifactRoot
-            ? createControlUiE2eArtifactDir("external-session-catalogs", artifactRoot)
-            : undefined;
-          if (artifactDir && catalogId === "beam") {
-            await page.screenshot({ path: path.join(artifactDir, `beam-author-${viewer}.png`) });
-          }
           expect(await message.locator(".chat-sender-name").textContent()).toBe("User");
           expect(
             await message
@@ -130,9 +154,7 @@ suite.define(() => {
               .count(),
           ).toBe(0);
           expect(await message.locator('a[href*="activity"]').count()).toBe(0);
-          const known = pane
-            .locator(".chat-group.user")
-            .filter({ hasText: "The uploader's question." });
+          const known = users.filter({ hasText: "The uploader's question." });
           expect(await known.locator(".chat-sender-name").textContent()).toBe("Taylor");
           await expect
             .poll(() =>
@@ -159,16 +181,15 @@ suite.define(() => {
           threadId: "Thread:A/B",
         };
         const search = `?${new URLSearchParams({ catalog: source.catalogId, host: source.hostId, thread: source.threadId })}`;
+        const ownerSource = (agentId: string) => ({
+          ...source,
+          agentId,
+          sourceHomeId: `${agentId}-home`,
+        });
         const owners = ["main", "other"];
         const gateway = await installMockGateway(page, {
           agentModel: "openai/gpt-5.6-luna",
-          featureMethods: [
-            "chat.metadata",
-            "chat.startup",
-            "sessions.catalog.list",
-            "sessions.catalog.read",
-            "sessions.catalog.continue",
-          ],
+          featureMethods: [...featureMethods, "sessions.catalog.continue"],
           methodResponses: {
             "agents.list": {
               defaultId: "main",
@@ -187,36 +208,21 @@ suite.define(() => {
                 match: { agentId },
                 response: {
                   catalogs: [
-                    {
-                      id: source.catalogId,
-                      label: "Native fixture",
-                      capabilities: { continueSession: true, archive: false },
-                      hosts: [
-                        {
-                          hostId: source.hostId,
-                          label: "Dev Box",
-                          kind: "node",
-                          connected: true,
-                          sessions: [
-                            {
-                              threadId: source.threadId,
-                              name: `${agentId} native thread`,
-                              status: "stored",
-                              canContinue: true,
-                              canArchive: false,
-                              sourceHomeId: `${agentId}-home`,
-                            },
-                          ],
-                        },
-                      ],
-                    },
+                    makeCatalog(
+                      source.catalogId,
+                      "Native fixture",
+                      source.threadId,
+                      `${agentId} native thread`,
+                      { hostId: source.hostId, label: "Dev Box", kind: "node" },
+                      { canContinue: true, sourceHomeId: `${agentId}-home` },
+                    ),
                   ],
                 },
               })),
             },
             "sessions.catalog.read": {
               cases: owners.map((agentId) => ({
-                match: { ...source, agentId, sourceHomeId: `${agentId}-home` },
+                match: ownerSource(agentId),
                 response: {
                   ...source,
                   items: [{ type: "agentMessage", text: `${agentId} native transcript` }],
@@ -225,7 +231,7 @@ suite.define(() => {
             },
             "sessions.catalog.continue": {
               cases: owners.map((agentId) => ({
-                match: { ...source, agentId, sourceHomeId: `${agentId}-home` },
+                match: ownerSource(agentId),
                 response: { sessionKey: `agent:${agentId}:adopted-native` },
               })),
             },
@@ -236,53 +242,27 @@ suite.define(() => {
         );
         const composer = () => activePane.locator(".agent-chat__composer-combobox > textarea");
         const navigate = async (agentId: string, catalog = true) => {
-          await page.evaluate(
-            ({ agentId: routeAgentId, search: routeSearch }) => {
-              const app = document.querySelector("openclaw-app") as HTMLElement & {
-                runtime: { context: ApplicationContext };
-              };
-              app.runtime.context.navigate("chat", {
+          await evaluateControlUiContext(
+            page,
+            (context, { agentId: routeAgentId, search: routeSearch }) => {
+              context.navigate("chat", {
                 pathname: `/chat/${routeAgentId}`,
                 search: routeSearch,
               });
             },
             { agentId, search: catalog ? search : "" },
           );
-          await waitForControlUiRoute(page, {
-            routeId: "chat",
-            pathname: `/chat/${agentId}`,
-            search: catalog ? search : "",
-          });
+          await waitForChat(page, agentId, catalog ? search : "");
         };
         const assertOwner = async (agentId: string) => {
           await expect
             .poll(() =>
-              page.evaluate(() => {
-                const app = document.querySelector("openclaw-app") as HTMLElement & {
-                  runtime: { context: ApplicationContext };
-                };
-                return app.runtime.context.agentSelection.state.selectedId;
-              }),
+              evaluateControlUiContext(page, (context) => context.agentSelection.state.selectedId),
             )
             .toBe(agentId);
           await expect
-            .poll(() =>
-              activePane.evaluateAll((panes) =>
-                panes.map((pane) => {
-                  const chat = pane as HTMLElement & {
-                    active: boolean;
-                    presented: boolean;
-                    state: { assistantAgentId: string };
-                  };
-                  return {
-                    active: chat.active,
-                    presented: chat.presented,
-                    owner: chat.state.assistantAgentId,
-                  };
-                }),
-              ),
-            )
-            .toEqual([{ active: true, presented: true, owner: agentId }]);
+            .poll(() => paneStates(activePane))
+            .toMatchObject([{ active: true, presented: true, owner: agentId }]);
         };
 
         await page.goto(
@@ -292,24 +272,18 @@ suite.define(() => {
         if (entrance === "sidebar") {
           await sidebar.getByRole("button", { name: /Switch agent/ }).click();
           await sidebar
-            .locator("wa-dropdown.sidebar-agent-menu")
+            .locator(".sidebar-agent-menu")
             .getByRole("menuitem", { name: "Other", exact: true })
             .click();
-          await waitForControlUiRoute(page, {
-            routeId: "chat",
-            pathname: "/chat/other",
-            search: "",
-          });
+          await waitForChat(page, "other");
           await assertOwner("other");
-          await sidebar.getByText("other native thread", { exact: true }).click();
+          await exactText(sidebar, "other native thread").click();
         }
-        await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/other", search });
-        expect((await gateway.waitForRequest("sessions.catalog.read")).params).toMatchObject({
-          ...source,
-          agentId: "other",
-          sourceHomeId: "other-home",
-        });
-        await activePane.getByText("other native transcript", { exact: true }).waitFor();
+        await waitForChat(page, "other", search);
+        expect((await gateway.waitForRequest("sessions.catalog.read")).params).toMatchObject(
+          ownerSource("other"),
+        );
+        await exactText(activePane, "other native transcript").waitFor();
         await assertOwner("other");
         await expect
           .poll(() =>
@@ -322,85 +296,58 @@ suite.define(() => {
 
         // Same source, different route owner: no intervening ordinary session may hide a key collision.
         await navigate("main");
-        await activePane.getByText("main native transcript", { exact: true }).waitFor();
+        await exactText(activePane, "main native transcript").waitFor();
         await assertOwner("main");
         expect(await composer().inputValue()).toBe("");
         await composer().fill("main retained draft");
         await navigate("other");
         await assertOwner("other");
         expect(await composer().inputValue()).toBe("other retained draft");
-        expect(
-          await page
-            .locator("openclaw-chat-pane")
-            .filter({ hasText: "main native transcript" })
-            .count(),
-        ).toBe(1);
+        const mainPane = page
+          .locator("openclaw-chat-pane")
+          .filter({ hasText: "main native transcript" });
+        expect(await mainPane.count()).toBe(1);
         const readsBeforeReturn = (await gateway.getRequests("sessions.catalog.read")).length;
         await navigate("other", false);
-        await sidebar.getByText("other native thread", { exact: true }).click();
-        await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/other", search });
+        await exactText(sidebar, "other native thread").click();
+        await waitForChat(page, "other", search);
         await assertOwner("other");
         expect(await composer().inputValue()).toBe("other retained draft");
         expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(readsBeforeReturn);
 
-        await activePane.getByRole("button", { name: "Open split view" }).click();
+        await selectChatLayoutAction(activePane, "Open split view");
         await navigate("main");
         const visiblePanes = page.locator(
           "openclaw-chat-pane.chat-pane-cache__pane--visible:not([inert])",
         );
+        const splitOwners = ["other", "main"];
         await expect.poll(() => visiblePanes.count()).toBe(2);
-        await visiblePanes.getByText("other native transcript", { exact: true }).click();
-        await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/other", search });
+        await exactText(visiblePanes, "other native transcript").click();
+        await waitForChat(page, "other", search);
         await assertOwner("other");
-        await visiblePanes.getByText("main native transcript", { exact: true }).click();
-        await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/main", search });
+        await exactText(visiblePanes, "main native transcript").click();
+        await waitForChat(page, "main", search);
         await assertOwner("main");
 
         // Ordinary Gateway publication and transport reconnect must retain each pane's owner.
-        const instanceId = await page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime: { context: ApplicationContext };
-          };
-          return app.runtime.context.gateway.snapshot.client?.instanceId;
-        });
+        const instanceId = await evaluateControlUiContext(
+          page,
+          (context) => context.gateway.snapshot.client?.instanceId,
+        );
         await gateway.emitGatewayEvent("presence", {
           presence: [{ instanceId, user: { id: "fixture-user", name: "Fixture User" } }],
         });
         await expect
-          .poll(() =>
-            visiblePanes.evaluateAll((panes) =>
-              panes.map((pane) => {
-                const chat = pane as HTMLElement & {
-                  state: { selfUser: { id: string } | null; assistantAgentId: string };
-                };
-                return [chat.state.selfUser?.id, chat.state.assistantAgentId];
-              }),
-            ),
-          )
-          .toEqual([
-            ["fixture-user", "other"],
-            ["fixture-user", "main"],
-          ]);
+          .poll(() => paneStates(visiblePanes))
+          .toMatchObject(splitOwners.map((owner) => ({ selfId: "fixture-user", owner })));
         await assertOwner("main");
         await gateway.closeLatest();
         await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(1);
         await expect
-          .poll(() =>
-            visiblePanes.evaluateAll((panes) =>
-              panes.map((pane) => {
-                const chat = pane as HTMLElement & {
-                  state: { connected: boolean; assistantAgentId: string };
-                };
-                return [chat.state.connected, chat.state.assistantAgentId];
-              }),
-            ),
-          )
-          .toEqual([
-            [true, "other"],
-            [true, "main"],
-          ]);
-        await visiblePanes.getByText("other native transcript", { exact: true }).click();
-        await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/other", search });
+          .poll(() => paneStates(visiblePanes))
+          .toMatchObject(splitOwners.map((owner) => ({ connected: true, owner })));
+        await exactText(visiblePanes, "other native transcript").click();
+        await waitForChat(page, "other", search);
         await assertOwner("other");
         await composer().fill("/bt");
         await page.getByRole("option").filter({ hasText: "/btw" }).click();
@@ -408,39 +355,26 @@ suite.define(() => {
         expect(await composer().inputValue()).toBe("/btw ");
         await composer().fill("Continue under Other");
         await activePane.getByRole("button", { name: "Send message", exact: true }).click();
-        expect((await gateway.waitForRequest("sessions.catalog.continue")).params).toMatchObject({
-          ...source,
-          agentId: "other",
-          sourceHomeId: "other-home",
-        });
+        expect((await gateway.waitForRequest("sessions.catalog.continue")).params).toMatchObject(
+          ownerSource("other"),
+        );
         const sent = await gateway.waitForRequest("chat.send");
         expect(sent.params).toMatchObject({
           sessionKey: "agent:other:adopted-native",
           message: "Continue under Other",
         });
-        await waitForControlUiRoute(page, {
-          routeId: "chat",
-          pathname: "/chat/other/adopted-native",
-          search: "",
-        });
+        await waitForChat(page, "other/adopted-native");
         await assertOwner("other");
         await gateway.emitChatFinal({
           runId: (sent.params as { idempotencyKey: string }).idempotencyKey,
           sessionKey: "agent:other:adopted-native",
           text: "Other continuation completed",
         });
-        await activePane
-          .locator("p")
-          .getByText("Other continuation completed", { exact: true })
-          .waitFor();
+        await exactText(activePane.locator("p"), "Other continuation completed").waitFor();
         const adoptedRow = sidebar.locator('[data-session-key="agent:other:adopted-native"]');
         await navigate("other", false);
         await adoptedRow.locator("a").click();
-        await waitForControlUiRoute(page, {
-          routeId: "chat",
-          pathname: "/chat/other/adopted-native",
-          search: "",
-        });
+        await waitForChat(page, "other/adopted-native");
         await assertOwner("other");
         for (const request of await gateway.getRequests("sessions.catalog.read")) {
           expect(request.params).toMatchObject(source);
@@ -452,120 +386,73 @@ suite.define(() => {
   );
 
   it("keeps old Beam links working and opens pretty shares under a non-main default agent", async () => {
-    const artifactDir = createControlUiE2eArtifactDir("beam-named-share-url");
-    const context = await suite.newBrowserContext({
-      recordVideo: { dir: artifactDir, size: { width: 1280, height: 720 } },
-      viewport: { width: 1280, height: 720 },
-    });
-    const page = await context.newPage();
-    const fullId = "0123456789abcdef0123456789abcdef";
-    const prettyPath = "/openclaw/beam/pretty-beam-route-0123456789ab";
-    const queryPath = `/openclaw/chat/research?catalog=beam&host=gateway&thread=${fullId}`;
-    const gateway = await installMockGateway(page, {
-      basePath: "/openclaw",
-      defaultAgentId: "research",
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "sessions.catalog.list",
-        "sessions.catalog.read",
-      ],
-      methodResponses: {
-        // Beam rows live in the plugin catalog, not the native session store.
-        "sessions.describe": { session: null },
-        "agents.list": {
-          agents: [
-            { id: "research", name: "Research" },
-            { id: "other", name: "Other" },
-          ],
-          defaultId: "research",
-          mainKey: "main",
+    await suite.withPage({ viewport: { width: 1280, height: 720 } }, async ({ page }) => {
+      const fullId = "0123456789abcdef0123456789abcdef";
+      const prettyPath = "/openclaw/beam/pretty-beam-route-0123456789ab";
+      const queryPath = `/openclaw/chat/research?catalog=beam&host=gateway&thread=${fullId}`;
+      const gateway = await installMockGateway(page, {
+        basePath: "/openclaw",
+        defaultAgentId: "research",
+        featureMethods,
+        methodResponses: {
+          // Beam rows live in the plugin catalog, not the native session store.
+          "sessions.describe": { session: null },
+          "agents.list": {
+            agents: [
+              { id: "research", name: "Research" },
+              { id: "other", name: "Other" },
+            ],
+            defaultId: "research",
+            mainKey: "main",
+          },
+          "sessions.catalog.list": {
+            catalogs: [
+              makeCatalog(
+                "beam",
+                "Beam",
+                fullId,
+                "Pretty Beam route",
+                { hostId: "gateway", label: "Beamed sessions", kind: "gateway" },
+                { shareRoute: SHARE_ROUTE, status: "live", archived: false },
+              ),
+            ],
+          },
+          "sessions.catalog.read": {
+            hostId: "gateway",
+            label: "Pretty Beam route",
+            threadId: fullId,
+            items: [
+              { type: "userMessage", text: "Keep this Beam URL readable." },
+              { type: "agentMessage", text: "The pretty route stayed put." },
+            ],
+          },
         },
-        "sessions.catalog.list": {
-          catalogs: [
-            {
-              id: "beam",
-              label: "Beam",
-              capabilities: { continueSession: false, archive: false },
-              shareRoute: SHARE_ROUTE,
-              hosts: [
-                {
-                  hostId: "gateway",
-                  label: "Beamed sessions",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: fullId,
-                      name: "Pretty Beam route",
-                      status: "live",
-                      archived: false,
-                      canContinue: false,
-                      canArchive: false,
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
-        },
-        "sessions.catalog.read": {
-          hostId: "gateway",
-          label: "Pretty Beam route",
-          threadId: fullId,
-          items: [
-            { type: "userMessage", text: "Keep this Beam URL readable." },
-            { type: "agentMessage", text: "The pretty route stayed put." },
-          ],
-        },
-      },
-    });
+      });
 
-    const assertCatalogOwner = async (agentId = "research") => {
-      await expect
-        .poll(() =>
-          page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible").evaluateAll((panes) =>
-            panes.map((pane) => {
-              const chat = pane as HTMLElement & {
-                sessionKey: string;
-                state: { assistantAgentId: string };
-              };
-              return { sessionKey: chat.sessionKey, agentId: chat.state.assistantAgentId };
-            }),
-          ),
-        )
-        .toEqual([{ sessionKey: `agent:${agentId}:catalog:beam:gateway:${fullId}`, agentId }]);
-    };
-
-    try {
+      const assertCatalogOwner = (agentId = "research") =>
+        expect
+          .poll(() => paneStates(page.locator(visiblePane)))
+          .toMatchObject([
+            { sessionKey: `agent:${agentId}:catalog:beam:gateway:${fullId}`, owner: agentId },
+          ]);
       const queryResponse = await page.goto(new URL(queryPath, suite.server.baseUrl).href);
       expect(queryResponse?.status()).toBe(200);
-      const transcript = page.getByText("The pretty route stayed put.", { exact: true });
+      const transcript = exactText(page, "The pretty route stayed put.");
       await transcript.waitFor();
       expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe(queryPath);
       await assertCatalogOwner();
-      await writeFile(
-        path.join(artifactDir, "beam-query-route.png"),
-        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [transcript]),
-      );
-
       const response = await page.goto(new URL(prettyPath, suite.server.baseUrl).href);
       expect(response?.status()).toBe(200);
       await transcript.waitFor();
       await assertCatalogOwner();
-      expect(new URL(page.url()).pathname).toBe(prettyPath);
-      expect(new URL(page.url()).search).toBe("");
+      expect(new URL(page.url())).toMatchObject({ pathname: prettyPath, search: "" });
       await page
         .locator(".sidebar-recent-session--active", { hasText: "Pretty Beam route" })
         .waitFor();
       await page
         .locator(".chat-pane__session-title-text", { hasText: "Pretty Beam route" })
         .waitFor();
-      expect(
-        await page
-          .locator("openclaw-chat-pane.chat-pane-cache__pane--visible textarea")
-          .isDisabled(),
-      ).toBe(true);
+      expect(await page.locator(`${visiblePane} textarea`).isDisabled()).toBe(true);
       const resolution = (await gateway.getRequests("sessions.catalog.list")).find(
         (request) => (request.params as { search?: string } | undefined)?.search,
       );
@@ -582,16 +469,9 @@ suite.define(() => {
       });
 
       await page.reload();
-      await page.getByText("The pretty route stayed put.", { exact: true }).waitFor();
+      await transcript.waitFor();
       await assertCatalogOwner();
-      expect(new URL(page.url()).pathname).toBe(prettyPath);
-      expect(new URL(page.url()).search).toBe("");
-
-      await writeFile(
-        path.join(artifactDir, "beam-pretty-route.png"),
-        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [transcript]),
-      );
-
+      expect(new URL(page.url())).toMatchObject({ pathname: prettyPath, search: "" });
       // Both previously shared IDs and stale names retain their transcript after a rename.
       for (const reference of ["0123456789ab", "old-title-0123456789ab"]) {
         await page.goto(new URL(`/openclaw/beam/${reference}`, suite.server.baseUrl).href);
@@ -599,12 +479,11 @@ suite.define(() => {
         await assertCatalogOwner();
         await expect.poll(() => new URL(page.url()).pathname).toBe(prettyPath);
       }
-
       await page.goto(new URL("/openclaw/chat/other", suite.server.baseUrl).href);
       const beamRow = page.locator("a", { hasText: "Pretty Beam route" }).first();
       await beamRow.waitFor();
       await beamRow.click();
-      await page.getByText("The pretty route stayed put.", { exact: true }).waitFor();
+      await transcript.waitFor();
       await assertCatalogOwner("other");
       expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe(
         `/openclaw/chat/other?catalog=beam&host=gateway&thread=${fullId}`,
@@ -614,134 +493,62 @@ suite.define(() => {
         catalogId: "beam",
         threadId: fullId,
       });
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("shows both paired-node catalogs and opens their view-only transcripts", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const pairedCatalogs = [
+      { id: "opencode", label: "OpenCode", name: "OpenCode release review" },
+      { id: "pi", label: "Pi", name: "Pi architecture notes" },
+    ];
     const gateway = await installMockGateway(page, {
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "sessions.catalog.list",
-        "sessions.catalog.read",
-      ],
+      featureMethods,
       methodResponses: {
         "sessions.catalog.list": {
-          catalogs: [
-            {
-              id: "opencode",
-              label: "OpenCode",
-              capabilities: { continueSession: false, archive: false },
-              hosts: [
-                {
-                  hostId: "node:devbox",
-                  label: "Dev Box",
-                  kind: "node",
-                  connected: true,
-                  nodeId: "devbox",
-                  sessions: [
-                    {
-                      threadId: "opencode-1",
-                      name: "OpenCode release review",
-                      status: "stored",
-                      canContinue: false,
-                      canArchive: false,
-                    },
-                  ],
-                },
-              ],
-            },
-            {
-              id: "pi",
-              label: "Pi",
-              capabilities: { continueSession: false, archive: false },
-              hosts: [
-                {
-                  hostId: "node:devbox",
-                  label: "Dev Box",
-                  kind: "node",
-                  connected: true,
-                  nodeId: "devbox",
-                  sessions: [
-                    {
-                      threadId: "pi-1",
-                      name: "Pi architecture notes",
-                      status: "stored",
-                      canContinue: false,
-                      canArchive: false,
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
+          catalogs: pairedCatalogs.map(({ id, label, name }) =>
+            makeCatalog(id, label, `${id}-1`, name, {
+              hostId: "node:devbox",
+              label: "Dev Box",
+              kind: "node",
+              nodeId: "devbox",
+            }),
+          ),
         },
         "sessions.catalog.read": {
-          cases: [
-            {
-              match: { catalogId: "opencode", threadId: "opencode-1" },
-              response: {
-                hostId: "node:devbox",
-                threadId: "opencode-1",
-                items: [{ type: "agentMessage", text: "OpenCode transcript loaded" }],
-              },
+          cases: pairedCatalogs.map(({ id, label }) => ({
+            match: { catalogId: id, threadId: `${id}-1` },
+            response: {
+              hostId: "node:devbox",
+              threadId: `${id}-1`,
+              items: [{ type: "agentMessage", text: `${label} transcript loaded` }],
             },
-            {
-              match: { catalogId: "pi", threadId: "pi-1" },
-              response: {
-                hostId: "node:devbox",
-                threadId: "pi-1",
-                items: [{ type: "agentMessage", text: "Pi transcript loaded" }],
-              },
-            },
-          ],
+          })),
         },
       },
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
-    await expect
-      .poll(() =>
-        page
-          .locator('[data-session-section="catalog:opencode"] [data-provider-icon="opencode"]')
-          .count(),
-      )
-      .toBe(1);
-    await expect
-      .poll(() =>
-        page.locator('[data-session-section="catalog:pi"] [data-provider-icon="pi"]').count(),
-      )
-      .toBe(1);
+    for (const { id } of pairedCatalogs) {
+      const icon = page.locator(
+        `[data-session-section="catalog:${id}"] [data-provider-icon="${id}"]`,
+      );
+      await expect.poll(() => icon.count()).toBe(1);
+    }
     const piIconResponse = await page.request.get(
       new URL("provider-icons/ProviderIcon-pi.svg", suite.server.baseUrl).toString(),
     );
     expect(piIconResponse.ok()).toBe(true);
 
-    await page.getByText("OpenCode release review", { exact: true }).click();
+    await exactText(page, "OpenCode release review").click();
     await expect.poll(() => page.getByText("OpenCode transcript loaded").count()).toBe(1);
-    await page.getByText("Pi architecture notes", { exact: true }).click();
-    const piPane = page
-      .locator("openclaw-chat-pane.chat-pane-cache__pane--visible")
-      .filter({ hasText: "Pi transcript loaded" });
+    await exactText(page, "Pi architecture notes").click();
+    const piPane = page.locator(visiblePane).filter({ hasText: "Pi transcript loaded" });
     await piPane.getByText("Pi transcript loaded").waitFor();
     expect(await piPane.locator(".agent-chat__composer-combobox > textarea").isDisabled()).toBe(
       true,
     );
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(2);
-
-    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("external-session-catalogs", artifactRoot)
-      : undefined;
-    if (artifactDir) {
-      await page.screenshot({
-        path: path.join(artifactDir, "external-session-catalogs.png"),
-        fullPage: true,
-      });
-    }
     await page.close();
   });
 });

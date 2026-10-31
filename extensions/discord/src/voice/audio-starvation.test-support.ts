@@ -28,8 +28,7 @@ export function startDiscordPacingReceiver(
     const read = next.resource.read.bind(next.resource);
     next.resource.read = () => {
       const packet = read();
-      // Count real encoded source audio, never SDK filler silence. Each consumed
-      // packet grants source credit; host scheduling cannot discard fixture ticks.
+      // Only consumed source packets, not SDK filler silence, grant source credit.
       if (packet && !packet.equals(Buffer.from([0xf8, 0xff, 0xfe]))) {
         onPacket(pacingFact(shared));
         port.postMessage({ type: "consumed" }, []);
@@ -84,10 +83,8 @@ if (!isMainThread && parentPort && workerData?.runtime === "discord-audio-starva
       }
       const audio = Buffer.alloc(960);
       for (let i = 0; i < 480; i += 1) {
-        audio.writeInt16LE(
-          Math.round(Math.sin((sample++ * 2 * Math.PI * 440) / 24_000) * 12_000),
-          i * 2,
-        );
+        const value = Math.round(Math.sin((sample++ * 2 * Math.PI * 440) / 24_000) * 12_000);
+        audio.writeInt16LE(value, i * 2);
       }
       credits -= 1;
       sent += 1;

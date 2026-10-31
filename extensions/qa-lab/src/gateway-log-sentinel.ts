@@ -2,9 +2,10 @@ import {
   isRecord,
   normalizeOptionalString as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseQaJson } from "./json.js";
 import {
   extractQaMessageText,
-  readQaMessageFunctionCalls,
+  readQaMessageToolCalls,
   readQaTranscriptMessages,
 } from "./runtime-transcript.js";
 
@@ -149,43 +150,16 @@ export function extractGatewayMessageText(message: Record<string, unknown>) {
   });
 }
 
-function parseJsonArguments(value: unknown): unknown {
-  if (typeof value !== "string") {
-    return value;
-  }
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return value;
-  }
-}
-
 function hasCurrentChatMessageSend(message: Record<string, unknown>) {
-  const rawContent = message.content;
-  if (Array.isArray(rawContent)) {
-    for (const block of rawContent) {
-      if (!isRecord(block)) {
-        continue;
-      }
-      const type = readNonEmptyString(block.type)?.toLowerCase();
-      if (
-        type !== "tool_use" &&
-        type !== "toolcall" &&
-        type !== "tool_call" &&
-        type !== "function_call"
-      ) {
-        continue;
-      }
-      if (
-        isCurrentChatMessageSend(block.name, block.input ?? block.arguments ?? block.args ?? null)
-      ) {
-        return true;
-      }
-    }
-  }
-
-  for (const call of readQaMessageFunctionCalls(message)) {
-    if (isCurrentChatMessageSend(call.tool, call.args)) {
+  for (const { block, tool, args } of readQaMessageToolCalls(message, {
+    includeFunctionCalls: true,
+  })) {
+    if (
+      isCurrentChatMessageSend(
+        tool,
+        block ? (block.input ?? block.arguments ?? block.args ?? null) : args,
+      )
+    ) {
       return true;
     }
   }
@@ -196,7 +170,7 @@ function isCurrentChatMessageSend(name: unknown, rawArgs: unknown) {
   if (readNonEmptyString(name) !== "message") {
     return false;
   }
-  const args = parseJsonArguments(rawArgs);
+  const args = typeof rawArgs === "string" ? safeParseQaJson(rawArgs) : rawArgs;
   if (!isRecord(args) || readNonEmptyString(args.action)?.toLowerCase() !== "send") {
     return false;
   }

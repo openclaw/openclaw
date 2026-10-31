@@ -1,5 +1,4 @@
 /**
- * Interactive onboarding command entrypoint.
  *
  * It wires the Clack prompter to the setup wizard and restores terminal state
  * on every exit path so canceled setup cannot leave stdin paused.
@@ -42,6 +41,8 @@ export async function runConversationalOnboarding(
     runtime.exit(1);
     return;
   }
+  const { captureRuntimeConfigAsyncReader } = await import("../config/io.js");
+  await captureRuntimeConfigAsyncReader()();
   const { verifySetupInference } = await import("../system-agent/setup-inference.js");
   const inference = await verifySetupInference({ runtime, bindSession: true });
   if (!inference.ok) {

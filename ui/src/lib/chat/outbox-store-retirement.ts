@@ -1,4 +1,5 @@
 import { getSafeSessionStorage } from "../../local-storage.ts";
+import type { SessionState } from "../sessions/session-capability.ts";
 import {
   nextDraftRevision,
   readDraftRevisionState,
@@ -14,17 +15,7 @@ import {
   notifyStoredChatOutboxChanges,
   type ChatComposerScope,
 } from "./outbox-store.ts";
-type StoredComposerRetirementTarget = {
-  key: string;
-  agentId?: string;
-  retireBeforeRevision: number;
-};
-
-type StoredComposerRetirement = {
-  scope: StoredChatOutboxScope;
-  minimumRevision: number;
-  retireBeforeRevision: number;
-};
+type StoredComposerRetirementTarget = SessionState["deletedSessions"][number];
 
 export function retireStoredComposerDrafts(
   state: ChatComposerScope,
@@ -54,7 +45,11 @@ export function retireStoredComposerDrafts(
     };
   }
 
-  const retirements: StoredComposerRetirement[] = [];
+  const retirements: {
+    scope: StoredChatOutboxScope;
+    minimumRevision: number;
+    retireBeforeRevision: number;
+  }[] = [];
   const written: Array<{ storeSessionKey: string; revision: number }> = [];
   let visibleChanged = false;
   try {

@@ -29,6 +29,11 @@ export interface DescribeStickerParams {
  */
 export async function describeStickerImage(params: DescribeStickerParams): Promise<string | null> {
   const { imagePath, cfg, agentDir, agentId } = params;
+  // Sticker descriptions are image understanding; the operator's off switch covers them too.
+  if (cfg.tools?.media?.image?.enabled === false) {
+    logVerbose("telegram: image understanding disabled; skipping sticker description");
+    return null;
+  }
 
   const scopedAgentDir = agentDir ?? (agentId ? resolveAgentDir(cfg, agentId) : undefined);
   const activeModel = resolveDefaultModelForAgent({ cfg, agentId });
@@ -45,7 +50,6 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   }
 
   const { provider, model } = resolved;
-  logVerbose(`telegram: describing sticker with ${provider}/${model}`);
 
   try {
     const result = await getTelegramRuntime().mediaUnderstanding.describeImageFileWithModel({

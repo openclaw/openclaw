@@ -7,9 +7,10 @@ import {
   addCommandDescriptorsToProgram,
   collectUniqueCommandDescriptors,
 } from "./command-descriptor-utils.js";
+import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
 import { configureProgramHelp, formatProgramHelpOutput } from "./help.js";
-import { getSubCliEntriesCore } from "./subcli-descriptors.js";
+import { getSubCliCommandMetadata } from "./subcli-command-metadata.js";
 
 /** Options for rendering root help without fully registering the live CLI. */
 export type RootHelpRenderOptions = Pick<PluginLoadOptions, "pluginSdkResolution"> & {
@@ -39,9 +40,9 @@ export async function outputRootHelp(renderOptions?: RootHelpRenderOptions): Pro
 
   addCommandDescriptorsToProgram(
     program,
-    collectUniqueCommandDescriptors([
+    collectUniqueCommandDescriptors<NamedCommandDescriptor>([
       getCoreCliCommandDescriptors(),
-      getSubCliEntriesCore(),
+      getSubCliCommandMetadata(),
       pluginDescriptors,
     ]),
   );

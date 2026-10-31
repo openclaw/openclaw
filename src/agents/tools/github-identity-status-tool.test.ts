@@ -1,11 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createGitHubIdentityStatusTool } from "./github-identity-status-tool.js";
-import type { InProcessGatewayCaller } from "./in-process-gateway.js";
+import * as gateway from "./in-process-gateway.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("github_identity_status tool", () => {
   it("returns status and an operator next action", async () => {
-    const callGatewayMock = vi.fn(async () => ({
+    const callGatewayMock = vi.spyOn(gateway, "callInProcessGatewayTool").mockResolvedValue({
       agentId: "main",
       selectedScope: "agent" as const,
       selected: { scope: "agent" as const, configured: false, identity: null },
@@ -21,10 +23,8 @@ describe("github_identity_status tool", () => {
         oauthScopes: ["repo", "workflow"],
         repositoryGrants: "unknown" as const,
       },
-    }));
-    const tool = createGitHubIdentityStatusTool({
-      callGateway: callGatewayMock as InProcessGatewayCaller,
     });
+    const tool = createGitHubIdentityStatusTool({ clientCaps: ["ui-agent-github-settings"] });
 
     const result = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: "agent:main:status" },
@@ -35,6 +35,35 @@ describe("github_identity_status tool", () => {
       agentId: "main",
       selectedScope: "agent",
     });
-    expect(JSON.stringify(result)).toContain("Ask the operator");
+    expect(JSON.stringify(result)).toContain("github_identity_settings");
+  });
+
+  it("gives manual guidance for an older Control UI", async () => {
+    vi.spyOn(gateway, "callInProcessGatewayTool").mockResolvedValue({
+      agentId: "main",
+      selectedScope: "agent" as const,
+      selected: { scope: "agent" as const, configured: false, identity: null },
+      effective: {
+        source: "system-configured" as const,
+        credentialKind: "managed-oauth" as const,
+        credentialState: "configured_unavailable" as const,
+        account: null,
+        gitAuthor: null,
+        evidence: "none" as const,
+        accessExpiresAtMs: null,
+        refreshState: "unavailable" as const,
+        oauthScopes: [],
+        repositoryGrants: "unknown" as const,
+      },
+    });
+    const tool = createGitHubIdentityStatusTool();
+
+    const result = await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:status" },
+      async () => await tool.execute("status-2", {}),
+    );
+
+    expect(JSON.stringify(result)).toContain("Settings → Agents → Tools");
+    expect(JSON.stringify(result)).not.toContain("github_identity_settings");
   });
 });

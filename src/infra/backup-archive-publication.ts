@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { BigIntStats, Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { isPathInside } from "@openclaw/fs-safe/path";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import {
   removePreparedBackupArchive,
   type BackupArchiveCleanupReceipt,
@@ -15,6 +17,79 @@ import {
   requireDirectorySync,
   syncDirectoryIfSupported,
 } from "./directory-durability.js";
+import { hasErrnoCode, isErrno } from "./errors.js";
+import { pathEntryExists } from "./path-existence.js";
+
+type BackupOutputFailurePhase = "parent" | "publication" | "write";
+
+export function formatBackupOutputFailure(
+  error: unknown,
+  outputPath: string,
+  phase: BackupOutputFailurePhase,
+  ownedRoot?: string,
+): unknown {
+  const cause = phase === "write" && error instanceof Error ? error.cause : undefined;
+  const filesystemError = isErrno(error) ? error : isErrno(cause) ? cause : null;
+  if (!filesystemError) {
+    return error;
+  }
+  if (ownedRoot) {
+    const failedPath = filesystemError.path;
+    if (typeof failedPath !== "string" || !isPathInside(ownedRoot, path.resolve(failedPath))) {
+      return error;
+    }
+  }
+
+  const outputParent = path.dirname(outputPath);
+  const retry = "run `openclaw backup create --output <archive>` again.";
+  let detail: string;
+  switch (filesystemError.code) {
+    case "ENOENT":
+      detail = `Backup output directory could not be created: ${outputParent}. Check the path and ${retry}`;
+      break;
+    case "EACCES":
+    case "EPERM":
+    case "EROFS":
+      detail = `Backup output directory is not writable: ${outputParent}. Check the path and directory permissions, then ${retry}`;
+      break;
+    case "EEXIST":
+    case "ENOTDIR":
+      if (phase !== "parent") {
+        return error;
+      }
+      detail = `Backup output parent is not a directory: ${outputParent}. Choose a directory path and ${retry}`;
+      break;
+    case "ENOSPC":
+      detail = `The destination does not have enough free space: ${outputParent}. Free up disk space and ${retry}`;
+      break;
+    case "EDQUOT":
+      detail = `The destination storage quota is exhausted: ${outputParent}. Free up space or choose another path, then ${retry}`;
+      break;
+    default:
+      detail = `The output path could not be prepared: ${outputParent}. Check the path and filesystem, then ${retry}`;
+  }
+  return new Error(`Backup archive creation failed: ${outputPath}. ${detail}`, { cause: error });
+}
+
+export async function assertOutputPathReady(outputPath: string): Promise<void> {
+  try {
+    await fs.access(outputPath);
+    throw new Error(`Refusing to overwrite existing backup archive: ${outputPath}`);
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
+      return;
+    }
+    throw formatBackupOutputFailure(error, outputPath, "parent");
+  }
+}
+
+export async function prepareBackupOutputParent(outputPath: string): Promise<void> {
+  try {
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  } catch (error) {
+    throw formatBackupOutputFailure(error, outputPath, "parent");
+  }
+}
 
 type BackupArchiveLogger = (message: string) => void;
 
@@ -26,7 +101,7 @@ export type BackupArchivePublication = {
   requestedOutputPath: string;
   requestedParentPath: string;
   stagingDir: string;
-  stagingIdentity: Stats;
+  stagingIdentity: BigIntStats;
   tempArchivePath: string;
 };
 
@@ -38,25 +113,13 @@ function pathsEqual(left: string, right: string): boolean {
     : resolvedLeft === resolvedRight;
 }
 
-async function assertTargetAbsent(targetPath: string): Promise<void> {
-  try {
-    await fs.lstat(targetPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return;
-    }
-    throw error;
-  }
-  throw new Error(`Refusing to overwrite existing backup archive: ${targetPath}`);
-}
-
 async function removeDirectoryIfOwned(
   directoryPath: string,
-  expectedIdentity: Stats,
+  expectedIdentity: BigIntStats,
 ): Promise<boolean> {
   // This is a cooperative same-user fence, not hostile local-user isolation;
   // SECURITY.md treats co-equal host mutation as inside the operator boundary.
-  const currentIdentity = await fs.lstat(directoryPath).catch(() => undefined);
+  const currentIdentity = await fs.lstat(directoryPath, { bigint: true }).catch(() => undefined);
   if (
     !currentIdentity ||
     !currentIdentity.isDirectory() ||
@@ -83,13 +146,15 @@ export async function createBackupArchivePublication(
     throw new Error(`Backup output parent is not a directory: ${requestedParentPath}`);
   }
   const canonicalOutputPath = path.join(canonicalParentPath, path.basename(requestedOutputPath));
-  await assertTargetAbsent(canonicalOutputPath);
+  if (await pathEntryExists(canonicalOutputPath)) {
+    throw new Error(`Refusing to overwrite existing backup archive: ${canonicalOutputPath}`);
+  }
   const stagingDir = await fs.mkdtemp(
     path.join(canonicalParentPath, `.openclaw-backup-publish-${randomUUID()}-`),
   );
-  let stagingIdentity: Stats | undefined;
+  let stagingIdentity: BigIntStats | undefined;
   try {
-    stagingIdentity = await fs.lstat(stagingDir);
+    stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
     await fs.chmod(stagingDir, 0o700);
     return {
       canonicalOutputPath,
@@ -144,7 +209,7 @@ async function removePendingBackupArchive(
   let identity = receipt.identity;
   if (!identity) {
     try {
-      identity = await fs.lstat(receipt.archivePath);
+      identity = await fs.lstat(receipt.archivePath, { bigint: true });
     } catch (error) {
       return (error as NodeJS.ErrnoException).code === "ENOENT";
     }
@@ -185,6 +250,8 @@ export async function publishPreparedBackupArchive(params: {
   let publicationFailure: { error: unknown } | undefined;
   try {
     try {
+      // A cancelled operation retires prepared bytes through this same owner.
+      resolveCommandProcessSignal()?.throwIfAborted();
       const publication = await publishFileExclusive({
         sourcePath: prepared.archivePath,
         targetPath: plan.canonicalOutputPath,

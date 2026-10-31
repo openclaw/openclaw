@@ -1,0 +1,14 @@
+.native-link-menu__panel {
+  --oc-overlay-max-width: 264px;
+
+  min-width: 220px;
+}
+
+.native-link-menu .session-menu__item {
+  min-height: var(--menu-item-height);
+  gap: 0;
+}
+
+.native-link-menu .session-menu__item[data-new-tab-action] {
+  cursor: pointer;
+}

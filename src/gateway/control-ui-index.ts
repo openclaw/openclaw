@@ -14,9 +14,16 @@ import {
   type ControlUiBootstrapConfig,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
-import { selectControlUiRoutePreloads } from "./control-ui-route-preloads.js";
+import {
+  controlUiPreloadLinks,
+  selectControlUiRoutePreloads,
+} from "./control-ui-route-preloads.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sendControlUiHtmlBody } from "./control-ui-static.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
 
 /** Anchors bundled assets before deep-linked documents begin preloading. */
 function rewriteControlUiIndexHtmlAssetHrefs(
@@ -40,7 +47,7 @@ function rewriteControlUiIndexHtmlAssetHrefs(
     replacements.set(`href="${buildControlUiRootAssetPath(normalized, asset)}"`, assetHref);
   }
   // Copy the document once instead of once per matching asset.
-  const pattern = new RegExp([...replacements.keys()].map(escapeRegExp).join("|"), "g");
+  const pattern = new RegExp(Array.from(replacements.keys(), escapeRegExp).join("|"), "g");
   return html.replace(pattern, (match) => replacements.get(match) ?? match);
 }
 
@@ -58,6 +65,7 @@ export async function serveControlUiIndexHtml(
   proxySessionEntry = false,
   bootstrapConfig?: ControlUiBootstrapConfig,
 ) {
+  const ingress = getRemoteControlUiIngressContext(req);
   const normalizedBasePath = normalizeControlUiBasePath(basePath);
   const preloadRoute =
     uiPath === "/chat" || uiPath.startsWith("/chat/")
@@ -92,7 +100,7 @@ export async function serveControlUiIndexHtml(
       .replace(
         /<html\b/i,
         () =>
-          `<html${basePathAttribute}${proxySessionEntry ? ' data-openclaw-proxy-session-entry="true"' : ""} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}${bootstrapAttribute}`,
+          `<html${basePathAttribute}${ingress ? ' data-openclaw-remote-ingress="true"' : ""}${proxySessionEntry ? ' data-openclaw-proxy-session-entry="true"' : ""} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}${bootstrapAttribute}`,
       ),
   );
   const document = sessionEntryPath
@@ -103,6 +111,9 @@ export async function serveControlUiIndexHtml(
       )
     : prepared;
   const hashes = computeInlineScriptHashes(document);
+  if (ingress) {
+    assertRemoteControlUiIngressCurrent(ingress);
+  }
   // Always set the document CSP here (the index carries inline scripts) so the
   // terminal's WASM relaxation is applied to the page that loads ghostty-web.
   res.setHeader(
@@ -111,6 +122,7 @@ export async function serveControlUiIndexHtml(
       inlineScriptHashes: hashes,
       allowWasm,
       portalHost: req.headers.host,
+      frameAncestors: ingress?.frameAncestors,
     }),
   );
   res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -118,5 +130,11 @@ export async function serveControlUiIndexHtml(
     "Cache-Control",
     bootstrapConfig ? "private, no-store" : sessionEntryPath ? "no-store" : "no-cache",
   );
+  const links = controlUiPreloadLinks(withBasePath);
+  if (links.length && (!isSessionEntryCurrent || isSessionEntryCurrent())) {
+    // Final-response preloads avoid the duplicate fetches observed with 103.
+    // The document still rechecks authority after asynchronous compression.
+    res.setHeader("Link", links);
+  }
   await sendControlUiHtmlBody(req, res, document, isSessionEntryCurrent);
 }

@@ -1,7 +1,6 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   dispatchChannelInboundTurn,
-  resolveInboundReplyDispatchCounts,
   readAgentRunTerminalOutcome,
   hasVisibleInboundReplyDispatch,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -10,33 +9,31 @@ import {
   type LivePreviewDeliveryResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
-  isReplyPayloadNonTerminalToolErrorWarning,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload, ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveSlackMarkdownOptions } from "../../accounts.js";
 import { formatSlackError } from "../../errors.js";
 import { normalizeSlackOutboundText } from "../../format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "../../limits.js";
 import { emitSlackMessageSentHooks } from "../../message-sent-hook.js";
 import { resolveSlackReplyRenderPlan } from "../../reply-blocks.js";
-import {
-  clearSlackThreadFailureNotice,
-  hasSlackThreadFailureNotice,
-  hasSlackThreadParticipation,
-  recordSlackThreadFailureNotice,
-  recordSlackThreadParticipation,
-} from "../../sent-thread-cache.js";
+import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
+import { resolveSlackReplyThreadTs } from "../../thread-ts.js";
 import { countSlackTextUtf8Bytes } from "../../truncate.js";
 import { registerSlackSessionRun } from "../session-run-targets.js";
 import { resolveSlackBotLoopProtection } from "./dispatch-helpers.js";
 import { createSlackProgressRuntime } from "./dispatch-progress.js";
 import { createSlackDispatchSetup, type SlackDispatchSetup } from "./dispatch-setup.js";
 import { createSlackStreamingDeliveryRuntime } from "./dispatch-streaming.js";
+import {
+  createSlackFailureNoticePolicy,
+  createSlackQueuedFailureNoticePolicy,
+} from "./failure-notice.js";
 import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 import type { PreparedSlackMessage } from "./types.js";
 
@@ -74,7 +71,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
     onSettled: () => {
       releaseDeferred?.();
-      upstreamLifecycle.onSettled?.();
+      return upstreamLifecycle.onSettled?.();
     },
   };
   const release = beginSessionRun();
@@ -90,6 +87,10 @@ async function dispatchSlackMessageWithSetup(
 ) {
   const { prepared } = setup;
   const { account, ctx, message, route } = prepared;
+  const markdownOptions = resolveSlackMarkdownOptions({
+    cfg: ctx.cfg,
+    accountId: account.accountId,
+  });
   const {
     cfg,
     disableBlockStreaming,
@@ -124,73 +125,18 @@ async function dispatchSlackMessageWithSetup(
     delivery.observedReplyDelivery ||
     previewLifecycle.previewFinalized ||
     Boolean(draftStream?.messageId());
-  const failureNoticeThreadTs = message.thread_ts;
-  const failureNoticeTeamId = prepared.eventScope?.teamId;
-  let sawTerminalFailurePayload = false;
-  let pendingFailureNotice:
-    | {
-        accountId: string;
-        channelId: string;
-        threadTs?: string;
-        failureText: string;
-        teamId?: string;
-      }
-    | undefined;
-
-  const filterPassiveThreadFailure = (payload: ReplyPayload): ReplyPayload | null => {
-    if (
-      payload.isError !== true ||
-      prepared.ctxPayload.ChatType !== "channel" ||
-      isReplyPayloadNonTerminalToolErrorWarning(payload)
-    ) {
-      return payload;
-    }
-    sawTerminalFailurePayload = true;
-    if (delivery.observedReplyDelivery || previewLifecycle.previewFinalized) {
-      return payload;
-    }
-
-    const explicitlyAddressed =
-      prepared.ctxPayload.ExplicitlyMentionedBot === true ||
-      prepared.ctxPayload.MentionSource === "explicit_bot" ||
-      prepared.ctxPayload.MentionSource === "subteam" ||
-      prepared.ctxPayload.MentionSource === "mention_pattern" ||
-      prepared.ctxPayload.MentionSource === "command_bypass" ||
-      (prepared.ctxPayload.CommandTurn?.kind !== undefined &&
-        prepared.ctxPayload.CommandTurn.kind !== "normal" &&
-        prepared.ctxPayload.CommandTurn.authorized);
-    const noticeThreadTs =
-      failureNoticeThreadTs ?? (explicitlyAddressed ? statusThreadTs : undefined);
-
-    const notice = {
-      accountId: account.accountId,
-      channelId: message.channel,
-      ...(noticeThreadTs ? { threadTs: noticeThreadTs } : {}),
-      failureText: payload.text ?? "",
-      ...(failureNoticeTeamId ? { teamId: failureNoticeTeamId } : {}),
-    };
-    if (
-      failureNoticeThreadTs &&
-      !explicitlyAddressed &&
-      prepared.ctxPayload.MentionSource !== "implicit_thread" &&
-      !hasSlackThreadParticipation(
-        notice.accountId,
-        notice.channelId,
-        failureNoticeThreadTs,
-        failureNoticeTeamId,
-      )
-    ) {
-      logVerbose("slack: suppressed passive failure before thread participation");
-      return null;
-    }
-
-    if (!explicitlyAddressed && hasSlackThreadFailureNotice(notice)) {
-      logVerbose("slack: suppressed repeated passive channel or thread failure");
-      return null;
-    }
-    pendingFailureNotice = notice;
-    return payload;
+  const failurePolicyParams = {
+    context: prepared.ctxPayload,
+    accountId: account.accountId,
+    channelId: message.channel,
+    failureNoticeThreadTs: message.thread_ts,
+    failureNoticeTeamId: prepared.eventScope?.teamId,
+    statusThreadTs,
   };
+  const failurePolicy = createSlackFailureNoticePolicy(
+    failurePolicyParams,
+    () => delivery.observedReplyDelivery || previewLifecycle.previewFinalized,
+  );
 
   const deliverSlackPayload = async (
     incomingPayload: ReplyPayload,
@@ -203,7 +149,7 @@ async function dispatchSlackMessageWithSetup(
         text: formatSlackGroupThreadReply(payload.text ?? "", info.participant),
       };
     }
-    if (info.kind === "final" && slackStreaming.mode === "progress" && progress.isProgressMode) {
+    if (info.kind === "final" && slackStreaming.mode === "progress") {
       const supplement = getReplyPayloadTtsSupplement(payload);
       const finalPayload =
         !progress.useDraftProgressCard &&
@@ -266,7 +212,7 @@ async function dispatchSlackMessageWithSetup(
     const reply = resolveSendableOutboundReplyParts(payload);
     const ttsSupplement = getReplyPayloadTtsSupplement(payload);
     const replySourceText = payload.text ?? ttsSupplement?.spokenText;
-    const replyRenderPlan = resolveSlackReplyRenderPlan(payload, replySourceText);
+    const replyRenderPlan = resolveSlackReplyRenderPlan(payload, replySourceText, markdownOptions);
     const slackBlocks =
       replyRenderPlan.mode === "single"
         ? replyRenderPlan.blocks
@@ -280,13 +226,7 @@ async function dispatchSlackMessageWithSetup(
     const previewFinalText =
       replyRenderPlan.mode === "single" && replyRenderPlan.textIsSlackMrkdwn
         ? trimmedFinalText
-        : normalizeSlackOutboundText((replySourceText ?? "").trim(), {
-            tableMode: resolveMarkdownTableMode({
-              cfg,
-              channel: "slack",
-              accountId: account.accountId,
-            }),
-          });
+        : normalizeSlackOutboundText((replySourceText ?? "").trim(), markdownOptions);
     const previewFinalTextFitsEdit =
       countSlackTextUtf8Bytes(previewFinalText) <= SLACK_EDIT_TEXT_MAX_BYTES;
     const shouldRestoreTtsSupplementTextForPreviewFallback =
@@ -305,8 +245,16 @@ async function dispatchSlackMessageWithSetup(
       isError: payload.isError === true,
       adapter: {
         buildFinalEdit: () => {
+          const threadTs = delivery.usedReplyThreadTs ?? statusThreadTs;
+          const finalThreadTs = resolveSlackReplyThreadTs({
+            replyToMode: setup.replyDeliveryMode,
+            replyToId: payload.replyToId,
+            threadId: threadTs,
+            replyToCurrent: payload.replyToCurrent,
+          });
           if (
             hasSlackCustomIdentity ||
+            finalThreadTs !== threadTs ||
             !previewStreamingEnabled ||
             (reply.hasMedia && !ttsSupplement) ||
             payload.isError ||
@@ -319,7 +267,7 @@ async function dispatchSlackMessageWithSetup(
           return {
             text: previewFinalText,
             blocks: slackBlocks,
-            threadTs: delivery.usedReplyThreadTs ?? statusThreadTs,
+            threadTs,
           };
         },
         editFinal: async (preview, edit) => {
@@ -430,7 +378,7 @@ async function dispatchSlackMessageWithSetup(
           const transformed = replyPipeline.transformReplyPayload
             ? replyPipeline.transformReplyPayload(payload)
             : payload;
-          return transformed ? filterPassiveThreadFailure(transformed) : null;
+          return transformed ? failurePolicy.filter(transformed) : null;
         },
         humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       },
@@ -449,7 +397,9 @@ async function dispatchSlackMessageWithSetup(
         onVisibleWorkSessions: progress.onVisibleWorkSessions,
         groupThreadReplyFormatter: formatSlackGroupThreadReply,
         // Followups can outlive this dispatch and retain their own source address.
-        queuedDeliveryCorrelations: [{ begin: beginSessionRun }],
+        queuedDeliveryCorrelations: [
+          createSlackQueuedFailureNoticePolicy(failurePolicyParams, beginSessionRun),
+        ],
         ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
         skillFilter: prepared.channelConfig?.skills,
         sourceReplyDeliveryMode,
@@ -522,7 +472,9 @@ async function dispatchSlackMessageWithSetup(
             return false;
           }
           progress.progressWorkCounter.noteItem(payload);
-          return progress.preambleOnlyProgress && payload.kind !== "preamble"
+          return progress.preambleOnlyProgress &&
+            payload.kind !== "preamble" &&
+            payload.kind !== "model-wait"
             ? await progress.progressDraft.noteActivity()
             : await progress.progressDraft.pushItemEvent(payload);
         },
@@ -544,17 +496,8 @@ async function dispatchSlackMessageWithSetup(
       settledDispatchResult = result;
       const agentRunOutcome = readAgentRunTerminalOutcome(result);
       agentRunFailed = agentRunOutcome === "failed";
-      if (
-        agentRunOutcome === "completed" &&
-        !sawTerminalFailurePayload &&
-        prepared.ctxPayload.ChatType === "channel"
-      ) {
-        clearSlackThreadFailureNotice({
-          accountId: account.accountId,
-          channelId: message.channel,
-          ...(failureNoticeThreadTs ? { threadTs: failureNoticeThreadTs } : {}),
-          ...(failureNoticeTeamId ? { teamId: failureNoticeTeamId } : {}),
-        });
+      if (agentRunOutcome === "completed") {
+        failurePolicy.complete();
       }
     }
   } catch (err) {
@@ -590,8 +533,8 @@ async function dispatchSlackMessageWithSetup(
   }
   await previewLifecycle.cleanup({ failed: Boolean(dispatchError || agentRunFailed) });
 
-  if (pendingFailureNotice && anyReplyDelivered) {
-    recordSlackThreadFailureNotice(pendingFailureNotice);
+  if (anyReplyDelivered) {
+    failurePolicy.recordDelivered();
   }
 
   if (dispatchError || agentRunFailed) {
@@ -635,13 +578,5 @@ async function dispatchSlackMessageWithSetup(
     if (progress.useDraftProgressCard) {
       await draftStream?.clear();
     }
-    return;
-  }
-
-  if (shouldLogVerbose()) {
-    const finalCount = resolveInboundReplyDispatchCounts(settledDispatchResult).final;
-    logVerbose(
-      `slack: delivered ${finalCount} repl${finalCount === 1 ? "y" : "ies"} to ${prepared.replyTarget}`,
-    );
   }
 }

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { buildGatewayInstallEntrypointCandidates } from "../../daemon/gateway-entrypoint.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../../daemon/program-args.js";
 import { resolvePinnedDaemonRuntimePath } from "../../daemon/runtime-paths.js";
+import type { DaemonRuntimePinSnapshot } from "../../daemon/runtime-pin-types.js";
 import { isUpdateOwnedGatewayServiceCommand } from "../../daemon/service-update-authority.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { isRegularFile } from "../../infra/executable-path.js";
@@ -10,18 +11,44 @@ import { resolveStableNodePath } from "../../infra/stable-node-path.js";
 import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
 import type { DaemonInstallOptions } from "./types.js";
 
+const expectedRuntimePinSchema = z.strictObject({
+  revision: z.string(),
+  definition: z.string().nullable(),
+});
+
+export function assertExpectedRuntimePin(
+  raw: string,
+  current: DaemonRuntimePinSnapshot,
+  service: "Gateway" | "Node",
+): void {
+  const expected = safeParseJsonWithSchema(expectedRuntimePinSchema, raw);
+  if (!expected) {
+    throw new Error("Invalid expected runtime pin snapshot.");
+  }
+  if (
+    expected.revision !== current.revision ||
+    expected.definition !== (current.definition ?? null)
+  ) {
+    throw new Error(
+      `${service} service or runtime pin changed before installation. The newer selection was preserved; inspect it before retrying.`,
+    );
+  }
+}
+
 const serviceFile = z
   .string()
   .refine((file) => path.isAbsolute(file) && !/[\0\r\n]/.test(file) && isRegularFile(file));
 const restoreServiceCliSchema = z.strictObject({
   executable: z.string(),
-  entrypoint: serviceFile.refine(
-    (entry) =>
-      path.basename(entry) === "openclaw.mjs" ||
-      buildGatewayInstallEntrypointCandidates(path.dirname(path.dirname(entry))).includes(
-        path.normalize(entry),
-      ),
-  ),
+  entrypoint: serviceFile
+    .refine(
+      (entry) =>
+        path.basename(entry) === "openclaw.mjs" ||
+        buildGatewayInstallEntrypointCandidates(path.dirname(path.dirname(entry))).includes(
+          path.normalize(entry),
+        ),
+    )
+    .nullable(),
   sqliteLibrary: serviceFile.nullable(),
 });
 
@@ -41,8 +68,13 @@ export async function resolveRestoreServiceCli(
     if (expectedRuntimePin === undefined) {
       throw new Error("requires --expected-runtime-pin.");
     }
-    if (runtime !== "node" && runtime !== "bun") {
-      throw new Error('requires an explicit --runtime ("node" or "bun").');
+    if (runtime !== "node" && runtime !== "bun" && runtime !== "standalone") {
+      throw new Error('requires an explicit --runtime ("node", "bun", or "standalone").');
+    }
+    if ((runtime === "standalone") !== (serviceCli.entrypoint === null)) {
+      throw new Error(
+        "standalone recovery requires a null entrypoint; Node and Bun require an entry script.",
+      );
     }
     if (wrapper !== undefined || installEnv[OPENCLAW_WRAPPER_ENV_KEY]?.trim()) {
       throw new Error("cannot be combined with a wrapper.");

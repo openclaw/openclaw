@@ -1,3 +1,4 @@
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import type { GatewayMethodDispatchResponse } from "../server-in-process-dispatch.types.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -8,43 +9,24 @@ const inflightByContext = new WeakMap<
   Map<string, Promise<GatewayInflightResult>>
 >();
 
-function getInflightMap(context: GatewayRequestContext) {
-  let inflight = inflightByContext.get(context);
-  if (!inflight) {
-    inflight = new Map();
-    inflightByContext.set(context, inflight);
-  }
-  return inflight;
-}
-
 /** Joins concurrent idempotent requests and replays completed Gateway dedupe entries. */
 export function resolveGatewayInflightRequest(params: {
   context: GatewayRequestContext;
   dedupeKey: string;
   idempotencyKey: string;
   respond: RespondFn;
-}):
-  | {
-      kind: "ready";
-      idem: string;
-      dedupeKey: string;
-      inflightMap: Map<string, Promise<GatewayInflightResult>>;
-    }
-  | {
-      kind: "handled";
-      done: Promise<void>;
-    } {
+}) {
   // Persistent dedupe wins before process-local in-flight joins for idempotent retries.
   const cached = params.context.dedupe.get(params.dedupeKey);
   if (cached) {
     params.respond(cached.ok, cached.payload, cached.error, { cached: true });
-    return { kind: "handled", done: Promise.resolve() };
+    return { kind: "handled" as const, done: Promise.resolve() };
   }
-  const inflightMap = getInflightMap(params.context);
+  const inflightMap = getOrCreateWeakOwnerMap(inflightByContext, params.context);
   const inflight = inflightMap.get(params.dedupeKey);
   if (inflight) {
     return {
-      kind: "handled",
+      kind: "handled" as const,
       done: inflight.then((result) => {
         const meta = { ...result.meta, cached: true };
         params.respond(result.ok, result.payload, result.error, meta);
@@ -52,7 +34,7 @@ export function resolveGatewayInflightRequest(params: {
     };
   }
   return {
-    kind: "ready",
+    kind: "ready" as const,
     idem: params.idempotencyKey,
     dedupeKey: params.dedupeKey,
     inflightMap,

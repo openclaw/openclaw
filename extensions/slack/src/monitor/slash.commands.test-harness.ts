@@ -468,18 +468,6 @@ export async function runCommandAndResolveActionsBlock(
   return { respond, payload, blockId };
 }
 
-export async function getFirstActionElementFromCommand(handler: (args: unknown) => Promise<void>) {
-  const { respond } = await runCommandHandler(handler);
-  expect(respond).toHaveBeenCalledTimes(1);
-  const payload = firstCallPayload(respond, "response") as { blocks?: Array<{ type: string }> };
-  const actions = findFirstActionsBlock(payload);
-  const element = actions?.elements?.[0];
-  if (!element) {
-    throw new Error("first action element missing");
-  }
-  return element;
-}
-
 export async function getCommandArgMenuValues(handler: (args: unknown) => Promise<void>) {
   const { respond } = await runCommandHandler(handler);
   const payload = firstCallPayload(respond, "response") as {

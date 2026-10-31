@@ -20,7 +20,7 @@ import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 type CapturedWriteOptions = Required<
   Pick<UpdateRunWriteOptions, "env" | "context" | "assertAccepting" | "retainSettlement">
 > &
-  Pick<UpdateRunWriteOptions, "requireNoRecovery" | "busyTimeoutMs">;
+  Pick<UpdateRunWriteOptions, "requireNoRecovery" | "busyTimeoutMs" | "pluginCohort">;
 
 export type UpdateCommandExecutionGuards = {
   recordPhase: (phase: UpdateRunPhase, patch?: UpdateRunPhasePatch) => Promise<void>;
@@ -29,6 +29,7 @@ export type UpdateCommandExecutionGuards = {
   onStateHandoff: () => void;
   admitExecutor: (acquired: UpdateRecoveryFence) => void;
   assertCurrent: (phase?: "restore") => void;
+  waitForCurrent: () => Promise<void>;
   assertBoundChildCurrent: () => void;
 };
 

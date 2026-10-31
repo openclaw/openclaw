@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
+  requireWorkerResourceReceipt,
+  sameWorkerResourceReceipt,
+} from "../../plugins/worker-resource-receipt.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { ensureWorkerEnvironmentNodeEnrollmentSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type {
@@ -39,7 +40,11 @@ import {
   requireWorkerEnvironmentString,
 } from "./store-validation.js";
 import type { CredentialRevocationInput } from "./store-write-types.js";
-import type { WorkerEnvironmentMutationMethods } from "./store.types.js";
+import { executeWorkerEnvironmentWrite } from "./store-write.js";
+import type {
+  WorkerEnvironmentMutationInput,
+  WorkerEnvironmentMutationMethods,
+} from "./store.types.js";
 
 export function createWorkerEnvironmentStoreKernel(
   database: OpenClawStateDatabase,
@@ -50,7 +55,7 @@ export function createWorkerEnvironmentStoreKernel(
   const createIntent = (input: WorkerEnvironmentIntentInput): WorkerEnvironmentRecord => {
     const environmentId = requireWorkerEnvironmentString(input.environmentId, "id");
     const createdAtMs = now();
-    executeSqliteQuerySync(
+    executeWorkerEnvironmentWrite(
       db,
       queryWorkerEnvironmentStore(db)
         .insertInto("worker_environments")
@@ -66,6 +71,7 @@ export function createWorkerEnvironmentStoreKernel(
             "provision operation id",
           ),
           lease_id: null,
+          resource_receipt_json: null,
           node_setup_id: null,
           node_device_id: null,
           shared_host: null,
@@ -102,6 +108,37 @@ export function createWorkerEnvironmentStoreKernel(
     }),
     ...createWorkerEnvironmentTransitionOps(db, now),
     createIntent,
+    recordResourceReceipt(
+      input: WorkerEnvironmentMutationInput<"recordResourceReceipt">,
+    ): WorkerEnvironmentRecord {
+      const environmentId = requireWorkerEnvironmentString(input.environmentId, "id");
+      const provisionOperationId = requireWorkerEnvironmentString(
+        input.provisionOperationId,
+        "provision operation id",
+      );
+      // Persist the versioned identity contract, not unrelated provider response fields.
+      const { version, leaseId, identity } = requireWorkerResourceReceipt(input.receipt);
+      const receipt = { version, leaseId, identity };
+      const current = getRequiredWorkerEnvironment(db, environmentId);
+      if (current.provisionOperationId !== provisionOperationId) {
+        throw new Error(`Worker environment ${environmentId} provision operation changed`);
+      }
+      if (current.leaseId !== null && current.leaseId !== receipt.leaseId) {
+        throw new Error(`Worker environment ${environmentId} resource receipt lease changed`);
+      }
+      if (current.resourceReceipt !== null) {
+        if (!sameWorkerResourceReceipt(current.resourceReceipt, receipt)) {
+          throw new Error(`Worker environment ${environmentId} resource receipt is immutable`);
+        }
+        return current;
+      }
+      const updatedAtMs = now();
+      updateRow(db, environmentId, current.state, {
+        resource_receipt_json: json(receipt),
+        updated_at_ms: updatedAtMs,
+      });
+      return { ...current, resourceReceipt: receipt, updatedAtMs };
+    },
     ensureNodeEnrollment(environmentIdInput: string): WorkerEnvironmentRecord {
       const environmentId = requireWorkerEnvironmentString(environmentIdInput, "id");
       ensureWorkerEnvironmentNodeEnrollmentSchema(db);
@@ -172,6 +209,9 @@ export function createWorkerEnvironmentStoreKernel(
       const current = getRequiredWorkerEnvironment(db, environmentId);
       if (current.state !== "provisioning" || current.leaseId !== null) {
         throw new Error(`Worker environment ${environmentId} cannot adopt provision cleanup`);
+      }
+      if (current.resourceReceipt && current.resourceReceipt.leaseId !== leaseId) {
+        throw new Error(`Worker environment ${environmentId} resource receipt lease changed`);
       }
       const updatedAtMs = now();
       // Lease identity and teardown ownership must become durable together. A crash between
@@ -267,7 +307,7 @@ export function createWorkerEnvironmentStoreKernel(
       if (deliveredAtMs >= credential.expiresAtMs) {
         throw new Error("Expired worker credential cannot be marked delivered");
       }
-      const result = executeSqliteQuerySync(
+      const result = executeWorkerEnvironmentWrite(
         db,
         queryWorkerEnvironmentStore(db)
           .updateTable("worker_environment_credentials")

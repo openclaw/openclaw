@@ -1,9 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
+import type { AuthProfileAuthorizationOperations } from "./authorization-enrollment.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { mergePersistedAuthProfileState } from "./persisted.js";
-import { inspectAuthProfileJsonCell, writeAuthProfileJsonCell } from "./sqlite-json.js";
+import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
+import { inspectAuthProfileJsonCell } from "./sqlite-json.js";
 import { prepareAuthProfileStateMutation } from "./store-mutation.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import type {
@@ -12,7 +14,7 @@ import type {
   AuthProfileUsageResult,
   AuthStoreUpdateOperations,
 } from "./store.worker-contract.js";
-import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
+import type { AuthProfileFailureReason, AuthProfileStore } from "./types.js";
 import { computeNextProfileUsageStats } from "./usage-failure-state.js";
 import { resolveInlineProviderApiKeyUsageId } from "./usage-state.js";
 
@@ -26,28 +28,27 @@ export type InlineAuthFailureInput = {
 
 export type InlineAuthFailureReceipt = {
   store: AuthProfileStore;
-  previousStats?: ProfileUsageStats;
-  nextStats: ProfileUsageStats;
-  now: number;
   publication: AuthProfileUsageReceipt["publication"];
 };
 
-type InlineAuthFailureResult =
-  | { ok: true; receipt: InlineAuthFailureReceipt }
-  | { ok: false; error: OpenClawStateWorkerErrorPayload };
-
-export type InlineAuthFailureOperations = AuthStoreUpdateOperations & {
-  "authProfiles.inlineSnapshot": {
-    input: undefined;
-    output: import("./types.js").AuthProfileRowRead;
+export type InlineAuthFailureOperations = AuthProfileAuthorizationOperations &
+  AuthStoreUpdateOperations & {
+    "authProfiles.inlineSnapshot": {
+      input: undefined;
+      output: import("./types.js").AuthProfileRowRead;
+    };
+    "authProfiles.inlineFailure": {
+      input: InlineAuthFailureInput;
+      output:
+        | { ok: true; receipt: InlineAuthFailureReceipt }
+        | { ok: false; error: OpenClawStateWorkerErrorPayload };
+    };
+    "authProfiles.usage": { input: AuthProfileUsageInput; output: AuthProfileUsageResult };
   };
-  "authProfiles.inlineFailure": { input: InlineAuthFailureInput; output: InlineAuthFailureResult };
-  "authProfiles.usage": { input: AuthProfileUsageInput; output: AuthProfileUsageResult };
-};
 
 /** The admitted agent transaction owns the fresh read, health reduction, and durable cells. */
 export function recordInlineAuthFailureInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   databasePath: string,
   input: InlineAuthFailureInput,
 ): InlineAuthFailureReceipt {
@@ -106,9 +107,6 @@ export function recordInlineAuthFailureInDatabase(
   }
   return {
     store,
-    previousStats,
-    nextStats,
-    now,
     publication: {
       credentialsChanged: false,
       profileSetChanged: false,

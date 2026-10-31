@@ -72,9 +72,7 @@ export async function shouldUseInternalSourceReplySink(
   }
   // Configured current-source channels can infer the target and deliver through
   // the normal plugin path; the sink is only the private fallback.
-  const provider =
-    normalizeMessageChannel(input.toolContext?.currentChannelProvider) ??
-    normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider);
+  const provider = normalizeMessageChannel(input.toolContext?.currentChannelProvider);
   if (
     !provider ||
     provider === INTERNAL_MESSAGE_CHANNEL ||

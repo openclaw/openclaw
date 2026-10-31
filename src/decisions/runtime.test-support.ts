@@ -1,18 +1,14 @@
 import { onTestFinished } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runPluginRegisterSyncInRegistry } from "../plugins/loader-module-runtime.js";
-import { createPluginRecord } from "../plugins/loader-records.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
-import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
-import type {
-  DecisionBatch,
-  DecisionProviderV1,
-  DecisionRuntimeV1,
-  ProviderDecisionOutcome,
-} from "./types.js";
+import { createDecisionRegistry } from "./contract.test-support.js";
+import type { DecisionEvaluateOptions } from "./execution-types.js";
+import type { ProviderDecisionOutcome } from "./provider-outcomes.js";
+import { prepareDecisionProviderReload } from "./provider-reload.js";
+import type { DecisionProviderV1 } from "./provider-types.js";
+import { evaluateDecisionInRegistry } from "./runtime.js";
+import type { DecisionBatch } from "./types.js";
 
 export const batch: DecisionBatch = {
   state: { evidence: "synthetic" },
@@ -37,7 +33,7 @@ export const answer = {
 export const config: OpenClawConfig = {
   agents: { defaults: { decisionModel: "fixture/fixture-v1" } },
 };
-export const options = (): Parameters<DecisionRuntimeV1["evaluate"]>[1] => ({
+export const options = (): DecisionEvaluateOptions => ({
   purpose: "test",
   rubricVersion: "1",
   timeoutMs: 1_000,
@@ -49,38 +45,21 @@ export function registered(
   providerId = "fixture",
 ) {
   const started = createDeferredCore();
-  const builder = createTestPluginRegistry();
-  const record = createPluginRecord({
-    id: "owner",
-    source: "/synthetic/index.ts",
-    origin: "global",
-    enabled: true,
-    configSchema: false,
-    contracts: { decisionProviders: [providerId.trim()] },
+  const builder = createDecisionRegistry(config, {
+    id: providerId,
+    contractVersion: 1,
+    evaluate: (...args) => {
+      started.resolve();
+      return evaluate(...args);
+    },
+    isReady,
   });
-  const api = builder.createApi(record, { config });
-  runPluginRegisterSyncInRegistry(
-    (registration) =>
-      registration.registerDecisionProvider({
-        id: providerId,
-        contractVersion: 1,
-        evaluate: (...args) => {
-          started.resolve();
-          return evaluate(...args);
-        },
-        isReady,
-      }),
-    api,
-    builder.registry,
-    record.id,
-  );
-  builder.registry.plugins.push(record);
-  setActivePluginRegistry(builder.registry);
+  const { record } = builder;
   onTestFinished(async () => {
     prepareDecisionProviderReload(builder.registry, new Set([record.id]));
     await getPluginInstance(record)?.dispose();
   });
   const run = (opts = options(), cfg = config) =>
     evaluateDecisionInRegistry(batch, opts, builder.registry, cfg);
-  return { ...builder, record, api, run, started: started.promise };
+  return { ...builder, run, started: started.promise };
 }

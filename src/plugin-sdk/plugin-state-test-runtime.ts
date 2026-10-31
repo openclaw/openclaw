@@ -4,11 +4,35 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
+import {
+  createPluginStateKeyedStore,
+  createPluginStateKeyedStoreV2,
+  createPluginStateSyncKeyedStore,
+} from "../plugin-state/plugin-state-store.js";
+import { assertPluginStateKey } from "../plugin-state/plugin-state-store.kernel.js";
 import type { PluginStateOperationModule } from "../plugin-state/plugin-state-store.native-binding.js";
+import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.types.js";
+
+export { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
+export { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 
 let fixturePackageRoot: string | undefined;
 const fixtureOperationModules = new Map<string, PluginStateOperationModule>();
+
+function guardFixtureRegistrations<T>(
+  store: Pick<PluginStateKeyedStore<T>, "register" | "registerIfAbsent">,
+): void {
+  const { register, registerIfAbsent } = store;
+  // Keep the host-owned object: native read guards and operations bind by identity.
+  store.register = async (...args) => {
+    assertPluginStateKey(true, args[0], "register");
+    return register(...args);
+  };
+  store.registerIfAbsent = async (...args) => {
+    assertPluginStateKey(true, args[0], "register");
+    return registerIfAbsent(...args);
+  };
+}
 
 function resolveFixtureOperationModule(
   pluginId: string,
@@ -59,7 +83,7 @@ export function createPluginStateKeyedStoreForTests<T>(
   ...args: Parameters<typeof createPluginStateKeyedStore<T>>
 ) {
   const [pluginId, options, assertCurrent, moduleSource] = args;
-  return createPluginStateKeyedStore<T>(
+  const store = createPluginStateKeyedStore<T>(
     pluginId,
     options,
     assertCurrent,
@@ -69,11 +93,53 @@ export function createPluginStateKeyedStoreForTests<T>(
       },
     },
   );
+  guardFixtureRegistrations(store);
+  const { withCurrent } = store;
+  store.withCurrent = (authority) => {
+    const current = withCurrent(authority);
+    guardFixtureRegistrations(current);
+    return current;
+  };
+  return store;
+}
+
+/** Bundled V2 fixtures resolve operations through the same package boundary as the host. */
+export function createPluginStateKeyedStoreV2ForTests<T>(
+  ...args: Parameters<typeof createPluginStateKeyedStoreV2<T>>
+) {
+  const [pluginId, options, assertCurrent, moduleSource] = args;
+  const store = createPluginStateKeyedStoreV2<T>(
+    pluginId,
+    options,
+    assertCurrent,
+    moduleSource ?? {
+      resolve(moduleName) {
+        return resolveFixtureOperationModule(pluginId, moduleName);
+      },
+    },
+  );
+  guardFixtureRegistrations(store);
+  return store;
+}
+
+/** SQLite fixtures reject new NUL keys while still reading legacy rows for adoption. */
+export function createPluginStateSyncKeyedStoreForTests<T>(
+  ...args: Parameters<typeof createPluginStateSyncKeyedStore<T>>
+) {
+  const store = createPluginStateSyncKeyedStore<T>(...args);
+  const { register, registerIfAbsent } = store;
+  store.register = (...registration) => {
+    assertPluginStateKey(true, registration[0], "register");
+    return register(...registration);
+  };
+  store.registerIfAbsent = (...registration) => {
+    assertPluginStateKey(true, registration[0], "register");
+    return registerIfAbsent(...registration);
+  };
+  return store;
 }
 
 export {
-  createPluginStateKeyedStoreV2 as createPluginStateKeyedStoreV2ForTests,
-  createPluginStateSyncKeyedStore as createPluginStateSyncKeyedStoreForTests,
   getPluginStateCapacity as getPluginStateCapacityForTests,
   importPluginStateEntriesForDoctor as importPluginStateEntriesForDoctorForTests,
   resetPluginStateStoreForTests,

@@ -53,16 +53,6 @@ function parsePossiblyNoisyStatus<T>(schema: z.ZodType<T>, raw: string): T | nul
   return safeParseJsonWithSchema(schema, raw.slice(start, end + 1));
 }
 
-function extractTailnetHostFromStatusJson(raw: string): string | null {
-  const parsed = parsePossiblyNoisyStatus(TailscaleStatusSchema, raw);
-  const dns = parsed?.Self?.DNSName;
-  if (dns && dns.length > 0) {
-    return dns.replace(/\.$/, "");
-  }
-  const ips = parsed?.Self?.TailscaleIPs ?? [];
-  return ips.length > 0 ? (ips[0] ?? null) : null;
-}
-
 function parseLoopbackProxyPort(proxy: string, forAdoption: boolean): number | null {
   // SDK discovery accepts the shipped proxy forms; ownership requires the exact
   // HTTP loopback root written by previous managed releases.
@@ -125,11 +115,6 @@ export function extractTailscaleServeGatewayUrls(
   return [...urls].toSorted();
 }
 
-type TailscaleServeGatewayInspection =
-  | { status: "ok"; urls: string[] }
-  | { status: "unavailable" }
-  | { status: "invalid" };
-
 /** Reads backend state without changing connectivity or Serve configuration. */
 export async function inspectTailscaleBackendStateWithRunner(
   runCommandWithTimeout: TailscaleStatusCommandRunner,
@@ -159,7 +144,7 @@ export async function inspectTailscaleServeGatewayUrlsWithRunner(
   gatewayPort: number,
   runCommandWithTimeout?: TailscaleStatusCommandRunner,
   forAdoption = false,
-): Promise<TailscaleServeGatewayInspection> {
+): Promise<{ status: "ok"; urls: string[] } | { status: "unavailable" } | { status: "invalid" }> {
   if (!runCommandWithTimeout) {
     return { status: "unavailable" };
   }
@@ -236,7 +221,9 @@ export async function resolveTailnetHostWithRunner(
       if (!raw) {
         continue;
       }
-      const host = extractTailnetHostFromStatusJson(raw);
+      const parsed = parsePossiblyNoisyStatus(TailscaleStatusSchema, raw);
+      const dns = parsed?.Self?.DNSName;
+      const host = dns && dns.length > 0 ? dns.replace(/\.$/, "") : parsed?.Self?.TailscaleIPs?.[0];
       if (host) {
         return host;
       }

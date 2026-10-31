@@ -28,7 +28,10 @@ import {
   loadPluginInstallRuntime,
   runInstallSourceScan,
 } from "./install-shared.js";
-import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
+import {
+  copyPluginInstallTransactionRequest,
+  resolvePluginInstallTransactionRequest,
+} from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
@@ -150,12 +153,7 @@ export async function installPluginFromNpmSpec(
       Object.assign(npmResolution, compatibleResolution, {
         resolvedAt: npmResolution.resolvedAt,
       });
-      compatibilityError = validateNpmResolutionCompatibility({
-        runtime,
-        parsedSpec,
-        expectedPluginId,
-        resolution: npmResolution,
-      });
+      compatibilityError = null;
     }
   }
   if (compatibilityError) {
@@ -184,6 +182,8 @@ export async function installPluginFromNpmSpec(
     packageName: parsedSpec.name,
     requestedMode: mode,
     npmResolution,
+    forceFreshGeneration:
+      resolvePluginInstallTransactionRequest(params)?.cohort?.forceFreshGeneration,
   });
 
   const preflightPolicyResult = await withTempWorkspace(
@@ -214,7 +214,6 @@ export async function installPluginFromNpmSpec(
             requestedSpecifier: spec,
             source: npmInstallPolicySource,
             sourcePath: policyMetadataPath,
-            sourcePathKind: "file",
           }),
       });
     },
@@ -229,10 +228,8 @@ export async function installPluginFromNpmSpec(
       trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
       config: params.config,
       packageName: parsedSpec.name,
-      dependencySpec: resolveManagedNpmRootDependencySpec({
-        parsedSpec,
-        resolution: npmResolution,
-      }),
+      prepareDependencySpec: async () =>
+        resolveManagedNpmRootDependencySpec({ parsedSpec, resolution: npmResolution }),
       displaySpec: spec,
       installPolicyRequest: {
         kind: "plugin-npm",
@@ -252,7 +249,6 @@ export async function installPluginFromNpmSpec(
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
       beforePersistentApply: params.beforePersistentApply,
       npmResolution,
-      ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
     }),
   );
   emitSuccessfulPluginInstallSecurityEvent(result, {

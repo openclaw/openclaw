@@ -1,21 +1,12 @@
-import type { RelayOperationReference } from "../extension-relay/owner-client.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { getProfileLifecycle } from "../server-context.lifecycle.js";
-
-export type BrowserOperationTargetResolver = (() =>
-  | string
-  | undefined
-  | Promise<string | undefined>) & {
-  reference?: RelayOperationReference;
-  release: () => Promise<void>;
-};
 
 /** Pin capture at the actual bridge; a failed capture must never enable generic recovery. */
 export async function captureBrowserOperationTarget(opts: {
   ctx: BrowserRouteContext;
   profileName: string;
   targetId: string;
-}): Promise<BrowserOperationTargetResolver | undefined> {
+}) {
   const state = opts.ctx.state();
   const relay = state.extensionRelays?.get(opts.profileName);
   if (!relay) {

@@ -9,8 +9,11 @@ const enSkillWorkshop = {
       label: "Learning",
       aria: "Skill Workshop learning mode",
       off: "Off",
+      propose: "Propose",
       auto: "Auto",
       offTitle: "The agent does not save or update skills on its own.",
+      proposeTitle:
+        "The agent saves skill changes it would make as drafts. Review them together with /learn drafts.",
       autoTitle:
         "The agent saves and improves skills as it works, announces each change, and every change can be undone.",
       updateError: "Could not update the learning mode.",
@@ -20,6 +23,8 @@ const enSkillWorkshop = {
       empty: "No learned skills yet. Your agent saves skills here as it learns from its work.",
       noneActive: "No active skills. Restore one from Archived, or let the agent learn.",
       noneArchived: "Nothing archived.",
+      noneDrafts:
+        "No drafts waiting. In Propose mode, background reviews save the skill changes they would make here for you to apply or discard.",
       filterAria: "Show active or archived skills",
       active: "Active",
       uses: "{count} uses",
@@ -27,6 +32,28 @@ const enSkillWorkshop = {
       noUses: "Not used yet",
       archived: "Archived",
       archivedAgo: "Archived {time}",
+      drafts: "Drafts",
+    },
+    drafts: {
+      newSkill: "New skill",
+      update: "Update",
+      proposed: "Proposed {time}",
+      createsSkill: "Creates a new skill",
+      updatesSkill: "Changes the live skill",
+      files: "{count} files",
+      apply: "Apply",
+      applyNewTitle: "Create this skill. You can archive it later.",
+      applyUpdateTitle:
+        "Replace the live skill with this draft. The current version is saved first, so you can undo.",
+      discard: "Discard",
+      discardTitle: "Delete this draft. No skill changes.",
+      diffLive: "Live skill",
+      diffDraft: "Draft",
+      same: "This draft already matches the live skill. Discard it.",
+      tooLarge: "This draft differs too much from the live skill to compare line by line.",
+      filesLabel: "Files",
+      chatHint:
+        "Want the agent's judgment first? Send /learn drafts in chat to review all drafts together, or /learn drafts {skill} for this skill only.",
     },
     sort: {
       label: "Sort skills",

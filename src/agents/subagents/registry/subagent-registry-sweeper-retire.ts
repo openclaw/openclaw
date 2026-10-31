@@ -1,5 +1,9 @@
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
-import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAgentId,
+  resolveSubagentChildAuthority,
+} from "./subagent-child-owner-match.js";
 import {
   safeRemoveAttachmentsDir,
   shouldRemoveSubagentAttachments,
@@ -11,6 +15,7 @@ import {
   isSameSubagentRun,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
+import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
 
 export async function retireSupersededSubagentRun(params: {
   runId: string;
@@ -23,6 +28,7 @@ export async function retireSupersededSubagentRun(params: {
   const transcriptTarget = params.entry.execution.transcriptTarget;
   const canRetire = (current: SubagentRunRecord | undefined) =>
     current !== undefined &&
+    resolveSubagentChildAuthority(current).status !== "mismatch" &&
     isSameSubagentRunOwner(current, params.entry) &&
     current.attachmentId === params.entry.attachmentId &&
     current.cleanup === params.entry.cleanup &&
@@ -44,8 +50,11 @@ export async function retireSupersededSubagentRun(params: {
     (admitted.killReconciliation?.supersededAt !== undefined ||
       [...params.runs.values()].some(
         (candidate) =>
-          candidate.childSessionKey === admitted.childSessionKey &&
-          compareSubagentRunGeneration(candidate, admitted) > 0,
+          matchesSubagentChildSessionOwner(
+            candidate,
+            admitted.childSessionKey,
+            resolveSubagentChildAgentId(admitted),
+          ) && compareSubagentRunGeneration(candidate, admitted) > 0,
       ));
   const isCurrent = () => canRetire(params.runs.get(params.runId));
   if (!superseded || !isCurrent()) {
@@ -67,7 +76,7 @@ export async function retireSupersededSubagentRun(params: {
     cleanupEntry &&
     transcriptTarget &&
     !transcriptStillOwned &&
-    !shouldSuppressSubagentRecoverySessionEffects(cleanupEntry)
+    !shouldSuppressSubagentSessionEffects(cleanupEntry)
   ) {
     await removeInternalSessionEffectsSession(transcriptTarget);
     if (!isCurrent()) {

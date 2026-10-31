@@ -1,4 +1,4 @@
-import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
+import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/session-limits.js";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -14,10 +14,6 @@ export type DraftStartupResumption = {
   startedAt: number;
   background: boolean;
 };
-
-type DraftSessionStartupResume =
-  | { kind: "wait" | "expired" | "owner-changed" }
-  | ({ kind: "resume" } & DraftStartupResumption);
 
 export class DraftSessionStartup {
   private pending: DraftSessionStartupIntent | null = null;
@@ -69,7 +65,9 @@ export class DraftSessionStartup {
     return true;
   }
 
-  resume(): DraftSessionStartupResume {
+  resume():
+    | { kind: "wait" | "expired" | "owner-changed" }
+    | ({ kind: "resume" } & DraftStartupResumption) {
     if (!this.pending?.interrupted) {
       return { kind: "wait" };
     }

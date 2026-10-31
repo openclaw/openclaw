@@ -72,4 +72,12 @@ export const GATEWAY_OWNER_ONLY_CORE_TOOLS = [
   "computer",
   "mobile_ui",
   "openclaw",
+  "intent",
 ] as const;
+
+export function resolveGatewayOwnerOnlyToolDenylist(senderIsOwner?: boolean): string[] {
+  // Standing intents always require explicit owner identity, including on internal turns.
+  return GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
+    (name) => senderIsOwner !== true && (senderIsOwner === false || name === "intent"),
+  );
+}

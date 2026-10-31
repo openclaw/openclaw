@@ -4,9 +4,10 @@ import type {
   WorkboardSessionsBoard,
   WorkboardSessionsBoardRead,
 } from "@openclaw/workboard-contract";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { ControlUiAgentPickerProps, ControlUiHost } from "openclaw/plugin-sdk/control-ui";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { loadMessages } from "../../i18n/locales.ts";
 import { mountPage } from "./workboard-page.test-support.ts";
 
 beforeEach(() => {
@@ -117,6 +118,49 @@ function peoplePicker(page: ReturnType<typeof mountPage>) {
   );
 }
 
+it("retains session clocks on host refreshes and updates timestamps, titles and locale", async () => {
+  const page = sessionsPage();
+  await page.connect();
+  const tile = expectDefined(
+    page.container.querySelector('[data-session-key="agent:main:working"]'),
+    "session tile",
+  );
+  const time = expectDefined(
+    tile.querySelector<HTMLElement>(".workboard-session-tile__time"),
+    "session time",
+  );
+  expect(time.textContent).toBe("2m ago");
+  const scheduled = vi.spyOn(globalThis, "setTimeout");
+  for (let index = 0; index < 5; index++) {
+    page.fixture.notify();
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  expect(scheduled).not.toHaveBeenCalled();
+  scheduled.mockRestore();
+
+  const session = expectDefined(page.result.sessions[0], "working session");
+  session.label = "Updated retries";
+  session.lastActivityAt = Date.now() - 10_000;
+  const previousTitle = time.title;
+  page.fixture.emit("plugin.workboard.changed", { epoch: "facts", revision: 2 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.container.querySelector('[data-session-key="agent:main:working"]')).toBe(tile);
+  expect(tile.querySelector(".workboard-session-tile__time")).toBe(time);
+  expect(tile.querySelector("button")?.textContent).toBe("Updated retries");
+  expect(tile.getAttribute("title")).toContain("Updated retries");
+  expect(time.title).not.toBe(previousTitle);
+  expect(time.textContent).toBe("just now");
+  await vi.advanceTimersByTimeAsync(50_000);
+  expect(time.textContent).toBe("1m ago");
+
+  await loadMessages("de");
+  Object.assign(page.fixture.host, { locale: "de" });
+  page.fixture.notify();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(time.textContent).toBe("vor 1 Min.");
+  page.dispose();
+});
+
 it("renders the people facet, rereads the selected view and restores it only for its viewer, Gateway and board", async () => {
   const page = sessionsPage();
   await page.connect();
@@ -214,10 +258,7 @@ it("restores the destination board's saved people filter when boards change whil
   const page = sessionsPage();
   const boardB = { ...page.board, id: "sessions-b", name: "Sessions B" };
   const previous = expectDefined(page.request.getMockImplementation(), "request");
-  let releaseIdentity = () => {};
-  const identityGate = new Promise<void>((resolve) => {
-    releaseIdentity = resolve;
-  });
+  const { promise: identityGate, resolve: releaseIdentity } = createDeferred();
   page.request.mockImplementation(async (method, params) => {
     if (method === "gateway.identity.get" || method === "users.self") {
       await identityGate;
@@ -310,6 +351,44 @@ function button(page: ReturnType<typeof mountPage>, label: string) {
     label,
   );
 }
+
+it("loads the next Sessions board page and refreshes the loaded window after a write receipt", async () => {
+  const page = sessionsPage();
+  const all = [...page.result.sessions];
+  const first = expectDefined(all[0], "first session");
+  const request = expectDefined(page.request.getMockImplementation(), "request");
+  page.request.mockImplementation(async (method, params) => {
+    if (method === "workboard.sessionsBoard.read") {
+      // SAFETY: this fixture handles the documented Sessions board request contract.
+      const input = params as { after?: string };
+      return {
+        ...page.result,
+        sessions: input.after ? all.slice(1) : all.slice(0, 1),
+        total: 2,
+        nextCursor: input.after ? undefined : first.key,
+      };
+    }
+    return request(method, params);
+  });
+  await page.connect();
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(1);
+  expect(page.container.textContent).toContain("1 of 2 sessions loaded");
+  button(page, "Load more sessions").click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true },
+    after: first.key,
+  });
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+  expect(page.container.textContent).not.toContain("Load more sessions");
+  first.label = "Updated retries";
+  page.fixture.emit("plugin.workboard.changed", { epoch: "facts", revision: 2 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+  expect(page.container.textContent).toContain("Updated retries");
+  page.dispose();
+});
 
 it("recovers empty-board facts through one plugin refresh of the selected people view", async () => {
   const page = sessionsPage();

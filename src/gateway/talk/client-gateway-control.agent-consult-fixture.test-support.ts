@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { createMockSubsystemLogger } from "../../../test/helpers/mock-subsystem-logger.js";
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { testing as embeddedRunsTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { createTalkClientAgentConsultRunner } from "./client-agent-consult.js";
@@ -8,19 +9,20 @@ import {
   mocks,
   type ConsultParams,
 } from "./client-gateway-control.agent-consult.test-support.js";
-import type { TalkAgentConsultAuthority } from "./client-gateway-control.js";
+import type { TalkAgentConsultAuthority } from "./client-tool-authority.js";
 
 export function createConsultRunner(
   overrides: Partial<Parameters<typeof createTalkClientAgentConsultRunner>[0]> = {},
 ) {
   return createTalkClientAgentConsultRunner({
     config,
-    context: { chatAbortControllers: new Map(), logGateway: { warn: vi.fn() } } as never,
+    context: { logGateway: createMockSubsystemLogger("gateway/test") },
     sessionTarget: {
       agentId: "researcher",
       sessionKey: "main",
       canonicalKey: "agent:researcher:talk",
       storePath: "/tmp/sessions",
+      assertCurrent: vi.fn(),
     },
     getVoiceSessionId: () => "voice-session",
     initialItems: [],

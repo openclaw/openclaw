@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { SessionMembershipFact } from "../config/sessions/session-membership-facts.types.js";
+import type {
+  SessionMembershipFact,
+  SessionParticipantRecord,
+} from "../config/sessions/session-membership-facts.types.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import {
   hasSqlitePostCommitScope,
   publishSqliteCommittedState,
@@ -13,7 +17,13 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 export type SessionRowFacts =
   | { kind: "unchanged" }
-  | { kind: "replacement"; membership: SessionMembershipFact; lifecycleChanged?: boolean }
+  | {
+      kind: "replacement";
+      membership: SessionMembershipFact;
+      /** Missing policy coverage must not preserve an already prepared send. */
+      communicationBinding?: string;
+      lifecycleChanged?: boolean;
+    }
   | {
       kind: "acp";
       sessionId: string | undefined;
@@ -42,9 +52,13 @@ export type SessionRowFacts =
       kind: "participants";
       /** Participant history belongs to the logical key, across transcript replacements. */
       projection?: Pick<SessionEntry, "participants" | "participantCount">;
+      /** Count-only contributions leave display identity and ordering unchanged. */
+      projectionChanged?: false;
+      records?: readonly SessionParticipantRecord[];
+      actorVersion?: { epoch: string; sequence: number };
     }
   | { kind: "category"; sessionId: string; category: string | null }
-  | { kind: "removed" };
+  | { kind: "removed"; transcriptInventoryUnchanged?: true };
 
 export type SessionRowChange =
   | {
@@ -60,6 +74,8 @@ export type SessionRowChange =
   | {
       all: true;
       scope: string | { agentId?: string; storePath?: string; topology?: true };
+      /** Run owners without a logical key retain the identity for indexed row invalidation. */
+      runtimeSession?: { sessionId: string; agentId?: string };
       factsInvalidated?: true;
     };
 
@@ -97,6 +113,33 @@ export function isSessionStoreTopologyChange(change: SessionRowChange): boolean 
   );
 }
 
+/** Replay descriptive reads when a committed topology change supersedes their captured stores. */
+export async function readWithSessionStoreTopology<T>(read: () => Promise<T>): Promise<T> {
+  let changed: boolean;
+  const stop = sessionChanges.subscribeFacts((change) => {
+    if (isSessionStoreTopologyChange(change)) {
+      changed = true;
+    }
+  });
+  try {
+    for (;;) {
+      changed = false;
+      try {
+        const result = await read();
+        if (!changed) {
+          return result;
+        }
+      } catch (error) {
+        if (!changed) {
+          throw error;
+        }
+      }
+    }
+  } finally {
+    stop();
+  }
+}
+
 type SessionRowNotification =
   | Omit<Extract<SessionRowChange, { sessionKey: string }>, "facts" | "factsInvalidated">
   | Omit<Extract<SessionRowChange, { all: true }>, "factsInvalidated">;
@@ -126,21 +169,31 @@ const captures = resolveGlobalSingleton(
   () => new WeakMap<DatabaseSync, Set<SessionRowChange[]>>(),
 );
 
+const rowRevision = resolveGlobalSingleton(Symbol.for("openclaw.sessionRowChangeRevision"), () => ({
+  value: 0,
+}));
+
+/** Fences derived reports across metadata, sharing, topology, and uncertain writes. */
+export function readSessionRowChangeRevision(): number {
+  return rowRevision.value;
+}
+
 /** Worker receipts borrow the producer's transaction postimages, including savepoint rollback. */
 export function captureSessionRowChanges<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   run: (changes: readonly SessionRowChange[]) => T,
 ) {
+  const anchor = sqlPublicationAnchor(database);
   const changes: SessionRowChange[] = [];
-  const active = captures.get(database) ?? new Set<SessionRowChange[]>();
+  const active = captures.get(anchor) ?? new Set<SessionRowChange[]>();
   active.add(changes);
-  captures.set(database, active);
+  captures.set(anchor, active);
   try {
     return { result: run(changes), changes };
   } finally {
     active.delete(changes);
     if (active.size === 0) {
-      captures.delete(database);
+      captures.delete(anchor);
     }
   }
 }
@@ -169,25 +222,27 @@ export const sessionChanges = {
   },
   /** Pending or indeterminate work fences facts without announcing a committed change. */
   invalidate(change: SessionRowChange): void {
+    rowRevision.value += 1;
     notifyListeners(factListeners, change);
     if (!privateFacts.has(change)) {
       notifyListeners(projectionListeners, change);
     }
   },
   /** SQLite observers run only after all committed owner state has settled. */
-  emit(change: SessionRowChange, database?: DatabaseSync): void {
+  emit(change: SessionRowChange, database?: EngineConnection): void {
     sessionChanges.emitBatch([change], database);
   },
   emitBatch(
     changes: readonly SessionRowChange[],
-    database?: DatabaseSync,
+    database?: EngineConnection,
     beforePublicNotifications?: () => void,
   ): void {
-    if (database && hasSqlitePostCommitScope(database)) {
-      for (const captured of captures.get(database) ?? []) {
+    const anchor = database && sqlPublicationAnchor(database);
+    if (anchor && hasSqlitePostCommitScope(anchor)) {
+      for (const captured of captures.get(anchor) ?? []) {
         const start = captured.length;
         if (
-          !stageSqliteTransactionState(database, {
+          !stageSqliteTransactionState(anchor, {
             stage: () => captured.push(...changes),
             commit() {},
             rollback: () => captured.splice(start),
@@ -211,6 +266,7 @@ export const sessionChanges = {
       }
     };
     const publishFacts = () => {
+      rowRevision.value += 1;
       for (const change of changes) {
         privateFacts.get(change)?.();
       }
@@ -238,6 +294,7 @@ export const sessionChanges = {
       installFacts: publishFacts,
       installProjection: prepareObservers,
       invalidate() {
+        rowRevision.value += 1;
         const invalidations: SessionRowChange[] = changes.map((change) => {
           const invalidated: SessionRowChange =
             "sessionKey" in change
@@ -267,7 +324,7 @@ export const sessionChanges = {
       },
       notify: publish,
     };
-    if (!database || !stageSqliteCommittedPublication(database, publication)) {
+    if (!anchor || !stageSqliteCommittedPublication(anchor, publication)) {
       publishSqliteCommittedState(publication);
     }
   },

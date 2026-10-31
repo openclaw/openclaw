@@ -1,5 +1,5 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { escapeRegExp } from "../shared/regexp.js";
 
@@ -7,44 +7,26 @@ const MIN_SECRET_VALUE_LENGTH = 6;
 const MAX_SECRET_VALUES = 512;
 
 type SecretValueRedactor = (text: string, mask: (value: string, index: number) => string) => string;
-type SecretRedactionRegistryState = {
-  registeredValues: Map<string, true>;
-  registryRevision: number;
-  registeredValueRedactor: SecretValueRedactor | undefined;
-};
-
 // Native and source module copies share membership and matcher invalidation.
-const state = resolveGlobalSingleton<SecretRedactionRegistryState>(
-  Symbol.for("openclaw.secretRedactionRegistry"),
-  () => ({
-    registeredValues: new Map<string, true>(),
-    registryRevision: 0,
-    registeredValueRedactor: undefined,
-  }),
-);
+const state = resolveGlobalSingleton<{
+  revision: number;
+  registeredValues: Map<string, true>;
+  registeredValueRedactor: SecretValueRedactor | undefined;
+}>(Symbol.for("openclaw.secretRedactionRegistry"), () => ({
+  revision: 0,
+  registeredValues: new Map<string, true>(),
+  registeredValueRedactor: undefined,
+}));
 
-export type SecretRedactionRegistrySnapshot = { revision: number; values: readonly string[] };
-const registrySnapshots = resolveGlobalSingleton(
-  Symbol.for("openclaw.secretRedactionRegistrySnapshots"),
-  () =>
-    new AsyncLocalStorage<{
-      snapshot: SecretRedactionRegistrySnapshot;
-      values: ReadonlySet<string>;
-      redactor?: SecretValueRedactor;
-    }>(),
-);
-
-/** A trusted worker task borrows captured policy without mutating its process registry. */
-export function withSecretRedactionRegistrySnapshot<T>(
-  snapshot: SecretRedactionRegistrySnapshot,
-  run: () => T,
-): T {
-  return registrySnapshots.run({ snapshot, values: new Set(snapshot.values) }, run);
+type SecretRedactionRegistrySnapshot = { values: readonly string[] };
+function invalidateMatcher(): void {
+  state.revision += 1;
+  state.registeredValueRedactor = undefined;
 }
 
-function invalidateMatcher(): void {
-  state.registryRevision += 1;
-  state.registeredValueRedactor = undefined;
+/** Invalidates prepared redacted facts when exact secret membership changes. */
+export function getSecretRedactionRegistryRevision(): number {
+  return state.revision;
 }
 
 function registerOneSecretValue(value: string): void {
@@ -67,8 +49,8 @@ export function registerSecretValueForRedaction(value: string): void {
   if (encoded !== value) {
     registerOneSecretValue(encoded);
   }
-  // Captured structured payloads are serialized before persistence, so retain
-  // the JSON string-content form for credentials with escaped characters.
+  // Structured logs serialize credentials, so retain the JSON string-content form
+  // for values with escaped characters.
   const jsonEscaped = JSON.stringify(value).slice(1, -1);
   if (jsonEscaped !== value) {
     registerOneSecretValue(jsonEscaped);
@@ -80,24 +62,16 @@ export function registerSecretValueForRedaction(value: string): void {
 
 /** Returns whether a value has SecretRef provenance in the process registry. */
 export function isSecretValueRegisteredForRedaction(value: string): boolean {
-  return (registrySnapshots.getStore()?.values ?? state.registeredValues).has(value);
+  return state.registeredValues.has(value);
 }
 
 export function hasRegisteredSecretValuesForRedaction(): boolean {
-  return (registrySnapshots.getStore()?.values ?? state.registeredValues).size > 0;
-}
-
-/** Changes with registry membership, including bounded eviction and test resets. */
-export function getSecretRedactionRegistryRevision(): number {
-  return registrySnapshots.getStore()?.snapshot.revision ?? state.registryRevision;
+  return state.registeredValues.size > 0;
 }
 
 /** Exact surface forms are already expanded; snapshots must not register them again. */
 export function captureSecretRedactionRegistrySnapshot(): SecretRedactionRegistrySnapshot {
-  const scoped = registrySnapshots.getStore();
-  return scoped
-    ? { revision: scoped.snapshot.revision, values: [...scoped.values] }
-    : { revision: state.registryRevision, values: [...state.registeredValues.keys()] };
+  return { values: [...state.registeredValues.keys()] };
 }
 
 /** Replaces registered exact values while preserving the caller's mask convention. */
@@ -105,11 +79,6 @@ export function redactRegisteredSecretValues(
   text: string,
   mask: (value: string, index: number) => string,
 ): string {
-  const scoped = registrySnapshots.getStore();
-  if (scoped) {
-    scoped.redactor ??= createSecretValueRedactor(scoped.snapshot.values);
-    return scoped.redactor(text, mask);
-  }
   if (!text || state.registeredValues.size === 0) {
     return text;
   }
@@ -117,7 +86,7 @@ export function redactRegisteredSecretValues(
   return state.registeredValueRedactor(text, mask);
 }
 
-export function createSecretValueRedactor(values: readonly string[]): SecretValueRedactor {
+function createSecretValueRedactor(values: readonly string[]): SecretValueRedactor {
   let compiledMatcher: { prefixes: RegExp; buckets: Map<string, string[]> } | undefined;
   let firstChars: Set<string> | undefined;
   return (text, mask) => {
@@ -137,16 +106,10 @@ export function createSecretValueRedactor(values: readonly string[]): SecretValu
       return text;
     }
     if (!compiledMatcher) {
-      const buckets = new Map<string, string[]>();
-      for (const value of values.toSorted((left, right) => right.length - left.length)) {
-        const prefix = value.slice(0, MIN_SECRET_VALUE_LENGTH);
-        const bucket = buckets.get(prefix);
-        if (bucket) {
-          bucket.push(value);
-        } else {
-          buckets.set(prefix, [value]);
-        }
-      }
+      const buckets = groupRecords(
+        values.toSorted((left, right) => right.length - left.length),
+        (value) => value.slice(0, MIN_SECRET_VALUE_LENGTH),
+      );
       // Supported store values can exceed the regex engine's literal span limit.
       // Compile fixed-width prefixes; verify complete values against the text.
       compiledMatcher = {

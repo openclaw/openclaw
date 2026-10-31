@@ -2,13 +2,14 @@ import { createHash } from "node:crypto";
 import type { ExecutionIdentityAdmissionToken } from "../../../audit/execution-identity-admission.js";
 import { withAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
 import type { AgentRuntimeSessionSpawnContext } from "../../../gateway/agent-runtime-identity-token.js";
+import { createPrivateContextCarrier } from "../../../shared/private-context-carrier.js";
 
 type SubagentGatewayExecutionIdentity = {
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
   parentExecutionIdentityToken?: ExecutionIdentityAdmissionToken;
 };
 
-const subagentGatewayExecutionIdentities = new WeakMap<object, SubagentGatewayExecutionIdentity>();
+const identities = createPrivateContextCarrier<SubagentGatewayExecutionIdentity>();
 
 function spawnInputRef(kind: string, value: unknown): string {
   return `${kind}:${createHash("sha256").update(JSON.stringify(value)).digest("base64url")}`;
@@ -63,13 +64,7 @@ export function withSubagentGatewayExecutionIdentity<T extends object>(
   params: T,
   facts: SubagentGatewayExecutionIdentity,
 ): T {
-  const carried = { ...params };
-  subagentGatewayExecutionIdentities.set(carried, facts);
-  return carried;
+  return identities.carry(params, facts);
 }
 
-export function readSubagentGatewayExecutionIdentity(
-  params: object,
-): SubagentGatewayExecutionIdentity | undefined {
-  return subagentGatewayExecutionIdentities.get(params);
-}
+export const readSubagentGatewayExecutionIdentity = identities.read;

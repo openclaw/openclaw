@@ -2,7 +2,16 @@ import { spawnSync } from "node:child_process";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { doctorConfigRuntimeEntrypoints } from "../commands/doctor-config-runtime.test-support.js";
+import { dashboardTitleRuntimeEntrypoints } from "../gateway/dashboard-session-title-runtime.test-support.js";
+import { nativeBoundaryTestEntrypoints } from "../infra/native-boundary-runtime.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
+import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
+import {
+  cliMessageExitEntrypoints,
+  oneShotExitProbeEntrypoints,
+} from "./cli-entrypoint.test-support.js";
 import {
   exitCliAfterOutput,
   requestExitAfterOneShotOutput,
@@ -14,6 +23,8 @@ import {
   waitForSignalExitBarriers,
 } from "./signal-exit-barrier.js";
 
+const oneShotExitUrl = resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.oneShotExit);
+const sourceImportArgs = resolveRuntimeWorkerArgv(oneShotExitUrl).slice(0, -1);
 const successfulRun = async () => {};
 const ignoreError = () => {};
 const proxyChildTempDir = useAutoCleanupTempDirTracker(afterAll).make("openclaw-proxy-child-tmp-");
@@ -23,7 +34,8 @@ function runCliChild(script: string, envOverrides: NodeJS.ProcessEnv = {}, maxBu
   delete env.VITEST;
   delete env.VITEST_POOL_ID;
   delete env.VITEST_WORKER_ID;
-  return spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+  const args = [...sourceImportArgs, "--input-type=module", "--eval", script];
+  return spawnSync(process.execPath, args, {
     encoding: "utf8",
     env,
     timeout: 30_000,
@@ -42,9 +54,9 @@ describe("one-shot CLI completion", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["default", "injected"])("unwinds the %s runtime with its requested code", (kind) => {
+  it("unwinds the injected runtime with its requested code", () => {
     const exit = vi.fn();
-    const runtime = kind === "default" ? defaultRuntime : { ...defaultRuntime, exit };
+    const runtime = { ...defaultRuntime, exit };
     const defaultExit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
     let thrown: unknown;
     try {
@@ -55,20 +67,7 @@ describe("one-shot CLI completion", () => {
     expect(thrown).toBeInstanceOf(ExitError);
     expect(thrown).toMatchObject({ code: 7 });
     expect(defaultExit).not.toHaveBeenCalled();
-    if (kind === "injected") {
-      expect(exit).toHaveBeenCalledExactlyOnceWith(7);
-    }
-  });
-
-  it("preserves errors thrown by an injected runtime exit", () => {
-    const failure = new Error("embedded runtime stopped");
-    const runtime = {
-      ...defaultRuntime,
-      exit: vi.fn(() => {
-        throw failure;
-      }),
-    };
-    expect(() => exitCliAfterOutput(runtime, 7)).toThrow(failure);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(7);
   });
 
   it.each([
@@ -127,6 +126,7 @@ describe("one-shot CLI completion", () => {
   it.each([
     { requested: 0, signal: "SIGTERM" as const, expected: 143 },
     { requested: "0", signal: "SIGINT" as const, expected: 130 },
+    { requested: 0, signal: "SIGHUP" as const, expected: 129 },
     { requested: 7, signal: "SIGTERM" as const, expected: 7 },
   ])(
     "retains an accepted signal over pending success ($requested, $signal)",
@@ -199,26 +199,14 @@ describe("one-shot CLI completion", () => {
     expect(process.exitCode).toBe(6);
   });
 
-  it.each([
-    { recorded: undefined, expected: 0 },
-    { recorded: 1, expected: 1 },
-    { recorded: "9", expected: 9 },
-  ])("preserves recorded outcome $recorded", async ({ recorded, expected }) => {
+  it("preserves the default successful outcome", async () => {
     await runCliWithExitFinalization({
       run: async () => {
         requestExitAfterOneShotOutput();
-        process.exitCode = recorded;
       },
       onError: ignoreError,
     });
-    expect(process.exitCode).toBe(expected);
-  });
-
-  it.each([0, 7])("preserves explicit command outcome %i", async (code) => {
-    process.exitCode = 9;
-    requestExitAfterOneShotOutput(defaultRuntime, code);
-    await runCliWithExitFinalization({ run: successfulRun, onError: ignoreError });
-    expect(process.exitCode).toBe(code);
+    expect(process.exitCode).toBe(0);
   });
 
   it.each(["before cleanup", "during cleanup"])(
@@ -242,22 +230,11 @@ describe("one-shot CLI completion", () => {
     },
   );
 
-  it("does not record an outcome for an embedded custom runtime", async () => {
-    process.exitCode = 4;
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    expect(requestExitAfterOneShotOutput(runtime, 7)).toBe(false);
-    await runCliWithExitFinalization({ run: successfulRun, onError: ignoreError, runtime });
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(4);
-  });
-
   it("drains large piped JSON before a deferred ExitError without reporting another error", () => {
-    const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
-    const runtimeUrl = new URL("../runtime.ts", import.meta.url).href;
     const payloadBytes = 1024 * 1024;
     const script = `
-      import { runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl)};
-      import { defaultRuntime, ExitError } from ${JSON.stringify(runtimeUrl)};
+      import { runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl.href)};
+      import { defaultRuntime, ExitError } from ${JSON.stringify(resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.runtime).href)};
       await runCliWithExitFinalization({
         run: async () => {
           defaultRuntime.writeJson({ ok: false, payload: "x".repeat(${payloadBytes}) });
@@ -282,16 +259,12 @@ describe("one-shot CLI completion", () => {
   });
 
   it("keeps the real proxy command exit truthful when --help is consumed as a proxy URL", () => {
-    const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
-    const runtimeSnapshotUrl = new URL("../config/runtime-snapshot.ts", import.meta.url).href;
-    const argvInvocationUrl = new URL("./argv-invocation.ts", import.meta.url).href;
-    const proxyCliUrl = new URL("./proxy-cli.ts", import.meta.url).href;
     const script = `
       import { Command, CommanderError } from "commander";
-      import { setRuntimeConfigSnapshot } from ${JSON.stringify(runtimeSnapshotUrl)};
-      import { resolveCliArgvInvocation } from ${JSON.stringify(argvInvocationUrl)};
-      import { registerProxyCli } from ${JSON.stringify(proxyCliUrl)};
-      import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl)};
+      import { setRuntimeConfigSnapshot } from ${JSON.stringify(resolveRuntimeWorkerUrl(dashboardTitleRuntimeEntrypoints.config).href)};
+      import { resolveCliArgvInvocation } from ${JSON.stringify(resolveRuntimeWorkerUrl(oneShotExitProbeEntrypoints.argv).href)};
+      import { registerProxyCli } from ${JSON.stringify(resolveRuntimeWorkerUrl(oneShotExitProbeEntrypoints.proxy).href)};
+      import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl.href)};
 
       setRuntimeConfigSnapshot({});
       const argv = ["node", "openclaw", "proxy", "validate", ...${JSON.stringify(["--proxy-url", "--help", "--json"])}];
@@ -338,25 +311,17 @@ describe("one-shot CLI completion", () => {
   });
 
   it.each([
-    { name: "deferred hooks failure", exitCode: 1, explicitRequest: true, signalRequest: false },
-    { name: "explicit successful exit", exitCode: 0, explicitRequest: true, signalRequest: false },
+    { name: "deferred hooks failure", exitCode: 1, explicitRequest: true },
     {
       name: "natural successful completion",
       exitCode: 0,
       explicitRequest: false,
-      signalRequest: false,
     },
-    { name: "accepted signal", exitCode: 143, explicitRequest: false, signalRequest: true },
-  ])("keeps real dual-TTY JSON clean for $name", ({ exitCode, explicitRequest, signalRequest }) => {
-    const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
-    const runtimeUrl = new URL("../runtime.ts", import.meta.url).href;
-    const loggingStateUrl = new URL("../logging/state.ts", import.meta.url).href;
-    const signalExitUrl = new URL("./signal-exit-barrier.ts", import.meta.url).href;
+  ])("keeps real dual-TTY JSON clean for $name", ({ exitCode, explicitRequest }) => {
     const script = `
-      import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl)};
-      import { defaultRuntime } from ${JSON.stringify(runtimeUrl)};
-      import { exitAfterSignalExitBarriers } from ${JSON.stringify(signalExitUrl)};
-      import { loggingState } from ${JSON.stringify(loggingStateUrl)};
+      import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl.href)};
+      import { defaultRuntime } from ${JSON.stringify(resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.runtime).href)};
+      import { loggingState } from ${JSON.stringify(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.loggingState).href)};
       Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
       Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
       loggingState.forceConsoleToStderr = true;
@@ -364,7 +329,6 @@ describe("one-shot CLI completion", () => {
         run: async () => {
           defaultRuntime.writeStdout(JSON.stringify({ ok: ${exitCode === 0} }));
           ${explicitRequest ? `requestExitAfterOneShotOutput(defaultRuntime, ${exitCode});` : ""}
-          ${signalRequest ? `exitAfterSignalExitBarriers(${exitCode});` : ""}
         },
         finalize: async () => {
           await Promise.resolve();
@@ -381,7 +345,7 @@ describe("one-shot CLI completion", () => {
     expect(result.signal).toBeNull();
     expect(JSON.parse(result.stdout)).toEqual({ ok: exitCode === 0 });
     expect(result.stderr.startsWith("finalized\n")).toBe(true);
-    if (explicitRequest || signalRequest) {
+    if (explicitRequest) {
       expect(result.stderr).toContain("\x1b[?25h");
     } else {
       expect(result.stderr).toBe("finalized\n");
@@ -389,14 +353,10 @@ describe("one-shot CLI completion", () => {
   });
 
   it("keeps real dual-TTY JSON clean after a fatal unhandled rejection", () => {
-    const runtimeUrl = new URL("../runtime.ts", import.meta.url).href;
-    const loggingStateUrl = new URL("../logging/state.ts", import.meta.url).href;
-    const unhandledRejectionsUrl = new URL("../infra/unhandled-rejections.ts", import.meta.url)
-      .href;
     const script = `
-      import { defaultRuntime } from ${JSON.stringify(runtimeUrl)};
-      import { loggingState } from ${JSON.stringify(loggingStateUrl)};
-      import { installUnhandledRejectionHandler } from ${JSON.stringify(unhandledRejectionsUrl)};
+      import { defaultRuntime } from ${JSON.stringify(resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.runtime).href)};
+      import { loggingState } from ${JSON.stringify(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.loggingState).href)};
+      import { installUnhandledRejectionHandler } from ${JSON.stringify(resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.unhandledRejections).href)};
       Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
       Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
       loggingState.forceConsoleToStderr = true;

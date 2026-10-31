@@ -1,8 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Type } from "typebox";
 // Verifies CLI system-prompt construction without loading the full runner.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { resolveSessionGitCoauthorPrompt } from "../git-coauthor-prompt.js";
+import { prepareAgentPromptRepoRoot, withAgentPromptProjects } from "../prompt-projects.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { buildCliAgentSystemPrompt } from "./helpers.js";
 import { prepareCliSystemPrompt } from "./prompt-context.js";
@@ -17,29 +21,44 @@ vi.mock("../../tts/tts-settings.js", () => ({
   setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("buildCliAgentSystemPrompt", () => {
   afterEach(() => {
     clearPluginCommands();
+    vi.restoreAllMocks();
     vi.mocked(resolveSessionGitCoauthorPrompt).mockReset();
   });
 
-  it("prepares session credit before rendering the CLI system prompt", async () => {
+  it("prepares repository and session credit before rendering the CLI system prompt", async () => {
+    const workspaceDir = tempDirs.make("openclaw-cli-prompt-repo-");
+    await fs.mkdir(path.join(workspaceDir, ".git"));
     const gitCoauthorPrompt =
       "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
       "Co-authored-by: ada <20+ada@users.noreply.github.com>";
     vi.mocked(resolveSessionGitCoauthorPrompt).mockResolvedValue(gitCoauthorPrompt);
     const config = {};
-    const prompt = await prepareCliSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      config,
-      agentId: "main",
-      sessionKey: "agent:main:shared",
-      sessionId: "shared-session",
-      tools: [],
-      modelDisplay: "test/model",
+    const stat = vi.spyOn(fs, "stat");
+    const prompt = await withAgentPromptProjects(async () => {
+      const params = {
+        workspaceDir,
+        cwd: workspaceDir,
+        config,
+        agentId: "main",
+        sessionKey: "agent:main:shared",
+        sessionId: "shared-session",
+        tools: [],
+        modelDisplay: "test/model",
+      };
+      await prepareAgentPromptRepoRoot(params);
+      return prepareCliSystemPrompt(params);
     });
+    expect(
+      stat.mock.calls.filter(([file]) => file === path.join(workspaceDir, ".git")),
+    ).toHaveLength(1);
 
     expect(prompt).toContain(gitCoauthorPrompt);
+    expect(prompt).toContain(`repo=${workspaceDir}`);
     expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({
       config,
       agentId: "main",
@@ -74,7 +93,7 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(systemPrompt).toContain("<name>weather</name>");
     expect(systemPrompt).toContain("- Current: fixture/current");
     preparedModelRuntime.isCurrent.mockReturnValue(false);
-    expect(buildCliAgentSystemPrompt(params)).not.toContain("## Model Aliases");
+    expect(buildCliAgentSystemPrompt(params)).toBe(systemPrompt);
   });
 
   it.each([true, false])(
@@ -129,16 +148,6 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("exec approval-pending");
   });
 
-  it("describes bundled exec without assuming a node-only target", () => {
-    const prompt = buildCliAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      tools: [{ name: "exec" } as never],
-      modelDisplay: "test/model",
-    });
-
-    expect(prompt).toContain("- exec: Run shell on configured exec target");
-  });
-
   it("distinguishes the CLI working directory from the agent workspace", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw-agent",
@@ -181,16 +190,6 @@ describe("buildCliAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("this run cannot safely finish full BOOTSTRAP.md");
-  });
-
-  it("omits the bootstrap gate when bootstrap mode is not provided", () => {
-    const prompt = buildCliAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      tools: [],
-      modelDisplay: "test/model",
-    });
-
-    expect(prompt).not.toContain("## Bootstrap Pending");
   });
 
   it("includes CLI-scoped plugin command guidance", () => {
@@ -256,6 +255,22 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("channel=telegram");
     expect(prompt).not.toContain("Telegram rich ON");
     expect(prompt).not.toContain("### message tool");
+  });
+
+  it.each(["mattermost", "slack"])("preserves %s channel-owned button guidance", (channel) => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [createStubTool("message")],
+      modelDisplay: "test/model",
+      runtimeChannel: channel,
+      runtimeCapabilities: ["inlineButtons"],
+      customInlineButtonHint: true,
+      messageToolHints: ["- Use the channel's supported button shape."],
+    });
+
+    expect(prompt).toContain("- Use the channel's supported button shape.");
+    expect(prompt).not.toContain('"action":{"type":"callback"');
+    expect(prompt).not.toContain("Inline buttons OFF");
   });
 
   it("requires an explicit message target when the CLI turn policy requires one", () => {

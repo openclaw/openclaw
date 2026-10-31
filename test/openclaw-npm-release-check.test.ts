@@ -4,8 +4,8 @@ import { delimiter, join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../scripts/lib/package-dist-inventory.ts";
 import {
-  collectForbiddenPackedContentErrors,
-  collectForbiddenPackedPathErrors,
+  collectForbiddenPackedContentErrors as contentErrors,
+  collectForbiddenPackedPathErrors as pathErrors,
   collectPackedTestCargoErrors,
   resolveNpmCommandInvocation,
   runNpmReleaseCheckCommand,
@@ -13,16 +13,12 @@ import {
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const npmArgs = ["view", "openclaw@beta", "version"];
+const npmInvocation = (npmExecPath = "", comSpec = process.env.ComSpec ?? "cmd.exe") =>
+  resolveNpmCommandInvocation({ npmExecPath, comSpec, npmArgs, platform: "win32" });
 
 it("wraps bare Windows npm_execpath through npm.cmd", () => {
-  expect(
-    resolveNpmCommandInvocation({
-      comSpec: "C:\\Windows\\System32\\cmd.exe",
-      npmArgs: ["view", "openclaw@beta", "version"],
-      npmExecPath: "npm",
-      platform: "win32",
-    }),
-  ).toEqual({
+  expect(npmInvocation("npm", "C:\\Windows\\System32\\cmd.exe")).toEqual({
     command: "C:\\Windows\\System32\\cmd.exe",
     args: ["/d", "/s", "/c", "npm.cmd view openclaw@beta version"],
     windowsVerbatimArguments: true,
@@ -41,12 +37,7 @@ if (process.platform === "win32") {
       join(dir, "npm.cmd"),
       `@echo off\r\n"${process.execPath}" "%~dp0fake-npm.js" %*\r\n`,
     );
-    const invocation = resolveNpmCommandInvocation({
-      comSpec: process.env.ComSpec ?? "cmd.exe",
-      npmArgs: ["view", "openclaw@beta", "version"],
-      npmExecPath: "",
-      platform: "win32",
-    });
+    const invocation = npmInvocation();
     execFileSync(invocation.command, invocation.args, {
       cwd: dir,
       env: {
@@ -56,73 +47,49 @@ if (process.platform === "win32") {
       },
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     } as { cwd: string; env: NodeJS.ProcessEnv });
-    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual([
-      "view",
-      "openclaw@beta",
-      "version",
-    ]);
+    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual(npmArgs);
   });
 }
 
 it("bounds commands that ignore termination", () => {
+  const command = {
+    command: process.execPath,
+    args: ["--eval", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"],
+  };
   const startedAt = Date.now();
   expect(() =>
-    runNpmReleaseCheckCommand(
-      {
-        command: process.execPath,
-        args: ["--eval", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"],
-      },
-      { stdio: ["ignore", "pipe", "pipe"], timeoutMs: 100 },
-    ),
+    runNpmReleaseCheckCommand(command, { stdio: ["ignore", "pipe", "pipe"], timeoutMs: 100 }),
   ).toThrow();
   expect(Date.now() - startedAt).toBeLessThan(2500);
 });
 
 it("rejects private QA and local build artifacts while allowing runtime files", () => {
-  expect(
-    collectForbiddenPackedPathErrors([
-      "dist/index.js",
-      "dist-runtime/extensions/example/runtime.js",
-      "docs/.generated/config-baseline.json",
-      "docs/.generated/config-baseline.plugin.json",
-      "dist/OpenClaw.app/Contents/MacOS/OpenClaw",
-      "dist/extensions/qa-channel/runtime-api.js",
-      "dist/extensions/qa-channel/package.json",
-      "dist/extensions/qa-lab/runtime-api.js",
-      "dist/extensions/qa-lab/src/cli.js",
-      "dist/plugin-sdk/extensions/qa-channel/api.d.ts",
-      "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
-      "dist/plugin-sdk/qa-channel.js",
-      "dist/plugin-sdk/qa-channel-protocol.d.ts",
-      "dist/plugin-sdk/qa-lab.js",
-      "dist/plugin-sdk/qa-runtime.d.ts",
-      "dist/qa-runtime-B9LDtssJ.js",
-      "docs/channels/qa-channel.md",
-      "qa/scenarios/index.yaml",
-    ]),
-  ).toEqual([
-    'npm package must not include generated docs artifact "docs/.generated/config-baseline.json".',
-    'npm package must not include generated docs artifact "docs/.generated/config-baseline.plugin.json".',
-    'npm package must not include local application build output "dist/OpenClaw.app/Contents/MacOS/OpenClaw".',
-    'npm package must not include local runtime build output "dist-runtime/extensions/example/runtime.js".',
-    'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
-    'npm package must not include private QA channel artifact "dist/extensions/qa-channel/runtime-api.js".',
-    'npm package must not include private QA channel docs "docs/channels/qa-channel.md".',
-    'npm package must not include private QA channel SDK artifact "dist/plugin-sdk/qa-channel-protocol.d.ts".',
-    'npm package must not include private QA channel SDK artifact "dist/plugin-sdk/qa-channel.js".',
-    'npm package must not include private QA channel type artifact "dist/plugin-sdk/extensions/qa-channel/api.d.ts".',
-    'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
-    'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
-    'npm package must not include private QA lab SDK artifact "dist/plugin-sdk/qa-lab.js".',
-    'npm package must not include private QA lab type artifact "dist/plugin-sdk/extensions/qa-lab/cli.d.ts".',
-    'npm package must not include private QA runtime chunk "dist/qa-runtime-B9LDtssJ.js".',
-    'npm package must not include private QA runtime SDK artifact "dist/plugin-sdk/qa-runtime.d.ts".',
-    'npm package must not include private QA suite artifact "qa/scenarios/index.yaml".',
-  ]);
+  const forbidden: Array<[string, string]> = [
+    ["generated docs artifact", "docs/.generated/config-baseline.json"],
+    ["generated docs artifact", "docs/.generated/config-baseline.plugin.json"],
+    ["local application build output", "dist/OpenClaw.app/Contents/MacOS/OpenClaw"],
+    ["local runtime build output", "dist-runtime/extensions/example/runtime.js"],
+    ["private QA channel artifact", "dist/extensions/qa-channel/runtime-api.js"],
+    ["private QA channel docs", "docs/channels/qa-channel.md"],
+    ["private QA channel SDK artifact", "dist/plugin-sdk/qa-channel-protocol.d.ts"],
+    ["private QA channel SDK artifact", "dist/plugin-sdk/qa-channel.js"],
+    ["private QA channel type artifact", "dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
+    ["private QA lab artifact", "dist/extensions/qa-lab/runtime-api.js"],
+    ["private QA lab SDK artifact", "dist/plugin-sdk/qa-lab.js"],
+    ["private QA lab type artifact", "dist/plugin-sdk/extensions/qa-lab/cli.d.ts"],
+    ["private QA runtime chunk", "dist/qa-runtime-B9LDtssJ.js"],
+    ["private QA runtime SDK artifact", "dist/plugin-sdk/qa-runtime.d.ts"],
+    ["private QA suite artifact", "qa/scenarios/index.yaml"],
+  ];
+  const paths = ["dist/index.js", ...forbidden.toReversed().map(([, file]) => file)];
+  expect(pathErrors(paths)).toEqual(
+    forbidden.map(([kind, file]) => `npm package must not include ${kind} "${file}".`),
+  );
 });
 
 it.each([
   ["dist/entry.js", "//#region extensions/qa-lab/src/cli.ts\n", "//#region extensions/qa-lab/"],
+  ["dist/entry.js", "// extensions/qa-lab/src/cli.ts\n", "// extensions/qa-lab/src/cli.ts"],
   [
     PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
     JSON.stringify(["dist/extensions/qa-lab/runtime-api.js"]),
@@ -133,17 +100,13 @@ it.each([
   mkdirSync(join(rootDir, "dist"));
   writeFileSync(join(rootDir, file), content);
   writeFileSync(join(rootDir, "README.md"), "developer docs mention extensions/qa-lab/\n");
-  expect(collectForbiddenPackedContentErrors([file, "README.md"], rootDir)).toEqual([
+  expect(contentErrors([file, "README.md"], rootDir)).toEqual([
     `npm package must not include private QA lab marker "${marker}" in "${file}".`,
   ]);
 });
 
 it("allows shipped Markdown reference guides", () => {
-  expect(
-    collectPackedTestCargoErrors([
-      "docs/reference/test/local.md",
-      "docs/reference/tests/guide.md",
-      String.raw`docs\reference\test\docker.md`,
-    ]),
-  ).toStrictEqual([]);
+  const paths = ["test/local.md", "tests/guide.md"].map((file) => `docs/reference/${file}`);
+  paths.push(String.raw`docs\reference\test\docker.md`);
+  expect(collectPackedTestCargoErrors(paths)).toStrictEqual([]);
 });

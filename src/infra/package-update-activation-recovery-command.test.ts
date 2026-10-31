@@ -1,10 +1,15 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import { readBytes } from "./package-update-activation-fixtures.test-support.js";
 import {
   openPackageActivationJournal,
+  resolvePackageActivationControl,
+  resolvePackageActivationHelper,
   resolvePackageActivationJournalPath,
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
@@ -16,10 +21,31 @@ import {
   runPackageActivationRecovery,
   settlePendingPackageActivation,
 } from "./package-update-activation.js";
+import { createPublicationOwner } from "./package-update-publication-owner.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 const fixture = createPackageActivationLifetimeFixture();
 const recoveryWorker = resolveRuntimeWorkerUrl(packageActivationRuntimeEntrypoint);
+function recoveryCommand(
+  prepared: { anchor: string; operationId: string },
+  env: NodeJS.ProcessEnv,
+  preload: string[] = [],
+) {
+  const argv = [
+    ...preload,
+    ...resolveRuntimeWorkerArgv(recoveryWorker),
+    "--anchor",
+    prepared.anchor,
+    "--operation",
+    prepared.operationId,
+  ];
+  return (action: string) =>
+    spawnSync(process.execPath, [...argv, action], {
+      env,
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+}
 afterEach(async () => {
   try {
     await fixture.lifetime.cleanup();
@@ -27,6 +53,92 @@ afterEach(async () => {
     vi.restoreAllMocks();
   }
 });
+
+it.skipIf(process.platform === "win32").each([false, true])(
+  "recovers after private permission repair and preserves package integrity checks (changed=%s)",
+  (changed) =>
+    fixture.lifetime.run(async () => {
+      const { root } = fixture.setup();
+      const packageModes = (directory: string, broaden: boolean) => {
+        for (const name of fs.readdirSync(directory)) {
+          const file = path.join(directory, name);
+          if (fs.lstatSync(file).isDirectory()) {
+            packageModes(file, broaden);
+          } else {
+            fs.chmodSync(file, broaden ? 0o650 : 0o600);
+          }
+        }
+        fs.chmodSync(directory, broaden ? 0o750 : 0o700);
+      };
+      const prepared = await fixture.prepare(() => {
+        packageModes(path.join(root, "stage/lib/node_modules/openclaw"), false);
+      });
+      const journal = openPackageActivationJournal(prepared.anchor);
+      const originalRename = fsp.rename;
+      const interrupted = vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+        if (from === path.join(prepared.anchor, "candidate")) {
+          throw new Error("interrupted candidate publication");
+        }
+        return originalRename(from, to);
+      });
+      await expect(
+        withUpdateCommandExecutor(
+          journal.read().descriptor.operationId,
+          async (executor) => {
+            const fence = await executor.enter(prepared.packageRoot);
+            await createPublicationOwner(prepared.anchor, journal, fence.assertCurrent).publish(
+              false,
+            );
+          },
+          { existingAuthority: journal.read().descriptor.authority },
+        ),
+      ).rejects.toThrow("interrupted candidate publication");
+      interrupted.mockRestore();
+      const privateObjects = [
+        [prepared.anchor, 0o700],
+        [resolvePackageActivationControl(prepared.anchor), 0o700],
+        [resolvePackageActivationJournalPath(prepared.anchor), 0o600],
+        [resolvePackageActivationHelper(prepared.anchor), 0o600],
+      ] as const;
+      const broadenPermissions = () => {
+        for (const [file, mode] of privateObjects) {
+          fs.chmodSync(file, mode | 0o050);
+        }
+      };
+      broadenPermissions();
+      packageModes(path.join(prepared.anchor, "candidate"), true);
+      await expect(
+        runPackageActivationRecovery(prepared.anchor, "repair", prepared.operationId),
+      ).resolves.toMatchObject({ phase: "publication-complete" });
+      for (const [file, mode] of privateObjects) {
+        expect(fs.statSync(file).mode & 0o777).toBe(mode);
+      }
+      expect(fs.readFileSync(prepared.launcher, "utf8")).toBe("candidate launcher\n");
+      expect(fs.statSync(path.join(prepared.packageRoot, "dist/index.js")).mode & 0o777).toBe(
+        0o600,
+      );
+      expect(
+        JSON.parse(fs.readFileSync(path.join(prepared.packageRoot, "package.json"), "utf8")),
+      ).toMatchObject({ version: "2.0.0" });
+
+      broadenPermissions();
+      if (changed) {
+        const payload = path.join(prepared.packageRoot, "dist/index.js");
+        fs.writeFileSync(payload, "changed package contents\n");
+        await expect(
+          runPackageActivationRecovery(prepared.anchor, "retire", prepared.operationId),
+        ).rejects.toThrow("Package publication object changed");
+        expect(fs.readFileSync(payload, "utf8")).toBe("changed package contents\n");
+        expect(fs.existsSync(path.join(prepared.anchor, "previous/package.json"))).toBe(true);
+      } else {
+        await expect(
+          runPackageActivationRecovery(prepared.anchor, "retire", prepared.operationId),
+        ).resolves.toMatchObject({ phase: "complete" });
+        expect(fs.existsSync(prepared.anchor)).toBe(false);
+        expect(() => assertNoPendingPackageActivation(prepared.packageRoot)).not.toThrow();
+      }
+    }),
+);
 
 it.skipIf(process.platform === "win32")(
   "replays the pending receipt with the validated runtime when PATH has no node",
@@ -68,19 +180,7 @@ it.skipIf(process.platform === "win32")(
     fixture.lifetime.run(async () => {
       const { childGuardEnv } = fixture.setup();
       const prepared = await fixture.prepare();
-      const run = (action: string) =>
-        spawnSync(
-          process.execPath,
-          [
-            ...resolveRuntimeWorkerArgv(recoveryWorker),
-            "--anchor",
-            prepared.anchor,
-            "--operation",
-            prepared.operationId,
-            action,
-          ],
-          { env: childGuardEnv(process.env), encoding: "utf8", timeout: 30_000 },
-        );
+      const run = recoveryCommand(prepared, childGuardEnv(process.env));
       const journalPath = resolvePackageActivationJournalPath(prepared.anchor);
       const pendingBytes = fs.readFileSync(journalPath);
       const pending = run("retire");
@@ -134,9 +234,7 @@ it.skipIf(process.platform === "win32")(
       });
       expect(result.stderr).toContain(retained);
       expect(fs.existsSync(path.dirname(journalPath))).toBe(false);
-      expect(fs.readFileSync(path.join(retained, "control", "operation.sqlite"))).toEqual(
-        completedBytes,
-      );
+      expect(readBytes(retained, "control", "operation.sqlite")).toEqual(completedBytes);
       expect(() => assertNoPendingPackageActivation(prepared.packageRoot)).not.toThrow();
     }),
 );
@@ -174,20 +272,11 @@ syncBuiltinESMExports();
 `,
         );
       }
-      const run = (action: string) =>
-        spawnSync(
-          process.execPath,
-          [
-            ...(scenario === "archive-sync-fails" ? ["--import", preload] : []),
-            ...resolveRuntimeWorkerArgv(recoveryWorker),
-            "--anchor",
-            f.anchor,
-            "--operation",
-            f.operationId,
-            action,
-          ],
-          { env: childGuardEnv(process.env), encoding: "utf8", timeout: 30_000 },
-        );
+      const run = recoveryCommand(
+        f,
+        childGuardEnv(process.env),
+        scenario === "archive-sync-fails" ? ["--import", preload] : [],
+      );
       const before = fs.readFileSync(f.journalPath);
       for (const action of ["status", "retire"]) {
         const refusal = run(action);

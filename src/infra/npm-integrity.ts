@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { NpmIntegrityDrift, NpmSpecResolution } from "./install-source-utils.js";
+import type { NpmSpecResolution } from "./install-source-utils.js";
 
 export type NpmIntegrityDriftPayload = {
   spec: string;
@@ -18,7 +18,7 @@ type ResolveNpmIntegrityDriftWithDefaultMessageParams = {
 
 export async function resolveNpmIntegrityDriftWithDefaultMessage(
   params: ResolveNpmIntegrityDriftWithDefaultMessageParams,
-): Promise<{ integrityDrift?: NpmIntegrityDrift; error?: string }> {
+): Promise<{ error?: string }> {
   const expectedIntegrity = normalizeOptionalString(params.expectedIntegrity);
   if (!expectedIntegrity) {
     return {};
@@ -33,7 +33,6 @@ export async function resolveNpmIntegrityDriftWithDefaultMessage(
     return {};
   }
 
-  const integrityDrift: NpmIntegrityDrift = { expectedIntegrity, actualIntegrity };
   const payload: NpmIntegrityDriftPayload = {
     spec: params.spec,
     expectedIntegrity,
@@ -49,8 +48,5 @@ export async function resolveNpmIntegrityDriftWithDefaultMessage(
     );
   }
 
-  return {
-    integrityDrift,
-    ...(proceed ? {} : { error: `aborted: npm package integrity drift detected for ${subject}` }),
-  };
+  return proceed ? {} : { error: `aborted: npm package integrity drift detected for ${subject}` };
 }

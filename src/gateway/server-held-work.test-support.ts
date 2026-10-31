@@ -9,11 +9,15 @@ export async function observeGatewayConnectionWork(releases: Promise<void>[] = [
   let signal: AbortSignal | undefined;
   let restoreRegistration: (() => void) | undefined;
   const kernelModule = await import("./server-kernel.js");
+  let context:
+    | Awaited<ReturnType<typeof kernelModule.createGatewayKernel>>["gatewayRequestContext"]
+    | undefined;
   const createKernel = kernelModule.createGatewayKernel;
   const factory = vi
     .spyOn(kernelModule, "createGatewayKernel")
     .mockImplementationOnce(async (...args) => {
       const kernel = await createKernel(...args);
+      context = kernel.gatewayRequestContext;
       signal = kernel.connectionWork.signal;
       const register = kernel.connectionWork.registerConnection.bind(kernel.connectionWork);
       const registration = vi
@@ -34,6 +38,9 @@ export async function observeGatewayConnectionWork(releases: Promise<void>[] = [
       return kernel;
     });
   return {
+    get context() {
+      return context;
+    },
     get signal() {
       return signal;
     },

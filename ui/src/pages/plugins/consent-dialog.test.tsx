@@ -6,7 +6,7 @@ import { buildCapabilityConsentErrorDetails } from "../../../../packages/gateway
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import {
-  renderArtTile,
+  PluginArtTile,
   renderPluginConsentDialog as PluginConsentDialog,
 } from "./consent-dialog.tsx";
 import { createInspectResult } from "./plugins-page.test-support.ts";
@@ -21,6 +21,7 @@ function mount(overrides: Partial<ConsentProps> = {}): HTMLElement {
       fallback: { name: "Workboard" },
     },
     inspection: createInspectResult(),
+    inspectionRead: null,
     loading: false,
     error: null,
     canMutate: true,
@@ -272,14 +273,18 @@ describe("renderPluginConsentDialog", () => {
 
 it("tries the author image after a broken package image, then retains initials until the source changes", () => {
   const [url, setUrl] = createSignal("blob:package");
-  const view = mountSolid(() =>
-    renderArtTile("lossless-claw", "Lossless Context Management", {
-      get iconUrl() {
-        return url();
-      },
-      authorIconUrl: "blob:author",
-    }),
-  );
+  const unregister = vi.fn();
+  const onIconError = vi.fn();
+  const view = mountSolid(() => (
+    <PluginArtTile
+      slug="lossless-claw"
+      name="Lossless Context Management"
+      iconUrl={url()}
+      authorIconUrl="blob:author"
+      registerIcon={() => unregister}
+      onIconError={onIconError}
+    />
+  ));
   const container = view.container;
   flush();
   expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:package");
@@ -296,5 +301,9 @@ it("tries the author image after a broken package image, then retains initials u
   setUrl("blob:updated");
   flush();
   expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:updated");
+  const detachedImage = container.querySelector("img")!;
   view.unmount();
+  detachedImage.dispatchEvent(new Event("error"));
+  expect(onIconError).toHaveBeenCalledTimes(1);
+  expect(unregister).toHaveBeenCalledOnce();
 });

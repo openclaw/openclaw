@@ -50,6 +50,7 @@ export const MemoryWikiConfigSource = z
       .optional(),
     bridge: z
       .strictObject({
+        ownership: z.enum(["sandboxed-only", "owner"]).optional(),
         enabled: z.boolean().optional(),
         readMemoryArtifacts: z.boolean().optional(),
         indexDreamReports: z.boolean().optional(),
@@ -122,8 +123,7 @@ export function resolveMemoryWikiConfig(
   options?: { homedir?: string; env?: NodeJS.ProcessEnv },
 ) {
   const homedir = options?.homedir ?? os.homedir();
-  const parsed = config ? MemoryWikiConfigSource.safeParse(config) : null;
-  const safeConfig = parsed?.success ? parsed.data : (config ?? {});
+  const safeConfig = config ?? {};
   const vaultScope = safeConfig.vault?.scope ?? "global";
   const vaultPath =
     safeConfig.vault?.path ??
@@ -147,6 +147,7 @@ export function resolveMemoryWikiConfig(
       openAfterWrites: safeConfig.obsidian?.openAfterWrites ?? false,
     },
     bridge: {
+      ownership: safeConfig.bridge?.ownership ?? "sandboxed-only",
       enabled: safeConfig.bridge?.enabled ?? false,
       readMemoryArtifacts: safeConfig.bridge?.readMemoryArtifacts ?? true,
       indexDreamReports: safeConfig.bridge?.indexDreamReports ?? true,

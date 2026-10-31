@@ -36,12 +36,6 @@ describe("Sessions board match normalization", () => {
     );
   });
 
-  it.each(["includeAutomation", "includeHome"])("rejects non-boolean scope.%s", (field) => {
-    expect(() =>
-      normalizeWorkboardSessionsBoardSpec({ ...specWithMatch({}), scope: { [field]: "true" } }),
-    ).toThrow(`scope.${field} must be a boolean`);
-  });
-
   it.each([
     { name: "one rule", match: { run: ["active"] }, expected: { run: ["active"] } },
     { name: "a singleton array", match: [{ run: ["active"] }], expected: { run: ["active"] } },

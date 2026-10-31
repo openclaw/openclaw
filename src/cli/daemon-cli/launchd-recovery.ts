@@ -6,25 +6,21 @@ import {
   repairLaunchAgentBootstrap,
   resolveLaunchAgentLabel,
 } from "../../daemon/launchd.js";
+import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
 
 const LAUNCH_AGENT_RECOVERY_MESSAGE =
   "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.";
 
-type LaunchAgentRecoveryAction = "started" | "restarted";
-
-type LaunchAgentRecoveryResult<TResult extends LaunchAgentRecoveryAction> = {
+/** Re-bootstrap an installed but unloaded LaunchAgent after a daemon start/restart command. */
+export async function recoverInstalledLaunchAgent<TResult extends "started" | "restarted">(params: {
+  result: TResult;
+  deadline?: GatewayServiceControlArgs["deadline"];
+  env?: Record<string, string | undefined>;
+}): Promise<{
   result: TResult;
   loaded: true;
   message: string;
-};
-
-/** Re-bootstrap an installed but unloaded LaunchAgent after a daemon start/restart command. */
-export async function recoverInstalledLaunchAgent<
-  TResult extends LaunchAgentRecoveryAction,
->(params: {
-  result: TResult;
-  env?: Record<string, string | undefined>;
-}): Promise<LaunchAgentRecoveryResult<TResult> | null> {
+} | null> {
   if (process.platform !== "darwin") {
     return null;
   }
@@ -37,10 +33,12 @@ export async function recoverInstalledLaunchAgent<
   if (!plistExists) {
     return null;
   }
-  const repaired = await repairLaunchAgentBootstrap({ env }).catch(() => ({
-    ok: false as const,
-    status: "bootstrap-failed" as const,
-  }));
+  const repaired = await repairLaunchAgentBootstrap({ env, deadline: params.deadline }).catch(
+    () => ({
+      ok: false as const,
+      status: "bootstrap-failed" as const,
+    }),
+  );
   if (!repaired.ok) {
     if (
       repaired.status === "system-launchdaemon-conflict" ||

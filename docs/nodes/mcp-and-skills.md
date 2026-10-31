@@ -57,6 +57,10 @@ expires, the node withdraws that server's stale tools and reconnects with
 bounded backoff. The failed call that detects an expired session is not replayed;
 a later call can use the replacement connection after its tools are republished.
 
+If a node warns that an MCP server's cleanup could not be confirmed, check that
+server process on the node. Other servers continue shutting down or reconnecting;
+the warning does not confirm that the affected server has stopped.
+
 Gateway operators can ignore all agent-visible tools published by paired nodes,
 including node-hosted MCP tools, with
 `gateway.nodes.pluginTools.enabled: false`. Exact command denies such as
@@ -91,6 +95,10 @@ its active OpenClaw state directory, so relative paths resolve on the node rathe
 than the Gateway machine. The publishing node must have approved `system.run`,
 and the agent's exec policy must allow `host=node`; otherwise the skill stays
 out of that agent's snapshot.
+
+Native Claude CLI turns receive selected node-hosted instructions through the
+session-scoped skills plugin, including the existing node execution guidance.
+Referenced scripts and binaries stay on the publishing node.
 
 Set `nodeHost.skills.enabled: false` on the node to stop publication. Gateway
 operators can ignore skills from every paired node with

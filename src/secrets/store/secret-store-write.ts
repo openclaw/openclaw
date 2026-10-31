@@ -12,7 +12,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
-import { classifyHiddenGitHubStoreName } from "./secret-store-hidden-github.js";
+import { classifyHiddenGitHubStoreName } from "./secret-store-github-names.js";
 import { withMissingSecretStoreFallback } from "./secret-store-sqlite.js";
 import { SecretStoreValidationError } from "./secret-store-validation-error.js";
 import {
@@ -55,7 +55,7 @@ export type SecretStoreBatchWriteParams = {
   database?: OpenClawStateDatabaseOptions;
 };
 
-export type SecretStoreWriteResult = {
+type SecretStoreWriteResult = {
   kind: SecretStoreKind;
   previous: SecretStoreWriteSnapshot | undefined;
 };

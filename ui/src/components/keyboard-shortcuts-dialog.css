@@ -8,9 +8,6 @@ openclaw-keyboard-shortcuts-dialog .dialog {
   display: flex;
   max-height: min(720px, calc(100dvh - 64px));
   flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--card);
   color: var(--text);
 }
 
@@ -18,24 +15,24 @@ openclaw-keyboard-shortcuts-dialog .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 22px 16px;
+  padding: var(--overlay-modal-padding) var(--overlay-modal-padding) 16px;
   border-bottom: 1px solid var(--border);
 }
 
 openclaw-keyboard-shortcuts-dialog h2 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 16px;
+  font-size: var(--overlay-modal-title-size);
   font-weight: 600;
 }
 
 openclaw-keyboard-shortcuts-dialog .close {
   display: grid;
-  width: 28px;
-  height: 28px;
+  width: var(--overlay-modal-close-size);
+  height: var(--overlay-modal-close-size);
   place-items: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--muted);
 }
@@ -45,8 +42,8 @@ openclaw-keyboard-shortcuts-dialog .close span {
 }
 
 openclaw-keyboard-shortcuts-dialog .close svg {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
 }
 
 openclaw-keyboard-shortcuts-dialog .close:hover {
@@ -56,7 +53,7 @@ openclaw-keyboard-shortcuts-dialog .close:hover {
 
 openclaw-keyboard-shortcuts-dialog .body {
   overflow: auto;
-  padding: 8px 22px 18px;
+  padding: 8px var(--overlay-modal-padding) 18px;
 }
 
 openclaw-keyboard-shortcuts-dialog section + section {
@@ -105,21 +102,4 @@ openclaw-keyboard-shortcuts-dialog kbd {
   font: inherit;
   font-size: 12px;
   text-align: center;
-}
-
-openclaw-keyboard-shortcuts-dialog .shortcut-kbd:where(:not([hidden])) {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  vertical-align: middle;
-}
-openclaw-keyboard-shortcuts-dialog .shortcut-kbd > span + span {
-  margin-inline-start: 0.15em;
-}
-openclaw-keyboard-shortcuts-dialog .kbd__text {
-  text-box: trim-both cap alphabetic;
-}
-openclaw-keyboard-shortcuts-dialog .shortcut-kbd::before {
-  content: "";
-  height: 1lh;
 }

@@ -1,6 +1,6 @@
 import process from "node:process";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { waitForCliSignalExit } from "../cli/signal-exit-barrier.js";
+import { registerSignalExitOwner, waitForCliSignalExit } from "../cli/signal-exit-barrier.js";
 
 const restoreRuntimeTerminalStateMock = vi.hoisted(() => vi.fn());
 vi.mock("../runtime.js", () => ({
@@ -81,6 +81,21 @@ describe("process error handlers", () => {
   );
 
   it.each([
+    ["ERR_WORKER_OUT_OF_MEMORY", "fatal unhandled rejection"],
+    [undefined, "unhandled rejection"],
+  ] as const)("passes the rejection reason to the process owner for code %s", (code, reason) => {
+    const owner = vi.fn();
+    const release = registerSignalExitOwner(owner);
+    try {
+      emitUnhandled(Object.assign(new Error("expected failure"), { code }));
+      expect(owner).toHaveBeenCalledExactlyOnceWith(1, reason);
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      release();
+    }
+  });
+
+  it.each([
     Object.assign(new TypeError("request failed"), { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } }),
     Object.assign(new Error("unable to open database file"), { code: "SQLITE_CANTOPEN" }),
   ])("warns without exiting for transient rejection %#", (error) => {
@@ -137,7 +152,12 @@ describe("process error handlers", () => {
     const error = new Error("registry input");
     const withoutStack = new Error("message fallback");
     delete withoutStack.stack;
-    const thrown = [new Error("stack detail"), withoutStack, { detail: "non-Error" }];
+    // Bun can materialize a bare "Error" header during GC that drops the message
+    // from the stack; the reporter must still name the failure.
+    const bareHeader = Object.assign(new Error("bare header message"), {
+      stack: "Error\n    at handlerThatThrew (source.js:3)",
+    });
+    const thrown = [new Error("stack detail"), withoutStack, bareHeader, { detail: "non-Error" }];
     const calls: string[] = [];
     const disposers = [
       registerUnhandledRejectionHandler((value) => {
@@ -171,13 +191,19 @@ describe("process error handlers", () => {
         }),
       );
       rejectionListener(error, Promise.resolve());
-      expect(calls).toEqual(["false", "throw-0", "throw-1", "throw-2", "handled"]);
-      expect(errorSpy.mock.calls).toEqual(
-        thrown.map((failure) => [
+      expect(calls).toEqual(["false", "throw-0", "throw-1", "throw-2", "throw-3", "handled"]);
+      expect(errorSpy.mock.calls).toEqual([
+        [
           "[openclaw] Unhandled rejection handler failed:",
-          failure instanceof Error ? (failure.stack ?? failure.message) : failure,
-        ]),
-      );
+          expect.stringMatching(/^Error: stack detail\n/),
+        ],
+        ["[openclaw] Unhandled rejection handler failed:", "message fallback"],
+        [
+          "[openclaw] Unhandled rejection handler failed:",
+          "Error: bare header message\n    at handlerThatThrew (source.js:3)",
+        ],
+        ["[openclaw] Unhandled rejection handler failed:", { detail: "non-Error" }],
+      ]);
       expect(exitCalls).toEqual([]);
     } finally {
       for (const dispose of disposers) {

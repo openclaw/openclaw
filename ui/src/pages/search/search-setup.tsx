@@ -3,17 +3,17 @@ import { For, Show, createMemo } from "solid-js";
 import type { WebSearchStatusResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
+import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
+import { ConfigNode } from "../../components/config-form.node.tsx";
 import { resolveConfigFieldMeta } from "../../components/config-form.search.ts";
-import { analyzeConfigSchema, renderNode } from "../../components/config-form.ts";
 import { LearnMoreLink, SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import {
   currentConfigObject,
   type RuntimeConfigState,
 } from "../../lib/config/config-state-model.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { PluginCredentialEditor } from "../plugins/credential-editor.tsx";
 import { pluginConfigSchema } from "../plugins/settings-model.ts";
 import { readConfigValue } from "./search-config.ts";
@@ -43,24 +43,22 @@ function SearchConfigField(
       description={meta().help}
       stackedOnNarrow
       control={
-        <LitContent
-          render={() =>
-            renderNode({
-              schema: props.schema,
-              value: props.value,
-              path: props.path,
-              hints: hints(),
-              unsupported: props.unsupported,
-              disabled: !props.canEdit() || props.busy(),
-              compact: true,
-              commitOnBlur: true,
-              showLabel: false,
-              rawAvailable: false,
-              maskSensitive: true,
-              onPatch: (path, value) => void props.patch(path, value),
-              onRemove: (path) => void props.patch(path, undefined),
-            })
-          }
+        <ConfigNode
+          params={{
+            schema: props.schema,
+            value: props.value,
+            path: props.path,
+            hints: hints(),
+            unsupported: props.unsupported,
+            disabled: !props.canEdit() || props.busy(),
+            compact: true,
+            commitOnBlur: true,
+            showLabel: false,
+            rawAvailable: false,
+            maskSensitive: true,
+            onPatch: (path, value) => void props.patch(path, value),
+            onRemove: (path) => void props.patch(path, undefined),
+          }}
         />
       }
     />
@@ -70,8 +68,9 @@ function SearchConfigField(
 export function SearchSetup(
   props: SearchSettingsProps & {
     context: ApplicationContext;
-    gateway: Pick<GatewayPageController, "capture" | "isCurrent" | "epoch" | "connected">;
+    gateway: Pick<GatewayPageBinding, "capture" | "isCurrent" | "epoch" | "connected" | "client">;
     provider: SearchProvider;
+    getPresentationLifetime: () => Promise<void>;
   },
 ) {
   const config = () => currentConfigObject(props.state());
@@ -88,7 +87,7 @@ export function SearchSetup(
       : null;
   const values = () => asNullableRecord(readConfigValue(config(), props.provider.configPath));
   const credential = () => props.provider.credential;
-  const fields = () =>
+  const fields = createMemo(() =>
     Object.entries(schema()?.properties ?? {}).filter(([key]) => {
       const descriptor = credential();
       return (
@@ -97,7 +96,8 @@ export function SearchSetup(
         !props.provider.configPath.every((segment, index) => segment === descriptor.path[index]) ||
         descriptor.path.at(-1) !== key
       );
-    });
+    }),
+  );
   return (
     <>
       <SettingsRow
@@ -136,7 +136,10 @@ export function SearchSetup(
                   baseHash: props.state().configSnapshot?.hash ?? null,
                   gateway: props.gateway,
                   canInspect: props.canEdit(),
-                  saveError: props.state().lastError,
+                  getPresentationLifetime: () => props.getPresentationLifetime(),
+                  get saveError() {
+                    return props.state().lastError;
+                  },
                   onCommit: props.commit,
                   onDiscard: () => props.context.runtimeConfig.discardFormValue(descriptor().path),
                 }}
@@ -186,10 +189,11 @@ export function AdvancedSearchSettings(props: SearchSettingsProps) {
   const schema = () => analysis().schema?.properties?.tools?.properties?.web?.properties?.search;
   const config = () => currentConfigObject(props.state());
   const value = () => asNullableRecord(readConfigValue(config(), ["tools", "web", "search"]));
-  const fields = () =>
+  const fields = createMemo(() =>
     Object.entries(schema()?.properties ?? {}).filter(
       ([key]) => key !== "enabled" && key !== "provider",
-    );
+    ),
+  );
   return (
     <Show when={fields().length > 0}>
       <details class="settings-section config-advanced-disclosure">

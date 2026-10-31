@@ -7,6 +7,13 @@ export type WorkerRetirementReason =
   | "idle_timeout"
   | "memory_pressure"
   | "closed"
+  | "eviction"
+  | "idle-expiry"
+  | "dispose"
+  | "shutdown"
+  | "crash"
+  | "gc-thrash"
+  | "gc-storm"
   | "rotation"
   | "cancelled"
   | "failure"
@@ -35,9 +42,19 @@ export type WorkerTaskHost = {
   captureTaskContext(worker: WorkerLifecycle): unknown;
   taskContextTransferList?(context: unknown): readonly Transferable[];
   createTaskObserver?(url: URL): (operation?: string) => WorkerTaskObservation;
+  /** Return only bounded, privacy-safe labels; never retain or serialize task input. */
+  describeTask?(url: URL, input: unknown): string;
   receiveMessage(worker: WorkerLifecycle, message: unknown): boolean;
+  observeResourceReply?(this: void): void;
+  /** Capture diagnostics before construction detaches from the task's async context. */
+  captureWorkerStartObserver?(url: URL): (() => void) | undefined;
   workerStarted(worker: WorkerLifecycle, pool: object): void;
   workerRetiring(worker: WorkerLifecycle, reason: WorkerRetirementReason): void;
+  /** Best-effort telemetry before native stop; the host bounds waiting, including synchronous service. */
+  flushWorkerDiagnostics?(
+    worker: WorkerLifecycle,
+    reason: WorkerRetirementReason,
+  ): RetainedOperation<void> | undefined;
   computeCapacity: WorkerComputeCapacity;
   pools: {
     register<T extends ResourceOwningPool>(pool: T): T;

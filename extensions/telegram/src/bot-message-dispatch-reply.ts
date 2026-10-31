@@ -9,6 +9,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
+import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
   isFastModeAutoProgressPayload,
   isReplyPayloadNonTerminalToolErrorWarning,
@@ -19,7 +20,6 @@ import {
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   deliverFinalAnswerText,
   handlePreviewFinalizedResult,
@@ -65,9 +65,7 @@ import { applyTextToPayload, markTelegramDroppedControlFallback } from "./intera
 import { createTelegramReasoningStepState } from "./reasoning-lane-coordinator.js";
 import { resolveTelegramTargetChatType } from "./targets.js";
 
-type BufferedDispatchParams = Parameters<
-  TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
->[0];
+type BufferedDispatchParams = Parameters<typeof dispatchReplyWithBufferedBlockDispatcher>[0];
 type DispatcherOptions = BufferedDispatchParams["dispatcherOptions"];
 type Deliver = DispatcherOptions["deliver"];
 type Skip = NonNullable<DispatcherOptions["onSkip"]>;
@@ -220,11 +218,11 @@ async function adoptProgressDraft(
     return false;
   }
   const adopt = info.adoptProgressDraft;
-  await turn.draftEventQueue;
   const stream = turn.answerLane.stream;
   if (!stream || turn.answerLane.finalized || turn.isSuperseded()) {
     return false;
   }
+  await info.onPlatformSendDispatch?.();
   if (
     !turn.progressCompositor.isVisible &&
     !turn.progressCompositor.hasStarted &&
@@ -352,12 +350,7 @@ async function deliverReplyWithNormalization(
   const split = splitTextIntoLaneSegments(turn, lanePayload.text, payload.isReasoning);
   const { segment } = split;
   if (info.kind === "final" && (reply.text.length > 0 || reply.hasMedia)) {
-    // Mark final delivery before any queued draft drain; late tool progress must stay suppressed.
     turn.previewLifecycle.beginFinalDelivery();
-  }
-  if (info.kind === "final") {
-    // Final delivery drains queued draft work so an earlier block cannot overtake it.
-    await enqueueDraftEvent(turn, async () => {});
   }
   if (info.kind === "final" && effectivePayload.isStatusNotice === true) {
     // ACP identity notices finish dispatch but must not replace the answer preview.

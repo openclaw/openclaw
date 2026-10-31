@@ -1,0 +1,82 @@
+title: Claude CLI owner manages operator automations
+
+scenario:
+  id: cron-claude-cli-owner-management
+  surface: cron
+  gatewayConfigPatch:
+    commands:
+      ownerAllowFrom:
+        - qa-cli-owner
+  coverage:
+    primary:
+      - automation.cron-rpcs
+    secondary:
+      - anthropic.claude-cli-compatibility
+  objective: Verify a configured channel owner on a Claude CLI agent can read and change an automation owned by another account, through the CLI MCP tool bridge.
+  successCriteria:
+    - A live-frontier run fails fast unless the selected primary provider is claude-cli.
+    - The operator creates an automation owned by another account, which caller scope cannot see.
+    - A configured channel owner asks the Claude CLI agent to read and disable it, and the agent reports success.
+    - The automation is disabled and keeps its original owner.
+  docsRefs:
+    - docs/automation/cron-jobs/managing-jobs.md
+    - docs/gateway/cli-backends.md
+  codeRefs:
+    - src/agents/cli-runner/mcp-grant-context.ts
+    - src/agents/cron-creator-authority-context.ts
+    - src/gateway/mcp-http.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Owns an automation of another account and a configured owner conversation on the Claude CLI backend.
+    channel: qa-channel
+    retryCount: 0
+    timeoutMs: 420000
+    summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --cli-auth-mode subscription --model claude-cli/claude-sonnet-4-6 --alt-model claude-cli/claude-sonnet-4-6 --scenario cron-claude-cli-owner-management`.
+    config:
+      requiredProviderMode: live-frontier
+      requiredProvider: claude-cli
+      conversationId: qa-cli-owner-management
+      doneMarker: CLI-OWNER-MANAGE-DONE
+      failedMarker: CLI-OWNER-MANAGE-FAILED
+
+flow:
+  steps:
+    - name: a Claude CLI owner turn disables another account's automation
+      actions:
+        - set: selected
+          value:
+            expr: "splitModelRef(env.primaryModel)"
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode && selected?.provider === config.requiredProvider"
+            message:
+              expr: "`expected live ${config.requiredProvider}, got ${env.providerMode} ${env.primaryModel}`"
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 120000]
+        - call: waitForQaChannelReady
+          args: [{ ref: env }, 120000]
+        - call: reset
+        - set: job
+          value:
+            expr: "await env.gateway.call('cron.add', { agentId: 'qa', name: `qa-cli-owner-${randomUUID().slice(0, 8)}`, enabled: true, deleteAfterRun: false, owner: { agentId: 'qa', sessionKey: 'agent:qa:main', accountId: 'qa-other-account' }, schedule: { kind: 'at', at: new Date(Date.now() + 60 * 60 * 1000).toISOString() }, sessionTarget: 'main', wakeMode: 'next-heartbeat', payload: { kind: 'systemEvent', text: 'Operator check-in.' } }, { timeoutMs: 30000 })"
+        - assert:
+            expr: "Boolean(job.id) && job.owner?.accountId === 'qa-other-account'"
+            message:
+              expr: "`operator automation did not keep its other-account owner: ${JSON.stringify({ owner: job.owner, policy: job.scheduledToolPolicy })}`"
+        - set: sinceIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((row) => row.direction === 'outbound').length"
+        - set: sent
+          value:
+            expr: "await transport.sendInbound({ conversation: { id: config.conversationId, kind: 'group' }, senderId: 'qa-cli-owner', senderName: 'QA Owner', text: `@openclaw Use the automations tool: first get the automation with jobId ${job.id}, then update it with enabled set to false. If both calls succeed, reply exactly ${config.doneMarker}. If any call fails, reply ${config.failedMarker} followed by the exact error text.` })"
+        - set: reply
+          value:
+            expr: "await waitForCondition(() => state.getSnapshot().messages.filter((row) => row.direction === 'outbound').slice(sinceIndex).find((row) => row.conversation.id === config.conversationId && (row.text.includes(config.doneMarker) || row.text.includes(config.failedMarker))), liveTurnTimeoutMs(env, 300000), 500)"
+        - set: after
+          value:
+            expr: "await env.gateway.call('cron.get', { id: job.id }, { timeoutMs: 30000 })"
+        - assert:
+            expr: "reply.text.includes(config.doneMarker) && after.enabled === false && after.owner?.accountId === 'qa-other-account' && after.owner?.sessionKey === 'agent:qa:main'"
+            message:
+              expr: "`Claude CLI owner could not manage the operator automation: ${JSON.stringify({ reply: reply.text.slice(0, 600), enabled: after.enabled, owner: after.owner, policy: after.scheduledToolPolicy })}`"
+      detailsExpr: "`reply=${reply.text.slice(0, 80)} enabled=${after.enabled} policy=${after.scheduledToolPolicy?.mode}`"

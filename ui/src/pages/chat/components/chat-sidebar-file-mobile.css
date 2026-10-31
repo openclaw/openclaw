@@ -1,0 +1,252 @@
+/* Opt-in mobile chrome. The host chooses mobile from mergedChrome, never pane width. */
+.sidebar-file-mobile__rail {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: 40px;
+  padding-inline: 8px;
+  border-bottom: var(--rail-divider-size) solid var(--rail-divider-color);
+  background: var(--rail-header-background);
+  color: var(--text);
+}
+
+.sidebar-file-mobile__identity {
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.sidebar-file-mobile__name {
+  display: block;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-file-mobile__rail-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: auto;
+}
+
+.sidebar-file-mobile__button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: var(--cursor-action);
+  touch-action: manipulation;
+}
+
+.sidebar-file-mobile__button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sidebar-file-mobile__button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-file-mobile__button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.sidebar-file-mobile__button:disabled {
+  opacity: var(--rail-header-action-disabled-opacity);
+  cursor: default;
+}
+
+/* The existing reader/player remains inside this body; controls are its non-scrolling sibling. */
+.sidebar-file-mobile__body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.sidebar-file-mobile__floating {
+  position: absolute;
+  z-index: 2;
+  inset: auto var(--space-3) var(--space-3);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-file-mobile__capsule {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  max-width: 100%;
+  padding: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  color: var(--muted);
+  box-shadow: var(--shadow-sm);
+  pointer-events: auto;
+}
+
+.sidebar-file-mobile__reading,
+.sidebar-file-mobile__editing,
+.sidebar-file-mobile__image {
+  margin-inline-start: auto;
+}
+
+.sidebar-file-mobile__divider {
+  flex: 0 0 1px;
+  width: 1px;
+  height: 18px;
+  margin-inline: 2px;
+  background: var(--border-strong);
+}
+
+.sidebar-file-mobile__mode--source {
+  border-color: var(--border-hover);
+}
+
+.sidebar-file-mobile__mode--source .sidebar-file-mobile__button {
+  color: var(--text);
+}
+
+.sidebar-file-mobile__find {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-inline-start: var(--space-3);
+}
+
+.sidebar-file-mobile__query {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-input-text-size);
+}
+
+.sidebar-file-mobile__query::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.sidebar-file-mobile__query:focus-visible {
+  outline: 0;
+  box-shadow: none;
+}
+
+.sidebar-file-mobile__find:focus-within {
+  border-color: var(--border-hover);
+}
+
+.sidebar-file-mobile__counter {
+  flex: 0 0 auto;
+  padding-inline: var(--space-1);
+  font-size: var(--control-ui-text-sm);
+  white-space: nowrap;
+}
+
+.sidebar-file-mobile__text-action {
+  width: auto;
+  padding-inline: var(--space-3);
+  font-size: var(--control-ui-text-md);
+}
+
+.sidebar-file-mobile__save,
+.sidebar-file-mobile__save:hover:not(:disabled) {
+  background: transparent;
+  color: var(--accent);
+}
+
+.sidebar-file-mobile__save:disabled {
+  color: var(--muted);
+}
+
+/* Apply only to the actual scrollport, with edges supplied by its native overflow owner.
+   The separate opaque layer leaves the scrollbar lane unmasked. */
+.sidebar-file-mobile__scroll {
+  --mobile-file-fade-top: 0px;
+  --mobile-file-fade-bottom: 0px;
+  --mobile-file-scrollbar-width: 12px;
+}
+
+.sidebar-file-mobile__scroll:is([data-fade-top], [data-fade-bottom]) {
+  mask-image:
+    linear-gradient(
+      to bottom,
+      transparent,
+      black var(--mobile-file-fade-top),
+      black calc(100% - var(--mobile-file-fade-bottom)),
+      transparent
+    ),
+    linear-gradient(black, black);
+  mask-size:
+    calc(100% - var(--mobile-file-scrollbar-width)) 100%,
+    var(--mobile-file-scrollbar-width) 100%;
+  mask-position:
+    left top,
+    right top;
+  mask-repeat: no-repeat;
+}
+
+.sidebar-file-mobile__scroll:dir(rtl) {
+  mask-position:
+    right top,
+    left top;
+}
+
+.sidebar-file-mobile__scroll[data-fade-top] {
+  --mobile-file-fade-top: 16px;
+}
+
+.sidebar-file-mobile__scroll[data-fade-bottom] {
+  --mobile-file-fade-bottom: 28px;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .sidebar-file-mobile__scroll:is([data-fade-top], [data-fade-bottom]) {
+    mask-image: none;
+  }
+}
+
+.sidebar-file-mobile__rail .sidebar-file-mobile__button {
+  border-radius: var(--radius-sm);
+}
+.sidebar-file-mobile__rail-actions .btn {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.sidebar-file-mobile__rail-actions .btn svg {
+  width: 16px;
+  height: 16px;
+}

@@ -13,7 +13,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import type { RealtimeVoiceAgentConsultTranscriptEntry } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guards";
-import WebSocket, { type RawData } from "ws";
+import { type RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import { hangupOpenAILiveCall } from "./realtime-live-api.js";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
@@ -682,9 +682,6 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
     shutdownController.abort(new Error("OpenAI realtime broker stopped"));
     for (const [token, offer] of pendingOffers) {
       expirePendingOffer(token, offer);
-    }
-    for (const { controller } of inFlightOffers.values()) {
-      controller.abort(new Error("OpenAI realtime broker stopped"));
     }
     return cleanupInFlight.finally(() => {
       cleanupInFlight = undefined;

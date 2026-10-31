@@ -1,10 +1,13 @@
-import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
+import { isProxy } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
+import { stripCompactionReplayCheckpointInPlace } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
+import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
 import { logWarn } from "../../logger.js";
 import { projectModelContextMessages } from "../../shared/model-context-message.js";
+import { isOpenClawSubagentCompletionMirrorAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import type {
@@ -12,7 +15,6 @@ import type {
   FileEntry,
   SessionContext,
   SessionEntry,
-  SessionHeader,
 } from "./session-manager-types.js";
 
 export {
@@ -23,7 +25,15 @@ export {
   partitionSessionFileEntries,
 } from "../../config/sessions/session-entry-codec.js";
 
-export function isTalkRealtimeVoiceEntry(entry: SessionEntry): boolean {
+/** Rows that record history without consuming the open turn's keyed input. */
+export function isOutOfTurnHistoryEntry(entry: SessionEntry): boolean {
+  return (
+    isTalkRealtimeVoiceEntry(entry) ||
+    (entry.type === "message" && isOpenClawSubagentCompletionMirrorAssistantMessage(entry.message))
+  );
+}
+
+function isTalkRealtimeVoiceEntry(entry: SessionEntry): boolean {
   if (
     entry.type !== "message" ||
     (entry.message.role !== "user" && entry.message.role !== "assistant")
@@ -131,18 +141,61 @@ export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEnt
   return boundary?.type === "compaction" ? boundary : null;
 }
 
-export function cloneSessionModelContextEntries(
-  header: SessionHeader | null,
-  branch: readonly SessionEntry[],
-): FileEntry[] {
-  // Public manager entries are mutable; preserve durable bytes before publication.
-  const events = structuredClone([...(header ? [header] : []), ...branch]);
-  for (const entry of events) {
+export function cloneSessionModelContextEntries(branch: readonly SessionEntry[]): SessionEntry[] {
+  // Project storage-only payloads before cloning, while isolating mutable manager entries.
+  const events = [...branch];
+  for (let index = 0; index < events.length; index++) {
+    const entry = events[index]!;
     if (entry.type === "message") {
-      entry.message = projectModelContextMessages([entry.message])[0]!;
+      const message = projectModelContextMessages([entry.message])[0]!;
+      if (message !== entry.message) {
+        events[index] = { ...entry, message };
+      }
     }
   }
-  return events;
+  // Initial model history stays writable even when resident payloads are frozen.
+  return cloneTranscriptView(events, {
+    shareImmutablePayloads: false,
+  });
+}
+
+/** Reuse immutable text without sharing the freshly hydrated message containers. */
+export function reuseResidentSessionEntryStrings(
+  entries: readonly FileEntry[],
+  residentEntries: ReadonlyMap<string, SessionEntry>,
+): void {
+  const reuse = (target: object, source: unknown): void => {
+    if (source === null || typeof source !== "object" || isProxy(source)) {
+      return;
+    }
+    for (const key of Object.keys(target)) {
+      const value: unknown = Reflect.get(target, key);
+      if (typeof value !== "string" && (value === null || typeof value !== "object")) {
+        continue;
+      }
+      const resident: unknown = Object.getOwnPropertyDescriptor(source, key)?.value;
+      if (typeof value === "string" && value === resident) {
+        Reflect.set(target, key, resident);
+      } else if (value !== null && typeof value === "object") {
+        reuse(value, resident);
+      }
+    }
+  };
+  for (const entry of entries) {
+    // Custom system-prompt metadata can be pooled and frozen; messages stay private.
+    if (entry.type === "message") {
+      reuse(entry, residentEntries.get(entry.id));
+    }
+  }
+}
+
+/** Build initial history using the reader's private messages and equal resident strings. */
+export function buildInitialContext(
+  branch: SessionEntry[],
+  residentEntries: ReadonlyMap<string, SessionEntry>,
+): SessionContext {
+  reuseResidentSessionEntryStrings(branch, residentEntries);
+  return buildCoreSessionContext(branch);
 }
 
 export function buildSessionContext(

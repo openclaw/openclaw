@@ -7,8 +7,68 @@ import {
 } from "./plugin-instance-error.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 
 describe("ordinary non-joining registry calls", () => {
+  it.each([false, true])(
+    "keeps lifecycle background authority after supersession only with overlap=%s",
+    async (generationOverlap) => {
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({ id: "background-owner", generationOverlap });
+      registry.plugins.push(record);
+      const instance = new PluginInstance(record.id, { record, registry });
+      const parent = instance.retainConsumer();
+      const effect = instance.wrap(() => "original generation");
+      const background = () => instance.lifecycle.runInBackgroundContext(effect);
+      try {
+        expect(parent.run(background)).toBe("original generation");
+        parent.release();
+        instance.quiesce();
+        if (generationOverlap) {
+          expect(background()).toBe("original generation");
+        } else {
+          expect(background).toThrow(PluginInstanceUnavailableError);
+        }
+        await instance.dispose();
+        expect(background).toThrow();
+      } finally {
+        parent.release();
+        await instance.dispose();
+      }
+    },
+  );
+
+  it("joins admitted overlap background work after terminal revocation and plugin cleanup", async () => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "background-owner", generationOverlap: true });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    const finish = createDeferredCore();
+    const effect = vi.fn();
+    const pending = instance.lifecycle.runInBackgroundContext(async () => {
+      await finish.promise;
+      return "settled";
+    });
+    instance.lifecycle.onDispose(() => instance.lifecycle.runInBackgroundContext(effect));
+    const closed = vi.fn();
+    const retirement = instance.dispose().then(closed);
+    try {
+      await setImmediate();
+      expect(effect).toHaveBeenCalledOnce();
+      expect(closed).not.toHaveBeenCalled();
+      expect(() => instance.lifecycle.runInBackgroundContext(effect)).toThrow(
+        PluginInstanceUnavailableError,
+      );
+      finish.resolve();
+      await expect(pending).resolves.toBe("settled");
+      await retirement;
+      expect(closed).toHaveBeenCalledWith({ errors: [] });
+    } finally {
+      finish.resolve();
+      await Promise.allSettled([pending, retirement]);
+    }
+  });
+
   it.each(["result", "nested callback"] as const)(
     "revokes a late %s after forced retirement without granting cleanup admission",
     async (kind) => {

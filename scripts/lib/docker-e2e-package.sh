@@ -315,7 +315,10 @@ docker_e2e_cleanup_container_cidfile() {
     if [ -n "$container_id" ]; then
       docker_e2e_docker_cmd rm -f "$container_id" >/dev/null 2>&1 || true
     fi
-    rm -f "$cidfile"
+    # A surviving host owner needs the CID even if this wrapper's cleanup fails.
+    if [ "$cidfile" != "${DOCKER_E2E_CONTAINER_CIDFILE:-}" ]; then
+      rm -f "$cidfile"
+    fi
   fi
 }
 
@@ -358,6 +361,7 @@ docker_e2e_harness_mount_args() {
     -v "$harness_root/packages/normalization-core/package.json:/app/packages/normalization-core/package.json:ro"
     -v "$harness_root/packages/normalization-core/src:/app/packages/normalization-core/src:ro"
     -v "$harness_root/tsconfig.json:/app/tsconfig.json:ro"
+    -v "$harness_root/standalone-runtime-profile.mjs:/app/standalone-runtime-profile.mjs:ro"
     -v "$harness_root/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"
     -v "$harness_root/test/helpers:/app/test/helpers:ro"
     -v "$harness_root/scripts/prepublish-plugin-registry-artifact.mjs:/app/scripts/prepublish-plugin-registry-artifact.mjs:ro"
@@ -368,7 +372,7 @@ docker_e2e_harness_mount_args() {
 docker_e2e_run_with_harness() {
   docker_e2e_harness_mount_args
   local run_status=0
-  local cid_dir
+  local cid_dir=""
   local cidfile
   local docker_run_pid=""
   local harness_stdin_fd=""
@@ -376,8 +380,11 @@ docker_e2e_run_with_harness() {
   local previous_int_trap
   local previous_term_trap
   local previous_hup_trap
-  cid_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-docker-e2e-container.XXXXXX")"
-  cidfile="$cid_dir/container.cid"
+  cidfile="${DOCKER_E2E_CONTAINER_CIDFILE:-}"
+  if [ -z "$cidfile" ]; then
+    cid_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-docker-e2e-container.XXXXXX")"
+    cidfile="$cid_dir/container.cid"
+  fi
   previous_int_trap="$(trap -p INT || true)"
   previous_term_trap="$(trap -p TERM || true)"
   previous_hup_trap="$(trap -p HUP || true)"
@@ -431,7 +438,9 @@ docker_e2e_run_with_harness() {
     terminate_harness_docker_run
     wait "$docker_run_pid" 2>/dev/null || true
     docker_e2e_cleanup_container_cidfile "$cidfile"
-    rmdir "$cid_dir" 2>/dev/null || true
+    if [ -n "$cid_dir" ]; then
+      rmdir "$cid_dir" 2>/dev/null || true
+    fi
     docker_e2e_cleanup_package_mount_args
     if [ -n "$harness_stdin_fd" ]; then
       eval "exec ${harness_stdin_fd}<&-"

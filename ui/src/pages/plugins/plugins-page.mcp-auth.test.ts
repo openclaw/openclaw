@@ -1,197 +1,229 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { pageFixture } from "./plugins-page.lifecycle-test-support.ts";
 import {
-  createClient,
-  createContext,
-  createGateway,
   createInspectResult,
   createPlugin,
-  createPluginsRouteData,
   createPluginsRouteLocation,
   createResult,
-  mountPage,
   resetPluginsPageTestState,
 } from "./plugins-page.test-support.ts";
 
-describe("plugin MCP sign-in", () => {
-  beforeEach(async () => {
-    await i18n.setLocale("en");
-    vi.spyOn(window, "open").mockReturnValue(null);
-  });
-  afterEach(resetPluginsPageTestState);
+vi.mock("../../components/confirm-dialog.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../components/confirm-dialog.ts")>()),
+  showConfirmDialog: vi.fn(),
+}));
 
-  async function setup(
-    handler: (method: string, params: unknown) => Promise<unknown>,
-    advertiseMcpLogin = true,
-  ) {
-    const { client, request } = createClient(handler);
-    const harness = createGateway(client);
-    if (advertiseMcpLogin) {
-      harness.emit(client, true, {
-        hello: gatewayHelloForMethods([
-          ...(harness.gateway.snapshot.hello?.features?.methods ?? []),
-          "mcp.authLogin",
-        ]),
-      });
-    }
-    const result = createResult(createPlugin({ enabled: true, state: "enabled" }));
-    const route = createPluginsRouteData(
-      harness.gateway,
-      result,
-      createPluginsRouteLocation("/settings/plugins/workboard"),
-    );
-    const context = createContext(harness.gateway);
-    const mounted = await mountPage(context, route, "settings");
-    await waitForSolid(() =>
-      expect(mounted.page.querySelector(".plugin-capabilities")).not.toBeNull(),
-    );
-    await mounted.page.updateComplete;
-    return { ...mounted, ...harness, client, request, route, context };
-  }
+beforeEach(async () => {
+  await i18n.setLocale("en");
+  vi.spyOn(window, "open").mockReturnValue(null);
+});
+afterEach(resetPluginsPageTestState);
 
-  it("shows configured credentials and opens existing Settings", async () => {
-    const inspection = createInspectResult({
-      credentials: [
-        {
-          path: ["plugins", "entries", "workboard", "config", "apiKey"],
-          label: "Workboard API key",
-          envVars: ["WORKBOARD_API_KEY"],
-          status: "configured",
-        },
-      ],
-      overview: {
-        capabilities: {
-          providers: [],
-          channels: [],
-          contracts: { webSearchProviders: ["workboard"] },
-        },
-      },
-    });
-    const { page, context } = await setup(async () => inspection);
-    const sections = [...page.querySelectorAll(".plugin-capabilities")];
-    expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
-      "Credentials1",
-      "Capabilities1",
-    ]);
-    expect(sections[0]?.textContent).toContain("WORKBOARD_API_KEY");
-    expect(sections[0]?.querySelector('[role="status"]')?.textContent?.trim() ?? null).toBe(
-      "Configured",
-    );
-    expect(sections[0]?.querySelector("button")?.textContent?.trim()).toBe("Edit");
-    sections[0]?.querySelector<HTMLButtonElement>("button")?.click();
-    expect(context.navigate).toHaveBeenCalledWith(
-      "plugin-settings",
-      expect.objectContaining({ search: "?view=settings" }),
-    );
-  });
-
-  it("starts the server's existing OAuth flow and waits for authoritative status after completion", async () => {
-    const refreshed = createDeferred<PluginsInspectResult>();
-    let completed = false;
-    const { page, context, request } = await setup(async (method) => {
-      if (method === "plugins.inspect") {
-        return completed
-          ? refreshed.promise
-          : createInspectResult({
-              mcpAuth: [{ serverName: "workboard-mcp", state: "requires-authorization" }],
-            });
-      }
-      if (method === "mcp.authLogin") {
-        completed = true;
-        return { done: true, status: "done" };
-      }
-      throw new Error(`Unexpected method ${method}`);
-    });
-    page.querySelector<HTMLButtonElement>('[aria-label="Connect workboard-mcp"]')!.click();
-    await waitForSolid(() =>
-      expect(request).toHaveBeenCalledWith(
+const inspectionWithAuth = (state: "requires-authorization" | "authorized" | "unauthenticated") =>
+  createInspectResult({ mcpAuth: [{ serverName: "workboard-mcp", state }] });
+const accountButton = (page: ParentNode) =>
+  page.querySelector<HTMLButtonElement>(
+    '.plugin-capabilities [aria-label="Sign in to workboard-mcp"]',
+  );
+const signOutButton = (page: ParentNode) =>
+  page.querySelector<HTMLButtonElement>(
+    '.plugin-capabilities [aria-label="Sign out of workboard-mcp"]',
+  );
+const heroSignIn = (page: ParentNode) =>
+  page.querySelector<HTMLButtonElement>(".plugin-catalog-detail__sign-in");
+async function setup(handlers: Record<string, () => unknown>, advertiseMcpLogin = true) {
+  const fixture = pageFixture(handlers);
+  const { client, gateway, emit } = fixture;
+  if (advertiseMcpLogin) {
+    emit(client, true, {
+      hello: gatewayHelloForMethods([
+        ...(gateway.snapshot.hello?.features?.methods ?? []),
         "mcp.authLogin",
-        { serverName: "workboard-mcp", sessionId: expect.any(String) },
-        { timeoutMs: null },
-      ),
-    );
-    await waitForSolid(() =>
-      expect(request.mock.calls.filter(([method]) => method === "plugins.inspect")).toHaveLength(2),
-    );
-    expect(page.querySelector('[aria-label="Connect workboard-mcp"]')).not.toBeNull();
-    refreshed.resolve(
-      createInspectResult({ mcpAuth: [{ serverName: "workboard-mcp", state: "authorized" }] }),
-    );
-    await waitForSolid(() =>
-      expect(page.querySelector('[aria-label="Connect workboard-mcp"]')).toBeNull(),
-    );
-    expect(page.querySelector(".plugin-capabilities")?.textContent).toContain("Connected");
-    page.querySelector<HTMLButtonElement>('[aria-label="Edit workboard-mcp connection"]')!.click();
-    expect(context.navigate).toHaveBeenCalledWith("mcp");
-  });
+        "mcp.authLogout",
+      ]),
+    });
+  }
+  const result = createResult(createPlugin({ enabled: true, state: "enabled" }));
+  const route = fixture.route("/settings/plugins/workboard", result);
+  const mounted = await fixture.mount("/settings/plugins/workboard", result);
+  await waitForSolid(() =>
+    expect(mounted.page.querySelector(".plugin-capabilities")).not.toBeNull(),
+  );
+  await mounted.page.updateComplete;
+  return { ...fixture, ...mounted, route };
+}
 
-  it("disables Connect and refuses sign-in when the gateway does not advertise MCP OAuth", async () => {
-    const { page, request } = await setup(
-      async (method) =>
-        method === "mcp.authLogin"
-          ? { done: true, status: "done" }
-          : createInspectResult({
-              mcpAuth: [{ serverName: "workboard-mcp", state: "requires-authorization" }],
-            }),
-      false,
-    );
-    const button = page.querySelector<HTMLButtonElement>('[aria-label="Connect workboard-mcp"]')!;
-    expect.soft(button.disabled).toBe(true);
-    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await page.updateComplete;
-    expect(request.mock.calls.filter(([method]) => method === "mcp.authLogin")).toHaveLength(0);
-    expect(window.open).not.toHaveBeenCalled();
+it("shows configured credentials and opens existing Settings", async () => {
+  const inspection = createInspectResult({
+    credentials: [
+      {
+        path: ["plugins", "entries", "workboard", "config", "apiKey"],
+        label: "Workboard API key",
+        envVars: ["WORKBOARD_API_KEY"],
+        status: "configured",
+      },
+    ],
   });
-
-  it.each(["navigation", "reconnect"])(
-    "cancels pending sign-in on %s without opening a late authorization URL",
-    async (change) => {
-      const admission = createDeferred<unknown>();
-      const { page, request, route, emit, client } = await setup(async (method) => {
-        if (method === "plugins.inspect") {
-          return createInspectResult({
-            mcpAuth: [{ serverName: "workboard-mcp", state: "unauthenticated" }],
-          });
-        }
-        if (method === "mcp.authLogin") {
-          return admission.promise;
-        }
-        if (method === "wizard.cancel") {
-          return { status: "cancelled" };
-        }
-        if (method === "plugins.list") {
-          return createResult(createPlugin({ enabled: true, state: "enabled" }));
-        }
-        throw new Error(`Unexpected method ${method}`);
-      });
-      page.querySelector<HTMLButtonElement>('[aria-label="Connect workboard-mcp"]')!.click();
-      const start = request.mock.calls.find(([method]) => method === "mcp.authLogin")!;
-      if (change === "navigation") {
-        page.routeData = { ...route, location: createPluginsRouteLocation("/settings/plugins") };
-        await page.updateComplete;
-      } else {
-        emit(client, false);
-        emit(client, true);
-      }
-      await waitForSolid(() =>
-        expect(request).toHaveBeenCalledWith(
-          "wizard.cancel",
-          { sessionId: (start[1] as { sessionId: string }).sessionId, closeInput: true },
-          expect.anything(),
-        ),
-      );
-      admission.resolve({ done: false, status: "running" });
-      await waitForSolid(() =>
-        expect(request.mock.calls.filter(([method]) => method === "wizard.cancel")).toHaveLength(2),
-      );
-      expect(request.mock.calls.some(([method]) => method === "wizard.next")).toBe(false);
-      expect(window.open).toHaveBeenCalledTimes(1);
-    },
+  const { page, context } = await setup({ "plugins.inspect": () => inspection });
+  const sections = [...page.querySelectorAll(".plugin-capabilities")];
+  expect(sections[0]?.textContent).toContain("WORKBOARD_API_KEY");
+  expect(sections[0]?.querySelector('[role="status"]')?.textContent?.trim() ?? null).toBe(
+    "Configured",
+  );
+  expect(sections[0]?.querySelector("button")?.textContent?.trim()).toBe("Edit");
+  sections[0]?.querySelector<HTMLButtonElement>("button")?.click();
+  expect(context.navigate).toHaveBeenCalledWith(
+    "plugin-settings",
+    expect.objectContaining({ search: "?view=settings" }),
   );
 });
+
+it("starts the server's existing OAuth flow and waits for authoritative status after completion", async () => {
+  const refreshed = createDeferred<PluginsInspectResult>();
+  let completed = false;
+  const { page, calls, waitForCall } = await setup({
+    "plugins.inspect": () =>
+      completed ? refreshed.promise : inspectionWithAuth("requires-authorization"),
+    "mcp.authLogin": () => {
+      completed = true;
+      return { done: true, status: "done" };
+    },
+  });
+  // Until the account is connected, sign-in takes the hero's primary action slot.
+  expect(heroSignIn(page)?.textContent?.trim()).toBe("Sign in");
+  expect(heroSignIn(page)?.getAttribute("aria-label")).toBe("Sign in to workboard-mcp");
+  expect(accountButton(page)?.textContent?.trim()).toBe("Sign in");
+  heroSignIn(page)!.click();
+  await waitForCall("mcp.authLogin");
+  expect(calls("mcp.authLogin")[0]?.[1]).toEqual({
+    serverName: "workboard-mcp",
+    sessionId: expect.any(String),
+  });
+  await waitForSolid(() => expect(calls("plugins.inspect")).toHaveLength(2));
+  expect(accountButton(page)).not.toBeNull();
+  refreshed.resolve(inspectionWithAuth("authorized"));
+  await waitForSolid(() => expect(accountButton(page)).toBeNull());
+  expect(heroSignIn(page)).toBeNull();
+  expect(page.querySelector(".plugin-capabilities")?.textContent).toContain("Connected");
+  expect(signOutButton(page)?.textContent?.trim()).toBe("Sign out");
+});
+
+it("signs out after confirmation and shows the account as signed out again", async () => {
+  let signedOut = false;
+  const confirmation = createDeferred<boolean>();
+  vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+  const { page, calls, waitForCall } = await setup({
+    "plugins.inspect": () => inspectionWithAuth(signedOut ? "unauthenticated" : "authorized"),
+    "mcp.authLogout": () => {
+      signedOut = true;
+      return { serverName: "workboard-mcp" };
+    },
+  });
+  signOutButton(page)!.click();
+  await waitForSolid(() => expect(showConfirmDialog).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(showConfirmDialog).mock.calls[0]?.[0]).toMatchObject({
+    title: "Sign out of Workboard?",
+    danger: true,
+  });
+  // The account stays connected until the operator confirms.
+  expect(calls("mcp.authLogout")).toHaveLength(0);
+  confirmation.resolve(true);
+  await waitForCall("mcp.authLogout");
+  expect(calls("mcp.authLogout")[0]?.[1]).toEqual({ serverName: "workboard-mcp" });
+  await waitForSolid(() => expect(accountButton(page)?.textContent?.trim()).toBe("Sign in"));
+  expect(signOutButton(page)).toBeNull();
+  expect(heroSignIn(page)).not.toBeNull();
+});
+
+it("reports a confirmation that cannot open and keeps the account connected", async () => {
+  vi.mocked(showConfirmDialog).mockRejectedValueOnce(new Error("chunk failed to load"));
+  const { page, calls } = await setup({
+    "plugins.inspect": () => inspectionWithAuth("authorized"),
+    "mcp.authLogout": () => ({ serverName: "workboard-mcp" }),
+  });
+  signOutButton(page)!.click();
+  await waitForSolid(() =>
+    expect(page.querySelector('[role="alert"]')?.textContent).toContain(
+      "Sign-out could not open. Your account is still connected; try again.",
+    ),
+  );
+  expect(calls("mcp.authLogout")).toHaveLength(0);
+  expect(signOutButton(page)?.disabled).toBe(false);
+});
+
+it("keeps the account connected and shows the error when sign-out fails", async () => {
+  vi.mocked(showConfirmDialog).mockResolvedValueOnce(true);
+  const { page, calls, waitForCall } = await setup({
+    "plugins.inspect": () => inspectionWithAuth("authorized"),
+    "mcp.authLogout": () => {
+      throw new Error("Credential store is unavailable.");
+    },
+  });
+  signOutButton(page)!.click();
+  await waitForCall("mcp.authLogout");
+  await waitForSolid(() =>
+    expect(page.querySelector('[role="alert"]')?.textContent).toContain(
+      "Credential store is unavailable.",
+    ),
+  );
+  await waitForSolid(() => expect(calls("plugins.inspect")).toHaveLength(2));
+  expect(signOutButton(page)?.disabled).toBe(false);
+});
+
+it("disables Sign in and refuses sign-in when the gateway does not advertise MCP OAuth", async () => {
+  const { page, calls } = await setup(
+    {
+      "mcp.authLogin": () => ({ done: true, status: "done" }),
+      "plugins.inspect": () => inspectionWithAuth("requires-authorization"),
+    },
+    false,
+  );
+  const button = accountButton(page)!;
+  expect.soft(button.disabled).toBe(true);
+  expect(heroSignIn(page)).toBeNull();
+  button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  await page.updateComplete;
+  expect(calls("mcp.authLogin")).toHaveLength(0);
+  expect(window.open).not.toHaveBeenCalled();
+});
+
+it.each(["navigation", "reconnect"])(
+  "cancels pending sign-in on %s without opening a late authorization URL",
+  async (change) => {
+    const admission = createDeferred<unknown>();
+    const { page, request, calls, route, emit, client } = await setup({
+      "plugins.inspect": () => inspectionWithAuth("unauthenticated"),
+      "mcp.authLogin": () => admission.promise,
+      "wizard.cancel": () => ({ status: "cancelled" }),
+      "plugins.list": () => createResult(createPlugin({ enabled: true, state: "enabled" })),
+    });
+    accountButton(page)!.click();
+    const start = request.mock.calls.find(([method]) => method === "mcp.authLogin")!;
+    if (change === "navigation") {
+      page.routeData = { ...route, location: createPluginsRouteLocation("/settings/plugins") };
+      await page.updateComplete;
+    } else {
+      emit(client, false);
+      emit(client, true);
+    }
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledWith(
+        "wizard.cancel",
+        { sessionId: (start[1] as { sessionId: string }).sessionId, closeInput: true },
+        expect.anything(),
+      ),
+    );
+    admission.resolve({ done: false, status: "running" });
+    await waitForSolid(() => expect(calls("wizard.cancel")).toHaveLength(2));
+    expect(calls("wizard.next")).toHaveLength(0);
+    expect(window.open).toHaveBeenCalledTimes(1);
+  },
+);

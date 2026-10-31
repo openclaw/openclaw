@@ -1,15 +1,17 @@
 import { GatewayClientRequestError } from "../../../../packages/gateway-client/src/request-error.js";
 import type { SessionsDeleteParams } from "../../../../packages/gateway-protocol/src/index.js";
-import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../../config/sessions/lifecycle.js";
+import { runOutsideAdmittedGenerationScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
+import { isSessionLifecycleChangedGatewayError } from "../../../config/sessions/lifecycle.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import {
   getCanonicalGatewayContextResolver,
   getGatewayContextLifetime,
   withPluginRuntimeGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { parseAgentSessionKey } from "../../../routing/session-key.js";
+import { runWithSessionControllerCleanup } from "../../../sessions/session-controller.owner-context.js";
 import { createLazyRuntimeModule } from "../../../shared/lazy-runtime.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
+import { resolveSubagentChildAgentId } from "./subagent-child-owner-match.js";
 
 // Shutdown preparation must retain this importer's promise before installed chunks can change.
 export const loadSubagentSessionCleanupRuntime = createLazyRuntimeModule(
@@ -24,20 +26,6 @@ type CallGateway = (options: {
   assertDispatchCurrent?: () => void;
 }) => Promise<unknown>;
 type SubagentSessionCleanupOutcome = "deleted" | "changed" | "failed";
-
-function isSessionLifecycleChangedGatewayError(error: unknown): boolean {
-  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
-    return false;
-  }
-  const requestError = error as Error & { gatewayCode?: unknown; details?: unknown };
-  const details = requestError.details;
-  return (
-    requestError.gatewayCode === "INVALID_REQUEST" &&
-    typeof details === "object" &&
-    details !== null &&
-    (details as { reason?: unknown }).reason === SESSION_LIFECYCLE_CHANGED_ERROR_REASON
-  );
-}
 
 export async function deleteSubagentSessionForCleanup(params: {
   callGateway: CallGateway;
@@ -55,15 +43,14 @@ export async function deleteSubagentSessionForCleanup(params: {
   timeoutMs?: number;
   onError?: (error: unknown) => void;
 }): Promise<SubagentSessionCleanupOutcome> {
-  if (!params.expectedSessionId || !params.expectedLifecycleRevision) {
+  const childAgentId = resolveSubagentChildAgentId(params);
+  if (!childAgentId || !params.expectedSessionId || !params.expectedLifecycleRevision) {
     return "failed";
   }
   const { prepareCurrent, isCurrent } = params;
   const cleanupParams: SessionsDeleteParams = {
     key: params.childSessionKey,
-    ...(params.childAgentId === undefined || parseAgentSessionKey(params.childSessionKey)
-      ? {}
-      : { agentId: params.childAgentId }),
+    agentId: childAgentId,
     deleteTranscript: params.deleteTranscript ?? true,
     emitLifecycleHooks: params.emitLifecycleHooks ?? params.spawnMode === "session",
     expectedSessionId: params.expectedSessionId,
@@ -126,9 +113,17 @@ export async function deleteSubagentSessionForCleanup(params: {
       });
     };
     // Provisional cleanup already carries its admitted Gateway in the request scope.
-    await (params.gatewayBinding
-      ? withPluginRuntimeGatewayContextResolver(params.gatewayBinding.resolveGatewayContext, run)
-      : run());
+    // Cleanup retains its captured Gateway and child authority, not the parent's cancelled turn.
+    await runOutsideAdmittedGenerationScopes(() =>
+      runWithSessionControllerCleanup(() =>
+        params.gatewayBinding
+          ? withPluginRuntimeGatewayContextResolver(
+              params.gatewayBinding.resolveGatewayContext,
+              run,
+            )
+          : run(),
+      ),
+    );
     return "deleted";
   } catch (error) {
     if (isSessionLifecycleChangedGatewayError(error)) {

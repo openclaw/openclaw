@@ -45,9 +45,8 @@ function parseOverrideSpec(raw: string): PluginInstallOverride | null {
 /** Resolves a gated plugin install override from environment configuration. */
 export function resolvePluginInstallOverride(params: {
   pluginId: string;
-  env?: NodeJS.ProcessEnv;
 }): PluginInstallOverride | null {
-  const env = params.env ?? process.env;
+  const env = process.env;
   if (!overrideAllowed(env)) {
     return null;
   }

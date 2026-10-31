@@ -1,4 +1,5 @@
 import * as childProcess from "node:child_process";
+import path from "node:path";
 import { promisify as promisifyCaptured } from "node:util";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -31,6 +32,7 @@ const boundary = vi.hoisted(() => ({
   stop: vi.fn<typeof maybeStopManagedServiceBeforeMutableUpdate>(),
   read: vi.fn<typeof readGatewayServiceState>(),
   command: vi.fn<GatewayService["readCommand"]>(),
+  config: vi.fn(async () => ({ config: {} })),
   revalidate: vi.fn<typeof revalidateManagedGatewayServiceAfterUpdate>(),
   repair: vi.fn(async () => ({})),
   restart: vi.fn(),
@@ -70,8 +72,9 @@ vi.mock("../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/paths.js")>()),
   isDefaultInstallIdentity: () => true,
 }));
-vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: async () => ({ config: {} }),
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: boundary.config,
 }));
 vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./doctor-service-repair-policy.js")>()),
@@ -224,13 +227,15 @@ beforeEach(() => {
     },
   }));
   vi.stubEnv("OPENCLAW_PROFILE", "default");
-  vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/doctor-state");
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", "/synthetic/doctor-state/openclaw.json");
+  const stateDir = tempDirs.make("doctor-settlement-state-");
+  const configPath = path.join(stateDir, "openclaw.json");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
   vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
   vi.spyOn(process, "kill").mockImplementation(boundary.native);
   const serviceEnv = {
-    OPENCLAW_STATE_DIR: "/synthetic/doctor-state",
-    OPENCLAW_CONFIG_PATH: "/synthetic/doctor-state/openclaw.json",
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: configPath,
   };
   const verdict = {
     kind: "owned" as const,
@@ -275,9 +280,6 @@ beforeEach(() => {
     runtime: { status: "stopped" },
   });
   boundary.health.mockResolvedValue({ outcome: "ready", healthy: true });
-  boundary.native.mockImplementation(() => {
-    throw new Error("Doctor settlement controls cannot start or inspect native processes");
-  });
 });
 afterEach(() => {
   try {

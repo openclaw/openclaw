@@ -76,7 +76,10 @@ export function prepareSecretInputStdio(
       let data: Buffer | undefined;
       try {
         data = secretInput.createData();
-        // Close the writer after delivery: later readers must see EOF, never a replay.
+        // Delivery completes when the pipe accepts the bytes; the finally block
+        // then closes the writer so later readers see EOF, never a replay. Do not
+        // use end(): on Windows its shutdown flushes the pipe and blocks until
+        // the child reads, which a child that ignores the descriptor never does.
         await new Promise<void>((resolve, reject) => {
           let settled = false;
           const settle = (error?: Error | null) => {
@@ -96,12 +99,12 @@ export function prepareSecretInputStdio(
             settle(new Error("secret delivery aborted"));
           };
           const onError = (error: Error) => settle(error);
-          // A pipe can emit its terminal error after end's callback. Retain the
+          // A pipe can emit its terminal error after write's callback. Retain the
           // handler until close while only the first outcome settles delivery.
           abortSignal?.addEventListener("abort", onAbort, { once: true });
           stream.on("error", onError);
           stream.once("close", () => stream.off("error", onError));
-          stream.end(data, settle);
+          stream.write(data, settle);
         });
       } finally {
         data?.fill(0);

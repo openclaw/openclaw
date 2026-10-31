@@ -3,6 +3,7 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { inspectNewerRecoveryHistory, needsPostCoreRepair } from "./update-run-activity.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
+import { readInstalledUpdateCandidate } from "./update-run-interruption-store.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
 import {
   canReconcileUpdateRunCandidates,
@@ -18,6 +19,47 @@ import { finishUpdateRunRecord, type UpdateRunRecord } from "./update-run-record
 import { persistRun, updateRunLedgerSchema as schema, upsertStep } from "./update-run-write.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
+
+function recordedServingCandidate(record: UpdateRunRecord): UpdateRunRecord["after"] | undefined {
+  const { verification } = record;
+  const installed = readInstalledUpdateCandidate(record);
+  const version =
+    installed?.version ??
+    record.after.version ??
+    record.origin.admission?.candidateVersion ??
+    record.target.version;
+  const buildId = installed?.buildId ?? record.after.buildId;
+  // Released Gateway observers can record the serving candidate before the
+  // orchestrator completes its step. Recovery's matching previous version is not success.
+  if (
+    !["activating", "restarting", "verifying"].includes(record.phase) ||
+    record.reason ||
+    record.repair.length ||
+    verification.recovery ||
+    verification.rollbackOutcome ||
+    verification.booted !== true ||
+    verification.serviceRunning !== true ||
+    verification.versionMatch !== true ||
+    (verification.coreReady ?? verification.readyz) === false ||
+    verification.settled === false ||
+    !version ||
+    verification.runningVersion !== version ||
+    (buildId && verification.runningBuildId !== buildId) ||
+    record.steps.some(
+      (step) =>
+        step.status === "failed" ||
+        step.step === "driver:identity-unavailable" ||
+        step.step === "package rollback" ||
+        step.step === "previous generation restoration",
+    )
+  ) {
+    return undefined;
+  }
+  return {
+    version,
+    ...(verification.runningBuildId ? { buildId: verification.runningBuildId } : {}),
+  };
+}
 
 export function reconcileUpdateRunCandidatesInWorker(
   command: UpdateRunReconciliationOperations["updateRuns.reconcile"]["input"],
@@ -71,19 +113,46 @@ export function reconcileUpdateRunCandidatesInWorker(
       }
       const reconciled: UpdateRunRecord[] = [];
       for (const [index, { record, rule }] of selected.entries()) {
-        if (!rule || (input.legacyOnly && rule !== LEGACY_UPDATE_RUN_EXPIRED_REASON)) {
+        if (
+          !rule ||
+          (input.legacyOnly && rule !== LEGACY_UPDATE_RUN_EXPIRED_REASON) ||
+          (input.statusOnly &&
+            rule !== LEGACY_UPDATE_RUN_EXPIRED_REASON &&
+            rule !== "handoff-terminated")
+        ) {
           continue;
         }
-        upsertStep(record, {
-          step: "reconcile:abandoned",
-          status: "failed",
-          endedAtMs: Date.now(),
-          detail: rule,
-        });
-        finishUpdateRunRecord(record, {
-          status: "failed",
-          reason: rule === LEGACY_UPDATE_RUN_EXPIRED_REASON ? rule : "abandoned",
-        });
+        const serving =
+          rule === "inactive-driver-dead" || rule === "handoff-terminated"
+            ? recordedServingCandidate(record)
+            : undefined;
+        if (serving) {
+          upsertStep(record, {
+            step: "warning:reconcile:driver-lost-after-verification",
+            status: "completed",
+            endedAtMs: Date.now(),
+            detail: `Update driver was lost after recorded verification of installed and serving candidate ${serving.version} (${rule}). Completion bookkeeping and follow-up work may be incomplete; saved verification describes the update attempt, not current Gateway health.`,
+          });
+          finishUpdateRunRecord(record, { status: "succeeded", after: serving });
+        } else {
+          upsertStep(record, {
+            step: "reconcile:abandoned",
+            status: "failed",
+            endedAtMs: Date.now(),
+            detail:
+              rule === "handoff-terminated"
+                ? `Managed handoff terminated during ${record.phase}; last recorded phase: ${record.phase}. Check the handoff log and systemd journal for termination or OOM diagnostics.`
+                : rule,
+          });
+          finishUpdateRunRecord(record, {
+            status: "failed",
+            reason:
+              rule === LEGACY_UPDATE_RUN_EXPIRED_REASON || rule === "handoff-terminated"
+                ? rule
+                : "abandoned",
+            nextAction: "Run `openclaw update repair` before retrying the update.",
+          });
+        }
         const saved = persistRun(db, record, options);
         current[index] = saved;
         reconciled.push(saved);

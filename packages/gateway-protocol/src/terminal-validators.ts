@@ -1,4 +1,5 @@
-import { lazyCompile } from "./protocol-validator.js";
+import * as Checks from "./compiled/protocol.generated/terminal-validators.js";
+import { createProtocolValidator } from "./protocol-validator.js";
 import {
   TerminalAttachParamsSchema,
   TerminalCloseParamsSchema,
@@ -9,10 +10,31 @@ import {
   TerminalUploadResultSchema,
 } from "./schema/terminal.js";
 
-export const validateTerminalOpenParams = lazyCompile(TerminalOpenParamsSchema);
-export const validateTerminalInputParams = lazyCompile(TerminalInputParamsSchema);
-export const validateTerminalResizeParams = lazyCompile(TerminalResizeParamsSchema);
-export const validateTerminalCloseParams = lazyCompile(TerminalCloseParamsSchema);
-export const validateTerminalAttachParams = lazyCompile(TerminalAttachParamsSchema);
-export const validateTerminalUploadParams = lazyCompile(TerminalUploadParamsSchema);
-export const validateTerminalUploadResult = lazyCompile(TerminalUploadResultSchema);
+export const validateTerminalOpenParams = createProtocolValidator(
+  TerminalOpenParamsSchema,
+  Checks.isTerminalOpenParams,
+);
+export const validateTerminalInputParams = createProtocolValidator(
+  TerminalInputParamsSchema,
+  Checks.isTerminalInputParams,
+);
+export const validateTerminalResizeParams = createProtocolValidator(
+  TerminalResizeParamsSchema,
+  Checks.isTerminalResizeParams,
+);
+export const validateTerminalCloseParams = createProtocolValidator(
+  TerminalCloseParamsSchema,
+  Checks.isTerminalCloseParams,
+);
+export const validateTerminalAttachParams = createProtocolValidator(
+  TerminalAttachParamsSchema,
+  Checks.isTerminalAttachParams,
+);
+export const validateTerminalUploadParams = createProtocolValidator(
+  TerminalUploadParamsSchema,
+  Checks.isTerminalUploadParams,
+);
+export const validateTerminalUploadResult = createProtocolValidator(
+  TerminalUploadResultSchema,
+  Checks.isTerminalUploadResult,
+);

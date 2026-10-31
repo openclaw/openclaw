@@ -4,11 +4,21 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite-read-pool.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../config/sessions/session-transcript-reconcile.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { drainSessionStoreWriterQueuesForTest } from "../config/sessions/store-writer-state.test-support.js";
 import { drainFileLockStateForTest } from "../infra/file-lock.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { isPathInside } from "../infra/path-guards.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  retireSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
+import { resolveDatabasePathKey } from "../infra/sqlite-worker-identity.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db-lifecycle.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "./database-cleanup.js";
@@ -36,13 +46,27 @@ export async function cleanupSessionStateForTest(
     return;
   }
   const rootPath = options.rootPath ?? options.stateDir;
+  for (const owner of memorySessionActorOwners.list()) {
+    if (isPathInside(rootPath, owner.path)) {
+      memorySessionActorOwners.closeDatabase(owner);
+    }
+  }
   closeAuthProfileReadPool({ kind: "root", rootPath });
   // Close agent handles before shared state: releasing their leases can reopen
   // shared state. Unrelated fixtures keep their handles.
   await closeOpenClawAgentDatabasesAsync(rootPath);
+  // Retire pathname observations before removal can recycle an inode into the next fixture.
+  closeOpenClawAgentDatabasesForTest(rootPath);
   await closeOpenClawStateDatabaseByPathAsync(
     resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: options.stateDir }),
   );
+  // Physical admissions outlive native handles; retire them before fixture removal.
+  const admittedRoot = resolveDatabasePathKey(rootPath);
+  for (const { location } of captureSqliteDatabaseAdmissions()) {
+    if (isPathInside(admittedRoot, location)) {
+      retireSqliteDatabaseAdmissionForPath(location);
+    }
+  }
 }
 
 /**
@@ -62,6 +86,7 @@ export function useSessionStoreTempDirs(
     const currentRoot = root;
     root = undefined;
     await closeOpenClawAgentDatabasesAsync(currentRoot);
+    closeOpenClawAgentDatabasesForTest(currentRoot);
     // Releasing agent leases can reopen shared state, which cases may keep under the root.
     await closeStateDatabaseForTest();
     await fs.rm(currentRoot, { recursive: true, force: true });

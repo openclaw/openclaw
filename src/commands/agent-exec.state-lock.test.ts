@@ -1,7 +1,5 @@
-import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -14,10 +12,12 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import * as embeddedStateLock from "../infra/embedded-state-lock.js";
+import { captureNativeSignalBridge } from "../infra/embedded-state-lock.test-support.js";
+import * as gatewayLockProcessModule from "../infra/gateway-lock-process.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
-import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { createSqliteAuditRecordWriter } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
-import type { RuntimeEnv } from "../runtime.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   withOpenClawAgentDatabaseAsync,
@@ -26,17 +26,30 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { runAgentExecWithMock } from "./agent-exec.test-helpers.js";
+import { runAgentExecWithMock as runExec } from "./agent-exec.test-helpers.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const acquireStateLock = embeddedStateLock.acquireEmbeddedStateLock;
 const createSignalBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
-afterEach(() => vi.restoreAllMocks());
+const signalCaptures: ReturnType<typeof captureNativeSignalBridge>[] = [];
+afterEach(() => {
+  try {
+    for (const signals of signalCaptures) {
+      signals.dispose();
+    }
+    signalCaptures.length = 0;
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
 const success = () => ({ payloads: [{ text: "done" }], meta: { durationMs: 1 } });
 function stateFixture() {
   const stateDir = tempDirs.make("openclaw-agent-exec-lock-");
   const lockDir = path.join(stateDir, "gateway-locks");
+  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
+    () => 123_456,
+  );
   const lockOptions = {
     allowInTests: true,
     env: {
@@ -46,7 +59,6 @@ function stateFixture() {
     },
     lockDir,
     timeoutMs: 100,
-    readProcessStartTime: () => 123_456,
   };
   vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockImplementation((params) =>
     acquireStateLock({ ...params, options: lockOptions }),
@@ -70,7 +82,7 @@ describe("agent exec retained-state ownership", () => {
       let stateDir = "";
       try {
         const result = await cleanupScope.run(() =>
-          runAgentExecWithMock(
+          runExec(
             "inspect",
             fixture ? { stateDir: fixture.stateDir } : {},
             createTestRuntime(),
@@ -83,6 +95,13 @@ describe("agent exec retained-state ownership", () => {
           ),
         );
         expect(result.exitCode).toBe(1);
+        expect(result.envelope).toMatchObject({
+          ok: false,
+          status: "error",
+          final: "done",
+          payloads: [{ text: "done" }],
+          error: { kind: "cleanup" },
+        });
         expect(cleanupScope.outcome).toBe("uncertain");
         expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
         if (fixture) {
@@ -108,7 +127,7 @@ describe("agent exec retained-state ownership", () => {
     const runAgent = vi.fn(async () => success());
     const runtime = createTestRuntime();
     try {
-      const result = await runAgentExecWithMock("inspect", { stateDir }, runtime, runAgent);
+      const result = await runExec("inspect", { stateDir }, runtime, runAgent);
       expect(result.exitCode).toBe(1);
       expect(runAgent).not.toHaveBeenCalled();
       expect(runtime.error).toHaveBeenCalledWith(
@@ -122,51 +141,67 @@ describe("agent exec retained-state ownership", () => {
   it("holds and releases the embedded state lock around the run", async () => {
     const { stateDir, lockPath } = stateFixture();
     await fs.writeFile(path.join(stateDir, "keep.txt"), "keep");
-    const result = await runAgentExecWithMock(
-      "inspect",
-      { stateDir },
-      createTestRuntime(),
-      async () => {
-        await expectLock(lockPath);
-        return success();
-      },
-    );
+    const result = await runExec("inspect", { stateDir }, createTestRuntime(), async () => {
+      await expectLock(lockPath);
+      return success();
+    });
     expect(result.exitCode).toBe(0);
     await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.readFile(path.join(stateDir, "keep.txt"), "utf8")).resolves.toBe("keep");
     expect((await fs.readdir(stateDir)).toSorted()).toEqual(["gateway-locks", "keep.txt", "tmp"]);
   });
 
-  it("releases the embedded state lock when SIGTERM aborts the run", async () => {
-    const { stateDir, lockPath } = stateFixture();
-    const signals = new EventEmitter();
+  it.each([
+    { retained: false, signal: "SIGINT", exitCode: 130 },
+    { retained: false, signal: "SIGTERM", exitCode: 143 },
+    { retained: true, signal: "SIGINT", exitCode: 130 },
+    { retained: true, signal: "SIGTERM", exitCode: 143 },
+  ] as const)("settles state after $signal (retained: $retained)", async (testCase) => {
+    const fixture = testCase.retained ? stateFixture() : undefined;
+    const signals = captureNativeSignalBridge(createSignalBridge);
+    signalCaptures.push(signals);
     const entered = createDeferred();
     const runtime = createTestRuntime();
-    vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementation(() =>
-      createSignalBridge(signals),
+    let stateDir = "";
+    vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
+      signals.create,
     );
-    const run = runAgentExecWithMock("inspect", { stateDir }, runtime, async (opts) => {
-      const signal = opts.abortSignal as AbortSignal;
-      const pending = new Promise<never>((_, reject) => {
-        signal.addEventListener(
-          "abort",
-          () => reject(Object.assign(new Error("agent exec aborted"), { name: "AbortError" })),
-          { once: true },
-        );
-      });
-      entered.resolve();
-      return pending;
-    });
+    const run = runExec(
+      "inspect",
+      fixture ? { stateDir: fixture.stateDir } : {},
+      runtime,
+      async (opts) => {
+        stateDir = process.env.OPENCLAW_STATE_DIR!;
+        await fs.writeFile(path.join(stateDir, "keep.txt"), "keep");
+        const signal = opts.abortSignal as AbortSignal;
+        const pending = new Promise<never>((_, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(Object.assign(new Error("agent exec aborted"), { name: "AbortError" })),
+            { once: true },
+          );
+        });
+        entered.resolve();
+        return pending;
+      },
+    );
     await Promise.race([
       entered.promise,
       run.then(() => {
         throw new Error("Run ended before signal admission");
       }),
     ]);
-    signals.emit("SIGTERM");
+    signals.emit(testCase.signal);
     await run;
-    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(runtime.exit).toHaveBeenCalledWith(143, { resetStream: process.stderr });
+    if (fixture) {
+      await expect(fs.stat(fixture.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(path.join(stateDir, "keep.txt"), "utf8")).resolves.toBe("keep");
+    } else {
+      await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    expect(signals.listenerCount("SIGINT")).toBe(0);
+    expect(signals.listenerCount("SIGTERM")).toBe(0);
+    expect(runtime.exit).toHaveBeenCalledWith(testCase.exitCode, { resetStream: process.stderr });
   });
 });
 
@@ -176,11 +211,11 @@ it("closes temporary databases before removal and preserves independent handles"
     env: { OPENCLAW_STATE_DIR: independentRoot },
   });
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const runtime = createTestRuntime();
   let runStateDir: string | undefined;
   let agentPath: string | undefined;
   let statePath: string | undefined;
-  const handles: DatabaseSync[] = [];
+  const handles: EngineConnection[] = [];
   const remove = fs.rm.bind(fs);
   const removed = vi.spyOn(fs, "rm").mockImplementation(async (pathname, options) => {
     if (pathname === runStateDir) {
@@ -192,43 +227,38 @@ it("closes temporary databases before removal and preserves independent handles"
     await remove(pathname, options);
   });
   try {
-    const result = await runAgentExecWithMock(
-      "inspect",
-      { authEnvOnly: true },
-      runtime,
-      async () => {
-        runStateDir = process.env.OPENCLAW_STATE_DIR;
-        const shared = openOpenClawStateDatabase();
-        handles.push(shared.db);
-        statePath = shared.path;
-        await withOpenClawAgentDatabaseAsync({ agentId: "main" }, (database) => {
-          handles.push(database.db);
-          agentPath = database.path;
-        });
-        const storePath = path.join(runStateDir!, "agents", "main", "sessions", "sessions.json");
-        const sessionKey = "agent:main:exec-cleanup";
-        await replaceSessionEntry(
-          { sessionKey, storePath },
-          { sessionId: "exec-cleanup", updatedAt: 1 },
-        );
-        const deletion = await deleteSessionEntryLifecycle({
-          agentId: "main",
-          storePath,
-          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-          archiveTranscript: false,
-          deleteTranscriptWithoutArchive: true,
-        });
-        expect(deletion.deleted).toBe(true);
-        await registerSqliteAuditRecordAsync(
-          { scope: "agent-exec-cleanup", maxEntries: 1 },
-          { key: "completed", value: "synthetic", createdAt: 1 },
-        );
-        expect(
-          createSqliteAuditRecordStore({ scope: "agent-exec-cleanup", maxEntries: 1 }).entries(),
-        ).toEqual([{ key: "completed", value: "synthetic", createdAt: 1 }]);
-        return { payloads: [{ text: "done" }], meta: { durationMs: 1 } };
-      },
-    );
+    const result = await runExec("inspect", { authEnvOnly: true }, runtime, async () => {
+      runStateDir = process.env.OPENCLAW_STATE_DIR;
+      const shared = openOpenClawStateDatabase();
+      handles.push(shared.db);
+      statePath = shared.path;
+      await withOpenClawAgentDatabaseAsync({ agentId: "main" }, (database) => {
+        handles.push(database.db);
+        agentPath = database.path;
+      });
+      const storePath = path.join(runStateDir!, "agents", "main", "sessions", "sessions.json");
+      const sessionKey = "agent:main:exec-cleanup";
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        { sessionId: "exec-cleanup", updatedAt: 1 },
+      );
+      const deletion = await deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+        archiveTranscript: false,
+        deleteTranscriptWithoutArchive: true,
+      });
+      expect(deletion.deleted).toBe(true);
+      await createSqliteAuditRecordWriter({
+        scope: "agent-exec-cleanup",
+        maxEntries: 1,
+      }).register("completed", "synthetic", 1);
+      expect(
+        createSqliteAuditRecordStore({ scope: "agent-exec-cleanup", maxEntries: 1 }).entries(),
+      ).toEqual([{ key: "completed", value: "synthetic", createdAt: 1 }]);
+      return success();
+    });
     expect(result.exitCode).toBe(0);
     expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
     expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);

@@ -74,10 +74,7 @@ function retryDeadline(response: Response): number | undefined {
   return deadlines.length ? Math.max(...deadlines) : undefined;
 }
 
-export function createXGitHubReader(options: {
-  token: string;
-  fetch?: (url: string, init?: RequestInit) => Promise<Response>;
-}) {
+export function createXGitHubReader(options: { token: string }) {
   const profiles = new Map<string, ProfileCache>();
   let retryAt = 0;
 
@@ -116,7 +113,7 @@ export function createXGitHubReader(options: {
     let response: Response;
     try {
       requestSignal.throwIfAborted();
-      response = await fetchXService("api.github.com", path, init, options.fetch);
+      response = await fetchXService("api.github.com", path, init);
     } catch {
       throw new XGitHubError(
         "GitHub request failed or was cancelled; the last verified set is unchanged.",

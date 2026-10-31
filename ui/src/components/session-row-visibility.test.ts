@@ -18,9 +18,10 @@ const states = [
   ["visually active", { visuallyActive: true }, true, false, false],
   ["active descendant", { containsActiveDescendant: true }, true, false, false],
   ["active run", { hasActiveRun: true }, true, true, false],
+  ["background work", { backgroundProcessCount: 1 }, true, true, false],
   ["stale running status", { status: "running" }, false, false, false],
   ["failed session", { status: "failed" }, false, false, false],
-  ["running descendant", { runningChildCount: 1 }, true, false, false],
+  ["running descendant", { runningChildCount: 1 }, true, true, false],
   ["attention", { attention: { kind: "question", requests: [] } }, true, false, true],
 ] as const;
 

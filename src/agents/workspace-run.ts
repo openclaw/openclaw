@@ -6,7 +6,7 @@
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
-import { classifySessionKeyShape, parseAgentSessionKey } from "../routing/session-key.js";
+import { classifySessionKeyShape } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { hasAgentRosterProperty } from "./agent-scope-config.js";
 import {
@@ -15,9 +15,9 @@ import {
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 
 type WorkspaceFallbackReason = "missing" | "blank" | "invalid_type";
-type AgentIdSource = "explicit" | "session_key" | "default";
 
 export type ResolveRunWorkspaceResult = {
   workspaceDir: string;
@@ -25,37 +25,24 @@ export type ResolveRunWorkspaceResult = {
   usedFallback: boolean;
   fallbackReason?: WorkspaceFallbackReason;
   agentId: string;
-  agentIdSource: AgentIdSource;
 };
-
-const RUN_WORKSPACE_ROSTER_REQUIRED_ERROR_CODE = "RUN_WORKSPACE_ROSTER_REQUIRED";
-
-class RunWorkspaceRosterRequiredError extends Error {
-  readonly code = RUN_WORKSPACE_ROSTER_REQUIRED_ERROR_CODE;
-
-  constructor() {
-    super("No agents configured; run workspace resolution requires an explicit roster.");
-    this.name = "RunWorkspaceRosterRequiredError";
-  }
-}
-
-class RunWorkspaceAgentNotConfiguredError extends Error {
-  readonly code = "RUN_WORKSPACE_AGENT_NOT_CONFIGURED";
-  readonly agentId: string;
-
-  constructor(agentId: string) {
-    super(`Agent ${agentId} is not present in the configured roster.`);
-    this.name = "RunWorkspaceAgentNotConfiguredError";
-    this.agentId = agentId;
-  }
-}
 
 /** Redacts a run/session identifier for logs and prompts. */
 export function redactRunIdentifier(value: string | undefined): string {
   return redactIdentifier(value, { len: 12 });
 }
 
-/** Resolves the workspace directory used for an agent run. */
+/** Recorded session roots own bootstrap files; cwd alone never selects instructions. */
+export function resolveRunBootstrapWorkspaceDir(
+  params: Parameters<typeof resolveRootedRunRuntimeWorkspace>[0],
+  fallback = params.bootstrapWorkspaceDir ?? params.workspaceDir,
+): string {
+  const confined =
+    params.requireWorkspaceOnly ||
+    resolveEffectiveToolFsWorkspaceOnly({ cfg: params.config, agentId: params.agentId });
+  return resolveUserPath(params.sessionRoot ?? (confined ? params.workspaceDir : fallback));
+}
+
 export function resolveRunWorkspaceDir(params: {
   workspaceDir: unknown;
   sessionKey?: string;
@@ -71,7 +58,10 @@ export function resolveRunWorkspaceDir(params: {
   // retain implicit-main routing compatibility, but must not invent an owner here.
   const config = params.config;
   if (!config || !hasAgentRosterProperty(config)) {
-    throw new RunWorkspaceRosterRequiredError();
+    throw Object.assign(
+      new Error("No agents configured; run workspace resolution requires an explicit roster."),
+      { name: "RunWorkspaceRosterRequiredError", code: "RUN_WORKSPACE_ROSTER_REQUIRED" },
+    );
   }
   const env = params.env ?? process.env;
   const requested = params.workspaceDir;
@@ -80,13 +70,12 @@ export function resolveRunWorkspaceDir(params: {
     agentId: params.agentId,
     config,
   });
-  const agentIdSource: AgentIdSource = params.agentId
-    ? "explicit"
-    : parseAgentSessionKey(rawSessionKey)?.agentId
-      ? "session_key"
-      : "default";
   if (!resolveAgentConfig(config, agentId)) {
-    throw new RunWorkspaceAgentNotConfiguredError(agentId);
+    throw Object.assign(new Error(`Agent ${agentId} is not present in the configured roster.`), {
+      name: "RunWorkspaceAgentNotConfiguredError",
+      code: "RUN_WORKSPACE_AGENT_NOT_CONFIGURED",
+      agentId,
+    });
   }
   const trimmed = typeof requested === "string" ? requested.trim() : "";
   const usedFallback = !trimmed;
@@ -110,26 +99,19 @@ export function resolveRunWorkspaceDir(params: {
     usedFallback,
     ...(usedFallback ? { fallbackReason } : {}),
     agentId,
-    agentIdSource,
   };
 }
 
 /** Rooted execution borrows plugin facts only from its agent's canonical bootstrap workspace. */
-export function resolveRootedRunRuntimeWorkspace(params: {
-  workspaceDir: string;
-  bootstrapWorkspaceDir?: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  requireWorkspaceOnly?: boolean;
-  sessionRoot?: string;
-}): ResolveRunWorkspaceResult | undefined {
-  if (
-    !params.bootstrapWorkspaceDir?.trim() ||
-    !params.config ||
-    !hasAgentRosterProperty(params.config)
-  ) {
+export function resolveRootedRunRuntimeWorkspace(
+  params: Parameters<typeof resolveRunWorkspaceDir>[0] & {
+    workspaceDir: string;
+    bootstrapWorkspaceDir?: string;
+    requireWorkspaceOnly?: boolean;
+    sessionRoot?: string;
+  },
+): ResolveRunWorkspaceResult | undefined {
+  if (!params.bootstrapWorkspaceDir?.trim() || !hasAgentRosterProperty(params.config)) {
     return undefined;
   }
   const bootstrap = resolveRunWorkspaceDir({
@@ -148,14 +130,10 @@ export function resolveRootedRunRuntimeWorkspace(params: {
 }
 
 /** Resolves the agent's canonical workspace for a run that executes somewhere else. */
-export function resolveCanonicalRunRuntimeWorkspace(params: {
-  workspaceDir: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): ResolveRunWorkspaceResult | undefined {
-  if (!params.config || !hasAgentRosterProperty(params.config)) {
+export function resolveCanonicalRunRuntimeWorkspace(
+  params: Parameters<typeof resolveRunWorkspaceDir>[0] & { workspaceDir: string },
+): ResolveRunWorkspaceResult | undefined {
+  if (!hasAgentRosterProperty(params.config)) {
     return undefined;
   }
   const { fallbackReason: _fallbackReason, ...canonical } = resolveRunWorkspaceDir({

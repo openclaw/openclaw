@@ -20,6 +20,7 @@ export type CronRunReceipt = {
   startedAtMs: number;
   finishedAtMs: number | null;
   error?: string;
+  deliveryNotStarted?: true;
 };
 
 export type CronRunReceiptHandle = Pick<
@@ -49,22 +50,6 @@ export type CronRunReceiptCurrentFacts = {
   receipt: CronRunReceiptHandle | undefined;
   job: (CronAgentScope & { hasCanonicalDeliveryMode: boolean }) | undefined;
   deletionBlocked: boolean;
-};
-
-export type CronRunReceiptOwnerObservation = Pick<
-  CronRunReceipt,
-  "receiptId" | "ownerPid" | "ownerStartTime" | "startedAtMs"
->;
-
-export type PreparedCronRunReceiptAdjudication = {
-  storeKey: string;
-  observed?: CronRunReceiptOwnerObservation;
-  observedStale: boolean;
-};
-
-export type PreparedCronRunReceiptClaim = PreparedCronRunReceiptAdjudication & {
-  handle: CronRunReceiptHandle;
-  requestRunId?: string;
 };
 
 export class CronRunReceiptRevisionError extends Error {

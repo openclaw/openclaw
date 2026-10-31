@@ -35,10 +35,7 @@ export function createRunStateMachine(params: RunStateMachineParams) {
   };
 
   const clearHeartbeat = () => {
-    if (!runActivityHeartbeat) {
-      return;
-    }
-    clearInterval(runActivityHeartbeat);
+    clearInterval(runActivityHeartbeat ?? undefined);
     runActivityHeartbeat = null;
   };
 
@@ -46,14 +43,7 @@ export function createRunStateMachine(params: RunStateMachineParams) {
     if (runActivityHeartbeat || activeRuns <= 0 || !lifecycleActive) {
       return;
     }
-    runActivityHeartbeat = setInterval(() => {
-      if (!lifecycleActive || activeRuns <= 0) {
-        clearHeartbeat();
-        return;
-      }
-      publish();
-    }, heartbeatMs);
-    runActivityHeartbeat.unref?.();
+    runActivityHeartbeat = setInterval(publish, heartbeatMs).unref();
   };
 
   const deactivate = () => {

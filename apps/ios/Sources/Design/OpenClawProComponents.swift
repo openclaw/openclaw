@@ -158,7 +158,13 @@ struct OpenClawSidebarControlButton: View {
 
     private var button: some View {
         Button(action: self.action.action) {
-            self.icon
+            Label {
+                self.action.accessibilityLabel.text
+                    .font(OpenClawType.body)
+            } icon: {
+                self.icon
+            }
+            .labelStyle(.iconOnly)
         }
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())
@@ -167,7 +173,7 @@ struct OpenClawSidebarControlButton: View {
 
     private var icon: some View {
         Image(systemName: self.action.systemName)
-            .font(OpenClawType.subheadSemiBold)
+            .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(OpenClawBrand.accent)
             .frame(
                 width: OpenClawProMetric.compactControlSize,
@@ -190,6 +196,14 @@ struct OpenClawSidebarToolbarItem: ToolbarContent {
 
     @ToolbarContentBuilder
     var body: some ToolbarContent {
+        if #available(iOS 27.1, *) {
+            self.item.axisBehavior(.verticalPreferred).visibilityPriority(.high)
+        } else {
+            self.item
+        }
+    }
+
+    private var item: some ToolbarContent {
         ToolbarItem(placement: self.placement) {
             OpenClawSidebarControlButton(action: self.action)
         }

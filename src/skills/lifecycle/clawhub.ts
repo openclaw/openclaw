@@ -149,7 +149,11 @@ export async function preflightSkillFromClawHub(params: {
         version: resolved.version,
         integrity,
       });
-      return owner.ok && trust.warning ? { ...owner, warning: trust.warning } : owner;
+      return {
+        ...owner,
+        integrity,
+        ...(trust.warning ? { warning: trust.warning } : {}),
+      };
     };
     if (params.expectedIntegrity) {
       return await preflightOwner(normalizeExpectedArtifactIntegrity(params.expectedIntegrity));
@@ -180,12 +184,9 @@ export async function preflightSkillFromClawHub(params: {
 }
 
 export async function installSkillFromClawHub(
-  params: Omit<
-    ClawHubInstallParams,
-    "ownerHandle" | "requestedReference" | "trustState" | "expectedClawHubState"
-  >,
+  params: Omit<ClawHubInstallParams, "ownerHandle" | "requestedReference" | "trustState">,
 ): Promise<InstallClawHubSkillResult> {
-  if (params.clawManaged) {
+  if (params.templateManaged) {
     return await installClawHubSkillReference(params, "requested");
   }
   return await withClawPackageLifecycleLease(

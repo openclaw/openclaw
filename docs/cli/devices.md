@@ -10,6 +10,19 @@ title: "Devices"
 
 Manage device pairing requests and device-scoped tokens.
 
+## Doctor pairing findings
+
+A pending first-time request or a request for more access is an operator decision,
+not proof that existing access failed. Run `openclaw devices list`, compare the
+requested roles and scopes with the approved access, and approve the exact request
+only if you recognize it. Reject an unrecognized request.
+
+An existing device with a missing approved scope baseline, missing role token,
+changed identity, or stale cached token needs repair. Follow Doctor's specific
+command. For a missing scope baseline, inspect the device, reconnect it to request
+its intended access, then approve the current request after reviewing those scopes.
+Do not grant administrator access just to silence a diagnostic.
+
 ## Common options
 
 - `--url <url>`: Gateway WebSocket URL (defaults to `gateway.remote.url` when configured)

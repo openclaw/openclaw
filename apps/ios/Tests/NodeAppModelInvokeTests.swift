@@ -1059,6 +1059,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
     var status: NotificationAuthorizationStatus = .notDetermined
     var authorizationStatusHandler: (@Sendable () async -> NotificationAuthorizationStatus)?
     var addCalls = 0
+    var lastAddedRequest: UNNotificationRequest?
     let notificationAdded = AsyncTestGate()
     var pendingRemovedIdentifiers: [[String]] = []
     var deliveredRemovedIdentifiers: [[String]] = []
@@ -1071,8 +1072,9 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         return self.status
     }
 
-    func add(_: UNNotificationRequest) async throws {
+    func add(_ request: UNNotificationRequest) async throws {
         self.addCalls += 1
+        self.lastAddedRequest = request
         self.notificationAdded.open()
     }
 
@@ -4373,6 +4375,41 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         talkMode.resumeAfterBackground(wasKeptActive: true)
         #expect(talkMode.canKeepContinuousTalkActiveInBackground)
+    }
+
+    @Test @MainActor func `background expiry preserves continuous Talk until it stops`() async {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: "talk.background.enabled")
+        defaults.set(true, forKey: "talk.background.enabled")
+        let (talkMode, appModel) = makeTalkModel()
+        talkMode.updateGatewayConnected(true)
+        talkMode.isEnabled = true
+        talkMode._test_setContinuousTranscriptProcessingActive(true)
+        appModel.gatewayConnected = true
+        defer {
+            talkMode.stop()
+            appModel.setScenePhase(.active)
+            if let previous {
+                defaults.set(previous, forKey: "talk.background.enabled")
+            } else {
+                defaults.removeObject(forKey: "talk.background.enabled")
+            }
+        }
+
+        appModel.setScenePhase(.background)
+        appModel.suppressBackgroundReconnect(reason: "background_grace_timer")
+
+        #expect(!appModel.backgroundReconnectSuppressed)
+        #expect(appModel.gatewayConnected)
+        #expect(talkMode.isGatewayConnected)
+        #expect(talkMode.canKeepContinuousTalkActiveInBackground)
+
+        talkMode.stop()
+        appModel.suppressBackgroundReconnect(reason: "node_loop:lease_expired")
+        #expect(appModel.backgroundReconnectSuppressed)
+        await waitForTalkCondition { !talkMode.isGatewayConnected }
+        #expect(!appModel.gatewayConnected)
+        #expect(appModel.gatewayStatusText == "Background idle")
     }
 
     @Test @MainActor func `late finalizer release cannot restart Voice Wake in background`() async throws {
@@ -8589,7 +8626,19 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let request = try makeInvokeRequest(
             id: "accepted-watch-mirror",
             command: OpenClawWatchCommand.notify.rawValue,
-            params: OpenClawWatchNotifyParams(title: "OpenClaw", body: "Accepted mirror test"))
+            params: OpenClawWatchNotifyParams(
+                title: " OpenClaw ",
+                body: " Accepted mirror test\n",
+                risk: .high,
+                actions: [
+                    OpenClawWatchAction(id: " ", label: "Ignored"),
+                    OpenClawWatchAction(id: " a1 ", label: " A1 "),
+                    OpenClawWatchAction(id: "a2", label: " "),
+                    OpenClawWatchAction(id: "a2", label: "A2"),
+                    OpenClawWatchAction(id: "a3", label: "A3"),
+                    OpenClawWatchAction(id: "a4", label: "A4"),
+                    OpenClawWatchAction(id: "a5", label: "A5"),
+                ]))
         let invocation = Task { @MainActor in await appModel.handleInvoke(request) }
         let deadline = ContinuousClock().now.advanced(by: .seconds(2))
         while await !(mirrorGate.hasStarted()), ContinuousClock().now < deadline {
@@ -8613,6 +8662,15 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(mirrorStarted)
         #expect(responseBeforeMirror.ok)
         #expect(center.addCalls == 1)
+        let content = try #require(center.lastAddedRequest?.content)
+        #expect(content.title == "OpenClaw")
+        #expect(content.body == "Accepted mirror test")
+        #expect(content.interruptionLevel == .timeSensitive)
+        #expect((0..<4).compactMap {
+            content.userInfo[WatchPromptNotificationBridge.actionIDKey(index: $0)] as? String
+        } == ["a1", "a2", "a3", "a4"])
+        #expect(content.userInfo[WatchPromptNotificationBridge.actionLabelKey(index: 0)] as? String == "A1")
+        #expect(content.userInfo[WatchPromptNotificationBridge.actionIDKey(index: 4)] == nil)
     }
 
     @Test @MainActor func `watch notification encodes the exact immutable quick reply target`() throws {
@@ -9248,5 +9306,105 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Model/NodeAppModel.swift")
+    }
+}
+
+extension TalkModeManagerTests {
+    @Test(.serialized, .testWaitLimit, arguments: ["ready", "stop", "session-switch"])
+    @MainActor func `PTT startup refusal preserves its send until acceptance or invalidation`(
+        action: String) async throws
+    {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let gateway = GatewayNodeSession()
+        let refusal = TalkPreparationBarrier()
+        var sends: [Data] = []
+        var accepted = false
+        let recordSend: @MainActor @Sendable (Data) -> Int = { params in
+            sends.append(params)
+            return sends.count
+        }
+        let finishAcceptedTurn: @MainActor @Sendable () -> Void = {
+            accepted = true
+            // Admission is the boundary under test; stop before starting real speech output.
+            talkMode.stop()
+        }
+        defer {
+            refusal.release()
+            talkMode.stop()
+        }
+        let socket = GatewayTestWebSocketTask(sendHook: { socket, message, _ in
+            let data: Data = switch message {
+            case let .data(value): value
+            case let .string(value): Data(value.utf8)
+            @unknown default: Data()
+            }
+            let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            guard let method = frame["method"] as? String, method != "connect" else { return }
+            var response: [String: Any] = try [
+                "type": "res", "id": #require(frame["id"] as? String), "ok": true, "payload": [:],
+            ]
+            var holdRefusal = false
+            if method == "chat.send" {
+                let params = try #require(frame["params"] as? [String: Any])
+                let attempt = try await recordSend(JSONSerialization.data(withJSONObject: params, options: .sortedKeys))
+                if attempt == 1 {
+                    response["ok"] = false
+                    response["error"] = [
+                        "code": "UNAVAILABLE", "message": "Agent is preparing", "retryable": true,
+                        "retryAfterMs": 1,
+                        "details": ["reason": "startup-sidecars", "method": "chat.send"],
+                    ]
+                    holdRefusal = action != "ready"
+                } else {
+                    response["payload"] = try [
+                        "runId": #require(params["idempotencyKey"] as? String), "status": "ok",
+                    ]
+                }
+            } else if method == "chat.history" {
+                await finishAcceptedTurn()
+            }
+            try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: response)))
+            if holdRefusal { await refusal.suspendFirstPreparation() }
+        }, receiveHook: { socket, index in
+            if index == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+            return .data(GatewayWebSocketTestSupport.connectOkData(
+                id: socket.snapshotConnectRequestID() ?? "connect",
+                capabilities: [GatewayServerCapability.chatSendRoutingContract.rawValue]))
+        })
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.allowStoredDeviceAuth = false
+        try await gateway.connect(
+            url: #require(URL(string: "ws://talk-startup-test.invalid")),
+            credentials: .init(),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: { socket })),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+        talkMode.attachGateway(gateway)
+        talkMode.updateMainSessionKey("agent:main:startup-test")
+        talkMode.updateGatewayConnected(true)
+        let capture = try await talkMode.beginPushToTalk()
+        await talkMode._test_handlePushToTalkTranscript(
+            "Keep this spoken message", isFinal: false, captureId: capture.captureId)
+        #expect(talkMode.endPushToTalk(captureId: capture.captureId).status == "queued")
+        if action != "ready" {
+            await refusal.waitUntilEntered()
+            if action == "stop" {
+                talkMode.stop()
+            } else {
+                talkMode.updateMainSessionKey("agent:main:replacement")
+            }
+            refusal.release()
+        }
+        await waitForTalkCondition { talkMode._test_finishingPushToTalkCaptureId() == nil }
+        await gateway.disconnect()
+        #expect(accepted == (action == "ready"))
+        try #require(sends.count == (action == "ready" ? 2 : 1))
+        let first = try #require(JSONSerialization.jsonObject(with: sends[0]) as? [String: Any])
+        #expect((first["message"] as? String)?.contains("Keep this spoken message") == true)
+        #expect(first["sessionKey"] as? String == "agent:main:startup-test")
+        #expect((first["idempotencyKey"] as? String)?.isEmpty == false)
+        if action == "ready" { #expect(sends[0] == sends[1]) }
     }
 }

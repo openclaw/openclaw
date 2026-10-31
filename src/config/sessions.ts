@@ -1,10 +1,10 @@
 // Public facade for session stores, metadata, lifecycle, reset, transcript, and cleanup APIs.
 export * from "./sessions/group.js";
+export * from "./sessions/group-display.js";
 export * from "./sessions/goals.js";
 export * from "./sessions/artifacts.js";
 export * from "./sessions/metadata.js";
 export * from "./sessions/main-session.js";
-export type { MainRestartRecoveryState } from "./sessions/main-session-recovery.types.js";
 export * from "./sessions/main-session.runtime.js";
 export * from "./sessions/lifecycle.js";
 export * from "./sessions/paths.js";
@@ -21,10 +21,8 @@ export * from "./sessions/types.js";
 export * from "./sessions/transcript.js";
 export * from "./sessions/session-registry-maintenance.js";
 export * from "./sessions/session-sharing-store.js";
-export {
-  SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
-  type StoredSessionSuggestion,
-} from "./sessions/session-suggestion-store.js";
+export { SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS } from "./sessions/session-suggestion-policy.js";
+export type { StoredSessionSuggestion } from "./sessions/session-sharing-store.types.js";
 export { listSessionSuggestions } from "./sessions/session-suggestion-store.read.js";
 export * from "./sessions/session-reaction-store.js";
 export * from "./sessions/delivery-info.js";

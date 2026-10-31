@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -8,6 +7,7 @@ import {
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   loadOutboundMediaFromUrl,
   type OutboundMediaLoadOptions,
@@ -77,9 +77,7 @@ function durableDeliveryDigest(params: {
   if (!Number.isSafeInteger(params.deliveryPartIndex) || (params.deliveryPartIndex ?? -1) < 0) {
     throw new Error("ClickClack durable delivery requires a stable delivery part index");
   }
-  return createHash("sha256")
-    .update(`${params.deliveryQueueId}\n${params.deliveryPartIndex}`)
-    .digest("hex");
+  return sha256Hex(`${params.deliveryQueueId}\n${params.deliveryPartIndex}`);
 }
 
 function mediaDeliveryNonces(params: Parameters<typeof durableDeliveryDigest>[0]) {
@@ -164,12 +162,12 @@ export async function sendClickClackText(params: {
   /** Records recipient-visible dispatch immediately before message creation. */
   onPlatformSendDispatch?: () => Promise<void>;
   assertDirectAdapterHandoff?: () => void;
-}): Promise<string | undefined> {
+}): Promise<{ messageId: string } | { outcome: "not_sent" }> {
   // Custom inbound replies bypass shared outbound normalization, so this private
   // sender owns ClickClack assistant-text sanitization for every delivery path.
   const text = sanitizeAssistantVisibleText(params.text);
   if (!text) {
-    return undefined;
+    return { outcome: "not_sent" };
   }
   const { account, client } = createOutboundContext(params);
   const workspaceId = await resolveWorkspaceId(client, account.workspace);
@@ -185,7 +183,7 @@ export async function sendClickClackText(params: {
     onPlatformSendDispatch: params.onPlatformSendDispatch,
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
-  return message.id;
+  return { messageId: message.id };
 }
 
 export async function sendClickClackMedia(

@@ -1,5 +1,6 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
 import { resolveVisibleHistoryEventCount } from "../config/sessions/session-accessor.sqlite-history-projection.js";
 import {
   readTranscriptDisplayDeltaFromProjection,
@@ -19,18 +20,23 @@ import {
   resolveVisibleMessagePositions,
 } from "../config/sessions/session-accessor.sqlite-reset-window.js";
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { readRecentTranscriptConversationText } from "../config/sessions/transcript-recent-text.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import type { TranscriptAnchorPageOptions } from "../sessions/transcript-anchor-page.js";
+import {
+  boundHistoryAnchorPageRange,
+  type TranscriptAnchorPageOptions,
+} from "../sessions/transcript-anchor-page.js";
 import type { TranscriptReadWindowOptions } from "../sessions/transcript-read-window.js";
 import {
   createChatHistoryRecoveryProjection,
   isPendingAssistantError,
+  projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.core.js";
 import {
   dropPreSessionStartAnnouncePairs,
   isPreSessionStartAssistantMessage,
 } from "./chat-display-projection.history.js";
-import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
 import {
   readChatHistoryMessageId,
   readChatHistoryRecoveryContext,
@@ -88,26 +94,22 @@ function projectSqliteHistoryEvents(entries: readonly SessionTranscriptMessageEv
   return messages;
 }
 
+// Raw admission bounds decoding; this cap also accounts for projected event metadata.
 function capAnchorEventsByBytes(
   events: SessionTranscriptMessageEvent[],
-  maxBytes: number | undefined,
+  options: TranscriptAnchorPageOptions,
 ): SessionTranscriptMessageEvent[] {
-  if (maxBytes === undefined) {
+  if (options.maxBytes === undefined) {
     return events;
   }
-  const limit = Math.max(1_024, Math.floor(maxBytes));
-  let bytes = 2;
-  let start = events.length;
-  while (start > 0) {
-    const eventBytes = jsonUtf8Bytes(events[start - 1]);
-    const separatorBytes = start === events.length ? 0 : 1;
-    if (bytes + separatorBytes + eventBytes > limit) {
-      break;
-    }
-    bytes += separatorBytes + eventBytes;
-    start -= 1;
-  }
-  return events.slice(start);
+  const anchor = events.findIndex(({ event }) => asOptionalRecord(event)?.id === options.messageId);
+  const range = boundHistoryAnchorPageRange(
+    { readStart: 0, endExclusive: events.length, hasOverreadContext: false, offset: 0 },
+    anchor >= 0 ? anchor : options.direction === "newer" ? 0 : events.length - 1,
+    Math.max(1_024, Math.floor(options.maxBytes)),
+    (index) => jsonUtf8Bytes(events[index]) + 1,
+  );
+  return events.slice(range.start, range.endExclusive);
 }
 
 function readRecentSqliteMessageRecords(
@@ -140,19 +142,22 @@ function filterSessionMessagesMatchingId(messages: unknown[], messageId: string)
 }
 
 /** Select and format one admitted projection; acquisition and archive fallback stay outside. */
-export function selectSessionTranscriptProjection<
-  Selection extends SessionTranscriptProjectionSelection,
->(
+function selectSessionTranscriptProjection<Selection extends SessionTranscriptProjectionSelection>(
   projection: CurrentTranscriptProjection,
   selection: Selection,
   sessionFile?: string,
 ): SessionTranscriptProjectionSelectionResults[Selection["kind"]];
-export function selectSessionTranscriptProjection(
+function selectSessionTranscriptProjection(
   projection: CurrentTranscriptProjection,
   selection: SessionTranscriptProjectionSelection,
   sessionFile?: string,
 ): SessionTranscriptProjectionSelectionResults[SessionTranscriptProjectionSelection["kind"]] {
   switch (selection.kind) {
+    case "recent-text":
+      return readRecentTranscriptConversationText(
+        (page) => readSessionTranscriptBoundedMessageTailPageFromProjection(projection, page),
+        selection.options,
+      );
     case "delta":
       return readTranscriptDisplayDeltaFromProjection(projection, selection.options);
     case "count":
@@ -199,16 +204,15 @@ export function selectSessionTranscriptProjection(
           transcriptPath: sessionFile,
         };
       }
+      const events = capAnchorEventsByBytes(page.events, selection.options);
       return {
         found: true,
         ...(page.windowReset ? { windowReset: true } : {}),
         ...(page.readWindow ? { readWindow: page.readWindow } : {}),
         displaySource: page.displaySource,
-        hasOverreadContext: page.hasOverreadContext,
-        messages: capAnchorEventsByBytes(page.events, selection.options.maxBytes)
-          .map(sqliteMessageEventWithSeq)
-          .filter((message) => message !== undefined),
-        offset: page.offset,
+        hasOverreadContext: page.hasOverreadContext && events[0] === page.events[0],
+        messages: events.map(sqliteMessageEventWithSeq).filter((message) => message !== undefined),
+        offset: events.length ? page.totalMessages - events.at(-1)!.seq : page.offset,
         totalMessages: page.totalMessages,
         transcriptPath: sessionFile,
       };
@@ -353,15 +357,33 @@ export async function filterSessionMessageHistoryVisibility(
       sessionStartedAt: visibility.sessionStartedAt,
     });
     // The scanner may stop at a user boundary before appending its final chunk.
-    const projected = createRecovery();
-    projected.append([result.message, ...context]);
-    if (
-      !projected
-        .result()
-        .messages.some((message) => readChatHistoryMessageId(message) === messageId)
-    ) {
+    const projected = projectChatDisplayMessagesWithState([result.message, ...context], {
+      maxChars: MAX_PAYLOAD_BYTES,
+      subagentCoordination: readers.subagentCoordination,
+      // Visibility does not need names; the response owner prepares forwarded labels.
+      resolveCronJobName: () => undefined,
+    });
+    const projectedMessage = projected.messages.find(
+      (message) => readChatHistoryMessageId(message) === messageId,
+    );
+    if (!projectedMessage) {
       return { found: false, oversized: false, historyHidden: true };
     }
+    return { ...result, message: projectedMessage };
+  }
+  if (visibility.requireVisible) {
+    const projected = projectChatDisplayMessagesWithState([result.message], {
+      maxChars: MAX_PAYLOAD_BYTES,
+      includeCommentaryFallbacks: true,
+      subagentCoordination: readers.subagentCoordination,
+      resolveCronJobName: () => undefined,
+    });
+    const message = projected.messages.find(
+      (entry) => readChatHistoryMessageId(entry) === messageId,
+    );
+    return message
+      ? { ...result, message }
+      : { found: false, oversized: false, historyHidden: true };
   }
   return result;
 }

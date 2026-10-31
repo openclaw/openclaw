@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { NodePath } from "@babel/traverse";
@@ -9,9 +10,23 @@ import type {
   Node,
   Program as BabelProgram,
 } from "@babel/types";
-import { parse, type AnyNode, type Program } from "acorn";
+import type { AnyNode, Program } from "acorn";
 import { moduleResolve } from "import-meta-resolve";
 import type { createJiti } from "jiti";
+import { markPluginSourceAcquisitionError } from "./plugin-instance-error.js";
+
+let parser: typeof import("acorn") | undefined;
+
+// Package captures and URL/package-map helpers do not parse source. Load the ESM
+// entry on demand so other host Acorn imports retain the same module identity.
+function parse(...args: Parameters<typeof import("acorn").parse>): Program {
+  if (!parser) {
+    const entry = moduleResolve("acorn", new URL(import.meta.url), new Set(["node", "import"]));
+    const loaded: typeof import("acorn") = createRequire(import.meta.url)(fileURLToPath(entry));
+    parser = loaded;
+  }
+  return parser.parse(...args);
+}
 
 export function capturedPluginModuleUrl(
   filename: string,
@@ -397,9 +412,11 @@ function parseTransformedPluginSource(source: string, code: string): Program {
       throw error;
     }
     // Name the blocking file; positions refer to the Jiti output, not the authored source.
-    throw new SyntaxError(`${source}: could not parse transformed source: ${error.message}`, {
-      cause: error,
-    });
+    throw markPluginSourceAcquisitionError(
+      new SyntaxError(`${source}: could not parse transformed source: ${error.message}`, {
+        cause: error,
+      }),
+    );
   }
 }
 
@@ -534,7 +551,7 @@ export function visitPluginSourceReferences(
   for (const reference of staticImports) {
     visitReference(reference, "import");
   }
-  const visit = (node: AnyNode) => {
+  const visit = (node: AnyNode, discardedResult = false) => {
     if (node.type === "ImportExpression") {
       const reference = staticString(node.source);
       if (reference !== undefined) {
@@ -555,7 +572,7 @@ export function visitPluginSourceReferences(
             callee.object.name === "require" &&
             name === "resolve";
       const asset =
-        (node.type === "NewExpression" && name === "URL") ||
+        (node.type === "NewExpression" && name === "URL" && !discardedResult) ||
         ["readFile", "readFileSync", "createReadStream"].includes(name);
       // Trace module references and explicit asset reads. Ordinary strings
       // (labels, descriptions, prompts) never confer ownership of sibling files.
@@ -575,7 +592,11 @@ export function visitPluginSourceReferences(
       }
     }
     for (const child of sourceChildren(node)) {
-      visit(child);
+      // An unused URL or its .href is not an asset read; its arguments still need inspection.
+      const discardedChild =
+        (node.type === "ExpressionStatement" && child === node.expression) ||
+        (discardedResult && node.type === "MemberExpression" && child === node.object);
+      visit(child, discardedChild);
     }
   };
   visit(tree);

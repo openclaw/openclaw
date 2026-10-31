@@ -38,7 +38,6 @@ const OMITTED_DIST_PREFIXES = [
 const OMITTED_PLUGIN_SDK_TEST_NAMES = [
   "agent-runtime-test-contracts",
   "channel-contract-testing",
-  "channel-target-testing",
   "channel-test-helpers",
   "compiled-subprocess-testing",
   "plugin-test-api",
@@ -84,7 +83,7 @@ function normalizeRelativePath(value: string): string {
   return value.replace(/\\/g, "/");
 }
 function isLegacyPluginDependencyDirPath(relativePath: string): boolean {
-  const parts = normalizeRelativePath(relativePath).split("/");
+  const parts = relativePath.split("/");
   if (parts[0]?.toLowerCase() !== "dist" || parts[1]?.toLowerCase() !== "extensions") {
     return false;
   }
@@ -217,9 +216,7 @@ async function collectRelativeFiles(
   try {
     const rootStats = await fsLimit(() => fs.lstat(rootDir));
     if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
-      throw new Error(
-        `Unsafe package dist path: ${normalizeRelativePath(path.relative(baseDir, rootDir))}`,
-      );
+      throw new Error(`Unsafe package dist path: ${rootRelativePath}`);
     }
     const entries = await fsLimit(() => fs.readdir(rootDir, { withFileTypes: true }));
     const files = await Promise.all(
@@ -284,11 +281,9 @@ export async function readPackageDistInventoryIfPresent(
   return sortUniqueStrings(parsed.map(normalizeRelativePath));
 }
 
-type PackageDistFsRoot = Awaited<ReturnType<typeof openFsRoot>>;
-
 async function openPackageDistFsRootIfPresent(
   packageRoot: string,
-): Promise<PackageDistFsRoot | null> {
+): Promise<Awaited<ReturnType<typeof openFsRoot>> | null> {
   const packageFs = await openFsRoot(packageRoot, {
     hardlinks: "allow",
     symlinks: "reject",
@@ -385,6 +380,7 @@ export async function readPackageDistContentInventoryIfPresent(
 
 export async function collectPackageDistContentInventoryErrors(
   packageRoot: string,
+  warnings?: string[],
 ): Promise<string[]> {
   const expected = await readPackageDistContentInventoryIfPresent(packageRoot);
   if (expected === null) {
@@ -393,5 +389,6 @@ export async function collectPackageDistContentInventoryErrors(
   return comparePackageDistContentInventory(
     expected,
     await collectPackageDistContentInventory(packageRoot),
+    warnings,
   );
 }

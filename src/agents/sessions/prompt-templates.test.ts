@@ -18,11 +18,12 @@ describe("loadPromptTemplates", () => {
     const templates = loadPromptTemplates({
       cwd: root,
       agentDir: join(root, "agent"),
-      promptPaths: [promptsDir],
+      promptPaths: [join(root, "missing"), join(promptsDir, "emoji.md", "child"), promptsDir],
     });
 
     expect(templates).toHaveLength(1);
     expect(templates[0]?.description).toBe(`${"a".repeat(59)}...`);
+    expect(templates[0]?.sourceInfo.baseDir).toBe(promptsDir);
   });
 
   it("preserves dash-prefixed Markdown as prompt content", async () => {

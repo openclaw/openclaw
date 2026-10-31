@@ -6,9 +6,12 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { scheduleTextareaHeightAdjustment } from "./chat-composer-dom.ts";
+import { QuestionFreeText } from "./chat-question-answer-controls.tsx";
 import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 import type { QuestionPanelProps } from "./chat-question-card.ts";
 import { ChatQuestionPanel } from "./chat-question-panel.tsx";
+import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
 function gatewayPrompt(overrides: Partial<QuestionPrompt> = {}): QuestionPrompt {
   return {
@@ -114,6 +117,67 @@ describe("shared question panel", () => {
     drawPanel(createGatewayQuestionPanelProps(gatewayPrompt(), options));
     return panelIn(container);
   }
+
+  it("keeps answer sizing on the live transcript without disturbing native editing", async () => {
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const first = document.createElement("div");
+    const second = document.createElement("div");
+    const replacement = document.createElement("div");
+    const observed = [vi.fn(), vi.fn(), vi.fn()];
+    const stops = [first, second, replacement].map((element, index) =>
+      subscribeTranscriptScroll(element, observed[index]!),
+    );
+    let transcript = first;
+    let replaceGetter!: () => void;
+    mounted = mountSolid(
+      () => {
+        const [value, setValue] = createSignal("alpha");
+        const [source, setSource] = createSignal({ get: () => transcript });
+        replaceGetter = () => setSource({ get: () => replacement });
+        return (
+          <QuestionFreeText
+            question={freeTextQuestion()}
+            value={value()}
+            selected={false}
+            disabled={false}
+            getTranscriptElement={source().get}
+            onInput={setValue}
+          />
+        );
+      },
+      { container },
+    );
+    try {
+      flush();
+      const textarea = container.querySelector("textarea")!;
+      textarea.focus();
+      textarea.value = "alpha beta";
+      textarea.setSelectionRange(2, 2);
+      observed.forEach((observer) => observer.mockClear());
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      flush();
+      expect(observed[0]).toHaveBeenCalledWith({ type: "before-resize" });
+      expect(document.activeElement).toBe(textarea);
+      expect(textarea.selectionStart).toBe(2);
+      expect(textarea.selectionEnd).toBe(2);
+      expect(container.querySelector("textarea")).toBe(textarea);
+
+      transcript = second;
+      scheduleTextareaHeightAdjustment(textarea);
+      await Promise.resolve();
+      expect(observed[1]).toHaveBeenCalledWith({ type: "before-resize" });
+      replaceGetter();
+      flush();
+      expect(observed[2]).toHaveBeenCalledWith({ type: "before-resize" });
+      expect(container.querySelector("textarea")).toBe(textarea);
+      expect(
+        warnings.mock.calls.filter(([text]) => String(text).includes("STRICT_READ_UNTRACKED")),
+      ).toEqual([]);
+    } finally {
+      stops.forEach((stop) => stop());
+      warnings.mockRestore();
+    }
+  });
 
   it("steps from single-select to multi-select and preserves array answers", async () => {
     const prompt = gatewayPrompt({
@@ -311,7 +375,7 @@ describe("shared question panel", () => {
     expect(hosts.value).toBe("api.example.test");
     expect(secret.autocomplete).toBe("off");
     expect(secret.placeholder).toBe("FAKE_DEPLOYMENT_API_KEY");
-    expect(secret.closest("label")?.textContent).toContain("API key");
+    expect(secret.labels?.[0]?.textContent).toContain("API key");
     expect(container.querySelector(".chat-question-panel__options")).toBeNull();
     expect(container.querySelector(".chat-question-panel__option-marker")).toBeNull();
     expect(container.querySelector("kbd")).toBeNull();
@@ -336,8 +400,57 @@ describe("shared question panel", () => {
     expect(container.textContent).not.toContain(fakeSecret);
     expect(container.innerHTML).not.toContain(fakeSecret);
 
+    const toggle = container.querySelector<HTMLButtonElement>('button[aria-label="Show secret"]')!;
+    expect(toggle).not.toBeNull();
+    toggle.click();
+    flush();
+    expect(secret.type).toBe("text");
+    expect(secret.value).toBe(fakeSecret);
+    expect(toggle.getAttribute("aria-label")).toBe("Hide secret");
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(container.textContent).not.toContain(fakeSecret);
+    expect(container.innerHTML).not.toContain(fakeSecret);
+    toggle.click();
+    flush();
+    expect(secret.type).toBe("password");
+    expect(secret.value).toBe(fakeSecret);
+
     container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.click();
     expect(onSubmit).toHaveBeenCalledWith({ api_key: [fakeSecret] });
+  });
+
+  it("remasks secrets when moving to another question or request", async () => {
+    const prompt = gatewayPrompt({
+      questions: [
+        freeTextQuestion({ questionId: "first", isSecret: true }),
+        freeTextQuestion({ questionId: "second", isSecret: true }),
+      ],
+    });
+    drawGateway(prompt);
+    await panelIn(container);
+    const input = () => container.querySelector<HTMLInputElement>("input")!;
+    const reveal = () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Show secret"]')!.click();
+      flush();
+    };
+    input().value = "fake-secret-first";
+    input().dispatchEvent(new InputEvent("input", { bubbles: true }));
+    flush();
+    reveal();
+    expect(input().type).toBe("text");
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
+    flush();
+    expect(input().type).toBe("password");
+    expect(input().value).toBe("");
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__back")!.click();
+    flush();
+    expect(input().type).toBe("password");
+    expect(input().value).toBe("fake-secret-first");
+    reveal();
+    drawGateway(gatewayPrompt({ id: "question-2", questions: prompt.questions }));
+    await panelIn(container);
+    expect(input().type).toBe("password");
+    expect(input().value).toBe("");
   });
 
   it.each([
@@ -385,7 +498,7 @@ describe("shared question panel", () => {
     const input = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(
       "input, textarea",
     )!;
-    expect(input.closest("label")?.textContent).toContain("Answer");
+    expect(input.labels?.[0]?.textContent).toContain("Answer");
     expect(input.placeholder).toBe("Answer");
   });
 
@@ -602,10 +715,18 @@ describe("shared question panel", () => {
     await panelIn(container);
     container.querySelector<HTMLButtonElement>('[role="radio"]')!.click();
     flush();
-    container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
+    const firstButton = container.querySelector<HTMLButtonElement>(
+      ".chat-question-panel__advance",
+    )!;
+    firstButton.click();
+    firstButton.click();
+    await waitForSolid(() => expect(firstButton.disabled).toBe(true));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
 
     drawGateway(gatewayPrompt({ id: "another-question" }));
-    flush();
+    await waitForSolid(() => {
+      expect(container.querySelector(".chat-question-panel__advance")).not.toBe(firstButton);
+    });
     drawGateway(prompt, { onSubmit });
     flush();
     const button = container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!;
@@ -615,8 +736,11 @@ describe("shared question panel", () => {
     await older.promise;
     flush();
     expect(button.disabled).toBe(true);
-    newer.resolve();
+    newer.reject(new Error("Question submission failed"));
     await waitForSolid(() => expect(button.disabled).toBe(false));
     expect(onSubmit).toHaveBeenCalledTimes(2);
+    button.click();
+    expect(onSubmit).toHaveBeenCalledTimes(3);
+    expect(onSubmit).toHaveBeenLastCalledWith({ format: ["Compact"] });
   });
 });

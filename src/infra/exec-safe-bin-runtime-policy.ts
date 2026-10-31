@@ -11,7 +11,6 @@ import {
   getTrustedSafeBinDirs,
   listWritableExplicitTrustedSafeBinDirs,
   normalizeTrustedSafeBinDirs,
-  type WritableTrustedSafeBinDir,
 } from "./exec-safe-bin-trust.js";
 
 type ExecSafeBinConfigScope = {
@@ -105,15 +104,9 @@ export function resolveExecSafeBinRuntimePolicy(params: {
   trustedSafeBinDirs: ReadonlySet<string>;
   unprofiledSafeBins: string[];
   unprofiledInterpreterSafeBins: string[];
-  writableTrustedSafeBinDirs: ReadonlyArray<WritableTrustedSafeBinDir>;
 } {
   const safeBins = resolveSafeBins(params.local?.safeBins ?? params.global?.safeBins);
-  const safeBinProfiles = resolveSafeBinProfiles(
-    resolveMergedSafeBinProfileFixtures({
-      global: params.global,
-      local: params.local,
-    }),
-  );
+  const safeBinProfiles = resolveSafeBinProfiles(resolveMergedSafeBinProfileFixtures(params));
   const unprofiledSafeBins = Array.from(safeBins)
     .filter((entry) => !safeBinProfiles[entry])
     .toSorted();
@@ -125,11 +118,8 @@ export function resolveExecSafeBinRuntimePolicy(params: {
     extraDirs: explicitTrustedSafeBinDirs,
     safeBins: Array.from(safeBins),
   });
-  const writableTrustedSafeBinDirs = listWritableExplicitTrustedSafeBinDirs(
-    explicitTrustedSafeBinDirs,
-  );
   if (params.onWarning) {
-    for (const hit of writableTrustedSafeBinDirs) {
+    for (const hit of listWritableExplicitTrustedSafeBinDirs(explicitTrustedSafeBinDirs)) {
       const scope = hit.worldWritable ? "world-writable" : "group-writable";
       params.onWarning(
         `exec: safeBinTrustedDirs includes ${scope} directory '${hit.dir}'; remove trust or tighten permissions (for example chmod 755).`,
@@ -142,6 +132,5 @@ export function resolveExecSafeBinRuntimePolicy(params: {
     trustedSafeBinDirs,
     unprofiledSafeBins,
     unprofiledInterpreterSafeBins: listInterpreterLikeSafeBins(unprofiledSafeBins),
-    writableTrustedSafeBinDirs,
   };
 }

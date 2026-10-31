@@ -1,5 +1,27 @@
+import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 import { ToolInputError } from "../tool-input-error.js";
 import { readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
+
+export function readSessionsSendTarget(params: Record<string, unknown>) {
+  const sessionKeyParam = readToolStringParam(params, "sessionKey");
+  const labelParam = readToolStringParam(params, "label");
+  const labelAgentIdInput = readToolStringParam(params, "agentId");
+  const normalizedLabelAgentId =
+    labelAgentIdInput === undefined ? null : normalizeAgentIdStrict(labelAgentIdInput);
+  if (normalizedLabelAgentId && !normalizedLabelAgentId.ok) {
+    return {
+      ok: false as const,
+      error: `Agent "${labelAgentIdInput}" not found. Run openclaw agents list to see configured agents.`,
+    };
+  }
+  return {
+    ok: true as const,
+    sessionKeyParam,
+    labelParam,
+    labelAgentIdInput,
+    explicitTargetAgentId: normalizedLabelAgentId?.value,
+  };
+}
 
 export function readSessionsSendMessage(params: Record<string, unknown>): string {
   const message = readToolStringParam(params, "message", { required: true, trim: false });

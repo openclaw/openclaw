@@ -81,7 +81,7 @@ These auth-related config keys can be set via environment variables instead of `
 ## History context
 
 - `channels.msteams.historyLimit` controls how many recent channel/group messages are wrapped into the prompt. Falls back to `messages.groupChat.historyLimit`, then defaults to 50. Set `0` to disable.
-- Graph thread context adds the parent and up to the oldest 50 replies alongside recent channel history. It excludes the triggering message and keeps history separate from the sender's command text, so commands quoted in history do not execute. Long fetched messages retain their beginning and end within the prompt's per-message limit.
+- Graph thread context adds the parent and up to the newest 50 replies alongside recent channel history. Graph returns replies oldest-first and caps each page at 50, so the plugin follows continuation links to reach the newest replies and then keeps the most recent window. If the reply pages cannot be retrieved in full, or their timestamps are incomplete, thread reply enrichment is omitted rather than replaced with an oldest-first prefix. It excludes the triggering message and keeps history separate from the sender's command text, so commands quoted in history do not execute. Long fetched messages retain their beginning and end within the prompt's per-message limit.
 - Thread and quoted attachment context follow `channels.msteams.contextVisibility`, falling back to `channels.defaults.contextVisibility`, then `all`. Use `allowlist` to filter both by sender allowlists (`allowFrom` / `groupAllowFrom`), or `allowlist_quote` to filter thread history while permitting quoted context.
 - DM history can be limited with `channels.msteams.dmHistoryLimit` (user turns). Per-user overrides: `channels.msteams.dms["<user_id>"].historyLimit`.
 
@@ -127,7 +127,7 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.certificateThumbprint`: certificate thumbprint; accepted, not required for auth.
 - `channels.msteams.useManagedIdentity`: enable managed identity auth (federated mode).
 - `channels.msteams.managedIdentityClientId`: client ID for user-assigned managed identity.
-- `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads in group chats/channels (see [Sending files in group chats](/channels/msteams/messaging#sending-files-in-group-chats)).
+- `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads. When omitted, standard channels resolve their team site automatically; group chats and private/shared channels require an explicit site (see [Sending files in group chats](/channels/msteams/messaging#sending-files-in-group-chats)).
 - `channels.msteams.welcomeCard`, `channels.msteams.groupWelcomeCard`, `channels.msteams.promptStarters`: welcome Adaptive Card shown on first DM/group contact, and its suggested prompt buttons.
 - `channels.msteams.responsePrefix`: text prefixed to outbound replies.
 - `channels.msteams.feedbackEnabled` (default `true`), `channels.msteams.feedbackReflection` (default `true`), `channels.msteams.feedbackReflectionCooldownMs`: thumbs-up/down feedback on replies and the negative-feedback reflection follow-up.

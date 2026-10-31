@@ -1,0 +1,58 @@
+.chatgpt-usage-limit-modal {
+  --openclaw-modal-width: 420px;
+}
+
+.chatgpt-usage-limit {
+  position: relative;
+  padding: 40px;
+  text-align: center;
+}
+
+.chatgpt-usage-limit__close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+.chatgpt-usage-limit .provider-brand-icon.chatgpt-usage-limit__logo {
+  display: inline-block;
+  width: 64px;
+  height: 64px;
+  color: var(--text-strong);
+}
+
+.chatgpt-usage-limit h2 {
+  margin: 16px 0;
+  color: var(--text-strong);
+  font-size: calc(24px * var(--control-ui-text-scale));
+  line-height: 1.3;
+}
+
+.chatgpt-usage-limit p {
+  margin: 16px 0;
+}
+
+.chatgpt-usage-limit blockquote {
+  margin: 16px 0;
+  white-space: pre-wrap;
+  text-align: start;
+}
+
+.chatgpt-usage-limit openclaw-modal-actions {
+  margin-top: 40px;
+}
+
+.chatgpt-usage-limit__action {
+  --primary: var(--text-strong);
+  --primary-foreground: var(--card);
+  --primary-hover: var(--text);
+  --accent-subtle: transparent;
+  --accent-glow: transparent;
+
+  width: 100%;
+  min-height: 44px;
+}
+
+a.chatgpt-usage-limit__action {
+  cursor: pointer;
+}

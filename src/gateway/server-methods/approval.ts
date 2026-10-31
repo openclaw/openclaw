@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
-  errorShape,
   isWellFormedApprovalId,
   type ApprovalDecision,
   type ApprovalHistoryResult,
@@ -36,10 +35,11 @@ import {
   type ExecApprovalIosPushDelivery,
   type PluginApprovalIosPushDelivery,
 } from "./approval-publication.js";
-import { canAccessApprovalSession } from "./approval-record-lookup.js";
+import { prepareApprovalSessionAccess } from "./approval-record-lookup.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import { respondApprovalStorageUnavailable } from "./approval-shared.js";
 import { loadVisibleApproval } from "./approval-visible-record.js";
+import { respondError } from "./response.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type CreateApprovalHandlersParams = {
@@ -96,13 +96,9 @@ function resolveLegacyApprovalLabel(client: GatewayClient | null): string | null
 }
 
 function respondApprovalNotFound(respond: RespondFn): void {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "approval not found", {
-      details: { reason: ErrorCodes.APPROVAL_NOT_FOUND },
-    }),
-  );
+  respondError(respond, ErrorCodes.INVALID_REQUEST, "approval not found", {
+    details: { reason: ErrorCodes.APPROVAL_NOT_FOUND },
+  });
 }
 
 function readExactApprovalId(params: unknown): string | null {
@@ -190,11 +186,7 @@ export function createApprovalHandlers(
       const { params: rawParams, respond, client, context } = options;
       using authority = createApprovalRequestAuthority(options);
       if (!validateApprovalHistoryParams(rawParams)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "invalid approval.history params"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid approval.history params");
         return;
       }
       if (!authority.isCurrent()) {
@@ -216,11 +208,7 @@ export function createApprovalHandlers(
           return;
         }
         if (error instanceof OperatorApprovalHistoryCursorError) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "invalid approval.history cursor"),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid approval.history cursor");
           return;
         }
         respondApprovalStorageUnavailable({ context, respond, operation: "history", error });
@@ -230,17 +218,16 @@ export function createApprovalHandlers(
         respondApprovalNotFound(respond);
         return;
       }
+      using sessionAccess = await prepareApprovalSessionAccess({
+        client,
+        getCfg: context.getRuntimeConfig,
+        sources: history.records.map((record) => record.source),
+      });
+      authority.assertCurrent();
       const cfg = context.getRuntimeConfig();
       const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
       const items = history.records.flatMap((record) => {
-        if (
-          !canAccessApprovalSession({
-            cfg,
-            client,
-            sessionKey: record.source.sessionKey,
-            agentId: record.source.agentId,
-          })
-        ) {
+        if (!sessionAccess.canAccess(record.source)) {
           return [];
         }
         const snapshot = buildApprovalSnapshot(record, controlUiBasePath);
@@ -257,17 +244,13 @@ export function createApprovalHandlers(
       const { params: rawParams, respond, client, context } = options;
       using authority = createApprovalRequestAuthority(options);
       if (!validateApprovalGetParams(rawParams)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "invalid approval.get params"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid approval.get params");
         return;
       }
       const id = readExactApprovalId(rawParams);
       let record: OperatorApprovalRecord | null;
       try {
-        const prepared = id
+        using prepared = id
           ? await loadVisibleApproval({
               ...params,
               id,
@@ -330,26 +313,41 @@ export function createApprovalHandlers(
         respondApprovalStorageUnavailable({ context, respond, operation: "lookup", error });
         return;
       }
-      if (!id || !record || !prepared) {
+      using retainedApproval = prepared;
+      if (!id || !record || !retainedApproval) {
         respondApprovalNotFound(respond);
         return;
       }
-      const { guard: approvalGuard, readCurrent } = prepared;
-      const custody = resolveParams?.reviewer
-        ? prepareApprovalChannelCustody({
-            cfg: context.getRuntimeConfig(),
-            approvalKind: record.kind,
-            reviewer: resolveParams.reviewer,
-          })
-        : null;
+      const { guard: approvalGuard, readCurrent } = retainedApproval;
       const liveRecord =
         record.kind === "exec"
           ? params.execApprovalManager.getLiveSnapshot(record.id)
           : record.kind === "plugin"
             ? params.pluginApprovalManager.getLiveSnapshot(record.id)
             : params.systemAgentApprovalManager?.getLiveSnapshot(record.id);
-      if (resolveParams?.reviewer && (!custody || !liveRecord || !custody.authorizes(liveRecord))) {
-        respondApprovalNotFound(respond);
+      using custody = resolveParams?.reviewer
+        ? prepareApprovalChannelCustody({
+            cfg: context.getRuntimeConfig(),
+            getCfg: context.getRuntimeConfig,
+            assertCurrent: () => approvalGuard.assertCurrent(),
+            approvalKind: record.kind,
+            reviewer: resolveParams.reviewer,
+          })
+        : null;
+      try {
+        if (
+          resolveParams?.reviewer &&
+          (!custody || !liveRecord || !(await custody.authorizes(liveRecord)))
+        ) {
+          respondApprovalNotFound(respond);
+          return;
+        }
+      } catch (error) {
+        if (!authority.isCurrent()) {
+          respondApprovalNotFound(respond);
+        } else {
+          respondApprovalStorageUnavailable({ context, respond, operation: "lookup", error });
+        }
         return;
       }
       if (record.status !== "pending") {
@@ -381,14 +379,6 @@ export function createApprovalHandlers(
       const forceMalformedDeny = !validParams || !kindMatches || !decisionAllowed;
       const assertCurrent = () => {
         approvalGuard.assertCurrent();
-        const currentCfg = context.getRuntimeConfig();
-        const currentCustody = resolveParams?.reviewer
-          ? prepareApprovalChannelCustody({
-              cfg: currentCfg,
-              approvalKind: record.kind,
-              reviewer: resolveParams.reviewer,
-            })
-          : null;
         if (
           client?.invalidated ||
           !canAccessOperatorApproval({
@@ -396,14 +386,8 @@ export function createApprovalHandlers(
             allowApprovalRuntime: true,
             binding: { reviewerDeviceIds: record.reviewerDeviceIds },
           }) ||
-          (approvalGuard.family === "native-compatibility" &&
-            !canAccessApprovalSession({
-              cfg: currentCfg,
-              client,
-              sessionKey: record.source.sessionKey,
-              agentId: record.source.agentId,
-            })) ||
-          (resolveParams?.reviewer && (!liveRecord || !currentCustody?.authorizes(liveRecord)))
+          (approvalGuard.family === "native-compatibility" && !readCurrent()) ||
+          (resolveParams?.reviewer && (!liveRecord || !custody?.isCurrent(liveRecord)))
         ) {
           throw new Error("approval resolver authority is no longer active");
         }

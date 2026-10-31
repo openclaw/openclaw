@@ -10,6 +10,12 @@ type SystemPromptToolListParams = {
   acpSpawnRuntimeEnabled: boolean;
 };
 
+/** Server-level guidance an MCP server published in its initialize result. */
+export type McpServerInstruction = {
+  server: string;
+  instructions: string;
+};
+
 /** Render the visible tool list with stable core ordering and caller-provided names. */
 export function buildSystemPromptToolLines(params: SystemPromptToolListParams): string[] {
   const { visibleTools, availableTools, promptSurface, acpSpawnRuntimeEnabled } = params;
@@ -22,7 +28,7 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
     find: "Find files by glob",
     ls: "List directories",
     exec: params.codeModeActive
-      ? "Run JavaScript Code Mode; call exact catalog tools from code, never shell/Python/imports"
+      ? "Run JavaScript Code Mode; call exact catalog tools from code"
       : promptSurface === "cli_backend"
         ? "Run shell on configured exec target"
         : "Run shell; pty for TTY CLIs",
@@ -74,12 +80,11 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
     image: "Analyze images",
   };
 
-  const resolveToolName = (normalized: string) => visibleTools.get(normalized) ?? normalized;
   const extraTools = [...visibleTools.keys()].filter((tool) => !toolOrder.includes(tool));
   const enabledTools = toolOrder.filter((tool) => visibleTools.has(tool));
   return [...enabledTools, ...extraTools.toSorted()].map((tool) => {
     const summary = summaries[tool];
-    const name = resolveToolName(tool);
+    const name = visibleTools.get(tool) ?? tool;
     return summary ? `- ${name}: ${summary}` : `- ${name}`;
   });
 }
@@ -92,6 +97,7 @@ export function buildSystemPromptToolingSection(params: {
   promptSurface: AgentPromptSurfaceKind;
   availableTools: ReadonlySet<string>;
   webSearchUnconfigured?: boolean;
+  mcpServerInstructions?: readonly McpServerInstruction[];
 }): string[] {
   const {
     includeToolGuidance,
@@ -99,6 +105,7 @@ export function buildSystemPromptToolingSection(params: {
     toolSchemaDirectoryPrompt,
     promptSurface,
     availableTools,
+    mcpServerInstructions = [],
   } = params;
   return [
     ...(includeToolGuidance
@@ -114,6 +121,17 @@ export function buildSystemPromptToolingSection(params: {
             ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
             : []),
           "The AGENTS.md Tools section guides usage; it never grants availability.",
+          ...(mcpServerInstructions.length > 0
+            ? [
+                "",
+                "## MCP Server Instructions",
+                "Server-wide guidance published by the MCP servers behind the tools above; it applies to that server's tools.",
+                ...mcpServerInstructions.flatMap((entry) => [
+                  `### ${entry.server}`,
+                  entry.instructions,
+                ]),
+              ]
+            : []),
         ]
       : []),
     ...(params.webSearchUnconfigured && !availableTools.has("web_search")

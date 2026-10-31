@@ -116,8 +116,8 @@ function gatewaySource(fixture) {
 const args=process.argv.slice(2);
 const activeLease=()=>{
   const lease=present("active-lease")?JSON.parse(read("active-lease")):null;
-  if(lease&&lease.expiry<=Date.now()) {
-    for(const name of ["active-lease","armed-handoff","request-id"])remove(name);
+  if(lease&&lease.expiry<=Date.now()&&!present("committed-handoff")) {
+    for(const name of ["active-lease","request-id"])remove(name);
     event("suspension.expired");return null;
   }
   return lease;
@@ -149,7 +149,10 @@ const option=(name)=>{
   return args[index+1];
 };
 try {
-if(args[0]==="config"&&args[1]==="validate") {
+if(args[0]==="update") {
+  event("gateway update "+args[1]);
+  reject("synthetic native update refused");
+} else if(args[0]==="config"&&args[1]==="validate") {
   event("gateway config validate");
   const config=loadConfig();
   if(typeof setup(config)!=="string"||!config.meta?.migrations?.modelPolicyAllowlist)
@@ -276,14 +279,15 @@ if(args[0]==="config"&&args[1]==="validate") {
     if(params.agentId!=="controller-test-agent"||params.deliver!==false||!params.message?.startsWith(prefix)||
       params.sessionKey!=="agent:controller-test-agent:explicit:"+params.sessionId?.toLowerCase()||!params.idempotencyKey||params.timeout<=0)
       reject("invalid synthetic agent ACK request");
-    if(present("marker-accepted")&&JSON.parse(read("marker-accepted")).idempotencyKey===params.idempotencyKey) reject("marker was redispatched");
-    put("marker-accepted",JSON.stringify(params));
+    const replay=present("marker-accepted")&&JSON.parse(read("marker-accepted")).idempotencyKey===params.idempotencyKey;
+    if(replay&&read("marker-accepted")!==JSON.stringify(params)) reject("marker replay changed its native request");
+    if(!replay) put("marker-accepted",JSON.stringify(params));
     if(present("marker-rpc-failure")) {
       const failure=JSON.parse(read("marker-rpc-failure"));
-      if(failure.method==="agent") {emit({fixtureError:failure.error});process.exit(7);}
+      if(failure.method==="agent"&&(!failure.once||!replay)) {emit({fixtureError:failure.error});process.exit(7);}
     }
     if(scenario==="marker-generation-change") put("pid",222);
-    emit({status:"accepted",runId:params.idempotencyKey,agentId:params.agentId,sessionKey:params.sessionKey});
+    emit(replay?{status:"in_flight",runId:params.idempotencyKey}:{status:"accepted",runId:params.idempotencyKey,agentId:params.agentId,sessionKey:params.sessionKey});
   } else if(method==="agent.wait") {
     const accepted=JSON.parse(read("marker-accepted"));
     if(params.runId!==accepted.idempotencyKey||!Number.isInteger(params.timeoutMs)||params.timeoutMs<0) reject("wait did not retain accepted run");
@@ -301,7 +305,7 @@ if(args[0]==="config"&&args[1]==="validate") {
     if(scenario==="marker-stream-close"&&!present("marker-waited")){put("marker-waited",1);emit({runId:params.runId,status:"timeout"});}
     else {
       const marker=accepted.message.split(": ").at(-1);
-      const receipt={runId:params.runId,sessionId:accepted.sessionId,turnId:"fixture-turn",terminalDisposition:"visible",effective:{provider:"fixture",model:"exact-model",responseModel:"exact-model"}};
+      const receipt={runId:params.runId,sessionId:accepted.sessionId,turnId:"fixture-turn",terminalDisposition:"visible",requested:{provider:"fixture",model:"exact-model"},effective:{provider:"fixture",model:"exact-model",responseModel:"exact-model"}};
       if(scenario==="marker-wrong-session") receipt.sessionId="different-session";
       if(scenario==="marker-wrong-model") receipt.effective.model="different-model";
       if(scenario==="marker-response-model-alias") receipt.effective.responseModel="provider-response-alias";
@@ -367,15 +371,15 @@ if(args[0]==="config"&&args[1]==="validate") {
     if(existing&&present("request-id")&&read("request-id")!==params.requestId) reject("suspension request changed");
     put("request-id",params.requestId);
     const failure=present("prepare-failure")?JSON.parse(read("prepare-failure")):null;
-    if(failure&&(!failure.renewal||present("active-lease"))) {
+    if(failure) {
       process.stdout.write(failure.stdout);
       process.stderr.write(failure.stderr??"");
       process.exit(failure.exit);
     }
-    const draining=persistentDrain||failure?.renewal;
+    const draining=persistentDrain;
     const sequence=existing?Number(read("lease-sequence")):Number(present("lease-sequence")?read("lease-sequence"):0)+1;
     put("lease-sequence",sequence);
-    const expiry=existing&&present("armed-handoff")?existing.expiry:Date.now()+(failure?.renewal?20000:120000);
+    const expiry=existing?existing.expiry:Date.now()+45000;
     const id=existing?existing.id:sequence===1?"fixture-preserve":"fixture-preserve-"+sequence;
     put("active-lease",JSON.stringify({id,expiry}));
     if(draining) event("suspension.draining");
@@ -384,14 +388,14 @@ if(args[0]==="config"&&args[1]==="validate") {
       ...(draining?{retryAfterMs:1000}:{})});
   } else if(method==="gateway.suspend.handoff") {
     const lease=activeLease();
-    if(Object.keys(params).sort().join(",")!=="suspensionId,target"||!lease||lease.expiry<=Date.now()||
+    if(Object.keys(params).sort().join(",")!=="commit,suspensionId,target"||params.commit!==true||!lease||lease.expiry<=Date.now()||
       params.suspensionId!==lease.id||Object.keys(params.target??{}).sort().join(",")!=="pid,processInstanceId"||
       params.target.pid!==Number(read("pid"))||params.target.processInstanceId!=="fixture-instance-"+read("pid"))
       reject("synthetic handoff target or live lease mismatch");
     if(scenario==="handoff-refused") {event("handoff.refused");reject("synthetic handoff refused");}
-    put("armed-handoff",JSON.stringify({id:lease.id,expiry:lease.expiry,pid:params.target.pid,instance:params.target.processInstanceId}));
-    event("handoff.armed");
-    emit({status:"armed",suspensionId:lease.id,expiresAtMs:lease.expiry+(scenario==="handoff-uncertain"?1:0)});
+    put("committed-handoff",JSON.stringify({id:lease.id,expiry:lease.expiry,pid:params.target.pid,instance:params.target.processInstanceId}));
+    event("handoff.committed");
+    emit({status:"committed",suspensionId:lease.id,expiresAtMs:lease.expiry+(scenario==="handoff-uncertain"?1:0)});
   } else {
     const lease=activeLease();
     if(method==="gateway.suspend.status") {
@@ -405,9 +409,10 @@ if(args[0]==="config"&&args[1]==="validate") {
         emit({status:"draining",expiresAtMs:lease.expiry,activeCount:1,
           blockers:[{kind:"terminal-session",count:1,message:"synthetic active terminal"}],retryAfterMs:1000});
       } else emit({status:"ready",expiresAtMs:lease.expiry});
-    } else if(!lease||lease.expiry<=Date.now()) emit({ok:true,status:"running",resumed:false});
+    } else if(present("committed-handoff")) emit({ok:false,reason:"gateway-restarting"});
+    else if(!lease||lease.expiry<=Date.now()) emit({ok:true,status:"running",resumed:false});
     else if(params.suspensionId!==lease.id) emit({ok:false,reason:"suspension-mismatch"});
-    else {remove("active-lease");remove("armed-handoff");remove("request-id");emit({ok:true,status:"running",resumed:true});}
+    else {remove("active-lease");remove("request-id");emit({ok:true,status:"running",resumed:true});}
   }
 } else if(args[0]==="agent") {
   event("gateway agent");
@@ -454,7 +459,7 @@ if(command==="busctl") {
 } else if(command==="curl") {
   const endpoint=new URL(args.at(-1)).pathname;
   const probes={"/healthz":{ok:true,status:"live"},"/startupz":{ok:true,status:"started",uptimeMs:42},
-    "/readyz":{ready:true,failing:[],uptimeMs:42,eventLoop:present("event-loop")?parseJson(read("event-loop")):{degraded:false}}};
+    "/readyz":{ready:true,failing:[],uptimeMs:42,eventLoop:present("event-loop")?parseJson(read("event-loop")):{degraded:false,delayP99Ms:0,delayMaxMs:0}}};
   if(present("start-count")&&present("health-failure")) probes["/healthz"].ok=false;
   if(!Object.hasOwn(probes,endpoint)) reject("unsupported synthetic HTTP probe");
   event("probe."+endpoint.slice(1));
@@ -577,11 +582,11 @@ if(command==="busctl") {
     }
     if(operation!=="start") {
       let intent="stop";
-      if(scope==="system"&&present("armed-handoff")) {
-        const arm=JSON.parse(read("armed-handoff")),lease=present("active-lease")?JSON.parse(read("active-lease")):null;
-        if(!lease||arm.id!==lease.id||arm.expiry!==lease.expiry||arm.expiry<=Date.now()||
+      if(scope==="system"&&present("committed-handoff")) {
+        const arm=JSON.parse(read("committed-handoff")),lease=present("active-lease")?JSON.parse(read("active-lease")):null;
+        if(!lease||arm.id!==lease.id||arm.expiry!==lease.expiry||
           arm.pid!==Number(pid)||arm.instance!=="fixture-instance-"+pid) reject("synthetic stop cannot consume a foreign handoff");
-        event("handoff.consumed");intent="external-restart";remove("armed-handoff");
+        intent="external-restart";remove("committed-handoff");
       }
       if(scope==="system") put("shutdown-kind",intent);
       fs.rmSync(path.join(fixture.root,"proc",pid),{recursive:true,force:true});
@@ -662,6 +667,12 @@ function writeRelease(fixture, releaseSha = sha) {
   writeFileSync(join(release, "dist", "control-ui", "assets", "app.js"), "fixture();\n");
   writeFileSync(join(release, "dist", "index.js"), gatewaySource(fixture), { mode: 0o755 });
   mkdirSync(join(release,"dist/plugin-sdk"),{recursive:true});
+  writeFileSync(join(release,"dist/plugin-sdk/model-ref-parse.js"), `
+export function splitTrailingAuthProfile(raw) {
+  if (raw !== "fixture/exact-model") throw Error("unexpected synthetic model route");
+  return {model: raw};
+}
+`);
   writeFileSync(join(release,"dist/plugin-sdk/gateway-runtime.js"), `
 import {spawnSync} from 'node:child_process';
 export function isGatewayTransportError(error) {

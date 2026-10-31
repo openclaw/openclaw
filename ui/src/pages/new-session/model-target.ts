@@ -71,6 +71,22 @@ export function resolveDraftDefaultModelTarget(params: {
   );
 }
 
+export function resolveDraftAccessProgram(
+  params: Parameters<typeof resolveDraftDefaultModelTarget>[0] & {
+    model: string;
+    agentRuntime?: string;
+  },
+) {
+  const selected = resolveDraftModelTarget(
+    params.model,
+    undefined,
+    params.catalog,
+    params.agentRuntime,
+  );
+  return (selected?.entry ?? resolveDraftDefaultModelTarget(params)?.entry)
+    ?.cyberAccessProgramDefault;
+}
+
 export function resolveDraftModelControls(params: {
   model: string;
   selection: DraftModelControlSelection;
@@ -114,6 +130,7 @@ export function resolveDraftModelControls(params: {
   };
   return {
     defaultTarget,
+    accessProgramDefault: entry?.cyberAccessProgramDefault,
     agentDefaultModel,
     modelCatalogState,
     contextWindowTarget:
@@ -194,12 +211,9 @@ export function resolveDraftModelTarget(
   };
 }
 
-export function resolveDraftModelUnavailableReason(params: {
-  model: string;
-  agentRuntime?: string;
-  metadata: NewSessionModelMetadata;
-  agent?: GatewayAgentRow;
-}): ModelRuntimeEntry["unavailableReason"] {
+function resolveDraftModelUnavailableReason(
+  params: Parameters<typeof resolveDraftModelSelectionBlockedReason>[0],
+): ModelRuntimeEntry["unavailableReason"] {
   const { metadata, agent } = params;
   if (!metadata.hasSnapshot || metadata.status === "offline") {
     return undefined;
@@ -261,26 +275,18 @@ export function resolveDraftModelSelectionBlockedReason(params: {
         : "chat.modelControls.noPermittedModels",
     );
   }
-  if (
-    agentRuntime &&
-    metadata.hasSnapshot &&
-    !resolveDraftModelTarget(model, undefined, metadata.catalog, agentRuntime)?.entry
-  ) {
+  const entry =
+    model || agentRuntime
+      ? resolveDraftModelTarget(model, undefined, metadata.catalog, agentRuntime)?.entry
+      : undefined;
+  if (agentRuntime && metadata.hasSnapshot && !entry) {
     return t("chat.modelControls.modelsUnavailable");
   }
   // Explicit model/runtime and personal-account choices retain Gateway availability checks.
-  if (
-    model &&
-    resolveDraftModelTarget(model, undefined, metadata.catalog, agentRuntime)?.entry
-      ?.manualSelectionAllowed === false
-  ) {
+  if (model && entry?.manualSelectionAllowed === false) {
     return t("chat.modelControls.modelsUnavailable");
   }
-  if (
-    agentRuntime &&
-    resolveDraftModelTarget(model, undefined, metadata.catalog, agentRuntime)?.entry?.available ===
-      false
-  ) {
+  if (agentRuntime && entry?.available === false) {
     return (
       chatModelUnavailableMessage(resolveDraftModelUnavailableReason(params)) ??
       t("chat.modelControls.modelsUnavailable")
@@ -324,12 +330,7 @@ export function resolveDraftAgentRuntime(params: {
     runtime = resolveDraftModelTarget(model, undefined, params.catalog, params.agentRuntime)?.entry
       ?.agentRuntime;
   } else if (!policy?.restricted) {
-    const agentDefaultModel = params.agent?.model?.primary;
-    const target = resolveDraftModelTarget(
-      agentDefaultModel ?? params.defaults?.model,
-      agentDefaultModel ? undefined : params.defaults?.modelProvider,
-      params.catalog,
-    );
+    const target = resolveDraftDefaultModelTarget(params);
     runtime =
       target?.entry?.agentRuntime ?? params.agent?.agentRuntime ?? params.defaults?.agentRuntime;
   }
@@ -386,14 +387,7 @@ export function reconcileDraftModelSelection(params: {
   const policy = params.modelSelectionPolicy;
   const agent = policy?.restricted ? undefined : params.agent;
   const defaults = policy?.restricted ? undefined : params.defaults;
-  const agentDefaultModel = policy?.restricted ? policy.defaultModel : agent?.model?.primary;
-  const defaultTarget = selected
-    ? null
-    : resolveDraftModelTarget(
-        agentDefaultModel ?? defaults?.model,
-        agentDefaultModel ? undefined : defaults?.modelProvider,
-        params.catalog,
-      );
+  const defaultTarget = selected ? null : resolveDraftDefaultModelTarget(params);
   const provider = (selectedTarget ?? defaultTarget)?.provider;
   const targetEntry = selectedTarget?.entry ?? defaultTarget?.entry;
   const fastMode =

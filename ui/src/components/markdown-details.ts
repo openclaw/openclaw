@@ -1,5 +1,5 @@
 import type { MarkdownIt, StateBlock } from "markdown-it";
-import { findMarkdownCodeSpans } from "../../../packages/markdown-core/src/reasoning-tags.js";
+import { findMarkdownCodeSpans } from "../../../packages/markdown-core/src/markdown-code-regions.js";
 
 const MAX_MARKDOWN_DETAILS_DEPTH = 32;
 const DISCLOSURE_TAG_RE = /<\/?(?:details|summary)(?=[\s>])[^>]*>/gi;

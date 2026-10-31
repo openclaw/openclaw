@@ -1,10 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
-import { expressionBuilder } from "kysely";
+import { expressionBuilder, type InsertObject } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -54,6 +55,7 @@ export function splitSessionEntrySnapshots(
   entryJson: string;
   snapshots: SessionEntrySnapshot[];
   snapshotsChanged: boolean;
+  snapshotsRemoved: boolean;
 } {
   const { sessionDiffBaseline, skillsSnapshot, systemPromptReport, ...hot } = entry;
   const values = { sessionDiffBaseline, skillsSnapshot, systemPromptReport };
@@ -71,7 +73,30 @@ export function splitSessionEntrySnapshots(
       snapshots.push({ field, valueJson });
     }
   }
-  return { entryJson: JSON.stringify(hot), snapshots, snapshotsChanged };
+  const snapshotsRemoved =
+    mode === "complete" ||
+    (snapshotsChanged &&
+      snapshotColumns.some(
+        ([field]) =>
+          mode.previousEntry?.[field] !== undefined &&
+          !snapshots.some((snapshot) => snapshot.field === field),
+      ));
+  return { entryJson: JSON.stringify(hot), snapshots, snapshotsChanged, snapshotsRemoved };
+}
+
+export function buildSessionEntrySnapshotUpsert(
+  database: EngineConnection,
+  rows: readonly InsertObject<DB, "session_entry_snapshots">[],
+) {
+  return getNodeSqliteKysely<DB>(database)
+    .insertInto("session_entry_snapshots")
+    .values(rows)
+    .onConflict((conflict) =>
+      conflict
+        .columns(["session_key", "field"])
+        .doUpdateSet((eb) => ({ value_json: eb.ref("excluded.value_json") }))
+        .whereRef("session_entry_snapshots.value_json", "!=", "excluded.value_json"),
+    );
 }
 
 /** The entry writer owns this synchronous transaction and publishes its committed facts. */
@@ -79,42 +104,38 @@ export function writeSessionEntrySnapshots(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionKey: string,
   snapshots: readonly SessionEntrySnapshot[],
+  { snapshotsRemoved = true }: { snapshotsRemoved?: boolean } = {},
 ): void {
   if (!database.db.isTransaction) {
     throw new Error("Session snapshot writes require an entry transaction");
   }
   const db = getNodeSqliteKysely<DB>(database.db);
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .deleteFrom("session_entry_snapshots")
-      .where("session_key", "=", sessionKey)
-      .$if(snapshots.length > 0, (query) =>
-        query.where(
-          "field",
-          "not in",
-          snapshots.map((snapshot) => snapshot.field),
-        ),
-      ),
-  );
-  if (snapshots.length > 0) {
+  if (snapshotsRemoved) {
     executeSqliteQuerySync(
       database.db,
       db
-        .insertInto("session_entry_snapshots")
-        .values(
-          snapshots.map((snapshot) => ({
-            session_key: sessionKey,
-            field: snapshot.field,
-            value_json: snapshot.valueJson,
-          })),
-        )
-        .onConflict((conflict) =>
-          conflict
-            .columns(["session_key", "field"])
-            .doUpdateSet((eb) => ({ value_json: eb.ref("excluded.value_json") }))
-            .whereRef("session_entry_snapshots.value_json", "!=", "excluded.value_json"),
+        .deleteFrom("session_entry_snapshots")
+        .where("session_key", "=", sessionKey)
+        .$if(snapshots.length > 0, (query) =>
+          query.where(
+            "field",
+            "not in",
+            snapshots.map((snapshot) => snapshot.field),
+          ),
         ),
+    );
+  }
+  if (snapshots.length > 0) {
+    executeSqliteQuerySync(
+      database.db,
+      buildSessionEntrySnapshotUpsert(
+        database.db,
+        snapshots.map((snapshot) => ({
+          session_key: sessionKey,
+          field: snapshot.field,
+          value_json: snapshot.valueJson,
+        })),
+      ),
     );
   }
 }

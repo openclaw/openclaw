@@ -1,7 +1,8 @@
 // Session group tests cover grouping and lookup of related sessions.
 import { describe, expect, it } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { buildGroupDisplayTitle, resolveGroupSessionKey } from "./group.js";
+import { buildGroupDisplayTitle } from "./group-display.js";
+import { resolveGroupSessionKey } from "./group.js";
 
 describe("resolveGroupSessionKey", () => {
   it("preserves Signal group ids from the originating target", () => {

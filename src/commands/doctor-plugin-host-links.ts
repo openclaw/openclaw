@@ -2,25 +2,31 @@ import path from "node:path";
 import { coerceErrorMessage as formatPackageReadFailure } from "@openclaw/normalization-core/error-coercion";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
 } from "../plugins/install-paths.js";
 import {
   loadInstalledPluginIndexInstallRecords,
+  readPersistedInstalledPluginIndexInstallRecordsAsync,
   type InstalledPluginIndexRecordStoreOptions,
 } from "../plugins/installed-plugin-index-records.js";
+import { listManagedPluginNpmRootsForInstallRecords } from "../plugins/installed-plugin-npm-roots.js";
 import { listManagedPluginNpmRootsSync } from "../plugins/npm-project-roots.js";
 import {
   auditOpenClawPeerDependenciesInManagedNpmRoot,
   reconcileRegisteredOpenClawHostLinks,
-  relinkOpenClawPeerDependenciesInManagedNpmRoot,
+  repairInstalledOpenClawHostLinks,
 } from "../plugins/plugin-peer-link.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 type PluginHostLinkDoctorParams = InstalledPluginIndexRecordStoreOptions & {
   prompter: Pick<DoctorPrompter, "shouldRepair">;
+  installRecords?: Record<string, PluginInstallRecord>;
+  beforePersistentEffect?: () => void | Promise<void>;
 };
 
 type PluginPackageReadFailure = {
@@ -45,10 +51,44 @@ export function resolveDoctorPluginNpmRoots(
   return listManagedPluginNpmRootsSync(npmRoot);
 }
 
+async function loadHostLinkInstallRecords(params: InstalledPluginIndexRecordStoreOptions) {
+  let records;
+  try {
+    records = await readPersistedInstalledPluginIndexInstallRecordsAsync(params);
+  } catch (error) {
+    // Invalid records and lost read authority still refuse repair. Only unreadable
+    // storage falls back to discovery so a recoverable I/O hiccup stays best effort.
+    if (
+      !["EACCES", "EPERM", "EIO", "SQLITE_CANTOPEN", "SQLITE_IOERR"].some((code) =>
+        hasErrnoCode(error, code),
+      )
+    ) {
+      throw error;
+    }
+    return null;
+  }
+  // Recovery discovers every generation; a readable ledger already owns selection.
+  return records ?? (await loadInstalledPluginIndexInstallRecords(params));
+}
+
+function resolveHostLinkNpmRoots(
+  params: InstalledPluginIndexRecordStoreOptions,
+  installRecords: Awaited<ReturnType<typeof loadHostLinkInstallRecords>>,
+) {
+  return listManagedPluginNpmRootsForInstallRecords({
+    npmRoot: params.stateDir
+      ? path.join(params.stateDir, "npm")
+      : resolveDefaultPluginNpmDir(params.env),
+    installRecords,
+    env: params.env,
+  });
+}
+
 /** Audits managed npm and registered plugin host links without mutating either root. */
 export async function listPluginOpenClawHostLinkIssues(
   params: InstalledPluginIndexRecordStoreOptions,
 ) {
+  const installRecords = await loadHostLinkInstallRecords(params);
   const packageReadFailures: PluginPackageReadFailure[] = [];
   const registeredPackageReadFailures: PluginPackageReadFailure[] = [];
   const recordReadFailure =
@@ -56,7 +96,7 @@ export async function listPluginOpenClawHostLinkIssues(
       failures.push({ packageDir, reason: formatPackageReadFailure(error) });
     };
   const audits = await Promise.all(
-    resolveDoctorPluginNpmRoots(params).map((npmRoot) =>
+    resolveHostLinkNpmRoots(params, installRecords).map((npmRoot) =>
       auditOpenClawPeerDependenciesInManagedNpmRoot({
         npmRoot,
         onPackageReadError: recordReadFailure(packageReadFailures),
@@ -64,7 +104,7 @@ export async function listPluginOpenClawHostLinkIssues(
     ),
   );
   const registeredAudit = await reconcileRegisteredOpenClawHostLinks({
-    installRecords: await loadInstalledPluginIndexInstallRecords(params),
+    installRecords: installRecords ?? {},
     extensionsDir: resolveRegisteredPluginExtensionsRoot(params),
     env: params.env,
     mode: "audit",
@@ -81,7 +121,6 @@ export async function listPluginOpenClawHostLinkIssues(
 export async function maybeRepairPluginOpenClawHostLinks(
   params: PluginHostLinkDoctorParams,
 ): Promise<boolean> {
-  const npmRoots = resolveDoctorPluginNpmRoots(params);
   if (!params.prompter.shouldRepair) {
     const audit = await listPluginOpenClawHostLinkIssues(params);
     const reportLinks = (
@@ -125,38 +164,33 @@ export async function maybeRepairPluginOpenClawHostLinks(
     return false;
   }
 
+  const installRecords = params.installRecords ?? (await loadHostLinkInstallRecords(params));
+  const npmRoots = resolveHostLinkNpmRoots(params, installRecords);
+
   const warnings: string[] = [];
   const logger = {
     info() {},
     warn: (message: string) => warnings.push(`- ${message}`),
   };
-  const warnReadFailure = (kind: string) => (error: unknown, packageDir: string) => {
-    logger.warn(
-      `Could not inspect ${kind} package ${shortenHomePath(packageDir)}: ${formatPackageReadFailure(error)}`,
-    );
-  };
-  const results = await Promise.all(
-    npmRoots.map((npmRoot) =>
-      relinkOpenClawPeerDependenciesInManagedNpmRoot({
-        npmRoot,
-        logger,
-        onPackageReadError: warnReadFailure("managed npm"),
-      }),
-    ),
-  );
-  const repaired = results.reduce((total, result) => total + result.repaired, 0);
-  const registeredRepair = await reconcileRegisteredOpenClawHostLinks({
-    installRecords: await loadInstalledPluginIndexInstallRecords(params),
+  const repair = await repairInstalledOpenClawHostLinks({
+    managedNpmRoots: npmRoots,
+    installRecords: installRecords ?? {},
     extensionsDir: resolveRegisteredPluginExtensionsRoot(params),
     env: params.env,
-    mode: "repair",
+    stateDir: params.stateDir,
+    filePath: params.filePath,
     logger,
-    onPackageReadError: warnReadFailure("registered"),
+    onPackageReadError: (error, packageDir, kind) => {
+      logger.warn(
+        `Could not inspect ${kind} package ${shortenHomePath(packageDir)}: ${formatPackageReadFailure(error)}`,
+      );
+    },
+    beforePersistentEffect: params.beforePersistentEffect,
   });
 
   for (const [count, kind] of [
-    [repaired, "managed npm"],
-    [registeredRepair.repaired, "registered"],
+    [repair.managedRepaired, "managed npm"],
+    [repair.registeredRepaired, "registered"],
   ] as const) {
     if (count > 0) {
       note(
@@ -166,11 +200,8 @@ export async function maybeRepairPluginOpenClawHostLinks(
     }
   }
   if (warnings.length > 0) {
-    note(
-      ["Could not repair all managed OpenClaw host peer links:", ...warnings].join("\n"),
-      "Plugin registry",
-    );
+    note(["OpenClaw host peer link warnings:", ...warnings].join("\n"), "Plugin registry");
   }
 
-  return repaired > 0 || registeredRepair.repaired > 0;
+  return repair.managedRepaired > 0 || repair.registeredRepaired > 0;
 }

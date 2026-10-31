@@ -11,7 +11,7 @@ const QUOTED_ATOM_PATTERN = String.raw`"(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|
 const QUOTED_ATOM_RE = new RegExp(`^${QUOTED_ATOM_PATTERN}$`);
 const QUOTED_MODEL_PREFIX_RE = new RegExp(`^${QUOTED_ATOM_PATTERN}`, "i");
 const UNQUOTED_MODEL_REF_PATTERN = String.raw`[A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*`;
-const MODEL_REF_PATTERN = String.raw`(?:(?:${QUOTED_ATOM_PATTERN}|${UNQUOTED_MODEL_REF_PATTERN})@${QUOTED_ATOM_PATTERN}|${UNQUOTED_MODEL_REF_PATTERN})`;
+const MODEL_REF_PATTERN = String.raw`(?:(?:${QUOTED_ATOM_PATTERN}|${UNQUOTED_MODEL_REF_PATTERN})@${QUOTED_ATOM_PATTERN}|${QUOTED_ATOM_PATTERN}|${UNQUOTED_MODEL_REF_PATTERN})`;
 const MODEL_RUNTIME_VALUE_PATTERN = String.raw`[A-Za-z0-9_.:-]+`;
 const MODEL_SCOPE_OPTION_PATTERN = String.raw`(?:--session|-s|--agent|-a|--global|-g)(?=$|\s)`;
 const MODEL_OPTION_PATTERN = String.raw`(?:(?:${MODEL_SCOPE_OPTION_PATTERN}|--runtime)(?=$|\s)|runtime=|harness=)`;
@@ -43,7 +43,7 @@ const ADDITIONAL_MODEL_SCOPE_PATTERN = new RegExp(
 /** Extract and remove a `/model` directive, including optional auth profile/runtime hints. */
 export function extractModelDirective(
   body?: string,
-  options?: { aliases?: string[] },
+  options?: { aliases?: string[]; isKnownInlineModel?: (raw: string) => boolean },
 ): {
   cleaned: string;
   rawModel?: string;
@@ -63,7 +63,7 @@ export function extractModelDirective(
   const quotedModel = modelReference?.startsWith('"')
     ? QUOTED_MODEL_PREFIX_RE.exec(modelReference)?.[0]
     : undefined;
-  const quotedProfileOffset = quotedModel?.length ?? modelReference?.indexOf('@"') ?? -1;
+  const quotedProfileOffset = modelReference?.indexOf('@"') ?? -1;
   const quotedProfile =
     quotedProfileOffset >= 0 ? modelReference?.slice(quotedProfileOffset + 1) : undefined;
   // Commands ignore case, but JSON string escapes are case-sensitive.
@@ -116,6 +116,8 @@ export function extractModelDirective(
         ? raw.slice(0, quotedProfileOffset)
         : normalizeOptionalString(JSON.parse(quotedModel));
     rawProfile = normalizeOptionalString(JSON.parse(quotedProfile));
+  } else if (raw && quotedModel !== undefined) {
+    rawModel = normalizeOptionalString(JSON.parse(quotedModel));
   } else if (raw) {
     const split = splitTrailingAuthProfile(raw);
     rawModel = split.model;
@@ -125,6 +127,27 @@ export function extractModelDirective(
   const cleaned = match
     ? removeDirectiveSpan(body, match.index, match.index + match[0].length)
     : body;
+  const scopeConflict = match
+    ? ADDITIONAL_MODEL_SCOPE_PATTERN.test(body.slice(match.index + match[0].length))
+    : false;
+  // A bare word in prose is ambiguous; explicit syntax retains command validation.
+  if (
+    modelMatch &&
+    rawModel &&
+    cleaned &&
+    !quotedModel &&
+    !/^\/model\s*:/i.test(modelMatch[0]) &&
+    !rawProfile &&
+    !rawRuntime &&
+    !scope &&
+    !scopeConflict &&
+    !/[/@]/.test(rawModel) &&
+    !/^\d+$/.test(rawModel) &&
+    options?.isKnownInlineModel &&
+    !options.isKnownInlineModel(rawModel)
+  ) {
+    return { cleaned: body, scopeConflict: false, hasDirective: false };
+  }
 
   return {
     cleaned,
@@ -132,9 +155,7 @@ export function extractModelDirective(
     rawProfile,
     rawRuntime,
     scope,
-    scopeConflict: match
-      ? ADDITIONAL_MODEL_SCOPE_PATTERN.test(body.slice(match.index + match[0].length))
-      : false,
+    scopeConflict,
     hasDirective: Boolean(match),
     ...(match ? { source: modelMatch ? ("model" as const) : ("alias" as const) } : {}),
   };

@@ -27,6 +27,11 @@ export const McpAuthLoginParamsSchema = closedObject({
   serverName: NonEmptyString,
 });
 
+/** Clears the shared operator OAuth credentials of one MCP server. */
+export const McpAuthLogoutParamsSchema = closedObject({
+  serverName: NonEmptyString,
+});
+
 export const WizardAnswerSchema = closedObject({
   stepId: NonEmptyString,
   value: Type.Optional(Type.Unknown()),
@@ -73,6 +78,7 @@ export const WizardStepSchema = closedObject({
   ]),
   title: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
+  progressMessage: Type.Optional(Type.String()),
   format: Type.Optional(Type.Union([Type.Literal("plain")])),
   options: Type.Optional(Type.Array(WizardStepOptionSchema)),
   initialValue: Type.Optional(Type.Unknown()),
@@ -108,6 +114,7 @@ const WizardResultFields = {
   modelActivation: Type.Optional(
     closedObject({
       modelRef: NonEmptyString,
+      modelName: Type.Optional(NonEmptyString),
       modelTarget: Type.Optional(Type.Literal("utility")),
       gatewayRestartRequired: Type.Optional(Type.Literal(true)),
     }),
@@ -134,6 +141,7 @@ export const WizardStatusResultSchema = closedObject({
 // pull in the ProtocolSchemas registry.
 export type WizardStartParams = Static<typeof WizardStartParamsSchema>;
 export type McpAuthLoginParams = Static<typeof McpAuthLoginParamsSchema>;
+export type McpAuthLogoutParams = Static<typeof McpAuthLogoutParamsSchema>;
 export type WizardAnswer = Static<typeof WizardAnswerSchema>;
 export type WizardNextParams = Static<typeof WizardNextParamsSchema>;
 export type WizardCancelParams = Static<typeof WizardCancelParamsSchema>;

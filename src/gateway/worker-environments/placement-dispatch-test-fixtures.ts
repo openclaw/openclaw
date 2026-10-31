@@ -3,6 +3,8 @@ import {
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   type WorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
+import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
 import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
 import type { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
@@ -118,6 +120,8 @@ export function createDispatchEnvironmentFixtures(generation = 1) {
     protocolFeatures: [
       WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
       WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+      WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
+      WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
     ],
   };
   const sshEndpoint: WorkerSshEndpoint = {
@@ -133,6 +137,7 @@ export function createDispatchEnvironmentFixtures(generation = 1) {
     profileId: "development",
     profileSnapshot,
     provisionOperationId: `provision:${environmentId}`,
+    resourceReceipt: null,
     nodeSetupId: null,
     nodeDeviceId: null,
     sharedHost: false,

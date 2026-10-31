@@ -1,5 +1,6 @@
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  isSilentAssistantTranscriptMessage,
   parseAssistantTextSignature,
   readAssistantTextBlocksForPhase,
 } from "../shared/chat-message-content.js";
@@ -17,6 +18,7 @@ export function projectAssistantCommentaryFallbacks(
   if (
     !entry ||
     entry.role !== "assistant" ||
+    isSilentAssistantTranscriptMessage(entry) ||
     !Array.isArray(entry.content) ||
     entry.stopReason === "error" ||
     typeof entry.errorMessage === "string"

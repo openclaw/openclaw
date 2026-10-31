@@ -53,7 +53,14 @@ export type SkillLibraryReadInput = {
     kind: K;
     params: SkillLibraryReadQueries[K]["input"];
     authority: SkillLibraryWorkerAuthority;
-  };
+  } & (K extends "session"
+    ? {
+        sessionFacts: {
+          profile?: { id: string; role: string | null; githubLogin: string | null };
+          multipleProfiles: boolean;
+        };
+      }
+    : unknown);
 }[keyof SkillLibraryReadQueries];
 export type SkillLibraryReadOutput = {
   [K in keyof SkillLibraryReadQueries]: {
@@ -63,6 +70,3 @@ export type SkillLibraryReadOutput = {
     profileIds: string[];
   };
 }[keyof SkillLibraryReadQueries];
-export type SkillLibraryReadOperations = {
-  "skillLibrary.read": { input: SkillLibraryReadInput; output: SkillLibraryReadOutput };
-};

@@ -2,7 +2,7 @@ import type {
   SessionCreatedActor,
   SessionSharingIdentity,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { listProfiles } from "../../state/user-profiles.js";
+import type { listResidentUserProfileDisplayFacts } from "../../state/user-profile-list.js";
 import { buildControlUiUserAvatarPath } from "../control-ui-contract.js";
 
 export type SharingActorFacts =
@@ -13,7 +13,7 @@ export type SharingActorFacts =
 export function knownSessionIdentities(params: {
   creators: readonly SessionCreatedActor[];
   actor: SharingActorFacts;
-  profiles: Awaited<ReturnType<typeof listProfiles>>;
+  profiles: ReturnType<typeof listResidentUserProfileDisplayFacts>;
 }): SessionSharingIdentity[] {
   const identities = new Map<string, SessionSharingIdentity>();
   const remember = (identity: SessionCreatedActor | null) => {
@@ -32,19 +32,14 @@ export function knownSessionIdentities(params: {
   if (params.actor.state === "present") {
     remember(params.actor.actor);
   }
-  for (const creator of params.creators) {
-    remember(creator);
-  }
+  // Human candidates come from current profiles, never historical session provenance.
+  params.creators.filter((creator) => creator.type !== "human").forEach(remember);
   for (const profile of params.profiles) {
     remember({
       type: "human",
       id: profile.id,
       identity: { type: "profile", id: profile.id },
-      label:
-        profile.displayName?.trim() ||
-        profile.githubIdentity?.login ||
-        profile.emails[0] ||
-        profile.id,
+      label: profile.label,
       ...(profile.hasAvatar
         ? { avatarUrl: buildControlUiUserAvatarPath(profile.id, profile.updatedAt) }
         : {}),

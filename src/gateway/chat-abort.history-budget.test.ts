@@ -1,9 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import { resolveInFlightRunSnapshot, type ChatAbortControllerEntry } from "./chat-abort.js";
+import type { RpcSourceAdapter, RpcSourceRef } from "../sessions/session-controller.rpc-sources.js";
+import {
+  initializeRpcSourceTiming,
+  markRpcSourceExecutionStarted,
+  requestRpcSourceCancellation,
+} from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
+import { boundInFlightRunSnapshotForChatHistory } from "./chat-history-budget.js";
+import { resolveInFlightRunSnapshot } from "./chat-inflight-snapshot.runtime.js";
 import { updateChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
 import { createChatRunState, type ChatRunPlanSnapshot } from "./server-chat-state.js";
-import { boundInFlightRunSnapshotForChatHistory } from "./server-methods/chat-history-budget.js";
+import { createRpcSourceForTest, claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
+
+afterEach(() => vi.useRealTimers());
 
 it.each([2, 50])("keeps the newest %i progress events with bounded serialization", (retained) => {
   let progress: ReturnType<typeof updateChatRunProgressSnapshot>;
@@ -47,8 +57,8 @@ it.each([2, 50])("keeps the newest %i progress events with bounded serialization
   expect(serializedBytes).toBeLessThan(inputBytes * 3);
 });
 
-describe("resolveInFlightRunSnapshot", () => {
-  const inFlightEntry = (
+describe("resolveInFlightRunSnapshot", async () => {
+  const inFlightEntry = async (
     sessionKey: string,
     opts?: {
       agentId?: string;
@@ -56,39 +66,49 @@ describe("resolveInFlightRunSnapshot", () => {
       controlUiVisible?: boolean;
       projectSessionActive?: boolean;
       startedAtMs?: number;
-      kind?: ChatAbortControllerEntry["kind"];
+      kind?: RpcSourceAdapter["kind"];
+      storePath?: string;
     },
-  ): ChatAbortControllerEntry => {
-    const now = Date.now();
-    const controller = new AbortController();
-    if (opts?.aborted) {
-      controller.abort();
+  ): Promise<RpcSourceRef> => {
+    if (opts?.startedAtMs !== undefined) {
+      vi.useFakeTimers();
+      vi.setSystemTime(opts.startedAtMs);
     }
-    const startedAtMs = opts?.startedAtMs ?? now;
-    return {
-      controller,
-      sessionId: "sess-1",
-      sessionKey,
-      agentId: opts?.agentId,
-      startedAtMs,
-      expiresAtMs: startedAtMs + 10_000,
-      controlUiVisible: opts?.controlUiVisible,
-      projectSessionActive: opts?.projectSessionActive ?? true,
-      kind: opts?.kind,
-    };
+    const source = createRpcSourceForTest(
+      {
+        controlUiVisible: opts?.controlUiVisible,
+        projectSessionActive: opts?.projectSessionActive ?? true,
+        kind: opts?.kind,
+      },
+      {
+        sessionKey,
+        sessionId: `${sessionKey}-fixture-session`,
+        agentId: opts?.agentId,
+        storeScope:
+          opts?.storePath ??
+          (sessionKey === "global" ? "/synthetic/history-global/sessions.db" : undefined),
+      },
+    );
+    await claimRpcSourceForTest(source);
+    if (opts?.aborted) {
+      requestRpcSourceCancellation(source);
+    }
+    return source;
   };
 
   // Most cases request with requestedKey === canonicalKey; default canonical to
   // the requested key unless a case exercises the requested/canonical split.
   const resolveSnap = (p: {
-    chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+    sources: Map<string, RpcSourceRef>;
     chatRunBuffers: Map<string, string>;
     chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
     sessionKey: string;
     canonicalSessionKey?: string;
     agentId?: string;
     defaultAgentId?: string;
+    storePath?: string;
   }) => {
+    rpcSourceTesting.reset(p.sources);
     const chatRunState = createChatRunState();
     for (const [runId, buffer] of p.chatRunBuffers ?? []) {
       chatRunState.getOrCreate(runId).buffer = buffer;
@@ -97,8 +117,11 @@ describe("resolveInFlightRunSnapshot", () => {
       chatRunState.getOrCreate(runId).planSnapshot = plan;
     }
     return resolveInFlightRunSnapshot({
-      chatAbortControllers: p.chatAbortControllers,
       chatRunState,
+      storePath:
+        p.storePath ??
+        p.sources.values().next().value?.input.target?.storeScope ??
+        "/synthetic/history-empty/sessions.db",
       requestedSessionKey: p.sessionKey,
       canonicalSessionKey: p.canonicalSessionKey ?? p.sessionKey,
       agentId: p.agentId,
@@ -113,10 +136,70 @@ describe("resolveInFlightRunSnapshot", () => {
     return result;
   };
 
-  it("returns an explicit empty plan snapshot for dismissal", () => {
+  it("replays accepted preparation before execution until cancellation", () => {
+    const runId = "preparing-repository";
+    const sessionKey = "agent:main:repository";
+    const storePath = "/synthetic/repository/sessions.db";
+    const source = createRpcSourceForTest(
+      {},
+      { runId, sessionKey, storeScope: storePath, accepted: true },
+    );
+    rpcSourceTesting.reset(new Map([[runId, source]]));
+    const chatRunState = createChatRunState();
+    chatRunState.recordProgressEvent(runId, {
+      runId,
+      sessionKey,
+      seq: 1,
+      ts: 1,
+      stream: "run_status",
+      data: { phase: "preparing_worktree_base" },
+    });
+    const resolve = () =>
+      resolveInFlightRunSnapshot({
+        chatRunState,
+        storePath,
+        requestedSessionKey: sessionKey,
+        canonicalSessionKey: sessionKey,
+      });
+    expect(resolve()).toMatchObject({
+      runId,
+      events: [{ data: { phase: "preparing_worktree_base" } }],
+    });
+    requestRpcSourceCancellation(source);
+    expect(resolve()).toBeUndefined();
+  });
+
+  it.each([-600_000, 0, 600_000])("starts timing after wall step %i", async (step) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const source = createRpcSourceForTest(
+      { projectSessionActive: true },
+      { runId: "queued-clock", sessionKey: "agent:main:queued-clock" },
+    );
+    rpcSourceTesting.reset(new Map([["queued-clock", source]]));
+    initializeRpcSourceTiming(source, { timeoutMs: 60_000, onQueueTimeout: () => {} });
+    await claimRpcSourceForTest(source);
+    await vi.advanceTimersByTimeAsync(1_000);
+    vi.setSystemTime(Date.now() + step);
+    const params = {
+      sources: new Map([["queued-clock", source]]),
+      chatRunBuffers: new Map<string, string>(),
+      sessionKey: "agent:main:queued-clock",
+    };
+    expect(resolveSnap(params)).toEqual({ runId: "queued-clock", text: "" });
+    const now = Date.now();
+    expect(markRpcSourceExecutionStarted(source)).toBe(true);
+    expect(resolveSnap(params)).toEqual({
+      runId: "queued-clock",
+      text: "",
+      startedAt: expect.any(Number),
+    });
+    expect(resolveSnap(params)?.startedAt).toBeGreaterThanOrEqual(now);
+  });
+
+  it("returns an explicit empty plan snapshot for dismissal", async () => {
     expect(
       snap({
-        chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:s")]]),
+        sources: new Map([["run-1", await inFlightEntry("agent:main:s")]]),
         chatRunBuffers: new Map(),
         chatRunPlanSnapshots: new Map([["run-1", { steps: [] }]]),
         sessionKey: "agent:main:s",
@@ -124,11 +207,11 @@ describe("resolveInFlightRunSnapshot", () => {
     ).toEqual({ runId: "run-1", text: "", plan: { steps: [] } });
   });
 
-  it("matches a run stored under the canonical key when requested with a different key", () => {
+  it("matches a run stored under the canonical key when requested with a different key", async () => {
     // Abort entry holds the canonical store key; the client requests history with
     // a different (requested) key for the same logical session.
     const result = snap({
-      chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:main")]]),
+      sources: new Map([["run-1", await inFlightEntry("agent:main:main")]]),
       chatRunBuffers: new Map([["run-1", "partial"]]),
       sessionKey: "main",
       canonicalSessionKey: "agent:main:main",
@@ -136,18 +219,18 @@ describe("resolveInFlightRunSnapshot", () => {
     expect(result).toEqual({ runId: "run-1", text: "partial" });
   });
 
-  it("ignores aborted, completed, hidden, internal agent, and other-session runs", () => {
-    const variants: ChatAbortControllerEntry[] = [
-      inFlightEntry("agent:main:s", { aborted: true }),
-      inFlightEntry("agent:main:s", { projectSessionActive: false }),
-      inFlightEntry("agent:main:s", { controlUiVisible: false }),
-      inFlightEntry("agent:main:s", { kind: "agent" }),
-      inFlightEntry("agent:main:other"),
+  it("ignores aborted, completed, hidden, internal agent, and other-session runs", async () => {
+    const variants: RpcSourceRef[] = [
+      await inFlightEntry("agent:main:s", { aborted: true }),
+      await inFlightEntry("agent:main:s", { projectSessionActive: false }),
+      await inFlightEntry("agent:main:s", { controlUiVisible: false }),
+      await inFlightEntry("agent:main:s", { kind: "agent" }),
+      await inFlightEntry("agent:main:other"),
     ];
     for (const entry of variants) {
       expect(
         snap({
-          chatAbortControllers: new Map([["run", entry]]),
+          sources: new Map([["run", entry]]),
           chatRunBuffers: new Map([["run", "text"]]),
           sessionKey: "agent:main:s",
         }),
@@ -155,26 +238,25 @@ describe("resolveInFlightRunSnapshot", () => {
     }
   });
 
-  it("does not surface suppressed control-token lead fragments from the live buffer", () => {
+  it("preserves literal partial control-token text from the live buffer", async () => {
     expect(
       snap({
-        chatAbortControllers: new Map([["run", inFlightEntry("agent:main:s")]]),
+        sources: new Map([["run", await inFlightEntry("agent:main:s")]]),
         chatRunBuffers: new Map([["run", "NO_"]]),
         sessionKey: "agent:main:s",
       }),
-    ).toEqual({ runId: "run", text: "" });
+    ).toEqual({ runId: "run", text: "NO_" });
   });
 
   it.each([
-    { agentId: "main", defaultAgentId: undefined, expected: "main" },
     { agentId: "work", defaultAgentId: undefined, expected: "work" },
     { agentId: undefined, defaultAgentId: "main", expected: "main" },
   ])(
     "scopes global history to $expected when requested agent is $agentId",
-    ({ agentId, defaultAgentId, expected }) => {
-      const controllers = new Map<string, ChatAbortControllerEntry>([
-        ["run-main", inFlightEntry("global", { agentId: "main", startedAtMs: 1_000 })],
-        ["run-work", inFlightEntry("global", { agentId: "work", startedAtMs: 2_000 })],
+    async ({ agentId, defaultAgentId, expected }) => {
+      const controllers = new Map<string, RpcSourceRef>([
+        ["run-main", await inFlightEntry("global", { agentId: "main", startedAtMs: 1_000 })],
+        ["run-work", await inFlightEntry("global", { agentId: "work", startedAtMs: 2_000 })],
       ]);
       const buffers = new Map([
         ["run-main", "main global text"],
@@ -183,7 +265,7 @@ describe("resolveInFlightRunSnapshot", () => {
 
       expect(
         snap({
-          chatAbortControllers: controllers,
+          sources: controllers,
           chatRunBuffers: buffers,
           sessionKey: "global",
           agentId,
@@ -193,13 +275,11 @@ describe("resolveInFlightRunSnapshot", () => {
     },
   );
 
-  it("prefers the newest startedAtMs when several runs match the same session+agent", () => {
-    // A fast restart/retry/stale-controller race can leave two active entries for
-    // the same key; selection must not depend on Map insertion order. Insert the
-    // older run first so a first-match selector would return the wrong one.
-    const controllers = new Map<string, ChatAbortControllerEntry>([
-      ["run-old", inFlightEntry("agent:main:s", { startedAtMs: 1_000 })],
-      ["run-new", inFlightEntry("agent:main:s", { startedAtMs: 2_000 })],
+  it("prefers the newest startedAtMs across the requested and canonical session keys", async () => {
+    const storePath = "/synthetic/history-aliases/sessions.db";
+    const controllers = new Map<string, RpcSourceRef>([
+      ["run-old", await inFlightEntry("agent:main:requested", { startedAtMs: 1_000, storePath })],
+      ["run-new", await inFlightEntry("agent:main:canonical", { startedAtMs: 2_000, storePath })],
     ]);
     const buffers = new Map([
       ["run-old", "stale partial"],
@@ -207,32 +287,59 @@ describe("resolveInFlightRunSnapshot", () => {
     ]);
     expect(
       snap({
-        chatAbortControllers: controllers,
+        sources: controllers,
         chatRunBuffers: buffers,
-        sessionKey: "agent:main:s",
+        sessionKey: "agent:main:requested",
+        canonicalSessionKey: "agent:main:canonical",
+        storePath,
       }),
     ).toEqual({ runId: "run-new", text: "current partial" });
   });
 
-  it.each([false, true])("breaks startedAtMs ties by runId (reverse insertion=%s)", (reverse) => {
-    const buffers = new Map([
-      ["run-a", "a"],
-      ["run-b", "b"],
-    ]);
-    const entries: [string, ChatAbortControllerEntry][] = [
-      ["run-a", inFlightEntry("agent:main:s", { startedAtMs: 5_000 })],
-      ["run-b", inFlightEntry("agent:main:s", { startedAtMs: 5_000 })],
-    ];
+  it.each([false, true])(
+    "breaks startedAtMs ties by runId (reverse insertion=%s)",
+    async (reverse) => {
+      const storePath = "/synthetic/history-tie/sessions.db";
+      const buffers = new Map([
+        ["run-a", "a"],
+        ["run-b", "b"],
+      ]);
+      const entries: [string, RpcSourceRef][] = [
+        ["run-a", await inFlightEntry("agent:main:requested", { startedAtMs: 5_000, storePath })],
+        ["run-b", await inFlightEntry("agent:main:canonical", { startedAtMs: 5_000, storePath })],
+      ];
+      expect(
+        snap({
+          sources: new Map(reverse ? entries.toReversed() : entries),
+          chatRunBuffers: buffers,
+          sessionKey: "agent:main:requested",
+          canonicalSessionKey: "agent:main:canonical",
+          storePath,
+        }),
+      ).toEqual({ runId: "run-b", text: "b" });
+    },
+  );
+
+  it("excludes a newer run with the same logical identity in another physical store", async () => {
+    const local = await inFlightEntry("agent:main:s", { startedAtMs: 1_000 });
+    const foreign = await inFlightEntry("agent:main:s", { startedAtMs: 2_000 });
     expect(
       snap({
-        chatAbortControllers: new Map(reverse ? entries.toReversed() : entries),
-        chatRunBuffers: buffers,
+        sources: new Map([
+          ["local", local],
+          ["foreign", foreign],
+        ]),
+        chatRunBuffers: new Map([
+          ["local", "local partial"],
+          ["foreign", "foreign partial"],
+        ]),
         sessionKey: "agent:main:s",
+        storePath: local.input.target!.storeScope,
       }),
-    ).toEqual({ runId: "run-b", text: "b" });
+    ).toEqual({ runId: "local", text: "local partial" });
   });
 
-  it("drops startedAt when the former minimal fallback exactly fills the budget", () => {
+  it("drops startedAt when the former minimal fallback exactly fills the budget", async () => {
     const messages = [{ role: "user", content: "near budget" }];
     const minimal = { runId: "run-1", text: "" };
     const maxBytes = jsonUtf8Bytes(messages) + jsonUtf8Bytes(minimal);
@@ -245,7 +352,7 @@ describe("resolveInFlightRunSnapshot", () => {
     expect(jsonUtf8Bytes(messages) + jsonUtf8Bytes(result)).toBeLessThanOrEqual(maxBytes);
   });
 
-  it("keeps small buffered text and clears an oversized plan explicitly", () => {
+  it("keeps small buffered text and clears an oversized plan explicitly", async () => {
     // Absence means legacy-gateway unknown to clients; a budget drop must send
     // an explicit empty plan so retained stale checklists cannot survive.
     expect(
@@ -263,7 +370,7 @@ describe("resolveInFlightRunSnapshot", () => {
     ).toEqual({ runId: "run-1", text: "short answer", plan: { steps: [] } });
   });
 
-  it("prioritizes active progress and explicitly clears budget-dropped projections", () => {
+  it("prioritizes active progress and explicitly clears budget-dropped projections", async () => {
     const event = {
       runId: "run-1",
       seq: 2,

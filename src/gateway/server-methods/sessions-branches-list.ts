@@ -4,11 +4,13 @@ import {
   type SessionsBranchesListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listSessionBranches } from "../../config/sessions/session-accessor.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import {
   captureSessionUpstreamLinkReadSource,
   prepareSessionUpstreamLink,
 } from "../../sessions/session-upstream-links-runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
@@ -20,23 +22,24 @@ export async function listSessionBranchesForGateway(
   const { params, respond, context } = options;
   const sessionKey = params.sessionKey.trim();
   const cfg = context.getRuntimeConfig();
-  const requestedAgent = resolveRequestedGlobalAgentId(cfg, sessionKey, params.agentId);
+  const requestedAgent = resolveRequestedGlobalAgentId(cfg, sessionKey, params.agentId, "read");
   if (!requestedAgent.ok) {
     respond(false, undefined, requestedAgent.error);
     return;
   }
   // Branches depend on transcript/lifecycle state, not a label or activity update during I/O.
-  const read = retainSessionScopedRead(options, sessionKey, requestedAgent.agentId, {
+  const read = await retainSessionScopedRead(options, sessionKey, requestedAgent.agentId, {
     allowMetadataChanges: true,
   });
-  try {
-    await withGatewaySessionEntryReadOnly(
+  const run = () =>
+    withGatewaySessionEntryReadOnly(
       {
         key: sessionKey,
         cfg,
         agentId: requestedAgent.agentId,
         excludeInternalEffects: true,
         projection: "list",
+        prepared: read?.prepared,
       },
       async (current, assertCurrent) => {
         const upstreamLink = current.entry?.sessionId
@@ -69,6 +72,7 @@ export async function listSessionBranchesForGateway(
               sessionKey: current.canonicalKey,
               sessionStoreKey: current.canonicalKey,
               storePath: current.storePath,
+              signal: getAsyncWorkSignal(),
             });
         assertCurrent();
         read?.assertCurrent();
@@ -90,6 +94,22 @@ export async function listSessionBranchesForGateway(
         respond(true, { branches: result.branches }, undefined);
       },
     );
+  const assertCurrent = () => read?.assertCurrent();
+  try {
+    const handled = await withSessionActorStorage(
+      { sessionKey, agentId: requestedAgent.agentId },
+      {
+        lifetime: { assertCurrent, assertReadable: assertCurrent },
+        authority: { assertCurrent, authorize() {} },
+      },
+      async () => {
+        await run();
+        return true;
+      },
+    );
+    if (!handled) {
+      await run();
+    }
   } finally {
     read?.release();
   }

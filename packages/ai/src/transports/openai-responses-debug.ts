@@ -1,10 +1,10 @@
-import type { Model } from "@openclaw/llm-core";
+import type { AssistantMessage, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveModelPayloadDebugMode } from "./model-transport-debug.js";
+import { readTransportDiagnosticLabel } from "../utils/provider-error.js";
+import { emitModelTransportError, resolveModelPayloadDebugMode } from "./model-transport-debug.js";
 import { RESPONSE_FAILED_NO_DETAILS_MESSAGE } from "./openai-responses-contracts.js";
 import { log } from "./openai-transport-shared.js";
-import { redactIdentifier, redactSensitiveText, sha256Hex } from "./transport-utils.js";
+import { redactIdentifier, sha256Hex } from "./transport-utils.js";
 
 function stringifyUnknown(value: unknown): string {
   if (typeof value === "string") {
@@ -104,31 +104,23 @@ function summarizeResponsesCompactionItems(input: unknown): string[] {
   ];
 }
 
-function readToolPayloadField(record: Record<string, unknown>, field: string): unknown {
-  try {
-    return record[field];
-  } catch {
-    return undefined;
-  }
-}
-
 function readResponsesToolDisplayName(tool: unknown): string {
   if (!tool || typeof tool !== "object") {
     return "";
   }
   const record = tool as Record<string, unknown>;
-  const name = readToolPayloadField(record, "name");
+  const name = record.name;
   if (typeof name === "string") {
     return name;
   }
-  const fn = readToolPayloadField(record, "function");
+  const fn = record.function;
   if (fn && typeof fn === "object") {
-    const fnName = readToolPayloadField(fn as Record<string, unknown>, "name");
+    const fnName = (fn as Record<string, unknown>).name;
     if (typeof fnName === "string") {
       return fnName;
     }
   }
-  const type = readToolPayloadField(record, "type");
+  const type = record.type;
   return typeof type === "string" && type !== "function" ? type : "";
 }
 
@@ -142,26 +134,6 @@ function summarizeResponsesTools(tools: unknown): string {
   const label = maxNames >= names.length ? "names" : "sample";
   const shown = names.slice(0, maxNames).join(",");
   return `count=${tools.length}${shown ? ` ${label}=${shown}` : ""}`;
-}
-
-function stringifyRedactedPayload(value: unknown): string {
-  try {
-    const encoded = JSON.stringify(value, (key, child) =>
-      key === "encrypted_content" ? "<opaque data omitted>" : child,
-    );
-    if (!encoded) {
-      return "<empty>";
-    }
-    const redacted = redactSensitiveText(encoded);
-    return redacted.length > 8000 ? `${truncateUtf16Safe(redacted, 8000)}…<truncated>` : redacted;
-  } catch {
-    return "<unserializable>";
-  }
-}
-
-export function stringifyRedactedEvent(value: unknown): string {
-  const redacted = stringifyRedactedPayload(value);
-  return redacted.length > 2000 ? `${truncateUtf16Safe(redacted, 2000)}…<truncated>` : redacted;
 }
 
 type ResponsesFailedNoDetailsObservation = ReturnType<
@@ -202,14 +174,6 @@ function buildResponsesFailedEventSummary(
   };
 }
 
-function isResponseFailedIdentifierKey(key: string): boolean {
-  const normalized = key.replace(/[-_\s]/g, "").toLowerCase();
-  return (
-    (normalized.includes("request") && normalized.endsWith("id")) ||
-    (normalized.includes("provider") && normalized.endsWith("id"))
-  );
-}
-
 function collectResponseFailedIdentifierHashes(input: unknown): string[] {
   const out: string[] = [];
   const seen = new WeakSet<object>();
@@ -225,7 +189,10 @@ function collectResponseFailedIdentifierHashes(input: unknown): string[] {
       }
       const childPath = typeof key === "number" ? `${path}[${key}]` : path ? `${path}.${key}` : key;
       const childIdentifierKey = typeof key === "number" ? identifierKey : key;
-      const isIdentifier = isResponseFailedIdentifierKey(childIdentifierKey);
+      const normalizedKey = childIdentifierKey.replace(/[-_\s]/g, "").toLowerCase();
+      const isIdentifier =
+        (normalizedKey.includes("request") && normalizedKey.endsWith("id")) ||
+        (normalizedKey.includes("provider") && normalizedKey.endsWith("id"));
       const childString =
         typeof child === "string" || typeof child === "number" ? String(child).trim() : "";
       if (isIdentifier && childString) {
@@ -239,98 +206,31 @@ function collectResponseFailedIdentifierHashes(input: unknown): string[] {
   return out;
 }
 
-function redactResponseFailedDiagnosticValue(input: unknown): unknown {
-  const seen = new WeakSet<object>();
-  const redact = (value: unknown, key: string, depth: number): unknown => {
-    if (typeof value === "string" || typeof value === "number") {
-      return key && isResponseFailedIdentifierKey(key)
-        ? redactIdentifier(String(value), { len: 12 })
-        : value;
-    }
-    if (depth > 6 || !value || typeof value !== "object") {
-      return value;
-    }
-    if (seen.has(value)) {
-      return "<circular>";
-    }
-    seen.add(value);
-    if (Array.isArray(value)) {
-      return value.slice(0, 16).map((item) => redact(item, key, depth + 1));
-    }
-    const out: Record<string, unknown> = {};
-    for (const [childKey, child] of Object.entries(value)) {
-      out[childKey] = redact(child, childKey, depth + 1);
-    }
-    return out;
-  };
-  return redact(input, "", 0);
-}
-
-function buildResponsesFailedFailureFields(
-  response: Record<string, unknown> | undefined,
-): Record<string, unknown> {
-  if (!response) {
-    return {};
-  }
-  const fields: Record<string, unknown> = {};
-  for (const key of RESPONSE_FAILED_FAILURE_FIELD_KEYS) {
-    if (response[key] !== undefined && response[key] !== null) {
-      fields[key] = response[key];
-    }
-  }
-  return fields;
-}
-
 function buildResponsesFailedNoDetailsObservation(
   event: Record<string, unknown>,
   model: Model,
-  response: Record<string, unknown> | undefined = isRecord(event.response)
-    ? event.response
-    : undefined,
+  response: Record<string, unknown> | undefined,
 ) {
-  const failureFields = redactResponseFailedDiagnosticValue(
-    buildResponsesFailedFailureFields(response),
-  ) as Record<string, unknown>;
+  const failureFieldNames = RESPONSE_FAILED_FAILURE_FIELD_KEYS.filter(
+    (key) => response?.[key] !== undefined && response[key] !== null,
+  );
   const metadataKeys = isRecord(response?.metadata)
     ? Object.keys(response.metadata).toSorted()
     : [];
-  const responsePreview = {
-    id: stringifyUnknown(response?.id),
-    status: stringifyUnknown(response?.status),
-    model: stringifyUnknown(response?.model),
-    object: stringifyUnknown(response?.object),
-    failureFields,
-    metadataKeys,
-  };
   return {
     event: "openai_responses_response_failed_without_details" as const,
     provider: model.provider,
     api: model.api,
     transportModel: model.id,
     providerRuntimeFailureKind: "no_error_details" as const,
-    responseId: responsePreview.id,
-    responseStatus: responsePreview.status,
-    responseModel: responsePreview.model,
-    responseObject: responsePreview.object,
+    responseId: stringifyUnknown(response?.id),
+    responseStatus: stringifyUnknown(response?.status),
+    responseModel: stringifyUnknown(response?.model),
+    responseObject: stringifyUnknown(response?.object),
     metadataKeys,
     requestIdHashes: collectResponseFailedIdentifierHashes(event),
-    failureFieldsPreview: stringifyRedactedEvent(failureFields),
-    responsePreview: stringifyRedactedEvent(responsePreview),
+    failureFieldNames,
   };
-}
-
-function summarizeResponsesFailedNoDetailsObservation(
-  observation: ResponsesFailedNoDetailsObservation,
-): string {
-  const requestIds = observation.requestIdHashes.join(",");
-  const metadataKeys = observation.metadataKeys.join(",");
-  return (
-    `responseId=${safeDebugValue(observation.responseId || undefined)} ` +
-    `responseStatus=${safeDebugValue(observation.responseStatus || undefined)} ` +
-    `responseModel=${safeDebugValue(observation.responseModel || undefined)} ` +
-    `requestIds=${requestIds || "none"} metadataKeys=${metadataKeys || "none"} ` +
-    `failureFields=${observation.failureFieldsPreview}`
-  );
 }
 
 export function normalizeResponsesFailedEvent(
@@ -382,13 +282,17 @@ export class ResponsesStreamFailure extends Error {
   }
 }
 
-export function logResponsesFailedNoDetails(
-  observation: ResponsesFailedNoDetailsObservation,
-): void {
+function logResponsesFailedNoDetails(observation: ResponsesFailedNoDetailsObservation): void {
+  const requestIds = observation.requestIdHashes.join(",");
+  const metadataKeys = observation.metadataKeys.join(",");
   log.warn(
     `[responses] response.failed missing error details provider=${observation.provider} ` +
       `api=${observation.api} model=${observation.transportModel} ` +
-      summarizeResponsesFailedNoDetailsObservation(observation),
+      `responseId=${safeDebugValue(observation.responseId || undefined)} ` +
+      `responseStatus=${safeDebugValue(observation.responseStatus || undefined)} ` +
+      `responseModel=${safeDebugValue(observation.responseModel || undefined)} ` +
+      `requestIds=${requestIds || "none"} metadataKeys=${metadataKeys || "none"} ` +
+      `failureFields=${observation.failureFieldNames.join(",") || "none"}`,
     observation,
   );
 }
@@ -429,28 +333,83 @@ export function summarizeResponsesPayload(params: unknown): string {
         : "none"
     }`,
   ];
-  if (resolveModelPayloadDebugMode() === "full-redacted") {
-    parts.push(`payload=${stringifyRedactedPayload(record)}`);
+  return parts.join(" ");
+}
+
+const ABORT_REASON_LABELS = new Map([
+  ["LlmIdleTimeoutError", "idle_timeout"],
+  ["LlmNoProgressError", "no_progress"],
+  ["FirstStreamEventTimeoutError", "first_event_timeout"],
+  ["OPENCLAW_SESSION_WATCHDOG", "session_watchdog"],
+  ["degenerate_output", "degenerate_output"],
+  ["OPENCLAW_RESTART_ABORT", "restart"],
+  ["ERR_STALE_GATEWAY_LIFECYCLE", "restart"],
+  ["AGENT_RUN_SUPERSEDED_ABORT", "superseded"],
+]);
+
+function resolveOpenAITransportAbortReason(signal?: AbortSignal): string | undefined {
+  if (!signal?.aborted) {
+    return undefined;
+  }
+  const reason = isRecord(signal.reason) ? signal.reason : undefined;
+  const defaultReason = reason?.name === "TimeoutError" ? "request_deadline" : "caller_abort";
+  // Only classify the request signal; provider errors can echo message/tool content.
+  const reasonKey = reason?.code ?? reason?.name;
+  return (
+    (typeof reasonKey === "string" ? ABORT_REASON_LABELS.get(reasonKey) : undefined) ??
+    defaultReason
+  );
+}
+
+function summarizeOpenAITransportError(error: unknown, signal?: AbortSignal): string {
+  const record = isRecord(error) ? error : undefined;
+  const cause =
+    record?.cause && typeof record.cause === "object"
+      ? (record.cause as Record<string, unknown>)
+      : undefined;
+  const parts = record
+    ? Object.entries({
+        name: readTransportDiagnosticLabel(record.name),
+        status: readTransportDiagnosticLabel(record.status),
+        code: readTransportDiagnosticLabel(record.code),
+        type: readTransportDiagnosticLabel(record.type),
+        causeName: readTransportDiagnosticLabel(cause?.name),
+        causeCode: readTransportDiagnosticLabel(cause?.code),
+      }).flatMap(([key, value]) => (value === undefined ? [] : [`${key}=${value}`]))
+    : [`type=${typeof error}`];
+  const abortReason = resolveOpenAITransportAbortReason(signal);
+  if (abortReason) {
+    parts.push(`abortReason=${abortReason}`);
   }
   return parts.join(" ");
 }
 
-export function summarizeOpenAITransportError(error: unknown): string {
-  if (!error || typeof error !== "object") {
-    return `type=${typeof error} message=${safeDebugValue(error)}`;
+/** Protocol-specific labels join the shared failure line; caller aborts keep their own diagnostic. */
+export function observeResponsesTransportFailure(params: {
+  error: unknown;
+  model: Model;
+  output: AssistantMessage;
+  signal?: AbortSignal;
+  requestSignal?: AbortSignal;
+}) {
+  const { error, model, output, signal, requestSignal } = params;
+  if (error instanceof ResponsesStreamFailure && error.observation) {
+    logResponsesFailedNoDetails(error.observation);
   }
-  const record = error as Record<string, unknown>;
-  const cause =
-    record.cause && typeof record.cause === "object"
-      ? (record.cause as Record<string, unknown>)
-      : undefined;
-  return [
-    `name=${safeDebugValue(record.name)}`,
-    `status=${safeDebugValue(record.status)}`,
-    `code=${safeDebugValue(record.code)}`,
-    `type=${safeDebugValue(record.type)}`,
-    `causeName=${safeDebugValue(cause?.name)}`,
-    `causeCode=${safeDebugValue(cause?.code)}`,
-    `message=${error instanceof Error ? error.message : safeDebugValue(error)}`,
-  ].join(" ");
+  const incomplete = output.diagnostics?.find(({ type }) => type === "openai_responses_terminal")
+    ?.details?.incompleteReason;
+  const incompleteReason = typeof incomplete === "string" ? incomplete : undefined;
+  if (signal?.aborted) {
+    emitModelTransportError(
+      log,
+      "responses",
+      () =>
+        `provider=${model.provider} api=${model.api} model=${model.id} ` +
+        summarizeOpenAITransportError(error, requestSignal) +
+        (incompleteReason ? ` incompleteReason=${incompleteReason}` : ""),
+      signal,
+    );
+    return undefined;
+  }
+  return { abortReason: resolveOpenAITransportAbortReason(requestSignal), incompleteReason };
 }

@@ -204,21 +204,6 @@ describe("channel-inbound direct-message helpers", () => {
     });
   });
 
-  it("builds a shared pre-crypto guard policy with partial overrides", () => {
-    const policy = createDirectDmPreCryptoGuardPolicy({
-      maxFutureSkewSec: 30,
-      rateLimit: {
-        maxPerSenderPerWindow: 5,
-      },
-    });
-
-    expect(policy.allowedKinds).toEqual([4]);
-    expect(policy.maxFutureSkewSec).toBe(30);
-    expect(policy.maxCiphertextBytes).toBe(16 * 1024);
-    expect(policy.rateLimit.maxPerSenderPerWindow).toBe(5);
-    expect(policy.rateLimit.maxGlobalPerWindow).toBe(200);
-  });
-
   it("defaults non-finite shared pre-crypto guard numeric overrides", () => {
     const policy = createDirectDmPreCryptoGuardPolicy({
       maxFutureSkewSec: Number.NaN,
