@@ -624,14 +624,14 @@ describe("transcript payload storage boundary", () => {
         INSERT INTO session_transcript_active_events VALUES ('selected', 0, 0), ('selected', 1, 1), ('selected', 2, 2)`);
       const readers = getMessageRangeReaders({ db: database, agentId: "main", path: ":memory:" });
       const range = { sessionId: "selected", start: 1, endExclusive: 3 };
-      const events = Array.from(readers.messages(range), parseActiveTranscriptMessageRow);
+      const parseMessage = (row: Parameters<typeof parseActiveTranscriptMessageRow>[0]) =>
+        parseActiveTranscriptMessageRow(row, {});
+      const events = Array.from(readers.messages(range), parseMessage);
       expect(events).toEqual(
         messages.map((event, index) => ({ event, eventSeq: index + 1, seq: index + 2 })),
       );
-      expect(parseActiveTranscriptMessageRow(readers.latest(range)!)).toEqual(events[1]);
-      expect(() =>
-        Array.from(readers.messages({ ...range, start: 0 }), parseActiveTranscriptMessageRow),
-      ).toThrow();
+      expect(parseMessage(readers.latest(range)!)).toEqual(events[1]);
+      expect(() => Array.from(readers.messages({ ...range, start: 0 }), parseMessage)).toThrow();
     } finally {
       database.close();
     }

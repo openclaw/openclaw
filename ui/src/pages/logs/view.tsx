@@ -148,6 +148,16 @@ export function LogsView(props: LogsProps) {
   const scrollRequest = {};
   let readerScrollPending = false;
   let synchronizeScrollOffset: ((scrolling: boolean) => void) | undefined;
+  const skipSizeAdjustment = () => false;
+  const updateSizeAdjustment = (
+    instance: Virtualizer<HTMLDivElement, HTMLDivElement>,
+    scrolling: boolean,
+    autoFollow = props.autoFollow,
+  ) => {
+    // Measurement writes interrupt WebKit's wheel travel. Keep idle reader anchoring.
+    instance.shouldAdjustScrollPositionOnItemSizeChange =
+      scrolling && !autoFollow ? skipSizeAdjustment : undefined;
+  };
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLDivElement>({
     count: 0,
     getScrollElement: () => stream,
@@ -155,10 +165,14 @@ export function LogsView(props: LogsProps) {
     estimateSize: () => 44,
     observeElementRect,
     observeElementOffset: (instance, notify) => {
-      synchronizeScrollOffset = (scrolling) => notify(stream.scrollTop, scrolling);
+      const updateOffset = (offset: number, scrolling: boolean) => {
+        updateSizeAdjustment(instance, scrolling);
+        notify(offset, scrolling);
+      };
+      synchronizeScrollOffset = (scrolling) => updateOffset(stream.scrollTop, scrolling);
       return observeElementOffset(instance, (offset, scrolling) => {
         readerScrollPending = false;
-        notify(offset, scrolling);
+        updateOffset(offset, scrolling);
       });
     },
     scrollToFn: elementScroll,
@@ -205,11 +219,14 @@ export function LogsView(props: LogsProps) {
           virtualizer.itemSizeCache.delete(key);
         }
       }
+      updateSizeAdjustment(virtualizer, virtualizer.isScrolling, next.autoFollow);
       virtualizer.setOptions({
         ...virtualizer.options,
         count: next.rows.length,
         getItemKey: next.getItemKey,
         followOnAppend: next.autoFollow,
+        // Follow-off readers pin measurements only once they reach the end.
+        scrollEndThreshold: next.autoFollow ? 120 : 0,
       });
       publish();
     },

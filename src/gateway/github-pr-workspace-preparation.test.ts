@@ -12,7 +12,10 @@ import { resolveSandboxContext } from "../agents/sandbox/context.js";
 import { acquireSandboxGatewayOwner } from "../agents/sandbox/registry.test-support.js";
 import { ensureEmptyWorktreeSource } from "../agents/worktrees/empty-source.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
+import {
+  linkCanonicalUserProfileEmail,
+  setCanonicalUserProfileRole,
+} from "../state/user-profile-writes.js";
 import {
   commandResult,
   installGitHubPublicationTestHarness,
@@ -24,6 +27,94 @@ describe("existing PR preparation through the registered agent action", () => {
     sandbox: "required",
     realWorktree: true,
   });
+
+  it.each([false, true])(
+    "lets the current maintainer prepare a guest's PR without transferring authority (private=%s)",
+    async (privateRepository) => {
+      const f = await fixture({ fork: true });
+      f.pr.base.repo.private = privateRepository;
+      f.pr.head.repo.private = privateRepository;
+      const before = f.readSession();
+      await expect(
+        f.invoke({}, f.sandbox, undefined, { requester: "maintainer" }),
+      ).resolves.toMatchObject({ status: "prepared", headCommit: f.headCommit });
+      expect(f.readSession().createdActor).toEqual(before.createdActor);
+      expect(f.readSession().owner).toEqual(before.owner);
+      expect(f.readSession().worktree?.githubPullRequest?.origin).toBe("external-pr");
+      expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
+        "original PR contents\n",
+      );
+      await expect(f.invoke()).resolves.toMatchObject({
+        status: "prepared",
+        headCommit: f.headCommit,
+      });
+      await expect(
+        f.invoke({
+          action: "merge",
+          pullRequestUrl: undefined,
+          expectedHeadCommit: f.headCommit,
+          mergeMethod: "squash",
+        }),
+      ).rejects.toThrow("missing scope: operator.write");
+      f.pr.user.id = 999;
+      await expect(f.invoke()).rejects.toThrow(
+        privateRepository
+          ? "could not be verified as yours"
+          : "not authored by a GitHub account linked to you",
+      );
+      expect(f.writes).toEqual([]);
+      expect(f.externalWrites).toEqual([]);
+    },
+  );
+
+  it("records a maintainer's foreign publisher-authored PR as imported", async () => {
+    const f = await fixture({ linked: false });
+    f.pr.user = { id: 42, login: "roboclaw-bot" };
+    await expect(
+      f.invoke({}, f.sandbox, undefined, { requester: "maintainer" }),
+    ).resolves.toMatchObject({ status: "prepared", headCommit: f.headCommit });
+    expect(f.readSession().worktree?.githubPullRequest?.origin).toBe("external-pr");
+    await expect(f.invoke()).rejects.toThrow("Link a verified");
+    expect(f.writes).toEqual([]);
+    expect(f.externalWrites).toEqual([]);
+  });
+
+  it.each(["narrowed", "missing", "revoked"] as const)(
+    "refuses a maintainer's %s selected authority before changing the guest workspace",
+    async (condition) => {
+      const f = await fixture();
+      const before = f.readSession();
+      const hostHead = await f.git("rev-parse", "HEAD");
+      const guestHead = await f.guestGit("rev-parse", "HEAD");
+      let revoked = false;
+      if (condition === "revoked") {
+        const transport = mocks.runCommand.getMockImplementation()!;
+        mocks.runCommand.mockImplementation(async (...args) => {
+          const result = await transport(...args);
+          if (!revoked && args[0].includes("fetch") && args[0].includes(f.headCommit)) {
+            await setCanonicalUserProfileRole(f.maintainerProfile, "revoked");
+            revoked = true;
+          }
+          return result;
+        });
+      }
+      await expect(
+        f.invoke({}, f.sandbox, undefined, {
+          requester: "maintainer",
+          caller:
+            condition === "missing" ? null : condition === "narrowed" ? "guest" : "maintainer",
+        }),
+      ).rejects.toThrow(condition === "revoked" ? undefined : "Only the person who started");
+      expect(revoked).toBe(condition === "revoked");
+      expect(f.readSession().worktree).toEqual(before.worktree);
+      expect(await f.git("rev-parse", "HEAD")).toBe(hostHead);
+      expect(await f.guestGit("rev-parse", "HEAD")).toBe(guestHead);
+      await expect(fs.stat(path.join(f.projection, "pr.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(f.writes).toEqual([]);
+    },
+  );
 
   it.each([
     { fork: false, baseBranch: "main", projectFork: false },
@@ -76,6 +167,7 @@ describe("existing PR preparation through the registered agent action", () => {
               branch: "topic/existing",
               commit: f.headCommit,
             },
+            origin: "external-pr",
             preparedHeadCommit: f.headCommit,
           },
         },

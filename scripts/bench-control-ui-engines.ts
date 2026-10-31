@@ -197,6 +197,10 @@ type Observation = {
   pair: number;
   status: "passed" | "failed";
   wallMs?: number;
+  scenarioMs?: number;
+  settleWaitMs?: number;
+  prepareFrameIntervalMs?: number;
+  settleFrameIntervalMs?: number;
   hostLoadAverage: number[];
   metrics?: EngineMetrics;
   requests?: Record<string, number>;
@@ -298,6 +302,9 @@ try {
           "./bench-control-ui-engines.ts",
           "./lib/control-ui-engine-metrics.ts",
           "./lib/control-ui-engine-boot-scenarios.ts",
+          "./lib/control-ui-engine-action-scenarios.ts",
+          "./lib/control-ui-interaction-scenarios.ts",
+          "./lib/control-ui-interaction-navigation.ts",
           "./lib/control-ui-engine-streaming-scenarios.ts",
           "./lib/control-ui-streaming-reply.ts",
           "./lib/control-ui-streaming-fixture.ts",
@@ -338,17 +345,20 @@ try {
     order:
       "Serial network profile, engine and bundle order alternates each pair; fresh browser context per observation",
     acceptance:
-      "Census ranks >1.5x WebKit/Chromium. Fix proof: ten interleaved pairs plus A/A control; median regression <=5% and p95 no worse, otherwise ten more pairs. Profile/CPU and structural counts decide on a noisy host; >20% attributable regression blocks.",
+      "Census ranks >1.3x WebKit/Chromium. Fix proof: ten interleaved pairs plus A/A control; median regression <=5% and p95 no worse, otherwise ten more pairs. Profile/CPU and structural counts decide on a noisy host; >20% attributable regression blocks.",
+    frameCadence:
+      "Prepare and settle frame intervals are consecutive requestAnimationFrame timestamp differences, not the full wait duration. scenarioMs includes driver input and scenario assertions; settleWaitMs measures the final two-frame wait. Their sum is wallMs. These are automation-to-assertion timings, not input-to-paint latency. Trace-only input and run marks locate native events without changing untraced runs.",
     boundary:
       "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request and every incoming mock Gateway frame (including the connect challenge); RPC replies thus include a simulated round trip, with no added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
     memoryContract:
       "Opt-in memory-* scenes retain one document, drain 4.1 s retirement timers, clear synthetic request history, then force two collections at each named checkpoint. Compare warm and late checkpoints; heap/native categories/RSS and DOM wrapper/native counts have different engine-specific meanings. Memory-scene elapsed times include forced GC and snapshots and are not latency evidence.",
-    scenarios: scenarios.map(({ id, route, expected, navigation, memory }) => ({
+    scenarios: scenarios.map(({ id, route, expected, navigation, memory, diagnostic }) => ({
       id,
       route,
       expected,
       navigation,
       memory,
+      diagnostic,
     })),
   });
   for (const viewport of viewports) {
@@ -395,6 +405,7 @@ try {
             });
             const page = await context.newPage();
             page.setDefaultTimeout(30_000);
+            const traceAction = values.trace && !scenario.navigation;
             const errors: Array<{ message: string; phase: string }> = [];
             let phase = "setup";
             page.on("pageerror", (error: Error) => errors.push({ message: error.message, phase }));
@@ -413,6 +424,17 @@ try {
                 await page.addInitScript(installControlUiResourceCounts);
               }
               await page.addInitScript(() => performance.setResourceTimingBufferSize(2048));
+              if (traceAction) {
+                await page.addInitScript(() => {
+                  for (const type of ["keydown", "keyup", "input", "focusin", "click"]) {
+                    document.addEventListener(
+                      type,
+                      () => performance.mark(`engine:input:${type}`),
+                      true,
+                    );
+                  }
+                });
+              }
               if (values.trace) {
                 await page.addInitScript(() => {
                   const deliveries: unknown[] = [];
@@ -512,7 +534,7 @@ try {
                 observation.navigationPreloads = await settleInteractionNavigationPreloads(page);
                 await page.waitForLoadState("networkidle");
                 await page.evaluate(() => document.fonts.ready.then(() => undefined));
-                await frames(page);
+                observation.prepareFrameIntervalMs = await frames(page);
               }
               const before = (await gateway.getRequests()).length;
               if (values.trace) {
@@ -534,7 +556,15 @@ try {
                 memory = await createEngineMemoryCollector(page, engine);
                 observation.memory = [];
               }
-              const timeOrigin = await page.evaluate(() => performance.timeOrigin);
+              const timeOrigin = await page.evaluate((trace) => {
+                if (trace) {
+                  for (const name of ["keydown", "keyup", "input", "focusin", "click"]) {
+                    performance.clearMarks(`engine:input:${name}`);
+                  }
+                  performance.mark("engine:run:start");
+                }
+                return performance.timeOrigin;
+              }, traceAction);
               if (memory) {
                 // Bind checkpoints to this document, independently of wall-clock adjustments.
                 await page.evaluate((identity) => {
@@ -585,12 +615,28 @@ try {
                       }
                     : undefined,
                 )) ?? undefined;
-              await frames(page);
+              if (traceAction) {
+                await page.evaluate(() => performance.mark("engine:run:end"));
+              }
+              observation.scenarioMs = performance.now() - start;
+              observation.settleFrameIntervalMs = await frames(page);
               observation.wallMs = performance.now() - start;
+              observation.settleWaitMs = observation.wallMs - observation.scenarioMs;
               const activeMeasurement = measurement;
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
+              if (traceAction) {
+                await writeJson(
+                  `${artifactPrefix}.user-timing.json`,
+                  await page.evaluate(() =>
+                    performance
+                      .getEntriesByType("mark")
+                      .filter(({ name }) => name.startsWith("engine:"))
+                      .map(({ name, startTime }) => ({ name, startTime })),
+                  ),
+                );
+              }
               if (values.trace || values["cpu-only"]) {
                 await writeJson(`${artifactPrefix}.inspector.json`, captured);
               }
@@ -731,6 +777,10 @@ const summary = [...cells.values()].map((cell) => {
     failed: rows.length - passing.length,
     measured: measured.length,
     wallMs: distribution(measured.map((row) => row.wallMs!)),
+    scenarioMs: distribution(measured.flatMap((row) => row.scenarioMs ?? [])),
+    settleWaitMs: distribution(measured.flatMap((row) => row.settleWaitMs ?? [])),
+    prepareFrameIntervalMs: distribution(rows.flatMap((row) => row.prepareFrameIntervalMs ?? [])),
+    settleFrameIntervalMs: distribution(rows.flatMap((row) => row.settleFrameIntervalMs ?? [])),
     evidence: Object.fromEntries(
       [...new Set(measured.flatMap((row) => Object.keys(row.evidence ?? {})))].map((key) => [
         key,
