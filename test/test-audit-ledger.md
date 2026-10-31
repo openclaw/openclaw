@@ -259,12 +259,36 @@ Additional source-only closure (no new runtime proof):
 DeepInfra request-policy batch starts at `c6646642e6c`. Qualify removal of the
 mock-call replay against unchanged real HTTP, CONNECT proxy and blocked-I/O
 keepers. The instant-completion mock protects no separate polling policy.
-Baseline and keeper fault detection are pending; production behavior stays unchanged.
+Untouched baseline `2fd90e38bf9`: 35 tests passed across two suites. Temporarily
+dropping configured request policy made three real POST/CONNECT cases fail at
+the private-network guard; the two blocked-I/O controls still passed. Production
+source was restored byte for byte. Candidate `2cb825b43a8`: 34 tests passed across
+the same two suites. The patch removes 55 test lines and one declaration, with
+no production change. Focused extension-test compilation, typed lint, formatting
+and ledger lint passed. Every removal-check phase ran on baseline and candidate:
+unused files and script exports are clean; both retain the same one production
+and one full-tree export finding in unchanged core source. Review and landing:
+[PR #189289](https://github.com/openclaw/openclaw/pull/189289).
 
 Further provider source review: Bedrock, OpenCode, GitHub Copilot, LM Studio, Kimi
-Coding and Moonshot total 70 suites / 436 declarations. Retain 435; repair one
+Coding, Moonshot, ClawRouter, OpenRouter, Qwen, Venice, Microsoft, Microsoft Foundry
+and Azure Speech total 128 suites / 848 declarations. Retain 847; repair one
 Moonshot live auth-drift path that currently returns success before assertions.
 No runtime proof or additional removal is claimed for these source-only lanes.
+
+Reply source review is complete: all 429 unique suites, their invoked registrars
+and direct local supports/owners are classified. The final 54 suites add 498
+declarations: retain 495, qualify two proof repairs and one 17-line dispatch
+consolidation. Preserve ordinary-channel persistence in the misleading model-run
+case; its mock supplies the reply. Deeper framework dependencies remain bounded.
+The separate 43 upstream suites are also closed; no additional removal is qualified.
+
+Android source coverage is now 105 suites / 1,064 declarations: retain 1,038,
+qualify 19 proof repairs and seven consolidations; 219 declaration files remain.
+Control UI Devices and its node library add 16 suites / 118 declarations, all
+retained. Connection authority, immutable policy receipts, token rotation,
+pairing lifecycle and visible controls cover distinct failures. No native or UI
+runtime result is claimed by this source closure.
 
 Remaining: declaration-level review across remaining core, plugins, UI, native apps,
 root/script suites and shared fixtures; close owner-reading gaps and land subsequent batches.
