@@ -14,7 +14,7 @@ import {
 } from "../plugins/manifest-registry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveUserPathLiteral } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { assertSecureExecCommandPath } from "./exec-provider-path-validation.js";
 import { readJsonPointer } from "./json-pointer.js";
@@ -182,7 +182,7 @@ async function resolveProviderRefs({
     if (providerConfig.source === "file") {
       const cache = options.cache;
       const read = async () => {
-        const filePath = resolveUserPath(providerConfig.path);
+        const filePath = resolveUserPathLiteral(providerConfig.path);
         const timeoutMs = normalizePositiveTimerMs(
           providerConfig.timeoutMs,
           DEFAULT_FILE_TIMEOUT_MS,
