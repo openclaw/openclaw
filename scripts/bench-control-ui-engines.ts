@@ -197,6 +197,8 @@ type Observation = {
   pair: number;
   status: "passed" | "failed";
   wallMs?: number;
+  prepareFrameIntervalMs?: number;
+  settleFrameIntervalMs?: number;
   hostLoadAverage: number[];
   metrics?: EngineMetrics;
   requests?: Record<string, number>;
@@ -338,17 +340,20 @@ try {
     order:
       "Serial network profile, engine and bundle order alternates each pair; fresh browser context per observation",
     acceptance:
-      "Census ranks >1.5x WebKit/Chromium. Fix proof: ten interleaved pairs plus A/A control; median regression <=5% and p95 no worse, otherwise ten more pairs. Profile/CPU and structural counts decide on a noisy host; >20% attributable regression blocks.",
+      "Census ranks >1.3x WebKit/Chromium. Fix proof: ten interleaved pairs plus A/A control; median regression <=5% and p95 no worse, otherwise ten more pairs. Profile/CPU and structural counts decide on a noisy host; >20% attributable regression blocks.",
+    frameCadence:
+      "Prepare and settle frame intervals are consecutive requestAnimationFrame timestamp differences from the existing two-frame waits. They are cadence diagnostics, not the full wait duration, and must not be subtracted from wall time.",
     boundary:
       "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request and every incoming mock Gateway frame (including the connect challenge); RPC replies thus include a simulated round trip, with no added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
     memoryContract:
       "Opt-in memory-* scenes retain one document, drain 4.1 s retirement timers, clear synthetic request history, then force two collections at each named checkpoint. Compare warm and late checkpoints; heap/native categories/RSS and DOM wrapper/native counts have different engine-specific meanings. Memory-scene elapsed times include forced GC and snapshots and are not latency evidence.",
-    scenarios: scenarios.map(({ id, route, expected, navigation, memory }) => ({
+    scenarios: scenarios.map(({ id, route, expected, navigation, memory, diagnostic }) => ({
       id,
       route,
       expected,
       navigation,
       memory,
+      diagnostic,
     })),
   });
   for (const viewport of viewports) {
@@ -512,7 +517,7 @@ try {
                 observation.navigationPreloads = await settleInteractionNavigationPreloads(page);
                 await page.waitForLoadState("networkidle");
                 await page.evaluate(() => document.fonts.ready.then(() => undefined));
-                await frames(page);
+                observation.prepareFrameIntervalMs = await frames(page);
               }
               const before = (await gateway.getRequests()).length;
               if (values.trace) {
@@ -585,7 +590,7 @@ try {
                       }
                     : undefined,
                 )) ?? undefined;
-              await frames(page);
+              observation.settleFrameIntervalMs = await frames(page);
               observation.wallMs = performance.now() - start;
               const activeMeasurement = measurement;
               measurement = undefined;
@@ -731,6 +736,8 @@ const summary = [...cells.values()].map((cell) => {
     failed: rows.length - passing.length,
     measured: measured.length,
     wallMs: distribution(measured.map((row) => row.wallMs!)),
+    prepareFrameIntervalMs: distribution(rows.flatMap((row) => row.prepareFrameIntervalMs ?? [])),
+    settleFrameIntervalMs: distribution(rows.flatMap((row) => row.settleFrameIntervalMs ?? [])),
     evidence: Object.fromEntries(
       [...new Set(measured.flatMap((row) => Object.keys(row.evidence ?? {})))].map((key) => [
         key,

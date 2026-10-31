@@ -6179,7 +6179,6 @@
 ["src/tui/embedded-backend.test.ts","../cli/deps.js","40b33b4241ace3328dfc3f1f345236c5435cbcb3a46d1f36819f5c0d0f7fd0cc",1]
 ["src/tui/embedded-backend.test.ts","../config/sessions.js","e465ee90ae810f33d506f443166b9d543b56459939d6ed31df7a0a06c4cf6cc4",1]
 ["src/tui/embedded-backend.test.ts","../config/sessions/session-accessor.js","f586edd08df1f1a4189c84b43bc9e5e3461683419e26671a30c3f3b59cb31f10",1]
-["src/tui/embedded-backend.test.ts","../config/sessions/startup-migration.js","4e99e32baab2955336b7bb6f17bb1980ffe3a6f9fc6527d010c280c7a54c1898",1]
 ["src/tui/embedded-backend.test.ts","../gateway/chat-display-projection.js","34709a2d551c4f623bc50665326ffd24d967146911f4e183cbf92cad8fe5c828",1]
 ["src/tui/embedded-backend.test.ts","../gateway/server-methods/agent-timestamp.js","810201fd1aa308e553e25953061afa865b2549a2e593bb7308a33467e5f56169",1]
 ["src/tui/embedded-backend.test.ts","../gateway/server-methods/chat-history-pages.js","6185241c0e4a6130a6fe1e4230270467fb9318040662be5da8c1c28954acdca7",1]

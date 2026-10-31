@@ -21,12 +21,13 @@ import {
   restartEnv,
   restartProviderServer,
   restartToolNames,
+  writeRestartPlugin,
   writeRestartJsonText,
   writeRestartToolCall,
 } from "./gateway-restart.test-support.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
-import { createDeferred, withinTest } from "./helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
 const RESUME =
@@ -93,6 +94,7 @@ async function providerFixture(signal: AbortSignal) {
   const summaries: Array<{ cycle: number; ordinal: number }> = [];
   const issued = new Set<string>();
   const heldResumes = new Map<number, { response: ServerResponse; ordinal: number }>();
+  let finalizer: ServerResponse | undefined;
   let ordinal = 0;
   let restarting = false;
   let origin = "";
@@ -111,7 +113,12 @@ async function providerFixture(signal: AbortSignal) {
       restartProviderServer(
         failed,
         async (request, response, body) => {
-          if (request.url?.startsWith("/tool/")) {
+          if (request.url === "/finalize") {
+            finalizer = response;
+            gate("finalize").resolve();
+            return;
+          }
+          if (request.url?.startsWith("/tool/") || request.url === "/timer") {
             gate(request.url).resolve();
             response.writeHead(204).end();
             return;
@@ -286,6 +293,12 @@ async function providerFixture(signal: AbortSignal) {
   origin = `http://127.0.0.1:${reservation.claim.port}`;
   return {
     baseUrl: `${origin}/v1`,
+    finalizerUrl: `${origin}/finalize`,
+    timerUrl: `${origin}/timer`,
+    releaseFinalizer: () => {
+      finalizer?.writeHead(204).end();
+      finalizer = undefined;
+    },
     calls,
     summaries,
     failed: failed.promise,
@@ -339,34 +352,95 @@ it.skipIf(process.platform === "win32").for([true, false])(
     // Two logical agents share one physical store; resume must retain the session's agent.
     const sharedStore = suspended ? undefined : path.join(instance.stateDir, "shared.sqlite");
     const config = asRecord(JSON.parse(await readFile(instance.configPath, "utf8")));
+    const pluginDir = instance.state.path("slow-finalizer");
+    await writeRestartPlugin(
+      pluginDir,
+      {
+        id: "slow-finalizer",
+        activation: { onStartup: true },
+        configSchema: { type: "object", properties: {} },
+      },
+      `import { channel } from "node:diagnostics_channel";
+      export default { id: "slow-finalizer", register(api) {
+      channel("openclaw.agent-database.reservation").subscribe((event) => {
+        if (event.workerOperations?.includes("session.rowTranscript.backfill"))
+          api.logger.info("[close-backfill-proof] " + JSON.stringify(event));
+      });
+      api.registerService({ id: "shared-state-timer", start(ctx) {
+        ctx.scheduler.schedule({ id: "cron-read", delayMs: 0, everyMs: 1000, async run() {
+          await ctx.getCron().list();
+          await fetch(${JSON.stringify(provider.timerUrl)}, { method: "POST", body: "{}" });
+        } });
+      }, stop() {} });
+      api.on("agent_end", async (event, ctx) => {
+        if (!event.success && ctx.sessionKey === ${JSON.stringify(key(0, "stream"))})
+          await fetch(${JSON.stringify(provider.finalizerUrl)}, { method: "POST", body: "{}" });
+      });
+    } };`,
+    );
+    config.plugins = {
+      enabled: !suspended,
+      load: { paths: [pluginDir] },
+      allow: ["slow-finalizer", "openai"],
+      slots: { memory: "none" },
+      entries: {
+        "slow-finalizer": { enabled: true, hooks: { allowConversationAccess: true } },
+      },
+    };
     const logPath = instance.state.path("gateway.log");
     config.logging = { level: "info", file: logPath };
-    await instance.state.writeConfig({ ...config, ...restartResumeConfig(model, sharedStore) });
+    await instance.state.writeConfig({
+      ...config,
+      ...restartResumeConfig(model, sharedStore),
+      plugins: config.plugins,
+    });
     let client: GatewayClient | undefined;
     const race = <T>(promise: Promise<T>) =>
       withinTest(Promise.race([promise, provider.failed]), signal);
+    const runLeases = () => {
+      using database = new DatabaseSync(resolveOpenClawStateSqlitePath(instance.env), {
+        readOnly: true,
+      });
+      return database
+        .prepare("SELECT owner FROM state_leases WHERE scope LIKE 'worktree-run:%'")
+        .all();
+    };
     const history = (sessionKey: string) =>
       client!.request<{
         messages: unknown[];
         pendingInputs?: { items: Array<{ state: string; message: unknown }> };
         sessionInfo: { hasActiveRun: boolean };
       }>("chat.history", { sessionKey, limit: 100 });
+    const waitHistory = (
+      sessionKey: string,
+      check: (result: Awaited<ReturnType<typeof history>>) => void,
+      timeout = 30_000,
+    ) => race(vi.waitFor(async () => check(await history(sessionKey)), { timeout }));
     const waitFinal = (sessionKey: string, text: string) =>
-      race(
-        vi.waitFor(
-          async () => {
-            const result = await history(sessionKey);
-            expect(JSON.stringify(result.messages), instance.logs()).toContain(text);
-            expect(result.sessionInfo.hasActiveRun).toBe(false);
-          },
-          { timeout: 30_000 },
-        ),
+      waitHistory(sessionKey, (result) => {
+        expect(JSON.stringify(result.messages), instance.logs()).toContain(text);
+        expect(result.sessionInfo.hasActiveRun).toBe(false);
+      });
+    const waitQueued = (sessionKey: string, messages: string[]) =>
+      waitHistory(
+        sessionKey,
+        (result) => {
+          const pending = result.pendingInputs?.items ?? [];
+          expect(
+            pending.filter(
+              (item) =>
+                item.state === "queued" &&
+                messages.some((text) => JSON.stringify(item.message).includes(text)),
+            ),
+          ).toHaveLength(messages.length);
+        },
+        5_000,
       );
     const send = (
       sessionKey: string,
       message: string,
       queueMode?: "followup" | "steer",
-      timeoutMs?: number,
+      options?: { timeoutMs?: number; suppressCommandInterpretation?: boolean },
     ) =>
       client!.request<{ runId: string }>(
         "chat.send",
@@ -374,13 +448,17 @@ it.skipIf(process.platform === "win32").for([true, false])(
           sessionKey,
           message,
           idempotencyKey: randomUUID(),
+          suppressCommandInterpretation: options?.suppressCommandInterpretation,
           ...(queueMode ? { queueMode } : {}),
         },
-        { expectFinal: false, ...(timeoutMs ? { timeoutMs } : {}) },
+        { expectFinal: false, timeoutMs: options?.timeoutMs },
       );
     await runQaGatewayFixture(
       async () => {
         await instance.startGateway();
+        if (!suspended) {
+          await provider.wait("/timer");
+        }
         client = await connectRestartClient(instance, {}, signal);
         const { profile } = await client.request<{ profile: { id: string } }>("users.self", {});
         for (const [cycle, mode] of (suspended
@@ -393,18 +471,23 @@ it.skipIf(process.platform === "win32").for([true, false])(
           provider.prepare();
           await Promise.all(
             cases.map(async (name) => {
+              const withWorktree = cycle === 0 && name === "stream" && !suspended;
               const created = await client!.request<{
                 entry: { createdActor: { type: string; source: string; id: string } };
               }>("sessions.create", {
                 key: key(cycle, name),
                 agentId: agent(name),
                 permissionMode: "full",
+                ...(withWorktree ? { worktree: true, worktreeSource: "empty" } : {}),
               });
               expect(created.entry.createdActor).toMatchObject({
                 type: "human",
                 source: "profile",
                 id: profile.id,
               });
+              if (withWorktree) {
+                expect(asRecord(created.entry).worktree, instance.logs()).toBeDefined();
+              }
               if (name === "compact") {
                 await send(
                   key(cycle, name),
@@ -412,7 +495,19 @@ it.skipIf(process.platform === "win32").for([true, false])(
                 );
                 await waitFinal(key(cycle, name), `WARMED_${cycle}_compact`);
               }
-              await send(key(cycle, name), marker(cycle, name));
+              if (withWorktree) {
+                await client!.request(
+                  "agent",
+                  {
+                    sessionKey: key(cycle, name),
+                    message: marker(cycle, name),
+                    idempotencyKey: randomUUID(),
+                  },
+                  { expectFinal: false },
+                );
+              } else {
+                await send(key(cycle, name), marker(cycle, name));
+              }
             }),
           );
           await race(
@@ -432,34 +527,11 @@ it.skipIf(process.platform === "win32").for([true, false])(
               }),
             ),
           );
-          await client.request(
-            "chat.send",
-            {
-              sessionKey: key(cycle, "stream"),
-              message: LITERAL_QUEUED_COMMAND,
-              idempotencyKey: randomUUID(),
-              queueMode: "followup",
-              suppressCommandInterpretation: true,
-            },
-            { expectFinal: false },
-          );
+          await send(key(cycle, "stream"), LITERAL_QUEUED_COMMAND, "followup", {
+            suppressCommandInterpretation: true,
+          });
           await send(key(cycle, "stream"), queued(cycle, 2), "followup");
-          await race(
-            vi.waitFor(
-              async () => {
-                const pending = (await history(key(cycle, "stream"))).pendingInputs?.items ?? [];
-                expect(
-                  pending.filter(
-                    (item) =>
-                      item.state === "queued" &&
-                      (JSON.stringify(item.message).includes(LITERAL_QUEUED_COMMAND) ||
-                        JSON.stringify(item.message).includes("QUEUED_BEFORE_RESTART")),
-                  ),
-                ).toHaveLength(2);
-              },
-              { timeout: 5_000 },
-            ),
-          );
+          await waitQueued(key(cycle, "stream"), [LITERAL_QUEUED_COMMAND, queued(cycle, 2)]);
           const child = instance.child;
           assert(child?.pid, "Owned Gateway process unavailable");
           const closed = once(child, "close");
@@ -517,6 +589,9 @@ it.skipIf(process.platform === "win32").for([true, false])(
             ).toMatchObject({ ok: true, resumed: true });
           }
           await closeOpenClawStateDatabaseAsync();
+          if (mode === "SIGTERM") {
+            expect(runLeases(), instance.logs()).toHaveLength(1);
+          }
           const blockedStore =
             mode === "managed"
               ? undefined
@@ -540,18 +615,45 @@ it.skipIf(process.platform === "win32").for([true, false])(
           } finally {
             blockedStore?.close();
           }
+          if (mode === "SIGTERM") {
+            await awaitGateBeforeSettlement(
+              provider.wait("finalize"),
+              closed,
+              "Gateway exited before the finalizer entered",
+            ).catch((error: unknown) => {
+              throw new Error(`${String(error)}\n${instance.logs()}`, { cause: error });
+            });
+            await vi.waitFor(
+              () =>
+                expect(instance.logs()).toContain(
+                  "received connection work cleanup exceeded 5000ms",
+                ),
+              { timeout: 10_000 },
+            );
+            provider.releaseFinalizer();
+          }
+          await vi.waitFor(() => expect(child.exitCode, instance.logs()).toBe(0), {
+            timeout: 10_000,
+          });
           const exit = await race(closed);
+          if (mode === "SIGTERM") {
+            expect(runLeases()).toEqual([]);
+          }
           const shutdownMs = Date.now() - started;
           const shutdownLogs = (await readFile(logPath, "utf8")).slice(shutdownLogStart);
+          expect(shutdownLogs).not.toMatch(
+            /terminal session persistence failed|input completion persistence failed|failed to settle pending agent input|failed to release worktree run lease/,
+          );
           const markerSummary = shutdownLogs.indexOf("shutdown restart resume:");
           const cleanClose = shutdownLogs.indexOf("agent database clean-close receipt:");
           expect(markerSummary, shutdownLogs).toBeGreaterThan(-1);
           expect(cleanClose, shutdownLogs).toBeGreaterThan(markerSummary);
+          expect(shutdownLogs.slice(cleanClose).includes("[close-backfill-proof]")).toBe(false);
           const markerAndAbortMs = shutdownLogs.match(
             /restart trace: restart.close.session-abort ([\d.]+)ms/,
           )?.[1];
           process.stdout.write(
-            `[restart-resume-proof] ${mode} markerAndAbortMs=${markerAndAbortMs ?? "unavailable"} shutdownMs=${shutdownMs}\n`,
+            `[restart-resume-proof] ${mode} markerAndAbortMs=${markerAndAbortMs ?? "unavailable"} shutdownMs=${shutdownMs} cleanCloses=${shutdownLogs.match(/^.*agent database clean-close receipt:.*$/gm)?.length ?? 0}\n`,
           );
           expect.soft(exit, instance.logs()).toEqual([0, null]);
           expect
@@ -588,7 +690,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
           // Admission must finish while the resumed provider request is still held.
           await expect
             .soft(
-              race(send(key(cycle, "stream"), fresh(cycle), "steer", 2_000)),
+              race(send(key(cycle, "stream"), fresh(cycle), "steer", { timeoutMs: 2_000 })),
               "a fresh message must not wait behind restart recovery admission",
             )
             .resolves.toMatchObject({ runId: expect.any(String) });
@@ -668,19 +770,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
         await send(crashKey, marker(2, "stream"));
         await provider.wait("ready:2:stream");
         await send(crashKey, CRASH_QUEUED, "followup");
-        await race(
-          vi.waitFor(
-            async () => {
-              expect(
-                (await history(crashKey)).pendingInputs?.items.some(
-                  (item) =>
-                    item.state === "queued" && JSON.stringify(item.message).includes(CRASH_QUEUED),
-                ),
-              ).toBe(true);
-            },
-            { timeout: 5_000 },
-          ),
-        );
+        await waitQueued(crashKey, [CRASH_QUEUED]);
         await instance.crashGateway();
         await client.stopAndWait();
         client = undefined;
@@ -720,6 +810,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
         expect(provider.calls.some((call) => call.current.includes(CRASH_QUEUED))).toBe(false);
       },
       () => client?.stopAndWait(),
+      provider.releaseFinalizer,
       () => instance.cleanup(),
       provider.close,
     );

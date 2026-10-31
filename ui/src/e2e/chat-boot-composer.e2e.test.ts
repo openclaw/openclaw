@@ -106,7 +106,6 @@ suite.define(() => {
         await page.keyboard.type(text);
         await page.keyboard.press(name === "phone" ? "Enter" : "Shift+Enter");
         await page.keyboard.type("second line");
-        // The caret moves into the draft; the handoff must keep it there.
         for (let index = 0; index < "line".length; index += 1) {
           await page.keyboard.press("ArrowLeft");
         }
@@ -125,6 +124,8 @@ suite.define(() => {
               origin.y + Number.parseFloat(style.paddingTop),
             ].map(Math.round);
           });
+        // Module startup moves the editor out of the static frame first.
+        await page.locator("#openclaw-boot-shell").waitFor({ state: "detached" });
         const before = await geometry(".loading-skeleton__composer:has(#openclaw-boot-composer)");
         // Record every animation frame through the handoff: each one must show one
         // composer, at one size, holding the whole draft.
@@ -157,7 +158,6 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         const draft = `${text}\nsecond line`;
         await expect.poll(() => composer.inputValue()).toBe(draft);
-        // The chat composer takes the same frame and text origin: nothing jumps.
         expect(await geometry(".agent-chat__input")).toEqual(before);
         await page.waitForFunction(
           () => (Reflect.get(window, "__bootComposerFrames") as string[]).length >= 90,

@@ -494,7 +494,12 @@ async function readWindowsNetstatEntries<T extends PortListener>(
 
 export async function inspectPortUsage(
   port: number,
-  options?: { probeHosts?: readonly string[]; signal?: AbortSignal; deadlineMs?: number },
+  options?: {
+    probeHosts?: readonly string[];
+    signal?: AbortSignal;
+    deadlineMs?: number;
+    knownRuntimePid?: number;
+  },
 ): Promise<PortUsage> {
   const signal = options?.signal;
   signal?.throwIfAborted();
@@ -502,7 +507,14 @@ export async function inspectPortUsage(
     process.platform === "win32"
       ? (await readWindowsNetstatEntries([port], parseWindowsNetstatListeners, signal))[0]!
       : await readUnixListeners(port, undefined, signal);
-  await enrichListenerProcessInfo(result.entries, signal);
+  // Exact runtime ownership is already known; other PIDs still need parent/command attribution.
+  await enrichListenerProcessInfo(
+    result.entries.filter(
+      (listener) =>
+        options?.knownRuntimePid === undefined || listener.pid !== options.knownRuntimePid,
+    ),
+    signal,
+  );
   return buildPortUsage(port, result, options?.probeHosts, signal, options?.deadlineMs);
 }
 

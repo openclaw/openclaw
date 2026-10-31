@@ -15,7 +15,7 @@ import {
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import { resolveSessionWorkStartBlock } from "./session-work-start.js";
-import { runSessionStartupMigration } from "./startup-migration.js";
+import { runSessionStartupMigration } from "./startup-migration-runtime.js";
 
 it.each(["startup", "doctor"] as const)(
   "%s retires only custody linked to the tombstoned generation, idempotently",
