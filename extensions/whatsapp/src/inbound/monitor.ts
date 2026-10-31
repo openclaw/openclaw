@@ -1,7 +1,12 @@
 import type { WAMessageKey, WASocket } from "baileys";
+import {
+  emitChannelGroupMembershipChanged,
+  type PluginHookChannelGroupMembershipEvent,
+} from "openclaw/plugin-sdk/channel-activity-runtime";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { logWhatsAppVerbose } from "../auto-reply/loggers.js";
+import { getComparableIdentityValues } from "../identity.js";
 import { createWaSocket, waitForWaConnection } from "../session.js";
 import { resolveWhatsAppSocketTiming, type WhatsAppSocketTimingOptions } from "../socket-timing.js";
 import {
@@ -63,6 +68,48 @@ export async function attachWebInboxToSocket(
       inboundConsoleLog.warn(`Failed hydrating participating groups on connect: ${error}`);
     },
   });
+  const membershipLifetime = new AbortController();
+  void socketSession.onClose.then(() => membershipLifetime.abort());
+  const reportMembership = (
+    conversationId: string,
+    event: PluginHookChannelGroupMembershipEvent,
+  ) => {
+    void emitChannelGroupMembershipChanged(event, {
+      channelId: "whatsapp",
+      accountId: options.accountId,
+      conversationId,
+      signal: membershipLifetime.signal,
+    }).catch(() => inboundLogger.warn("group membership observation failed"));
+  };
+  const detachMembershipListeners = [
+    socketSession.listen("groups.upsert", (groups) => {
+      for (const group of groups) {
+        reportMembership(group.id, {
+          kind: "group_observed",
+          selfIds: getComparableIdentityValues(socketSession.self),
+          actorId: group.author,
+          actorPhoneNumberId: group.authorPn,
+          participants: group.participants.map((participant) => ({
+            id: participant.id,
+            phoneNumberId: participant.phoneNumber,
+          })),
+        });
+      }
+    }),
+    socketSession.listen("group-participants.update", (update) => {
+      reportMembership(update.id, {
+        kind: "participants_changed",
+        selfIds: getComparableIdentityValues(socketSession.self),
+        action: update.action,
+        actorId: update.author,
+        actorPhoneNumberId: update.authorPn,
+        participants: update.participants.map((participant) => ({
+          id: participant.id,
+          phoneNumberId: participant.phoneNumber,
+        })),
+      });
+    }),
+  ];
   const delivery = createWhatsAppMessageDeliveryCoordinator({
     ...options,
     socketSession,
@@ -81,6 +128,10 @@ export async function attachWebInboxToSocket(
 
   return {
     close: async () => {
+      membershipLifetime.abort();
+      for (const detach of detachMembershipListeners) {
+        detach();
+      }
       delivery.stopIntake();
       socketSession.stop();
       groupMetadata.close();

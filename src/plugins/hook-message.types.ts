@@ -15,6 +15,26 @@ export type PluginHookBeforeChannelIngressContext = {
   signal: AbortSignal;
 };
 
+/** Transport identities from one provider membership notification, never a fetched roster. */
+export type PluginHookChannelGroupMembershipEvent = {
+  actorId?: string;
+  /** Provider-attested phone-number identity; may itself be a transport-native ID. */
+  actorPhoneNumberId?: string;
+  participants: Array<{ id: string; phoneNumberId?: string }>;
+  /** Known identities of the connected account, for identifying self-membership changes. */
+  selfIds: string[];
+} & (
+  | { kind: "group_observed" }
+  | { kind: "participants_changed"; action: "add" | "remove" | "promote" | "demote" | "modify" }
+);
+
+export type PluginHookChannelGroupMembershipContext = {
+  channelId: string;
+  accountId: string;
+  conversationId: string;
+  signal: AbortSignal;
+};
+
 /** Ordered media fact exposed by inbound message hooks. */
 export type PluginHookMediaFact = MessageHookMediaFact;
 
@@ -213,6 +233,10 @@ export type PluginHookMessageSentEvent = {
 
 /** Message operation contracts share their provider-event and delivery types. */
 export type PluginMessageHookHandlerMap = {
+  channel_group_membership_changed: AsyncPluginHook<
+    PluginHookChannelGroupMembershipEvent,
+    PluginHookChannelGroupMembershipContext
+  >;
   before_channel_ingress: AsyncPluginHook<
     PluginHookBeforeChannelIngressEvent,
     PluginHookBeforeChannelIngressContext,

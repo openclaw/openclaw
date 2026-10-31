@@ -94,7 +94,7 @@ The standard runner applies these defaults **per handler**:
 | `before_channel_ingress`                                                                                       | 15 seconds                          | Refuse durable intake without logging policy exception contents  |
 | `before_agent_finalize`, `before_prompt_build`, `message_sending`, `reply_payload_sending`, `resolve_exec_env` | 15 seconds                          | Log and skip the failed handler; retain other successful results |
 | `agent_end`, `before_compaction`, `after_compaction`, `skill_changed`                                          | 30 seconds                          | Log and continue                                                 |
-| `channel_pairing_requested`                                                                                    | 2 seconds                           | Log and continue                                                 |
+| `channel_pairing_requested`, `channel_group_membership_changed`                                                | 2 seconds                           | Log and continue                                                 |
 | `gateway_stop`                                                                                                 | 5 seconds                           | Log and continue shutdown                                        |
 | Other asynchronous hooks, including claim hooks                                                                | No runner timeout unless configured | Log and continue                                                 |
 | `tool_result_persist`, `before_message_write`                                                                  | No asynchronous timeout             | Synchronous errors are logged; failed results are ignored        |
@@ -153,17 +153,18 @@ contracts above; a modifying hook is not an observation hook.
 
 **Messages and delivery**
 
-| Hook                        | Kind          | Purpose                                                                      |
-| --------------------------- | ------------- | ---------------------------------------------------------------------------- |
-| `before_channel_ingress`    | Modify / gate | Transform a raw channel event before durable storage; failures refuse intake |
-| `inbound_claim`             | Claim         | Claim an inbound message for the plugin that owns its conversation binding   |
-| `channel_pairing_requested` | Observe       | Observe newly created DM pairing requests                                    |
-| `message_received`          | Observe       | Observe inbound content, sender, thread, and metadata                        |
-| `message_sending`           | Modify / gate | Rewrite outbound content or cancel delivery                                  |
-| `reply_payload_sending`     | Modify / gate | Mutate or cancel normalized reply payloads before delivery                   |
-| `message_sent`              | Observe       | Observe outbound delivery success or failure                                 |
-| `before_dispatch`           | Claim         | Handle an inbound message before the normal model dispatch                   |
-| `reply_dispatch`            | Claim         | Own reply generation and dispatch instead of the default model path          |
+| Hook                               | Kind          | Purpose                                                                      |
+| ---------------------------------- | ------------- | ---------------------------------------------------------------------------- |
+| `before_channel_ingress`           | Modify / gate | Transform a raw channel event before durable storage; failures refuse intake |
+| `inbound_claim`                    | Claim         | Claim an inbound message for the plugin that owns its conversation binding   |
+| `channel_pairing_requested`        | Observe       | Observe newly created DM pairing requests                                    |
+| `channel_group_membership_changed` | Observe       | Observe provider-reported group membership and actor identities              |
+| `message_received`                 | Observe       | Observe inbound content, sender, thread, and metadata                        |
+| `message_sending`                  | Modify / gate | Rewrite outbound content or cancel delivery                                  |
+| `reply_payload_sending`            | Modify / gate | Mutate or cancel normalized reply payloads before delivery                   |
+| `message_sent`                     | Observe       | Observe outbound delivery success or failure                                 |
+| `before_dispatch`                  | Claim         | Handle an inbound message before the normal model dispatch                   |
+| `reply_dispatch`                   | Claim         | Own reply generation and dispatch instead of the default model path          |
 
 `inbound_claim` is not a global pre-routing broadcast. OpenClaw invokes it only
 for the plugin that owns the message's core-managed conversation binding. To
