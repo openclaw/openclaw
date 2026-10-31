@@ -1059,6 +1059,61 @@ struct DashboardManagerGatewayTargetTests {
         #expect(manager.alertPresenter._testPendingAlerts.isEmpty)
     }
 
+    @Test(arguments: ["dock", "menu"])
+    func `pending browser sign-in survives gateway focus`(_ entry: String) async throws {
+        try await TestIsolation.withIsolatedState {
+            let entered = AsyncStream.makeStream(of: Void.self)
+            let release = DispatchSemaphore(value: 0)
+            defer { release.signal() }
+            let held = Task.detached {
+                await MacGatewayProfileStore.shared.holdForDashboardSignInFocus(
+                    entered: entered.continuation, release: release)
+            }
+            var enteredIterator = entered.stream.makeAsyncIterator()
+            await enteredIterator.next()
+
+            let url = try #require(URL(string: "https://gateway.example.invalid/"))
+            let page = DashboardFailurePage.SignedOut(
+                target: .profile("studio"), name: "Studio", host: "gateway.example.invalid", expiresAt: .distantPast)
+            let controller = DashboardWindowController(
+                url: url,
+                auth: .unauthenticated,
+                websiteDataStore: .nonPersistent(),
+                windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
+                requestBrowserProfileImportOffer: { _ in false })
+            let manager = DashboardManager._testMake(
+                automaticGatewayProfileRefreshEnabled: false,
+                profileEndpointProvider: { _ in
+                    Issue.record("Focusing a pending sign-in must not resolve another endpoint")
+                    throw MacGatewayProfileStore.BrowserSignInRequired(
+                        profile: .init(id: "studio", name: "Studio", url: url), expiresAt: .distantPast)
+                },
+                gatewayEntriesProvider: { DashboardGatewayTestEntries.withProfiles(["studio"]) })
+            defer { manager.close() }
+            manager._testSetController(controller)
+            manager._testSetMainTarget(page.target)
+            controller.showSignedOut(page, present: true, autoStart: true)
+            let document = controller.webView
+
+            if entry == "dock" {
+                try await manager.show()
+            } else {
+                await manager.openOrFocusDashboard(for: page.target).value
+            }
+
+            #expect(manager._testController() === controller)
+            #expect(controller.webView === document)
+            #expect(controller.isWindowOpen)
+            #expect(controller.signedOut == page)
+            #expect(manager.alertPresenter._testPendingAlerts.isEmpty)
+            controller.cancelGatewayReconnect(page.target)
+            #expect(!manager.canFocusWithoutReload(controller))
+            manager.close()
+            release.signal()
+            await held.value
+        }
+    }
+
     private func withConfiguredPrimary(_ body: @MainActor () async throws -> Void) async throws {
         // An unconfigured app opens the saved profile during show(), before a
         // picker test can release the profile gate it intended to suspend later.
@@ -1069,6 +1124,18 @@ struct DashboardManagerGatewayTargetTests {
             defer { state.connectionMode = previousMode }
             try await body()
         }
+    }
+}
+
+extension MacGatewayProfileStore {
+    fileprivate func holdForDashboardSignInFocus(
+        entered: AsyncStream<Void>.Continuation,
+        release: DispatchSemaphore)
+    {
+        entered.yield()
+        // Hold the real reconnect's catalog lookup so focus runs while sign-in is pending.
+        // Every exit releases the barrier; no helper, browser, or network is needed.
+        release.wait()
     }
 }
 
