@@ -268,6 +268,7 @@ async function captureReload(
   outputDir: string,
   warm: boolean,
   route: string,
+  shortVisit?: ShortVisit,
 ) {
   await mkdir(outputDir, { recursive: true });
   const oldAnimationSample = warm
@@ -525,6 +526,7 @@ async function captureReload(
     }
     const report = {
       warm,
+      ...(shortVisit ? { shortVisit } : {}),
       oldPage: oldPage
         ? {
             ...oldPage,
@@ -618,11 +620,7 @@ const results: Array<{
   route: "chat" | "dashboard";
   coldReset: unknown;
   warmCache: Awaited<ReturnType<typeof inspectWarmCache>> | null;
-  runs: Array<
-    Awaited<ReturnType<typeof captureReload>> & {
-      shortVisit?: ShortVisit;
-    }
-  >;
+  runs: Array<Awaited<ReturnType<typeof captureReload>>>;
 }> = [];
 try {
   const arms: Array<{
@@ -1005,8 +1003,9 @@ try {
             path.join(item.arm.directory, route, `warm-${String(index).padStart(2, "0")}`),
             true,
             route,
+            shortVisit,
           );
-          item.result.runs.push({ ...run, ...(shortVisit ? { shortVisit } : {}) });
+          item.result.runs.push(run);
           if (values.base) {
             await item.cdp.send("Page.setWebLifecycleState", { state: "frozen" });
           }
