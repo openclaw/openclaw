@@ -903,33 +903,6 @@ it("does not leak hook-blocked CLI input in raw trace payloads", async () => {
   expect(texts).not.toContain(secret);
 });
 
-describe("runReplyAgent messaging tool dedupe", () => {
-  it.each([
-    { state: undefined, routed: true, delivered: true },
-    { state: "missing", routed: true, delivered: false },
-    { state: undefined, routed: false, delivered: false },
-  ] as const)(
-    "requires current-source evidence before suppressing a deduplicated final: $state/$routed",
-    async ({ state, routed, delivered }) => {
-      runEmbeddedAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "hello world!" }],
-        sourceReplyDeliveryState: state,
-        messagingToolSentTexts: ["hello world!"],
-        messagingToolSentTargets: routed
-          ? [{ tool: "slack", provider: "slack", to: "channel:C1" }]
-          : undefined,
-        meta: {},
-      });
-      const result = await channelRun("slack", "channel:C1").run();
-      if (delivered) {
-        expect(result).toBeUndefined();
-      } else {
-        expect(result).toMatchObject({ isError: true, text: expect.any(String) });
-      }
-    },
-  );
-});
-
 it.each([
   ["unrelated cron jobs", "I'll remind you tomorrow morning.", false],
   ["a failed cron store read", "I'll remind you after lunch.", true],

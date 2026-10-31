@@ -1,3 +1,4 @@
+import type { CliBackendParseJsonlEvent } from "../../plugins/cli-backend.types.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { captureCliRunStartTime, type PreparedCliRunContext } from "./types.js";
 
@@ -94,6 +95,35 @@ export function buildPreparedContext(params: PreparedContextOverrides = {}): Pre
       ...(params?.openClawHistoryPrompt
         ? { openClawHistoryPrompt: params.openClawHistoryPrompt }
         : {}),
+    },
+  );
+}
+
+export function buildPreparedCliRunContext(params: {
+  output: "json" | "jsonl" | "text";
+  provider?: string;
+  runId?: string;
+  beforeExecution?: () => Promise<void>;
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
+}): PreparedCliRunContext {
+  const provider = params.provider ?? "codex-cli";
+  const runId = params.runId ?? `run-${params.output}`;
+  const backend = {
+    command: "agent-cli",
+    args: [],
+    output: params.output,
+    input: "stdin" as const,
+    serialize: true,
+  };
+  return createPreparedCliContext(
+    { provider, model: "model", runId, agentId: "main", sessionKey: "agent:main:main" },
+    { id: provider, config: backend, bundleMcp: false, parseJsonlEvent: params.parseJsonlEvent },
+    {
+      preparedBackend: {
+        backend,
+        env: {},
+        ...(params.beforeExecution ? { beforeExecution: params.beforeExecution } : {}),
+      },
     },
   );
 }

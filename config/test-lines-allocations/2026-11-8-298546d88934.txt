@@ -1,0 +1,4 @@
+109
+# Source 298546d88934bf05bc7e208d13bf6ce2c538e3f2; cli-run-settlement.ts plus agent-runner-result-payloads.ts, followup-delivery.ts and reply-payloads-dedupe.ts: distinguish progress from terminal delivery, preserving explicit custody and message_tool_only.
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.
+# Includes20 net LF for preserving assertions while extracting the dedupe suite and shared CLI fixture under normal file-size gates.
