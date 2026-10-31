@@ -94,7 +94,11 @@ function createCodec(side) {
       return { ...value };
     }
     if (typeof value === "function") {
-      return { [MARK]: "function", ref: remoteIds.get(value) ?? register(value), remote: remoteIds.has(value) };
+      return {
+        [MARK]: "function",
+        ref: remoteIds.get(value) ?? register(value),
+        remote: remoteIds.has(value),
+      };
     }
     if (value === null || typeof value !== "object") {
       return value;
@@ -312,12 +316,8 @@ export async function runIsolatedUpdateCompatExport(moduleUrl, exportName, args)
     port1.close();
     settle(new Error(`Update compatibility worker exited with code ${code}`));
   });
-  const result = await callWorker(null, exportName, args);
-  // Returned callbacks keep the (unreferenced) worker; otherwise release it now.
-  if (!containsFunction(result)) {
-    await worker.terminate();
-  }
-  return result;
+  // Returned callbacks keep the unreferenced worker; otherwise it exits after flushing output.
+  return await callWorker(null, exportName, args);
 }
 
 /** Bind one bridged export; each call runs in its own worker. */
@@ -361,6 +361,9 @@ async function runWorker() {
         value: codec.encode(value),
         args: codec.encode(args),
       });
+      if (message.ref === null && !containsFunction(value)) {
+        parentPort.close();
+      }
     } catch (error) {
       parentPort.postMessage({
         id: message.id,
@@ -368,6 +371,9 @@ async function runWorker() {
         error: codec.encodeError(error),
         args: codec.encode(args),
       });
+      if (message.ref === null) {
+        parentPort.close();
+      }
     }
   });
 }
