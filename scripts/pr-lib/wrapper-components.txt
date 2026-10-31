@@ -4,6 +4,7 @@ cli-parent-lifetime.mjs
 cli-root-options.mjs
 config/ci-test-timings.json
 node-compile-cache.mjs
+gateway-run-argv.mjs
 gateway-prewarm.mjs
 gateway-shutdown-budget.mjs
 worker-heap-flag.mjs

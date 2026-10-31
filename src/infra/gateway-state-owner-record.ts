@@ -6,7 +6,7 @@ import { isMainThread } from "node:worker_threads";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getCliParentPid } from "../../cli-parent-lifetime.mjs";
-import { isGatewayRunInvocationArgv } from "../cli/gateway-run-argv.js";
+import { isForegroundGatewayRunArgv } from "../../gateway-run-argv.mjs";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
@@ -226,7 +226,7 @@ function assertGatewayRestorationPriority(
   // Gateway bootstrap may need schema admission before acquiring its process root.
   if (
     payload.pid === process.pid &&
-    isGatewayRunInvocationArgv(process.argv) &&
+    isForegroundGatewayRunArgv(process.argv) &&
     classifyOpenClawArgv(process.argv, { command: "gateway" }).kind === "openclaw"
   ) {
     return;
