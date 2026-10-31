@@ -17,6 +17,20 @@ export type LocalWorkspacePreparation = {
 
 export const LOCAL_WORKSPACE_CONTENT_BATCH = 256;
 
+export function decodeLocalWorkspaceTree(packs: readonly string[], legacy = false) {
+  const records = new Map<string, LocalWorkspaceManifestRecord>();
+  for (const packed of packs) {
+    // SAFETY: Immutable packs and their links are produced together by the tree owner.
+    const entries = legacy
+      ? [JSON.parse(packed) as LocalWorkspaceManifestRecord]
+      : (JSON.parse(packed) as LocalWorkspaceManifestRecord[]);
+    for (const record of entries) {
+      records.set(record.node.path, record);
+    }
+  }
+  return records;
+}
+
 export function localWorkspaceDigestBytes(ref: string): Uint8Array {
   if (!/^sha256:[a-f0-9]{64}$/u.test(ref)) {
     throw new Error("Invalid local workspace tree digest");

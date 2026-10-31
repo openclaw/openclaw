@@ -168,7 +168,9 @@ check and rechecks live authority after that wait; no successful check is cached
 across requests.
 
 Local workspace reconciliation releases the shared state reader after capturing
-its database snapshot. The existing workspace computation pool scans files and
+its database snapshot. Immutable record JSON crosses the worker boundary without
+first expanding a tree in the shared reader. The computation pool decodes it once
+and releases the transferred text before scanning files. The existing pool
 prepares manifest results from that compressed snapshot; the Gateway forwards it
 without expanding the tree. The reconciliation lease still checks authority before
 accepting results, and the state writer retains atomic manifest publication.
