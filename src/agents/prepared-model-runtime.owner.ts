@@ -1,10 +1,8 @@
 import path from "node:path";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { pinRuntimeConfigSource } from "../config/runtime-config-capture-state.js";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSnapshotMetadata,
-  getRuntimeConfigSourceSnapshot,
   hashRuntimeConfigValue,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -242,12 +240,6 @@ export function normalizePreparedModelRuntimeInput(
     workspaceDir: _workspaceDir,
     ...rest
   } = input;
-  // Pin the authored source while this config is still the live generation; a later
-  // rebuild must not project an older runtime config onto a newer source snapshot.
-  const sourceSnapshot = getRuntimeConfigSourceSnapshot();
-  if (sourceSnapshot && input.config === getRuntimeConfigSnapshot()) {
-    pinRuntimeConfigSource(input.config, sourceSnapshot);
-  }
   const inheritedAuthDir = normalizeOptionalDir(
     input.inheritedAuthDir ?? resolveLegacyInheritedAuthDir(input.config, input.env),
   );
