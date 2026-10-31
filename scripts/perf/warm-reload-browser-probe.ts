@@ -6,7 +6,7 @@ export const proofRegions = {
   header: ".chat-pane__header",
   transcript: ".chat-thread-viewport, .chat-thread",
   details: ".chat-details",
-  composer: ".agent-chat__input",
+  composer: ".agent-chat__input, .agent-chat__disabled-banner--replacement",
   dashboard: "openclaw-board-view",
 };
 
@@ -388,6 +388,7 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
         box.bottom > 0 &&
         box.y < innerHeight &&
         box.width > 0 &&
+        row.checkVisibility({ checkOpacity: true, visibilityProperty: true }) &&
         Boolean(row.querySelector(".chat-text")?.textContent?.trim())
       );
     });
