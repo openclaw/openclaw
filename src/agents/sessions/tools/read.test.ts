@@ -6,6 +6,7 @@ import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
+import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
@@ -217,6 +218,15 @@ console.log("headless-read-ok");`,
     await expect(executeRead(tool, { path: ".", optional: true })).rejects.toThrow(
       "Read requires a file path, but . is a directory. List the directory, then read a specific file.",
     );
+  });
+
+  it("accepts optional: false as a required read", async () => {
+    const { tool } = await fileFixture("notes.txt", "present");
+    const args = { path: "notes.txt", optional: false };
+    const call = { type: "toolCall" as const, id: "read-1", name: "read", arguments: args };
+    expect(validateToolArguments(tool, call)).toEqual(args);
+    await expectReadText(tool, args, "present");
+    await expect(executeRead(tool, { path: "missing.txt", optional: false })).rejects.toThrow();
   });
 
   it("treats ENOTDIR as optional not_found without swallowing permission errors", async () => {
