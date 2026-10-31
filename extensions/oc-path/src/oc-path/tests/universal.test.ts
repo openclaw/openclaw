@@ -1,8 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { findOcPaths } from "../find.js";
 import { parseJsonc } from "../jsonc/parse.js";
 import { parseJsonl } from "../jsonl/parse.js";
-import { parseOcPath } from "../oc-path.js";
+import { formatOcPath, parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
 import { REDACTED_SENTINEL } from "../sentinel.js";
 import { resolveOcPath, setOcPath, type OcAst } from "../universal.js";
@@ -25,6 +26,63 @@ function expectLeaf(match: ReturnType<typeof resolve>, valueText: string, leafTy
 }
 
 describe("resolveOcPath", () => {
+  it.each([
+    [
+      "JSONC",
+      parseJsonc,
+      '{"\u00e9":"NFC","e\u0301":"NFD"}',
+      "oc://keys.jsonc/",
+      '{"\u00e9":"NFC","e\u0301":"NEW"}',
+    ],
+    [
+      "JSONL",
+      parseJsonl,
+      '{"\u00e9":"NFC","e\u0301":"NFD"}\n',
+      "oc://keys.jsonl/L1/",
+      '{"\u00e9":"NFC","e\u0301":"NEW"}\n',
+    ],
+    [
+      "YAML",
+      parseYaml,
+      "\u00e9: NFC\ne\u0301: NFD\n",
+      "oc://keys.yaml/",
+      "\u00e9: NFC\ne\u0301: NEW\n",
+    ],
+  ] as const)(
+    "keeps canonically equivalent %s keys distinct across reads and writes",
+    (_kind, parse, raw, prefix, expected) => {
+      const ast = parse(raw);
+      expectLeaf(resolve(ast, `${prefix}\u00e9`), "NFC");
+      expectLeaf(resolve(ast, `${prefix}e\u0301`), "NFD");
+      const matches = findOcPaths(ast, parseOcPath(`${prefix}*`));
+      expect(matches).toHaveLength(2);
+      const nfd = expectDefined(
+        matches.find(({ match }) => match.kind === "leaf" && match.valueText === "NFD"),
+        "NFD key is discoverable",
+      );
+      expectLeaf(resolve(ast, formatOcPath(nfd.path)), "NFD");
+      expect(findOcPaths(ast, parseOcPath(`${prefix}e\u0301`))).toMatchObject([
+        { match: { valueText: "NFD" } },
+      ]);
+      const edited = edit(ast, `${prefix}e\u0301`, "NEW");
+      expect(edited.raw).toBe(expected);
+      expectLeaf(resolve(edited, `${prefix}\u00e9`), "NFC");
+      expectLeaf(resolve(edited, `${prefix}e\u0301`), "NEW");
+    },
+  );
+
+  it("preserves literal Markdown item fields independently of slug addressing", () => {
+    const ast = parseMd("## Keys\n- e\u0301: NFD\n- keep: untouched\n");
+    const uri = "oc://keys.md/keys/#0/e\u0301";
+    expectLeaf(resolve(ast, uri), "NFD");
+    const [found] = findOcPaths(ast, parseOcPath("oc://keys.md/keys/#0/*"));
+    expectLeaf(
+      resolve(ast, formatOcPath(expectDefined(found, "literal field is discoverable").path)),
+      "NFD",
+    );
+    expect(edit(ast, uri, "NEW").raw).toBe("## Keys\n- e\u0301: NEW\n- keep: untouched\n");
+  });
+
   it.each([
     ["Markdown", () => parseMd("---\nname: github\n---\n\n## Boundaries\n\n- enabled: true\n")],
     ["JSONC", () => parseJsonc('{ "enabled": true }')],

@@ -186,9 +186,13 @@ Reserved characters (`?`, `&`, `%`) outside quoted, predicate, or union
 segments are rejected. Control characters (U+0000-U+001F, U+007F) are
 rejected anywhere, including the `session` query value.
 
-`formatOcPath(parseOcPath(path)) === path` is guaranteed for normalized paths.
+`formatOcPath(parseOcPath(path)) === path` is guaranteed for canonical paths.
 Other query parameters are ignored except for the first non-empty
 `session=` value.
+
+File names, literal keys, and session values preserve their Unicode code points;
+canonically equivalent spellings remain distinct. Markdown section and item
+addresses still use their existing slug rules.
 
 Hard limits: a path caps at 4096 bytes, at most 4 slots (file/section/item/
 field), at most 64 dotted sub-segments per slot, and at most 256 nested

@@ -16,6 +16,8 @@ describe("oc-path-parse-edges", () => {
       "oc://SOUL.md/Boundaries/deny-rule-1/risk",
       "oc://SOUL.md?session=daily",
       "oc://X.md/a/b/c?session=s",
+      "oc://e\u0301.jsonc/e\u0301?session=e\u0301",
+      "oc://\u00e9.jsonc/\u00e9?session=\u00e9",
       "oc://skills/email-drafter/[frontmatter]/name",
       "oc://config/plugins.entries.foo.token",
       "oc://config.jsonc/items/$first",
