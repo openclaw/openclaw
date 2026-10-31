@@ -929,6 +929,18 @@ it("preserves an inventory worker output limit without blaming the process super
   expect(await fs.readFile(file, "utf8")).toBe("source");
 });
 
+it("inventories more paths than a fixed 1 MiB result would hold", async ({ signal }) => {
+  const root = await fs.realpath(tempDirs.make("inventory-many-paths-"));
+  const file = path.join(root, `${"a".repeat(150)}.sqlite`);
+  await fs.writeFile(file, "source");
+  const sizes = await readUpdateStateDatabaseSizes(
+    Array(12_000).fill(file),
+    workerOptions(root, signal),
+  );
+  expect(sizes).toHaveLength(12_000);
+  expect(sizes.at(-1)).toEqual({ path: file, sizeBytes: 6n });
+});
+
 it("refuses a grown WAL family at the post-inventory capacity gate", async () => {
   const root = await fs.realpath(tempDirs.make("rehearsal-wal-growth-"));
   await materializeUpdateCandidateStateWorker(root);

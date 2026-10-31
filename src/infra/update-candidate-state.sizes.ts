@@ -77,6 +77,10 @@ export async function readUpdateStateDatabaseSizes(
     phase: "metadata inventory",
     paths: files,
   });
+  const input = JSON.stringify({ files });
+  // Each result entry repeats an input path plus a bounded size field, so the stdout cap
+  // scales with the inventory instead of failing large state directories at a fixed 1 MiB.
+  const stdoutLimit = Buffer.byteLength(input) + files.length * 64 + 1024 * 1024;
   let result;
   let dispose: (() => void) | undefined;
   let cleanupUncertain = false;
@@ -91,14 +95,14 @@ export async function readUpdateStateDatabaseSizes(
       () =>
         runUtf8CommandWithTimeout(script.argv, {
           cwd: os.tmpdir(),
-          input: JSON.stringify({ files }),
+          input,
           baseEnv: options.sourceEnv,
           env: { XDG_CACHE_HOME: options.stagingRoot },
           signal: options.signal,
           timeoutMs: resolveTimerTimeoutMs(Math.max(options.timeoutMs ?? 0, budget), budget),
           killGraceMs: 500,
           killProcessTree: true,
-          maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
+          maxOutputBytes: { stdout: stdoutLimit, stderr: 20_000 },
           outputCapture: { stdout: "head", stderr: "discard" },
           terminateOnOutputLimit: { stdout: true },
           onOutputChunk: inspection.onOutputChunk,
