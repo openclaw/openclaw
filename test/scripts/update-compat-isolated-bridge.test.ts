@@ -14,7 +14,7 @@ import {
 
 const { createTempDir } = createScriptTestHarness();
 const staticSpecifiers = (source: string) =>
-  [...source.matchAll(/(?:^|\n)\s*(?:import|export)\s[^;]*?from\s*"([^"]+)"/g)].map((m) => m[1]);
+  [...source.matchAll(/(?:^|\n)\s*(?:import|export)\s[^;]*?from\s*"([^"]+)"/g)].map((m) => m[1]!);
 
 // Vitest's module runner hides Node's URL-keyed ESM cache, so the updater runs natively.
 const OLD_UPDATER = `
@@ -95,7 +95,7 @@ it("keeps recovery bridges thin and refuses unisolated recovery imports", () => 
   expect(isolated.some((file) => file.startsWith("update-command-fresh-doctor-"))).toBe(true);
   for (const file of isolated) {
     const specifiers = staticSpecifiers(fs.readFileSync(path.join(dist, file), "utf8"));
-    expect(specifiers.map((specifier) => path.posix.basename(specifier!))).toEqual([
+    expect(specifiers.map((specifier) => path.posix.basename(specifier))).toEqual([
       ISOLATED_COMPATIBILITY_BRIDGE,
     ]);
   }

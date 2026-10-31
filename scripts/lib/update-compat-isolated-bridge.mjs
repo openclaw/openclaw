@@ -3,6 +3,7 @@
 // linking current code there resolves cached older modules and can fail at link time.
 // This file is copied into dist beside those bridges and may import only Node builtins:
 // it runs the current export in a worker, whose module map loads one consistent tree.
+/* oxlint-disable unicorn/require-post-message-target-origin -- Node worker ports have no browser target origin. */
 import {
   isMainThread,
   MessageChannel,
@@ -252,6 +253,7 @@ export async function runIsolatedUpdateCompatExport(moduleUrl, exportName, args)
   });
   const pending = new Map();
   let nextCall = 0;
+  /** @type {Error | undefined} */
   let failure;
   const callWorker = (ref, method, callArgs) =>
     new Promise((resolve, reject) => {
@@ -305,7 +307,7 @@ export async function runIsolatedUpdateCompatExport(moduleUrl, exportName, args)
     }
   });
   const settle = (error) => {
-    failure ??= error;
+    failure ??= error instanceof Error ? error : new Error(String(error));
     for (const entry of pending.values()) {
       entry.reject(failure);
     }
@@ -327,7 +329,7 @@ export function isolatedUpdateCompatExport(bridgeUrl, specifier, exportName) {
 }
 
 async function runWorker() {
-  const { moduleUrl, exportName, port, flag } = workerData;
+  const { moduleUrl, port, flag } = workerData;
   const codec = createCodec("w");
   const callParent = (ref, method, args) => {
     Atomics.store(flag, 0, 0);
