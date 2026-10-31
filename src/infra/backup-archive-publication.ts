@@ -17,7 +17,7 @@ import {
   requireDirectorySync,
   syncDirectoryIfSupported,
 } from "./directory-durability.js";
-import { isErrno } from "./errors.js";
+import { hasErrnoCode, isErrno } from "./errors.js";
 import { pathEntryExists } from "./path-existence.js";
 
 type BackupOutputFailurePhase = "parent" | "publication" | "write";
@@ -76,8 +76,7 @@ export async function assertOutputPathReady(outputPath: string): Promise<void> {
     await fs.access(outputPath);
     throw new Error(`Refusing to overwrite existing backup archive: ${outputPath}`);
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    if (code === "ENOENT" || code === "ENOTDIR") {
+    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
       return;
     }
     throw formatBackupOutputFailure(error, outputPath, "parent");

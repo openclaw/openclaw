@@ -20,6 +20,7 @@ import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { configureSqliteReadOnlyPragmas } from "../infra/sqlite-wal.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
@@ -275,7 +276,7 @@ async function verifyLocalCompanionAnchors(
     const imagePath = path.join(tempDir, anchor.archivePath);
     await assertSqliteSnapshotFileShape(imagePath, anchor.archivePath, artifacts[index]!.size!);
     using database = openNodeSqliteDatabase(imagePath, { readOnly: true });
-    database.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
+    configureSqliteReadOnlyPragmas(database);
     assertSqliteIntegrity(database, anchor.archivePath);
     const identity = readEngineAnchorIdentity(database, anchor.archivePath);
     if (
@@ -371,7 +372,7 @@ async function verifySqliteSnapshots(params: {
             "PostgreSQL anchor has no owned matched capsule. Re-run backup with this version on the source installation.",
           );
         }
-        database.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
+        configureSqliteReadOnlyPragmas(database);
         await loadSqliteVecExtension({ db: database });
         assertSqliteIntegrity(database, entry.normalized);
         if (entry.role === "agent") {

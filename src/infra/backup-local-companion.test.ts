@@ -32,9 +32,9 @@ it("captures companion anchors and fixed-local credentials without exporting Pos
     const shared = state.statePath("state/openclaw.sqlite");
     const agent = state.statePath("agents/retained/agent/openclaw-agent.sqlite");
     const client = state.statePath("client/credentials.sqlite");
-    for (const [file, id] of [
-      [shared, "shared-store"],
-      [agent, "agent-store"],
+    for (const { file, id } of [
+      { file: shared, id: "shared-store" },
+      { file: agent, id: "agent-store" },
     ]) {
       await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
       using database = new DatabaseSync(file);
