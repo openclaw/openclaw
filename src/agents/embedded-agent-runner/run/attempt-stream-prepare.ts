@@ -43,6 +43,7 @@ import {
   requiresCompletionRequiredAsyncTaskWait,
   type AsyncStartedToolMeta,
 } from "./attempt-async-tasks.js";
+import { createContextTotalTokensWriter } from "./attempt-context-total-tokens.js";
 import { readAttemptNestedToolActivity } from "./attempt-nested-tool-activity.js";
 import {
   claimEmbeddedPendingUserInputAnswer,
@@ -299,6 +300,7 @@ function prepareStream(
   // Terminal callbacks run after queue construction; keep the queue in this
   // phase so active-run clearing and subscription teardown share one owner.
   let deferredLifecycleOwner: EmbeddedAttemptDeferredLifecycleOwner | undefined;
+  const contextTotalTokensWriter = createContextTotalTokensWriter(attempt);
   const streamSubscription = subscribeEmbeddedAgentSession({
     // Keep the transcript session key; the sandbox key is only authority context.
     runId: attempt.runId,
@@ -349,6 +351,7 @@ function prepareStream(
     trustedLocalMediaToolNames: agentSession.trustedLocalMediaToolNames,
     session: activeSession,
     onModelUsage: input.onModelUsage,
+    onModelCallSettled: contextTotalTokensWriter.offer,
     messageChannel: input.runtimeChannel,
     hookRunner: getGlobalHookRunner() ?? undefined,
     reasoningMode: attempt.reasoningLevel ?? "off",
@@ -696,6 +699,7 @@ function prepareStream(
 
   return {
     subscription,
+    contextTotalTokensWriter,
     queueHandle,
     registration,
     deferredLifecycleOwner,

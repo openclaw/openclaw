@@ -150,21 +150,25 @@ export async function updateSessionStoreAfterAgentRun(params: {
     );
     Object.assign(next, projectSessionUsageSnapshot(usage, runEstimatedCostUsd));
   }
+  let contextSnapshot:
+    | Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">
+    | undefined;
   if (!preserveUserFacingRunState) {
     const currentContextSnapshot = params.compactionAccounting?.currentContextSnapshot;
     if (currentContextSnapshot || hasUsage) {
       const totalTokens = currentContextSnapshot
         ? currentContextSnapshot.tokens
         : deriveSessionTotalTokens({ lastCallUsage, contextTokens, promptTokens });
-      next.totalTokens = totalTokens;
-      next.totalTokensFresh = totalTokens !== undefined;
-      next.totalTokensVersion =
-        totalTokens !== undefined ? SESSION_TOTAL_TOKENS_VERSION : undefined;
+      contextSnapshot = {
+        totalTokens,
+        totalTokensFresh: totalTokens !== undefined,
+        totalTokensVersion: totalTokens !== undefined ? SESSION_TOTAL_TOKENS_VERSION : undefined,
+      };
     } else {
       // Empty-session zero is no longer current after a turn without usage.
-      next.totalTokensFresh = false;
-      next.totalTokensVersion = undefined;
+      contextSnapshot = { totalTokensFresh: false, totalTokensVersion: undefined };
     }
+    Object.assign(next, contextSnapshot);
   }
   const metadataPatch = preserveUserFacingRunState
     ? {
@@ -194,11 +198,16 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
       const patch: Partial<SessionEntry> = preserveUserFacingRunState
         ? metadataPatch
-        : projectSessionSnapshotChanges({
-            initial: entry,
-            next,
-            current: currentEntry,
-          });
+        : {
+            ...projectSessionSnapshotChanges({
+              initial: entry,
+              next,
+              current: currentEntry,
+            }),
+            // The run's own per-call totals (attempt-context-total-tokens) changed these
+            // fields under its snapshot; its final accounting supersedes them.
+            ...contextSnapshot,
+          };
       if (touchActivity && !preserveUserFacingRunState && currentEntry.snoozedUntil !== undefined) {
         // Clear the current snooze, including one set while this run was in flight.
         patch.snoozedUntil = undefined;
