@@ -147,7 +147,7 @@ export function buildMessagingSection(params: {
             ? "- Visible `message(send)` content: never repeat in final."
             : suppressSilentTokenGuidance
               ? "- Follow turn delivery: private final => visible via `message(send)`; otherwise normal reply once."
-              : `- After visible \`message(send)\`, final ONLY uppercase ${SILENT_REPLY_TOKEN}, with no punctuation or quotes.`,
+              : `- Do not repeat a confirmed final reply to the current source. Progress sends and sends elsewhere do not themselves end the turn. Continue unfinished work and deliver any still-pending answer through this turn's reply route. If no text reply remains, use ${SILENT_REPLY_TOKEN}.`,
           !suppressSilentTokenGuidance
             ? `Only the entire exact ${SILENT_REPLY_TOKEN} reply is silent. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`
             : "",

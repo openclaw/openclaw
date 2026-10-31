@@ -61,6 +61,19 @@ describe("system prompt messaging routing", () => {
     expect(prompt.includes("Only that whole reply is silent.")).toBe(testCase.silent);
   });
 
+  it("does not mistake progress or other-destination sends for a final source reply", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      sourceReplyDeliveryMode: "automatic",
+      toolNames: ["message"],
+      runtimeInfo: { channel: "discord" },
+    });
+    expect(prompt).not.toContain("After visible `message(send)`, final ONLY");
+    expect(prompt).toContain("confirmed final reply to the current source");
+    expect(prompt).toContain("Progress sends and sends elsewhere do not themselves end the turn");
+    expect(prompt).toContain("deliver any still-pending answer through this turn's reply route");
+  });
+
   it("omits silence guidance for a private completion on an external channel", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

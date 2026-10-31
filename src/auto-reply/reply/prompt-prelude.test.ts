@@ -7,6 +7,7 @@ import * as gitCoauthorPrompt from "../../agents/git-coauthor-prompt.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import * as userPreferences from "../../state/user-preferences.js";
 import { bindRequesterProfile } from "../requester-profile.js";
+import { buildHarnessVisibleReplyGuidance } from "../source-reply-delivery-mode.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { prepareReplyRunContext, PreparedReplyRunContext } from "./get-reply-run-context.js";
 import { prepareReadyReply } from "./get-reply-run-context.test-support.js";
@@ -107,6 +108,42 @@ it.each([
       transcriptCommandBody: softResetTail || "[OpenClaw session reset]",
       currentInboundContext: undefined,
     });
+  },
+);
+
+it.each(["automatic", "message_tool_only"] as const)(
+  "keeps group defaults compatible with %s turn delivery",
+  async (sourceReplyDeliveryMode) => {
+    const sessionCtx = context("Please report progress, then finish the task.", {
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "channel",
+      InboundEventKind: "user_request",
+    });
+    const prepared = await prepareReadyReply({
+      ctx: sessionCtx,
+      sessionCtx,
+      cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+      opts: { sourceReplyDeliveryMode, sessionPromptSourceReplyDeliveryMode: "automatic" },
+    });
+    const envelope = prepared.buildPromptBodies({ prefixedBody: prepared.prefixedBodyBase });
+    const prompt = [
+      ...prepared.extraSystemPromptParts,
+      currentPrompt(envelope),
+      buildHarnessVisibleReplyGuidance({
+        sourceReplyDeliveryMode: prepared.sourceReplyDeliveryMode,
+        messageToolAvailable: true,
+        currentConversation: { currentChannelProvider: "discord", currentChannelId: "123" },
+        requireExplicitMessageTarget: false,
+      }),
+    ].join("\n\n");
+    expect(prompt).toContain("message(action=send, final=false)");
+    expect(prompt).toContain("Current-turn delivery instructions override these defaults.");
+    expect(prompt).toContain("attachments");
+    expect(prompt).not.toContain("For ordinary text, do not use the message tool");
+    expect(prompt).not.toContain("Use message(action=send) only when");
+    expect(prompt).not.toContain("status updates between tool calls are still shown");
+    expect(prompt).toContain("reply only when directly addressed or you can add clear value");
   },
 );
 

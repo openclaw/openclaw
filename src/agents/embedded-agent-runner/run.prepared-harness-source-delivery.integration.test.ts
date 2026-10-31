@@ -557,16 +557,16 @@ describe("prepared harness source delivery", () => {
     } else if (testCase.preparedVisibleReplies === "automatic") {
       expect(modelVisiblePrompt).toContain("Current-session final text normally routes to source");
       expect(modelVisiblePrompt).toContain(
-        "Your replies are automatically sent to this conversation",
+        "By default, final text is automatically sent to this conversation",
       );
-      expect(modelVisiblePrompt).not.toContain("Normal final replies are private");
+      expect(modelVisiblePrompt).not.toContain("By default, final text stays private");
     } else {
       expect(modelVisiblePrompt).toContain(
         "Current source visible reply MUST use `message(action=send)`",
       );
-      expect(modelVisiblePrompt).toContain("Normal final replies are private");
+      expect(modelVisiblePrompt).toContain("By default, final text stays private");
       expect(modelVisiblePrompt).not.toContain(
-        "Your replies are automatically sent to this conversation",
+        "By default, final text is automatically sent to this conversation",
       );
     }
   });
