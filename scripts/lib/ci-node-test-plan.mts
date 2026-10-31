@@ -5327,8 +5327,8 @@ function createCompactNodeTestShardBundles(
             ),
           0,
         );
-      const admits = (groups: NodeTestShardGroup[]) =>
-        admitsCompactBin(groups, COMPACT_HYBRID_RUNTIME_JOB_SECONDS, cost);
+      const admits = (groups: NodeTestShardGroup[], seconds = cost) =>
+        admitsCompactBin(groups, COMPACT_HYBRID_RUNTIME_JOB_SECONDS, seconds);
       const prepareRecipient = (job: CompactNodeTestShard) => {
         if (job.planConcurrency !== 2) {
           return job.groups;
