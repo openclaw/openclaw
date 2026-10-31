@@ -486,6 +486,11 @@ function renderPageContent(host: PageHost) {
   return (
     <Show when={initialConnectionReady()}>
       {(_ready) => {
+        const assistantNameControl = children(() => (
+          <Show when={!catalog.isTarget(page().data) && page().place.agents().length > 1}>
+            <DraftAgentSelect page={page} />
+          </Show>
+        ));
         onSettled(() => {
           renderedPages.add(host);
         });
@@ -527,11 +532,7 @@ function renderPageContent(host: PageHost) {
                       <DraftWelcome
                         sessions={page().context?.sessions}
                         options={page().welcomeOptions()}
-                        assistantNameControl={
-                          !catalog.isTarget(page().data) && page().place.agents().length > 1 ? (
-                            <DraftAgentSelect page={page} />
-                          ) : undefined
-                        }
+                        assistantNameControl={assistantNameControl()}
                         composer={<Draft />}
                       />
                     }

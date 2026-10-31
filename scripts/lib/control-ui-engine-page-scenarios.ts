@@ -1680,6 +1680,44 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
         return evidence;
       },
     };
+    if (id === "agents") {
+      const openFiles = async (page: Page) => {
+        const started = await page.evaluate(() => performance.now());
+        await page.locator("#agents-tab-files").click();
+        await page.locator("#agent-panel").getByText("No files found.", { exact: true }).waitFor();
+        assert.equal(await page.locator("#agents-tab-files").getAttribute("aria-selected"), "true");
+        await frames(page);
+        return {
+          actionReadyMs: await page.evaluate((start) => performance.now() - start, started),
+          filesOpened: true,
+        };
+      };
+      const filesOpen: EngineScenario = {
+        ...common,
+        id: "page-agents-files-open",
+        expected: "First Files-tab opening after Overview presents the loaded empty workspace.",
+        prepare: enter,
+        run: openFiles,
+      };
+      const visitAndFilesOpen: EngineScenario = {
+        ...common,
+        id: "page-agents-visit-and-files-open",
+        expected:
+          "First Agents visit and immediate Files-tab opening both complete in one document.",
+        prepare: boot,
+        run: async (page) => {
+          const started = await page.evaluate(() => performance.now());
+          const timing = await measureVisit(page, id, definition);
+          const files = await openFiles(page);
+          return {
+            ...files,
+            visitReadyMs: timing.readyMs,
+            visitAndFilesOpenMs: await page.evaluate((start) => performance.now() - start, started),
+          };
+        },
+      };
+      return [visit, action, leave, filesOpen, visitAndFilesOpen];
+    }
     if (id === "search") {
       const firstAdvancedOpen: EngineScenario = {
         ...common,
