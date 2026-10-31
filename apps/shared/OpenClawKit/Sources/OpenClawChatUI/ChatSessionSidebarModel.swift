@@ -147,6 +147,24 @@ public enum ChatSessionSidebarModel {
         }
     }
 
+    /// A depth-preserving projection for flat native row containers.
+    public struct Row: Identifiable, Equatable, Sendable {
+        public let node: Node
+        public let depth: Int
+        public var id: String {
+            self.node.id
+        }
+    }
+
+    /// Rows with a parent's sub-sessions left out unless `showsChildren` says they are open.
+    public static func rows(_ nodes: [Node], depth: Int = 0, showsChildren: (Node) -> Bool) -> [Row] {
+        nodes.flatMap { node in
+            [Row(node: node, depth: depth)] + (showsChildren(node)
+                ? self.rows(node.children, depth: depth + 1, showsChildren: showsChildren)
+                : [])
+        }
+    }
+
     public struct Section: Identifiable, Equatable, Sendable {
         public let id: String
         public let title: String?
@@ -266,28 +284,30 @@ public enum ChatSessionSidebarModel {
             return sections
             #endif
         }
-        // Pin state owns first placement. Group sections then preserve the
-        // same tree builder, so grouped parent/child rosters still nest.
-        let pinned = self.tree(
-            from: OpenClawChatSessionListOrganizer.organize(visible.filter { $0.pinned == true }),
-            identity: identity)
-        let unpinned = visible.filter { $0.pinned != true }
+        // Resolve Gateway ancestry before projecting roots into display sections.
+        let roots = self.tree(from: visible, identity: identity)
+        let pinnedOrder = OpenClawChatSessionListOrganizer.organize(visible.filter { $0.pinned == true })
+            .map(identity)
+        let pinned = roots.filter { $0.session.pinned == true }.sorted {
+            (pinnedOrder.firstIndex(of: identity($0.session)) ?? Int.max) <
+                (pinnedOrder.firstIndex(of: identity($1.session)) ?? Int.max)
+        }
+        let unpinned = roots.filter { $0.session.pinned != true }
         let orderedGroups = groups.sorted { lhs, rhs in
             lhs.position == rhs.position ? lhs.name < rhs.name : lhs.position < rhs.position
         }
         let groupNames = Set(orderedGroups.map(\.name))
-        let recent = self.tree(from: unpinned.filter { session in
-            guard let category = session.category else { return true }
+        let recent = unpinned.filter { node in
+            guard let category = node.session.category else { return true }
             return !groupNames.contains(category)
-        }, identity: identity)
+        }
 
         var result: [Section] = []
         if !pinned.isEmpty {
             result.append(Section(id: "pinned", title: "Pinned", nodes: pinned))
         }
         for group in orderedGroups {
-            let nodes = self.tree(
-                from: unpinned.filter { $0.category == group.name }, identity: identity)
+            let nodes = unpinned.filter { $0.session.category == group.name }
             if !nodes.isEmpty {
                 result.append(Section(id: "group:\(group.name)", title: group.name, nodes: nodes))
             }

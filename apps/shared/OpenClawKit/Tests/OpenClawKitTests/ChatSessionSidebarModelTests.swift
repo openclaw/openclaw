@@ -5,6 +5,24 @@ import Testing
 
 @MainActor
 struct ChatSessionSidebarModelTests {
+    @Test func `folding preserves gateway ancestry across explicit group placement`() throws {
+        let sessions = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
+        {"sessions":[
+          {"key":"parent","category":"A","childSessions":["child"]},
+          {"key":"child","category":"B","parentSessionKey":"parent","childSessions":["grandchild"]},
+          {"key":"grandchild","parentSessionKey":"child"}
+        ]}
+        """#.utf8)).sessions
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: sessions, currentSessionKey: "parent", mainSessionKey: "main",
+            groups: [.init(name: "A", position: 0), .init(name: "B", position: 1)], query: "")
+        let roots = sections.flatMap(\.nodes)
+        #expect(roots.map(\.id) == ["parent"])
+        #expect(ChatSessionSidebarModel.rows(roots, showsChildren: { _ in true }).map(\.depth) == [0, 1, 2])
+        #expect(ChatSessionSidebarModel.rows(roots, showsChildren: { _ in false }).map(\.id) == ["parent"])
+        #expect(roots.first?.children.first?.session.category == "B")
+    }
+
     private func mixedRoster() throws -> [OpenClawChatSessionEntry] {
         try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
         {"sessions":[
@@ -413,18 +431,19 @@ struct ChatSessionSidebarModelTests {
         #expect(Set(sections[1].nodes.map(\.session.key)) == Set(["case", "spaces"]))
     }
 
-    @Test func `pinned descendants move to pinned section independently`() {
+    @Test func `pinned descendants retain gateway parent placement`() {
         let sections = ChatSessionSidebarModel.sections(
             sessions: [
-                self.entry(key: "parent", updatedAt: 200),
+                self.entry(key: "parent", updatedAt: 200, childSessions: ["child"]),
                 self.entry(key: "child", updatedAt: 100, pinned: true, parentSessionKey: "parent"),
             ],
             currentSessionKey: "parent",
             query: "")
 
-        #expect(sections.map(\.id) == ["pinned", "recent"])
-        #expect(sections[0].nodes.map(\.id) == ["child"])
-        #expect(sections[1].nodes.map(\.id) == ["parent"])
+        #expect(sections.map(\.id) == ["recent"])
+        #expect(sections[0].nodes.map(\.id) == ["parent"])
+        #expect(sections[0].nodes[0].children.map(\.id) == ["child"])
+        #expect(sections[0].nodes[0].children[0].session.pinned == true)
     }
 
     @Test func `hides onboarding and archived sessions, keeps the active one`() {
