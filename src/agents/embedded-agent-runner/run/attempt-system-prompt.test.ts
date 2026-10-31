@@ -269,16 +269,13 @@ describe("buildAttemptSystemPrompt", () => {
             attemptOverrides: { config, sessionKey: store.sessionKey, sessionId: entry.sessionId },
           });
         const published = await prepare();
-        expect(published.prepared.runtimeInfo.sessionUrl).toBe(
-          "https://gateway.example/chat/main/dashboard/public-link",
-        );
-        expect(published.prepared.systemPromptText).toContain(
-          published.prepared.runtimeInfo.sessionUrl,
-        );
+        const sessionUrl = "https://gateway.example/chat/main/dashboard/public-link";
+        expect(published.prepared.runtimeInfo).toHaveProperty("sessionUrl", sessionUrl);
+        expect(published.prepared.systemPromptText).toContain(sessionUrl);
         const initialWorkerReads = workerReads.mock.calls.length;
         store.replace({ ...entry, publicShare: undefined });
         const revoked = await prepare();
-        expect(revoked.prepared.runtimeInfo.sessionUrl).toBeUndefined();
+        expect(revoked.prepared.runtimeInfo).toHaveProperty("sessionUrl", undefined);
         expect(revoked.prepared.systemPromptText).not.toContain(
           "https://gateway.example/chat/main/dashboard/public-link",
         );
