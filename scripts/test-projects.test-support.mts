@@ -106,10 +106,7 @@ import {
   splitExtensionTestJobTargets,
   splitExtensionTestProcessTargets,
 } from "./lib/extension-test-plan.mts";
-import {
-  createGatewayServerTestTargetChunks,
-  splitTestTargetChunks as splitTargetChunks,
-} from "./lib/gateway-server-test-plan.mts";
+import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-plan.mts";
 import { GIT_LS_FILES_MAX_BUFFER_BYTES } from "./lib/list-test-files.mts";
 import {
   readRuntimeWorkerDescriptorReads,
@@ -118,6 +115,7 @@ import {
   readTestSelectorSourceFacts,
   runtimeWorkerSpecifier,
 } from "./lib/test-selector-source-facts.mts";
+import { splitTestTargetChunks as splitTargetChunks } from "./lib/test-target-chunks.mts";
 // CI imports planning before dependency installation; execution owners stay outside this closure.
 import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestCacheRoot, resolveVitestCacheSlotPath } from "./lib/vitest-cache-slots.mts";
