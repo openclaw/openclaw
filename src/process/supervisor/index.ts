@@ -7,7 +7,7 @@ const holder = resolveGlobalSingleton(
   (): { current: ReturnType<typeof createProcessSupervisor> | null } => ({ current: null }),
   async (value) => {
     const supervisor = value.current;
-    await supervisor?.shutdown();
+    await shutdownProcessSupervisor();
     if (value.current === supervisor) {
       value.current = null;
     }
@@ -17,6 +17,11 @@ const holder = resolveGlobalSingleton(
 /** Return the process-wide supervisor used by runtime code that does not inject one. */
 export function getProcessSupervisor(): ProcessSupervisor {
   return (holder.current ??= createProcessSupervisor());
+}
+
+/** Join the existing owner without creating a supervisor or retiring its admission fence. */
+export async function shutdownProcessSupervisor(): Promise<void> {
+  await holder.current?.shutdown();
 }
 
 export type { ManagedRun, ProcessSupervisor } from "./types.js";

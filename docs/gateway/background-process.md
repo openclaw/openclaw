@@ -154,6 +154,10 @@ before loading its main runtime.
 If initial broker startup fails, the Gateway logs the failure reason and runtime
 entry path, then uses in-process spawning for the rest of that Gateway process.
 A new Gateway process tries the broker again.
+During shutdown, the broker stays available until the existing process supervisor
+has settled accepted commands, final output, and process-tree cleanup, even when
+earlier required Gateway cleanup fails. A failed process cleanup retains the broker
+instead of discarding command outcomes.
 When the broker is ready, exec commands, shell-snapshot capture and validation,
 and helpers using the shared command runner spawn from it, so Linux does not copy
 the Gateway's page tables for each command. The existing process supervisors and

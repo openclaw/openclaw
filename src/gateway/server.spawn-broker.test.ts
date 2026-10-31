@@ -1,7 +1,7 @@
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { withinTest, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
@@ -9,11 +9,13 @@ import { runSqliteReadOnlyWorker } from "../infra/sqlite-readonly-worker.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import type { BrokerChild } from "../process/spawn-broker/child.js";
 import { getSpawnBroker } from "../process/spawn-broker/context.js";
+import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   withAgentDatabaseStartupAdmission,
   type getAgentDatabaseStartupAdmission,
 } from "../state/agent-database-startup.js";
+import { runGatewayCloseSteps } from "./server-shutdown.js";
 import { startGatewayServer } from "./server.js";
 
 type AgentDatabaseStartupAdmission = NonNullable<
@@ -279,6 +281,73 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
           }
         }
       });
+    },
+  );
+  nodeIt(
+    "settles active command output after a required core close failure",
+    async ({ signal }) => {
+      const ready = createDeferredCore();
+      let run: ManagedRun | undefined;
+      let release: (() => Promise<void>) | undefined;
+      observed.startupWork = async () => {
+        const supervisor = getProcessSupervisor();
+        release = supervisor.acquireScopeCleanup("shutdown-command", {
+          processTree: "required-all",
+        });
+        run = await supervisor.spawn({
+          mode: "child",
+          scopeKey: "shutdown-command",
+          argv: [
+            process.execPath,
+            "-e",
+            'process.on("SIGTERM", () => process.stdout.write("settled\\n", () => process.exit(0)));' +
+              'setInterval(() => {}, 1000); process.stdout.write("ready\\n");',
+          ],
+          onStdout: (chunk) => {
+            if (chunk.includes("ready")) {
+              ready.resolve();
+            }
+          },
+        });
+        await withinTest(ready.promise, signal);
+      };
+      const failure = new Error("required connection cleanup failed");
+      const coreClose = vi.fn();
+      observed.closeWork = () =>
+        runGatewayCloseSteps({
+          owner: {
+            connectionWork: {
+              drain: async () => {
+                throw failure;
+              },
+            },
+            stopConnectionDependentSidecars: () => {},
+            stopRegisteredGatewayLifetimeSidecars: () => {},
+            stopRegisteredPostReadySidecars: () => {},
+            runClosePrelude: () => {},
+            sealAndJoinRegisteredSidecarStops: () => {},
+          },
+          close: coreClose,
+          onError: () => {},
+        });
+      try {
+        const server = await startGatewayServer();
+        const outcome = Promise.allSettled([run!.wait()]);
+        await expect(server.close()).rejects.toMatchObject({ errors: [{ cause: failure }] });
+        expect(coreClose).not.toHaveBeenCalled();
+        // No post-close polling or extra supervisor drain may repair a lost outcome.
+        expect(run!.activity.resultSettled).toBe(true);
+        expect(await withinTest(outcome, signal)).toMatchObject([
+          {
+            status: "fulfilled",
+            value: { reason: "manual-cancel", exitCode: 0, stdout: "ready\nsettled\n" },
+          },
+        ]);
+        await expect(run!.waitForExtinction!()).resolves.toBeUndefined();
+        expect(() => process.kill(observed.brokerPid!, 0)).toThrow();
+      } finally {
+        await release?.();
+      }
     },
   );
 });

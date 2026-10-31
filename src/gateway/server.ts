@@ -143,6 +143,10 @@ async function startGatewayServerWithRuntime(
     return await start();
   }
   const closeBroker = async () => {
+    // Required core cleanup can reject before singleton retirement. Keep command
+    // outcomes and final output reachable until the existing supervisor joins.
+    const { shutdownProcessSupervisor } = await import("../process/supervisor/index.js");
+    await shutdownProcessSupervisor();
     // A failed required core join can stop before the admission sidecar runs.
     await stopDatabaseAdmission?.();
     try {
