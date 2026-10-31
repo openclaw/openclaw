@@ -1,22 +1,6 @@
-import { pluginCohortPublicationContext } from "../infra/update-plugin-cohort-context.js";
-
 export type PluginInstallTransaction = {
   commit(): Promise<void>;
   rollback(): Promise<void>;
-};
-
-/** Private updater facts recorded before a fresh managed npm generation is published. */
-export type PluginCohortInstallObserver = {
-  forceFreshGeneration: true;
-  deferRecordPublication?: true;
-  beforeManagedNpmPublish(facts: {
-    pluginId: string;
-    packageName: string;
-    targetNpmRoot: string;
-    targetPackageDir: string;
-    stagedNpmRoot: string;
-    stagedPackageDir: string;
-  }): Promise<void>;
 };
 
 const PLUGIN_INSTALL_TRANSACTION = Symbol.for("openclaw.pluginInstallTransaction");
@@ -29,7 +13,6 @@ type PluginInstallTransactionRequest = {
   transactionSink?: PluginInstallTransaction[];
   assertOwned?: () => void;
   prepareSettlement?: () => void | Promise<void>;
-  cohort?: PluginCohortInstallObserver;
 };
 
 export function attachPluginInstallTransaction<T extends object>(
@@ -63,7 +46,6 @@ export function requestDeferredPluginInstall<T extends object>(
   transactionSink?: PluginInstallTransaction[],
   assertOwned?: () => void,
   prepareSettlement?: () => void | Promise<void>,
-  cohort?: PluginCohortInstallObserver,
 ): T {
   Object.defineProperty(params, PLUGIN_INSTALL_TRANSACTION_REQUEST, {
     configurable: false,
@@ -73,7 +55,6 @@ export function requestDeferredPluginInstall<T extends object>(
       ...(transactionSink ? { transactionSink } : {}),
       ...(assertOwned ? { assertOwned } : {}),
       ...(prepareSettlement ? { prepareSettlement } : {}),
-      ...(cohort ? { cohort } : {}),
     } satisfies PluginInstallTransactionRequest,
   });
   return params;
@@ -90,7 +71,6 @@ export function copyPluginInstallTransactionRequest<T extends object>(
         request.transactionSink,
         request.assertOwned,
         request.prepareSettlement,
-        request.cohort,
       )
     : target;
 }
@@ -117,8 +97,7 @@ export async function withPluginInstallTransactions<
   ) => Promise<R>,
 ): Promise<R> {
   const request = resolvePluginInstallTransactionRequest(params);
-  const automaticContext = !request ? pluginCohortPublicationContext.getStore() : undefined;
-  const initiatingAssert = request?.assertOwned ?? automaticContext?.assertCurrent;
+  const initiatingAssert = request?.assertOwned;
   const initiatingPreparation = request?.prepareSettlement;
   const callerBeforePersistentEffect = params.beforePersistentEffect;
   const transactions: PluginInstallTransaction[] = [];
@@ -163,26 +142,11 @@ export async function withPluginInstallTransactions<
       return refuse(error);
     }
   };
-  let cohort = request?.cohort;
-  if (automaticContext) {
-    const { createPluginCohortPublication } = await import("./update-cohort-recovery.js");
-    assertCurrent();
-    const publication = createPluginCohortPublication({
-      runId: automaticContext.runId,
-      env: automaticContext.env,
-      fence: { assertCurrent },
-    });
-    if (!publication) {
-      throw new Error("Plugin cohort recovery disappeared before installing packages.");
-    }
-    cohort = publication.observer;
-  }
   const owned = requestDeferredPluginInstall(
     { ...params, beforePersistentEffect },
     request ? request.transactionSink : transactions,
     assertCurrent,
     prepareEffect,
-    cohort,
   );
   let result: R;
   try {

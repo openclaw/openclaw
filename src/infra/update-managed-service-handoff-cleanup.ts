@@ -130,8 +130,7 @@ export async function readManagedHandoffRepairFacts(
   const { listUpdateRunsAsync } = await import("./update-run-reader.js");
   const { recordedUpdateRunDrivers } = await import("./update-run-activity.js");
   const { sameUpdateRunDriver } = await import("./update-run-driver.js");
-  const { assertUpdateRecoveryAdmission, inspectPluginCohortRecoveryAdmission } =
-    await import("./update-run-recovery-admission.js");
+  const { assertUpdateRecoveryAdmission } = await import("./update-run-recovery-admission.js");
   const { resolveStateDir } = await import("../config/paths.js");
   const { resolveUpdateCaptureRoot } = await import("./update-capture-paths.js");
   const runIds = new Set<string>(boundRunId ? [boundRunId] : []);
@@ -237,15 +236,7 @@ export async function readManagedHandoffRepairFacts(
   if (capture && !capture.restored && !capture.forwardResolution && !capture.retirement) {
     throw new Error(`Update ${runId} retains restoration; run openclaw doctor --fix.`);
   }
-  try {
-    await assertUpdateRecoveryAdmission({ env });
-  } catch (error) {
-    // The unique run was proven above from this native lineage. Gathering facts
-    // remains read-only; reclaiming the claim still proves every driver exited.
-    if (!(await inspectPluginCohortRecoveryAdmission({ env }, runId))) {
-      throw error;
-    }
-  }
+  await assertUpdateRecoveryAdmission({ env });
   if (!capture) {
     const { resolvePublicUpdateStepId } = await import("./update-step-identity.js");
     const { isVerifiedUpdateRollback } = await import("../shared/update-outcome.js");

@@ -137,9 +137,7 @@ export function registerMaintenanceContentionTests(
         );
         if (expires) {
           const failure = await work.catch((error: unknown) => error);
-          expect(failure, failure instanceof Error ? failure.stack : undefined).toMatchObject({
-            result: { recovery: { serviceRestartSafe: true } },
-          });
+          expect(failure).toMatchObject({ result: { recovery: { serviceRestartSafe: true } } });
           const { result } = await resolveMutableUpdateFailure({
             cause: refusal,
             mode: "npm",

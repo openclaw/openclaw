@@ -19,11 +19,7 @@ import { createUpdateRunRecordFixture } from "./update-run-record.test-support.j
 import { assertUpdateRecoveryAdmission } from "./update-run-recovery-admission.js";
 
 vi.mock("./update-run-reader.js", () => ({ listUpdateRunsAsync: vi.fn() }));
-vi.mock("./update-run-recovery-admission.js", async (original) => ({
-  ...(await original<typeof import("./update-run-recovery-admission.js")>()),
-  assertUpdateRecoveryAdmission: vi.fn(),
-  inspectPluginCohortRecoveryAdmission: vi.fn(async () => undefined),
-}));
+vi.mock("./update-run-recovery-admission.js", () => ({ assertUpdateRecoveryAdmission: vi.fn() }));
 
 const dirs = useStateDatabaseTempDirs();
 let root: string;

@@ -269,7 +269,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       assertCurrent();
       if (params.databaseBackup) {
         await observeUpdateParentDatabaseWrites(params.databaseBackup, {
-          env: baseEnv,
+          env: run?.env ?? baseEnv,
           root: params.root,
           assertCurrent,
         });

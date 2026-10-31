@@ -177,8 +177,6 @@ export async function maybeRepairPluginOpenClawHostLinks(
     installRecords: installRecords ?? {},
     extensionsDir: resolveRegisteredPluginExtensionsRoot(params),
     env: params.env,
-    stateDir: params.stateDir,
-    filePath: params.filePath,
     logger,
     onPackageReadError: (error, packageDir, kind) => {
       logger.warn(

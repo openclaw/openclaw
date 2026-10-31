@@ -30,7 +30,6 @@ import { createCommandResult as commandResult } from "../test-utils/npm-spec-ins
 import { getFreePort } from "../test-utils/ports.js";
 import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { setupConfigMutationWithRetryMock } from "./update-cli-assertions.test-support.js";
-import { createGitUpdateAfterMutationFixture } from "./update-cli-invocation.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
 import * as update from "./update-cli-modules.test-support.js";
 import {
@@ -353,9 +352,7 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     mocks.launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob.mockResolvedValue(false);
     mocks.confirm.mockResolvedValue(false);
     mocks.select.mockResolvedValue("stable");
-    vi.mocked(update.updateGitCheckout).mockImplementation(
-      createGitUpdateAfterMutationFixture().run,
-    );
+    vi.mocked(update.updateGitCheckout).mockResolvedValue(update.makeOkUpdateResult());
     fixture.setTty(false);
     fixture.setStdoutTty(false);
     fixture.initializeExistingUpdateProfile();

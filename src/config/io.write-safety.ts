@@ -15,11 +15,18 @@ import { stampConfigWriteMetadata } from "./io.meta.js";
 import { hashConfigRaw, parseConfigJson5 } from "./io.read-helpers.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type { ConfigWriteOptions } from "./io.types.js";
-import type { ConfigFileWritePathSnapshot } from "./io.write-path.types.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { resolveStateDir } from "./paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { createConfigWriteAuthorityGuard } from "./write-authority.js";
+
+export type ConfigFileWritePathSnapshot = {
+  targetPath: string;
+  entries: Array<
+    | { path: string; kind: "missing-directory" }
+    | { path: string; kind: "existing"; dev: string; ino: string; link?: string }
+  >;
+};
 
 /** The captured path facts survive an update's delegated finalizer; they grant no write authority. */
 export function assertConfigFileWritePathSnapshot(

@@ -39,26 +39,6 @@ export type UpdateDoctorInput = Omit<UpdatePostCoreInput, "opts"> & {
   serviceInspectionDeadlineAtMs?: number;
 };
 
-/** Rollback bookkeeping only; the delegated executor remains the authority. */
-export type UpdatePluginCohortSettlementInput = {
-  executor: UpdateCommandChildGrant;
-  runId: string;
-  transactionId: string;
-};
-
-/** Correlation only; the post-ready worker acquires its own native executor. */
-export type UpdatePluginCohortCommitInput = {
-  runId: string;
-  transactionId: string;
-  installKey: string;
-};
-
-export type UpdatePluginCohortSettlementResult = {
-  runId: string;
-  transactionId: string;
-  configPaths: string[];
-};
-
 export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {
   params: Omit<
     FinishUpdateParams,

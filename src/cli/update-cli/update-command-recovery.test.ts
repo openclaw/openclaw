@@ -19,11 +19,7 @@ import {
 } from "../../infra/update-retained-recovery.test-support.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { legacyRecord } from "../../infra/update-run-recovery-legacy.test-support.js";
-import {
-  inspectUpdateRecoveries,
-  loadUpdateRecovery,
-  UpdateRecoveryRequiredError,
-} from "../../infra/update-run-recovery.js";
+import { inspectUpdateRecoveries, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -36,7 +32,6 @@ import { resultFixture } from "./update-command-fixtures.test-support.js";
 import { finishParams } from "./update-command-maintenance-fixtures.test-support.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
 import { assertUpdateCommandPackageFinalization } from "./update-command-recovery.js";
-import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import * as service from "./update-command-service.js";
@@ -145,20 +140,6 @@ function fixture(rollback = false) {
   storeRetainedUpdateRecovery(record, options);
   return { options, run: { runId: run.runId, env }, live, record };
 }
-
-it("preserves the initiating failure when retained recovery prevents terminal settlement", async () => {
-  const f = fixture();
-  const result = resultFixture(f.live, { status: "error", reason: "restart-unhealthy" });
-  const refusal = new UpdateRecoveryRequiredError(f.record);
-  const pending = new UpdateCommandPendingRecoveryFailure(result, refusal.message, {
-    cause: refusal,
-  });
-  const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
-  await expect(
-    resolveSettledUpdateCommandResult({ opts: { run: f.run }, root: f.live }, result, pending),
-  ).rejects.toBe(pending);
-  expect(prepare).not.toHaveBeenCalled();
-});
 
 it("refuses to serialize live authority into a legacy migrated worker", async () => {
   const f = await checkpointRollbackFixture();

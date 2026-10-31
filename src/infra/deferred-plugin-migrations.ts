@@ -6,7 +6,6 @@ import { z } from "zod";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
-import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import {
   closeTrackedStateDatabase,
   openTrackedStateDatabase,
@@ -23,18 +22,9 @@ import { runManagedStateTransaction } from "../state/openclaw-state-db-transacti
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import {
-  capturePluginCohortMigrationRowsBeforeWrite,
-  captureCohortMigrationContext,
-  cohortMigrationBinding,
-  recordPluginCohortMigrationRowsAfterWrite,
-  restorePluginCohortMigrationRowsInDatabase,
-} from "./deferred-plugin-migrations.cohort.js";
-import {
-  DEFERRED_PLUGIN_MIGRATION_RUN_PREFIX as RUN_PREFIX,
   deferredPluginMigrationSchema,
   type DeferredPluginMigration,
 } from "./deferred-plugin-migrations.contract.js";
@@ -52,11 +42,6 @@ import { runWithSqliteCleanup, throwSqliteLifecycleErrors } from "./sqlite-lifec
 import { invalidateSuccessfulMigrationCheckpointsInTransaction } from "./startup-migration-checkpoint.js";
 import { withStateDatabaseSchemaMaintenance } from "./state-database-maintenance.js";
 import { recordLegacyMigrationRun } from "./state-migrations.receipts.js";
-import { foldPluginCohortMigrationPublications } from "./update-plugin-cohort-records.js";
-import type {
-  PluginCohortMigrationPublication,
-  PluginCohortRecoveryWriteBinding,
-} from "./update-plugin-cohort-schema.js";
 
 export type { DeferredPluginMigration } from "./deferred-plugin-migrations.contract.js";
 
@@ -69,6 +54,7 @@ function invalidatePinnedMigrationReads(): void {
   }
 }
 
+const RUN_PREFIX = "deferred-plugin-migration:";
 const migrationReceipt: SqliteDatabaseAdmissionKey<object> = {
   name: "plugins.deferred-migrations",
   lifetime: "process",
@@ -109,20 +95,15 @@ export function withDeferredPluginConfigRollback(
     return;
   }
   let failure: { error: unknown } | undefined;
-  const pluginCohort = cohortMigrationBinding(captureCohortMigrationContext(params.env));
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       params.assertCurrent();
-      recordDeferredPluginMigrationsInTransaction(
-        db,
-        {
-          pending: completion.expectedPending,
-          expectedPending: completion.expectedPending.filter(
-            (entry) => !completion.resolvedPluginIds.includes(entry.pluginId),
-          ),
-        },
-        pluginCohort,
-      );
+      recordDeferredPluginMigrationsInTransaction(db, {
+        pending: completion.expectedPending,
+        expectedPending: completion.expectedPending.filter(
+          (entry) => !completion.resolvedPluginIds.includes(entry.pluginId),
+        ),
+      });
       try {
         publish();
       } catch (error) {
@@ -417,7 +398,6 @@ export function withDeferredPluginMigrationsCurrent<T>(
     return publish();
   }
   const databasePath = resolveOpenClawStateSqlitePath(params.env);
-  const pluginCohort = cohortMigrationBinding(captureCohortMigrationContext(params.env));
   const existing = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(databasePath);
   if (expectedPending.length === 0 && !existing) {
     if (!existsSync(databasePath)) {
@@ -486,17 +466,13 @@ export function withDeferredPluginMigrationsCurrent<T>(
       const published = publish();
       if (completion) {
         completion.assertCurrent();
-        recordDeferredPluginMigrationsInTransaction(
-          db,
-          {
-            pending: pending.filter(
-              (entry) => !completion.resolvedPluginIds.includes(entry.pluginId),
-            ),
-            resolvedPluginIds: completion.resolvedPluginIds,
-            expectedPending,
-          },
-          pluginCohort,
-        );
+        recordDeferredPluginMigrationsInTransaction(db, {
+          pending: pending.filter(
+            (entry) => !completion.resolvedPluginIds.includes(entry.pluginId),
+          ),
+          resolvedPluginIds: completion.resolvedPluginIds,
+          expectedPending,
+        });
       }
       return published;
     },
@@ -540,9 +516,7 @@ export type DeferredPluginMigrationRecordInput = {
 export function recordDeferredPluginMigrationsInTransaction(
   db: EngineConnection,
   params: Omit<DeferredPluginMigrationRecordInput, "env">,
-  pluginCohort?: PluginCohortRecoveryWriteBinding,
 ) {
-  const observation = capturePluginCohortMigrationRowsBeforeWrite(db, pluginCohort, params);
   if (params.pending.length > 0 || params.resolvedPluginIds?.length) {
     invalidatePinnedMigrationReads();
   }
@@ -614,61 +588,7 @@ export function recordDeferredPluginMigrationsInTransaction(
   if (deferred.length > 0 || resolved.length > 0) {
     publishSqliteDatabaseAdmission(db, migrationReceipt, {});
   }
-  recordPluginCohortMigrationRowsAfterWrite(db, observation);
   return { deferred, resolved, pending: pendingMigrationRecords(readPendingMigrationRows(db)) };
-}
-
-/** Reopen only this updater's exact obligations; later Doctor decisions stay authoritative. */
-export async function restorePluginCohortMigrationPublications(
-  publications: readonly PluginCohortMigrationPublication[],
-  authority: { env: NodeJS.ProcessEnv; assertCurrent: () => void },
-): Promise<void> {
-  authority.assertCurrent();
-  if (publications.length === 0) {
-    return;
-  }
-  const rows = foldPluginCohortMigrationPublications(publications);
-  const present = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-    ({ db }) => tableExists(db, "migration_runs"),
-    { env: authority.env },
-  );
-  authority.assertCurrent();
-  if (!present) {
-    if ([...rows.values()].some((row) => row.before !== undefined)) {
-      throw new Error(
-        "Plugin migration recovery is missing its original obligations; recovery preserved the database.",
-      );
-    }
-    // A pre-migration backup can predate this obligation table. Original absence
-    // is already restored; settlement must not initialize the candidate schema.
-    return;
-  }
-  const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
-  await withPluginLifecycleLease(
-    { env: authority.env, schemaPolicy: "existing", assertCurrent: authority.assertCurrent },
-    async (lease) => {
-      const assertCurrent = () => {
-        authority.assertCurrent();
-        lease.assertOwned();
-      };
-      runExistingOpenClawStateWriteTransaction(
-        ({ db }) => {
-          restorePluginCohortMigrationRowsInDatabase(db, rows, assertCurrent, (database) => {
-            invalidatePinnedMigrationReads();
-            invalidateSuccessfulMigrationCheckpointsInTransaction(database);
-            publishSqliteDatabaseAdmission(database, migrationReceipt, {});
-          });
-        },
-        { env: authority.env },
-        {
-          operationLabel: "state.plugin-migration-cohort-rollback",
-          schemaSql: ["schema_meta", "migration_runs"]
-            .map((table) => getOpenClawStateFeatureSchemaSql(table))
-            .join("\n"),
-        },
-      );
-    },
-  );
 }
 
 /** Only the migration owner can resolve a pending record after its work completes. */
@@ -697,8 +617,6 @@ export async function recordDeferredPluginMigrations(
       env: params.env,
       path: lease.databasePath,
     });
-    const cohort = captureCohortMigrationContext(params.env);
-    const pluginCohort = cohortMigrationBinding(cohort);
     const result = await runWithOpenClawStateLeaseWorker(
       lease.stateLease,
       context,
@@ -708,15 +626,9 @@ export async function recordDeferredPluginMigrations(
           input: {
             identity,
             ...input,
-            ...(pluginCohort ? { pluginCohort } : {}),
           },
         }),
-      {
-        assertCurrent: () => {
-          lease.assertCurrent();
-          cohort?.assertCurrent();
-        },
-      },
+      { assertCurrent: () => lease.assertCurrent() },
     );
     if (result.kind === "conflict") {
       throw new DeferredPluginMigrationConflictError(result.pending, {

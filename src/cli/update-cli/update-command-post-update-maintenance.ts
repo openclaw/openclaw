@@ -198,23 +198,13 @@ export async function completePostUpdateMaintenance(
   };
 }
 
-export async function settlePostUpdateWindowsAutoStartFailure(
+export function recordPostUpdateWindowsAutoStartFailure(
   params: Pick<FinishUpdateParams, "root">,
   finalResult: UpdateRunResult,
   result: Pick<UpdateRunResult, "status" | "reason">,
   cause: unknown,
-  readStopped: () => PreManagedServiceStop | undefined,
-): Promise<{ cause: unknown }> {
-  let failure = cause;
-  try {
-    await readStopped()?.windowsTaskAutoStartRecovery?.complete(false);
-  } catch (cleanupError) {
-    failure = new AggregateError(
-      [cause, cleanupError],
-      `Windows task restoration and compensation failed: ${formatErrorMessage(cause)}; ${formatErrorMessage(cleanupError)}`,
-    );
-  }
-  defaultRuntime.error(`Failed to restore Windows Scheduled Task autostart: ${String(failure)}`);
+): void {
+  defaultRuntime.error(`Failed to restore Windows Scheduled Task autostart: ${String(cause)}`);
   finalResult.status = "error";
   finalResult.reason =
     result.status === "error" ? result.reason : "windows-task-autostart-restore-failed";
@@ -225,9 +215,8 @@ export async function settlePostUpdateWindowsAutoStartFailure(
     cwd: finalResult.root ?? params.root,
     durationMs: 0,
     exitCode: 1,
-    stderrTail: formatErrorMessage(failure),
+    stderrTail: formatErrorMessage(cause),
   });
-  return { cause: failure };
 }
 
 export async function resumePostUpdateWindowsAutoStart(

@@ -9,7 +9,6 @@ import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
 } from "../../../plugins/install-paths.js";
-import { copyPluginInstallTransactionRequest } from "../../../plugins/install-transaction.js";
 import { listManagedPluginNpmRootsForInstallRecords } from "../../../plugins/installed-plugin-npm-roots.js";
 import {
   runPluginPayloadSmokeCheck,
@@ -142,27 +141,25 @@ async function runPostCorePluginConvergenceWithLease(
     : null;
 
   const warnings: PostCoreConvergenceWarning[] = [];
-  const repair = await repairMissingConfiguredPluginInstalls(
-    copyPluginInstallTransactionRequest(params, {
-      cfg: params.cfg,
-      // App-owned activation reaches this pass before plugin migrations, without CLI cohort sync.
-      repairVersionDrift,
-      timeoutMs: params.timeoutMs,
-      workTimeoutMs: params.workTimeoutMs,
-      env,
-      ...(prunedBaseline ? { baselineRecords: prunedBaseline.records } : {}),
-      onCapabilityConsent: params.onCapabilityConsent,
-      onWarning: ({ message, pluginId }) => {
-        warnings.push({
-          ...(pluginId ? { kind: "repair", pluginId } : {}),
-          reason: message,
-          message,
-          guidance: [REPAIR_GUIDANCE],
-        });
-      },
-      beforePersistentEffect: params.beforePersistentEffect,
-    }),
-  );
+  const repair = await repairMissingConfiguredPluginInstalls({
+    cfg: params.cfg,
+    // App-owned activation reaches this pass before plugin migrations, without CLI cohort sync.
+    repairVersionDrift,
+    timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
+    env,
+    ...(prunedBaseline ? { baselineRecords: prunedBaseline.records } : {}),
+    onCapabilityConsent: params.onCapabilityConsent,
+    onWarning: ({ message, pluginId }) => {
+      warnings.push({
+        ...(pluginId ? { kind: "repair", pluginId } : {}),
+        reason: message,
+        message,
+        guidance: [REPAIR_GUIDANCE],
+      });
+    },
+    beforePersistentEffect: params.beforePersistentEffect,
+  });
   params.beforePersistentEffect?.();
 
   const hostLinkInstallRecords = repair.records;

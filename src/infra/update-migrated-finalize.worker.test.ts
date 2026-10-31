@@ -427,11 +427,7 @@ it.each(["json", "human", "check"] as const)(
       expect(JSON.parse(stdout.join(""))).toMatchObject(
         mode === "json"
           ? result
-          : {
-              executorDelegation: "pid-start-v1",
-              postCoreExecutor: "stdin-pid-start-v1",
-              pluginCohortSettlement: true,
-            },
+          : { executorDelegation: "pid-start-v1", postCoreExecutor: "stdin-pid-start-v1" },
       );
       expect(stderr.join("")).toContain("cleanup diagnostic");
       if (mode === "json") {

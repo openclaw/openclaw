@@ -106,7 +106,6 @@ import { prepareConfigWriteTopology } from "./io.write-topology.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
-import { prepareRootPluginCohortIntent } from "./plugin-cohort-publication.js";
 import { setConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectRawWithPlugins } from "./validation.js";
@@ -524,7 +523,6 @@ export async function writeConfigFileFromContext(
     });
     await assertAgentDeletionTargetsUnchanged(snapshot.config, sourceConfigForPreflight, deps.env);
     await options.beforeCommit?.();
-    prepareRootPluginCohortIntent(snapshot, pathProof.snapshot, json, writeGuard.assertCurrent);
     const healthBaselineCapture = databaseAccessAllowed
       ? await captureConfigHealthBaselineForWrite(deps, configPath)
       : null;

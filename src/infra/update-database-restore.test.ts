@@ -12,8 +12,6 @@ import {
   withDaemonRuntimePinStore,
 } from "../daemon/runtime-pin-store.js";
 import { recordBackupRunOutcome } from "../state/backup-run-records.js";
-import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import { readConfigMachineState } from "../state/config-machine-state.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -40,21 +38,18 @@ import {
 } from "./update-candidate-state.js";
 import { createUpdateDatabaseBackupInProcess } from "./update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "./update-database-restore.js";
-import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
 import {
   createUpdateRun,
   getUpdateRun,
   recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "./update-run-ledger.js";
-import { readPluginCohortRecoveryPairRows } from "./update-run-recovery-store.js";
 import { finishUpdateRun } from "./update-run-write.js";
 
 async function createRestoreFixture(
   state: OpenClawTestState,
   linked = false,
   captureClientAbsent = false,
-  retainHistory = true,
 ) {
   expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
   expect(process.env.HOME).toBe(state.home);
@@ -94,10 +89,6 @@ async function createRestoreFixture(
     // Model a driver's absent preimage even though current fresh bootstrap creates this family.
     await fs.unlink(resolveClientCredentialStorePath(state.env));
   }
-  if (!retainHistory) {
-    // A service can have no local run history when its controller uses another database.
-    shared.db.exec("DROP TABLE update_runs");
-  }
   const input = {
     backupRoot: state.path("retained-package"),
     stateDir: state.stateDir,
@@ -111,9 +102,7 @@ async function createRestoreFixture(
     ...input,
     inspectionPlan: await discoverUpdateStateSchemaInspectionInProcess(input),
   });
-  if (retainHistory) {
-    recordUpdateRunPhase(run.runId, "staging", {}, { env: state.env });
-  }
+  recordUpdateRunPhase(run.runId, "staging", {}, { env: state.env });
   for (const owner of [shared, agent]) {
     owner.db.exec(
       "UPDATE restore_witness SET value = 'candidate'; CREATE TABLE candidate_only(value TEXT);",
@@ -138,91 +127,12 @@ async function createRestoreFixture(
 
 type RestoreFixture = Awaited<ReturnType<typeof createRestoreFixture>>;
 
-function withFixture(
-  run: (fixture: RestoreFixture) => Promise<void>,
-  linked = false,
-  retainHistory = true,
-) {
+function withFixture(run: (fixture: RestoreFixture) => Promise<void>, linked = false) {
   return withOpenClawTestState(
     { layout: "split", prefix: "update-database-restore-", scenario: "minimal" },
-    async (state) => run(await createRestoreFixture(state, linked, false, retainHistory)),
+    async (state) => run(await createRestoreFixture(state, linked)),
   );
 }
-
-it.each([true, false])(
-  "preserves only the named plugin cohort pair (history=%s)",
-  async (retainHistory) => {
-    await withFixture(
-      async (fixture) => {
-        const options = { env: fixture.state.env };
-        const runtime = {
-          root: fixture.state.home,
-          nodePath: process.execPath,
-          version: "2026.10.9",
-          buildId: "fixture",
-        };
-        // Synthetic retained storage, not a serving or restoration receipt.
-        const reservation = createRetainedUpdateRecovery(
-          { runId: fixture.run.runId, from: runtime, to: runtime },
-          options,
-        );
-        const binding = { runId: reservation.runId, transactionId: reservation.transactionId };
-        writeConfigMachineState(
-          "update.pluginCohort." + binding.runId,
-          {
-            ...binding,
-            revision: 0,
-            disposition: "rollback",
-            installKey: fixture.state.home,
-            priorArtifacts: [],
-            artifacts: [],
-            publications: [],
-            settledPublications: 0,
-          },
-          options,
-        );
-        writeConfigMachineState("fixture.unrelated-candidate-state", { retain: false }, options);
-        const retainedRows = readPluginCohortRecoveryPairRows(fixture.shared.db, binding);
-        await restoreUpdateDatabaseBackup({
-          backup: fixture.backup,
-          runId: fixture.run.runId,
-          env: fixture.state.env,
-          assertCurrent() {},
-          pluginCohortRecovery: binding,
-        });
-        const restored = openOpenClawStateDatabase(options);
-        expect(readPluginCohortRecoveryPairRows(restored.db, binding)).toEqual(retainedRows);
-        expect(
-          readConfigMachineState("fixture.unrelated-candidate-state", options),
-        ).toBeUndefined();
-      },
-      false,
-      retainHistory,
-    );
-  },
-);
-
-it("refuses restoration when its named live cohort pair is missing", async () => {
-  await withFixture(async (fixture) => {
-    await expect(
-      restoreUpdateDatabaseBackup({
-        backup: fixture.backup,
-        runId: fixture.run.runId,
-        env: fixture.state.env,
-        assertCurrent() {},
-        pluginCohortRecovery: {
-          runId: fixture.run.runId,
-          transactionId: "00000000-0000-4000-8000-000000000001",
-        },
-      }),
-    ).rejects.toThrow("Database rollback lost its live plugin cohort recovery pair.");
-    const current = openOpenClawStateDatabase({ env: fixture.state.env });
-    expect(current.db.prepare("SELECT value FROM restore_witness").get()).toEqual({
-      value: "candidate",
-    });
-    expect(getUpdateRun(fixture.run.runId, { env: fixture.state.env })?.status).toBe("running");
-  });
-});
 
 it("captures and restores exact local daemon intent with its independent schema", async () => {
   await withOpenClawTestState(

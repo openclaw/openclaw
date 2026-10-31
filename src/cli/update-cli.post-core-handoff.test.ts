@@ -325,11 +325,17 @@ it("keeps the candidate stopped through plugin convergence and only restarts the
 it.each(["spawn", "phase"])(
   "restores the exact plugin index revision when post-core %s fails",
   async (failureKind) => {
-    const root = f.createCaseDir("openclaw-post-core-index");
-    vi.mocked(cli.resolveGatewayInstallEntrypoint).mockResolvedValue(
-      path.join(root, "dist/entry.js"),
+    const before = { version: "2026.5.28" };
+    const after = { version: "2026.4.29" };
+    const { root } = f.setupUpdatedRootRefresh({
+      admitMutation: true,
+      targetVersion: after.version,
+      gatewayUpdateImpl: async (updatedRoot) =>
+        cli.makeOkUpdateResult({ mode: "npm", root: updatedRoot, before, after }),
+    });
+    mocks.readPackageVersion.mockImplementation(async (pkgRoot: string) =>
+      pkgRoot === root ? after.version : before.version,
     );
-    mocks.readPackageVersion.mockResolvedValue("2026.4.29");
     const previousPersistedIndex = {
       policyHash: "previous-policy",
       installRecords: {
@@ -340,6 +346,9 @@ it.each(["spawn", "phase"])(
       previous: previousPersistedIndex as never,
       revision: 17,
     });
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(
+      previousPersistedIndex.installRecords,
+    );
     mocks.spawn.mockImplementationOnce((_node, _argv, options) => {
       if (failureKind === "spawn") {
         throw new Error("post-core spawn failed");
@@ -351,24 +360,20 @@ it.each(["spawn", "phase"])(
       return exitingChild(1);
     });
 
-    const updating = cli.continuePostCoreUpdateInFreshProcess({
-      root,
-      channel: "stable",
-      requestedChannel: null,
-      opts: { yes: true, restart: false },
-      pluginInstallRecords: previousPersistedIndex.installRecords,
-      updateStartedAtMs: Date.now(),
-      timeoutMs: 30_000,
-    });
-    if (failureKind === "spawn") {
-      await expect(updating).rejects.toThrow("post-core spawn failed");
-    } else {
-      await expect(updating).resolves.toEqual({
-        resumed: false,
-        exitCode: 1,
-        error: "pre-plugin Doctor failed before convergence",
-      });
-    }
+    await expect(cli.updateCommand({ yes: true, restart: false })).rejects.toEqual(
+      new cli.ExitError(1),
+    );
+    expect(
+      vi.mocked(cli.runUpdateFailureTriage).mock.calls.map(([call]) => call.failure),
+    ).toContainEqual(
+      expect.objectContaining({
+        error:
+          failureKind === "spawn"
+            ? "post-core spawn failed"
+            : "pre-plugin Doctor failed before convergence",
+        result: expect.objectContaining({ status: "error", mode: "npm", root, before, after }),
+      }),
+    );
     expect(cli.defaultRuntime.exit).not.toHaveBeenCalled();
 
     expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledTimes(
