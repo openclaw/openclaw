@@ -2,10 +2,7 @@ import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
-import {
-  CHAT_HISTORY_REQUEST_LIMIT,
-  CHAT_HISTORY_REQUEST_MAX_BYTES,
-} from "../pages/chat/chat-history-request-params.ts";
+import { chatHistoryRequestParams } from "../pages/chat/chat-history-request-params.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import {
   sampleHistoryAnchor,
@@ -392,6 +389,9 @@ type HistoryPacketMetric = {
 };
 
 export function createHistoryAdmissionRecorder(read: () => HistoryPacketMetric[]) {
+  // Both comparison arms expose this request owner; its constants may remain private.
+  const { limit: CHAT_HISTORY_REQUEST_LIMIT, maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES } =
+    chatHistoryRequestParams("chat.history", "history-proof", undefined);
   const admissionReceipts: Array<{
     direction: string;
     admitted: string[];
