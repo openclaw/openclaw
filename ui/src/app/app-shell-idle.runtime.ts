@@ -147,9 +147,11 @@ export function connectShellIdle(
       const key = nextPending();
       intent = undefined;
       if (!key) {
-        // Warm the declared next route before menu bodies can enqueue more bodies.
-        // Opening any surface still owns its load failure.
-        await Promise.all(takeIdleWarmups().map((load) => load().catch(() => undefined)));
+        // A menu import can discover more imports. Start one per quiet window so
+        // speculative bodies cannot occupy every connection ahead of navigation.
+        for (const load of takeIdleWarmups(1)) {
+          await load().catch(() => undefined);
+        }
         return;
       }
       pending.delete(key);

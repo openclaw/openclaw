@@ -16,9 +16,15 @@ export function hasIdleWarmups(): boolean {
   return pending.size > 0;
 }
 
-/** Shell idle owner only: claims every registered loader. */
-export function takeIdleWarmups(): Warmup[] {
-  const loads = [...pending];
-  pending.clear();
+/** Shell idle owner only: claims a bounded batch of registered loaders. */
+export function takeIdleWarmups(limit = pending.size): Warmup[] {
+  const loads: Warmup[] = [];
+  for (const load of pending) {
+    if (loads.length >= limit) {
+      break;
+    }
+    pending.delete(load);
+    loads.push(load);
+  }
   return loads;
 }

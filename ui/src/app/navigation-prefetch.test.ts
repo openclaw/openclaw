@@ -233,7 +233,8 @@ it("warms the next route before queued menu bodies", async () => {
   fixture.outlet.presentationSettled = true;
   fixture.transcript.ready = true;
   const warmMenu = vi.fn(async () => {});
-  warmWhenIdle(warmMenu);
+  const warmSecondMenu = vi.fn(async () => {});
+  warmWhenIdle(warmMenu, warmSecondMenu);
   await idle();
   expect(hints().map((link) => link.href)).toEqual([
     new URL("/control/assets/new-1234abcd.js", location.origin).href,
@@ -243,6 +244,15 @@ it("warms the next route before queued menu bodies", async () => {
   hints().forEach((link) => link.dispatchEvent(new Event("load")));
   await idle();
   expect(warmMenu).toHaveBeenCalledOnce();
+  expect(warmSecondMenu).not.toHaveBeenCalled();
+  fixture.state.status = "loading";
+  fixture.notify();
+  await idle();
+  expect(warmSecondMenu).not.toHaveBeenCalled();
+  fixture.state.status = "success";
+  fixture.notify();
+  await idle();
+  expect(warmSecondMenu).toHaveBeenCalledOnce();
 });
 
 it("keeps declared next interactions as the route's only automatic idle work", async () => {
