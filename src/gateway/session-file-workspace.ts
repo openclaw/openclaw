@@ -7,8 +7,14 @@ import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js"
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sessionMutationForbiddenError } from "./session-mutation-authorization-error.js";
-import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
+import {
+  SessionFileWorkspaceChangedError,
+  sessionMutationForbiddenError,
+} from "./session-mutation-authorization-error.js";
+import {
+  isUnscopedSessionHostWorkspace,
+  resolveSessionWorkspaceRoots,
+} from "./session-workspace-roots.js";
 
 export type SessionFileSandboxWorkspace = {
   hostRoot: string;
@@ -173,11 +179,9 @@ export async function prepareSessionFileWorkspace(
     ...roots,
     sandboxWorkspace,
     historical,
-    unscopedHostRoot: Boolean(
-      roots.root &&
-      !selectedEntry.repositoryWorkspaceId &&
-      !selectedEntry.execNode &&
-      (!selected.runtime.sandboxed || Boolean(selectedEntry.worktree?.id)),
+    unscopedHostRoot: isUnscopedSessionHostWorkspace(
+      { cfg, agentId, sessionKey, entry: selectedEntry },
+      { root: roots.root, sandboxed: selected.runtime.sandboxed },
     ),
     assertCurrent(config: OpenClawConfig, current: Partial<InternalSessionEntry>) {
       if (
@@ -186,7 +190,7 @@ export async function prepareSessionFileWorkspace(
         (historical &&
           !isDeepStrictEqual(expected, selection(policy(config, sourceEntry(current)))))
       ) {
-        throw sessionMutationForbiddenError("Session workspace changed during file access");
+        throw new SessionFileWorkspaceChangedError();
       }
     },
   };

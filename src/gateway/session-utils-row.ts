@@ -92,6 +92,7 @@ import {
 } from "./session-utils-projection.js";
 import { parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
+import { isUnscopedSessionHostWorkspace } from "./session-workspace-roots.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
 export function readSessionRowInputs(params: {
@@ -590,6 +591,11 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     row: freezeTrustedJsonSnapshot<Readonly<GatewaySessionRow>>(row),
     source: Object.freeze({
       parsedKey: parseAgentSessionKey(key),
+      // Materialization already owns config and workspace-entry invalidation.
+      unscopedHostRoot: Boolean(
+        entry &&
+        isUnscopedSessionHostWorkspace({ cfg, agentId: input.agentId, sessionKey: key, entry }),
+      ),
       agentId: input.agentId,
       cfg,
       entry,

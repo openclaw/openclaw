@@ -28,6 +28,31 @@ type SessionFileReadContext = {
   requireWorkspaceOnly?: boolean;
 };
 
+export function isUnscopedSessionHostWorkspace(
+  params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    sessionKey: string;
+    entry: Partial<InternalSessionEntry>;
+  },
+  prepared?: { root?: string; sandboxed: boolean },
+): boolean {
+  const { cfg, agentId, sessionKey, entry } = params;
+  if (entry.repositoryWorkspaceId || entry.execNode) {
+    return false;
+  }
+  const root = prepared ? prepared.root : resolveSessionWorkspaceRoots(cfg, agentId, entry).root;
+  return Boolean(
+    root &&
+    (entry.worktree?.id ||
+      !(
+        prepared?.sandboxed ??
+        resolveSandboxRuntimeStatus({ cfg, agentId, sessionKey, preparedSessionEntry: entry })
+          .sandboxed
+      )),
+  );
+}
+
 function resolveSessionFileReadScope(
   cfg: OpenClawConfig,
   agentId: string,
