@@ -49,6 +49,13 @@ Read commands report invalid config, unknown servers, and disabled named checks 
       ]
     }
     ```
+
+    `authStatus.state` describes stored authorization, so `authorized` does not
+    guarantee that an access token is still usable. For native shared OAuth,
+    `oauthWarning` is included when the stored access token has expired without a
+    refresh token. The warning includes sign-in recovery steps. Existing
+    `authStatus` fields and the meaning of `ok` are unchanged.
+
   </Accordion>
   <Accordion title="doctor --json">
     ```json

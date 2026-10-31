@@ -13,13 +13,7 @@ import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/stri
 import { Command } from "commander";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
-import { readMcpOAuthStoreReadOnly } from "../agents/mcp-oauth-store.js";
-import {
-  clearMcpOAuthCredentials,
-  countMcpOAuthPrincipals,
-  readMcpOAuthCredentialsStatus,
-  type McpOAuthPrincipalStatus,
-} from "../agents/mcp-oauth.js";
+import { clearMcpOAuthCredentials, countMcpOAuthPrincipals } from "../agents/mcp-oauth.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
 import { renderEnvTemplateToken, scanEnvTemplateTokens } from "../config/env-substitution.js";
@@ -34,7 +28,13 @@ import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
-import { loginMcpServer, registerMcpLoginCommand, type McpLoginOptions } from "./mcp-cli-oauth.js";
+import {
+  loginMcpServer,
+  readMcpCliOAuthStatus,
+  registerMcpLoginCommand,
+  type McpLoginOptions,
+  type McpStatusAuthStatusJson,
+} from "./mcp-cli-oauth.js";
 import { probeMcpServers, resolveMcpProbeIssue } from "./mcp-cli-probe.js";
 import {
   offlineMcpAction,
@@ -248,16 +248,6 @@ function applyMcpHttpControls(
   setOptionalField(server, "clientKey", readNonBlankString(opts.clientKey));
 }
 
-/** Documented `mcp status --json` shape: legacy booleans stay additive to `state`. */
-type McpStatusAuthStatusJson = McpOAuthPrincipalStatus & {
-  hasTokens: boolean;
-  requiresAuthorization: boolean;
-  hasClientInformation: boolean;
-  hasCodeVerifier: boolean;
-  hasDiscoveryState: boolean;
-  hasLastAuthorizationUrl: boolean;
-};
-
 type McpStatusEntry = {
   name: string;
   configured: true;
@@ -270,6 +260,7 @@ type McpStatusEntry = {
   supportsParallelToolCalls?: boolean;
   auth?: unknown;
   authStatus?: McpStatusAuthStatusJson;
+  oauthWarning?: string;
   connectedPrincipals?: number;
   toolFilter?: unknown;
   codex?: unknown;
@@ -399,9 +390,14 @@ async function collectMcpDoctorIssues(params: {
     if (resolved?.kind === "http") {
       if (server.auth === "oauth") {
         if (asRecord(server.oauth)?.identity !== "per-requester") {
-          const authStatus = await readMcpOAuthCredentialsStatus(
-            operatorMcpOAuthIdentity(name, resolved.url),
+          const { authStatus, oauthWarning } = await readMcpCliOAuthStatus(
+            name,
+            resolved,
+            params.config,
           );
+          if (oauthWarning) {
+            issues.push(issue("warning", oauthWarning));
+          }
           if (authStatus.state !== "authorized") {
             const state =
               authStatus.state === "requires-authorization"
@@ -504,10 +500,8 @@ async function countConnectedMcpPrincipals(
   return countMcpOAuthPrincipals(operatorMcpOAuthIdentity(name, resolved.url));
 }
 
-async function buildMcpStatusEntries(
-  servers: Record<string, Record<string, unknown>>,
-): Promise<McpStatusEntry[]> {
-  const entries = Object.entries(servers).toSorted(([a], [b]) => a.localeCompare(b));
+async function buildMcpStatusEntries(loaded: LoadedMcpConfig): Promise<McpStatusEntry[]> {
+  const entries = Object.entries(loaded.mcpServers).toSorted(([a], [b]) => a.localeCompare(b));
   return Promise.all(
     entries.map(async ([name, server]) => {
       const resolved = resolveMcpTransportConfig(name, server);
@@ -533,20 +527,13 @@ async function buildMcpStatusEntries(
         resolved?.kind === "http" &&
         asRecord(server.oauth)?.identity !== "per-requester"
       ) {
-        const identity = operatorMcpOAuthIdentity(name, resolved.url);
-        // Documented `mcp status --json` contract: the six legacy authStatus
-        // booleans stay for existing scripts; `state` is the additive shape.
-        const store = await readMcpOAuthStoreReadOnly(identity.storeKey);
-        entry.authStatus = {
-          hasTokens: Boolean(store.tokens),
-          requiresAuthorization:
-            store.pendingAuthorizationChallenge?.requiresAuthorization === true,
-          hasClientInformation: Boolean(store.clientInformation),
-          hasCodeVerifier: Boolean(store.codeVerifier),
-          hasDiscoveryState: Boolean(store.discoveryState),
-          hasLastAuthorizationUrl: Boolean(store.lastAuthorizationUrl),
-          ...(await readMcpOAuthCredentialsStatus(identity, store)),
-        };
+        const { authStatus, oauthWarning } = await readMcpCliOAuthStatus(
+          name,
+          resolved,
+          loaded.config,
+        );
+        entry.authStatus = authStatus;
+        entry.oauthWarning = oauthWarning;
       } else {
         entry.connectedPrincipals = await countConnectedMcpPrincipals(name, server);
       }
@@ -684,7 +671,7 @@ export function registerMcpCli(program: Command) {
     .option("--json", "Print JSON")
     .action(async (opts: { json?: boolean; verbose?: boolean }) => {
       const loaded = await loadMcpConfig(opts);
-      const status = await buildMcpStatusEntries(loaded.mcpServers);
+      const status = await buildMcpStatusEntries(loaded);
       if (opts.json) {
         defaultRuntime.writeJson({ path: loaded.path, servers: status });
         return;
@@ -712,6 +699,9 @@ export function registerMcpCli(program: Command) {
         defaultRuntime.log(
           terminalText`- ${entry.name}: ${transport}${auth}${oauth}${connected}${filters}${parallel}`,
         );
+        if (entry.oauthWarning) {
+          defaultRuntime.log(terminalText`  warning: ${entry.oauthWarning}`);
+        }
         if (opts.verbose) {
           defaultRuntime.log(terminalText`  launch: ${entry.launch ?? "n/a"}`);
           defaultRuntime.log(

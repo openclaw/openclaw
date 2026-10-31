@@ -1,6 +1,10 @@
+// Load temp-home cleanup dependencies during collection, outside the test deadline.
+import "../test-utils/session-state-cleanup.js";
 import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:http";
+import path from "node:path";
 import { text as readBody } from "node:stream/consumers";
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
@@ -9,7 +13,7 @@ import {
   operatorMcpOAuthIdentity,
   requesterMcpOAuthIdentity,
 } from "../agents/mcp-oauth-identity.js";
-import { readMcpOAuthPendingAuthorization } from "../agents/mcp-oauth-store.js";
+import { readMcpOAuthPendingAuthorization, type McpOAuthStore } from "../agents/mcp-oauth-store.js";
 import { readMcpOAuthCredentialsStatus } from "../agents/mcp-oauth.js";
 import { seedMcpOAuthStoreForTest } from "../agents/mcp-oauth.test-support.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
@@ -214,6 +218,84 @@ it("keeps per-requester list, status, and doctor probes read only", async () => 
           .get("mcp_oauth_pending_authorizations"),
       ).toBeUndefined();
     });
+  });
+});
+
+it("warns only for expired native OAuth tokens without a refresh token", async () => {
+  await withTempHome(`openclaw-mcp-expiry-${randomUUID()}-`, async (home) => {
+    const logs: string[] = [];
+    const json: unknown[] = [];
+    vi.spyOn(defaultRuntime, "log").mockImplementation((line) => logs.push(String(line)));
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => json.push(value));
+    const serverUrl = "https://mcp.example.com/rpc";
+    const tokens = oauthTokens("fixture-access-token");
+    const expired = { tokens, tokenExpiresAt: 0 };
+    const stores: Record<string, McpOAuthStore> = {
+      expired,
+      unexpired: { tokens, tokenExpiresAt: Date.now() + 3_600_000 },
+      refreshable: {
+        ...expired,
+        tokens: oauthTokens("fixture-access-token", "fixture-refresh-token"),
+      },
+      unknown: { tokens },
+      pending: { ...expired, pendingAuthorizationChallenge: { requiresAuthorization: true } },
+      profile: expired,
+    };
+    const names = Object.keys(stores).toSorted();
+    const servers = Object.fromEntries(
+      names.map((name) => [
+        name,
+        oauthServer(serverUrl, name === "profile" ? { authProfileId: "fixture:mcp" } : undefined),
+      ]),
+    );
+    await fs.writeFile(
+      path.join(home, ".openclaw", "openclaw.json"),
+      JSON.stringify({ mcp: { servers } }),
+    );
+    for (const [name, store] of Object.entries(stores)) {
+      seedMcpOAuthStoreForTest(operatorMcpOAuthIdentity(name, serverUrl).storeKey, store);
+    }
+    const warning = expect.stringMatching(
+      /OAuth access token has expired and cannot be refreshed\..*mcp login expired/,
+    );
+    const expected = names.map((name) => ({
+      name,
+      authStatus: {
+        state: name === "pending" ? "requires-authorization" : "authorized",
+        hasTokens: true,
+      },
+      oauthWarning: name === "expired" ? warning : undefined,
+    }));
+    const { run } = createCli();
+    await run("status", "--verbose");
+    expect(logs).toContain("- pending: streamable-http oauth authorization-required");
+    expect(logs).toContain("  oauth: requires-authorization");
+    expect(logs.filter((line) => line.includes("cannot be refreshed"))).toEqual([warning]);
+    const expiredRow = logs.findIndex((line) => line.startsWith("- expired:"));
+    expect(expiredRow).toBeGreaterThanOrEqual(0);
+    expect(logs[expiredRow + 1]).toEqual(warning);
+    await run("status", "--json");
+    expect(json.at(-1)).toMatchObject({ servers: expected });
+    await run("doctor", "--json");
+    expect(json.at(-1)).toMatchObject({
+      ok: true,
+      servers: expected.map(({ name, oauthWarning }) => ({
+        name,
+        ok: true,
+        issues: oauthWarning
+          ? [{ level: "warning", message: oauthWarning }]
+          : name === "pending"
+            ? [
+                {
+                  level: "warning",
+                  message:
+                    "OAuth credentials require additional authorization; run openclaw mcp login pending",
+                },
+              ]
+            : [],
+      })),
+    });
+    expect(JSON.stringify(json)).not.toMatch(/fixture-(?:access|refresh)-token/);
   });
 });
 
