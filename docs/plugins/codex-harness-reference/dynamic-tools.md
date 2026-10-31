@@ -31,17 +31,29 @@ Codex's own tool-search surface:
 available through the OpenClaw dynamic-tool bridge as the durable session status
 surface.
 
-When the native surface is disabled, OpenClaw publishes allowed dynamic tools
-directly instead of requiring unavailable native discovery. This includes managed
-GitHub identity and sandbox-backed execution. Native-enabled threads retain
-searchable, direct, and code-mode-only loading. In native JavaScript `exec`,
-`ALL_TOOLS` and `tools` are JavaScript globals, never shell environment variables.
-OpenClaw shell tools execute operating-system commands.
+Restricted local turns can retain `searchable` loading when the final native
+model appears in `model/list` on the same connection used for startup. Unknown
+models, failed catalog reads, remote connections, known unsupported models and
+explicit `direct` selection keep direct declarations. Existing immutable native
+catalogs remain unchanged. Catalog membership is a compatibility proxy, not a
+native discovery capability guarantee: remotely refreshed model metadata can drift
+from the bundled catalog tested with Codex 0.164.0.
 
-When a finite runtime allowlist disables native Code Mode, OpenClaw sends an
-empty execution-environment selection. In that direct, unsandboxed case,
-OpenClaw keeps its policy-filtered `exec` and `process` tools as the shell
-fallback. Runtime allowlists and `codexDynamicToolsExclude` still apply.
+The model receives the complete list of deferred tool names. OpenClaw checks the
+comma-space-separated, qualified names against one tenth of the resolved context
+window in UTF-16 code units (approximately 2.5% of the token window). If the list
+exceeds that budget, preparation fails with `TOOL_INVENTORY_BUDGET_EXCEEDED` and
+reports the tool count, size and limit. It does not drop names or retry eagerly.
+This checks the inventory, not the entire request or the mandatory direct schemas.
+
+OpenClaw's restricted-turn flags do not guarantee that Codex's selected model
+disables Code Mode. Use directly listed tools by their exact names, or inspect
+`ALL_TOOLS` and invoke `tools` using the actual runtime name when the native
+JavaScript runner is available. `ALL_TOOLS` and `tools` are JavaScript globals,
+never shell environment variables. OpenClaw shell tools execute operating-system
+commands; the restricted shell fallback can be exposed as `openclaw_direct.exec`.
+Runtime allowlists and `codexDynamicToolsExclude` still apply. This discovery
+change does not repair Code Mode's existing image-to-text result projection.
 
 `tools.gatewayPolicy` adds a required allowlist for Gateway-supplied tools and
 their actions. The adapter applies it after tool additions and exclusions, to

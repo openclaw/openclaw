@@ -21,8 +21,12 @@ Codex's native `skills` namespace or install marketplace skills. See
 [installed skill search](/tools/skills#search-installed-skills).
 
 Codex dynamic tools default to `searchable` loading when the native surface is
-enabled. When it is disabled, OpenClaw publishes allowed dynamic tools directly,
-including session UI tools and managed shell paths. Tool policy, argument
+enabled. When it is disabled, eligible tools use deferred loading only after
+the selected model is found in the executing local connection's catalog;
+unknown models retain direct loading. See
+[dynamic tool discovery](/plugins/codex-harness-reference/dynamic-tools) for
+eligibility and names-budget limits. This includes session UI tools and managed
+shell paths. Tool policy, argument
 validation, session authority, and effect ownership still apply. Dashboard and
 widget actions use these session-bound tools; a shell CLI connection and device
 pairing do not replace them. OpenClaw normally does

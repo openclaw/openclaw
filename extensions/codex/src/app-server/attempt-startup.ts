@@ -77,6 +77,7 @@ export async function startCodexAttemptThread(params: {
   authority?: CodexBindingAuthority;
   attemptClientFactory: CodexAppServerClientFactory;
   callerOwnedAttemptClient?: boolean;
+  preparedClient?: { client: CodexAppServerClient; release: () => void };
   bindingStore: CodexAppServerBindingStore;
   runtime?: PluginRuntime;
   appServer: CodexAppServerRuntimeOptions;
@@ -231,33 +232,35 @@ export async function startCodexAttemptThread(params: {
               throw new CodexAppServerStartupError("aborted");
             }
             enterStartupStage("client-acquire");
-            startupClient = await params.attemptClientFactory({
-              ...params.clientOptions,
-              // Process startup retains its synchronous admission contract. Ordinary
-              // native requests use the retained worker authority at wire admission.
-              assertCurrent: () => {
-                params.assertCurrent?.();
-                params.authority?.assertLegacyCurrent();
-              },
-              startOptions: params.appServer.start,
-              pluginConfig: params.pluginConfig,
-              authProfileStore: attemptParams.authProfileStore,
-              agentId: params.sessionAgentId,
-              agentDir: params.agentDir,
-              config: params.config,
-              onStartedClient: (client) => {
-                observedStartupClient = client;
-                // Shared startup belongs to the service until this attempt acquires a lease.
-                if (params.attemptClientFactory !== getLeasedSharedCodexAppServerClient) {
-                  startupClientForAbandonedRequestCleanup = client;
-                  if (startupAbandonController.signal.aborted) {
-                    void closeCodexStartupClientBestEffort(client);
+            startupClient =
+              params.preparedClient?.client ??
+              (await params.attemptClientFactory({
+                ...params.clientOptions,
+                // Process startup retains its synchronous admission contract. Ordinary
+                // native requests use the retained worker authority at wire admission.
+                assertCurrent: () => {
+                  params.assertCurrent?.();
+                  params.authority?.assertLegacyCurrent();
+                },
+                startOptions: params.appServer.start,
+                pluginConfig: params.pluginConfig,
+                authProfileStore: attemptParams.authProfileStore,
+                agentId: params.sessionAgentId,
+                agentDir: params.agentDir,
+                config: params.config,
+                onStartedClient: (client) => {
+                  observedStartupClient = client;
+                  // Shared startup belongs to the service until this attempt acquires a lease.
+                  if (params.attemptClientFactory !== getLeasedSharedCodexAppServerClient) {
+                    startupClientForAbandonedRequestCleanup = client;
+                    if (startupAbandonController.signal.aborted) {
+                      void closeCodexStartupClientBestEffort(client);
+                    }
                   }
-                }
-              },
-              abandonSignal: startupAbandonController.signal,
-              timeoutMs: params.appServer.requestTimeoutMs,
-            });
+                },
+                abandonSignal: startupAbandonController.signal,
+                timeoutMs: params.appServer.requestTimeoutMs,
+              }));
             const activeStartupClient = startupClient;
             let startupClientLeaseReleased = false;
             startupClientLease = () => {
@@ -265,7 +268,9 @@ export async function startCodexAttemptThread(params: {
                 return;
               }
               startupClientLeaseReleased = true;
-              if (
+              if (params.preparedClient) {
+                params.preparedClient.release();
+              } else if (
                 params.callerOwnedAttemptClient ||
                 params.attemptClientFactory === createIsolatedCodexAppServerClient
               ) {
@@ -606,6 +611,7 @@ export async function startCodexAttemptThread(params: {
           return await startupAttempt();
         } catch (error) {
           if (
+            params.preparedClient ||
             startupAbandonController.signal.aborted ||
             !(error instanceof CodexThreadClientReplacementError)
           ) {

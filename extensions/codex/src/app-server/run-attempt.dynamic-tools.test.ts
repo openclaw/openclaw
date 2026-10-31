@@ -1,4 +1,8 @@
-import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  AgentHarnessPreflightError,
+  onAgentEvent,
+  type AgentEventPayload,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createProcessPollDeliveryContract,
   createRequiredExecRuntimeContract,
@@ -18,6 +22,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { createDynamicToolCall, textToolResult } from "./dynamic-tools.test-support.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
+import { createModelFixture } from "./model-fixture.test-support.js";
 import {
   flattenCodexDynamicToolFunctions,
   type CodexDynamicToolCallParams,
@@ -32,9 +37,11 @@ import {
   createStartedThreadHarness,
   runCodexAppServerAttempt,
   setCodexTestModelSupportsTools,
+  setCodexAppServerClientFactoryForTest,
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
+import { CodexThreadClientReplacementError } from "./thread-lifecycle-errors.js";
 
 function callTool(
   harness: ReturnType<typeof createStartedThreadHarness>,
@@ -116,6 +123,82 @@ function observeDiagnostics() {
 }
 
 setupRunAttemptTestHooks();
+
+it.each([true, false])(
+  "keeps restricted tools callable with same-connection discovery (listed: %s)",
+  async (listed) => {
+    const params = createTestParams();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "model/list") {
+        return { data: listed ? [createModelFixture(params.modelId)] : [], nextCursor: null };
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      return undefined;
+    });
+    const tool = createRuntimeDynamicTool("lookup_record");
+    const { run } = await startTool(tool, {
+      harness,
+      pluginHarnessToolPolicyRestricted: true,
+      clock: true,
+    });
+    await run.waitForTurnAccepted();
+    const start = harness.requests.find(({ method }) => method === "thread/start")
+      ?.params as CodexThreadStartParams;
+    const deferred =
+      flattenCodexDynamicToolFunctions(start.dynamicTools ?? []).find(
+        (entry) => entry.name === "lookup_record",
+      )?.deferLoading === true;
+    const result = await harness.handleServerRequest({
+      id: "discovered-call",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "discovered-call",
+        namespace: deferred ? "openclaw" : null,
+        tool: "lookup_record",
+        arguments: {},
+      },
+    });
+    await completeRun(harness, run);
+    expect(result).toMatchObject({ success: true });
+    expect(tool.execute).toHaveBeenCalledOnce();
+    expect(deferred).toBe(listed);
+  },
+);
+
+it("rejects an overflowing inventory as a global preflight before native startup", async () => {
+  const params = createTestParams();
+  const harness = createStartedThreadHarness(async (method) =>
+    method === "model/list"
+      ? { data: [createModelFixture(params.modelId)], nextCursor: null }
+      : undefined,
+  );
+  const tool = createRuntimeDynamicTool("lookup_record");
+  const { run } = await startTool(tool, {
+    harness,
+    clock: true,
+    pluginHarnessToolPolicyRestricted: true,
+    contextWindowInfo: { tokens: 100, source: "agentContextTokens" },
+  });
+  const failure: unknown = await run.catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(AgentHarnessPreflightError);
+  expect(failure).toMatchObject({
+    code: "TOOL_INVENTORY_BUDGET_EXCEEDED",
+    scope: undefined,
+    toolCount: 1,
+    requiredSize: 22,
+    limit: 10,
+    userMessage: expect.stringContaining("requiredSize=22, limit=10"),
+  });
+  expect(
+    harness.requests.filter(({ method }) => method === "thread/start" || method === "turn/start"),
+  ).toEqual([]);
+  expect(tool.execute).not.toHaveBeenCalled();
+  expect(harness.requests.filter(({ method }) => method === "model/list")).toHaveLength(1);
+});
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
   it("enforces Gateway policy on an owner turn's tool declarations and callbacks", async () => {
@@ -627,4 +710,55 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       }
     },
   );
+});
+
+it("re-evaluates discovery on startup client replacement and falls back to direct", async () => {
+  const params = createTestParams();
+  const first = createStartedThreadHarness(async (method) => {
+    if (method === "model/list") {
+      return { data: [createModelFixture(params.modelId)], nextCursor: null };
+    }
+    if (method === "configRequirements/read") {
+      // Fault at startup admission, before native registration or inference.
+      throw new CodexThreadClientReplacementError();
+    }
+    return undefined;
+  });
+  const second = createStartedThreadHarness(async (method) =>
+    method === "model/list" || method === "mcpServerStatus/list"
+      ? { data: [], nextCursor: null }
+      : undefined,
+  );
+  const acquire = vi.fn().mockResolvedValueOnce(first.client).mockResolvedValueOnce(second.client);
+  setCodexAppServerClientFactoryForTest(acquire);
+  const tool = createRuntimeDynamicTool("lookup_record");
+  const { run } = await startTool(tool, {
+    harness: second,
+    clock: true,
+    pluginHarnessToolPolicyRestricted: true,
+  });
+  await run.waitForTurnAccepted();
+  expect(acquire).toHaveBeenCalledTimes(2);
+  expect(first.requests.filter(({ method }) => method === "model/list")).toHaveLength(1);
+  expect(second.requests.filter(({ method }) => method === "model/list")).toHaveLength(1);
+  expect(
+    first.requests.some(({ method }) => method === "thread/start" || method === "turn/start"),
+  ).toBe(false);
+  const start = second.requests.find(({ method }) => method === "thread/start")
+    ?.params as CodexThreadStartParams;
+  expect(
+    flattenCodexDynamicToolFunctions(start.dynamicTools ?? []).every(
+      (spec) => spec.deferLoading !== true,
+    ),
+  ).toBe(true);
+  await completeRun(second, run);
+});
+
+it("does not query the catalog on the existing unrestricted native path", async () => {
+  const { harness, run } = await startTool(createRuntimeDynamicTool("lookup_record"), {
+    clock: true,
+  });
+  await run.waitForTurnAccepted();
+  expect(harness.requests.filter(({ method }) => method === "model/list")).toEqual([]);
+  await completeRun(harness, run);
 });

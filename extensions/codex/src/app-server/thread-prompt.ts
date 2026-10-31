@@ -81,6 +81,19 @@ export function buildCodexConversationTurnInstructions(
   ].join("\n\n");
 }
 
+export function collectCodexDeferredToolNames(specs: readonly CodexDynamicToolSpec[]): string[] {
+  const names = new Set<string>();
+  for (const spec of specs) {
+    for (const tool of spec.type === "namespace" ? spec.tools : [spec]) {
+      const name = tool.name.trim();
+      if (tool.deferLoading === true && name) {
+        names.add(spec.type === "namespace" ? `${spec.name}.${name}` : name);
+      }
+    }
+  }
+  return [...names].toSorted((left, right) => left.localeCompare(right));
+}
+
 export function buildDeveloperInstructions(
   params: CodexThreadPromptContext,
   options: {
@@ -162,7 +175,9 @@ export function buildDeveloperInstructions(
         ? options.nativeCodeModeOnlyEnabled === true
           ? "Deferred tools may be absent from the direct tool list. Use Codex's native JavaScript `exec` to filter `ALL_TOOLS` by name and description, then invoke the matching entry through `tools`. `ALL_TOOLS` and `tools` are JavaScript globals, not shell environment variables. OpenClaw shell command tools are separate from this JavaScript runner. Call directly listed tools by their exact qualified names."
           : "Call directly listed tools by their exact qualified names. Use `tool_search` for deferred tools when it is directly callable. Otherwise use Codex's native JavaScript `exec` to filter `ALL_TOOLS` and invoke the matching entry through `tools`. `ALL_TOOLS` and `tools` are JavaScript globals, not shell environment variables. OpenClaw shell command tools are separate from this JavaScript runner. Do not repeat a completed call to retrieve a result you already have."
-        : "Call the supplied OpenClaw tools by their exact qualified names. Shell command tools execute operating-system commands, not JavaScript tool discovery."
+        : deferredToolNames.size > 0
+          ? "Call directly listed OpenClaw tools by their exact qualified names. When Code Mode `exec` is available, inspect `ALL_TOOLS` and invoke `tools` using the actual runtime name. Otherwise use directly available `tool_search` for deferred tools. `ALL_TOOLS` and `tools` are JavaScript globals, not shell environment variables. OpenClaw shell command tools execute operating-system commands, not JavaScript tool discovery. Do not repeat a completed call to retrieve a result you already have."
+          : "Call the supplied OpenClaw tools by their exact qualified names. Shell command tools execute operating-system commands, not JavaScript tool discovery."
       : undefined;
   const sections = [
     "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",

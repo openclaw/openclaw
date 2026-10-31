@@ -524,9 +524,12 @@ are JavaScript globals. Code-mode-only threads use that JavaScript discovery
 path. These globals are not shell environment variables, and OpenClaw shell
 command tools are separate from the native JavaScript runner.
 
-When the native surface is disabled, OpenClaw publishes its allowed dynamic
-tools directly instead of requiring deferred discovery. This includes managed
-GitHub identity and sandbox-backed execution paths. The current tool policy,
+When the native surface is disabled, OpenClaw defers eligible tools only when
+the selected model is listed by the same local connection that will run the
+turn. Otherwise, allowed tools remain directly callable. See
+[dynamic tool discovery](/plugins/codex-harness-reference/dynamic-tools) for
+eligibility and names-budget limits. This includes managed GitHub identity and
+sandbox-backed execution paths. The current tool policy,
 argument validation, session authority, and effect owners still apply. Dashboard
 and widget actions use those session-bound tools; a shell CLI connection and
 its device pairing do not replace them.

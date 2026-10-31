@@ -1,0 +1,63 @@
+{
+  "codexVersion": "0.164.0",
+  "commit": "6aaac694803004a63c6f393d153c96d22521a6b9",
+  "sourcePath": "codex-rs/models-manager/models.json",
+  "sourceSha256": "943ca7fe1d19ed019054158303f0dbbd80b3bef43b3aa425a71aa7cb3fb52c2b",
+  "models": [
+    {
+      "identitySha256": "576a599a64cb3dde05f18ebb3e26e3d5bcbf4b108ff92da24f5229188fa0972a",
+      "supportsSearchTool": true,
+      "codeModeOnly": true
+    },
+    {
+      "identitySha256": "dedfefd51120f28386c9dba78e46feb403523e23d67980cdf24514ee0b50b5ed",
+      "supportsSearchTool": true,
+      "codeModeOnly": true
+    },
+    {
+      "identitySha256": "7388db16debdff683f90a7d87e3c095a2fd22e74c5a1bd90e3dc360972e10b21",
+      "supportsSearchTool": true,
+      "codeModeOnly": true
+    },
+    {
+      "identitySha256": "9a7e60cd1c7bb9d5493832103af02aca05272564b29e49852a9a0b5d8d96ec2c",
+      "supportsSearchTool": true,
+      "codeModeOnly": true
+    },
+    {
+      "identitySha256": "419255f2bb4c6801939e868fe2cdbbdc34d51742400939d1842d262a1fec749c",
+      "supportsSearchTool": true,
+      "codeModeOnly": true
+    },
+    {
+      "identitySha256": "deda3dc02a1d1575f15d5c9f9b3e31cf0c768a55508c31e7ff0f4fc8f33fc669",
+      "supportsSearchTool": true,
+      "codeModeOnly": true
+    },
+    {
+      "identitySha256": "e33230db3dd7d2f0153debcbb9fabc3386faac005477571931af855d70c4ae9b",
+      "supportsSearchTool": true,
+      "codeModeOnly": true
+    },
+    {
+      "identitySha256": "a03fd978832d705ef408a44f19b3b26716165bf95230594c8cf60d07188ddd25",
+      "supportsSearchTool": true,
+      "codeModeOnly": true
+    },
+    {
+      "identitySha256": "576b3569f5a1affd98b518f300bfb9bfec645ea66b9cd7ad187bc50c0822245d",
+      "supportsSearchTool": true,
+      "codeModeOnly": true
+    },
+    {
+      "identitySha256": "ffc50c70661c227edf8daae6f8dbed2dd0645386c12d43bc7fc44da166e043bd",
+      "supportsSearchTool": true,
+      "codeModeOnly": false
+    },
+    {
+      "identitySha256": "db836f93467ed6ffc84e5821d4d065ac89070ec0ea2164db220f94cd49ddc7c4",
+      "supportsSearchTool": true,
+      "codeModeOnly": true
+    }
+  ]
+}
