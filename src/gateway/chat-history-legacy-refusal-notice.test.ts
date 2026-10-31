@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { WebSocket } from "ws";
 import { recordGatewaySessionRunFailure } from "../sessions/session-run-error.js";
 import { formatProviderRefusalText } from "../shared/assistant-error-format.js";
 import { readRunFailureNotice } from "../shared/run-failure-notice.js";
