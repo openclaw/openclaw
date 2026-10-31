@@ -40,6 +40,7 @@ suite.define(() => {
         async ({ page }) => {
           const documentRequested = createDeferred();
           const documentRelease = createDeferred();
+          const initialDocumentRelease = createDeferred();
           const configRelease = createDeferred();
           let reloading = false;
           let boardDocumentRequests = 0;
@@ -49,6 +50,8 @@ suite.define(() => {
               boardDocumentRequests += 1;
               documentRequested.resolve();
               await documentRelease.promise;
+            } else {
+              await initialDocumentRelease.promise;
             }
             await route.fulfill({ status: 200, contentType: "text/html", body: widgetHtml });
           });
@@ -104,12 +107,8 @@ suite.define(() => {
           await page.getByText("Synthetic mission briefing.", { exact: true }).waitFor();
           await page.locator(".chat-pane__session-title-text", { hasText: title }).waitFor();
           await gateway.waitForRequest("board.get");
+          expect(await page.locator("[data-panel-skeleton=board]").count()).toBe(1);
           await gateway.resolveDeferred("board.get");
-          await page
-            .frameLocator(".board-widget__frame")
-            .frameLocator("iframe")
-            .getByText("All systems ready")
-            .waitFor();
           await selectChatLayoutAction(page, /^Swap /);
           await expect
             .poll(() =>
@@ -118,6 +117,12 @@ suite.define(() => {
                 .evaluate((view) => view.closest("[data-region]")?.getAttribute("data-region")),
             )
             .toBe("main");
+          initialDocumentRelease.resolve();
+          await page
+            .frameLocator(".board-widget__frame")
+            .frameLocator("iframe")
+            .getByText("All systems ready")
+            .waitFor();
           const readSnapshots = () =>
             page.evaluate(async () => {
               const boot = Object.keys(localStorage).some((key) =>
@@ -168,6 +173,7 @@ suite.define(() => {
                       }),
                     ]),
                     board: expect.objectContaining({
+                      contentHeights: expect.any(Object),
                       snapshot: expect.objectContaining({ revision }),
                     }),
                     ...(delayTranscriptValidation ? { historyState: expect.any(Object) } : {}),
@@ -201,15 +207,15 @@ suite.define(() => {
               const pane = document.querySelector(".chat-pane-cache__pane--visible");
               const heading = pane?.querySelector(".chat-pane__session-title-text");
               if (heading) {
-                const boardSkeleton = pane?.querySelector("[data-panel-skeleton=board]");
-                const bounds = boardSkeleton?.getBoundingClientRect();
+                const boardCard = pane?.querySelector(".board-widget");
+                const bounds = boardCard?.getBoundingClientRect();
                 const transcript = pane?.querySelector(".chat-thread");
                 frames.push({
                   title: heading.textContent?.trim() ?? "",
                   empty: Boolean(pane?.querySelector(".agent-chat__empty")),
                   board: Boolean(bounds && bounds.width > 0 && bounds.height > 0),
                   boardRegion:
-                    boardSkeleton?.closest("[data-region]")?.getAttribute("data-region") ?? null,
+                    boardCard?.closest("[data-region]")?.getAttribute("data-region") ?? null,
                   transcript:
                     transcript?.textContent?.includes("Synthetic mission briefing.") ?? false,
                   transcriptRegion:
@@ -241,7 +247,8 @@ suite.define(() => {
               await page.getByText("Synthetic mission briefing.", { exact: true }).waitFor();
             }
             const skeleton = page.locator("[data-panel-skeleton=board]");
-            await skeleton.waitFor();
+            await page.locator(".board-widget").waitFor();
+            expect(await skeleton.count()).toBe(0);
             expect(
               await page.getByText("Synthetic mission briefing.", { exact: true }).isVisible(),
             ).toBe(true);
@@ -270,14 +277,13 @@ suite.define(() => {
             await expect.poll(() => boardDocumentRequests).toBe(1);
             await documentRequested.promise;
             expect(await gateway.getRequests("board.get")).toHaveLength(0);
-            expect(await skeleton.count()).toBe(1);
+            expect(await skeleton.count()).toBe(0);
             documentRelease.resolve();
             await page
               .frameLocator(".board-widget__frame")
               .frameLocator("iframe")
               .getByText("All systems ready")
               .waitFor();
-            await skeleton.waitFor({ state: "detached" });
             await gateway.setOnline(true);
             await gateway.waitForRequest("connect");
             await gateway.resolveDeferred("connect");
@@ -375,6 +381,7 @@ suite.define(() => {
               await frame.waitFor({ state: "detached" });
             }
           } finally {
+            initialDocumentRelease.resolve();
             historyValidator?.release();
             documentRelease.resolve();
             configRelease.resolve();

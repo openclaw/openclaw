@@ -181,6 +181,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
       fullWidth,
       page,
       loading,
+      quiet: owner.hasRestoredGeometry(),
       cells: [...entries.values()],
       state,
     };
@@ -206,7 +207,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
 
   return (
     <>
-      <Show when={view().loading}>
+      <Show when={view().loading && !view().quiet}>
         <PanelLoadingSkeleton
           variant="board"
           label={t("common.loading")}

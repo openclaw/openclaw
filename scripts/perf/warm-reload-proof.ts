@@ -16,8 +16,13 @@ import {
 } from "../../src/shared/control-ui-storage.ts";
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
+import { installWidgetReadiness } from "../lib/control-ui-dashboard-probe.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { freeProofPort, startWarmReloadAdmission } from "./warm-reload-admission.ts";
+import {
+  installBoardSandboxPhaseProbe,
+  startBoardSandboxTrace,
+} from "./warm-reload-board-trace.ts";
 import { installWarmReloadBrowserProbe, proofRegions } from "./warm-reload-browser-probe.ts";
 import { launchWarmReloadBrowser, calibrateWarmReloadPaintHolding } from "./warm-reload-browser.ts";
 import { prepareWarmReloadBuild, createWarmReloadComparison } from "./warm-reload-compare.ts";
@@ -38,6 +43,8 @@ const { values } = parseArgs({
     "rtt-ms": { type: "string", default: "80" },
     "capture-ms": { type: "string", default: "8000" },
     route: { type: "string", default: "both" },
+    "trace-board": { type: "boolean", default: false },
+    "board-phases": { type: "boolean", default: false },
     "audit-report": { type: "string" },
     "paint-audit": { type: "string" },
     help: { type: "boolean", default: false },
@@ -242,6 +249,7 @@ async function captureReload(
   route: string,
 ) {
   await mkdir(outputDir, { recursive: true });
+  let stopBoardTrace: (() => Promise<void>) | undefined;
   const oldAnimationSample = warm
     ? await page.evaluate(() => {
         const data: ReturnType<typeof installWarmReloadBrowserProbe> = Reflect.get(
@@ -357,6 +365,9 @@ async function captureReload(
   cdp.on("Network.webSocketFrameReceived", onReceived);
   page.on("pageerror", onError);
   try {
+    if (values["trace-board"]) {
+      stopBoardTrace = await startBoardSandboxTrace(page, path.join(outputDir, "board-trace.json"));
+    }
     await cdp.send("Page.startScreencast", {
       format: "png",
       maxWidth: viewport.width,
@@ -380,6 +391,13 @@ async function captureReload(
       timeout: captureMs + 60000,
     });
     const probe = await readProbe(page);
+    if (values["trace-board"] || values["board-phases"]) {
+      const phases = await page.evaluate(() => ({
+        readiness: Reflect.get(window, "__readWidgetReadiness")(),
+        phases: Reflect.get(window, "__readBoardSandboxPhases")(),
+      }));
+      await writeFile(path.join(outputDir, "board-phases.json"), JSON.stringify(phases, null, 2));
+    }
     const finalDocumentTimeOrigin = probe.timeOrigin;
     const navigationOrigin = documents[0]?.epochMs ?? finalDocumentTimeOrigin;
     const documentOffsetMs = finalDocumentTimeOrigin - navigationOrigin;
@@ -541,6 +559,7 @@ async function captureReload(
     );
     return report;
   } finally {
+    await stopBoardTrace?.();
     await cdp.send("Page.stopScreencast").catch(() => {});
     cdp.off("Page.screencastFrame", onFrame);
     cdp.off("Network.requestWillBeSent", onDocument);
@@ -757,6 +776,11 @@ try {
         try {
           const page = await context.newPage();
           diagnosticPage = page;
+          if (values["trace-board"] || values["board-phases"]) {
+            await page.addInitScript({
+              content: `globalThis.__name = (fn) => fn; (${installWidgetReadiness.toString()})(); (${installBoardSandboxPhaseProbe.toString()})();`,
+            });
+          }
           page.setDefaultTimeout(60000);
           await page.addInitScript({
             content: `globalThis.__name = (fn) => fn; (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)});`,

@@ -111,7 +111,11 @@ export type ChatSessionSnapshot = {
   avatarSources?: Record<string, string | null>;
   composer?: ChatComposerSnapshot | null;
   // The board provider validates cached payloads before they can reach a view.
-  board?: { snapshot: unknown; receivedAtMs: number } | null;
+  board?: {
+    snapshot: unknown;
+    receivedAtMs: number;
+    contentHeights?: Record<string, number>;
+  } | null;
   widgetHeights?: Record<string, number>;
   transcriptMetadata?: ChatTranscriptMetadata;
   messageReactions?: Record<string, MessageReactionSummary[]>;

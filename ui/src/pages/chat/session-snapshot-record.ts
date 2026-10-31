@@ -93,7 +93,23 @@ const snapshotSchema = json.object(
       ),
     ),
     board: json.optional(
-      json.nullable(json.object({ snapshot: json.unknown, receivedAtMs: nonnegative }, true)),
+      json.nullable(
+        json.object(
+          {
+            snapshot: json.unknown,
+            receivedAtMs: nonnegative,
+            contentHeights: json.optional(
+              json.refine(
+                json.record(json.refine(json.number, (height) => height >= 1 && height <= 20000)),
+                (heights) =>
+                  Object.keys(heights).length <= 48 &&
+                  Object.keys(heights).every((key) => /^[a-f0-9]{16}$/u.test(key)),
+              ),
+            ),
+          },
+          true,
+        ),
+      ),
     ),
     widgetHeights: json.optional(
       json.refine(

@@ -1,5 +1,5 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { createMemo, lazy, type Element } from "solid-js";
+import { createMemo, lazy, Show, type Element } from "solid-js";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import type { BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
@@ -42,7 +42,11 @@ export function BoardSessionSurface(props: BoardSessionSurfaceProps) {
       {props.controls}
       <div class="board-session-surface__board">
         <ChatLazyBoundary
-          fallback={<PanelLoadingSkeleton variant="board" label={t("common.loading")} overlay />}
+          fallback={
+            <Show when={!props.callbacks.heightLayout?.cached}>
+              <PanelLoadingSkeleton variant="board" label={t("common.loading")} overlay />
+            </Show>
+          }
         >
           <BoardView
             ref={[boardRef]}

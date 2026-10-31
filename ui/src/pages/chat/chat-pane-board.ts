@@ -30,14 +30,10 @@ import {
   readSessionMethodAccess,
   readSessionMethodScopeAccess,
 } from "../../lib/session-method-access.ts";
-import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import { resolveSessionPreferredFace } from "../../lib/sessions/route-navigation.ts";
 import {
-  buildAgentMainSessionKey,
   canonicalUiSessionKeyForPersistence,
-  normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
-  resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
@@ -266,17 +262,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     this.commitSidebarLayout(fittedProjection, { geometryOnly: true });
   }
 
-  protected resolveBoardConversation() {
-    return resolveUiConversationIdentity(
-      {
-        assistantAgentId: this.state?.assistantAgentId,
-        agentsList: this.state?.agentsList,
-        hello: this.context?.gateway.snapshot.hello,
-      },
-      this.state?.sessionKey || this.sessionKey,
-    );
-  }
-
   protected resolveBoardProvider(): BoardProvider {
     const session = this.resolveBoardConversation();
     if (this.boardProvider) {
@@ -352,6 +337,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           state && readChatSessionSnapshot(state.chatMessagesBySession, state, session);
         if (cached?.board) {
           this.boardProviderLease.restoreSnapshot(cached.board.snapshot, cached.board.receivedAtMs);
+          this.prepareBoardSandboxes(this.boardProviderLease.provider);
         }
       } else {
         this.boardProviderLease.update(client, gateway.phase === "connected", {
@@ -377,6 +363,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected releaseBoardProviderLease(): void {
+    this.releasePreparedBoardSandboxes();
     this.boardProviderLease?.release();
     this.boardProviderLease = undefined;
   }
@@ -478,15 +465,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     }
   }
 
-  protected resolveBoardSessionKey(snapshotSessionKey = ""): string {
-    const resolved = resolveSessionKey(
-      snapshotSessionKey || this.state?.sessionKey || this.sessionKey,
-      this.context?.gateway.snapshot.hello,
-    );
-    const normalized = normalizeSessionKeyForUiComparison(resolved);
-    return normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
-  }
-
   protected refreshSwarmRoster(): void {
     const context = this.context;
     // Load before admission so mounting cannot retire the state captured by a held import.
@@ -570,12 +548,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const provider = this.resolveBoardProvider();
     const snapshot = provider.snapshot$.value;
     const hasBoard = snapshot.tabs.length > 0 || snapshot.widgets.length > 0;
-    const sessionKey = this.resolveBoardSessionKey(snapshot.sessionKey);
-    const saved = this.context.theme.settings.boardSessionViews?.[sessionKey];
-    const savedTab = snapshot.tabs.some((tab) => tab.tabId === saved?.activeTabId)
-      ? saved?.activeTabId
-      : undefined;
-    const activeTabId = savedTab ?? snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
     return {
       provider,
       snapshot,
@@ -585,7 +557,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           isGatewayMethodAdvertised(this.context.gateway.snapshot, "board.get") !== false),
       hasBoard,
       face: this.routeFace ?? "chat",
-      activeTabId,
+      activeTabId: this.boardActiveTab(snapshot),
     };
   }
 

@@ -8,10 +8,12 @@ export const WIDGET_LOAD_NOTICE_MS = 10_000;
 export const WIDGET_LOAD_TIMEOUT_MS = DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS;
 export class WidgetRenderTimeoutError extends Error {}
 
-type WidgetSandboxHostOptions = {
+type WidgetSandboxProxyOptions = {
   frame: HTMLIFrameElement;
   sandboxOrigin: string;
   sandboxUrl: string;
+};
+export type WidgetSandboxHostOptions = WidgetSandboxProxyOptions & {
   documentKey: string;
   /** Restricts the untrusted inner document, not the trusted transport shell. */
   allowScripts?: boolean;
@@ -38,13 +40,17 @@ export class WidgetSandboxHost {
   private activeLoad: { controller: AbortController; timeout: number; notice: number } | null =
     null;
 
-  constructor(private options: WidgetSandboxHostOptions) {
+  constructor(private options: WidgetSandboxHostOptions | WidgetSandboxProxyOptions) {
     // Owners finish installing their bridge before an immediate load can report back.
     queueMicrotask(() => this.start());
   }
 
   get frame(): HTMLIFrameElement {
     return this.options.frame;
+  }
+
+  private get documentOptions(): WidgetSandboxHostOptions | undefined {
+    return "loadDocument" in this.options ? this.options : undefined;
   }
 
   get ready(): boolean {
@@ -62,7 +68,7 @@ export class WidgetSandboxHost {
   update(options: WidgetSandboxHostOptions): void {
     const sandboxChanged =
       this.options.frame !== options.frame || this.options.sandboxUrl !== options.sandboxUrl;
-    const documentChanged = this.options.documentKey !== options.documentKey;
+    const documentChanged = this.documentOptions?.documentKey !== options.documentKey;
     this.options = options;
     if (sandboxChanged || documentChanged) {
       this.reset();
@@ -111,7 +117,7 @@ export class WidgetSandboxHost {
       if (this.renderId && event.data?.params?.renderId === this.renderId) {
         this.clearReadyTimeout();
         this.renderId = null;
-        this.options.onRendered?.();
+        this.documentOptions?.onRendered?.();
       }
       return;
     }
@@ -156,7 +162,8 @@ export class WidgetSandboxHost {
 
   private scheduleReadyTimeout(): void {
     if (
-      (this.proxyReady && (!this.renderId || !this.options.onRendered)) ||
+      !this.documentOptions ||
+      (this.proxyReady && (!this.renderId || !this.documentOptions.onRendered)) ||
       this.readyTimer !== null
     ) {
       return;
@@ -164,7 +171,7 @@ export class WidgetSandboxHost {
     this.slowTimer = window.setTimeout(() => {
       this.slowTimer = null;
       if (this.active && this.frame.isConnected) {
-        this.options.onPending?.();
+        this.documentOptions?.onPending?.();
       }
     }, WIDGET_LOAD_NOTICE_MS);
     this.readyTimer = window.setTimeout(() => {
@@ -172,7 +179,7 @@ export class WidgetSandboxHost {
       if (this.active && !this.proxyReady && this.frame.isConnected) {
         this.retrySandboxFrame();
       } else if (this.active && this.renderId && this.frame.isConnected) {
-        this.options.onError(
+        this.documentOptions?.onError(
           new WidgetRenderTimeoutError(
             "Widget content did not finish loading. Reload the dashboard to try again.",
           ),
@@ -184,7 +191,7 @@ export class WidgetSandboxHost {
   private retrySandboxFrame(): void {
     this.proxyReady = false;
     this.reset();
-    this.options.onReadyTimeout();
+    this.documentOptions?.onReadyTimeout();
     this.scheduleRetry(() => {
       // A new ticket cannot recover an outer frame that never reached its script.
       this.frame.src = this.options.sandboxUrl;
@@ -224,8 +231,9 @@ export class WidgetSandboxHost {
   }
 
   private async loadDocument(): Promise<void> {
-    const { loadDocument } = this.options;
+    const loadDocument = this.documentOptions?.loadDocument;
     if (
+      !loadDocument ||
       this.loaded ||
       this.pendingDocument !== null ||
       this.activeLoad !== null ||
@@ -238,7 +246,7 @@ export class WidgetSandboxHost {
       controller,
       notice: window.setTimeout(() => {
         if (this.activeLoad === load) {
-          this.options.onPending?.();
+          this.documentOptions?.onPending?.();
         }
       }, WIDGET_LOAD_NOTICE_MS),
       timeout: window.setTimeout(
@@ -262,8 +270,8 @@ export class WidgetSandboxHost {
     } catch (error) {
       if (this.activeLoad === load && this.active && this.frame.isConnected) {
         const failure = controller.signal.aborted ? controller.signal.reason : error;
-        this.options.onError(failure);
-        if (this.options.retryDocument?.(failure)) {
+        this.documentOptions?.onError(failure);
+        if (this.documentOptions?.retryDocument?.(failure)) {
           this.scheduleRetry(() => this.start());
         }
       }
@@ -290,7 +298,7 @@ export class WidgetSandboxHost {
         params: {
           html: document,
           renderId: this.renderId,
-          ...(this.options.allowScripts === false ? { allowScripts: false } : {}),
+          ...(this.documentOptions?.allowScripts === false ? { allowScripts: false } : {}),
         },
       },
       this.options.sandboxOrigin,
@@ -298,6 +306,6 @@ export class WidgetSandboxHost {
     this.pendingDocument = null;
     this.documentLoaded = true;
     this.retryDelayMs = 1_000;
-    this.options.onLoaded();
+    this.documentOptions?.onLoaded();
   }
 }

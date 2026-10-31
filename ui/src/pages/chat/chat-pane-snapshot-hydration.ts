@@ -2,7 +2,7 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { mergeStoredChatSessionSnapshot } from "./chat-board-snapshot.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { chatHistoryRequests, type InitialChatSnapshotHydration } from "./chat-history-state.ts";
-import { ChatPaneReplyNavigation } from "./chat-pane-reply-navigation.ts";
+import { ChatPaneBoardCache } from "./chat-pane-board-cache.ts";
 import {
   applyChatCacheSnapshot,
   cacheChatSessionSnapshot,
@@ -12,7 +12,7 @@ import {
 } from "./session-message-cache.ts";
 import { snapshotStoreGeneration } from "./session-snapshot-invalidation-events.ts";
 
-export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation {
+export abstract class ChatPaneSnapshotHydration extends ChatPaneBoardCache {
   protected hydrateStoredChatSnapshot(
     state: NonNullable<ChatPaneSnapshotHydration["state"]>,
     sessionKey: string,
@@ -37,6 +37,9 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
       if (isCurrent() && board) {
         this.resolveBoardProvider();
         this.boardProviderLease?.restoreSnapshot(board.snapshot, board.receivedAtMs);
+        if (this.boardProviderLease?.provider.hasLoadedSnapshot) {
+          this.prepareBoardSandboxes(this.boardProviderLease.provider);
+        }
       }
     };
     const adoptSnapshot = (storedSnapshot: ChatSessionSnapshot | null) => {

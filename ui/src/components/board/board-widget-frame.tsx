@@ -3,7 +3,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import { EventStream } from "../../lib/board/provider-signals.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
-import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
+import type { BoardViewCallbacks, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
 import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-lifetime.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -13,13 +13,14 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { subscribeDocumentVisibility } from "../../lib/reactive/platform.ts";
 import { observeWindowMessage } from "../../lib/reactive/window-message.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { WidgetRenderTimeoutError } from "../../lib/widget-sandbox-host.ts";
+import { WidgetRenderTimeoutError, type WidgetSandboxHost } from "../../lib/widget-sandbox-host.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../lib/widget-theme.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../command-palette-contract.ts";
 import { McpAppConfirmation } from "../mcp-app-confirm-solid.tsx";
 import { createMcpAppConfirm } from "../mcp-app-confirm.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
+import { BoardSandboxFrame } from "./board-sandbox-frame.tsx";
 import { BoardWidgetTicketRefresh, type FrameRefresh } from "./board-widget-ticket-refresh.ts";
 
 registerEnglishCatalog(registerBoardEnglish);
@@ -69,6 +70,7 @@ export function createBoardWidgetFrame(host: {
   scrollBy: (deltaY: number) => void;
   resolveFrameUrl: () => BoardWidgetFrameUrl | undefined;
   widget: () => BoardWidget | undefined;
+  takePreparedSandbox?: BoardViewCallbacks["takePreparedSandbox"];
 }) {
   const changes = new EventStream<void>();
   let initialTheme = document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
@@ -86,6 +88,7 @@ export function createBoardWidgetFrame(host: {
   let lastFrameUrl = "";
   let sandboxOrigin = "";
   let sandboxHost: BoardWidgetSandboxHost | null = null;
+  let preparedDocumentHost: WidgetSandboxHost | undefined;
   let contentVisible = false;
   let initialPaint = true;
   const confirmation = createMcpAppConfirm();
@@ -375,6 +378,10 @@ export function createBoardWidgetFrame(host: {
       sandboxHost = null;
       return;
     }
+    const url = resolveSandboxFrameUrl(widget);
+    if (url && frame.src !== url) {
+      frame.src = url;
+    }
     syncSandboxHost(frame, widget);
   }
 
@@ -395,7 +402,8 @@ export function createBoardWidgetFrame(host: {
     }
     if (!sandboxHost || sandboxHost.frame !== frame) {
       sandboxHost?.dispose();
-      sandboxHost = new BoardWidgetSandboxHost(options);
+      sandboxHost = new BoardWidgetSandboxHost(options, preparedDocumentHost);
+      preparedDocumentHost = undefined;
     } else {
       sandboxHost.update(options);
     }
@@ -564,14 +572,18 @@ export function createBoardWidgetFrame(host: {
     // Forward the widget owner's event stream to its projection subscribers.
     subscribe: (listener: () => void) => changes.subscribe(listener),
     confirmation,
-    bindFrame(frame: HTMLIFrameElement) {
+    takePreparedSandbox: (widget: BoardWidget, url: string) =>
+      host.takePreparedSandbox?.(widget, url),
+    bindFrame(frame: HTMLIFrameElement, prepared?: WidgetSandboxHost) {
       releaseTheme?.();
       releaseTheme = undefined;
       frame.style.colorScheme = initialTheme;
       frameElement = frame;
+      preparedDocumentHost = prepared;
     },
     frameConnected(frame: HTMLIFrameElement): () => void {
       syncMessages();
+      changes.emit();
       return () => {
         if (messageFrame === frame) {
           releaseMessages();
@@ -588,6 +600,9 @@ export function createBoardWidgetFrame(host: {
       const sandboxSrc = resolveSandboxFrameUrl(value);
       if (!sandboxSrc && (value.sandboxUrl || value.sandboxPort || value.viewTicket)) {
         throw new Error(t("board.widget.sandboxUnavailable"));
+      }
+      if (sandboxSrc && frameElement && frameElement.src !== sandboxSrc) {
+        frameElement.src = sandboxSrc;
       }
       return {
         src,
@@ -688,20 +703,12 @@ export function BoardWidgetFrame(props: {
             </Match>
           </Switch>
         </Show>
-        <iframe
-          ref={[frameRef()]}
-          class="board-widget__frame"
-          allow="fullscreen"
-          style={{ opacity: view().visible || view().painting ? undefined : 0 }}
-          inert={!view().visible}
-          sandbox="allow-scripts allow-same-origin allow-forms"
-          referrerpolicy="origin"
-          loading="eager"
-          title={props.current().title || props.current().name}
-          src={view().sandboxSrc}
-          onOpenclaw:restore-focus={(event: Event) => props.state().restoreFocus(event)}
-          onError={() => props.state().handleFrameError(props.current())}
-          onLoad={(event) => props.state().postBoardHostState(event.currentTarget)}
+        <BoardSandboxFrame
+          state={props.state}
+          current={props.current}
+          url={() => view().sandboxSrc!}
+          visible={() => view().visible}
+          painting={() => view().painting}
         />
       </div>
     </Show>

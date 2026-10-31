@@ -5,6 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
+import type { BoardViewCallbacks } from "../../lib/board/view-types.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import type { ChatBoardPanelSource } from "./chat-pane-panel-source.ts";
@@ -37,6 +38,7 @@ type BoardTestPane = HTMLElement & {
     layout: ChatPageHost["sidebarLayout"],
   ) => ChatBoardPanelSource | null;
   releaseBoardProviderLease: () => void;
+  boardHeightLayout: (provider: BoardProvider) => BoardViewCallbacks["heightLayout"];
 };
 
 type BoardSnapshot = BoardProvider["snapshot$"]["value"];
@@ -171,7 +173,7 @@ it("hydrates the transcript without mounting an invalid persisted board", async 
   expect(container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
 });
 
-it("persists a board acquired before pane state exists after transcript hydration", async () => {
+it("persists a board and bounded measured heights after transcript hydration", async () => {
   const sessionKey = "agent:main:warm-persistence";
   const { pane, request, snapshot, cleanup } = createGatewayBoardPane(sessionKey);
   const response = createDeferred<typeof snapshot>();
@@ -195,6 +197,11 @@ it("persists a board acquired before pane state exists after transcript hydratio
   expect(
     readChatSessionSnapshot(pane.state.chatMessagesBySession, pane.state, { sessionKey }),
   ).toBeNull();
+  const layout = expectDefined(pane.boardHeightLayout(provider), "board layout");
+  for (let index = 0; index < 48; index++) {
+    layout.write(index.toString(16).padStart(16, "0"), 100 + index);
+  }
+  layout.write("0123456789abcdef", 462);
   cacheChatSessionSnapshot(
     pane.state.chatMessagesBySession,
     pane.state,
@@ -209,6 +216,10 @@ it("persists a board acquired before pane state exists after transcript hydratio
   });
   expect(cached?.messages).toEqual(transcript.messages);
   expect(cached?.board?.snapshot).toEqual(snapshot);
+  expect(cached?.board?.contentHeights?.["0123456789abcdef"]).toBe(462);
+  expect(Object.keys(cached?.board?.contentHeights ?? {})).toHaveLength(48);
+  expect(cached?.board?.contentHeights?.["0000000000000000"]).toBeUndefined();
+  expect(cached?.board?.contentHeights?.["0000000000000001"]).toBe(101);
 });
 
 it("discards a retired lease's deferred cache write after a newer board arrives", async () => {
@@ -225,6 +236,10 @@ it("discards a retired lease's deferred cache write after a newer board arrives"
   response.resolve(snapshot);
   await response.promise;
   expect(retired.hasLoadedSnapshot).toBe(true);
+  expectDefined(pane.boardHeightLayout(retired), "retired board layout").write(
+    "0123456789abcdef",
+    462,
+  );
   pane.releaseBoardProviderLease();
   history.initialSnapshotHydration = undefined;
   const newer = { ...snapshot, revision: 2 };
@@ -236,6 +251,10 @@ it("discards a retired lease's deferred cache write after a newer board arrives"
     readChatSessionSnapshot(pane.state.chatMessagesBySession, pane.state, { sessionKey })?.board
       ?.snapshot;
   expect(readBoard()).toEqual(newer);
+  expect(
+    readChatSessionSnapshot(pane.state.chatMessagesBySession, pane.state, { sessionKey })?.board
+      ?.contentHeights,
+  ).toBeUndefined();
   hydration.resolve();
   await hydration.promise;
   expect(readBoard()).toEqual(newer);

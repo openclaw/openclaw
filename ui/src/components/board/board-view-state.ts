@@ -15,6 +15,7 @@ import {
 } from "../../lib/board/grid.ts";
 import type { BoardOp, BoardSnapshot, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardViewCallbacks, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
+import { boardWidgetHeightKey } from "../../lib/board/widget-content-height.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -84,7 +85,10 @@ export function createBoardViewState(
   const activeTab = createMemo(
     () => tabs().find((tab) => tab.tabId === props.activeTabId) ?? tabs()[0],
   );
-  const initialHeights: Record<string, { height: number; revision: number }> = {};
+  const initialHeights: Record<
+    string,
+    { height: number; revision: number; restored?: true; pendingHeight?: number }
+  > = {};
   const initial = {
     previewItems: new Array<BoardGridItem>(),
     gesture: { name: "", mode: "" },
@@ -143,6 +147,32 @@ export function createBoardViewState(
         }
       }
     }
+    if (
+      (ownerChanged || !before?.snapshot) &&
+      props.callbacks?.heightLayout?.cached &&
+      props.snapshot
+    ) {
+      const width = host.offsetWidth;
+      if (width > 0) {
+        for (const widget of props.snapshot.widgets.filter(
+          (entry) => entry.tabId === activeTab()?.tabId,
+        )) {
+          if (widget.contentKind !== "html") {
+            continue;
+          }
+          const height = props.callbacks.heightLayout.read(
+            boardWidgetHeightKey(widget, width, widget.name === props.pageWidgetName),
+          );
+          if (height !== undefined) {
+            local.contentHeights[widget.name] = {
+              height,
+              revision: widget.revision,
+              restored: true,
+            };
+          }
+        }
+      }
+    }
     if (ownerChanged || before?.activeTabId !== props.activeTabId) {
       local.focusName = "";
     }
@@ -172,6 +202,11 @@ export function createBoardViewState(
       update((local) => {
         local.initialLoading = false;
       });
+      for (const [name, entry] of Object.entries(presentation.contentHeights)) {
+        if (entry.pendingHeight !== undefined) {
+          cellCallbacks.reportContentHeight(name, entry.pendingHeight);
+        }
+      }
     }
   };
   function announce(message: string): void {
@@ -248,6 +283,7 @@ export function createBoardViewState(
   }
 
   const cellCallbacks: BoardWidgetCellCallbacks = {
+    takePreparedSandbox: (widget, url) => props.callbacks?.takePreparedSandbox?.(widget, url),
     presentationReady: reconcileInitialPresentation,
     appViewGeneration: () => props.callbacks?.appViewGeneration ?? 0,
     grant: async (name, decision) => {
@@ -301,13 +337,32 @@ export function createBoardViewState(
       if (!widget || widget.contentKind !== "html") {
         return;
       }
+      // Retain admitted geometry until the existing rendered-document acknowledgement.
+      if (presentation.initialLoading && presentation.contentHeights[name]?.restored) {
+        update((local) => {
+          local.contentHeights[name]!.pendingHeight = height;
+        });
+        return;
+      }
       // Any pixel change matters: the cell renders the exact reported height,
       // not just the quantized row span.
       update((local) => {
-        if (local.contentHeights[name]?.height !== height) {
+        if (
+          local.contentHeights[name]?.height !== height ||
+          local.contentHeights[name]?.pendingHeight !== undefined
+        ) {
           local.contentHeights[name] = { height, revision: widget.revision };
         }
       });
+      if (props.callbacks?.heightLayout) {
+        const width = host.offsetWidth;
+        if (width > 0) {
+          props.callbacks.heightLayout.write(
+            boardWidgetHeightKey(widget, width, name === props.pageWidgetName),
+            height,
+          );
+        }
+      }
     },
     remove: async (widget) =>
       applyOps(
@@ -557,6 +612,14 @@ export function createBoardViewState(
     ),
     visitedTabs,
     contentHeights,
+    hasRestoredGeometry: () => {
+      const widgets =
+        props.snapshot?.widgets.filter((widget) => widget.tabId === activeTab()?.tabId) ?? [];
+      return (
+        widgets.length > 0 &&
+        widgets.every((widget) => presentation.contentHeights[widget.name]?.restored)
+      );
+    },
     cellCallbacks,
     tabs,
     activeTab,

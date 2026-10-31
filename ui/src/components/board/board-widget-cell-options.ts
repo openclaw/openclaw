@@ -2,7 +2,11 @@ import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/provider.ts";
 import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
-import type { BoardGrantDecision, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
+import type {
+  BoardGrantDecision,
+  BoardViewCallbacks,
+  BoardWidgetFrameUrl,
+} from "../../lib/board/view-types.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 
 export const BOARD_SIZE_PRESETS = {
@@ -20,6 +24,7 @@ export type BoardWidgetPageMenu = {
 };
 
 export type BoardWidgetCellCallbacks = {
+  takePreparedSandbox?: BoardViewCallbacks["takePreparedSandbox"];
   presentationReady?: () => void;
   appViewGeneration: () => number;
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;

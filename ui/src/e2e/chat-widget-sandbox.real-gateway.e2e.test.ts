@@ -12,6 +12,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
@@ -118,6 +119,38 @@ function appendAssistant(sessionKey: string, sessionId: string, content: unknown
   );
 }
 
+function installBoardGeometryProbe() {
+  if (window !== window.top) {
+    return;
+  }
+  const heights: number[] = [];
+  Reflect.set(window, "warmBoardGeometry", heights);
+  const observed = new WeakSet<Element>();
+  const resize = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const height = entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height;
+      if (height > 0 && heights.at(-1) !== height) {
+        heights.push(height);
+      }
+    }
+  });
+  new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) {
+          continue;
+        }
+        for (const cell of [node, ...node.querySelectorAll(".board-widget")]) {
+          if (cell.matches(".board-widget") && !observed.has(cell)) {
+            observed.add(cell);
+            resize.observe(cell);
+          }
+        }
+      }
+    }
+  }).observe(document, { childList: true, subtree: true });
+}
+
 async function cliJson(args: string[]): Promise<Record<string, unknown>> {
   const result = await gatewayOwner().cli(["--no-color", ...args]);
   expect(result, args.slice(0, 3).join(" ")).toMatchObject({ code: 0, signal: null });
@@ -139,7 +172,10 @@ suite.define(() => {
         placement: { size: "full" },
         content: {
           kind: "html",
-          html: buildWidgetDocument("Warm connection proof", "<h1>Cached connection proof</h1>"),
+          html: buildWidgetDocument(
+            "Warm connection proof",
+            "<style>body{height:436px}</style><h1>Cached connection proof</h1>",
+          ),
         },
       });
       for (let index = 0; index < 9; index++) {
@@ -156,8 +192,19 @@ suite.define(() => {
       const url = await sessionUrl(key, face);
       const observations: unknown[] = [];
       await suite.withPage(browserOptions, async ({ page }) => {
+        let documentGate = face === "dashboard" ? createDeferred() : undefined;
+        let documentRequested = createDeferred();
+        await page.route("**/__openclaw__/board/**", async (route) => {
+          const gate = documentGate;
+          if (gate) {
+            documentRequested.resolve();
+            await gate.promise;
+          }
+          await route.continue();
+        });
         await page.addInitScript(installWarmConnectSocketTrace);
         await page.addInitScript(installWarmConnectIdentityGate);
+        await page.addInitScript(installBoardGeometryProbe);
         await page.goto(url);
         // The entry probe reveals login or redirects into the app asynchronously.
         const login = page.getByRole("link", { name: "Log in", exact: true });
@@ -170,13 +217,41 @@ suite.define(() => {
           .getByText("Cached warm connection transcript.", { exact: false })
           .first();
         await transcript.waitFor();
+        let boardHeight: number | undefined;
         if (face === "dashboard") {
+          try {
+            await documentRequested.promise;
+            expect(await page.locator("[data-panel-skeleton=board]").count()).toBe(1);
+            await page.locator(".board-widget").evaluate((cell) => {
+              const frame = cell.querySelector("iframe")!;
+              Reflect.set(
+                window,
+                "fittedBoardHeight",
+                new Promise<number>((resolve) => {
+                  const receive = (event: MessageEvent) => {
+                    if (
+                      event.source === frame.contentWindow &&
+                      event.data?.type === "openclaw:widget-size" &&
+                      event.data.height > 0
+                    ) {
+                      window.removeEventListener("message", receive);
+                      requestAnimationFrame(() => resolve(cell.getBoundingClientRect().height));
+                    }
+                  };
+                  window.addEventListener("message", receive);
+                }),
+              );
+            });
+          } finally {
+            documentGate?.resolve();
+          }
           await page
             .locator(".board-widget__frame")
             .contentFrame()
             .frameLocator("iframe")
             .getByRole("heading", { name: "Cached connection proof" })
             .waitFor();
+          boardHeight = await page.evaluate(() => Reflect.get(window, "fittedBoardHeight"));
         }
         await page.waitForFunction(() =>
           Object.keys(localStorage).some((storageKey) =>
@@ -192,20 +267,48 @@ suite.define(() => {
           if (reload === 0) {
             await page.evaluate(() => sessionStorage.setItem("warm-connect-hold-identity", "1"));
           }
-          await page.reload();
-          if (reload === 0) {
-            try {
-              await page.waitForFunction(() => window.warmConnectIdentityPending === true);
-              await transcript.waitFor();
-              await page.getByRole("link", { name: "Linked mission", exact: true }).waitFor();
-              const trace = await page.evaluate(() => window.warmConnectSocketTrace);
-              observations.push({ face, reload, stage: "cached-before-connect", trace });
-            } finally {
-              await page.evaluate(() => window.releaseWarmConnectIdentity?.());
+          documentRequested = createDeferred();
+          documentGate = face === "dashboard" ? createDeferred() : undefined;
+          try {
+            await page.reload();
+            if (reload === 0) {
+              try {
+                await page.waitForFunction(() => window.warmConnectIdentityPending === true);
+                await transcript.waitFor();
+                await page.getByRole("link", { name: "Linked mission", exact: true }).waitFor();
+                const trace = await page.evaluate(() => window.warmConnectSocketTrace);
+                observations.push({ face, reload, stage: "cached-before-connect", trace });
+              } finally {
+                await page.evaluate(() => window.releaseWarmConnectIdentity?.());
+              }
             }
+            if (face === "dashboard") {
+              await documentRequested.promise;
+              expect(await page.locator("[data-panel-skeleton=board]").count()).toBe(0);
+              expect(
+                await page
+                  .locator(".board-widget")
+                  .evaluate((cell) => cell.getBoundingClientRect().height),
+              ).toBe(boardHeight);
+            }
+          } finally {
+            documentGate?.resolve();
           }
           await waitForControlUiGatewayReady(page);
           await transcript.waitFor();
+          if (face === "dashboard") {
+            const inner = page
+              .locator(".board-widget__frame")
+              .contentFrame()
+              .frameLocator("iframe");
+            await inner.getByRole("heading", { name: "Cached connection proof" }).waitFor();
+            expect(await inner.locator("html").evaluate(() => document.fullscreenEnabled)).toBe(
+              true,
+            );
+            expect(await page.evaluate(() => Reflect.get(window, "warmBoardGeometry"))).toEqual([
+              boardHeight,
+            ]);
+          }
           const trace = await page.evaluate(() => window.warmConnectSocketTrace);
           observations.push({ face, reload, trace });
           await writeFile(

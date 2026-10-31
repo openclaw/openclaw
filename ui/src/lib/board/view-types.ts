@@ -1,4 +1,6 @@
 import type { BoardOp } from "@openclaw/gateway-protocol";
+import type { BoardWidget } from "./types.ts";
+import type { PreparedBoardSandbox } from "./widget-sandbox-prewarm.ts";
 
 export type BoardGrantDecision = "granted" | "rejected";
 export type BoardWidgetAppViewState =
@@ -6,6 +8,12 @@ export type BoardWidgetAppViewState =
   | { status: "stale" };
 
 export type BoardViewCallbacks = {
+  heightLayout?: {
+    cached: boolean;
+    read: (key: string) => number | undefined;
+    write: (key: string, height: number) => void;
+  };
+  takePreparedSandbox?: (widget: BoardWidget, url: string) => PreparedBoardSandbox | undefined;
   appViewGeneration?: number;
   applyOps: (ops: BoardOp[]) => Promise<void>;
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;

@@ -46,6 +46,8 @@ export function buildChatBoardPanel(
       canMutate: board.provider.canMutate,
       canGrant: board.provider.canGrant,
       callbacks: {
+        heightLayout: owner.boardHeightLayout(board.provider),
+        takePreparedSandbox: (widget, url) => owner.takePreparedBoardSandbox(widget, url),
         appViewGeneration: board.provider.appViewGeneration,
         applyOps: (ops) => board.provider.applyOps(ops),
         grant: (name, decision) => board.provider.grant(name, decision),

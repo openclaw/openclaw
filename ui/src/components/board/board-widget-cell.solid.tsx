@@ -170,6 +170,7 @@ function BoardWidgetCellContent(
           host.closest("openclaw-board-view")?.scrollBy({ top: deltaY, behavior: "auto" }),
         resolveFrameUrl: () => props.widgetFrameUrl,
         widget: () => props.widget,
+        takePreparedSandbox: (widget, url) => props.callbacks?.takePreparedSandbox?.(widget, url),
       });
       disconnectFrame = () => frame.disconnect();
       return {

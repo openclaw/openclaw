@@ -314,6 +314,7 @@ describe("persistent chat session snapshots", () => {
     {
       board: {
         receivedAtMs: 100,
+        contentHeights: { "0123456789abcdef": 462 },
         snapshot: {
           sessionKey: "s",
           widgets: [

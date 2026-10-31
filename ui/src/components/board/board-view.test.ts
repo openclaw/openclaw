@@ -88,14 +88,23 @@ function stubBoardDocumentFetch(read: () => Promise<Response>): void {
 }
 
 describe("openclaw-board-view", () => {
-  it("retains one loading surface through snapshot and sandbox document readiness", async () => {
+  it("keeps cold loading covered and restores matching warm geometry", async () => {
     vi.useFakeTimers();
+    const width = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(480);
+    const heights = new Map<string, number>();
+    const heightLayout = () => ({
+      cached: heights.size > 0,
+      read: (key: string) => heights.get(key),
+      write: (key: string, height: number) => {
+        heights.set(key, height);
+      },
+    });
     const response = deferred<Response>();
     const fetchMock = vi.fn(() => response.promise);
     stubBoardDocumentFetch(fetchMock);
     const view = document.createElement("openclaw-board-view");
     view.activeTabId = "main";
-    view.callbacks = callbacks();
+    view.callbacks = callbacks({ heightLayout: heightLayout() });
     view.widgetFrameUrl = documentUrl;
     const provider = createApplicationContextProvider(gatewayContext(null));
     provider.append(view);
@@ -131,6 +140,59 @@ describe("openclaw-board-view", () => {
     expect(view.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
     expect(view.querySelector(".board-view")?.hasAttribute("inert")).toBe(false);
     expect(view.querySelector("iframe")).toBe(frame);
+    receive({ type: "openclaw:widget-size", height: 436 });
+    await settleCells(view);
+    const restored = () =>
+      mount({
+        snapshot: sandboxSnapshot(),
+        callbacks: callbacks({ heightLayout: heightLayout() }),
+        widgetFrameUrl: documentUrl,
+        context: gatewayContext(null),
+      });
+    const warm = await restored();
+    expect(warm.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+    expect(warm.querySelector(".board-widget")?.getAttribute("style")).toContain("500px");
+    const warmFrame = warm.querySelector("iframe")!;
+    const warmDocument = deferred<{ renderId: string }>();
+    vi.spyOn(warmFrame.contentWindow!, "postMessage").mockImplementation((message) => {
+      if (message.method === "ui/notifications/sandbox-resource-ready") {
+        warmDocument.resolve(message.params);
+      }
+    });
+    frameMessage(warmFrame, { type: "openclaw:widget-size", height: 520 });
+    await settleCells(warm);
+    expect(warm.querySelector(".board-widget")?.getAttribute("style")).toContain("500px");
+    frameMessage(warmFrame, {
+      method: "ui/notifications/sandbox-proxy-ready",
+      params: { sandboxUrl: warmFrame.src },
+    });
+    frameMessage(warmFrame, {
+      method: "ui/notifications/sandbox-resource-loaded",
+      params: { renderId: (await warmDocument.promise).renderId },
+    });
+    await vi.advanceTimersByTimeAsync(32);
+    await settleCells(warm);
+    expect(warm.querySelector(".board-widget")?.getAttribute("style")).toContain("584px");
+    width.mockReturnValue(640);
+    expect((await restored()).querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
+    width.mockReturnValue(480);
+    const changed = await mount({
+      snapshot: sandboxSnapshot({ revision: 2 }),
+      callbacks: callbacks({ heightLayout: heightLayout() }),
+      widgetFrameUrl: documentUrl,
+      context: gatewayContext(null),
+    });
+    expect(changed.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
+    const previousMode = document.documentElement.dataset.themeMode;
+    onTestFinished(() => {
+      if (previousMode === undefined) {
+        delete document.documentElement.dataset.themeMode;
+      } else {
+        document.documentElement.dataset.themeMode = previousMode;
+      }
+    });
+    document.documentElement.dataset.themeMode = previousMode === "light" ? "dark" : "light";
+    expect((await restored()).querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
   });
 
   it("paces a stalled proxy retry without spending the authorization refresh budget", async () => {

@@ -1,5 +1,7 @@
 import type { Element } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { BoardProvider } from "../../lib/board/provider.ts";
+import type { BoardViewCallbacks } from "../../lib/board/view-types.ts";
 import type { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import type { createChatPaneDiscussionState } from "./chat-pane-discussion-state.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
@@ -20,6 +22,8 @@ export type ChatBoardPanelSource = {
     onFaceChange?: (paneId: string, sessionKey: string, face: ResolvedBoardView["face"]) => void;
     boardView: HTMLElementTagNameMap["openclaw-board-view"] | null;
     selectBoardTab(activeTabId: string): void;
+    takePreparedBoardSandbox: NonNullable<BoardViewCallbacks["takePreparedSandbox"]>;
+    boardHeightLayout: (provider: BoardProvider) => BoardViewCallbacks["heightLayout"];
   };
   board: ResolvedBoardView;
   layout: SidebarLayout;
