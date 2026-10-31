@@ -282,6 +282,9 @@ available context fields depend on the emitting harness. Its event contains:
 - optional `event.result`: the tool outcome supplied by the harness.
 - optional `event.error`: an error message supplied or extracted by the harness.
 - optional `event.durationMs`: elapsed milliseconds when the start time is known.
+- optional `event.outcome`: the host's terminal classification of the call, one
+  of `completed`, `error`, or `blocked`. Absent when the host has no
+  structured outcome to classify.
 
 ```typescript
 type AfterToolCallEvent = {
@@ -292,6 +295,7 @@ type AfterToolCallEvent = {
   result?: unknown;
   error?: string;
   durationMs?: number;
+  outcome?: "completed" | "error" | "blocked";
 };
 ```
 
@@ -307,6 +311,16 @@ absence of `error` can record a failed call as a successful one; treat an
 unreadable outcome as unknown rather than as either result. What `result`
 carries for exec and bash-family tools is tracked separately in
 [#102961](https://github.com/openclaw/openclaw/issues/102961).
+
+`outcome` is the host's own classification from the same tool-result classifier
+that produces the `tool.execution.completed`, `tool.execution.error`, and
+`tool.execution.blocked` diagnostics for the call: `completed` means the call
+settled without a structured failure, `blocked` means it was denied before it
+ran (for example an unavailable exec approval), and `error` covers structured
+failures, including cancelled and timed-out results. The embedded agent path
+fills the field; results without structured details, and emitting harnesses
+that have not classified the call yet, leave it absent — absence never means
+success.
 
 Do not use this hook to enforce policy. As the
 [hook reference](/plugins/hooks/reference) puts it, use a gate that blocks the operation on error
