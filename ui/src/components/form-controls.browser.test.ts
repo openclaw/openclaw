@@ -398,6 +398,45 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     });
   });
 
+  it("keeps the gradient chevron where customizable selects are unavailable", async () => {
+    await withBrowserPage(mobileContext.newPage(), async (page) => {
+      await setFixture(page, controlsHtml(), 'data-theme-mode="light"');
+      await page.evaluate(() => {
+        for (const style of document.querySelectorAll("style")) {
+          style.textContent = style.textContent.replaceAll(
+            "@supports (appearance: base-select)",
+            "@supports (appearance: openclaw-unsupported)",
+          );
+        }
+      });
+      const selects = await page.locator("select.settings-select").evaluateAll((nodes) =>
+        nodes.map((node) => {
+          const style = getComputedStyle(node as HTMLElement);
+          return {
+            appearance: style.appearance,
+            image: style.backgroundImage,
+            paddingRight: Number.parseFloat(style.paddingRight),
+            positionX: style.backgroundPositionX.split(",").map((value) => value.trim()),
+            size: style.backgroundSize.split(",").map((value) => value.trim()),
+            repeat: style.backgroundRepeat.split(",").map((value) => value.trim()),
+          };
+        }),
+      );
+
+      expect(selects).toHaveLength(2);
+      for (const select of selects) {
+        expect(select).toMatchObject({
+          appearance: "none",
+          positionX: ["calc(100% - 18px)", "calc(100% - 14px)"],
+          size: ["5px 5px", "5px 5px"],
+          repeat: ["no-repeat", "no-repeat"],
+        });
+        expect(select.image.match(/linear-gradient[(]/g)).toHaveLength(2);
+        expect(select.paddingRight).toBeGreaterThanOrEqual(32);
+      }
+    });
+  });
+
   it("keeps mobile control sizes and themed select affordances", async () => {
     await withBrowserPage(mobileContext.newPage(), async (page) => {
       await setFixture(page, controlsHtml(), 'data-theme-mode="light"');
@@ -431,13 +470,12 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       const selects = await page.locator("select.settings-select").evaluateAll((nodes) =>
         nodes.map((node) => {
           const style = getComputedStyle(node as HTMLElement);
+          const icon = getComputedStyle(node as HTMLElement, "::picker-icon");
           return {
             appearance: style.appearance,
             image: style.backgroundImage,
-            paddingRight: Number.parseFloat(style.paddingRight),
-            positionX: style.backgroundPositionX.split(",").map((value) => value.trim()),
-            size: style.backgroundSize.split(",").map((value) => value.trim()),
-            repeat: style.backgroundRepeat.split(",").map((value) => value.trim()),
+            iconWidth: icon.width,
+            iconMask: icon.maskImage,
           };
         }),
       );
@@ -445,13 +483,11 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       expect(selects).toHaveLength(2);
       for (const select of selects) {
         expect(select).toMatchObject({
-          appearance: "none",
-          positionX: ["calc(100% - 18px)", "calc(100% - 14px)"],
-          size: ["5px 5px", "5px 5px"],
-          repeat: ["no-repeat", "no-repeat"],
+          appearance: "base-select",
+          image: "none",
+          iconWidth: "16px",
+          iconMask: expect.stringContaining("svg"),
         });
-        expect(select.image.match(/linear-gradient[(]/g)).toHaveLength(2);
-        expect(select.paddingRight).toBeGreaterThanOrEqual(32);
       }
       const [checkbox, radio, select, text] = await Promise.all(
         [
