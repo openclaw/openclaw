@@ -65,6 +65,23 @@ const NATIVE_TOOL_REQUIREMENTS = {
     "view_image",
     "ask_user",
   ],
+  // Qoder CLI 1.1.81: createToolRegistry and the qoder-tools built-in plugin,
+  // https://unpkg.com/@qoder-ai/qodercli@1.1.81/bundle/qodercli.js
+  qoder: [
+    ...LOCAL_TOOL_REQUIREMENTS,
+    "process",
+    "sessions_spawn",
+    "sessions_send",
+    "sessions_list",
+    "subagents",
+    "web_fetch",
+    "web_search",
+    "view_image",
+    "ask_user",
+    "automations",
+    "image_generate",
+    "video_generate",
+  ],
 } as const;
 
 export function createAcpAgentHarness(params: {

@@ -109,6 +109,28 @@ and [Copilot billing guide](https://docs.github.com/en/copilot/concepts/billing-
 for account and plan requirements. Native chat permission and sandbox boundaries
 below still apply.
 
+## Qoder CLI in native chat
+
+Install Qoder CLI and sign in under the OS account that runs the Gateway, then
+refresh the model catalog and choose an `acp-qoder/<model-id>` entry. Qoder CLI
+1.1.81 exposes its account model catalog and model selection over ACP. OpenClaw
+uses each advertised ID unchanged, including any slashes;
+it does not supply a static model list or an OpenClaw API credential.
+
+The pinned acpx launcher is `qodercli --acp`. Make `qodercli` available on `PATH`
+for the OS account that runs the Gateway. Configure custom providers and billing
+choices in Qoder itself. Qoder CLI is separate from QoderWork.
+
+Set `plugins.entries.acpx.config.nativeAgents.qoder` to `false` to disable new
+native Qoder turns and catalog discovery. Classic `/acp spawn qoder` sessions
+and `acp.allowedAgents` keep their existing behavior. Installation detection does
+not prove sign-in, model entitlement, or successful execution.
+
+See Qoder's [ACP guide](https://docs.qoder.com/cli/acp) and
+[custom model guide](https://docs.qoder.com/cli/custom-models).
+The native permission and sandbox boundaries below still apply, including
+Qoder's subagents, scheduled tasks, and media tools.
+
 Installed native agents keep their own sign-in. During discovery, `/models` can
 report **Checking native agent** without requiring an OpenClaw API key. If
 availability is unconfirmed, check the native app on the Gateway host and run

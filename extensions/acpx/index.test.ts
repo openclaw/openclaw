@@ -145,7 +145,7 @@ describe("acpx plugin", () => {
   });
 
   it("detects native programs and applies current enable settings without starting the runtime", async () => {
-    for (const command of ["npx", "opencode", "qwen", "pi-acp", "copilot"]) {
+    for (const command of ["npx", "opencode", "qwen", "pi-acp", "copilot", "qodercli"]) {
       nativePrograms.add(command);
     }
     let config: OpenClawPluginApi["config"] = { acp: { allowedAgents: ["codex"] } };
@@ -189,6 +189,13 @@ describe("acpx plugin", () => {
     });
     expect(detected).toHaveProperty("agents.1.installation", "installed");
     expect(detected).toHaveProperty("agents.2.installation", "missing");
+    expect(detected).toHaveProperty("agents.5", {
+      id: "qoder",
+      name: "Qoder",
+      runtimeId: "acp-qoder",
+      installation: "installed",
+      enabled: true,
+    });
     const opencode = getHarness("opencode");
     const selection = {
       provider: "acp-opencode",
@@ -203,7 +210,14 @@ describe("acpx plugin", () => {
     expect(inspectAgentModels).not.toHaveBeenCalled();
     nativePrograms.add("pi");
     const pluginConfig = {
-      nativeAgents: { opencode: false, qwen: false, pi: false, kilocode: false, copilot: false },
+      nativeAgents: {
+        opencode: false,
+        qwen: false,
+        pi: false,
+        kilocode: false,
+        copilot: false,
+        qoder: false,
+      },
       agents: { qwen: { command: "npx qwen" } },
     };
     config = {
@@ -218,13 +232,22 @@ describe("acpx plugin", () => {
     expect(disabled).toHaveProperty("agents.0.enabled", false);
     expect(disabled).toHaveProperty("agents.1.installation", "unverified");
     expect(disabled).toHaveProperty("agents.2.installation", "installed");
+    expect(disabled).toHaveProperty("agents.5.enabled", false);
+    await expect(
+      getHarness("qoder").loadModelCatalog(catalogInput(undefined, config)),
+    ).resolves.toEqual({ entries: [] });
+    expect(inspectAgentModels).not.toHaveBeenCalled();
     expect(config.acp?.allowedAgents).toEqual(["codex"]);
     expect(createServiceMock).not.toHaveBeenCalled();
   });
 
-  it.for(["enabled", "disposed"] as const)(
-    "inspects a real native catalog without runtime state when the harness becomes %s",
-    async (lifecycle, { signal }) => {
+  it.for([
+    { agent: "opencode", runtimeId: "acp-opencode", lifecycle: "enabled" },
+    { agent: "opencode", runtimeId: "acp-opencode", lifecycle: "disposed" },
+    { agent: "qoder", runtimeId: "acp-qoder", lifecycle: "enabled" },
+  ] as const)(
+    "inspects a real native catalog without runtime state: %j",
+    async ({ agent, runtimeId, lifecycle }, { signal }) => {
       const directory = await fs.mkdtemp(path.join(os.tmpdir(), "acpx-native-catalog-"));
       const peerDirectory = path.join(directory, "peer");
       await fs.mkdir(peerDirectory);
@@ -240,7 +263,7 @@ export { sendReceipt };`,
           stateDir: runtimeDirectory,
           timeoutSeconds: 10,
           agents: {
-            opencode: {
+            [agent]: {
               command: process.execPath,
               args: [
                 fileURLToPath(new URL("../../test/fixtures/acp/owner-agent.mjs", import.meta.url)),
@@ -263,7 +286,7 @@ export { sendReceipt };`,
           },
         }),
       });
-      const harness = getHarness("opencode");
+      const harness = getHarness(agent);
       const catalog = harness.loadModelCatalog(catalogInput(directory)).then(
         (models) => ({ models, error: undefined }),
         (error: unknown) => ({ models: undefined, error }),
@@ -286,12 +309,12 @@ export { sendReceipt };`,
               ["initial", "Initial"],
               ["selected", "Selected"],
             ].map(([id, name]) => ({
-              provider: "acp-opencode",
+              provider: runtimeId,
               id,
               name,
-              nativeRuntime: "acp-opencode",
+              nativeRuntime: runtimeId,
             })),
-            outcomes: [{ provider: "acp-opencode", status: "ready" }],
+            outcomes: [{ provider: runtimeId, status: "ready" }],
           });
         }
         const sessionId = await fs.readFile(entered, "utf8");
