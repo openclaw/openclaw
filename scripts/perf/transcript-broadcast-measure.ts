@@ -91,12 +91,14 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import path from "node:path";
 import { createHistogram } from "node:perf_hooks";
+import { DatabaseSync } from "node:sqlite";
 import { finished } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -193,8 +195,10 @@ const { values } = parseArgs({
     "stress-network-tool": { type: "boolean", default: false },
     "attempt-setup-image": { type: "string" },
     "sandbox-image": { type: "string" },
+    "sandbox-turn-timeout-ms": { type: "string" },
     "cold-session-rounds": { type: "string", default: "0" },
     "turn-start-phases": { type: "boolean", default: false },
+    "turn-start-workspace-mutations": { type: "boolean", default: false },
     "turn-start-rich-context": { type: "boolean", default: false },
     "turn-start-advance-origin": { type: "boolean", default: false },
     "git-trace": { type: "boolean", default: false },
@@ -707,6 +711,17 @@ if (
 const chunkCount = integer(values.chunks, "--chunks");
 const chunkIntervalMs = integer(values["chunk-interval-ms"], "--chunk-interval-ms", 0);
 const providerDelayMs = integer(values["provider-delay-ms"], "--provider-delay-ms", 0);
+const sandboxTurnTimeoutMs = values["sandbox-turn-timeout-ms"]
+  ? integer(values["sandbox-turn-timeout-ms"], "--sandbox-turn-timeout-ms")
+  : 170_000;
+if (
+  sandboxTurnTimeoutMs > 600_000 ||
+  (values["sandbox-turn-timeout-ms"] && (!values["sandbox-image"] || !values["turn-start-phases"]))
+) {
+  throw new Error(
+    "--sandbox-turn-timeout-ms requires sandbox turn-start phases and at most 600000ms",
+  );
+}
 if (values["turn-start-phases"] && scenario !== "chat.send") {
   throw new Error("--turn-start-phases requires --scenario chat.send");
 }
@@ -1142,6 +1157,65 @@ if (values["attempt-setup-image"] && coldBaseRefs.length < coldSessionRounds * r
   );
 }
 const fixtureSessionCount = typeof fixture.sessionCount === "number" ? fixture.sessionCount : 0;
+const fixtureWorktreeFiles = typeof fixture.worktreeFiles === "number" ? fixture.worktreeFiles : 0;
+const workspaceMutations: Array<{ round: number; kind: string; sessions: number }> = [];
+if (
+  values["turn-start-workspace-mutations"] &&
+  (!values["sandbox-image"] ||
+    !values["turn-start-phases"] ||
+    coldSessionRounds !== 0 ||
+    fixtureWorktreeFiles < rounds + 1 ||
+    typeof fixture.worktreeFileBytes !== "number" ||
+    fixture.worktreeFileBytes < 1)
+) {
+  throw new Error(
+    "Workspace mutations require warm sandbox turns and a populated synthetic inventory",
+  );
+}
+function mutateTurnStartWorkspaces(round: number, sessionKeys: readonly string[]) {
+  if (!values["turn-start-workspace-mutations"]) {
+    return () => {};
+  }
+  const kind = ["host-edit", "guest-edit", "guest-delete"][round % 3]!;
+  const fileIndex = kind === "guest-delete" ? round : fixtureWorktreeFiles - 1;
+  const relative = path.join("inventory", String(Math.floor(fileIndex / 1000)), `${fileIndex}.txt`);
+  const fixtureRoot = `${realpathSync(root)}${path.sep}`;
+  using database = new DatabaseSync(path.join(root, "state/openclaw.sqlite"), { readOnly: true });
+  const select = database.prepare(
+    "SELECT w.path AS canonical, p.projection_path AS projection FROM local_workspace_projections p JOIN worktrees w ON w.id = p.worktree_id WHERE p.session_key = ? AND w.owner_kind = 'session' AND w.owner_id = p.session_key AND w.removed_at IS NULL",
+  );
+  const checks = sessionKeys.map((key) => {
+    const row = select.get(key);
+    if (!row || typeof row.canonical !== "string" || typeof row.projection !== "string") {
+      throw new Error("Synthetic sandbox workspace binding is missing");
+    }
+    const targets = [row.canonical, row.projection].map((directory) => {
+      const target = realpathSync(path.join(directory, relative));
+      if (!target.startsWith(fixtureRoot)) {
+        throw new Error("Workspace mutation escaped the synthetic fixture");
+      }
+      return target;
+    });
+    const source = targets[kind === "host-edit" ? 0 : 1]!;
+    let expected: Buffer | undefined;
+    if (kind === "guest-delete") {
+      unlinkSync(source);
+    } else {
+      expected = readFileSync(source);
+      expected[0] = expected[0]! ^ 1;
+      writeFileSync(source, expected);
+    }
+    return () => {
+      for (const target of targets) {
+        if (expected ? !readFileSync(target).equals(expected) : existsSync(target)) {
+          throw new Error(`Synthetic ${kind} did not converge after round ${round}`);
+        }
+      }
+    };
+  });
+  workspaceMutations.push({ round, kind, sessions: sessionKeys.length });
+  return () => checks.forEach((check) => check());
+}
 const teamStressTargets =
   teamPluginCatalog && Array.isArray(fixture.stressTargets)
     ? fixture.stressTargets.map((target: unknown) => {
@@ -4023,7 +4097,11 @@ async function rpc(
   const started = performance.now();
   let response: Awaited<ReturnType<typeof client.request>>;
   try {
-    response = await client.request(method, params, 180_000);
+    response = await client.request(
+      method,
+      params,
+      method === "agent.wait" ? Math.max(180_000, sandboxTurnTimeoutMs + 10_000) : 180_000,
+    );
   } catch (error) {
     recordTeamStressRpc(method, performance.now() - started, false);
     throw error;
@@ -4623,8 +4701,9 @@ async function runRound(
           }
         })()
       : undefined;
-  const providerTimeoutMs =
-    values["attempt-setup-image"] || values["sandbox-image"] || values["stress-worktree-fanout"]
+  const providerTimeoutMs = values["sandbox-image"]
+    ? sandboxTurnTimeoutMs
+    : values["attempt-setup-image"] || values["stress-worktree-fanout"]
       ? 170_000
       : 45_000;
   const timeout = setTimeout(
@@ -4777,7 +4856,7 @@ async function runRound(
           throw new Error("Turn-start subscriber received a different run before acknowledgement");
         }
         timing.awaitingCreatedRunId = false;
-        const result = await rpc(client, "agent.wait", { runId, timeoutMs: 170_000 });
+        const result = await rpc(client, "agent.wait", { runId, timeoutMs: sandboxTurnTimeoutMs });
         if (
           !result ||
           typeof result !== "object" ||
@@ -5900,7 +5979,7 @@ try {
       deliver: false,
       idempotencyKey: runId,
     });
-    const result = await rpc(sender, "agent.wait", { runId, timeoutMs: 170_000 });
+    const result = await rpc(sender, "agent.wait", { runId, timeoutMs: sandboxTurnTimeoutMs });
     if (!isRecord(result) || result.status !== "ok") {
       throw new Error(`diff baseline preparation failed: ${JSON.stringify(result)}`);
     }
@@ -6338,7 +6417,14 @@ try {
       break;
     }
     const started = performance.now();
-    await runScenario(undefined, warmupOperations);
+    if (values["turn-start-phases"] && values["sandbox-image"]) {
+      // Large initial workspace allocations serialize; give each setup turn its own deadline.
+      for (const key of keys) {
+        await runRound(sender, undefined, [key]);
+      }
+    } else {
+      await runScenario(undefined, warmupOperations);
+    }
     // Stress background publications need not stop after the warmup turns settle.
     await drainEvents(!values["team-stress"] && !values["turn-start-phases"]);
     if (!soakScenario) {
@@ -6596,6 +6682,7 @@ try {
       : round < (idleScenario ? 2 : rounds);
     round++
   ) {
+    const verifyWorkspaceMutation = mutateTurnStartWorkspaces(round, keys);
     if (values["turn-start-phases"] && round < coldSessionRounds) {
       await delay(roundIntervalMs);
     }
@@ -7546,6 +7633,7 @@ try {
         sessionResets,
       })}`,
     );
+    verifyWorkspaceMutation();
     if (idleScenario) {
       await verifyIdleHistories(round === 0 ? "touched" : "reopened");
       if (round === 0) {
@@ -8349,6 +8437,8 @@ try {
               }
             : {}),
           coldSessionRounds,
+          sandboxTurnTimeoutMs,
+          workspaceMutations,
           firstModelRequest: {
             "cold-session": latencySummary(
               samples
