@@ -15,6 +15,8 @@ describe("resolveNavigatorLocale", () => {
     ["pt-PT", "pt-BR"],
     ["DE-at", "de"],
     ["ja-JP", "ja-JP"],
+    ["ca", "ca"],
+    ["ca-ES", "ca"],
     ["sv-SE", "sv"],
     ["sv-FI", "sv"],
     ["nb-NO", "en"],
