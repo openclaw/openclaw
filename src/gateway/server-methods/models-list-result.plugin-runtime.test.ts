@@ -106,7 +106,7 @@ type DecisionCase = {
   expectedChat?: boolean;
   error?: boolean;
   replace?: boolean;
-  prepared?: "remote" | "cleared" | "alias";
+  prepared?: "remote" | "remote-cleared" | "cleared" | "alias";
 };
 function decisionCase(name: string, overrides: Partial<Omit<DecisionCase, "name">>): DecisionCase {
   return { name, plugins: {}, expected: false, ...overrides };
@@ -124,7 +124,8 @@ describe("models.list plugin metadata handoff", () => {
     decisionCase("chat filter + decisions", { provider: "custom", chat: true, expectedChat: true }),
     decisionCase("unfiltered", { chat: true, expectedChat: true, expected: true }),
     decisionCase("prepared-only Decision model", { prepared: "remote", expected: true }),
-    decisionCase("route-cleared capabilities", { prepared: "cleared" }),
+    decisionCase("route-cleared manifest advertisement", { prepared: "cleared", expected: true }),
+    decisionCase("route-cleared remote-only model", { prepared: "remote-cleared", expected: true }),
     decisionCase("owned provider alias", { prepared: "alias", expected: true }),
     decisionCase("replace-mode manifest discovery", { replace: true, expected: true }),
   ])(
@@ -184,8 +185,13 @@ describe("models.list plugin metadata handoff", () => {
             inference: prepared === "cleared" ? { chat: false } : native.inference,
           });
         }
-        if (prepared === "remote") {
-          snapshot.entries.push({ ...native, id: "remote", name: "Remote decisions" });
+        if (prepared === "remote" || prepared === "remote-cleared") {
+          snapshot.entries.push({
+            ...native,
+            id: "remote",
+            name: "Remote decisions",
+            inference: prepared === "remote-cleared" ? { chat: false } : native.inference,
+          });
         }
         snapshot.entries.push({ ...native, id: "unowned", provider: "unowned" });
         const metadataSnapshot = createPluginMetadataSnapshotFixture({
