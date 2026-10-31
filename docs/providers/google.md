@@ -614,6 +614,12 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
     another Gemini text model, set `api: "google-interactions"` on that model's
     entry. A compatible proxy can also set it provider-wide.
 
+    Interactions honors the Google provider's managed `request.proxy`,
+    `request.tls`, and local-service settings. Requests to the official AI Studio
+    endpoint also use the same Gemini API-key rotation as GenerateContent when
+    rate limited before streaming starts. Custom endpoints, OAuth credentials,
+    and explicit authentication headers do not receive additional Gemini keys.
+
     Interactions supports tool calling, thinking levels, image and native video
     inputs, and streamed replies. Native video remains available on supported
     Gemini models using the official AI Studio endpoint. Inline video uses

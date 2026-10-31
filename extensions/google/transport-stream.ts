@@ -1,5 +1,6 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
+  getApiProvider,
   getEnvApiKey,
   resolveProviderContext,
   type Context,
@@ -11,10 +12,7 @@ import {
   type SimpleStreamOptions,
 } from "openclaw/plugin-sdk/llm";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import {
-  collectProviderApiKeysForExecution,
-  executeWithApiKeyRotation,
-} from "openclaw/plugin-sdk/provider-auth-runtime";
+import { executeWithApiKeyRotation } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createProviderHttpError,
   providerOperationRetryConfig,
@@ -61,6 +59,7 @@ import {
   resolveGoogleGemini3ThinkingLevel,
   type GoogleThinkingLevel,
 } from "./thinking-api.js";
+import { collectGoogleTransportApiKeys } from "./transport-api-keys.js";
 import { hasGoogleFirstResponseActivity, parseGoogleSseChunks } from "./transport-stream-sse.js";
 import { isGoogleVertexCredentialsMarker } from "./vertex-adc-config.js";
 import { resolveGoogleVertexAuthorizedUserHeaders } from "./vertex-adc.js";
@@ -352,19 +351,6 @@ function serializeGoogleRequest(
   return body;
 }
 
-function isGoogleOauthApiKey(apiKey: string | undefined): boolean {
-  return Boolean(
-    apiKey?.trimStart().startsWith("{") && parseGeminiAuth(apiKey).headers.Authorization,
-  );
-}
-
-function hasGoogleAuthHeader(headers: ModelRequestHeaders | undefined): boolean {
-  return Object.keys(headers ?? {}).some((name) => {
-    const normalized = name.trim().toLowerCase();
-    return normalized === "authorization" || normalized === "x-goog-api-key";
-  });
-}
-
 function resolveGoogleGemini3FirstResponseRetryMs(): number {
   const raw = process.env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
   return parseStrictNonNegativeInteger(raw) ?? GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
@@ -649,15 +635,8 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           return retryAttempt;
         };
         const apiKeys =
-          kind === "google-generative-ai" &&
-          isOfficialGoogleAiStudioBaseUrl(model.baseUrl) &&
-          !isGoogleOauthApiKey(apiKey) &&
-          !hasGoogleAuthHeader(model.headers) &&
-          !hasGoogleAuthHeader(options?.headers)
-            ? collectProviderApiKeysForExecution({
-                provider: model.provider,
-                primaryApiKey: apiKey,
-              })
+          kind === "google-generative-ai"
+            ? collectGoogleTransportApiKeys(model, options, apiKey)
             : [];
         const sse =
           apiKeys.length > 0
@@ -695,4 +674,64 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
 
 export function createGoogleVertexTransportStreamFn(): StreamFn {
   return createGoogleTransportStreamFn("google-vertex");
+}
+
+export function createGoogleInteractionsTransportStreamFn(): StreamFn {
+  return (model, context, options) => {
+    const { eventStream, stream } = createWritableTransportEventStream();
+    void (async () => {
+      const output = buildAssistantMessage({
+        model,
+        content: [],
+        usage: createEmptyTransportUsage(),
+        stopReason: "stop",
+      });
+      try {
+        const provider = getApiProvider("google-interactions");
+        if (!provider) {
+          throw new Error("Google Interactions transport is unavailable");
+        }
+        const apiKey = options?.apiKey ?? getEnvApiKey(model.provider);
+        const openStream = async (requestApiKey: string | undefined) => {
+          const source = provider.streamSimple(model, context, {
+            ...options,
+            apiKey: requestApiKey,
+          });
+          const iterator = source[Symbol.asyncIterator]();
+          // The adapter emits start only after the guarded HTTP request succeeds.
+          // Retry opening failures, never an error after streaming has started.
+          const first = await iterator.next();
+          if (!first.done && first.value.type === "error") {
+            await iterator.return?.();
+            throw new Error(first.value.error.errorMessage ?? "Google Interactions request failed");
+          }
+          return { first, iterator };
+        };
+        const apiKeys = collectGoogleTransportApiKeys(model, options, apiKey);
+        const opened =
+          apiKeys.length > 0
+            ? await executeWithApiKeyRotation({
+                provider: model.provider,
+                apiKeys,
+                transientRetry: providerOperationRetryConfig("read"),
+                execute: openStream,
+              })
+            : await openStream(apiKey);
+        if (!opened.first.done) {
+          stream.push(opened.first.value);
+        }
+        for (;;) {
+          const next = await opened.iterator.next();
+          if (next.done) {
+            break;
+          }
+          stream.push(next.value);
+        }
+        stream.end();
+      } catch (error) {
+        failTransportStream({ stream, output, signal: options?.signal, error });
+      }
+    })();
+    return eventStream;
+  };
 }

@@ -29,6 +29,10 @@ const loadVertexStream = createLazyRuntimeSurface(
   () => import("./transport-stream.js"),
   (runtime) => runtime.createGoogleVertexTransportStreamFn(),
 );
+const loadInteractionsStream = createLazyRuntimeSurface(
+  () => import("./transport-stream.js"),
+  (runtime) => runtime.createGoogleInteractionsTransportStreamFn(),
+);
 
 export function buildGoogleProvider(): ProviderPlugin {
   return {
@@ -121,6 +125,9 @@ export function buildGoogleProvider(): ProviderPlugin {
       }
       if (model.api === "google-generative-ai") {
         return async (...args) => (await loadGenerativeAiStream())(...args);
+      }
+      if (model.api === "google-interactions") {
+        return async (...args) => (await loadInteractionsStream())(...args);
       }
       return undefined;
     },
