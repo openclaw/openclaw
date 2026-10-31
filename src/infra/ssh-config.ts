@@ -1,3 +1,4 @@
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveSshClient } from "./ssh-client.js";
 import type { SshParsedTarget } from "./ssh-tunnel.js";
@@ -64,8 +65,9 @@ export async function resolveSshConfig(
   if (target.port > 0 && (target.port !== 22 || opts.explicitPort)) {
     args.push("-p", String(target.port));
   }
-  if (opts.identity?.trim()) {
-    args.push("-i", opts.identity.trim());
+  const identity = readNonBlankString(opts.identity);
+  if (identity) {
+    args.push("-i", identity);
   }
   const userHost = target.user ? `${target.user}@${target.host}` : target.host;
   // Use "--" so userHost can't be parsed as an ssh option.

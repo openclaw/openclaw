@@ -1,6 +1,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readNonBlankString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
@@ -111,7 +112,9 @@ export async function gatewayStatusCommand(
     (useConfiguredRemoteTargets ? sanitizeSshTarget(cfg.gateway?.remote?.sshTarget) : null);
   let sshIdentity =
     sanitizeSshTarget(opts.sshIdentity) ??
-    (useConfiguredRemoteTargets ? sanitizeSshTarget(cfg.gateway?.remote?.sshIdentity) : null);
+    (useConfiguredRemoteTargets
+      ? (readNonBlankString(cfg.gateway?.remote?.sshIdentity) ?? null)
+      : null);
 
   if (!sshTarget && useConfiguredRemoteTargets) {
     // Remote URL inference gives users a useful SSH default without requiring

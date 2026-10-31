@@ -96,6 +96,30 @@ it.each([
   },
 );
 
+it("preserves trailing whitespace in the configured ssh identity path", async () => {
+  const url = "ws://127.0.0.1:18789";
+  mocks.details.mockReturnValue(connection(url, "config gateway.remote.url"));
+  const result = await bootstrap({
+    config: remoteConfig({
+      url,
+      transport: "ssh",
+      sshTarget: "me@studio",
+      remotePort: 18789,
+      sshIdentity: "/keys/id test ",
+      sshHostKeyPolicy: "openssh",
+    }),
+    env: {},
+  });
+
+  expect(result.deviceAuthScope).toBe(SSH_SCOPE);
+  expect(result.sshTunnel).toEqual({
+    target: "me@studio",
+    remotePort: 18789,
+    identity: "/keys/id test ",
+    hostKeyPolicy: "openssh",
+  });
+});
+
 it.each([
   ["direct transport", "direct", LOCAL_WS, "cli", false],
   ["different explicit URL", "ssh", "ws://127.0.0.1:19876", "cli", false],

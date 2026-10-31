@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { resolveConfigPath, resolveGatewayPort } from "../config/paths.js";
@@ -72,7 +75,7 @@ export function resolveGatewayDeviceAuthRoute(params: {
   }
   const remote = params.config.gateway?.remote;
   const configuredTarget = normalizeOptionalString(remote?.sshTarget);
-  const identity = normalizeOptionalString(remote?.sshIdentity);
+  const identity = readNonBlankString(remote?.sshIdentity);
   const configuredSshRoute =
     params.configuredRemote &&
     configuredTarget &&
