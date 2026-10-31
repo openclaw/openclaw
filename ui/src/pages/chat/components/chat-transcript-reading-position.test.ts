@@ -11,6 +11,7 @@ import {
   handleChatScrollTakeover,
   restoreChatScrollPosition,
 } from "../scroll.ts";
+import { renderChatThread } from "./chat-thread.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES } from "./chat-transcript-session.ts";
 import type { TestContentRow } from "./chat-transcript.test-support.ts";
@@ -18,6 +19,7 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
   resizeObservers,
+  threadProps,
 } from "./chat-transcript.test-support.ts";
 
 beforeEach(installTranscriptDomMocks);
@@ -281,6 +283,33 @@ it.each([false, true])(
   },
 );
 
+it("keeps the cold end destination through a partial history projection", async () => {
+  const view = fixture("first-paint-partial-history", {
+    saved: true,
+    ready: false,
+    deferredMeasurement: true,
+  });
+  try {
+    // A warm partial snapshot is measurable before authoritative history arrives.
+    view.setRows(view.allRows.slice(0, 1));
+    view.commit();
+    await view.beforePaint();
+    expect(view.container.scrollTop).toBe(0);
+
+    view.setRows(view.allRows);
+    view.setReady(true);
+    view.commit();
+    await view.beforePaint();
+    const tail = view.container.querySelector<HTMLElement>('[data-message-id="message:79"]')!;
+    expect(tail).not.toBeNull();
+    expect(tail.getBoundingClientRect().bottom).toBeCloseTo(400, 0);
+    expect(view.container.scrollTop).toBe(view.container.scrollHeight - 400);
+    expect(view.following).toBe(true);
+  } finally {
+    view.dispose();
+  }
+});
+
 it("lets reader input supersede a queued initial positioning commit", async () => {
   const view = fixture("first-paint-takeover", { saved: true, deferredMeasurement: true });
   try {
@@ -532,6 +561,72 @@ it.each([false, true])(
       expect(view.following).toBe(true);
     } finally {
       view.dispose();
+    }
+  },
+);
+
+it.each([false, true])(
+  "lets a loaded empty chat settle after partial history=%s",
+  async (partial) => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = threadProps(
+      "pane-empty-startup",
+      "agent:main:empty-startup",
+      partial ? [{ role: "user", content: "Cached message", timestamp: 1_000 }] : [],
+    );
+    props.loading = partial;
+    let requested = false;
+    const transcript = new ChatTranscriptController(
+      {
+        addController: vi.fn(),
+        removeController: vi.fn(),
+        requestUpdate: () => {
+          requested = true;
+        },
+        updateComplete: Promise.resolve(true),
+      },
+      () => props.paneId,
+    );
+    const commit = () => {
+      requested = false;
+      transcript.hostUpdate();
+      render(renderChatThread(props, transcript), container);
+      Object.defineProperty(container.querySelector(".chat-thread")!, "clientHeight", {
+        configurable: true,
+        value: 400,
+      });
+      transcript.hostUpdated();
+    };
+    transcript.hostConnected();
+    try {
+      commit();
+      if (partial) {
+        for (let checkpoint = 0; checkpoint < 20; checkpoint++) {
+          await Promise.resolve();
+          if (requested) {
+            commit();
+          }
+        }
+        expect(container.querySelector(".chat-thread-inner--virtual")).not.toBeNull();
+        props.messages = [];
+        props.loading = false;
+        commit();
+      }
+      // The empty welcome shell has no virtual range to measure. Its update
+      // checkpoint must become idle so the browser can admit the next route.
+      for (let checkpoint = 0; checkpoint < 20; checkpoint++) {
+        await Promise.resolve();
+        if (requested) {
+          commit();
+        }
+      }
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(container.querySelector(".chat-thread-inner--virtual")).toBeNull();
+      expect(requested).toBe(false);
+    } finally {
+      transcript.hostDisconnected();
+      render(nothing, container);
     }
   },
 );

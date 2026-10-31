@@ -82,7 +82,14 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   );
   private readonly followEnd = () => this.scrollToEnd({ source: "auto", behavior: "auto" });
   readonly readingPosition: TranscriptScrollRestoration;
-  private readonly messageReveal = new ChatMessageReveal();
+  private readonly messageReveal = new ChatMessageReveal(() => ({
+    root: this.threadInnerElement,
+    state: this.offsetState,
+    virtualizer: this.virtualizerController.getVirtualizer(),
+    messageRows: this.messageRowKeysById,
+    rowIndexes: this.rowIndexesByKey,
+    requestUpdate: this.requestUpdate,
+  }));
   // Lit calls refs before newly rendered nodes are connected. Resolve the
   // scroll parent lazily or a stable ref can permanently capture null.
   get scrollElement(): HTMLDivElement | null {
@@ -280,7 +287,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           this.messageRowKeysById.get(this.offsetState.scrollCommand.messageId) === key
         ) {
           // The parent update can finish before a virtualized target mounts.
-          queueMicrotask(() => this.completeMessageReveal());
+          queueMicrotask(this.messageReveal.complete);
         }
       },
     });
@@ -664,6 +671,21 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     return this.readingPosition.activeMessageId(messageIds);
   }
 
+  clearRows(): void {
+    this.presentation.didRenderRows(0);
+    this.messageRowKeysById = this.candidateMessageRowKeysById;
+    this.prependAnchor.committedMessageRows = this.candidateMessageRowsByKey;
+    this.renderPreviousRows = null;
+    this.focusedRowKey = null;
+    this.headerHeight = 0;
+    this.prependAnchor.clear();
+    if (this.rowKeys.length > 0 || this.appliedHeaderHeight !== 0) {
+      // A shell has no virtual range; retired rows cannot remain geometry or
+      // bookmark lookup facts after authoritative history replaces a preload.
+      this.syncRows([]);
+    }
+  }
+
   revealMessage(messageId: string): boolean {
     const rowKey = this.messageRowKeysById.get(messageId);
     const rowIndex = rowKey ? this.rowIndexesByKey.get(rowKey) : undefined;
@@ -679,27 +701,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     };
     this.virtualizerController.getVirtualizer().scrollToIndex(rowIndex, { align: "center" });
     this.host.requestUpdate();
-    void this.host.updateComplete.then(() => this.completeMessageReveal());
+    void this.host.updateComplete.then(this.messageReveal.complete);
     return true;
-  }
-
-  private completeMessageReveal(): void {
-    const command = this.offsetState.scrollCommand;
-    if (command?.target !== "message") {
-      return;
-    }
-    const virtualizer = this.virtualizerController.getVirtualizer();
-    if (this.messageReveal.reveal(this.threadInnerElement, command, virtualizer)) {
-      this.offsetState.scrollCommand = { behavior: command.behavior, target: "index" };
-      return;
-    }
-    // Expanding folded work can move the target beyond the initially mounted rows.
-    const rowKey = this.messageRowKeysById.get(command.messageId);
-    const rowIndex = rowKey ? this.rowIndexesByKey.get(rowKey) : undefined;
-    if (rowIndex !== undefined) {
-      virtualizer.scrollToIndex(rowIndex, { align: "center" });
-      this.host.requestUpdate();
-    }
   }
 
   setContentReady(ready: boolean): void {

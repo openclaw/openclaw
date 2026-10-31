@@ -23,6 +23,7 @@ import {
 } from "./chat-history-snapshot.ts";
 import {
   beginHistoryRequest,
+  recordInitialChatInputHistory,
   chatHistoryRequests,
   ownsHistoryRequest,
   acceptsHistoryResult,
@@ -190,6 +191,12 @@ export async function hydrateChatHistory(
       }
     }
     if (isHistoryCursor(response) && response.kind === "delta") {
+      if (method === "chat.startup") {
+        recordInitialChatInputHistory(state, ownership, response.messages, {
+          payloads: true,
+          pendingInputs: response.pendingInputs,
+        });
+      }
       const runProjectionsBeforeApply = readRunProjections(state, sessionKey, requestAgentId);
       const activeStreamBeforeApply = state.chatRunId ? state.chatStream : null;
       const runActive = isSessionRunActive(response.sessionInfo);
@@ -287,6 +294,11 @@ export async function hydrateChatHistory(
         : {}),
     });
     state.chatSubmissions?.observeInitialSession(sessionKey, client, nextSessionId);
+    if (method === "chat.startup") {
+      recordInitialChatInputHistory(state, ownership, visibleMessages, {
+        pendingInputs: res.pendingInputs,
+      });
+    }
     // Only the pane-owned reducer proves which live and pending rows survive;
     // terminal-renderer cleanup must not reclassify them as history. A new
     // session or leaf starts empty.

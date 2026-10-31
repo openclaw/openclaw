@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { nativeHistoryMessage } from "./chat-pane-history.test-support.ts";
 import {
@@ -13,7 +13,6 @@ import {
 import { subscribeTranscriptScroll } from "./components/chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
-  mountTestTranscript,
   resetTranscriptTestDom,
   resizeObservers,
   transcriptDomState,
@@ -63,9 +62,35 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
       key: `row:${index}`,
       content: html`<div>Message ${index}</div>`,
     }));
-    const mounting = mountTestTranscript("maintenance-history", rows, props.transcript);
-    await vi.advanceTimersByTimeAsync(0);
-    const { container, renderRows, transcript } = await mounting;
+    let currentRows = rows;
+    const transcript = props.transcript;
+    // The pane owns transcript updates. Commit its range on each real Lit
+    // update instead of mounting a detached range that the pane cannot refresh.
+    vi.spyOn(pane, "render").mockImplementation(
+      () => html`
+        <div class="chat-thread">
+          ${transcript.renderSession("agent:main:maintenance-history", (current) => {
+            current.setContentReady(true);
+            return current.render(
+              currentRows,
+              (row) => (row.kind === "content" ? row.content : nothing),
+              null,
+              false,
+            );
+          })}
+        </div>
+      `,
+    );
+    const renderRows = (nextRows: TestContentRow[]) => {
+      currentRows = nextRows;
+      pane.requestUpdate();
+    };
+    pane.requestUpdate();
+    await pane.updateComplete;
+    const container = expectDefined(
+      pane.renderRoot.querySelector<HTMLDivElement>(".chat-thread"),
+      "pane-owned transcript scroll container",
+    );
     let maximum = 1400;
     Object.defineProperties(container, {
       clientHeight: { configurable: true, value: 600 },
@@ -83,6 +108,8 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     for (const observer of resizeObservers) {
       observer.emitTarget(container, 800, 600);
     }
+    // Settle the initial end frame before placing the idle reader mid-history.
+    await vi.advanceTimersByTimeAsync(16);
     let scrolling: boolean | undefined;
     const stopObserving = subscribeTranscriptScroll(container, (event) => {
       if (event.type === "offset") {

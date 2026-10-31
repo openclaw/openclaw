@@ -8,6 +8,7 @@ import { parseStoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
+import { takeInitialChatInputHistory } from "./chat-history-state.ts";
 import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
@@ -467,6 +468,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     const sessionId = state.currentSessionId ?? null;
     const changedScope =
       this.inputScope?.sessionKey !== state.sessionKey || this.inputScope?.sessionId !== sessionId;
+    const initialInputHistory = takeInitialChatInputHistory(state);
     if (changedScope) {
       this.inputScope = { sessionKey: state.sessionKey, sessionId };
       this.seenInputKeys.clear();
@@ -480,12 +482,14 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     }
     if (
       !changedScope &&
+      !initialInputHistory &&
       this.previousChatMessages === state.chatMessages &&
       this.previousPendingInputs === pendingInputs
     ) {
       return false;
     }
     let remoteInputArrived = false;
+    initialInputHistory?.forEach((key) => this.seenInputKeys.add(key));
     const observe = (message: unknown, sendId?: string) => {
       const identity = readSessionMessageIdentity(message, { clientRunId: sendId });
       if (identity?.role !== "user") {

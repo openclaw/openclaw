@@ -71,6 +71,8 @@ export type ChatTranscriptSession = {
     messageRowKeysById: ReadonlyMap<string, string>,
     messageRowsByKey: ReadonlyMap<string, string>,
   ): void;
+  /** Nonvirtual welcome/loading shells replace the committed row projection. */
+  clearRows(): void;
   /** Returns the sampled loaded message at or preceding the viewport midpoint. */
   activeMessageId(messageIds: readonly string[]): string | null;
   revealMessage(messageId: string): boolean;

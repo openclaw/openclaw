@@ -228,7 +228,7 @@ export class TranscriptScrollRestoration {
       this.owner.requestUpdate();
       return;
     }
-    if (positionAtMeasuredEnd(this.restoreHost)) {
+    if (positionAtMeasuredEnd(this.restoreHost) && this.owner.isContentReady()) {
       this.initialEnd = false;
       this.owner.onEndAnchored();
       this.owner.requestUpdate();
@@ -253,6 +253,11 @@ function positionAtMeasuredEnd(owner: TranscriptScrollRestoreHost): boolean {
   const element = owner.getScrollElement();
   if ((!owner.isContentReady() && owner.getRowCount() === 0) || !element?.clientHeight) {
     return false;
+  }
+  // Empty welcome shells do not render a virtual range. Once their history is
+  // authoritative, there is no row geometry to wait for or retry on each commit.
+  if (owner.getRowCount() === 0) {
+    return true;
   }
   if (!owner.prepareGeometry()) {
     owner.requestUpdate();

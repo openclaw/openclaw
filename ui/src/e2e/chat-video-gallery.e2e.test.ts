@@ -107,6 +107,11 @@ suite.define(() => {
           });
           await page.goto(`${suite.server.baseUrl}chat`);
           await gateway.waitForRequest("chat.startup");
+          // History opens at its latest turn; earlier media may be virtualized.
+          // Reach the first turn through reader input before locating its player.
+          const thread = page.locator(".chat-thread");
+          await thread.hover();
+          await page.mouse.wheel(0, -100_000);
           const expand = page.getByRole("button", {
             name: "Expand before.mp4 in the media overlay",
             exact: true,
