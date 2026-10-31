@@ -70,6 +70,7 @@ import {
   scopedCronJobHandler,
 } from "./cron-job-access.js";
 import { cronListHandler } from "./cron-list.js";
+import { cronLiveOutputHandler } from "./cron-live-output.js";
 import { respondCronJobConfigRevisionConflict } from "./cron-revision-error.js";
 import { cronRunsHandler } from "./cron-runs.js";
 import { cronScratchHandlers } from "./cron-scratch.js";
@@ -615,6 +616,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     },
   ),
   "cron.history": cronHistoryHandler,
+  "cron.liveOutput": cronLiveOutputHandler,
   "cron.runs": cronRunsHandler,
 };
 
@@ -639,7 +641,8 @@ for (const [method, handler] of Object.entries(cronHandlers)) {
             method === "cron.list" ||
             method === "cron.get" ||
             method === "cron.runs" ||
-            method === "cron.history"
+            method === "cron.history" ||
+            method === "cron.liveOutput"
           ) {
             assertActiveAgentRuntimeAuthority(args.client, args.context);
             getCronManagementAuthority(identity)?.();

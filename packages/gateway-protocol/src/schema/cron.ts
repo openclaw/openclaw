@@ -757,3 +757,25 @@ export const CronHistoryResultSchema = closedObject({
 });
 export type CronHistoryParams = Static<typeof CronHistoryParamsSchema>;
 export type CronHistoryResult = Static<typeof CronHistoryResultSchema>;
+
+/** Follow cursor over the bounded in-memory tail of one running command automation. */
+export const CronLiveOutputParamsSchema = closedObject({
+  id: NonEmptyString,
+  /** Byte offset returned by the previous read; send it back with that read's `runAtMs`. */
+  cursor: Type.Optional(Type.Integer({ minimum: 0 })),
+  runAtMs: Type.Optional(CronDateTimestampMsSchema),
+});
+
+export const CronLiveOutputResultSchema = closedObject({
+  /** False when the job has no live buffer (not a running command job); use the recorded run. */
+  active: Type.Boolean(),
+  runAtMs: Type.Optional(CronDateTimestampMsSchema),
+  cursor: Type.Integer({ minimum: 0 }),
+  text: Type.String(),
+  /** The cursor was absent, stale, or from another run: `text` replaces what the caller holds. */
+  reset: Type.Optional(Type.Boolean()),
+  /** Older output was dropped before the first returned byte. */
+  truncated: Type.Optional(Type.Boolean()),
+});
+export type CronLiveOutputParams = Static<typeof CronLiveOutputParamsSchema>;
+export type CronLiveOutputResult = Static<typeof CronLiveOutputResultSchema>;

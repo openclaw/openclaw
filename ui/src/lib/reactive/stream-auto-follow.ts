@@ -1,5 +1,12 @@
 import { createEffect, onCleanup } from "solid-js";
 
+const FOLLOW_SLACK_PX = 120;
+
+/** Whether the reader is still within reach of the end of a scrolling stream. */
+export function isNearStreamEnd(container: HTMLElement): boolean {
+  return container.scrollHeight - container.scrollTop - container.clientHeight < FOLLOW_SLACK_PX;
+}
+
 export function useStreamAutoFollow(options: {
   container: () => HTMLElement | undefined;
   enabled: () => boolean;
@@ -27,12 +34,7 @@ export function useStreamAutoFollow(options: {
       if (!container?.isConnected || options.identity() !== identity) {
         return;
       }
-      if (
-        !force &&
-        (!options.enabled() ||
-          (!wasAtBottom &&
-            container.scrollHeight - container.scrollTop - container.clientHeight >= 120))
-      ) {
+      if (!force && (!options.enabled() || (!wasAtBottom && !isNearStreamEnd(container)))) {
         return;
       }
       if (options.scrollToEnd) {
@@ -53,7 +55,7 @@ export function useStreamAutoFollow(options: {
     handleScroll: (event: Event) => {
       const container = event.currentTarget;
       if (container instanceof HTMLElement) {
-        atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+        atBottom = isNearStreamEnd(container);
       }
     },
   };

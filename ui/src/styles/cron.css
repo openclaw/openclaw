@@ -1142,3 +1142,28 @@
 .cron-filter-dropdown__details > .oc-menu {
   width: min(300px, calc(100vw - 48px));
 }
+
+/* Live output: tail of a running command automation, above the recorded runs. */
+
+.cron-live-output {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cron-live-output__frame {
+  position: relative;
+}
+
+.cron-live-output__stream {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-anchor: none;
+}
+
+.cron-live-output__jump {
+  position: absolute;
+  inset-block-end: var(--space-3);
+  inset-inline-end: var(--space-3);
+}

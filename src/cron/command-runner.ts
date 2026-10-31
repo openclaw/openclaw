@@ -5,6 +5,7 @@ import { hasCommandProcessCleanupError, type SpawnResult } from "../process/exec
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isScheduledBackupCommand } from "./backup-command.js";
+import { beginCronCommandLiveOutput } from "./command-live-output.js";
 import {
   buildCronCommandSummary,
   isCronCommandActionCriticalLine,
@@ -117,6 +118,12 @@ export async function runCronCommandJob(params: {
   const releaseCustody = isScheduledBackupCommand(params.job)
     ? beginLifecycleWriteCustody("backup")
     : undefined;
+  // Watchers read this tail while the run is active; `finally` discards it on every end path.
+  const liveOutput = beginCronCommandLiveOutput({
+    jobId: params.job.id,
+    runAtMs: params.job.state.runningAtMs ?? nowMs(),
+    outputMaxBytes: payload.outputMaxBytes,
+  });
   let failure: unknown;
   try {
     // Scope settlement replaces an already-produced command result with its cleanup
@@ -137,6 +144,7 @@ export async function runCronCommandJob(params: {
             ? { maxOutputBytes: payload.outputMaxBytes }
             : {}),
           preserveOutputLine: isCronCommandActionCriticalLine,
+          onOutputChunk: (chunk) => liveOutput.append(chunk),
           ...(params.abortSignal ? { signal: params.abortSignal } : {}),
           killProcessTree: true,
         });
@@ -244,6 +252,7 @@ export async function runCronCommandJob(params: {
       },
     };
   } finally {
+    liveOutput.end();
     releaseCustody?.(failure);
   }
 }
