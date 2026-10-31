@@ -32,3 +32,6 @@ export type DecisionQuestion =
         readonly false?: DecisionEntry;
       } | null;
     };
+
+/** Provider-declared execution mode; omission leaves the provider default unchanged. */
+export type DecisionReasoning = "auto" | "off" | "on";

@@ -1,6 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { DecisionReasoning } from "./execution-types.js";
-import type { DecisionEntry } from "./input-types.js";
+import type { DecisionEntry, DecisionReasoning } from "./input-types.js";
 import type { ProviderDecisionOutcomeV2 } from "./provider-outcomes.js";
 import type { DecisionAnswerV2, DecisionBatchV2 } from "./types-v2.js";
 import { validateDecisionBatchV2 } from "./validation-v2.js";
