@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   createGatewayHarness,
@@ -195,4 +195,48 @@ export function pagination(totalMessages = 4, nextOffset?: number): ChatHistoryP
   return nextOffset === undefined
     ? { hasMore: false, totalMessages }
     : { hasMore: true, nextOffset, olderCursor: `older-${nextOffset}`, totalMessages };
+}
+
+export function installHistoryObserver(intersect = true) {
+  const observe = vi.fn();
+  const disconnect = vi.fn();
+  const construct =
+    vi.fn<(callback: IntersectionObserverCallback, observer: IntersectionObserver) => void>();
+  let rootMargin: string | undefined;
+  class FakeIntersectionObserver {
+    readonly root: IntersectionObserver["root"] | undefined;
+    constructor(
+      private readonly callback: IntersectionObserverCallback,
+      options?: IntersectionObserverInit,
+    ) {
+      rootMargin = options?.rootMargin;
+      this.root = intersect ? undefined : (options?.root ?? null);
+      construct(callback, this as unknown as IntersectionObserver);
+    }
+    disconnect() {
+      disconnect();
+    }
+    observe(target: Element) {
+      observe(target);
+      if (intersect) {
+        this.callback(
+          [{ isIntersecting: true } as IntersectionObserverEntry],
+          this as unknown as IntersectionObserver,
+        );
+      }
+    }
+  }
+  vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  return { observe, disconnect, construct, rootMargin: () => rootMargin };
+}
+
+export function appendSentinel(thread: HTMLElement, pane: { historySentinel: HTMLElement | null }) {
+  const sentinel = document.createElement("div");
+  sentinel.className = "chat-history-sentinel";
+  thread.append(sentinel);
+  pane.historySentinel = sentinel;
+  return sentinel;
 }

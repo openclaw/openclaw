@@ -8,9 +8,125 @@ import {
   type AnchorWindow,
 } from "./chat-history-pagination-probe.test-support.ts";
 
+// Hold the actual foreground owner before either a staged take or a wire read.
+export async function holdHistoryPacketEntry(pane: Locator, direction: "older" | "newer") {
+  const gate = await pane.evaluateHandle(
+    (element: HTMLElement, heldDirection: "older" | "newer") => {
+      type Args = [unknown, "older" | "newer", boolean, AbortSignal, () => boolean];
+      type Owner = {
+        state: {
+          chatHistoryPagination: {
+            olderCursor?: string;
+            newerCursor?: string;
+            needsBoundary?: boolean;
+            needsNewerBoundary?: boolean;
+          };
+        };
+        stagedHistory: { page: unknown; load: unknown };
+        loadNativeHistoryPackets: (...args: Args) => Promise<boolean>;
+      };
+      const scope = window as Window & {
+        openclawPaneRuntimeForTest?: (element: HTMLElement) => object | undefined;
+      };
+      const runtime = scope.openclawPaneRuntimeForTest?.(element);
+      if (!runtime || typeof Reflect.get(runtime, "loadNativeHistoryPackets") !== "function") {
+        throw new Error("History entry gate requires the mounted pane runtime test adapter");
+      }
+      const owner = runtime as Owner;
+      const state = owner.state;
+      const original = owner.loadNativeHistoryPackets;
+      const descriptor = Object.getOwnPropertyDescriptor(owner, "loadNativeHistoryPackets");
+      let captured: { args: Args; release: () => void } | undefined;
+      let intent: { signal: AbortSignal; owns: () => boolean } | undefined;
+      let armed = true;
+      const { promise: released, resolve: release } = Promise.withResolvers<void>();
+      const { promise: completed, resolve: complete } = Promise.withResolvers<void>();
+      const wrapper = async function (this: Owner, ...args: Args) {
+        if (armed && this === owner && args[0] === state && args[1] === heldDirection && args[2]) {
+          armed = false;
+          captured = { args, release };
+          intent = { signal: args[3], owns: args[4] };
+          try {
+            await released;
+            captured = undefined;
+            return await Reflect.apply(original, this, args);
+          } finally {
+            intent = undefined;
+            complete();
+          }
+        }
+        return Reflect.apply(original, this, args);
+      };
+      Object.defineProperty(owner, "loadNativeHistoryPackets", {
+        configurable: true,
+        writable: true,
+        value: wrapper,
+      });
+      const current = () =>
+        intent !== undefined && owner.state === state && !intent.signal.aborted && intent.owns();
+      return {
+        held: () => captured !== undefined,
+        current,
+        coldCursor: () => {
+          if (!captured || !current() || owner.stagedHistory.page || owner.stagedHistory.load) {
+            throw new Error("Initial reader calibration requires an actual cold foreground entry");
+          }
+          const pagination = state.chatHistoryPagination;
+          const boundary =
+            heldDirection === "older" ? pagination.needsBoundary : pagination.needsNewerBoundary;
+          const cursor =
+            heldDirection === "older" ? pagination.olderCursor : pagination.newerCursor;
+          if (boundary || typeof cursor !== "string" || !cursor) {
+            throw new Error("Initial reader calibration requires the actual foreground cursor");
+          }
+          return cursor;
+        },
+        release: () => {
+          if (!captured || !current()) {
+            throw new Error("Held history intent retired before the reader sample completed");
+          }
+          captured!.release();
+        },
+        dispose: async () => {
+          const entered = !armed;
+          armed = false;
+          release();
+          if (owner.loadNativeHistoryPackets !== wrapper) {
+            throw new Error("History entry gate lost ownership of its method wrapper");
+          }
+          if (descriptor) {
+            Object.defineProperty(owner, "loadNativeHistoryPackets", descriptor);
+          } else {
+            Reflect.deleteProperty(owner, "loadNativeHistoryPackets");
+          }
+          if (entered) {
+            await completed;
+          }
+        },
+      };
+    },
+    direction,
+  );
+  return {
+    wait: () => expect.poll(() => gate.evaluate((entry) => entry.held())).toBe(true),
+    assertCurrent: async () => expect(await gate.evaluate((entry) => entry.current())).toBe(true),
+    coldCursor: () => gate.evaluate((entry) => entry.coldCursor()),
+    release: () => gate.evaluate((entry) => entry.release()),
+    dispose: async () => {
+      try {
+        await gate.evaluate((entry) => entry.dispose());
+      } finally {
+        await gate.dispose();
+      }
+    },
+  };
+}
+
 // Keep real Gateway bytes/cursors intact; only delivery waits for settled reader input.
 export async function installHistoryResponseGate(page: Page, sessionKey: string) {
   let armed = false;
+  let pendingRequests = 0;
+  let coldRequest: { id?: string } | undefined;
   const replies: Array<{ deliver: () => void; id: string; cursor: string; sha256: string }> = [];
   const released: Array<{ id: string; cursor: string; sha256: string }> = [];
   await page.routeWebSocket(/\/.*$/u, (socket) => {
@@ -19,7 +135,6 @@ export async function installHistoryResponseGate(page: Page, sessionKey: string)
     socket.onMessage((message) => {
       const frame: unknown = JSON.parse(message.toString());
       if (
-        armed &&
         isRecord(frame) &&
         frame.method === "chat.history" &&
         typeof frame.id === "string" &&
@@ -27,7 +142,11 @@ export async function installHistoryResponseGate(page: Page, sessionKey: string)
         frame.params.sessionKey === sessionKey &&
         typeof frame.params.cursor === "string"
       ) {
+        pendingRequests++;
         requests.set(frame.id, frame.params.cursor);
+        if (coldRequest && !coldRequest.id) {
+          coldRequest.id = frame.id;
+        }
       }
       server.send(message);
     });
@@ -35,6 +154,9 @@ export async function installHistoryResponseGate(page: Page, sessionKey: string)
       const frame: unknown = JSON.parse(message.toString());
       const id = isRecord(frame) && typeof frame.id === "string" ? frame.id : undefined;
       const cursor = id && requests.get(id);
+      if (id && cursor) {
+        pendingRequests--;
+      }
       if (id && cursor && armed) {
         requests.delete(id);
         replies.push({
@@ -55,14 +177,22 @@ export async function installHistoryResponseGate(page: Page, sessionKey: string)
     arm: () => {
       armed = true;
     },
-    wait: () => expect.poll(() => replies.length).toBeGreaterThan(0),
-    release: () => {
-      const reply = replies.shift();
-      if (!reply) {
-        throw new Error("No actual history response is held");
+    // The first calibration must follow request sizing, while its exact reply is held.
+    waitForColdReply: async (cursor: string, releaseEntry: () => Promise<void>) => {
+      expect(armed && !pendingRequests && !replies.length && !released.length && !coldRequest).toBe(
+        true,
+      );
+      const request: { id?: string } = {};
+      coldRequest = request;
+      try {
+        await releaseEntry();
+        await expect
+          .poll(() => request.id !== undefined && replies.some((reply) => reply.id === request.id))
+          .toBe(true);
+        expect(replies.find((reply) => reply.id === request.id)?.cursor).toBe(cursor);
+      } finally {
+        coldRequest = undefined;
       }
-      reply.deliver();
-      released.push({ id: reply.id, cursor: reply.cursor, sha256: reply.sha256 });
     },
     disarm: () => {
       armed = false;
@@ -135,43 +265,71 @@ export async function sampleControlledHistoryAdmission(
   });
   await bubble.waitFor();
   const probe = await sampleHistoryAnchor(bubble);
+  let stopped = false;
+  const stopProbe = async () => {
+    try {
+      return await probe.evaluate((stop) => stop());
+    } finally {
+      stopped = true;
+      await probe.dispose();
+    }
+  };
+  const cancel = async () => {
+    if (!stopped) {
+      await stopProbe();
+    }
+  };
   let readerMotion = 0;
-  if (options.readerCalibration) {
-    // No response is admitted during this phase. Normalize observed reader motion
-    // only, then freeze that correction before admission can produce scroll writes.
-    const motion = await bubble.evaluateHandle((element) => {
-      const scrollElement = element.closest<HTMLElement>(".chat-thread")!;
-      const pane = element.closest<HTMLElement>("openclaw-chat-pane") as HTMLElement & {
-        state: { chatIsProgrammaticScroll: () => boolean; chatIsMaintenanceScroll: () => boolean };
-      };
-      let prior = scrollElement.scrollTop;
-      let invalid = false;
-      let delta = 0;
-      const onScroll = () => {
-        invalid ||= pane.state.chatIsProgrammaticScroll() || pane.state.chatIsMaintenanceScroll();
-        const consumed = scrollElement.scrollTop - prior;
-        prior = scrollElement.scrollTop;
-        delta += consumed;
-        (window as AnchorWindow).prependFrames.readerDelta += consumed;
-      };
-      scrollElement.addEventListener("scroll", onScroll);
-      return () => {
-        scrollElement.removeEventListener("scroll", onScroll);
-        return { invalid, delta };
-      };
-    });
-    await page.mouse.wheel(0, 40);
-    await waitForChatScrollIdle(page);
-    const result = await motion.evaluate((stop) => stop());
-    await motion.dispose();
-    expect(result.invalid, "calibration contains reader motion only").toBe(false);
-    expect(result.delta).toBeGreaterThan(0);
-    readerMotion = result.delta;
+  try {
+    if (options.readerCalibration) {
+      // No response is admitted during this phase. Normalize observed reader motion
+      // only, then freeze that correction before admission can produce scroll writes.
+      const motion = await bubble.evaluateHandle((element) => {
+        const scrollElement = element.closest<HTMLElement>(".chat-thread")!;
+        const pane = element.closest<HTMLElement>("openclaw-chat-pane") as HTMLElement & {
+          state: {
+            chatIsProgrammaticScroll: () => boolean;
+            chatIsMaintenanceScroll: () => boolean;
+          };
+        };
+        let prior = scrollElement.scrollTop;
+        let invalid = false;
+        let delta = 0;
+        const onScroll = () => {
+          invalid ||= pane.state.chatIsProgrammaticScroll() || pane.state.chatIsMaintenanceScroll();
+          const consumed = scrollElement.scrollTop - prior;
+          prior = scrollElement.scrollTop;
+          delta += consumed;
+          (window as AnchorWindow).prependFrames.readerDelta += consumed;
+        };
+        scrollElement.addEventListener("scroll", onScroll);
+        return () => {
+          scrollElement.removeEventListener("scroll", onScroll);
+          return { invalid, delta };
+        };
+      });
+      try {
+        await page.mouse.wheel(0, 40);
+        await waitForChatScrollIdle(page);
+        const result = await motion.evaluate((stop) => stop());
+        expect(result.invalid, "calibration contains reader motion only").toBe(false);
+        expect(result.delta).toBeGreaterThan(0);
+        readerMotion = result.delta;
+      } finally {
+        try {
+          await motion.evaluate((stop) => stop());
+        } finally {
+          await motion.dispose();
+        }
+      }
+    }
+  } catch (error) {
+    await cancel();
+    throw error;
   }
   const finish = async () => {
     await waitForChatScrollIdle(page);
-    const positions = await probe.evaluate((stop) => stop());
-    await probe.dispose();
+    const positions = await stopProbe();
     const initial = positions[0];
     expect(initial).not.toBeNull();
     expect(positions.length).toBeGreaterThan(1);
@@ -180,32 +338,39 @@ export async function sampleControlledHistoryAdmission(
     );
     return { positions, frames: positions.length, maxDrift, readerMotion };
   };
-  return { source, bubble, finish };
+  return { source, bubble, finish, cancel };
 }
 
 export async function detectNonInputHistoryShift(page: Page, bubble: Locator) {
   const probe = await sampleHistoryAnchor(bubble);
-  const before = await bubble.evaluate((element: HTMLElement) => {
-    const prior = element.style.transform;
-    element.style.transform = "translateY(12px)";
-    return prior;
-  });
   try {
-    await page.evaluate(async () => {
-      await new Promise(requestAnimationFrame);
-      await new Promise(requestAnimationFrame);
+    const before = await bubble.evaluate((element: HTMLElement) => {
+      const prior = element.style.transform;
+      element.style.transform = "translateY(12px)";
+      return prior;
     });
+    try {
+      await page.evaluate(async () => {
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+      });
+    } finally {
+      await bubble.evaluate((element: HTMLElement, prior) => {
+        element.style.transform = prior;
+      }, before);
+    }
+    const positions = await probe.evaluate((stop) => stop());
+    expect(positions.every((top) => top !== null)).toBe(true);
+    const maxDrift = Math.max(...positions.map((top) => Math.abs(top! - positions[0]!)));
+    expect(maxDrift, "non-input shift must fail the placement oracle").toBeGreaterThan(2);
+    return { positions, maxDrift };
   } finally {
-    await bubble.evaluate((element: HTMLElement, prior) => {
-      element.style.transform = prior;
-    }, before);
+    try {
+      await probe.evaluate((stop) => stop());
+    } finally {
+      await probe.dispose();
+    }
   }
-  const positions = await probe.evaluate((stop) => stop());
-  await probe.dispose();
-  expect(positions.every((top) => top !== null)).toBe(true);
-  const maxDrift = Math.max(...positions.map((top) => Math.abs(top! - positions[0]!)));
-  expect(maxDrift, "non-input shift must fail the placement oracle").toBeGreaterThan(2);
-  return { positions, maxDrift };
 }
 
 type HistoryPacketMetric = {

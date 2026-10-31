@@ -16,6 +16,7 @@ import { installHistoryPaginationProbe } from "./chat-history-pagination-probe.t
 import {
   createHistoryAdmissionRecorder,
   detectNonInputHistoryShift,
+  holdHistoryPacketEntry,
   installHistoryResponseGate,
   sampleControlledHistoryAdmission,
 } from "./chat-history-response-gate.test-support.ts";
@@ -237,7 +238,7 @@ suite.define(() => {
             | Awaited<ReturnType<typeof detectNonInputHistoryShift>>
             | undefined;
           const watchAnchor = async (direction: string, residentEdge: number) => {
-            const { source, bubble, finish } = await sampleControlledHistoryAdmission(
+            const { source, bubble, finish, cancel } = await sampleControlledHistoryAdmission(
               page,
               thread,
               {
@@ -247,7 +248,7 @@ suite.define(() => {
                 readerCalibration: anchors.length === 0,
               },
             );
-            return async () => {
+            const finishAnchor = async () => {
               const sample = await finish();
               anchors.push({
                 direction,
@@ -271,6 +272,49 @@ suite.define(() => {
                 `${direction} source ${source} stays mounted in every frame`,
               ).toBeLessThanOrEqual(2);
             };
+            return { finish: finishAnchor, cancel };
+          };
+          const historyGesture = async (
+            direction: "older" | "newer",
+            before: number,
+            gesture: () => Promise<void>,
+          ) => {
+            if (!responseGate) {
+              await gesture();
+              return;
+            }
+            const entry = await holdHistoryPacketEntry(selectedPane, direction);
+            let anchor: Awaited<ReturnType<typeof watchAnchor>> | undefined;
+            let completed = false;
+            try {
+              await gesture();
+              await entry.wait();
+              const firstCalibration = anchors.length === 0;
+              if (firstCalibration) {
+                const cursor = await entry.coldCursor();
+                await responseGate.waitForColdReply(cursor, entry.release);
+              }
+              anchor = await watchAnchor(direction, before);
+              await entry.assertCurrent();
+              if (!firstCalibration) {
+                await entry.release();
+              }
+              await responseGate.releaseAdmission(async () => {
+                const resident = await residentNumbers();
+                return direction === "older" ? resident[0]! < before : resident.at(-1)! > before;
+              }, 8);
+              await anchor.finish();
+              completed = true;
+            } finally {
+              if (!completed) {
+                responseGate.disarm();
+              }
+              try {
+                await anchor?.cancel();
+              } finally {
+                await entry.dispose();
+              }
+            }
           };
           const recordWindow = async (direction: string) => {
             const numbers = await residentNumbers();
@@ -299,21 +343,14 @@ suite.define(() => {
           while (numbers[0]! > 1) {
             const before = numbers[0]!;
             await waitForHistoryGesture();
-            await thread.evaluate((element) => {
-              window.historyPaginationProbe.begin();
-              element.scrollTop = 0;
+            await historyGesture("older", before, async () => {
+              await thread.evaluate((element) => {
+                window.historyPaginationProbe.begin();
+                element.scrollTop = 0;
+              });
+              await page.mouse.wheel(0, -500);
             });
-            await page.mouse.wheel(0, -500);
-            await responseGate?.wait();
-            const finishAnchor = responseGate ? await watchAnchor("older", before) : undefined;
-            if (responseGate) {
-              await responseGate.releaseAdmission(
-                async () => (await residentNumbers())[0]! < before,
-                8,
-              );
-            }
             await expect.poll(async () => (await residentNumbers())[0]).toBeLessThan(before);
-            await finishAnchor?.();
             await waitForChatScrollIdle(page);
             numbers = await recordWindow("older");
             olderPageCommits++;
@@ -343,20 +380,13 @@ suite.define(() => {
           // hold every row; the windowed build must reload evicted newer segments.
           while (numbers.at(-1)! < transcriptLength) {
             const before = numbers.at(-1)!;
-            await thread.evaluate((element) => {
-              element.scrollTop = element.scrollHeight;
+            await historyGesture("newer", before, async () => {
+              await thread.evaluate((element) => {
+                element.scrollTop = element.scrollHeight;
+              });
+              await page.mouse.wheel(0, 500);
             });
-            await page.mouse.wheel(0, 500);
-            await responseGate?.wait();
-            const finishAnchor = responseGate ? await watchAnchor("newer", before) : undefined;
-            if (responseGate) {
-              await responseGate.releaseAdmission(
-                async () => (await residentNumbers()).at(-1)! > before,
-                8,
-              );
-            }
             await expect.poll(async () => (await residentNumbers()).at(-1)).toBeGreaterThan(before);
-            await finishAnchor?.();
             await waitForChatScrollIdle(page);
             numbers = await recordWindow("newer");
             recordAdmission("newer", numbers);

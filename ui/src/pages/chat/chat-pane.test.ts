@@ -930,6 +930,7 @@ describe("chat pane history pagination intent", () => {
 
   it("re-arms a failed older-page load only after another user scroll", () => {
     const { pane, state, thread, event } = scrollFixture();
+    state.chatHistoryPagination = { hasMore: true, olderCursor: "older-intent" };
     pane.historyAutoLoadBlocked = true;
     vi.spyOn(pane.transcript, "isPositionSettled", "get").mockReturnValue(true);
     thread.scrollTop = 80;

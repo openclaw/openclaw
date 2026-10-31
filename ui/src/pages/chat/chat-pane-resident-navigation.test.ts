@@ -108,13 +108,16 @@ it("recovers every evicted newer page through its exact opaque edge", async () =
     Array.from({ length: 400 }, (_, index) => index + 81),
   );
   expect(state.chatHistoryPagination.newerCursor).toBe("after-480");
+  const before = requests.length;
   expect(await pane.loadNewerMessages()).toBe(true);
   expect(await pane.loadNewerMessages()).toBe(false);
   expect(state.chatMessages.map(nativeHistorySeq)).toEqual(
     Array.from({ length: 400 }, (_, index) => index + 241),
   );
   expect(state.chatHistoryPagination.hasNewer).toBeUndefined();
-  expect(requests.slice(-2).map((request) => request.cursor)).toEqual(["after-480", "after-560"]);
+  expect(requests.slice(before)).toEqual([
+    { cursor: "after-480", messageId: undefined, offset: undefined, limit: 400 },
+  ]);
   expect(requests.every((request) => request.offset === undefined)).toBe(true);
 });
 
@@ -136,13 +139,12 @@ it.each([2_000, 400])(
     // At a restored physical bottom (or a short window), native offset cannot move.
     thread.dispatchEvent(new WheelEvent("wheel", { deltaY: 100 }));
     expect(requests.slice(before)).toEqual([
-      { cursor: "after-480", messageId: undefined, offset: undefined, limit: 80 },
+      { cursor: "after-480", messageId: undefined, offset: undefined, limit: 400 },
     ]);
     await vi.waitFor(() => expect(nativeHistorySeq(state.chatMessages.at(-1))).toBe(640));
     expect(state.chatHistoryPagination.hasNewer).toBeUndefined();
     expect(requests.slice(before)).toEqual([
-      { cursor: "after-480", messageId: undefined, offset: undefined, limit: 80 },
-      { cursor: "after-560", messageId: undefined, offset: undefined, limit: 80 },
+      { cursor: "after-480", messageId: undefined, offset: undefined, limit: 400 },
     ]);
   },
 );
@@ -179,7 +181,7 @@ it("reopens a refreshed partial segment before recovering its discarded successo
   expect(await pane.loadNewerMessages()).toBe(true);
   expect(requests.slice(before)).toEqual([
     { messageId: "source-640", cursor: undefined, offset: undefined, limit: 1 },
-    { cursor: "after-640", messageId: undefined, offset: undefined, limit: 80 },
+    { cursor: "after-640", messageId: undefined, offset: undefined, limit: 400 },
   ]);
   expect(state.chatMessages.map(nativeHistorySeq)).toEqual(
     Array.from({ length: 360 }, (_, index) => index + 321),
@@ -466,13 +468,14 @@ it("does not advance a rejected held page and retries its exact edge after the r
   );
   expect(state.chatHistoryPagination).toMatchObject({ hasMore: true, olderCursor: "before-241" });
   expect(requests.slice(before).map(({ cursor, limit }) => ({ cursor, limit }))).toEqual([
+    { cursor: "before-241", limit: 400 },
     { cursor: "before-241", limit: 80 },
     { cursor: "before-241", limit: 1 },
   ]);
   expect(pane.stagedHistory.page?.limit).toBe(1);
   bubble.remove();
   expect(await pane.loadOlderMessages(false)).toBe(true);
-  expect(requests.length).toBe(before + 2);
+  expect(requests.length).toBe(before + 3);
   expect(pane.stagedHistory.page).toBeNull();
   expect(state.chatMessages.map(nativeHistorySeq)).toEqual(
     Array.from({ length: 321 }, (_, index) => index + 240),

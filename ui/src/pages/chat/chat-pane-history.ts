@@ -161,6 +161,10 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
       return false;
     }
     this.retireOlderMessagesReads(false, "newer");
+    // Direction reversal retires older intent; boot autofill must not
+    // cancel the accepted newer navigation when its window remains short.
+    this.historyObserverArmed = false;
+    this.historyViewportFillAttempted = true;
     const read = new AbortController();
     this.activeNewerRead = read;
     const ownsConnection = captureChatConnectionOwner(state);
@@ -322,6 +326,7 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
       this.presented &&
       this.visuallyPresented &&
       !this.history.loadingOlder &&
+      this.hasOlderMessages() &&
       this.transcript.isPositionSettled &&
       !this.transcript.isProgrammaticScroll &&
       !this.transcript.isMaintenanceScroll &&

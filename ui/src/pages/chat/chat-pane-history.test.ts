@@ -2,7 +2,7 @@
 
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { createComponent, createMemo, merge } from "solid-js";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-message-identity.ts";
@@ -21,6 +21,8 @@ import { message, renderedText } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   appendChatThread,
+  appendSentinel,
+  installHistoryObserver,
   historyPage,
   pagination,
   sparsePrefetchRequest,
@@ -89,50 +91,6 @@ function expectHistoryPagination(
       }),
     ),
   );
-}
-
-function installHistoryObserver(intersect = true) {
-  const observe = vi.fn();
-  const disconnect = vi.fn();
-  const construct =
-    vi.fn<(callback: IntersectionObserverCallback, observer: IntersectionObserver) => void>();
-  let rootMargin: string | undefined;
-  class FakeIntersectionObserver {
-    readonly root: IntersectionObserver["root"] | undefined;
-    constructor(
-      private readonly callback: IntersectionObserverCallback,
-      options?: IntersectionObserverInit,
-    ) {
-      rootMargin = options?.rootMargin;
-      this.root = intersect ? undefined : (options?.root ?? null);
-      construct(callback, this as unknown as IntersectionObserver);
-    }
-    disconnect() {
-      disconnect();
-    }
-    observe(target: Element) {
-      observe(target);
-      if (intersect) {
-        this.callback(
-          [{ isIntersecting: true } as IntersectionObserverEntry],
-          this as unknown as IntersectionObserver,
-        );
-      }
-    }
-  }
-  vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
-  onTestFinished(() => {
-    vi.unstubAllGlobals();
-  });
-  return { observe, disconnect, construct, rootMargin: () => rootMargin };
-}
-
-function appendSentinel(thread: HTMLElement, pane: { historySentinel: HTMLElement | null }) {
-  const sentinel = document.createElement("div");
-  sentinel.className = "chat-history-sentinel";
-  thread.append(sentinel);
-  pane.historySentinel = sentinel;
-  return sentinel;
 }
 
 it("passes only a proven profile viewer identity to transcript rendering", () => {
@@ -562,7 +520,10 @@ it.each([false, true])("joins an in-flight prefetch (tail refreshed=%s)", async 
     refresh ? [1, 2, 7, 8, 9] : [1, 2, 3, 4, 5, 6, 7, 8],
   );
   if (refresh) {
-    expectOlderRequest(request, state.sessionKey, 5);
+    expectOlderRequest(request, state.sessionKey, 5, -1, {
+      limit: 400,
+      maxBytes: 3 * 1024 * 1024 - 1,
+    });
   }
 });
 
@@ -915,10 +876,8 @@ it.each([
     expectHistoryPagination(state, pagination(total, hasMore ? 2 : undefined));
     expect(pane.hasOlderMessages()).toBe(hasMore);
     if (kind === "replacement") {
-      expectOlderRequest(request, state.sessionKey, 2, 0, {
-        limit: 400,
-        maxBytes: 3 * 1024 * 1024 - 1,
-      });
+      // The prior physical session cannot authorize an adaptive reservation.
+      expectOlderRequest(request, state.sessionKey, 2, 0);
       expect(request).toHaveBeenNthCalledWith(
         2,
         "chat.history",
