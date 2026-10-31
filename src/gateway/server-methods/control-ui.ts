@@ -411,13 +411,21 @@ export const controlUiHandlers: GatewayRequestHandlers = {
       respond(true, {}, undefined);
       return;
     }
-    const { parseControlUiLinkPreviewUrl, loadControlUiLinkPreview } =
-      await import("../control-ui-link-preview.js");
+    const {
+      isControlUiLinkPreviewEligible,
+      loadControlUiLinkPreview,
+      parseControlUiLinkPreviewInput,
+    } = await import("../control-ui-link-preview.js");
     const url = Object.keys(params).every((key) => key === "url")
-      ? parseControlUiLinkPreviewUrl(params.url)
+      ? parseControlUiLinkPreviewInput(params.url)
       : null;
     if (!url) {
       respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid controlUi.linkPreview params");
+      return;
+    }
+    // A well-formed target that cannot be previewed is unavailable metadata, not bad input.
+    if (!isControlUiLinkPreviewEligible(url)) {
+      respond(true, {}, undefined);
       return;
     }
     const preview = await loadControlUiLinkPreview(url, isEnabled, scope);

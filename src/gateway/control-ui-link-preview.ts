@@ -30,23 +30,27 @@ let nextPrincipal = 0;
 const cache = new Map<string, CacheEntry>();
 
 /** Public presentation only: never reuse browser credentials or private-network policy. */
-export function parseControlUiLinkPreviewUrl(value: unknown, base?: string): URL | null {
+export function isControlUiLinkPreviewEligible(url: URL): boolean {
+  return !isIP(normalizeHostname(url.hostname)) && !isBlockedHostnameOrIp(url.hostname);
+}
+
+/** Accepts a well-formed anonymous http(s) URL without judging preview eligibility. */
+export function parseControlUiLinkPreviewInput(value: unknown, base?: string): URL | null {
   if (typeof value !== "string" || !value.trim() || value.length > 2_048) {
     return null;
   }
   const url = URL.parse(value, base);
-  if (
-    !url ||
-    !["http:", "https:"].includes(url.protocol) ||
-    url.username ||
-    url.password ||
-    isIP(normalizeHostname(url.hostname)) ||
-    isBlockedHostnameOrIp(url.hostname)
-  ) {
+  if (!url || !["http:", "https:"].includes(url.protocol) || url.username || url.password) {
     return null;
   }
   url.hash = "";
   return url;
+}
+
+/** Every hop, redirect, and declared resource keeps the same destination restrictions. */
+export function parseControlUiLinkPreviewUrl(value: unknown, base?: string): URL | null {
+  const url = parseControlUiLinkPreviewInput(value, base);
+  return url && isControlUiLinkPreviewEligible(url) ? url : null;
 }
 
 async function readPageMetadata(response: Response, finalUrl: string, signal: AbortSignal) {
