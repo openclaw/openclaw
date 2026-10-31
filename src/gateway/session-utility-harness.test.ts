@@ -87,6 +87,7 @@ describe("utility completion with an unavailable implicit harness", () => {
     setRuntimeConfigSnapshot(config);
     runtimeMocks.acquire.mockReset().mockResolvedValue({
       snapshot: runtimeSnapshot(),
+      run: <T>(run: () => T): T => run(),
       [Symbol.asyncDispose]: async () => {},
     });
     runtimeMocks.runEmbeddedAttempt.mockReset();
@@ -191,6 +192,7 @@ describe("utility completion with an unavailable implicit harness", () => {
     const snapshot = runtimeSnapshot(registry);
     runtimeMocks.acquire.mockResolvedValue({
       snapshot,
+      run: <T>(run: () => T): T => run(),
       [Symbol.asyncDispose]: release,
     });
     const builtInTransport = vi

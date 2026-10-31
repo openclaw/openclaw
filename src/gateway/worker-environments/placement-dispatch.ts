@@ -141,22 +141,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     const retainCredentialCleanup = (revoke: () => Promise<void>) => {
       credentialCleanups.add(revoke);
     };
-    const readNativeCredential = request.readNativeCredential
-      ? async (...args: Parameters<NonNullable<typeof request.readNativeCredential>>) => {
-          assertCurrent();
-          const token = await request.readNativeCredential!(...args);
-          assertCurrent();
-          return token;
-        }
-      : undefined;
-    if (readNativeCredential) {
-      Object.assign(readNativeCredential, {
-        assertCurrent: () => {
-          assertCurrent();
-          request.readNativeCredential?.assertCurrent?.();
-        },
-      });
-    }
+    // Source owners compose dispatch liveness with the original reader's admission and policy guard.
+    const readNativeCredential = request.readNativeCredential;
     try {
       signal?.throwIfAborted();
       placement = await options.runLocalBarrier({

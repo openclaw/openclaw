@@ -371,6 +371,7 @@ export function buildPluginManifestRecord(params: {
     packageDescription: params.candidate.packageDescription,
     enabledByDefault: params.manifest.enabledByDefault === true ? true : undefined,
     enabledByDefaultOnPlatforms: params.manifest.enabledByDefaultOnPlatforms,
+    generationOverlap: params.manifest.generationOverlap,
     autoEnableWhenConfiguredProviders: params.manifest.autoEnableWhenConfiguredProviders,
     legacyPluginIds: params.manifest.legacyPluginIds,
     format: params.candidate.format ?? "openclaw",

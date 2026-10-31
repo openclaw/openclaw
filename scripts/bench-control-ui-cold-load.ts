@@ -60,10 +60,6 @@ import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-
 import { sidebarPresentationProbe } from "../ui/src/test-helpers/control-ui-sidebar-presentation-probe.test-support.ts";
 import { installTeamScaleSidebarPresentation } from "../ui/src/test-helpers/control-ui-sidebar-presentation.test-support.ts";
 import { revealSidebarTarget } from "../ui/src/test-helpers/control-ui-sidebar-window.ts";
-import {
-  createControlUiStreamingReply,
-  createStreamingReplyProbeInitScript,
-} from "../ui/src/test-helpers/control-ui-streaming-reply.ts";
 import { createControlUiTeamScaleFixture } from "../ui/src/test-helpers/control-ui-team-scale-fixture.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { resolveColdLoadLatency } from "./lib/control-ui-bench-latency.ts";
@@ -110,6 +106,8 @@ import {
 } from "./lib/control-ui-interaction-trace.ts";
 import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
 import { installPaneChromeProbe } from "./lib/control-ui-pane-chrome-probe.ts";
+import { createControlUiStreamingReply } from "./lib/control-ui-streaming-fixture.ts";
+import { createStreamingReplyProbeInitScript } from "./lib/control-ui-streaming-reply.ts";
 import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
 import {
   GATEWAY_HEAP_SAMPLE_INTERVAL,
@@ -337,6 +335,7 @@ const { values } = parseArgs({
     "network-latency-ms": { type: "string" },
     "download-kbps": { type: "string" },
     "cpu-throttle": { type: "string" },
+    "low-memory": { type: "boolean", default: false },
     port: { type: "string" },
     "sandbox-port": { type: "string" },
     "compare-bundle-dir": { type: "string", multiple: true, default: [] },
@@ -865,7 +864,12 @@ const isolatedSandboxOrigin =
   values["dashboard-widget"] || values["dashboard-mcp-app"] || values["dashboard-paint-marker"]
     ? `http://127.0.0.1:${address.port}`
     : undefined;
-const chromiumArgs = isolatedSandboxOrigin ? [`--isolate-origins=${isolatedSandboxOrigin}`] : [];
+const chromiumArgs = [
+  ...(isolatedSandboxOrigin ? [`--isolate-origins=${isolatedSandboxOrigin}`] : []),
+  ...(values["low-memory"]
+    ? ["--enable-low-end-device-mode", "--js-flags=--max-old-space-size=128"]
+    : []),
+];
 let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
@@ -948,6 +952,8 @@ try {
         firstLiveShellMs: null as number | null,
         firstShellInteractiveMs: null as number | null,
         firstEnabledComposerMs: null as number | null,
+        firstUsableComposerMs: null as number | null,
+        firstUsableComposerKind: null as "static" | "hydrated" | "new" | null,
         firstComposerFocusMs: null as number | null,
         firstNonemptyTranscriptMs: null as number | null,
         firstRouteReadyMs: null as number | null,
@@ -1126,6 +1132,29 @@ try {
           visible(composer)
         ) {
           milestones.firstEnabledComposerMs = performance.now();
+        }
+        if (milestones.firstUsableComposerMs === null) {
+          const composers = document.querySelectorAll<HTMLTextAreaElement>(
+            "#openclaw-boot-composer, .chat-pane-cache__pane--active .agent-chat__composer-combobox textarea, .new-session-page__message",
+          );
+          for (const candidate of composers) {
+            if (
+              candidate.matches(":disabled") ||
+              candidate.readOnly ||
+              candidate.closest("[inert]") ||
+              !visible(candidate)
+            ) {
+              continue;
+            }
+            milestones.firstUsableComposerMs = performance.now();
+            milestones.firstUsableComposerKind =
+              candidate.id === "openclaw-boot-composer"
+                ? "static"
+                : candidate.matches(".new-session-page__message")
+                  ? "new"
+                  : "hydrated";
+            break;
+          }
         }
         if (
           milestones.firstNonemptyTranscriptMs === null &&
@@ -3391,6 +3420,8 @@ try {
           firstStaticShellMs: result.presentation.firstStaticShellMs,
           firstShellInteractiveMs: result.presentation.firstShellInteractiveMs,
           firstEnabledComposerMs: result.presentation.firstEnabledComposerMs,
+          firstUsableComposerMs: result.presentation.firstUsableComposerMs,
+          firstUsableComposerKind: result.presentation.firstUsableComposerKind,
           firstNonemptyTranscriptMs: result.presentation.firstNonemptyTranscriptMs,
           cls: result.presentation.cls,
         },
@@ -3470,6 +3501,9 @@ try {
         networkLatencyMs,
         downloadKbps,
         cpuThrottle,
+        memoryProfile: values["low-memory"]
+          ? "Chromium low-end-device mode; 128 MiB V8 old-space limit, not an OS/RSS limit."
+          : "default",
         comparisonBundleDirs,
         fixture: fixture.counts,
         sidebarView,

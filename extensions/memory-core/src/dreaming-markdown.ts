@@ -15,6 +15,7 @@ import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { updateDeepDreamsFile } from "./dreaming-dreams-file.js";
 import { getMemoryWorkspaceMaintenance, readWorkspaceText } from "./memory-workspace-files.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
+import { resolveWorkspaceCreationMode, type WorkspaceFileMode } from "./workspace-file-mode.js";
 
 const PHASE_TITLES: Record<MemoryDreamingPhaseName, string> = {
   light: "Light Sleep",
@@ -49,11 +50,13 @@ export async function replaceDreamingMarkdownFile(
   filePath: string,
   content: string,
   workspaceDir?: string,
+  workspaceFileMode?: WorkspaceFileMode,
 ): Promise<void> {
   const files = workspaceDir ? getMemoryWorkspaceMaintenance(workspaceDir) : undefined;
   if (files) {
-    return await files.replaceReport(filePath, content);
+    return await files.replaceReport(filePath, content, workspaceFileMode);
   }
+  const mode = resolveWorkspaceCreationMode(workspaceFileMode);
   const directoryPath = path.dirname(filePath);
   await fs.mkdir(directoryPath, { recursive: true });
   const dirMode = (await fs.stat(directoryPath)).mode & 0o7777;
@@ -61,7 +64,7 @@ export async function replaceDreamingMarkdownFile(
     filePath,
     content,
     dirMode,
-    mode: 0o600,
+    mode,
     preserveExistingMode: true,
     tempPrefix: `${path.basename(filePath)}.dreaming`,
     syncTempFile: true,
@@ -72,6 +75,7 @@ export async function replaceDreamingMarkdownFile(
 
 type DreamingReportParams = {
   workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
   bodyLines: string[];
   hasContent: boolean;
   nowMs?: number;
@@ -132,7 +136,12 @@ async function writeDreamingReport(
       params.timezone,
     );
     const report = `# ${PHASE_TITLES[params.phase]}\n\n${body}\n`;
-    await replaceDreamingMarkdownFile(reportPath, report, params.workspaceDir);
+    await replaceDreamingMarkdownFile(
+      reportPath,
+      report,
+      params.workspaceDir,
+      params.workspaceFileMode,
+    );
   }
 
   await appendMemoryHostEvent(params.workspaceDir, {

@@ -375,6 +375,9 @@ export async function prepareGatewayLifecycle(params: {
     port,
     workspaceDir: defaultWorkspaceDir,
     isClosing: () => lifecycle.closePreludeStarted,
+    getConfig: getRuntimeConfig,
+    getPluginRegistry: () => pluginRuntime.registry,
+    logger: logCron,
     runHook: async (event, ctx) => {
       try {
         const hookRunner = (await import("../plugins/hooks.js")).createHookRunner(

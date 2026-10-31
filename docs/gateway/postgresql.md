@@ -199,7 +199,13 @@ Read-only agent scopes retain their store identity and schema admission between
 reads, but return their PostgreSQL transport after the last borrower finishes.
 Each worker isolate caches **at most two returned transports across all stores**,
 keyed by connection and timeout settings. Reusing one for a different store changes
-its `search_path` before the next query. Same-store reuse needs no extra query.
+its `search_path` before the next query. Same-store reuse within one second needs
+no extra query. After at least one second in the idle cache, the transport is
+validated before the next statement and reconnected if validation fails. An
+already-reported connection error also reconnects before reuse. A backend
+terminated less than one second after its last use can still fail the next
+statement if its termination notification has not arrived; user statements are
+never replayed after a connection failure.
 An open transaction is never returned to the cache; checked-out connections remain
 exclusive. Returned transports expire after three minutes idle or on worker shutdown.
 SQLite handle retention is unchanged.
