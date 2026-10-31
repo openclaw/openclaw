@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { postNativeExternalLink } from "../../app/native-link-routing.ts";
+import { hasNativeExternalLink, postNativeExternalLink } from "../../app/native-link-routing.ts";
 import { dispatchWidgetPrompt } from "../../components/mcp-app-security.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 
@@ -19,6 +19,9 @@ const STATE_PAYLOAD_MAX_BYTES = 8 * 1024;
 const STATE_COALESCE_WINDOW_MS = 5_000;
 const STATE_RATE_WINDOW_MS = 60_000;
 const STATE_RATE_MAX_ATTEMPTS = 12;
+const NATIVE_LINK_INTERVAL_MS = 1_000;
+// One budget per dashboard document, so N widgets cannot open N links a second.
+const lastNativeLinkAt = new WeakMap<Document, number>();
 
 export function isBoardWidgetBridgeRequest(value: unknown): value is BoardWidgetBridgeRequest {
   if (!value || typeof value !== "object") {
@@ -48,7 +51,6 @@ export class BoardWidgetBridgeOwner {
   private readonly recentStatePayloads = new Map<string, number>();
   private readonly pendingStates = new Map<string, Promise<unknown>>();
   private stateAttemptTimes: number[] = [];
-  private lastNativeLinkAt = Number.NEGATIVE_INFINITY;
 
   constructor(
     private readonly options: {
@@ -57,6 +59,8 @@ export class BoardWidgetBridgeOwner {
       client: BoardWidgetBridgeGatewayClient;
       rateKey: string;
       confirmPrompt: (text: string) => boolean | Promise<boolean>;
+      /** Whether this widget's own sandbox frame holds live user activation. */
+      widgetActivated: () => Promise<boolean>;
     },
   ) {
     this.options = { ...options };
@@ -65,6 +69,28 @@ export class BoardWidgetBridgeOwner {
   updateIdentity(frame: HTMLIFrameElement, ticket: string): void {
     this.options.frame = frame;
     this.options.ticket = ticket;
+  }
+
+  // The native route skips WebKit's popup blocker, so it keeps that blocker's
+  // per-frame rule: the dashboard and this widget's own sandbox frame must both
+  // hold live user activation. Activation reaches that frame only from input
+  // inside this widget, so code that took the wrapper's port cannot open links
+  // on a click or keystroke elsewhere in the dashboard. It also opens at most
+  // once a second per dashboard, like a blocker that spends the gesture.
+  private async openNativeLink(url: string): Promise<boolean> {
+    const dashboard = this.options.frame.ownerDocument;
+    const allowed = () =>
+      navigator.userActivation?.isActive &&
+      performance.now() - (lastNativeLinkAt.get(dashboard) ?? Number.NEGATIVE_INFINITY) >=
+        NATIVE_LINK_INTERVAL_MS;
+    if (!hasNativeExternalLink() || !allowed() || !(await this.options.widgetActivated())) {
+      return false;
+    }
+    if (!allowed() || !postNativeExternalLink(url)) {
+      return false;
+    }
+    lastNativeLinkAt.set(dashboard, performance.now());
+    return true;
   }
 
   private async emitState(payload: unknown): Promise<unknown> {
@@ -136,18 +162,9 @@ export class BoardWidgetBridgeOwner {
         if (!/^https?:\/\//i.test(url)) {
           throw new Error("widget link url is invalid");
         }
-        // The native route skips the popup blocker, so it keeps that blocker's
-        // rules in the dashboard realm: it needs live user activation and opens
-        // at most once a second, like a blocker that spends the gesture. Widget
-        // code that reaches the port without one falls through to window.open.
-        const now = Date.now();
-        const native =
-          navigator.userActivation?.isActive &&
-          now - this.lastNativeLinkAt >= 1_000 &&
-          postNativeExternalLink(url);
-        if (native) {
-          this.lastNativeLinkAt = now;
-        } else if (!openExternalUrlSafe(url)) {
+        // A request the native route refuses falls through to window.open,
+        // which WebKit's popup blocker refuses as it does on main.
+        if (!(await this.openNativeLink(url)) && !openExternalUrlSafe(url)) {
           throw new Error("widget link could not be opened");
         }
         return { ok: true };

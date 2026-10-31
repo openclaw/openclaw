@@ -10,13 +10,8 @@ beforeEach(() => {
   vi.useFakeTimers({ now: 1_000 });
   dispatchPrompt.mockReset().mockResolvedValue(true);
   client.request.mockReset().mockResolvedValue({ ok: true });
-  controller = new BoardWidgetBridgeOwner({
-    frame: document.createElement("iframe"),
-    ticket: "ticket",
-    client,
-    rateKey: "widget",
-    confirmPrompt,
-  });
+  widgetActivated.mockReset().mockResolvedValue(true);
+  controller = owner();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -28,6 +23,18 @@ const client = {
   request: vi.fn<(method: string, params: Record<string, unknown>) => Promise<unknown>>(),
 };
 const confirmPrompt = () => true;
+const widgetActivated = vi.fn<() => Promise<boolean>>();
+// Native link budgets belong to a dashboard document; a fresh one per test
+// keeps an earlier test's open from spending this test's budget.
+const owner = (dashboard = document.implementation.createHTMLDocument()) =>
+  new BoardWidgetBridgeOwner({
+    frame: dashboard.createElement("iframe"),
+    ticket: "ticket",
+    client,
+    rateKey: "widget",
+    confirmPrompt,
+    widgetActivated,
+  });
 const dispatchPrompt = vi.mocked(dispatchWidgetPrompt);
 let controller: BoardWidgetBridgeOwner;
 const handle = (
@@ -102,6 +109,92 @@ it("opens at most one native widget link per second of user activation", async (
     [{ type: "open-link", url: "https://example.com/later", target: "external" }],
   ]);
   expect(open.mock.calls).toEqual([["https://example.com/burst", "_blank", "noopener,noreferrer"]]);
+});
+it("opens native widget links only while that widget's own frame holds user activation", async () => {
+  const postMessage = vi.fn();
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  // Dashboard activation from a click or keystroke outside this widget.
+  stubUserActivation(true);
+  widgetActivated.mockResolvedValue(false);
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  await expect(handle("host.open", { url: "https://example.com/elsewhere" })).rejects.toThrow(
+    "widget link could not be opened",
+  );
+  expect(widgetActivated).toHaveBeenCalledOnce();
+  expect(postMessage).not.toHaveBeenCalled();
+  expect(open.mock.calls).toEqual([
+    ["https://example.com/elsewhere", "_blank", "noopener,noreferrer"],
+  ]);
+  widgetActivated.mockResolvedValue(true);
+  await expect(handle("host.open", { url: "https://example.com/inside" })).resolves.toEqual({
+    ok: true,
+  });
+  expect(postMessage.mock.calls).toEqual([
+    [{ type: "open-link", url: "https://example.com/inside", target: "external" }],
+  ]);
+});
+it("shares one native link budget across the widgets of a dashboard", async () => {
+  const postMessage = vi.fn();
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  stubUserActivation(true);
+  vi.spyOn(window, "open").mockReturnValue(null);
+  const dashboard = document.implementation.createHTMLDocument();
+  const [first, second] = [owner(dashboard), owner(dashboard)];
+  const link = (target: BoardWidgetBridgeOwner, path: string) =>
+    target.handle({
+      ...envelope,
+      id: crypto.randomUUID(),
+      method: "host.open",
+      params: { url: `https://example.com/${path}` },
+    });
+  await expect(link(first, "first")).resolves.toEqual({ ok: true });
+  await expect(link(second, "second")).rejects.toThrow("widget link could not be opened");
+  await expect(link(owner(), "other-dashboard")).resolves.toEqual({ ok: true });
+  expect(postMessage.mock.calls.map(([message]) => message.url)).toEqual([
+    "https://example.com/first",
+    "https://example.com/other-dashboard",
+  ]);
+});
+it("spaces native widget links on the monotonic clock", async () => {
+  const postMessage = vi.fn();
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  stubUserActivation(true);
+  vi.spyOn(window, "open").mockReturnValue(null);
+  let monotonic = 50_000;
+  vi.spyOn(performance, "now").mockImplementation(() => monotonic);
+  await expect(handle("host.open", { url: "https://example.com/first" })).resolves.toEqual({
+    ok: true,
+  });
+  // A wall-clock jump is not elapsed time.
+  vi.setSystemTime(Date.now() + 60_000);
+  await expect(handle("host.open", { url: "https://example.com/jump" })).rejects.toThrow(
+    "widget link could not be opened",
+  );
+  monotonic += 1_000;
+  await expect(handle("host.open", { url: "https://example.com/later" })).resolves.toEqual({
+    ok: true,
+  });
+  expect(postMessage.mock.calls.map(([message]) => message.url)).toEqual([
+    "https://example.com/first",
+    "https://example.com/later",
+  ]);
+});
+it("opens one native widget link when requests race the activation check", async () => {
+  const postMessage = vi.fn();
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  stubUserActivation(true);
+  vi.spyOn(window, "open").mockReturnValue(null);
+  const activation = createDeferred<boolean>();
+  widgetActivated.mockReturnValue(activation.promise);
+  const links = ["a", "b"].map((path) =>
+    handle("host.open", { url: `https://example.com/${path}` }).then(
+      () => "opened",
+      () => "refused",
+    ),
+  );
+  activation.resolve(true);
+  expect(await Promise.all(links)).toEqual(["opened", "refused"]);
+  expect(postMessage).toHaveBeenCalledOnce();
 });
 it.each([
   ["javascript:alert(1)", "widget link url is invalid"],

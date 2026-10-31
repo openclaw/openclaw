@@ -34,6 +34,8 @@ type BoardWidgetSandboxHostOptions = {
   onError: (error: unknown) => void;
 };
 
+const ACTIVATION_QUERY_TIMEOUT_MS = 250;
+
 class WidgetDocumentError extends Error {
   constructor(
     readonly kind: "unauthorized" | "invalid-url" | "unavailable" | "rejected",
@@ -63,6 +65,7 @@ export class BoardWidgetSandboxHost {
   private readonly documentHost: WidgetSandboxHost;
   private requestGeneration = 0;
   private readonly pendingRequests = new Set<string>();
+  private readonly activationQueries = new Map<string, (active: boolean) => void>();
 
   constructor(private options: BoardWidgetSandboxHostOptions) {
     this.documentHost = new WidgetSandboxHost(this.documentOptions());
@@ -164,6 +167,11 @@ export class BoardWidgetSandboxHost {
     ) {
       return;
     }
+    if (event.data?.method === "ui/notifications/sandbox-activation") {
+      const params = event.data.params;
+      this.activationQueries.get(params?.id)?.(params?.active === true);
+      return;
+    }
     this.documentHost.handleMessage(event);
     if (event.data?.method === "ui/notifications/sandbox-proxy-ready") {
       return;
@@ -250,6 +258,7 @@ export class BoardWidgetSandboxHost {
         // routine ticket renewals into fresh prompt budgets.
         rateKey: this.documentKey(),
         confirmPrompt: this.options.confirmPrompt,
+        widgetActivated: () => this.queryFrameActivation(),
       });
     } else {
       this.bridgeOwner.updateIdentity(this.options.frame, ticket);
@@ -306,6 +315,31 @@ export class BoardWidgetSandboxHost {
     // the wrapper document so no previously adopted bridge port crosses modes.
     const bridgeMode = this.options.bridgeEnabled === false ? "passive" : "interactive";
     return `${sourceIdentity}\0${this.options.widget.revision}\0${generation}\0${bridgeMode}`;
+  }
+
+  // Asks the trusted outer proxy whether it holds live user activation. Only
+  // that frame's own window, at the sandbox origin, can answer this query id.
+  private queryFrameActivation(): Promise<boolean> {
+    const target = this.options.frame.contentWindow;
+    if (!target) {
+      return Promise.resolve(false);
+    }
+    const id = Array.from(crypto.getRandomValues(new Uint32Array(4)), (part) =>
+      part.toString(36),
+    ).join("-");
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => settle(false), ACTIVATION_QUERY_TIMEOUT_MS);
+      const settle = (active: boolean) => {
+        clearTimeout(timer);
+        this.activationQueries.delete(id);
+        resolve(active);
+      };
+      this.activationQueries.set(id, settle);
+      target.postMessage(
+        { jsonrpc: "2.0", method: "ui/notifications/sandbox-activation-query", params: { id } },
+        this.options.sandboxOrigin,
+      );
+    });
   }
 
   private postHostInit(): void {

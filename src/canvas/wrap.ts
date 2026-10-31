@@ -114,11 +114,14 @@ export function buildWidgetDocument(
     "const listen=window.addEventListener.bind(window);const path=Event.prototype.composedPath;" +
     "const prevent=Event.prototype.preventDefault;const test=RegExp.prototype.test;" +
     "const later=setTimeout.bind(window);const cancel=clearTimeout.bind(window);" +
+    // Widget code can replace MessageEvent.prototype.data to receive these
+    // private ports as `this`; reading through the captured getter denies it.
+    'const apply=Reflect.apply;const dataOf=Object.getOwnPropertyDescriptor(MessageEvent.prototype,"data").get;' +
     "const c=new MessageChannel();" +
     "const promptPost=c.port1.postMessage.bind(c.port1);" +
     "const b=new MessageChannel();const bridgePost=b.port1.postMessage.bind(b.port1);" +
     "const promptWaiting=[];let inlinePromptReady=false;" +
-    'c.port1.addEventListener("message",event=>{if(event.data?.type!=="openclaw:widget-prompt-host-ready"||inlinePromptReady)return;' +
+    'c.port1.addEventListener("message",event=>{if(apply(dataOf,event,[])?.type!=="openclaw:widget-prompt-host-ready"||inlinePromptReady)return;' +
     "inlinePromptReady=true;while(promptWaiting.length){const entry=shift.call(promptWaiting);if(entry)entry.inline();}});c.port1.start();" +
     "let act=null;" +
     "try{const ua=navigator.userActivation;" +
@@ -129,7 +132,7 @@ export function buildWidgetDocument(
     "let ticket=null;let controlUiBaseUrl=null;let sequence=0;let hostInitExpired=false;const pending=new Map();const waiting=[];" +
     'const initTimer=later(()=>{hostInitExpired=true;while(waiting.length){const entry=shift.call(waiting);if(entry)entry.reject(new ErrorCtor("widget host capabilities unavailable"));}' +
     'while(promptWaiting.length){const entry=shift.call(promptWaiting);if(entry)entry.reject(new ErrorCtor("widget prompt host unavailable"));}},5000);' +
-    'b.port1.addEventListener("message",event=>{const data=event.data;' +
+    'b.port1.addEventListener("message",event=>{const data=apply(dataOf,event,[]);' +
     'if(data?.type==="openclaw:widget-host-init"&&typeof data.ticket==="string"){ticket=data.ticket;' +
     'const base=data.controlUiBaseUrl;controlUiBaseUrl=typeof base==="string"&&/^https?:\\/\\//.test(base)?base:null;' +
     'bridgePost({type:"openclaw:widget-host-init-ack",ticket});cancel(initTimer);' +

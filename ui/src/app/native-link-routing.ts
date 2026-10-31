@@ -95,6 +95,10 @@ function postNativeLink(postMessage: NativeLinkPoster, url: URL): boolean {
   }
 }
 
+export function hasNativeExternalLink(): boolean {
+  return getNativeLinkPoster() !== undefined;
+}
+
 export function postNativeExternalLink(url: string): boolean {
   const poster = getNativeLinkPoster();
   if (!poster) {

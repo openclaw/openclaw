@@ -108,14 +108,18 @@ it("keeps the wrapped document bytes stable", () => {
     '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
   );
 
-  expect(Buffer.byteLength(html)).toBe(17765);
+  expect(Buffer.byteLength(html)).toBe(17895);
   expect(createHash("sha256").update(html).digest("hex")).toBe(
-    "e8c709f66c308ddf94d310ad2a29375a1edff39b9d82328464146045640e72f0",
+    "d24f2ef46f994f7c099512e4b17b03d79cd539b0e11a66e68604c245f9d7be24",
   );
 });
-it("never turns script-dispatched link clicks into host.open", async () => {
+// The host side reads port data through the pristine getter, so a widget
+// override of MessageEvent.prototype.data only ever sees the wrapper's reads.
+const messageData = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "data")!;
+async function bootWrappedWidget(body: string) {
   // jsdom has no MessageChannel and drops transferred ports, so the real wrapper
-  // gets Node's channel and the parent's postMessage records its port offers.
+  // gets Node's channel (and its MessageEvent) and the parent's postMessage
+  // records its port offers.
   const dom = new JSDOM("<iframe></iframe>", { runScripts: "dangerously" });
   onTestFinished(() => dom.window.close());
   const offers: Array<{ type: string; port?: MessagePort }> = [];
@@ -125,28 +129,30 @@ it("never turns script-dispatched link clicks into host.open", async () => {
     typeof globalThis;
   Object.assign(frame, {
     MessageChannel,
+    MessageEvent,
     CanvasRenderingContext2D: function CanvasRenderingContext2D() {},
     ResizeObserver: class {
       observe() {}
     },
   });
   frame.document.open();
-  frame.document.write(
-    buildWidgetDocument(
-      "Links",
-      ["https://example.com/a", "javascript:alert(1)", "data:text/html,x"]
-        .map((href, index) => `<a id="l${index}" target="_blank" href="${href}">${index}</a>`)
-        .join(""),
-    ),
-  );
+  frame.document.write(buildWidgetDocument("Links", body));
   frame.document.close();
   const port = offers.find((offer) => offer.type === "openclaw:widget-bridge-port-offer")!.port!;
   onTestFinished(() => port.close());
   const received: Array<{ type: string; method?: string }> = [];
-  port.addEventListener("message", (event) => received.push(event.data));
+  port.addEventListener("message", (event) => received.push(messageData.get!.call(event)));
   port.start();
   port.postMessage({ type: "openclaw:widget-host-init", ticket: "ticket" });
   await vi.waitFor(() => expect(received[0]?.type).toBe("openclaw:widget-host-init-ack"));
+  return { frame, port, received };
+}
+it("never turns script-dispatched link clicks into host.open", async () => {
+  const { frame, received } = await bootWrappedWidget(
+    ["https://example.com/a", "javascript:alert(1)", "data:text/html,x"]
+      .map((href, index) => `<a id="l${index}" target="_blank" href="${href}">${index}</a>`)
+      .join(""),
+  );
   const events: Event[] = [];
   for (const anchor of frame.document.querySelectorAll("a")) {
     anchor.click();
@@ -169,4 +175,32 @@ it("never turns script-dispatched link clicks into host.open", async () => {
     "state.emit",
   ]);
   expect(events.map((event) => event.defaultPrevented)).toEqual(events.map(() => false));
+});
+it("keeps its private bridge port from a widget's MessageEvent data override", async () => {
+  const original = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "data")!;
+  onTestFinished(() => {
+    Object.defineProperty(MessageEvent.prototype, "data", original);
+  });
+  const { frame, port, received } = await bootWrappedWidget(
+    "<script>window.stolen=[];" +
+      'const original=Object.getOwnPropertyDescriptor(MessageEvent.prototype,"data");' +
+      'Object.defineProperty(MessageEvent.prototype,"data",{configurable:true,' +
+      "get(){const data=original.get.call(this);" +
+      // Node's worker RPC shares this MessageEvent; keep only bridge traffic.
+      'if(String(data?.type).startsWith("openclaw:"))window.stolen.push(this.target);return data;}});</script>',
+  );
+  const widget = frame as unknown as {
+    stolen: unknown[];
+    openclaw: { state: { emit: (payload: unknown) => Promise<unknown> } };
+  };
+  const emitted = widget.openclaw.state.emit({ live: true });
+  await vi.waitFor(() => expect(received.at(-1)?.method).toBe("state.emit"));
+  const { id } = received.at(-1) as unknown as { id: string };
+  port.postMessage({ type: "openclaw:widget-bridge-response", id, ok: true, result: { ok: true } });
+  await expect(emitted).resolves.toEqual({ ok: true });
+  // The override is live in the widget realm, yet never saw the wrapper's port.
+  const control = { type: "openclaw:control" };
+  expect(new MessageEvent("message", { data: control }).data).toBe(control);
+  expect(widget.stolen).toHaveLength(1);
+  expect(widget.stolen[0]).toBeNull();
 });
