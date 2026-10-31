@@ -29,6 +29,9 @@ enum CanvasScheme {
         case "woff": "font/woff"
         case "ttf": "font/ttf"
         case "wasm": "application/wasm"
+        // WebKit will not display application/octet-stream in a frame, so documents need real types.
+        case "txt", "text", "md", "markdown", "csv", "log": "text/plain"
+        case "pdf": "application/pdf"
         default: "application/octet-stream"
         }
     }
