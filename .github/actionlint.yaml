@@ -81,3 +81,6 @@ paths:
   .github/workflows/ci-check-routine-testbox.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/security-review.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
