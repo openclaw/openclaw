@@ -96,12 +96,8 @@ export class TranscriptLayoutOwner {
   }
 
   readonly rowMinimum = (index: number): number => {
-    const heights = this.rowLayout?.readRows();
-    if (!heights) {
-      return 0;
-    }
     const key = this.rowLayoutKey(index);
-    return key ? (heights[key] ?? 0) : 0;
+    return key ? (this.rowLayout?.read(key) ?? 0) : 0;
   };
 
   restoreRows(

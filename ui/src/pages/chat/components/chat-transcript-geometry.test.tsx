@@ -16,6 +16,7 @@ import {
   createChatWidgetLayout,
   observeChatCache,
   type ChatMessageCache,
+  type ChatWidgetLayout,
 } from "../session-message-cache.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import {
@@ -33,7 +34,6 @@ import {
 } from "./chat-transcript-fixture.test-support.tsx";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
-import { admitFootprint } from "./chat-transcript-layout.test-support.ts";
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
 import {
   flushDeferredRowPrune,
@@ -72,7 +72,19 @@ it("reserves only the matching width and appearance, including text scale, width
     chatMessageMaxWidth: "48rem",
   };
   const theme = { ...context.theme, settings, resolvedMode: "light" as const };
+  let cachedKey: string | undefined;
+  const widgetLayout: ChatWidgetLayout = {
+    read: (key) => {
+      cachedKey ??= key;
+      return key === cachedKey ? 300 : undefined;
+    },
+    readRows: () => undefined,
+    write: vi.fn(),
+    writeRows: vi.fn(),
+    invalidateRow: vi.fn(),
+  };
   const props = threadProps("footprint-appearance", "agent:main:footprint", [], {
+    widgetLayout,
     applicationContext: { ...context, theme },
   });
   const layout = new TranscriptLayoutOwner(() => {});
@@ -80,8 +92,6 @@ it("reserves only the matching width and appearance, including text scale, width
   layout.rowWidth = 768;
   layout.paneWidth = 1100;
   layout.rowGutter = 166;
-  layout.configureRows(props, "gutter", false);
-  props.widgetLayout = admitFootprint(layout, props, 300);
   const reserve = (version = 0) => {
     layout.configureRows(props, "gutter", version !== 0);
     return layout.rowMinimum(0);
@@ -123,7 +133,8 @@ it("reserves only the matching width and appearance, including text scale, width
   expect(reserve()).toBe(0);
   vi.stubGlobal("innerHeight", viewportHeight);
   expect(reserve()).toBe(300);
-  // Transient expansion must not reuse the conversation's saved footprint.
+  // A repeated expansion counter cannot admit a footprint from another recovered message.
+  cachedKey = undefined;
   expect(reserve(2)).toBe(0);
 });
 
@@ -177,25 +188,14 @@ it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap", "ra
     });
     const write = vi.fn();
     observeChatCache(cache, { write, delete: vi.fn() });
-    const props = threadProps("footprint-idle", target.sessionKey, [], {
-      widgetLayout: createChatWidgetLayout()(cache, host, target),
-    });
     const layout = new TranscriptLayoutOwner(() => {});
-    layout.configureRows(props, "gutter", false);
-    const readMinimum = (owner: TranscriptLayoutOwner) => {
-      const descriptor = expectDefined(
-        Object.getOwnPropertyDescriptor(window, "innerHeight"),
-        "innerHeight",
-      );
-      const height = window.innerHeight;
-      const readHeight = vi.fn(() => height);
-      Object.defineProperty(window, "innerHeight", { configurable: true, get: readHeight });
-      try {
-        return { minimum: owner.rowMinimum(0), viewportReads: readHeight.mock.calls.length };
-      } finally {
-        Object.defineProperty(window, "innerHeight", descriptor);
-      }
-    };
+    layout.configureRows(
+      threadProps("footprint-idle", target.sessionKey, [], {
+        widgetLayout: createChatWidgetLayout()(cache, host, target),
+      }),
+      "gutter",
+      false,
+    );
     layout.rowWidth = 768;
     layout.paneWidth = 1100;
     layout.rows = [{ key: "row", revision: "one" }];
@@ -219,9 +219,6 @@ it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap", "ra
     // eslint-disable-next-line no-underscore-dangle -- Bind the native viewport before measuring.
     virtualizer._willUpdate();
     try {
-      if (control === "") {
-        expect(readMinimum(layout)).toEqual({ minimum: 0, viewportReads: 0 });
-      }
       virtualizer.measureElement(row);
       emitTranscriptResize(row, 768, 100);
       expect(write).not.toHaveBeenCalled();
@@ -233,21 +230,6 @@ it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap", "ra
       takeIdle()();
       expect(write).toHaveBeenCalledTimes(1);
       expect(Object.values(write.mock.calls[0]![1].widgetHeights)).toEqual([100]);
-      if (control === "") {
-        // Persisted measurements become reservations only on a fresh admission.
-        expect(readMinimum(layout)).toEqual({ minimum: 0, viewportReads: 0 });
-        const restored = new TranscriptLayoutOwner(() => {});
-        restored.configureRows(
-          { ...props, widgetLayout: createChatWidgetLayout()(cache, host, target) },
-          "gutter",
-          false,
-        );
-        restored.rows = layout.rows;
-        restored.rowWidth = layout.rowWidth;
-        restored.paneWidth = layout.paneWidth;
-        restored.rowGutter = layout.rowGutter;
-        expect(readMinimum(restored).minimum).toBe(100);
-      }
       const disclosure = requireElement(
         row,
         control === "raw-output"

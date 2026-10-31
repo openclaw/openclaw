@@ -55,11 +55,7 @@ describe("transcript layout lifetime", () => {
     scheduledCallbacks(true);
     const host = new ChatSessionVirtualizerHost(() => {});
     const { layout } = footprintLayout();
-    host.layout.configureRows(
-      threadProps("layout-lifetime", undefined, [], { widgetLayout: layout.rowLayout }),
-      "gutter",
-      false,
-    );
+    host.layout.rowLayout = layout.rowLayout;
     host.layout.rowWidth = 768;
     host.layout.paneWidth = 1100;
     const renderAndDisconnect = () => {

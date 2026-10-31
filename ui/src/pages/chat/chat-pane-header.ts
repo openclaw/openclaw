@@ -443,21 +443,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       (catalog ? this.history.catalogSession?.name?.trim() : undefined) ||
       this.resolveHeaderSessionTitle(row);
     const branchQuery = this.state ? getChatBranchesQueryState(this.state) : undefined;
-    const navDrawerOpen = () => this.navDrawerOpen;
-    const gatewayStatus = () => this.gatewayStatus;
     const header: ChatPaneHeaderProps = {
       onHeaderRef: this.registerHeaderElement,
       paneId: this.paneId,
       presented: { owner: this.element, isPresented: () => this.presented },
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
-      // Drawer chrome changes update the header without waking the transcript/composer frame.
-      get navDrawerOpen() {
-        return navDrawerOpen();
-      },
-      get gatewayStatus() {
-        return gatewayStatus();
-      },
+      navDrawerOpen: this.navDrawerOpen,
+      gatewayStatus: this.gatewayStatus,
       savedConversation: Boolean(
         this.state &&
         (!this.state.connected ||

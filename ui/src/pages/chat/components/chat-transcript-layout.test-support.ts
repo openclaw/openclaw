@@ -1,11 +1,6 @@
 import { Virtualizer } from "@tanstack/virtual-core";
 import { vi } from "vitest";
-import {
-  cacheChatSessionSnapshot,
-  createChatWidgetLayout,
-  type ChatMessageCache,
-} from "../session-message-cache.ts";
-import type { ChatThreadProps } from "./chat-thread-interactions.ts";
+import type { ChatWidgetLayout } from "../session-message-cache.ts";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { threadProps } from "./chat-transcript.test-support.ts";
 
@@ -41,70 +36,24 @@ export function scheduledCallbacks(idle: boolean) {
   return { frames, idleCallbacks, takeFrame, takeIdle };
 }
 
-/** Seed geometry through its real writer, then return a fresh reservation. */
-export function admitFootprint(
-  source: TranscriptLayoutOwner,
-  props: ChatThreadProps,
-  height: number,
-  avatarPlacement = "gutter",
-) {
-  const cache: ChatMessageCache = new Map();
-  const host = { assistantAgentId: "main" };
-  const target = { sessionKey: props.sessionKey ?? "agent:main:layout-footprint" };
-  cacheChatSessionSnapshot(cache, host, target, {
-    messages: [],
-    pagination: { hasMore: false },
-    sessionId: "one",
-  });
+export function footprintLayout() {
+  const writeRows = vi.fn<(heights: Record<string, number>) => void>();
+  const rowLayout: ChatWidgetLayout = {
+    read: () => 300,
+    readRows: () => undefined,
+    write: () => undefined,
+    writeRows,
+    invalidateRow: () => {},
+  };
   const layout = new TranscriptLayoutOwner(() => {});
   layout.configureRows(
-    { ...props, widgetLayout: createChatWidgetLayout()(cache, host, target) },
-    avatarPlacement,
+    threadProps("layout-lifetime", undefined, [], { widgetLayout: rowLayout }),
+    "gutter",
     false,
   );
-  layout.rows = source.rows;
-  layout.rowWidth = source.rowWidth;
-  layout.paneWidth = source.paneWidth;
-  layout.rowGutter = source.rowGutter;
-  const descriptors = [
-    "requestAnimationFrame",
-    "cancelAnimationFrame",
-    "requestIdleCallback",
-    "cancelIdleCallback",
-  ].map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
-  const scheduled = scheduledCallbacks(false);
-  try {
-    const mounted = mountedVirtualizer(layout, height);
-    try {
-      layout.persistRows(mounted.instance, false);
-      scheduled.takeFrame()();
-      scheduled.takeFrame()();
-    } finally {
-      layout.disconnect();
-      mounted.dispose();
-    }
-  } finally {
-    for (const [name, descriptor] of descriptors) {
-      if (descriptor) {
-        Object.defineProperty(globalThis, name, descriptor);
-      } else {
-        Reflect.deleteProperty(globalThis, name);
-      }
-    }
-  }
-  return createChatWidgetLayout()(cache, host, target);
-}
-
-export function footprintLayout() {
-  const layout = new TranscriptLayoutOwner(() => {});
-  const props = threadProps("layout-lifetime", undefined, []);
-  layout.configureRows(props, "gutter", false);
   layout.rowWidth = 768;
   layout.paneWidth = 1100;
   layout.rows = [{ key: "row", revision: "revision" }];
-  const rowLayout = admitFootprint(layout, props, 300);
-  layout.rowLayout = rowLayout;
-  const writeRows = vi.spyOn(rowLayout, "writeRows");
   return { layout, writeRows };
 }
 

@@ -23,7 +23,6 @@ import { render, renderChatThread } from "../test-helpers/chat-transcript-native
 import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
 import { ChatThread } from "./chat-thread-view.tsx";
-import { admitFootprint } from "./chat-transcript-layout.test-support.ts";
 import * as transcriptIndex from "./chat-transcript-message-index.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
@@ -492,6 +491,14 @@ describe("transcript projection", () => {
       msg("assistant", "needle", 1_000, { __openclaw: { id: "matching-row" } }),
     ]);
     props.chatBubbleMode = true;
+    const read = vi.fn(() => 700);
+    props.widgetLayout = {
+      read,
+      readRows: () => undefined,
+      write: vi.fn(),
+      writeRows: vi.fn(),
+      invalidateRow: vi.fn(),
+    };
     const session = new ChatSessionVirtualizerHost(() => {});
     cleanups.push(() => session.dispose());
     session.layout.rowWidth = 768;
@@ -499,19 +506,16 @@ describe("transcript projection", () => {
     session.layout.rowGutter = 166;
     const project = () => projectChatTranscript(props, session).renderRows();
     project();
-    props.widgetLayout = admitFootprint(session.layout, props, 700, "footer");
-    const readRows = vi.spyOn(props.widgetLayout, "readRows");
-    project();
     const row = session.layout.rows[0];
     expect(session.layout.rowMinimum(0)).toBe(700);
     const search = getTranscriptState(props.paneId).search;
     search.toggle();
     search.setQuery("needle");
-    readRows.mockClear();
+    read.mockClear();
     project();
     expect(session.layout.rows[0]).toMatchObject({ key: row?.key, revision: row?.revision });
     expect(session.layout.rowMinimum(0)).toBe(0);
-    expect(readRows).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
     search.close();
     project();
     expect(session.layout.rowMinimum(0)).toBe(700);

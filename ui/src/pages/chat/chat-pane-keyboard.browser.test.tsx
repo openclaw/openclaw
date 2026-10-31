@@ -1,10 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { page, userEvent } from "vitest/browser";
-import { connectShellViewport, shellViewport } from "../../app/shell-viewport.ts";
+import { userEvent } from "vitest/browser";
 import "../../styles.css";
 import "../../styles/chat.ts";
-import { t } from "../../i18n/index.ts";
+import { connectShellViewport, shellViewport } from "../../app/shell-viewport.ts";
 import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import {
   connectPaneTestView,
@@ -62,49 +61,6 @@ it("publishes keyboard transitions to the mobile composer without transcript geo
   await expect.poll(() => shell.dataset.composerKeyboard).toBeUndefined();
   await expect.poll(() => shell.dataset.composerEditing).toBe("false");
   expect(runtime.mobilePresentation.suspended).toBe(true);
-});
-
-it("updates drawer chrome without rebuilding the transcript and composer frame", async () => {
-  await page.viewport(430, 800);
-  const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
-  const runtime = getPaneTestRuntime(pane);
-  pane.mergedChrome = true;
-  pane.narrow = true;
-  pane.gatewayStatus = { kind: "offline", queuedCount: 0, lastError: null, onRetry: vi.fn() };
-  const gatewayStatus = pane.gatewayStatus;
-  pane.style.cssText = "display: block; width: 430px; height: 600px";
-  onTestFinished(() => pane.element.remove());
-  connectPaneTestView(pane);
-  document.body.append(pane.element);
-  await pane.updateComplete;
-  await expect.poll(() => pane.querySelector(".mobile-header__navigation")).not.toBeNull();
-  await expect
-    .poll(() => pane.querySelector(".mobile-header__notices")?.textContent)
-    .toContain(t("connection.offline"));
-  const toggle = expectDefined(pane.querySelector(".mobile-header__navigation"), "drawer toggle");
-  const textarea = expectDefined(pane.querySelector("textarea"), "composer input");
-  const render = vi.spyOn(runtime, "render");
-  onTestFinished(() => render.mockRestore());
-
-  // The shell mutes its closed-drawer gateway notice while navigation owns the screen.
-  pane.navDrawerOpen = true;
-  pane.gatewayStatus = null;
-  await pane.updateComplete;
-  await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
-  expect(pane.querySelector(".mobile-header__notices")).toBeNull();
-  expect(pane.querySelector("textarea")).toBe(textarea);
-  expect(render).not.toHaveBeenCalled();
-
-  pane.navDrawerOpen = false;
-  pane.gatewayStatus = gatewayStatus;
-  await pane.updateComplete;
-  await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("false");
-  await expect
-    .poll(() => pane.querySelector(".mobile-header__notices")?.textContent)
-    .toContain(t("connection.offline"));
-  expect(pane.querySelector(".mobile-header__navigation")).toBe(toggle);
-  expect(pane.querySelector("textarea")).toBe(textarea);
-  expect(render).not.toHaveBeenCalled();
 });
 
 it("keeps the mobile composer open while a typed draft waits", async () => {

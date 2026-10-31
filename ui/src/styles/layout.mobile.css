@@ -81,17 +81,21 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   width: auto;
   padding: 0;
   pointer-events: none;
+  visibility: hidden;
   border: 0;
   border-radius: 0;
   background: rgb(0 0 0 / 44%);
   opacity: 0;
-  /* Closed hit testing is already disabled here and by the backdrop's inert owner. */
-  transition: opacity var(--motion-sheet);
+  /* visibility interpolates as visible until the fade ends, in both directions. */
+  transition:
+    opacity var(--motion-sheet),
+    visibility var(--motion-sheet);
   touch-action: none;
 }
 
 .shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
   pointer-events: auto;
+  visibility: visible;
   opacity: 1;
 }
 
