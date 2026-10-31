@@ -237,6 +237,8 @@ export async function finishGatewayStartup(params: {
     const operation = Promise.resolve().then(() => run(runtime.connectionWork.signal));
     return runtime.connectionWork.track(() => operation);
   };
+  let postAttachSpanSettled = false;
+  let postAttachSidecarsReady = false;
   const postAttachHandles = await trackStartupWork(() =>
     startupTrace.measure("runtime.post-attach", () =>
       import("./server-startup-post-attach.js").then(({ startGatewayPostAttachRuntime }) =>
@@ -343,7 +345,10 @@ export async function finishGatewayStartup(params: {
               : null;
           },
           onSidecarsReady: () => {
-            kernel.markSidecarsReady();
+            postAttachSidecarsReady = true;
+            if (sidecarStartup === "defer" || postAttachSpanSettled) {
+              kernel.markSidecarsReady();
+            }
             activateScheduledServicesWhenReady();
           },
           getReadiness,
@@ -356,6 +361,10 @@ export async function finishGatewayStartup(params: {
       ),
     ),
   );
+  postAttachSpanSettled = true;
+  if (postAttachSidecarsReady && sidecarStartup !== "defer") {
+    kernel.markSidecarsReady();
+  }
   kernel.setPostAttachHandles(postAttachHandles);
   if (minimalTestGateway) {
     databasePreparationReady.resolve();
@@ -368,9 +377,10 @@ export async function finishGatewayStartup(params: {
   ]);
   if (getReadiness().ready) {
     startupTrace.mark("ready");
-    if (sidecarStartup === "defer") {
-      logGatewayReady({ getReadiness, log });
-    }
+    logGatewayReady(
+      { getReadiness, log },
+      opts.updateCanary ? "candidate gateway ready; autonomous sidecars suppressed" : undefined,
+    );
   }
   finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
   if (opts.updateCanary) {
