@@ -22,6 +22,13 @@ function record(event) {
     pid: process.pid, threadId: wt.threadId, ...event }) + '\n');
 }
 record({ type: 'start', ppid: process.ppid, mainThread: wt.isMainThread, argv: process.argv });
+require('node:module').registerHooks({
+  load(url, context, nextLoad) {
+    const result = nextLoad(url, context);
+    if (url.startsWith('file:')) record({ type: 'module-load', url });
+    return result;
+  }
+});
 const ownOptions = '--require=' + JSON.stringify(__filename) +
   (observer ? ' --require=' + JSON.stringify(observer) : '');
 function instrumentOptions(value) {

@@ -101,8 +101,8 @@ vi.mock("./update-cli/update-command-post-plugin-readiness.js", async (importOri
     await importOriginal<typeof import("./update-cli/update-command-post-plugin-readiness.js")>();
   return {
     ...actual,
-    applyPostPluginUpdateReadiness: vi.fn(
-      async (params: Parameters<typeof actual.applyPostPluginUpdateReadiness>[0]) =>
+    applyPostPluginUpdateChecks: vi.fn(
+      async (params: Parameters<typeof actual.applyPostPluginUpdateChecks>[0]) =>
         params.pluginUpdate,
     ),
   };

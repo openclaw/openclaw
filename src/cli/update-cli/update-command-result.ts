@@ -6,15 +6,10 @@ import { isAbortError } from "../../infra/abort-signal.js";
 import { acquireWithWait } from "../../infra/acquire-with-wait.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { hasErrnoCode } from "../../infra/errno.js";
-import {
-  attachErrorDiagnostic,
-  formatErrorMessageForDisplay,
-} from "../../infra/error-diagnostics.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
-import { formatErrorMessage, formatUncaughtError } from "../../infra/errors.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { isStateDatabaseMaintenanceContention } from "../../infra/gateway-state-owner-record.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
-import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import type { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   markControlPlaneUpdateRestartSentinelFailure,
@@ -217,20 +212,6 @@ export function prepareUpdateServiceResult(
     );
   }
   return shouldRestart;
-}
-
-/** Terminal worker diagnostics do not participate in recovery decisions. */
-export function formatUpdateFinalizationError(error: unknown): string {
-  const contention = collectNestedErrorCandidates(error).find(isSqliteLockError);
-  if (error && typeof error === "object" && contention instanceof Error) {
-    // The worker has already unwound ownership. Retain the actual causal site
-    // through aggregate wrappers without changing policy-bearing error fields.
-    attachErrorDiagnostic(
-      error,
-      `SQLite contention call site:\n${formatUncaughtError(contention)}`,
-    );
-  }
-  return formatErrorMessageForDisplay(error);
 }
 
 export type MutableUpdateExecutionResult = {

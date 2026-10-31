@@ -1,12 +1,8 @@
 import type { Command } from "commander";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { isConfigReadFailure } from "../config/io.invalid-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
-import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
-import { renderConfigValidationIssueLines } from "../config/issue-location.js";
-import { formatConfigFilePath } from "../config/logging.js";
-import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
-import { danger, success, warn } from "../globals.js";
+import { resolveConfigPath } from "../config/paths.js";
+import { danger } from "../globals.js";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -18,7 +14,6 @@ import {
 } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { parseConcreteConfigPathTokens } from "../shared/dot-path.js";
-import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import type {
   ConfigMutationOptions,
@@ -486,97 +481,7 @@ export function registerConfigCli(program: Command) {
     .description("Validate the current config against the schema without starting the gateway")
     .option("--json", "Output validation result as JSON", false)
     .action(async (opts) => {
-      const json = Boolean(opts.json);
-      const runtime = defaultRuntime;
-      let outputPath = CONFIG_PATH ?? "openclaw.json";
-      try {
-        const { readConfigSnapshotForEngineSelection } =
-          await import("../commands/config-preflight-snapshot.js");
-        const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
-        const { finishConfigValidationForCli } = await import("./config-cli-validation.js");
-        const { formatInvalidConfigRepairHint } = await import("./config-recovery-hints.js");
-        const selected = await readConfigSnapshotForEngineSelection();
-        const snapshot =
-          isConfigReadFailure(selected) ||
-          selected.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
-            ? selected
-            : await finishConfigValidationForCli(
-                await readConfigFileSnapshotWithPluginMetadata({
-                  observe: false,
-                  prepareValidation: "strict",
-                  completePluginMetadata: false,
-                }),
-              );
-        outputPath = snapshot.path;
-        const shortPath = shortenHomePath(outputPath);
-        if (!snapshot.exists) {
-          if (json) {
-            writeRuntimeJson(
-              runtime,
-              { ...formatCliJsonFailure("file not found"), valid: false, path: outputPath },
-              0,
-            );
-          } else {
-            runtime.error(danger(`Config file not found: ${formatConfigFilePath(outputPath)}`));
-            runtime.error(
-              `Create one with ${formatCliCommand("openclaw onboard")} or run ${formatCliCommand("openclaw doctor --fix")}.`,
-            );
-          }
-          exitCliAfterOutput(runtime, 1);
-        }
-        if (!snapshot.valid) {
-          const issues = normalizeConfigIssues(snapshot.issues);
-          if (json) {
-            writeRuntimeJson(runtime, {
-              ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortPath}`),
-              repairHint: formatInvalidConfigRepairHint(snapshot, "to repair, then retry."),
-              valid: false,
-              path: outputPath,
-              issues,
-            });
-          } else {
-            runtime.error(`Config needs correction: ${formatConfigFilePath(outputPath)}`);
-            for (const line of renderConfigValidationIssueLines(snapshot, "-")) {
-              runtime.error(`  ${line}`);
-            }
-            runtime.error("");
-            runtime.error(
-              formatInvalidConfigRepairHint(snapshot, "to repair, or fix the keys above manually."),
-            );
-            runtime.error(
-              `Run ${formatCliCommand("openclaw config schema")} to inspect supported settings and values, then rerun ${formatCliCommand("openclaw config validate")}.`,
-            );
-          }
-          exitCliAfterOutput(runtime, 1);
-        }
-        const warnings = normalizeConfigIssues(snapshot.warnings);
-        if (json) {
-          writeRuntimeJson(runtime, { valid: true, path: outputPath, warnings }, 0);
-        } else {
-          runtime.log(success(`Config valid: ${formatConfigFilePath(outputPath)}`));
-          if (warnings.length > 0) {
-            runtime.log(warn(`${warnings.length} warning(s):`));
-            for (const line of formatConfigIssueLines(warnings, warn("!"), {
-              normalizeRoot: true,
-            })) {
-              runtime.log(`  ${line}`);
-            }
-          }
-        }
-      } catch (err) {
-        if (err instanceof ExitError) {
-          throw err;
-        }
-        if (json) {
-          writeRuntimeJson(
-            runtime,
-            { ...formatCliJsonFailure(err), valid: false, path: outputPath },
-            0,
-          );
-        } else {
-          runtime.error(danger(terminalText`Config validation error: ${formatErrorMessage(err)}`));
-        }
-        exitCliAfterOutput(runtime, 1);
-      }
+      const { runConfigValidationCli } = await import("./config-cli-validation.js");
+      await runConfigValidationCli({ json: Boolean(opts.json) });
     });
 }

@@ -24,25 +24,7 @@ it.each([false, true])(
   "validates the internal retirement-only hint (%s)",
   async (retirementOnly) => {
     const doctor = vi.fn();
-    // mock-isolation: Observe the private wire contract without running host maintenance.
-    vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
-    process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = "/synthetic/doctor.json";
-    try {
-      await runWorker(
-        {
-          executor: {},
-          runId: "synthetic-run",
-          root: "/synthetic",
-          configInputHash: "hash",
-          repair: true,
-          retirementOnly,
-        },
-        "--doctor",
-      );
-    } finally {
-      delete process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
-      vi.doUnmock("../flows/doctor-health.js");
-    }
+    await runDoctorWorker(doctor, { retirementOnly });
 
     expect(fixture.stopService).not.toHaveBeenCalled();
     if (retirementOnly) {
@@ -64,7 +46,9 @@ it.each([false, true])(
 const fixture = vi.hoisted(() => ({
   close: vi.fn<() => Promise<void>>(),
   closeNative: vi.fn<() => Promise<void>>(),
-  closePostgres: vi.fn<() => Promise<void>>(),
+  closePostgres: vi.fn(async () => {}),
+  preparePostgres: vi.fn(async () => {}),
+  postPluginChecks: vi.fn(),
   budget: vi.fn(),
   activation: vi.fn(),
   finish: vi.fn(),
@@ -110,8 +94,10 @@ vi.mock("../cli/update-cli/update-command-executor.js", () => ({
 vi.mock("../cli/update-cli/update-command-post-update.js", () => ({
   finishUpdate: fixture.finish,
 }));
+vi.mock("../cli/update-cli/update-command-post-plugin-checks.js", () => ({
+  runPostPluginChecks: fixture.postPluginChecks,
+}));
 vi.mock("../cli/update-cli/update-command-result.js", () => ({
-  formatUpdateFinalizationError: String,
   UpdateCommandFailure: class extends Error {},
 }));
 vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({
@@ -138,7 +124,7 @@ vi.mock("./worker-native-lifecycle.js", () => ({
 }));
 // mock-isolation: Keep executable cleanup scoped to the synthetic finalization fixture.
 vi.mock("./postgres-sync/pool.js", () => ({
-  preparePostgresPoolForUpdate: vi.fn(async () => {}),
+  preparePostgresPoolForUpdate: fixture.preparePostgres,
   closePostgresPool: fixture.closePostgres,
 }));
 vi.mock("./update-finalization-budget.js", () => ({
@@ -150,7 +136,7 @@ vi.mock("./update-doctor-result.js", () => ({
   writeUpdatePostInstallDoctorResult: vi.fn(),
 }));
 vi.mock("./update-requester-authority.js", () => ({
-  createManagedUpdateRequesterAuthority: vi.fn(),
+  createDelegatedUpdateRequesterAuthority: vi.fn(),
   UpdateRequesterRevokedError: class extends Error {},
 }));
 // mock-isolation: Worker lifecycle tests replace ledger access without opening a real state database.
@@ -244,7 +230,7 @@ afterEach(() => {
 
 async function runWorker(
   input: unknown,
-  mode?: "--check" | "--doctor" | "--post-core",
+  mode?: string | string[],
   cleanup?: () => Promise<void>,
   nativeCleanup?: () => Promise<void>,
 ) {
@@ -257,11 +243,9 @@ async function runWorker(
       settled.resolve();
     }
   });
-  fixture.closePostgres.mockResolvedValue(undefined);
-  process.argv = [process.execPath, "update-migrated-finalize.worker.js", ...(mode ? [mode] : [])];
+  process.argv = [process.execPath, "update-migrated-finalize.worker.js", ...[mode ?? []].flat()];
   vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
     yield JSON.stringify(input);
-    return undefined;
   });
   await import("./update-migrated-finalize.worker.js");
   await settled.promise;
@@ -308,6 +292,26 @@ it("installs the one-shot database role before delegated Doctor maintenance", as
   expect(process.exitCode, stderr.join("")).toBe(originalExitCode);
 });
 
+it.each([false, true])(
+  "dispatches post-plugin checks before input and database work (flags=%s)",
+  async (flags) => {
+    // The dispatcher owns mode selection; the helper owns strict/lint policy and resources.
+    await runWorker({}, [
+      "--post-plugin-checks",
+      ...(flags ? ["--skip-config-validation", "--include-optional-inspections"] : []),
+    ]);
+    expect(fixture.postPluginChecks).toHaveBeenCalledExactlyOnceWith({
+      skipConfigValidation: flags,
+      includeOptionalInspections: flags,
+    });
+    expect(fixture.preparePostgres).not.toHaveBeenCalled();
+    expect(process.stdin[Symbol.asyncIterator]).not.toHaveBeenCalled();
+    expect(fixture.close).toHaveBeenCalledOnce();
+    expect(fixture.closeNative).toHaveBeenCalledOnce();
+    expect(fixture.closePostgres).toHaveBeenCalledOnce();
+  },
+);
+
 it.each(["database", "native"] as const)(
   "retains PostgreSQL services when the %s owner drain rejects",
   async (owner) => {
@@ -353,7 +357,6 @@ it("refuses a malformed post-core timeout before invoking the updater", async ()
       },
       "--post-core",
     );
-    await setImmediate();
   } finally {
     vi.unstubAllEnvs();
     vi.doUnmock("../cli/update-cli/update-command.js");
@@ -373,8 +376,6 @@ it.each([
 ])("refuses malformed Doctor $field before maintenance", async ({ field, value }) => {
   const doctor = vi.fn();
   await runDoctorWorker(doctor, { [field]: value });
-  // The executable reports its terminal error after all cleanup promises settle.
-  await setImmediate();
 
   expect(doctor).not.toHaveBeenCalled();
   expect(fixture.stopService).not.toHaveBeenCalled();

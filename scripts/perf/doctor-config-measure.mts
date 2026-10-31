@@ -1,6 +1,7 @@
 // node --import ./scripts/tsx.mjs scripts/perf/doctor-config-measure.mts fixture --fixture <fresh-dir>
 // node --import ./scripts/tsx.mjs scripts/perf/doctor-config-measure.mts run --repo <built-repo> \
 //   --fixture <fixture-copy> --output <fresh-dir> --observer-root <frozen-harness> [--profile]
+// Use --flow post-plugin-checks for the target-owned strict-validation/readiness continuation.
 // Copy the stopped fixture before each sample. The caller owns disk/load gates, timing locks,
 // interleaved baseline/candidate sampling, frozen-observer verification, and scratch cleanup.
 import assert from "node:assert/strict";
@@ -25,10 +26,12 @@ const { positionals, values } = parseArgs({
     "observer-root": { type: "string" },
     profile: { type: "boolean", default: false },
     execute: { type: "boolean", default: false },
+    flow: { type: "string", default: "doctor" },
   },
 });
 const mode = positionals[0];
 assert.ok(positionals.length === 1 && (mode === "fixture" || mode === "run"));
+assert.ok(values.flow === "doctor" || values.flow === "post-plugin-checks");
 assert.ok(values.fixture, "--fixture is required; only synthetic state may be supplied");
 const root = path.resolve(values.repo);
 const fixture = path.resolve(values.fixture);
@@ -113,6 +116,8 @@ if (mode === "run" && !values.execute) {
     fixture,
     "--output",
     output,
+    "--flow",
+    values.flow,
     "--execute",
   ];
   const stdout = fs.openSync(path.join(output, "stdout.log"), "w");
@@ -177,6 +182,8 @@ if (mode === "run" && !values.execute) {
   try {
     if (mode === "fixture") {
       await createFixture();
+    } else if (values.flow === "post-plugin-checks") {
+      await runPostPluginChecks();
     } else {
       await runDoctor();
     }
@@ -192,6 +199,69 @@ if (mode === "run" && !values.execute) {
       await load("src/infra/postgres-sync/pool.ts");
     await closeDefaultRetainedNativeWorkerSource();
     await closePostgresPool();
+  }
+
+  async function runPostPluginChecks() {
+    assert.ok(values.output);
+    const output = path.resolve(values.output);
+    const {
+      withUpdateCommandExecutor,
+    }: typeof import("../../src/cli/update-cli/update-command-executor.js") = await load(
+      "src/cli/update-cli/update-command-executor.ts",
+    );
+    const {
+      createUpdateRun,
+      adoptUpdateRun,
+      finishUpdateRun,
+    }: typeof import("../../src/infra/update-run-ledger.js") = await load(
+      "src/infra/update-run-ledger.ts",
+    );
+    const {
+      completePostCorePluginUpdate,
+    }: typeof import("../../src/cli/update-cli/update-command-fresh-doctor.js") = await load(
+      "src/cli/update-cli/update-command-fresh-doctor.ts",
+    );
+    const {
+      createPostCorePluginUpdateResult,
+    }: typeof import("../../src/cli/update-cli/update-command-plugins-internals.js") = await load(
+      "src/cli/update-cli/update-command-plugins-internals.ts",
+    );
+    const runId = randomUUID();
+    const result: Record<string, unknown> = {
+      node: process.version,
+      platform: `${process.platform}/${process.arch}`,
+      load: os.loadavg(),
+      flow: values.flow,
+    };
+    try {
+      await withUpdateCommandExecutor(runId, async (executor) => {
+        const fence = await executor.enter(root);
+        createUpdateRun({ runId, trigger: "cli", origin: { admission: { owner: "installed" } } });
+        adoptUpdateRun(runId);
+        fs.writeFileSync(path.join(output, "phase"), "post-plugin-checks");
+        const checked = await completePostCorePluginUpdate({
+          root,
+          runId,
+          json: true,
+          timeoutMs: 5 * 60_000,
+          candidateRuntime: true,
+          pluginUpdate: createPostCorePluginUpdateResult({ status: "ok" }),
+          assertCurrent: () => fence.assertCurrent(),
+        });
+        assert.notEqual(checked.pluginUpdate.status, "error", "Post-plugin checks must succeed");
+        assert.ok(checked.configSnapshot.valid, "Synthetic config must remain valid");
+        result.pluginUpdate = checked.pluginUpdate;
+        finishUpdateRun(runId, { status: "succeeded" });
+      });
+      result.ok = true;
+    } catch (error) {
+      result.ok = false;
+      result.error = String(error);
+      process.exitCode = 1;
+    } finally {
+      fs.writeFileSync(path.join(output, "phase"), "cleanup");
+      fs.writeFileSync(path.join(output, "direct-result.json"), JSON.stringify(result, null, 2));
+    }
   }
 
   async function createFixture() {

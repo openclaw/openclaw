@@ -142,7 +142,7 @@ vi.mock("./update-command-post-core.js", async (original) => ({
   shouldResumePostCoreUpdateInFreshProcess: () => false,
 }));
 vi.mock("./update-command-post-plugin-readiness.js", () => ({
-  applyPostPluginUpdateReadiness: async (params: { pluginUpdate: unknown }) => params.pluginUpdate,
+  applyPostPluginUpdateChecks: async (params: { pluginUpdate: unknown }) => params.pluginUpdate,
 }));
 vi.mock("./update-command-service.js", async (original) => ({
   ...(await original<typeof import("./update-command-service.js")>()),

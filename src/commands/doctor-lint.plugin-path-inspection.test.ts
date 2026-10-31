@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { createPostCorePluginUpdateResult } from "../cli/update-cli/update-command-plugins-internals.js";
-import { applyPostPluginUpdateReadiness } from "../cli/update-cli/update-command-post-plugin-readiness.js";
+import { applyPostPluginUpdateChecks } from "../cli/update-cli/update-command-post-plugin-readiness.js";
 import { createConfigIO } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -297,7 +297,8 @@ it.each(pathFailures)("preserves custom settings through a %s load path", async 
             createCommandResult({ stdout: reportText }),
           );
           expect(
-            await applyPostPluginUpdateReadiness({
+            await applyPostPluginUpdateChecks({
+              skipConfigValidation: true,
               root: f.root,
               entryPath: path.join(f.root, "openclaw.mjs"),
               timeoutMs: 1_000,

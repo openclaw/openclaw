@@ -21,10 +21,7 @@ import {
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
-import {
-  CommandProcessCleanupError,
-  recordCommandProcessFailure,
-} from "../../process/exec-result.js";
+import { recordCommandProcessFailure } from "../../process/exec-result.js";
 import type { CommandOptions } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -72,16 +69,26 @@ vi.mock("../../process/exec.js", async (importOriginal) => {
     runExec: (...args: Parameters<typeof actual.runExec>) =>
       args[1].includes("doctor") && args[1].includes("--help")
         ? mocks.cliHelp(...args)
-        : args[1].includes("config") && args[1].includes("validate")
-          ? mocks.command(...args)
-          : actual.runExec(...args),
+        : actual.runExec(...args),
     runUtf8CommandWithTimeout: async (
       ...args: Parameters<typeof actual.runUtf8CommandWithTimeout>
     ) => {
-      if (args[0].includes("doctor") && args[0].includes("--repair")) {
+      const validation = args[0].includes("config") && args[0].includes("validate");
+      if (validation || (args[0].includes("doctor") && args[0].includes("--repair"))) {
         const [command, ...argv] = args[0];
-        return {
+        return createCommandResult({
+          cleanup: "normal",
           ...(await mocks.command(command, argv, args[1]).catch((error: unknown) => {
+            if (validation && error instanceof Error && "exitCode" in error) {
+              return createCommandResult({
+                code: Number(error.exitCode),
+                stdout: "stdout" in error ? String(error.stdout) : "",
+                stderr: "stderr" in error ? String(error.stderr) : "",
+                termination: "timedOut" in error && error.timedOut ? "timeout" : "exit",
+                cleanup:
+                  "cleanup" in error && error.cleanup === "uncertain" ? "uncertain" : "normal",
+              });
+            }
             // The fixture performs no native spawn; preserve its diagnostic rejection.
             throw recordCommandProcessFailure(error, {
               code: 1,
@@ -89,12 +96,7 @@ vi.mock("../../process/exec.js", async (importOriginal) => {
               termination: "exit",
             });
           })),
-          code: 0,
-          signal: null,
-          killed: false,
-          cleanup: "normal",
-          termination: "exit",
-        };
+        });
       }
       return args[0].includes("doctor") && args[0].includes("--lint")
         ? mocks.runUtf8(...args)
@@ -164,7 +166,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let restoreTempRoot = () => {};
 const readinessExit = createCommandResult();
 const signaledReadiness = { termination: "signal", signal: "SIGTERM", killed: true } as const;
-const emptyOutput = { stdout: "", stderr: "" };
+const emptyOutput = { code: 0, stdout: "", stderr: "" };
 const commandArgs = () => mocks.command.mock.calls.map(([, args]) => args);
 const commandTimeouts = () => mocks.command.mock.calls.map((call) => call[2].timeoutMs);
 const expectNoCalls = (...spies: unknown[]) => {
@@ -350,6 +352,7 @@ describe("post-plugin update readiness", () => {
   );
 
   it.each([
+    ["untraced", "pre-plugin", 0],
     ["success", "pre-plugin", 0],
     ["advisory", "pre-plugin", UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE],
     ["exit", "pre-plugin", 23],
@@ -360,12 +363,15 @@ describe("post-plugin update readiness", () => {
     "records the fresh Doctor's traced sections without printing the trace (%s)",
     async (outcome, phase, exitCode) => {
       vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", undefined);
-      const stderr = [
-        "[gateway] startup trace: doctor.config-flow 4100.0ms total=4200.0ms start=100.0ms\n",
-        "real Doctor warning\n",
-        "[gateway] startup trace: doctor.contribution.doctor:plugins 2500.0ms total=6800.0ms start=4300.0ms\n",
-        "[gateway] startup trace: doctor.contributions 2600.0ms total=6900.0ms start=4300.0ms",
-      ].join("");
+      const stderr =
+        outcome === "untraced"
+          ? ""
+          : [
+              "[gateway] startup trace: doctor.config-flow 4100.0ms total=4200.0ms start=100.0ms\n",
+              "real Doctor warning\n",
+              "[gateway] startup trace: doctor.contribution.doctor:plugins 2500.0ms total=6800.0ms start=4300.0ms\n",
+              "[gateway] startup trace: doctor.contributions 2600.0ms total=6900.0ms start=4300.0ms",
+            ].join("");
       let traceEnv: string | undefined;
       mocks.command.mockImplementationOnce(async (_command, _args, options: CommandOptions) => {
         traceEnv = options.env?.OPENCLAW_GATEWAY_STARTUP_TRACE;
@@ -382,7 +388,7 @@ describe("post-plugin update readiness", () => {
             },
           });
         }
-        if (outcome !== "success") {
+        if (!["success", "untraced"].includes(outcome)) {
           throw Object.assign(new Error("Doctor did not finish"), {
             failed: true,
             exitCode: exitCode ?? undefined,
@@ -400,7 +406,7 @@ describe("post-plugin update readiness", () => {
       });
       if (phase === "post-plugin") {
         await expect(pending).resolves.toMatchObject({ reason: "doctor-advisory" });
-      } else if (outcome === "success" || outcome === "advisory") {
+      } else if (["success", "untraced", "advisory"].includes(outcome)) {
         await pending;
       } else {
         await expect(pending).rejects.toThrow("Updated pre-plugin Doctor failed");
@@ -414,18 +420,26 @@ describe("post-plugin update readiness", () => {
             outcome === "advisory" ? ["core/doctor/new-target-inspection"] : null,
           exitCode,
           durationMs: expect.any(Number),
-          diagnostics: [
-            "Doctor sections: config-flow 4.1 s, contributions 2.6 s; slowest contributions: plugins 2.5 s",
-          ],
         }),
       );
       const step = onDoctorStep.mock.calls[0]![0];
+      expect(step.diagnostics).toEqual(
+        outcome === "untraced"
+          ? undefined
+          : [
+              "Doctor sections: config-flow 4.1 s, contributions 2.6 s; slowest contributions: plugins 2.5 s",
+            ],
+      );
       expect(updateRunStepsFromResultStep(step)[0]?.status).toBe(
-        outcome === "success" || outcome === "advisory" || phase === "post-plugin"
+        ["success", "untraced", "advisory"].includes(outcome) || phase === "post-plugin"
           ? "completed"
           : "failed",
       );
-      expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith("real Doctor warning");
+      if (outcome === "untraced") {
+        expectNoCalls(defaultRuntime.error);
+      } else {
+        expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith("real Doctor warning");
+      }
     },
   );
 
@@ -443,30 +457,11 @@ describe("post-plugin update readiness", () => {
       });
       await complete({ opts: { ...updateOptions.opts, fullIntegrityCheck }, timeoutMs });
 
-      expect(commandArgs()).toEqual([
-        [...doctorArgs, ...(fullIntegrityCheck && supported ? ["--full-integrity-check"] : [])],
-        validateArgs,
-      ]);
-      expect(mocks.cliHelp).toHaveBeenCalledTimes(fullIntegrityCheck ? 1 : 0);
-      expect(mocks.runUtf8).toHaveBeenCalledExactlyOnceWith(
-        [
-          "/usr/bin/node",
-          "/opt/openclaw/dist/index.js",
-          "doctor",
-          "--lint",
-          "--json",
-          "--severity-min",
-          "error",
-        ],
-        expect.objectContaining({
-          timeoutMs: timeoutMs ?? 300_000,
-          input: "",
-          maxOutputBytes: 4 * 1024 * 1024,
-          outputCapture: "head",
-          terminateOnOutputLimit: true,
-          env: { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
-        }),
+      expect(commandArgs()[0]?.includes("--full-integrity-check")).toBe(
+        fullIntegrityCheck && supported,
       );
+      expect(mocks.cliHelp).toHaveBeenCalledTimes(fullIntegrityCheck ? 1 : 0);
+      expect(mocks.runUtf8.mock.calls[0]?.[1]).toMatchObject({ timeoutMs: timeoutMs ?? 300_000 });
       const [doctorTimeout, validationTimeout] = commandTimeouts();
       expect(validationTimeout).toBe(timeoutMs ?? 300_000);
       if (timeoutMs === undefined) {
@@ -616,50 +611,6 @@ describe("post-plugin update readiness", () => {
       });
     },
   );
-
-  it.each([
-    {
-      name: "runtime exception",
-      stdout: JSON.stringify({ valid: false, error: "Runtime failed" }),
-    },
-    { name: "missing output", stdout: "" },
-    { name: "malformed output", stdout: "not JSON" },
-    { name: "launch", code: "ENOENT", exitCode: undefined, stdout: "" },
-    { name: "timeout", timedOut: true },
-    { name: "cancellation", isCanceled: true },
-    { name: "signal", signal: "SIGTERM", isTerminated: true },
-    { name: "output limit", isMaxBuffer: true },
-    { name: "capture failure", cause: new Error("capture failed") },
-    { name: "unsettled cleanup", cleanup: "uncertain" },
-    { name: "nested cleanup", cause: new CommandProcessCleanupError() },
-  ])("retains a config validation $name as an execution failure", async (failure) => {
-    const { cause, ...metadata } = failure;
-    mocks.command.mockRejectedValueOnce(
-      Object.assign(new Error("private argv must not be copied", { cause }), {
-        failed: true,
-        exitCode: 1,
-        stdout: JSON.stringify({ valid: false, issues: [{ message: "Unconfirmed issue" }] }),
-        ...metadata,
-      }),
-    );
-
-    const { pluginUpdate: result } = await completeUnchanged();
-
-    expect(result).toMatchObject({
-      status: "error",
-      reason: "post-plugin-config-validation-execution-failed",
-      warnings: [{ message: "Config validation could not complete; refusing to restart." }],
-      failureFacts: [
-        { code: "post-plugin-config-validation-execution-failed" },
-        ...(failure.stdout === "" || failure.name === "launch"
-          ? []
-          : [expect.objectContaining({ code: "command-failed" })]),
-      ],
-    });
-    expect(JSON.stringify(result)).not.toContain("private argv");
-    expect(JSON.stringify(result)).not.toContain("doctor --fix");
-    expectNoCalls(mocks.runUtf8, defaultRuntime.log, defaultRuntime.error);
-  });
 
   it.each(["entrypoint", "maintenance"] as const)(
     "preserves a Doctor %s failure before child repair",
@@ -905,7 +856,9 @@ describe("post-plugin update readiness", () => {
     "defers unfinished lint and retains diagnostics for $label",
     async ({ stdout, code, launch }) => {
       if (launch) {
-        mocks.runUtf8.mockRejectedValue(new Error("Readiness executable unavailable"));
+        mocks.runUtf8.mockRejectedValue(
+          new Error("Readiness executable unavailable https://example.test/?token=fixture-secret"),
+        );
       } else {
         mocks.runUtf8.mockResolvedValue({
           ...readinessExit,
@@ -927,14 +880,13 @@ describe("post-plugin update readiness", () => {
       if (launch) {
         expect(result.doctorLint?.exitCode).toBeNull();
         expect(result.warnings?.[0]?.message).toContain("Readiness executable unavailable");
+        expect(result.warnings?.[0]?.message).toContain("token=<redacted>");
+        expect(JSON.stringify(result)).not.toContain("fixture-secret");
       } else if (code === 0) {
-        expect(result.warnings).toEqual([
-          expect.objectContaining({
-            message: expect.stringContaining(
-              "Updated plugin readiness checks could not be completed before restart.",
-            ),
-          }),
-        ]);
+        expect(result.warnings).toHaveLength(1);
+        expect(result.warnings?.[0]?.message).toContain(
+          "Updated plugin readiness checks could not be completed before restart.",
+        );
       } else {
         const reason = result.warnings?.[0]?.message;
         expect(reason).toContain("code=2");

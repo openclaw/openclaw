@@ -216,7 +216,8 @@ export async function createUpdateUtf8CommandTransportFixture(
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const runDoctorFixture = await createUpdateCommandTransportFixture(transport);
   return async (argv, options) => {
-    if (argv[2] === "doctor" && argv[3] === "--repair") {
+    const validation = argv[2] === "config" && argv[3] === "validate";
+    if (validation || (argv[2] === "doctor" && argv[3] === "--repair")) {
       try {
         const result = await transport.exec(
           expectDefined(argv[0], "Doctor executable"),
@@ -225,6 +226,13 @@ export async function createUpdateUtf8CommandTransportFixture(
         );
         return commandResult({ ...result, cleanup: "normal" });
       } catch (error) {
+        if (validation && error instanceof Error && "exitCode" in error) {
+          return commandResult({
+            code: Number(error.exitCode),
+            stdout: "stdout" in error ? String(error.stdout) : "",
+            stderr: "stderr" in error ? String(error.stderr) : "",
+          });
+        }
         // This effect double starts no native child, including on diagnostic failures.
         throw recordCommandProcessFailure(error, {
           code: null,
