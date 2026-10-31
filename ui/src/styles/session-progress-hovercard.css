@@ -10,7 +10,7 @@
   padding: 0;
   margin: 0;
   overflow: auto;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: var(--menu-radius);
   background: var(--menu-surface);
   box-shadow: var(--menu-shadow);
@@ -70,14 +70,5 @@
 
   .session-progress-hovercard[data-open="true"] {
     transform: none;
-  }
-}
-
-@media (forced-colors: active) {
-  .session-progress-hovercard {
-    border: 1px solid CanvasText;
-    background: Canvas;
-    box-shadow: none;
-    backdrop-filter: none;
   }
 }

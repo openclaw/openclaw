@@ -74,7 +74,7 @@ export function expectSharedTooltipSkin(tooltip: TooltipElement) {
     ...rules.map((rule) => rule.cssText),
   ].join("\n");
   expect(styles).toContain("--openclaw-tooltip-background-color");
-  expect(styles).toContain("border: 0");
+  expect(styles).toContain("border: 1px solid");
   expect(styles).toContain(".tooltip-surface");
   expect(styles).not.toContain("::part(");
   expect(styles).toContain("var(--radius-tooltip)");

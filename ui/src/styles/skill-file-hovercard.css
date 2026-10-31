@@ -9,7 +9,7 @@
   padding: 0;
   margin: 0;
   overflow: hidden;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: var(--menu-radius);
   background: var(--menu-surface);
   box-shadow: var(--menu-shadow);
@@ -173,13 +173,4 @@
 .skill-file-hovercard__source .hljs-bullet,
 .skill-file-hovercard__source .hljs-link {
   color: var(--accent-2);
-}
-
-@media (forced-colors: active) {
-  .skill-file-hovercard {
-    border: 1px solid CanvasText;
-    background: Canvas;
-    box-shadow: none;
-    backdrop-filter: none;
-  }
 }
