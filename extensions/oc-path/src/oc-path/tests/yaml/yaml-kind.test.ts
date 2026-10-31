@@ -143,6 +143,6 @@ describe("YAML", () => {
   it("stops recursive alias cycles without dropping the first edge", () => {
     const ast = parseYaml("root: &root\n  label: ok\n  self: *root\n");
     const matches = findOcPaths(ast, path("**/label"));
-    expect(matches.map(({ path }) => path.section)).toEqual(["root", "root.self"]);
+    expect(matches.map(({ path: p }) => p.section)).toEqual(["root", "root.self"]);
   });
 });
