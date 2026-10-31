@@ -2,9 +2,11 @@ import {
   embeddedAgentLog,
   isHostScopedAgentToolActive,
   materializeRequesterScopedMcpToolsForHarnessRun,
+  supportsModelTools,
   type EmbeddedRunAttemptParams,
   type ExecApprovalDecision,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createAgentHarnessClientTools } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import {
   captureFinalCodexCronCreatorToolAllowlist,
   formatMcpCodexApprovalRemedy,
@@ -315,7 +317,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       }
     })());
   try {
-    const tools = await buildDynamicTools({
+    const openClawTools = await buildDynamicTools({
       ...commonToolParams,
       registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
       onMessageToolTargetResolved: (required) => {
@@ -330,13 +332,26 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         toolState.webSearchAllowed = allowed;
       },
     });
-    const registeredTools = nativeSpecs
+    const registeredOpenClawTools = nativeSpecs
       ? []
       : await buildDynamicTools({
           ...commonToolParams,
           ignoreDisableMessageTool: true,
           ignoreRuntimePlan: true,
         });
+    // Caller-owned functions join both lists so the thread declares them for this attempt,
+    // under the same gates as the built-in runtime's client functions.
+    const clientTools = createAgentHarnessClientTools({
+      clientTools:
+        params.disableTools || params.trigger === "memory" || !supportsModelTools(params.model)
+          ? undefined
+          : params.clientTools,
+      toolsAllow: params.toolsAllow,
+      existingToolNames: [...openClawTools, ...registeredOpenClawTools].map((tool) => tool.name),
+    });
+    const tools = [...openClawTools, ...clientTools.tools];
+    // Supervised threads keep their saved native declarations, so they cannot add client tools.
+    const registeredTools = nativeSpecs ? [] : [...registeredOpenClawTools, ...clientTools.tools];
     const policyContext = {
       config: params.config,
       sessionKey: sandboxSessionKey,
@@ -542,6 +557,8 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       ),
       hookContext,
     });
+    // Delegated calls are tool facts for the attempt result, like accepted session spawns.
+    Object.assign(toolBridge.telemetry, { clientToolCalls: clientTools.calls });
     const captureCronCreatorToolAllowlist = async () => {
       await captureFinalCodexCronCreatorToolAllowlist(
         cronCreatorToolAllowlist,
@@ -646,6 +663,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     }
     return {
       tools: toolsWithScopedMcp,
+      reserveClientToolCall: clientTools.reserve,
       requireExplicitMessageTarget,
       configuredMcp,
       disposeTools,

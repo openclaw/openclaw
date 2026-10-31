@@ -50,7 +50,7 @@ export type CodexAppServerToolTelemetry = Partial<
     confirmedMediaDeliveries?: Readonly<
       AgentHarnessToolResultTelemetry["confirmedMediaDeliveries"]
     >;
-  } & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">;
+  } & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns" | "clientToolCalls">;
 
 class CodexProjectionSettlement extends AgentHarnessProjectionSettlement<EmbeddedRunAttemptParams> {
   terminalReceipt: CodexTurn | undefined;
@@ -450,6 +450,9 @@ export abstract class CodexTurnProjection {
         activeCount: activeItemCount,
       },
       yieldDetected: yieldDetected || false,
+      ...(toolTelemetry.clientToolCalls?.length
+        ? { clientToolCalls: toolTelemetry.clientToolCalls }
+        : {}),
       didSendDeterministicApprovalPrompt: guardianReviewCount > 0 ? false : undefined,
     };
     const transferTtsProvenance = resolveCodexTtsProvenanceTransfer(runParams.hostCapabilities);
