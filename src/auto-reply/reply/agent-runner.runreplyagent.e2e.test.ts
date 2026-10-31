@@ -53,6 +53,7 @@ import {
 } from "./agent-runner.runreplyagent.fixture.test-support.js";
 import { registerFollowupDrainCases } from "./agent-runner.runreplyagent.followup-drain.cases.js";
 import { createReplyQueueFixture } from "./agent-runner.runreplyagent.queue.test-support.js";
+import { registerQueuedTypingCases } from "./agent-runner.runreplyagent.queued-typing.cases.js";
 import { registerRequiredReplyCompletionCases } from "./agent-runner.runreplyagent.required-reply.cases.js";
 import { registerSteeringReceiptCases } from "./agent-runner.runreplyagent.steering-receipts.cases.js";
 import { registerWaitingStatusCases } from "./agent-runner.runreplyagent.waiting-status.cases.js";
@@ -1502,29 +1503,7 @@ describe("runReplyAgent admission and cleanup", () => {
     expect(runState.admission).toEqual({ status: "skipped", reason: "queue-cap" });
   });
 
-  it("keeps queued typing alive and the drain dormant until the active owner clears", async () => {
-    const active = createMainSessionOperation();
-    const { run, typing } = createMinimalRun({
-      opts: {},
-      isActive: true,
-      isRunActive: () => true,
-      shouldFollowup: true,
-      resolvedQueueMode: "collect",
-    });
-
-    const result = await run();
-
-    expect(result).toBeUndefined();
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
-    expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
-    expect(typing.cleanup).not.toHaveBeenCalled();
-    expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[5]).toBe(false);
-    active.complete();
-    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
-  });
+  registerQueuedTypingCases({ createMinimalRun, runEmbeddedAgentMock: state.runEmbeddedAgentMock });
 
   it("starts draining after enqueue when the reply lane owner is already gone", async () => {
     const { run, typing } = createMinimalRun({

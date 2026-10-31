@@ -16,7 +16,8 @@ type PublicReplyKey =
   | "assertChannelAuthority"
   | "internalEventExecution"
   | "onReplyOperationAdmitted"
-  | "onReplyOperationOwned";
+  | "onReplyOperationOwned"
+  | "onTypingHandoff";
 type Present<T> = Exclude<T, undefined>;
 type ProgressKey =
   | "onToolResult"
@@ -116,6 +117,7 @@ it("rejects plugin-supplied event custody while retaining public reply options",
     internalEventExecution: { assertCurrent: callback, onStarted: callback },
     onReplyOperationAdmitted: callback,
     onReplyOperationOwned: callback,
+    onTypingHandoff: callback,
     [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" as const },
   };
   const delivered: string[] = [];
@@ -133,6 +135,7 @@ it("rejects plugin-supplied event custody while retaining public reply options",
       expect(replyOptions).not.toHaveProperty("internalEventExecution");
       expect(replyOptions).not.toHaveProperty("onReplyOperationAdmitted");
       expect(replyOptions).not.toHaveProperty("onReplyOperationOwned");
+      expect(replyOptions).not.toHaveProperty("onTypingHandoff");
       expect(replyOptions).toMatchObject({
         disableTools: true,
         onReplyStart: callback,

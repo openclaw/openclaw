@@ -47,11 +47,11 @@ import {
   resolveRoutedReplyDeliveryOutcome,
   shouldRetryReplyDispatch,
 } from "./reply-dispatch-outcome.js";
+import { waitForReplyDispatcherIdle } from "./reply-dispatcher-idle.js";
 import {
   attachReplyDispatchUndeliveredFallback,
   captureReplyDispatchDeliveryOutcome,
   prepareReplyPayloadForDispatcher,
-  waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import {
