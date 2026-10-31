@@ -3,6 +3,26 @@ import { describe, expect, it } from "vitest";
 import { buildMemoryReadResult, buildMemoryReadResultFromSlice } from "./read-file-shared.js";
 
 describe("memory read result slicing", () => {
+  it.each(["\n", "\r\n", "\r"])(
+    "reads the original body citation after frontmatter (%j)",
+    (ending) => {
+      expect(
+        buildMemoryReadResult({
+          content: ["---", "status: active", "---", "Prefer aisle seats."].join(ending),
+          relPath: "memory/note.md",
+          from: 4,
+          lines: 1,
+        }),
+      ).toEqual({
+        status: "ok",
+        path: "memory/note.md",
+        from: 4,
+        lines: 1,
+        text: "Prefer aisle seats.",
+      });
+    },
+  );
+
   it.each([
     {
       name: "a terminal newline",

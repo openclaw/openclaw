@@ -1,9 +1,11 @@
+import { extractFrontmatterBlock } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readWorkspaceText } from "./memory-workspace-files.js";
 import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-record.js";
 import type { PromotionCandidate } from "./short-term-promotion-types.js";
 import {
   isGenericDailyHeading,
+  isShortTermSessionCorpusPath,
   normalizeSnippet,
   SHORT_TERM_BASENAME_RE,
 } from "./short-term-promotion-utils.js";
@@ -257,7 +259,7 @@ export async function rehydratePromotionCandidate(
       throw err;
     }
 
-    const lines = rawSource.split(/\r?\n/);
+    const lines = rawSource.split(/\r\n?|\n/);
     const relocated = relocateCandidateRange(lines, candidate);
     if (!relocated) {
       continue;
@@ -267,6 +269,12 @@ export async function rehydratePromotionCandidate(
     // because file edits shifted lines between ranking and apply), refuse the
     // candidate so dream artifacts cannot be promoted into MEMORY.md.
     if (lineRangeOverlapsDreamingFence(lines, relocated.startLine, relocated.endLine)) {
+      continue;
+    }
+    const frontmatter = isShortTermSessionCorpusPath(candidate.path)
+      ? undefined
+      : extractFrontmatterBlock(rawSource);
+    if (frontmatter && relocated.startLine <= frontmatter.lineRange.endLine) {
       continue;
     }
     return {
