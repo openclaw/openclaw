@@ -340,6 +340,17 @@ For stored keys without an agent prefix, such as `global`, export uses the
 configured default or sole agent. Pass `--agent <id>` when multiple agents are
 configured without a default.
 
+## Session processes
+
+List or stop background exec processes observed for one session (Control UI Processes panel):
+
+```bash
+openclaw sessions processes list "agent:main:main" --json
+openclaw sessions processes stop "agent:main:main" <processId> --session-id <sessionId> --instance <instanceId> --json
+```
+
+Requires a reachable Gateway. `list` uses `sessions.processes.list` (`operator.read`). `stop` uses `sessions.processes.stop` (`operator.write`) and requires `--session-id` plus `--instance` from the matching list response so a conversation change cannot stop the wrong process. This is the per-process observe/stop surface; it is not a bulk "kill all children" command.
+
 ## Cleanup maintenance
 
 Run maintenance now instead of waiting for the next write cycle. Without
