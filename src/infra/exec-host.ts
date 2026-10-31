@@ -56,10 +56,11 @@ export async function requestExecHostViaSocket(params: {
   if (!socketPath || !token) {
     return null;
   }
-  // Zero disables both command and response deadlines.
+  // Zero and null (the Gateway's no-expiry value) disable both command and
+  // response deadlines; the companion runs such commands without a timer.
   const timeoutMs =
     params.timeoutMs ??
-    (request.timeoutMs === 0
+    (request.timeoutMs === 0 || request.timeoutMs === null
       ? 0
       : addTimerTimeoutGraceMs(request.timeoutMs, EXEC_HOST_RESPONSE_GRACE_MS)) ??
     20_000;

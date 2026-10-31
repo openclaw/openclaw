@@ -9,6 +9,7 @@ import path from "node:path";
 import timers from "node:timers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { normalizeSystemRunInvokeParams } from "../gateway/node-registry.system-run.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { requestExecHostViaSocket, type ExecHostRequest } from "./exec-host.js";
 
@@ -176,6 +177,42 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
       });
     },
   );
+
+  it("waits past the 20 s fallback for a Gateway no-expiry run", async () => {
+    // Derive the wire value from the Gateway normalizer so this pins the contract:
+    // an exec timeout of 0 arrives as null, which the companion runs without a timer.
+    const { timeoutMs } = normalizeSystemRunInvokeParams({
+      command: "system.run",
+      params: { timeoutMs: 0 },
+    }) as { timeoutMs: null };
+    expect(timeoutMs).toBeNull();
+    await withExecPeer(async ({ socketPath, onRequest }) => {
+      const received = createDeferred<net.Socket>();
+      onRequest(async (socket) => {
+        received.resolve(socket);
+      });
+      const controller = new AbortController();
+      const completed = vi.fn();
+      const pending = requestExecHostViaSocket({
+        socketPath,
+        token,
+        request: { command: ["/bin/echo", "done"], timeoutMs },
+        signal: controller.signal,
+      }).then(completed);
+      try {
+        const socket = await received.promise;
+        await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+        expect(completed).not.toHaveBeenCalled();
+        socket.end(`${JSON.stringify({ type: "exec-res", ...success })}\n`);
+        await pending;
+        expect(completed).toHaveBeenCalledExactlyOnceWith(success);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        controller.abort();
+        await pending;
+      }
+    });
+  });
 
   it("characterizes a missing socket before any request can execute", async () => {
     await withTestDir({ prefix: "oc-exec-", parentDir: "/tmp" }, async (dir) => {
