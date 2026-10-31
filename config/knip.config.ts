@@ -41,6 +41,7 @@ const repositoryScriptEntries = [
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-android-release-history.mts!",
   "scripts/bench-duplicate-paragraphs.mts!",
+  "scripts/bench-plugin-catalog.ts!",
   "scripts/perf/agent-exec-cgroup-proof.ts!",
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
@@ -162,6 +163,7 @@ const repositoryScriptEntries = [
   "scripts/bench-standalone-wasm.mjs!",
   "scripts/generate-social-preview.mts!",
   "scripts/perf/plugin-invocation-scope-measure.ts!",
+  "scripts/perf/prepared-plugin-lease-measure.mjs!",
   "scripts/perf/plugin-state-polling.mts!",
   "scripts/bench-codex-validators.mts!",
   "scripts/bench-control-ui-navigation.ts!",

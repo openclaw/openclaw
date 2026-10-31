@@ -245,6 +245,31 @@ suite.define(() => {
     });
   });
 
+  it("shows the chat header while creating a session", async () => {
+    await suite.withPage(mobile, async ({ page }) => {
+      const gateway = await installScenario(page);
+      await page.goto(suite.server.baseUrl + "new?agent=research");
+      await page.locator(".new-session-page__message").fill("Help me plan the next release.");
+      const toggle = navigationDrawerToggle(page);
+      const appearance = () =>
+        toggle.evaluate((element) => {
+          const { width, border, backgroundColor } = getComputedStyle(element);
+          return [width, border, backgroundColor, element.querySelector("path")?.getAttribute("d")];
+        });
+      const draft = await appearance();
+      await gateway.deferNext("sessions.create");
+      await page.locator(".new-session-page__start-submit").tap();
+      const pending = page.locator("openclaw-pending-session-create");
+      await pending.locator(".agent-chat__header--mobile").waitFor();
+      expect(await pending.locator(".chat-pane__header").count()).toBe(0);
+      const pendingAppearance = await appearance();
+      await gateway.resolveDeferred("sessions.create");
+      await pending.waitFor({ state: "detached" });
+      // Draft topbar, pending header and admitted chat header present one control.
+      expect([draft, pendingAppearance]).toEqual(Array(2).fill(await appearance()));
+    });
+  });
+
   it.each([
     { state: "denied", team: false },
     { state: "disconnected", team: false },

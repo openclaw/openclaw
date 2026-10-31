@@ -11,6 +11,13 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as mutationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import type { OpenClawConfig, OpenClawPluginToolContext } from "../plugin-sdk/plugin-entry.js";
+import { preparePluginStateRead } from "../plugin-sdk/plugin-state-runtime.js";
+import {
+  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
+  createPluginStateSyncKeyedStoreForTests,
+  importPluginStateEntriesForDoctorForTests,
+} from "../plugin-sdk/plugin-state-test-runtime.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { markPluginRegistryActive, revokePluginRecord } from "../plugins/registry-lifecycle.js";
 import type { PluginRecord } from "../plugins/registry-types.js";
@@ -694,4 +701,59 @@ describe("plugin-state-store.runtime", () => {
         .get("diffs", "runtime-env", "viewer"),
     ).toEqual({ count: 1 });
   });
+});
+
+const invalidKey = "account\0resource";
+const invalidInput = { code: "PLUGIN_STATE_INVALID_INPUT", operation: "register" };
+
+it("rejects NUL registrations in synchronous fixtures", ({ state }) => {
+  const store = createPluginStateSyncKeyedStoreForTests("fixture-plugin", {
+    namespace: "portable-keys",
+    maxEntries: 10,
+    env: state.env,
+  });
+  expect(() => store.register(invalidKey, 1)).toThrow(expect.objectContaining(invalidInput));
+  expect(() => store.registerIfAbsent(invalidKey, 1)).toThrow(
+    expect.objectContaining(invalidInput),
+  );
+});
+
+it.for(["async", "action", "v2"] as const)(
+  "rejects NUL registrations while preserving %s fixture read bindings",
+  async (mode, { state }) => {
+    const options = { namespace: "portable-keys", maxEntries: 10, env: state.env };
+    const store =
+      mode === "v2"
+        ? createPluginStateKeyedStoreV2ForTests<number>("fixture-plugin", options, {
+            assertCurrent() {},
+          })
+        : mode === "action"
+          ? createPluginStateKeyedStoreForTests<number>("fixture-plugin", options).withCurrent({
+              assertCurrent() {},
+            })
+          : createPluginStateKeyedStoreForTests<number>("fixture-plugin", options);
+    await expect(store.register(invalidKey, 1)).rejects.toMatchObject(invalidInput);
+    await expect(store.registerIfAbsent(invalidKey, 1)).rejects.toMatchObject(invalidInput);
+    await store.register("portable", 2);
+    const prepared = await preparePluginStateRead(store, "portable");
+    expect(prepared).toBeDefined();
+    try {
+      expect(prepared?.read()).toBe(2);
+    } finally {
+      prepared?.release();
+    }
+  },
+);
+
+it("keeps imported legacy SQLite NUL keys readable and consumable", async ({ state }) => {
+  const options = { namespace: "portable-keys", maxEntries: 10, env: state.env };
+  importPluginStateEntriesForDoctorForTests("fixture-plugin", options, [
+    { key: invalidKey, value: 3, createdAt: Date.now() },
+  ]);
+  const sync = createPluginStateSyncKeyedStoreForTests<number>("fixture-plugin", options);
+  const store = createPluginStateKeyedStoreForTests<number>("fixture-plugin", options);
+  expect(sync.lookup(invalidKey)).toBe(3);
+  expect(await store.entries()).toEqual([expect.objectContaining({ key: invalidKey, value: 3 })]);
+  expect(await store.consume(invalidKey)).toBe(3);
+  expect(sync.lookup(invalidKey)).toBeUndefined();
 });

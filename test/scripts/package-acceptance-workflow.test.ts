@@ -10701,7 +10701,7 @@ describe("package artifact reuse", () => {
     );
     expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-flash");
     expect(openCodeGoSmoke.command).toContain(
-      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3 OPENCLAW_LIVE_GATEWAY_SMOKE=1",
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2 OPENCLAW_LIVE_GATEWAY_SMOKE=1",
     );
     expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-pro");
   });

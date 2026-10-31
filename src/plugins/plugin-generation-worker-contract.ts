@@ -4,6 +4,17 @@ import type { GenerationWireValue } from "./plugin-generation-worker-codec.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import type { AdmissionState } from "./plugin-native-admission-state.js";
 
+export type PluginGenerationInspection =
+  | {
+      kind: "dependencies";
+      entries: readonly { rootDir: string; entryFile: string }[];
+      dependencyRoot?: string;
+    }
+  | {
+      kind: "sources";
+      entries: readonly { pluginId: string; rootDir: string; entryFile?: string }[];
+    };
+
 export type GenerationWorkerInput = (
   | {
       operation: "capture";
@@ -15,6 +26,7 @@ export type GenerationWorkerInput = (
       readOnly: boolean;
       scratch: string;
       managedRoot?: string;
+      inspection?: PluginGenerationInspection;
       admission: Pick<
         AdmissionState,
         "owners" | "managedRoots" | "receipts" | "files" | "namespaces"

@@ -1273,9 +1273,9 @@ AFTER_CD
       const run = expectDefined(installStep.run, `Install opengrep script in ${workflowPath}`);
 
       expect(installStep.env, workflowPath).toMatchObject({
-        OPENGREP_VERSION: "v1.31.0",
+        OPENGREP_VERSION: "v1.32.0",
         OPENGREP_LINUX_X64_SHA256:
-          "dbbe3c2058dbe600c449a8ba22ea79a1643a6660658400090d0323a8d0d31147",
+          "7360d60174880bd9214f2dfbe439b7bce82b7a3d44cfe945ba833c85cc8bda75",
       });
       expectIncludes(
         run,

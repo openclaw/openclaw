@@ -7,6 +7,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { cleanupSessionStateForTest as cleanupState } from "../test-utils/session-state-cleanup.js";
 import {
   AgentDatabaseSchemaAdmissionChangedError as AdmissionChangedError,
   AgentDatabaseSchemaAdmissionInvalidError as AdmissionInvalidError,
@@ -46,7 +47,6 @@ import {
 import {
   closeOpenClawAgentDatabaseByPath as closePath,
   closeOpenClawAgentDatabasesAsync as closeDatabases,
-  closeOpenClawAgentDatabasesForTest as retireFixture,
   openOpenClawAgentDatabase as openDatabase,
   runOpenClawAgentWriteTransaction as writeTransaction,
 } from "./openclaw-agent-db.js";
@@ -125,7 +125,7 @@ vi.mock("../infra/owned-directory-observation.js", () => ({
 describe("canonical proof on physical database validation", () => {
   it.for(["ordinary close", "fixture retirement"] as const)(
     "handles a removed fixture's queued observation after %s",
-    async (cleanup, { empty: { database } }) => {
+    async (cleanup, { empty: { database, options } }) => {
       const captured = captureReadValidation(database)!;
       const successor = independentWorkerReceipt(database);
       const root = path.dirname(database.path);
@@ -138,7 +138,7 @@ describe("canonical proof on physical database validation", () => {
       expect(observer!.active).toBe(true);
       expectFlag(captured.validation.valid, 1);
       if (cleanup === "fixture retirement") {
-        retireFixture(root);
+        await cleanupState({ rootPath: root, stateDir: options.env!.OPENCLAW_STATE_DIR });
         expect(observer!.active).toBe(false);
         expect(getTransfer(database)).toBeUndefined();
       }

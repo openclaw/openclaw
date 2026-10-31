@@ -762,7 +762,7 @@ describe("offline installed runtime composition", () => {
     const { root, options } = await fixture();
     await composeInstalledRuntime(options);
     const tools = path.join(root, "tools");
-    execFileSync("git", ["clone", "--shared", "--no-checkout", "--quiet", repo, tools]);
+    execFileSync("git", ["clone", "--depth=1", "--no-local", "-n", "-q", repo, tools]);
     for (const name of ["Dockerfile", "pnpm-lock.yaml", "docker-entrypoint.mjs"]) {
       await fs.copyFile(path.join(repo, name), path.join(tools, name));
     }

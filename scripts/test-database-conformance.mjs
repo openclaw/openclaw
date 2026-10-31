@@ -77,6 +77,7 @@ let targets = explicitTargets
       "src/config/sessions/session-turn-resident.postgres.test.ts",
       "src/config/sessions/session-turn-commit.postgres.test.ts",
       "src/infra/client-credential-migration.postgres.test.ts",
+      "src/infra/state-migrations.plugin-doctor-context.postgres.test.ts",
       "src/infra/gateway-lock-recovery.postgres.test.ts",
       "src/infra/exec-approvals-native.test.ts",
       "src/infra/client-credential-update.test.ts",
