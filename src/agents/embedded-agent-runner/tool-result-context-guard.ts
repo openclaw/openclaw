@@ -1,3 +1,4 @@
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   ContextEngine,
   ContextEngineRuntimeContext,
@@ -199,6 +200,10 @@ export function installContextEngineLoopHook(params: {
   let lastSeenLength: number | null = null;
   let lastAssembledView: AgentMessage[] | null = null;
   let lastSourceMessages: AgentMessage[] | null = null;
+  // A failed loop-hook operation disables this engine for the rest of the turn.
+  // A newly appended user message or a reset history starts a fresh attempt.
+  let assemblyFailedAtLength: number | null = null;
+  const log = createSubsystemLogger("agents/context-engine");
 
   mutableAgent.transformContext = async (messages, signal) => {
     signal?.throwIfAborted();
@@ -218,6 +223,23 @@ export function installContextEngineLoopHook(params: {
     if (sourceHistoryChanged) {
       lastSeenLength = null;
       lastAssembledView = null;
+    }
+
+    if (assemblyFailedAtLength != null) {
+      const hasNewUserTurn = transcriptMessages
+        .slice(assemblyFailedAtLength)
+        .some((message) => message.role === "user");
+      if (hasNewUserTurn) {
+        assemblyFailedAtLength = null;
+      }
+    }
+
+    if (assemblyFailedAtLength != null) {
+      // Do not repeatedly call a broken context engine for every tool result.
+      // Keep the fence current so the next user turn can resume normally.
+      lastSeenLength = transcriptMessages.length;
+      lastSourceMessages = transcriptMessages;
+      return providerMessages;
     }
 
     // Seed the loop fence from the attempt's pre-prompt message count when available.
@@ -307,12 +329,17 @@ export function installContextEngineLoopHook(params: {
         : assembled.messages;
       lastAssembledView = params.repairAssembledMessages?.(modelMessages) ?? modelMessages;
       return lastAssembledView;
-    } catch {
+    } catch (error) {
       // Restore the provider array even when afterTurn mutated it before failing.
       providerMessages.splice(0, providerMessages.length, ...preassemblyMessages);
       signal?.throwIfAborted();
-      // Retry from the original fence so failed assembly cannot consume history.
-      lastSeenLength = prePromptMessageCount;
+      log.warn("Context engine loop hook failed; using provider context until the next user turn", {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Fail closed for this turn instead of retrying a broken engine on each tool loop.
+      assemblyFailedAtLength = transcriptMessages.length;
+      lastSeenLength = transcriptMessages.length;
       lastAssembledView = null;
       lastSourceMessages = transcriptMessages;
     }
