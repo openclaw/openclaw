@@ -442,7 +442,6 @@ export async function prepareGatewayLifecycle(params: {
       step("model-accounts", stopModelAccountsForClose),
       step("mention-inbox", () => mentionInbox.dispose()),
       step("sandbox-registry", () => sandboxRegistry.drain()),
-      step("talk-persistence", () => talkClose.drain()),
     ]);
   const beginClosePrelude = async (options?: GatewayCloseOptions) => {
     await step("prelude-fence", () => markClosePreludeStarted(options));
@@ -466,6 +465,7 @@ export async function prepareGatewayLifecycle(params: {
   let exitAfterClose = false;
   const runClosePrelude = async () => {
     await beginClosePrelude();
+    await step("talk-persistence", () => talkClose.drain());
     stopNodeConnectionNotifications();
     await watchNodeHttpRuntime.close();
     await shutdownRuntime.runGatewayClosePrelude({
