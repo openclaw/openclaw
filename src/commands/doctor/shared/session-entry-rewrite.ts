@@ -33,8 +33,10 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import { withEngineStoreAdmission } from "../../../infra/database-engine/admission-scope.js";
 import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../../infra/sql-connection.js";
-import { runWithSqliteCleanup } from "../../../infra/sqlite-lifecycle-errors.js";
-import { SqliteSnapshotCleanupError } from "../../../infra/sqlite-readonly-location-cleanup.js";
+import {
+  runWithSqliteCleanup,
+  SqliteSnapshotCleanupError,
+} from "../../../infra/sqlite-lifecycle-errors.js";
 import { prepareSqliteReadOnlyLocationSync } from "../../../infra/sqlite-snapshot-source.js";
 import {
   assertExistingDatabaseIdentity,

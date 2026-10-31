@@ -20,6 +20,7 @@ import { withDoctorProgress } from "../flows/doctor-health-startup.js";
 import { formatDoctorProgressPhase } from "../infra/doctor-progress.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
+import { preparePluginDoctorContractModules } from "../plugins/doctor-contract-preparation.js";
 import { resolvePluginDoctorProviderRenames } from "../plugins/doctor-contract-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
@@ -160,6 +161,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     });
   };
   const finalizeMigrationResult = prepareDoctorConfigMigrationResult(preflight, snapshot);
+  await runWithCurrentPluginMetadata(state.candidate, () =>
+    preparePluginDoctorContractModules({ config: state.candidate, surfaces: ["configRepair"] }),
+  );
   const plannedProviderRenames = runWithCurrentPluginMetadata(state.candidate, () =>
     planProviderRenames(
       snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
@@ -245,9 +249,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }
     const { findDoctorLegacyConfigIssues } =
       await import("./doctor/shared/legacy-config-issues.js");
-    return runWithCurrentPluginMetadata(state.candidate, () =>
-      findDoctorLegacyConfigIssues(snapshot.parsed, snapshot.parsed),
-    );
+    return runWithCurrentPluginMetadata(state.candidate, async () => {
+      await preparePluginDoctorContractModules({
+        config: snapshot.parsed as OpenClawConfig,
+        surfaces: ["configRepair"],
+      });
+      return findDoctorLegacyConfigIssues(snapshot.parsed, snapshot.parsed);
+    });
   })();
   const seenLegacyIssues = new Set(
     snapshot.legacyIssues.map((issue) => `${issue.path}:${issue.message}`),
@@ -296,7 +304,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   // Parsed config supplies invalid-key evidence only; migrations still mutate the
   // include/env-resolved candidate so doctor never writes unresolved source values.
-  const normalized = runWithCurrentPluginMetadata(state.candidate, () =>
+  const normalized = await runWithCurrentPluginMetadata(state.candidate, () =>
     normalizeCompatibilityConfigValues(state.candidate, {
       blockedModelIdentities: blockedCodexModelIdentities,
       sourceRaw: snapshot.parsed,
@@ -375,10 +383,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note,
     warningNotes: collectCodexPluginActivationWarnings(pluginActivationSourceConfig),
   });
-  const { applyPluginAutoEnable } = await import("../config/plugin-auto-enable.js");
+  const { applyPluginAutoEnableAsync } = await import("../config/plugin-auto-enable.js");
   applyConfigMutation(
-    runWithCurrentPluginMetadata(state.candidate, () =>
-      applyPluginAutoEnable({
+    await runWithCurrentPluginMetadata(state.candidate, () =>
+      applyPluginAutoEnableAsync({
         config: state.candidate,
         env: process.env,
       }),
@@ -628,6 +636,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       referenceSource?.installedPluginIdRecovery,
     );
 
+  await runWithCurrentPluginMetadata(cfg, () =>
+    preparePluginDoctorContractModules({ config: cfg, surfaces: ["configRepair"] }),
+  );
   await noteConfigAdvisories(cfg, runWithCurrentPluginMetadata);
 
   const migrationResult = await finalizeMigrationResult({

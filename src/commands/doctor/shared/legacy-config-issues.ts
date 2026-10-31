@@ -7,6 +7,7 @@ import type {
   OpenClawConfig,
 } from "../../../config/types.js";
 import { withPluginMetadataSnapshotScope } from "../../../plugins/current-plugin-metadata-snapshot.js";
+import { preparePluginDoctorContractModules } from "../../../plugins/doctor-contract-preparation.js";
 import {
   collectDoctorConfigRepairPluginIds,
   listPluginDoctorLegacyConfigRules,
@@ -55,7 +56,12 @@ export async function addDoctorLegacyIssues(
     activatePluginState();
   }
   const resolvedRaw = snapshot.sourceConfig ?? snapshot.config ?? {};
-  const collect = () => {
+  const collect = async () => {
+    await preparePluginDoctorContractModules({
+      config: resolvedRaw,
+      pluginIds: collectDoctorConfigRepairPluginIds(resolvedRaw),
+      surfaces: ["configRepair"],
+    });
     const sourceRaw = snapshot.parsed ?? resolvedRaw;
     const legacyIssues = findDoctorLegacyConfigIssues(resolvedRaw, sourceRaw);
     const ownerIssue = findLegacySystemAgentOwnerIssue(

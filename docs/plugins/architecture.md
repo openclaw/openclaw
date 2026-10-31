@@ -302,6 +302,10 @@ progress hint only: the host still services the transport and checks the actual
 task receipt and deadline. Readers retain bounded polling for worker failures.
 
 Doctor retains an unexecuted source snapshot across its maintenance phases.
+Selected setup sources are prepared by the existing plugin preparation worker
+before Doctor binds callbacks, so source capture does not block its main event
+loop. Preparation rechecks the selected inventory after awaiting the worker;
+canceled or retired work settles its cleanup before releasing source custody.
 Each phase admits fresh callback instances with private module files and settles
 their cleanup before releasing its lifecycle lease. The snapshot is reused for
 the whole operation; edit plugin sources between Doctor runs, not between phases.

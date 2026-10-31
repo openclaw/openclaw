@@ -23,8 +23,6 @@ import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-
 import {
   resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
-  resolveSessionTranscriptsDirForAgent,
-  resolveSessionStorePathCore,
 } from "../config/sessions/paths.js";
 import {
   loadExactSessionEntryReadOnly,
@@ -45,6 +43,7 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { safeStatSync } from "../infra/path-guards.js";
 import { loadLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
+import { preparePluginDoctorContractModules } from "../plugins/doctor-contract-preparation.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
@@ -59,6 +58,10 @@ import {
 } from "./doctor-session-state-providers.js";
 import { countLabel, type OrphanAgentDir } from "./doctor-state-integrity-format.js";
 import {
+  resolveSessionRuntimeDirectories,
+  type RuntimeDirLabel,
+} from "./doctor-state-integrity.directories.js";
+import {
   detectLinuxSdBackedStateDir,
   detectLinuxVolatileStateDir,
   detectMacCloudSyncedStateDir,
@@ -70,25 +73,6 @@ import {
 import { collectRetainedUnconfiguredAgentDatabaseWarnings } from "./doctor-unconfigured-agent-databases.js";
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
-
-type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
-
-function resolveSessionRuntimeDirectories(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-  homedir: () => string,
-): Map<string, RuntimeDirLabel> {
-  const directories = new Map<string, RuntimeDirLabel>();
-  const agentId = tryResolveDefaultAgentId(cfg);
-  if (agentId) {
-    directories.set(resolveSessionTranscriptsDirForAgent(agentId, env, homedir), "Sessions dir");
-    directories.set(
-      path.dirname(resolveSessionStorePathCore(cfg.session?.store, { agentId, env })),
-      "Session store dir",
-    );
-  }
-  return directories;
-}
 
 export type StateIntegrityHealthIssue = { path: string } & (
   | {
@@ -768,6 +752,11 @@ export async function noteStateIntegrity(
     (left, right) =>
       left.agentId === compatibilityAgentId ? -1 : right.agentId === compatibilityAgentId ? 1 : 0,
   );
+  await preparePluginDoctorContractModules({
+    config: cfg,
+    env,
+    surfaces: ["sessionRouteStateOwners"],
+  });
 
   const inspectAgentSessionIntegrity = async (
     target: SessionStoreTarget,

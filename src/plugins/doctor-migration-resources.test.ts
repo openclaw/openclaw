@@ -5,7 +5,7 @@ import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/doctor-migra
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { coercePluginDoctorContractModule } from "./doctor-contract-module.js";
 import type { PluginDoctorStateMigration } from "./doctor-contract-module.js";
-import { preparePluginDoctorMigrationBackupResources } from "./doctor-contract-registry.js";
+import { preparePluginDoctorMigrationBackupResources } from "./doctor-contract-preparation.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
 import {
   type PluginDoctorMigrationResourceCollectionParams,

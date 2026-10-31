@@ -12,7 +12,6 @@ import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-sto
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { createFixture, nativeSize } from "./plugin-generation-artifact.admission.test-support.js";
-import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import {
   captureResources,
   createSdkHost,
@@ -23,6 +22,7 @@ import {
   type Cache,
 } from "./plugin-generation-capture.test-support.js";
 import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
+import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import {
   preparePluginNativeAdmissions,
@@ -238,9 +238,15 @@ it("pins a custody fork's publisher before deferred native materialization", asy
     await withPluginCache(cache, () =>
       withPluginGenerationSourceCustody(async () => {
         const artifact = resources.keep(
-          withPluginSourceAdmissionPublisher(original, () =>
-            capturePluginGenerationArtifact(fixture.root, fixture.entry, (run) => run()),
-          ),
+          (
+            await withPluginSourceAdmissionPublisher(original, () =>
+              preparePluginGenerationArtifact({
+                rootDir: fixture.root,
+                source: fixture.entry,
+                standalone: true,
+              }),
+            )
+          ).artifact,
         );
         expect(original).not.toHaveBeenCalled();
         await withPluginSourceAdmissionPublisher(replacement, async () => {

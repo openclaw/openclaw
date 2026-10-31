@@ -10,6 +10,7 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
+import { PluginSetupPreparationRequiredError } from "../plugins/plugin-setup-module.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 
 /** Resolve installed setup contracts without activating channel runtimes during Doctor. */
@@ -26,7 +27,10 @@ export function createCommandOwnerChannelResolver(cfg: OpenClawConfig) {
           includePersistedAuthState: false,
           includeSetupFallbackPlugins: true,
         }).plugins;
-      } catch {
+      } catch (error) {
+        if (error instanceof PluginSetupPreparationRequiredError) {
+          throw error;
+        }
         // Discovery failures already have Doctor diagnostics; never drop an unknown kind.
         plugins = [];
       }

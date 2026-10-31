@@ -137,6 +137,7 @@ vi.mock("./doctor/shared/stale-oauth-profile-shadows.js", () => ({
 vi.mock("../plugins/setup-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/setup-registry.js")>();
   return {
+    ...actual,
     resolvePluginSetupCliBackend: vi.fn(() => undefined),
     resolvePluginSetupRegistry: vi.fn(() => ({
       providers: [],
@@ -146,7 +147,7 @@ vi.mock("../plugins/setup-registry.js", async (importOriginal) => {
       diagnostics: [],
     })),
     resolvePluginSetupAutoEnableReasons: actual.resolvePluginSetupAutoEnableReasons,
-    runPluginSetupConfigMigrations: vi.fn(({ config }: { config: unknown }) => ({
+    runPluginSetupConfigMigrations: vi.fn(async ({ config }: { config: unknown }) => ({
       config,
       changes: [],
     })),
@@ -155,12 +156,12 @@ vi.mock("../plugins/setup-registry.js", async (importOriginal) => {
 
 // mock-isolation: Keep channel plugin loading and registry initialization outside config-flow repair coordination.
 vi.mock("./doctor/shared/channel-doctor.js", () => ({
-  collectChannelDoctorCompatibilityMutations: vi.fn(() => []),
+  collectChannelDoctorCompatibilityMutations: vi.fn(async () => []),
   collectChannelDoctorMutableAllowlistWarnings: vi.fn(() => []),
   collectChannelDoctorPreviewWarnings: vi.fn(async () => []),
   collectChannelDoctorRepairMutations: vi.fn(async () => []),
   collectChannelDoctorStaleConfigMutations: vi.fn(async () => []),
-  createChannelDoctorEmptyAllowlistPolicyHooks: vi.fn(() => ({
+  createChannelDoctorEmptyAllowlistPolicyHooks: vi.fn(async () => ({
     extraWarningsForAccount: () => [],
     shouldSkipDefaultEmptyGroupAllowlistWarning: ({ channelName }: { channelName: string }) =>
       channelName === "googlechat" || channelName === "telegram",

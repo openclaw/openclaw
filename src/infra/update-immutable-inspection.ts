@@ -188,7 +188,7 @@ export async function inspectImmutableUpdateCoverage(params: {
           }
         }
         const { preparePluginDoctorMigrationBackupResources } =
-          await import("../plugins/doctor-contract-registry.js");
+          await import("../plugins/doctor-contract-preparation.js");
         const { createPluginCache, withPluginCache, retirePluginCache } =
           await import("../plugins/plugin-cache.js");
         const { withPluginSourceCaptureStorage } =

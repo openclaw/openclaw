@@ -1,6 +1,8 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
+export class SqliteSnapshotCleanupError extends Error {}
+
 export class OpenClawStateOwnershipError extends Error {}
 
 export class OpenClawStateOwnershipMetadataError extends OpenClawStateOwnershipError {

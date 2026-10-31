@@ -153,7 +153,7 @@ function modernLegacyFixture(source = directDetector) {
 }
 
 describe("doctor-contract-registry state migrations", () => {
-  it("orders dynamic and declared owners while preserving each owner's action order", () => {
+  it("orders dynamic and declared owners while preserving each owner's action order", async () => {
     const acpxRoot = makeTempDir();
     const codexRoot = makeTempDir();
     const dynamicRoot = makeTempDir();
@@ -184,8 +184,12 @@ describe("doctor-contract-registry state migrations", () => {
       { pluginId: "dynamic-owner", id: "dynamic-action" },
     ];
     expect(
-      harness.registry.resolveLivePluginDoctorStateMigrationInventory({ config: {}, env: {} })
-        .descriptors,
+      (
+        await harness.preparation.prepareLivePluginDoctorStateMigrationInventory({
+          config: {},
+          env: {},
+        })
+      ).descriptors,
     ).toEqual(expected);
 
     discoveryOrder = [acpxRecord, codexRecord, dynamicRecord];

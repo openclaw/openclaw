@@ -51,6 +51,7 @@ export function useDoctorContractRegistryHarness(
   state.legacySetup = options.legacySetup ?? false;
   const tempDirs: string[] = [];
   let registry: typeof import("./doctor-contract-registry.js");
+  let preparation: typeof import("./doctor-contract-preparation.js");
   let clearCache: typeof import("./doctor-contract-registry.test-fixtures.js").clearPluginDoctorContractRegistryCache;
   let waitForRetirement:
     | typeof import("./plugin-cache.js").waitForPluginCacheRetirement
@@ -59,6 +60,7 @@ export function useDoctorContractRegistryHarness(
   beforeAll(async () => {
     vi.resetModules();
     registry = await import("./doctor-contract-registry.js");
+    preparation = await import("./doctor-contract-preparation.js");
     ({ clearPluginDoctorContractRegistryCache: clearCache } =
       await import("./doctor-contract-registry.test-fixtures.js"));
     if (options.waitForRetirement) {
@@ -92,6 +94,9 @@ export function useDoctorContractRegistryHarness(
     makeTempDir: () => makeTrackedTempDir("openclaw-doctor-contract-registry", tempDirs),
     get registry() {
       return registry;
+    },
+    get preparation() {
+      return preparation;
     },
     get clearCache() {
       return clearCache;

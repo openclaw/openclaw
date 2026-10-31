@@ -148,7 +148,7 @@ describe("canonical model-reference migration", () => {
     expectIdempotent(result);
   });
 
-  it("canonicalizes a seeded legacy Claude CLI allowlist in one doctor pass", () => {
+  it("canonicalizes a seeded legacy Claude CLI allowlist in one doctor pass", async () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
     // #124952: the seeded allowlist and its model map must migrate in one pass.
@@ -162,7 +162,7 @@ describe("canonical model-reference migration", () => {
       "claude-cli/claude-sonnet-4-6",
     ]);
 
-    const res = normalizeCompatibilityConfigValues(seeded.next);
+    const res = await normalizeCompatibilityConfigValues(seeded.next);
     expect(res.config.agents?.defaults?.models).toEqual({
       "anthropic/*": { agentRuntime: { id: "claude-cli" } },
       "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
@@ -172,6 +172,6 @@ describe("canonical model-reference migration", () => {
     expect(res.config.agents?.defaults?.modelPolicy).toEqual({
       allow: ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6"],
     });
-    expect(normalizeCompatibilityConfigValues(res.config).changes).toEqual([]);
+    expect((await normalizeCompatibilityConfigValues(res.config)).changes).toEqual([]);
   });
 });

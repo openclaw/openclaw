@@ -13,6 +13,7 @@ import {
 } from "../../infra/update-deferred-model-retirement.js";
 import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { preparePluginDoctorContractModules } from "../../plugins/doctor-contract-preparation.js";
 import { loadInstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "../../plugins/official-runtime-plugins.js";
 import {
@@ -176,6 +177,13 @@ export async function runDoctorRepairSequence(params: {
         env,
       }),
     );
+  await runWithCurrentPluginMetadata(() =>
+    preparePluginDoctorContractModules({
+      config: state.candidate,
+      env,
+      surfaces: ["configRepair"],
+    }),
+  );
   for (const mutation of await collectCurrentChannelRepairs()) {
     applyMutation(mutation);
   }
@@ -275,6 +283,13 @@ export async function runDoctorRepairSequence(params: {
     records: missingConfiguredPluginInstallRepair.records,
   });
   applyMutation(installedPluginRecovery);
+  await runWithCurrentPluginMetadata(() =>
+    preparePluginDoctorContractModules({
+      config: state.candidate,
+      env,
+      surfaces: ["configRepair"],
+    }),
+  );
   appendNotes(warningNotes, installedPluginRecovery.notices);
   if (missingConfiguredPluginInstallRepair.changes.length > 0) {
     appendNotes(changeNotes, missingConfiguredPluginInstallRepair.changes);
@@ -300,7 +315,7 @@ export async function runDoctorRepairSequence(params: {
       // Missing external plugins cannot expose their doctor contracts until
       // installation completes. Normalize legacy shapes before channel repair
       // so later validation and gateway restart consume canonical config.
-      const channelCompatibilityMutations = runWithCurrentPluginMetadata(() =>
+      const channelCompatibilityMutations = await runWithCurrentPluginMetadata(() =>
         collectChannelDoctorCompatibilityMutations(state.candidate, {
           env,
         }),
@@ -341,10 +356,10 @@ export async function runDoctorRepairSequence(params: {
     maybeRepairStaleSubagentAllowlists,
   ]);
 
-  const emptyAllowlistWarnings = await runWithCurrentPluginMetadata(() =>
+  const emptyAllowlistWarnings = await runWithCurrentPluginMetadata(async () =>
     scanEmptyAllowlistPolicyWarnings(state.candidate, {
       doctorFixCommand: params.doctorFixCommand,
-      ...createChannelDoctorEmptyAllowlistPolicyHooks({ cfg: state.candidate, env }),
+      ...(await createChannelDoctorEmptyAllowlistPolicyHooks({ cfg: state.candidate, env })),
     }),
   );
   appendNotes(warningNotes, emptyAllowlistWarnings);

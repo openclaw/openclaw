@@ -1,5 +1,5 @@
 import { findLegacyConfigIssues } from "./legacy.js";
-import type { LegacyConfigIssue } from "./types.js";
+import type { LegacyConfigIssue, OpenClawConfig } from "./types.js";
 
 let doctorIssuesModule:
   | Promise<typeof import("../commands/doctor/shared/legacy-config-issues.js")>
@@ -23,7 +23,13 @@ export async function collectInvalidConfigLegacyIssues(
   }
   const { findDoctorLegacyConfigIssues } = await (doctorIssuesModule ??=
     import("../commands/doctor/shared/legacy-config-issues.js"));
+  const { preparePluginDoctorContractModules } =
+    await import("../plugins/doctor-contract-preparation.js");
   const activatePluginState = await options.preparePluginDiagnostics?.();
   activatePluginState?.();
+  await preparePluginDoctorContractModules({
+    config: raw as OpenClawConfig,
+    surfaces: ["configRepair"],
+  });
   return findDoctorLegacyConfigIssues(raw, sourceRaw);
 }

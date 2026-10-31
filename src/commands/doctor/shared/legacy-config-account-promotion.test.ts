@@ -70,12 +70,12 @@ function channelConfig(
   };
 }
 
-function normalizeAndRepeat(cfg: OpenClawConfig) {
+async function normalizeAndRepeat(cfg: OpenClawConfig) {
   const before = structuredClone(cfg);
-  const first = normalizeCompatibilityConfigValues(cfg);
+  const first = await normalizeCompatibilityConfigValues(cfg);
   clearPluginMetadataLifecycleCaches();
   resetPluginRuntimeStateForTest();
-  expect(normalizeCompatibilityConfigValues(first.config)).toEqual(first);
+  expect(await normalizeCompatibilityConfigValues(first.config)).toEqual(first);
   expect(cfg).toEqual(before);
   return first;
 }
@@ -190,7 +190,7 @@ it.each([
     enabled,
   );
   const before = structuredClone(cfg);
-  const first = normalizeAndRepeat(cfg);
+  const first = await normalizeAndRepeat(cfg);
   expect(first.config).toEqual(before);
   expect(first.changes).toEqual([]);
 });
@@ -213,7 +213,7 @@ it.each([false, true])(
       },
     });
     const before = structuredClone(cfg);
-    const first = normalizeAndRepeat(cfg);
+    const first = await normalizeAndRepeat(cfg);
     expect(first.config).toEqual(before);
     expect(first.changes).toEqual([]);
     if (existingDefault) {

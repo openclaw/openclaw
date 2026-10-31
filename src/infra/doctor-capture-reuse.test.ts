@@ -7,7 +7,7 @@ import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-man
 import type { DoctorMaintenanceParams } from "../commands/doctor-maintenance-types.js";
 import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import { preserveDoctorOriginalState } from "../commands/doctor-original-capture.js";
-import * as declarations from "../plugins/doctor-contract-registry.js";
+import * as declarations from "../plugins/doctor-contract-preparation.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,

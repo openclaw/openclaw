@@ -598,7 +598,7 @@ export async function collectDoctorPreviewNotes(params: {
   if (hasChannelConfig) {
     const { createChannelDoctorEmptyAllowlistPolicyHooks } = await import("./channel-doctor.js");
     const { scanEmptyAllowlistPolicyWarnings } = await import("./empty-allowlist-scan.js");
-    const emptyAllowlistHooks = createChannelDoctorEmptyAllowlistPolicyHooks({
+    const emptyAllowlistHooks = await createChannelDoctorEmptyAllowlistPolicyHooks({
       cfg: params.cfg,
       env,
     });

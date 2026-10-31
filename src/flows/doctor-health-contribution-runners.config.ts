@@ -132,6 +132,9 @@ export async function runWriteConfigHealth(
     });
     const { restoreDoctorConfigEnvRefs } =
       await import("../commands/doctor/shared/config-flow-steps.js");
+    const { preparePluginDoctorContractModules } =
+      await import("../plugins/doctor-contract-preparation.js");
+    await preparePluginDoctorContractModules({ config: ctx.cfg, surfaces: ["configRepair"] });
     const { prepareDoctorConfigWriteStage } =
       await import("../commands/doctor/shared/roster-include-write.js");
     let stageSnapshot = configResultWritePending
@@ -266,6 +269,7 @@ export async function runWriteConfigHealth(
         });
       }
       const { path, hash } = confirmedConfigSource;
+      await preparePluginDoctorContractModules({ config: ctx.cfg, surfaces: ["configRepair"] });
       const nextConfig = restoreDoctorConfigEnvRefs(
         ctx.cfg,
         ctx.configResult.referenceSource,

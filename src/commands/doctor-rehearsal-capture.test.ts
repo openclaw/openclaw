@@ -8,7 +8,7 @@ import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
-import * as pluginResources from "../plugins/doctor-contract-registry.js";
+import * as pluginResources from "../plugins/doctor-contract-preparation.js";
 import { preparePluginDoctorMigrationResources } from "../plugins/doctor-migration-resources.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {

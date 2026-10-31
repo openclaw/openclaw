@@ -14,6 +14,7 @@ import {
   captureSqliteDatabaseAdmissions,
   hasSqliteDatabaseSchemaAdmissionForPath,
 } from "./sqlite-database-admission.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import {
   adoptPreparedLocation,
   registerRetainedSnapshotTempDirectory,
@@ -21,7 +22,6 @@ import {
   cleanupSnapshotOperations,
   removeTempDirectory,
   removeTempDirectoryAsync,
-  SqliteSnapshotCleanupError,
 } from "./sqlite-readonly-location-cleanup.js";
 import { createReadBarrier, observeSettlement } from "./sqlite-readonly.test-support.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";

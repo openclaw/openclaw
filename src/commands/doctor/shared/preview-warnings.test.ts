@@ -104,7 +104,8 @@ vi.mock("../channel-capabilities.js", () => {
   };
 });
 
-vi.mock("./channel-doctor.js", () => ({
+vi.mock("./channel-doctor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./channel-doctor.js")>()),
   collectChannelDoctorPreviewWarnings: vi.fn(
     async ({ cfg }: { cfg: { channels?: Record<string, unknown> } }) => {
       const telegram = cfg.channels?.telegram as { allowFrom?: unknown } | undefined;
@@ -123,7 +124,7 @@ vi.mock("./channel-doctor.js", () => ({
       ];
     },
   ),
-  createChannelDoctorEmptyAllowlistPolicyHooks: vi.fn(() => ({
+  createChannelDoctorEmptyAllowlistPolicyHooks: vi.fn(async () => ({
     extraWarningsForAccount: () => [],
     shouldSkipDefaultEmptyGroupAllowlistWarning: () => false,
   })),
@@ -369,7 +370,7 @@ describe("doctor preview warnings", () => {
 
   it("collects provider and shared preview warnings", async () => {
     const channelDoctor = await import("./channel-doctor.js");
-    vi.mocked(channelDoctor.createChannelDoctorEmptyAllowlistPolicyHooks).mockReturnValueOnce({
+    vi.mocked(channelDoctor.createChannelDoctorEmptyAllowlistPolicyHooks).mockResolvedValueOnce({
       extraWarningsForAccount: ({ prefix }) => [`extra:${prefix}`],
       shouldSkipDefaultEmptyGroupAllowlistWarning: () => false,
     });

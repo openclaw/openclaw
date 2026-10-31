@@ -5,9 +5,9 @@ import { expect, it } from "vitest";
 import { applyLegacyDoctorMigrations } from "./doctor/shared/legacy-config-compat.js";
 import { normalizeCompatibilityConfigValues as normalizeConfig } from "./doctor/shared/legacy-config-core-migrate.js";
 
-function migrateConfig(config: unknown) {
+async function migrateConfig(config: unknown) {
   const early = applyLegacyDoctorMigrations(config, { sourceConfigBeforeMigrations: config });
-  const normalized = normalizeConfig(early.next ?? config);
+  const normalized = await normalizeConfig(early.next ?? config);
   return {
     ...normalized,
     changes: [...early.changes, ...normalized.changes],
@@ -29,15 +29,18 @@ function ollamaConfig(
   return { models: { providers: { [id]: nextProvider } } };
 }
 
-function expectStable(result: ReturnType<typeof normalizeConfig>, migrate = normalizeConfig) {
+async function expectStable(
+  result: Awaited<ReturnType<typeof normalizeConfig>>,
+  migrate = normalizeConfig,
+) {
   const expected = structuredClone(result.config);
-  const repeated = migrate(result.config);
+  const repeated = await migrate(result.config);
   expect(repeated.config).toEqual(expected);
   expect(repeated.changes).toEqual([]);
 }
 useDoctorLegacyConfigFixture();
 
-it("migrates legacy Ollama siblings without pinning a current model", () => {
+it("migrates legacy Ollama siblings without pinning a current model", async () => {
   const current = {
     id: "current",
     api: "ollama",
@@ -45,7 +48,7 @@ it("migrates legacy Ollama siblings without pinning a current model", () => {
     contextTokens: 32_768,
     params: { temperature: 0.2 },
   };
-  const result = normalizeConfig(
+  const result = await normalizeConfig(
     ollamaConfig(
       [
         current,
@@ -70,11 +73,11 @@ it("migrates legacy Ollama siblings without pinning a current model", () => {
   expect(provider?.models?.[2]?.params).toEqual({ num_ctx: 8192 });
   expect(provider?.models?.[3]?.params).toEqual({ num_ctx: 16384 });
   expect(provider?.models?.[4]?.params).toEqual({ temperature: 0.1 });
-  expectStable(result);
+  await expectStable(result);
 });
 
-it("keeps retired provider contextTokens usable without adding an Ollama num_ctx pin", () => {
-  const result = migrateConfig(
+it("keeps retired provider contextTokens usable without adding an Ollama num_ctx pin", async () => {
+  const result = await migrateConfig(
     ollamaConfig([{ contextWindow: undefined }], {
       contextTokens: 32_768,
       contextWindow: 262_144,
@@ -87,11 +90,11 @@ it("keeps retired provider contextTokens usable without adding an Ollama num_ctx
   expect(provider?.params).toBeUndefined();
   expect(provider?.models?.[0]).toMatchObject({ contextTokens: 32_768, contextWindow: 262_144 });
   expect(provider?.models?.[0]?.params).toBeUndefined();
-  expectStable(result, migrateConfig);
+  await expectStable(result, migrateConfig);
 });
 
-it("uses the output budget when the native model window is invalid", () => {
-  const res = normalizeConfig(ollamaConfig([{ contextWindow: 0, maxTokens: 24576 }]));
+it("uses the output budget when the native model window is invalid", async () => {
+  const res = await normalizeConfig(ollamaConfig([{ contextWindow: 0, maxTokens: 24576 }]));
   expect(res.config.models?.providers?.ollama?.models?.[0]?.params).toEqual({ num_ctx: 24576 });
 });
 
@@ -104,26 +107,29 @@ it.each([
     { num_ctx: 32768 },
     65536,
   ],
-] as const)("migrates retired provider contextWindow: %s", (_label, model, params, numCtx) => {
-  const models = [model];
-  const expectedProviderParams = structuredClone(params);
-  const res = migrateConfig(ollamaConfig(models, { contextWindow: 65536, params }));
-  const provider = res.config.models?.providers?.ollama;
-  expect(provider).not.toHaveProperty("contextWindow");
-  expect(provider?.params).toEqual(expectedProviderParams);
-  expect(provider?.models?.map((entry) => entry.params)).toEqual(
-    numCtx ? [{ num_ctx: numCtx }] : [],
-  );
-  expect(res.config.agents?.defaults?.model).toEqual({ primary: "ollama/llama3.3" });
-  expect(res.warnings).toEqual([]);
-});
+] as const)(
+  "migrates retired provider contextWindow: %s",
+  async (_label, model, params, numCtx) => {
+    const models = [model];
+    const expectedProviderParams = structuredClone(params);
+    const res = await migrateConfig(ollamaConfig(models, { contextWindow: 65536, params }));
+    const provider = res.config.models?.providers?.ollama;
+    expect(provider).not.toHaveProperty("contextWindow");
+    expect(provider?.params).toEqual(expectedProviderParams);
+    expect(provider?.models?.map((entry) => entry.params)).toEqual(
+      numCtx ? [{ num_ctx: numCtx }] : [],
+    );
+    expect(res.config.agents?.defaults?.model).toEqual({ primary: "ollama/llama3.3" });
+    expect(res.warnings).toEqual([]);
+  },
+);
 
-it("keeps native Ollama params prototype-safe while setting num_ctx", () => {
+it("keeps native Ollama params prototype-safe while setting num_ctx", async () => {
   const ownProto = (params: Record<string, unknown>, value: Record<string, unknown>) =>
     Object.defineProperty(params, "__proto__", { enumerable: true, value });
   const providerParams = ownProto({ temperature: 0.2 }, { think: "high" });
   const modelParams = ownProto({ top_p: 0.9 }, { keep_alive: "forever" });
-  const res = migrateConfig(
+  const res = await migrateConfig(
     ollamaConfig([{ contextWindow: 32768, params: modelParams }], {
       contextWindow: 65536,
       params: providerParams,
@@ -143,13 +149,13 @@ it("keeps native Ollama params prototype-safe while setting num_ctx", () => {
 
 it.each([false, true])(
   "does not pin OpenAI-compatible Ollama configs (implicit=%s)",
-  (implicit) => {
+  async (implicit) => {
     const input = ollamaConfig([{ contextWindow: 81920 }], {
       baseUrl: "http://localhost:11434/v1",
       api: implicit ? undefined : "openai-completions",
       ...(implicit ? { contextWindow: 65536 } : {}),
     });
-    const res = implicit ? migrateConfig(input) : normalizeConfig(input);
+    const res = implicit ? await migrateConfig(input) : await normalizeConfig(input);
     if (implicit) {
       expect(res.config.models?.providers?.ollama).not.toHaveProperty("contextWindow");
       expect(res.config.models?.providers?.ollama?.models).toEqual(

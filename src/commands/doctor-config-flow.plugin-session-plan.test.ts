@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runSessionTranscriptsHealth } from "../flows/doctor-health-contribution-runners.state.js";
-import { resolveLivePluginDoctorStateMigrationInventory as resolveMigrations } from "../plugins/doctor-contract-registry.js";
+import { prepareLivePluginDoctorStateMigrationInventory as resolveMigrations } from "../plugins/doctor-contract-preparation.js";
 import { clearPluginDoctorContractRegistryCache } from "../plugins/doctor-contract-registry.test-fixtures.js";
 import {
   readPersistedInstalledPluginIndexInstallRecordsAsync as readInstallRecords,
@@ -81,7 +81,7 @@ module.exports = { stateMigrations: [{
         vi.spyOn(pluginInstalls, "repairMissingConfiguredPluginInstalls").mockImplementationOnce(
           async ({ cfg, env, beforePersistentEffect }) => {
             // Warm the old inventory before installation invalidates its metadata scope.
-            resolveMigrations({ config: cfg, env: env ?? process.env });
+            await resolveMigrations({ config: cfg, env: env ?? process.env });
             return await withPluginLifecycleLease({ env }, async (lease) => {
               const indexOptions = { config: cfg, env, filePath: lease.databasePath, lease };
               const records = (await readInstallRecords(indexOptions)) ?? {};

@@ -11,9 +11,8 @@ import {
   serializeSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
-import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
+import { runWithSqliteCleanup, SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import { captureSqlitePrivateSnapshotFamily } from "./sqlite-private-snapshot-fork.js";
-import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
 import type {
   PreparedSqliteReadOnlyLocation,

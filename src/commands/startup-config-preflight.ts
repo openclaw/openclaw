@@ -215,7 +215,18 @@ async function prepareStartupConfig(
       const migration = await measureDoctorConfigPreflightStep("webhook-readiness", async () => {
         const { applyPluginDoctorCompatibilityMigrations } =
           await import("../plugins/doctor-contract-registry.js");
-        // Legacy compatibility inspection is synchronous boot admission, before runtime starts.
+        const { preparePluginDoctorContractModules } =
+          await import("../plugins/doctor-contract-preparation.js");
+        await preparePluginDoctorContractModules({
+          config: read.snapshot.sourceConfig,
+          env,
+          manifestRegistry: read.pluginMetadataSnapshot?.manifestRegistry,
+          pluginIds: pendingWebhookChannels,
+          historicalWebhookListeners: true,
+          surfaces: ["configRepair"],
+          assertCurrent: assertLeaseCurrent,
+        });
+        assertLeaseCurrent();
         return withEngineStoreAdmission(() =>
           applyPluginDoctorCompatibilityMigrations(read.snapshot.sourceConfig, {
             config: read.snapshot.sourceConfig,

@@ -9,6 +9,10 @@ import {
   importStateMigrationFixtureGraph,
   rerunStateMigrationFixtureAfterRestart,
 } from "./state-migrations.native-graph.test-support.js";
+import {
+  legacyChannelStateMigrationEntries,
+  pluginDoctorStateMigrationEntries,
+} from "./state-migrations.plugin-fixture.test-support.js";
 let native = await importStateMigrationFixtureGraph();
 import type { OpenClawConfig } from "../config/config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
@@ -83,49 +87,6 @@ async function reloadStateDirFixtureGraph() {
 async function rerunAutomaticMigrationAfterRestart(params: AutoMigrateLegacyStateParams) {
   return await rerunStateMigrationFixtureAfterRestart(params, native, migrationDatabaseClosers);
 }
-
-const pluginDoctorStateMigrationEntries = vi.hoisted(
-  (): {
-    entries: Array<{
-      pluginId: string;
-      channelIds?: string[];
-      trustedForDurableStores?: boolean;
-      migration: PluginDoctorStateMigration;
-    }>;
-  } => ({ entries: [] }),
-);
-
-const legacyChannelStateMigrationEntries = vi.hoisted(() => ({
-  entries: [] as Array<{ pluginId: string; migration: PluginDoctorStateMigration }>,
-}));
-
-vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
-  const buildStateMigrationInventory = (params?: { config?: OpenClawConfig }) => ({
-    knownPluginIds: actual.collectRelevantDoctorPluginIds(params?.config ?? {}),
-    sessionStoreOwnerPluginIds: [],
-    descriptors: [
-      ...pluginDoctorStateMigrationEntries.entries,
-      ...legacyChannelStateMigrationEntries.entries,
-    ].map((entry) =>
-      Object.assign(
-        { pluginId: entry.pluginId, id: entry.migration.id },
-        entry.migration.doctorOnly === true ? { doctorOnly: true as const } : {},
-        entry.migration.phase ? { phase: entry.migration.phase } : {},
-      ),
-    ),
-    unresolvedPluginIds: [],
-  });
-  return {
-    ...actual,
-    listPluginDoctorStateMigrationEntries: vi.fn(() => [
-      ...pluginDoctorStateMigrationEntries.entries,
-      ...legacyChannelStateMigrationEntries.entries,
-    ]),
-    resolveLivePluginDoctorStateMigrationInventory: vi.fn(buildStateMigrationInventory),
-    resolvePluginDoctorStateMigrationInventory: vi.fn(buildStateMigrationInventory),
-  };
-});
 
 const tempDirs = createTrackedTempDirs();
 const APNS_DEVICE_FIELD = "token";

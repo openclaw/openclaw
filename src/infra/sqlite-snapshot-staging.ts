@@ -10,6 +10,7 @@ import {
   markPrivateDirectoryCreationRefused,
 } from "./private-directory-creation.js";
 import { markSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import {
   createPrivateSqliteTempDirectorySync,
   resolvePrivateSqliteSnapshotStagingRoot,
@@ -19,7 +20,6 @@ import {
   removeTempDirectory,
   removeTempDirectoryAsync,
   retainSnapshotWork,
-  SqliteSnapshotCleanupError,
   retireSqliteSnapshotPayload,
 } from "./sqlite-readonly-location-cleanup.js";
 import { sqliteSnapshotSourceFileSize } from "./sqlite-snapshot-policy.js";

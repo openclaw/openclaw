@@ -4,16 +4,67 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { collectPluginDoctorStateMigrationPlans } from "../infra/state-migrations.plugin-doctor.js";
-import { listPluginDoctorStateMigrationEntries } from "./doctor-contract-registry.js";
+import {
+  captureRetainedNativeWorkerSource,
+  closeDefaultRetainedNativeWorkerSource,
+} from "../infra/worker-native-lifecycle.js";
+import { preparePluginDoctorContractModules } from "./doctor-contract-preparation.js";
+import {
+  listPluginDoctorSessionRouteStateOwners,
+  listPluginDoctorStateMigrationEntries,
+} from "./doctor-contract-registry.js";
 import { createDoctorGenerationFixture } from "./doctor-generation.test-support.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import {
+  createPluginGenerationMetrics,
+  withPluginGenerationMetrics,
+} from "./plugin-generation-metrics.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await closeDefaultRetainedNativeWorkerSource();
+});
 
 const migrationInput = (root: string) => createDoctorGenerationFixture(root, "fixture").input;
+
+it("prepares manifest-owned session routes without capturing broken runtime source", async () => {
+  const rootDir = dirs.make("doctor-manifest-routes-");
+  writeTree(rootDir, {
+    "package.json": { type: "module" },
+    "index.mjs": "this is not valid JavaScript",
+    "doctor-contract-api.mjs": "throw new Error('manifest routes must not load this module');",
+  });
+  const owner = { id: "manifest-owner", label: "Manifest owner" };
+  const manifestRegistry = {
+    plugins: [
+      createPluginManifestRecordFixture({
+        id: "manifest-routes",
+        rootDir,
+        source: path.join(rootDir, "index.mjs"),
+        origin: "config",
+        doctorContract: { sessionRouteStateOwners: true },
+        sessionRouteStateOwners: [owner],
+      }),
+    ],
+    diagnostics: [],
+  };
+  const metrics = createPluginGenerationMetrics();
+  await using cache = createPluginCache();
+  await withPluginGenerationMetrics(metrics, () =>
+    withPluginCache(cache, async () => {
+      await preparePluginDoctorContractModules({
+        manifestRegistry,
+        surfaces: ["sessionRouteStateOwners"],
+      });
+      expect(listPluginDoctorSessionRouteStateOwners({ manifestRegistry })).toEqual([owner]);
+    }),
+  );
+  expect(metrics.captures).toBe(0);
+  expect(metrics.originalBytes).toBe(0);
+});
 
 it("retains direct dependency resource reads for dedicated Doctor callbacks", async () => {
   const rootDir = fs.realpathSync(dirs.make("doctor-dependency-resource-"));
@@ -85,18 +136,22 @@ it("keeps other plugin migrations available after a dependency link cannot be cr
   });
   fs.mkdirSync(path.join(roots[0]!, "node_modules"));
   fs.symlinkSync(dependency, path.join(roots[0]!, "node_modules", "broken-dependency"), "junction");
-  const symlink = fs.symlinkSync;
-  vi.spyOn(fs, "symlinkSync").mockImplementation((destination, filename, type) => {
-    if (
-      String(filename).includes("openclaw-plugin-build-") &&
-      path.basename(String(filename)).startsWith("broken-dependency")
-    ) {
-      throw Object.assign(new Error("fixture dependency link permission denied"), {
-        code: "EACCES",
-      });
-    }
-    symlink(destination, filename, type);
-  });
+  const nativeSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  const create = nativeSource.create.bind(nativeSource);
+  vi.spyOn(nativeSource, "create").mockImplementation((filename, options = {}, ...rest) =>
+    create(
+      new URL("./doctor-capture-probe.test-support.ts", import.meta.url),
+      {
+        ...options,
+        workerData: {
+          ...options.workerData,
+          doctorDependencyLinkFailure: true,
+          doctorCaptureWorkerUrl: String(filename),
+        },
+      },
+      ...rest,
+    ),
+  );
   const warnings: string[] = [];
   await using cache = createPluginCache();
   const collected = await withPluginCache(cache, () =>

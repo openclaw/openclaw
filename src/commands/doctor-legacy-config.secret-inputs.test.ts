@@ -8,8 +8,8 @@ import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-confi
 describe("normalizeCompatibilityConfigValues", () => {
   useDoctorLegacyConfigFixture();
 
-  it("migrates legacy secretref-env markers on SecretRef credential paths", () => {
-    const res = normalizeCompatibilityConfigValues({
+  it("migrates legacy secretref-env markers on SecretRef credential paths", async () => {
+    const res = await normalizeCompatibilityConfigValues({
       secrets: { defaults: { env: "gateway-env" } },
       channels: {
         discord: {
@@ -31,8 +31,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
-  it("leaves invalid legacy secretref-env markers unchanged", () => {
-    const res = normalizeCompatibilityConfigValues({
+  it("leaves invalid legacy secretref-env markers unchanged", async () => {
+    const res = await normalizeCompatibilityConfigValues({
       messages: { groupChat: { visibleReplies: "message_tool" } },
       channels: { discord: { token: "secretref-env:not-valid" } },
     });
@@ -43,7 +43,7 @@ describe("normalizeCompatibilityConfigValues", () => {
 
   it.each(["env", "file", "exec", "store"] as const)(
     "adds the configured %s provider only to registered SecretRef fields",
-    (source) => {
+    async (source) => {
       const id = source === "file" ? "/SYNTHETIC_KEY" : "SYNTHETIC_KEY";
       const provider = <T>(apiKey: T) => ({
         apiKey,
@@ -61,7 +61,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         plugins: { entries: { opaque: { config: { metadata: { source, id: "SYNTHETIC_KEY" } } } } },
       };
       const before = structuredClone(original);
-      const result = normalizeCompatibilityConfigValues(original);
+      const result = await normalizeCompatibilityConfigValues(original);
       const expected = { source, provider: "configured", id };
       expect(result.config.models?.providers?.example?.apiKey).toEqual(expected);
       const extended = result.config.models?.providers?.extended?.apiKey;
@@ -73,7 +73,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       expect(result.changes.join("\n")).not.toContain("synthetic-ref-metadata");
       expect(result.config.plugins?.entries?.opaque).toEqual(original.plugins?.entries?.opaque);
       expect(original).toEqual(before);
-      const { config, changes } = normalizeCompatibilityConfigValues(result.config);
+      const { config, changes } = await normalizeCompatibilityConfigValues(result.config);
       expect({ config, changes }).toEqual({ config: result.config, changes: [] });
     },
   );

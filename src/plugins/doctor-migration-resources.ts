@@ -25,6 +25,8 @@ export type PluginDoctorMigrationResourceCollectionParams = {
   warnings: PluginDoctorMigrationBackupWarning[];
   requireLocalResources?: boolean;
   manifestRegistry?: PluginManifestRegistry;
+  assertCurrent?: () => void;
+  signal?: AbortSignal;
 };
 
 /** Select one whole-plugin data scope for both rehearsal inventory and execution. */
@@ -37,6 +39,8 @@ export async function preparePluginDoctorMigrationResources(
   const notices: string[] = [];
   const pluginResources = new Map<string, Set<string>>();
   for (const { pluginId, migration } of entries) {
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     const notice = sqliteOnlyMigrationNotice(migration, params.config);
     if (notice) {
       notices.push(notice);
@@ -61,6 +65,8 @@ export async function preparePluginDoctorMigrationResources(
         resolveDefaultAgentWorkspaceDir(params.env),
       ...(params.requireLocalResources ? { requireLocalResources: true } : {}),
     });
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     if (!Array.isArray(resolved)) {
       throw new Error(`Invalid migration backup inventory from ${pluginId}/${migration.id}`);
     }
@@ -101,6 +107,8 @@ export async function preparePluginDoctorMigrationResources(
     .filter((resource) => selectedPaths.has(resource.path))
     .toSorted((left, right) => left.path.localeCompare(right.path));
   const assertCurrent = () => {
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     if (!rehearsalRoot) {
       return;
     }

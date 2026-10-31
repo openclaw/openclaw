@@ -17,7 +17,10 @@ import {
   retireSqliteDatabaseAdmissionForPath,
 } from "./sqlite-database-admission.js";
 import { recordSqliteSnapshotFailure } from "./sqlite-error-diagnostics.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import {
+  createSqliteLifecycleAggregateError,
+  SqliteSnapshotCleanupError,
+} from "./sqlite-lifecycle-errors.js";
 import type {
   PreparedSqliteReadOnlyLocation,
   RetainedPreparedSqliteReadOnlyLocation,
@@ -29,8 +32,6 @@ import {
 } from "./sqlite-snapshot-file.js";
 import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import { SQLITE_STAGING_TOKEN_FILES, type SqliteStagingToken } from "./sqlite-staging-token.js";
-
-export class SqliteSnapshotCleanupError extends Error {}
 
 /**
  * Runtimes without qualified native close (stock Bun, every Windows Bun) can

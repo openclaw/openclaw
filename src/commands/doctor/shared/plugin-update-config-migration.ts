@@ -8,6 +8,7 @@ import {
   withDeferredPluginConfigCompletion,
 } from "../../../infra/deferred-plugin-migrations.js";
 import { withPluginMetadataSnapshotScope } from "../../../plugins/current-plugin-metadata-snapshot.js";
+import { preparePluginDoctorContractModules } from "../../../plugins/doctor-contract-preparation.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
   collectDoctorConfigRepairPluginIds,
@@ -50,7 +51,7 @@ export async function preparePluginUpdateConfigMigration(params: {
       return withPluginMetadataSnapshotScope(metadata, () => run(metadata), { config });
     });
   try {
-    const prepared = inspect(params.config, (metadata) => {
+    const prepared = await inspect(params.config, async (metadata) => {
       const selectedIds = new Set(params.installOwners);
       for (const plugin of metadata.plugins) {
         const installOwner = resolvePluginManifestInstallOwner(plugin);
@@ -59,6 +60,14 @@ export async function preparePluginUpdateConfigMigration(params: {
         }
       }
       const selectedPending = pending.filter((entry) => selectedIds.has(entry.pluginId));
+      await preparePluginDoctorContractModules({
+        config: params.config,
+        pluginIds: [...selectedIds],
+        manifestRegistry: metadata.manifestRegistry,
+        surfaces: ["configRepair"],
+        assertCurrent: params.assertCurrent,
+      });
+      params.assertCurrent();
       const inspected = new Map<string, boolean>();
       const migrated = applyPluginDoctorCompatibilityMigrations(params.config, {
         historicalWebhookListeners: HISTORICAL_WEBHOOK_CHANNELS.some((id) => selectedIds.has(id)),
@@ -123,7 +132,15 @@ export async function preparePluginUpdateConfigMigration(params: {
         params.assertCurrent();
         // Install owns enablement after normalization. Inspect state obligations against
         // that final policy; inactive owners retain their inputs without running state work.
-        const resolvedPluginIds = inspect(activationConfig, (metadata) => {
+        const resolvedPluginIds = await inspect(activationConfig, async (metadata) => {
+          await preparePluginDoctorContractModules({
+            config: activationConfig,
+            pluginIds: [...selectedIds],
+            manifestRegistry: metadata.manifestRegistry,
+            surfaces: ["configRepair", "stateMigrations"],
+            assertCurrent: params.assertCurrent,
+          });
+          params.assertCurrent();
           const rules = listPluginDoctorLegacyConfigRules({
             config: activationConfig,
             pluginIds: [...selectedIds],

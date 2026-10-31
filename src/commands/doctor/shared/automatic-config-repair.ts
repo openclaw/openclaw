@@ -22,6 +22,7 @@ import {
   validateConfigObjectRaw,
   validateConfigObjectWithPlugins,
 } from "../../../config/validation.js";
+import { preparePluginDoctorContractModules } from "../../../plugins/doctor-contract-preparation.js";
 import { withDeferredPluginDoctorMigrations } from "../../../plugins/doctor-contract-registry.js";
 import {
   prepareDoctorConfigReferenceSource,
@@ -98,6 +99,11 @@ async function planConfigRepair(
         )
       : run();
   const migrationSource = additionalMigration?.config ?? snapshot.sourceConfig;
+  if (pluginContracts) {
+    await withPluginContracts(() =>
+      preparePluginDoctorContractModules({ config: migrationSource, surfaces: ["configRepair"] }),
+    );
+  }
   const migration = withPluginContracts(() =>
     applyLegacyDoctorMigrations(migrationSource, {
       sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,

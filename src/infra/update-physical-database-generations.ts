@@ -2,7 +2,7 @@ import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { readBackupEngineImage, type BackupEngine } from "./database-engine/physical-store.js";
 import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
-import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import type { PreparedSqliteSnapshotSource } from "./sqlite-readonly-location.types.js";
 import {
   readUpdateDatabaseGeneration,

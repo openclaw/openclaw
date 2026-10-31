@@ -3,6 +3,7 @@ import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-con
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginDoctorContractModules } from "../plugins/doctor-contract-preparation.js";
 import {
   listPluginDoctorStateMigrationEntries,
   PluginDoctorStateMigrationDeclarationError,
@@ -167,6 +168,15 @@ export async function collectPluginDoctorStateMigrationPlans(
   const { config, env } = input;
   let entries: ReturnType<typeof listPluginDoctorStateMigrationEntries>;
   try {
+    await preparePluginDoctorContractModules({
+      config,
+      env,
+      inventory: params.inventory,
+      pluginIds: params.pluginIds,
+      surfaces: ["stateMigrations"],
+      assertCurrent: () => params.repairAuthority?.assertCurrent(),
+    });
+    params.repairAuthority?.assertCurrent();
     entries = listPluginDoctorStateMigrationEntries({
       config,
       env,

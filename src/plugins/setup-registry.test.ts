@@ -377,7 +377,7 @@ describe("setup registry", () => {
     },
   );
 
-  it.each([false, true])("isolates registered migration candidates (throws=%s)", (throws) => {
+  it.each([false, true])("isolates registered migration candidates (throws=%s)", async (throws) => {
     setupPlugin({ id: "fixture" });
     registration((api) => {
       api.registerConfigMigration((config) => ({
@@ -397,7 +397,7 @@ describe("setup registry", () => {
       }));
     });
     const config = { plugins: { entries: { fixture: {} } } };
-    const result = runMigrations({ config, env: {} });
+    const result = await runMigrations({ config, env: {} });
 
     expect(result.config.gateway).toEqual({ port: 18789, bind: "loopback" });
     expect(result.changes).toEqual(["first", "last"]);

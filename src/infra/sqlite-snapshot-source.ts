@@ -13,6 +13,7 @@ import {
   isArtifactPreservingStateRead,
 } from "../state/artifact-preserving-state-reads.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import { prepareSqliteSnapshotFromLiveOwner } from "./sqlite-live-snapshot.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { captureSqlitePrivateSnapshotFamily } from "./sqlite-private-snapshot-fork.js";
@@ -22,7 +23,6 @@ import {
   removeTempDirectoryAsync,
   registerRetainedSnapshotTempDirectory,
   retainSnapshotTempDirectory,
-  SqliteSnapshotCleanupError,
 } from "./sqlite-readonly-location-cleanup.js";
 import type {
   PreparedSqliteReadOnlyLocation,

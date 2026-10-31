@@ -29,8 +29,9 @@ import { externalDoctorEnv } from "./doctor-update.test-support.js";
 const selection = vi.hoisted(() => ({
   entries: [] as { pluginId: string; migration: PluginDoctorStateMigration }[],
 }));
-vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
-  const registry = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
+vi.mock("../plugins/doctor-contract-preparation.js", async (importOriginal) => {
+  const registry =
+    await importOriginal<typeof import("../plugins/doctor-contract-preparation.js")>();
   const { preparePluginDoctorMigrationResources } =
     await import("../plugins/doctor-migration-resources.js");
   return {

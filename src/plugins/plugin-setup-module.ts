@@ -7,11 +7,14 @@ import {
   retainPluginCache,
   retirePluginCacheInstance,
 } from "./plugin-cache.js";
+import { hasPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 import type { PreparedPluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { isPluginSourceAcquisitionError } from "./plugin-instance-error.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { resolveBundledPluginStateOperationCapture } from "./plugin-state-operation-module-loader.js";
+
+export class PluginSetupPreparationRequiredError extends Error {}
 
 function setupKey(record: PluginManifestRecord, source: string, stateOperations?: false) {
   return `setup:${record.id}:${source}${stateOperations === false ? ":no-state-operations" : ""}`;
@@ -35,6 +38,19 @@ export function getPluginSetupModuleLoader(
   }
   if (!cached && cache.retirement) {
     throw new Error(`Plugin ${record.id} setup inventory has retired`);
+  }
+  if (
+    !cached &&
+    hasPluginGenerationSourceCustody() &&
+    !options.preparedArtifact &&
+    isMainThread &&
+    (record.origin !== "bundled" ||
+      (options.stateOperations !== false &&
+        resolveBundledPluginStateOperationCapture({ rootDir, source })))
+  ) {
+    throw new PluginSetupPreparationRequiredError(
+      `Plugin ${record.id} Doctor source must be prepared before loading`,
+    );
   }
   const instance = cached ?? new PluginInstance(record.id, { cache });
   const discard = () => {
@@ -163,6 +179,8 @@ export async function preparePluginSetupModuleLoader(
       }
       assertCurrent();
       if (isPluginSourceAcquisitionError(error)) {
+        // Keep the settled failure with this inventory so synchronous readers
+        // report the unavailable plugin without repeating capture on the host.
         if (!cache.setupModules.has(key)) {
           const failed = new PluginInstance(record.id, { cache });
           failed.setupPreparationFailure = error;
