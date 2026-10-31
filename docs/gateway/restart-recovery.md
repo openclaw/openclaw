@@ -89,6 +89,11 @@ persistence before retiring state and gives other resource cleanup a bounded
 grace. A long model stream, tool call, or background process does not get
 a full run-completion drain before shutdown.
 
+Optional session preview backfill stops scheduling when restart drain begins.
+Queued rows are dropped; an already-admitted database operation settles through
+the existing database drain before retirement. The next Gateway rebuilds any
+missing previews.
+
 After marker persistence and cancellation, process-owned shutdown logs a warning
 when required connection cleanup exceeds five seconds, then keeps joining its
 accepted finalizers before releasing the Gateway lock and state admission. The

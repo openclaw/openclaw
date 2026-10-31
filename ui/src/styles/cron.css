@@ -8,6 +8,17 @@
   min-width: 0;
 }
 
+@media (forced-colors: active) {
+  .cron-page .session-css-icon {
+    forced-color-adjust: none;
+    background: ButtonText;
+  }
+
+  .cron-page :is(:disabled, [aria-disabled="true"]) .session-css-icon {
+    background: GrayText;
+  }
+}
+
 /* Popover menus (row actions, filters) must escape the group surface;
    .settings-group clips overflow by default. */
 .cron-page .settings-group:has(> .cron-table),

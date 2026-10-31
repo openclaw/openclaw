@@ -65,6 +65,7 @@ export type MessageMediaOptions = Pick<
   | "mediaReadAllowed"
   | "onRequestOpenImage"
   | "onOpenImage"
+  | "onFindWorkspaceFile"
   | "resolveArtifactDownload"
   | "getTurnVideoMessages"
 >;
@@ -126,6 +127,7 @@ export function createMessageMediaOptions(
     mediaReadAllowed: opts.mediaReadAllowed,
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
+    onFindWorkspaceFile: opts.onFindWorkspaceFile,
     resolveArtifactDownload: opts.resolveArtifactDownload,
   };
 }

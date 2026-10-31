@@ -37,6 +37,23 @@ function readOwnErrorDataProperty(value: object, key: string): unknown {
   }
 }
 
+/** Retired admission cannot recover by replaying a channel, model, or state operation. */
+export function isStateDatabaseAdmissionClosedError(error: unknown): boolean {
+  return collectNestedErrorCandidates(error).some((candidate) => {
+    const fields =
+      typeof candidate === "string" ? { message: candidate } : isRecord(candidate) ? candidate : {};
+    const code =
+      readOwnErrorDataProperty(fields, "errorCode") ?? readOwnErrorDataProperty(fields, "code");
+    const message =
+      readOwnErrorDataProperty(fields, "errorMessage") ??
+      readOwnErrorDataProperty(fields, "message");
+    return (
+      code === "STATE_DATABASE_READ_ADMISSION_INVALIDATED" ||
+      (typeof message === "string" && message.includes("Shared-state worker is retiring"))
+    );
+  });
+}
+
 /** These outcomes must leave tool execution without becoming model-visible tool errors. */
 export function isLocalStorageOutcomeError(error: unknown): boolean {
   // Presentation can select a primary failure, but every uncertain write still fences continuation.
@@ -44,6 +61,9 @@ export function isLocalStorageOutcomeError(error: unknown): boolean {
     return true;
   }
   try {
+    if (isStateDatabaseAdmissionClosedError(error)) {
+      return true;
+    }
     const failure = classifyGatewayStorageFailure(error);
     return failure === "session_actor_reconciliation" || failure === "57014";
   } catch {

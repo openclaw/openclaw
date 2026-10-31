@@ -26,10 +26,12 @@ import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-m
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
 import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
+import { registerChatSessionSharingEnglish } from "../../ui/src/i18n/locales/en-chat-session-sharing.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
 import { registerNewSessionRuntimeEnglish } from "../../ui/src/i18n/locales/en-new-session-runtime.ts";
+import { registerSessionMenuEnglish } from "../../ui/src/i18n/locales/en-session-menu.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -305,9 +307,11 @@ describe("control-ui-i18n generated ownership", () => {
       registerChatDetailsEnglish.catalog,
       registerChatSessionEnglish.catalog,
       registerChatSessionOptionalEnglish.catalog,
+      registerChatSessionSharingEnglish.catalog,
       registerCodeBlocksEnglish.catalog,
       registerLabsEnglish.catalog,
       registerNewSessionRuntimeEnglish.catalog,
+      registerSessionMenuEnglish.catalog,
       registerSettingsEnglish.catalog,
       registerTranscriptsEnglish.catalog,
     ]) {
@@ -316,6 +320,24 @@ describe("control-ui-i18n generated ownership", () => {
         expect(source.get(key), key).toBe(value);
       }
     }
+    const sessionKeys = [...source.keys()]
+      .filter((key) => key.startsWith("sessionsView."))
+      .map((key) => key.slice("sessionsView.".length));
+    expect(
+      sessionKeys.slice(
+        sessionKeys.indexOf("personalGroupAdd"),
+        sessionKeys.indexOf("personalGroupEdit") + 1,
+      ),
+    ).toEqual([
+      "personalGroupAdd",
+      "personalGroupReferenceAdded",
+      "personalGroups",
+      "personalGroupNew",
+      "personalGroupEdit",
+    ]);
+    expect(
+      sessionKeys.slice(sessionKeys.indexOf("assignToMe"), sessionKeys.indexOf("assignTo") + 1),
+    ).toEqual(["assignToMe", "searchPeople", "noPeopleMatch", "assignTo"]);
     expect(
       [...source.keys()]
         .filter((key) => key.startsWith("chat.workspaceConflict."))

@@ -19,7 +19,10 @@ import { integrateManagedWorkspaceSource } from "./github-publication-base-refre
 import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
 import { inspectOwnGitHubPullRequest } from "./github-publication-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
-import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import {
+  captureGitHubPublicationActionAuthority,
+  prepareGitHubPublicationRequesterV2,
+} from "./github-publication-requester.js";
 import { prepareManagedWorkspaceReviewBase } from "./github-publication-workspace-review.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -78,9 +81,11 @@ export async function performSessionGitHubPreparation(
   const publicationSession = { ...session, sessionId: loaded.entry.sessionId };
   const admitted = await prepareGitHubPublicationRequesterV2(options, session);
   using _ = { [Symbol.dispose]: admitted.release };
-  // Publication admits other writers; replacing this conversation's source is its own requester's.
+  const authority = captureGitHubPublicationActionAuthority(admitted.requester);
+  // Guests prepare their own conversation; a current full-write maintainer may assist.
   const { actor } = admitted.requester.snapshot;
   if (
+    !authority.operatorWrite &&
     !isSessionOwnRequester(
       { cfg: context.getRuntimeConfig(), client: options.client },
       { canonicalKey: loaded.canonicalKey, entry: loaded.entry },
@@ -90,13 +95,13 @@ export async function performSessionGitHubPreparation(
     )
   ) {
     throw new Error(
-      "Only the person who started this conversation can prepare a PR in it. Assigning a new owner does not transfer this.",
+      "Only the person who started this conversation can prepare a PR in it without full operator write permission. Assigning a new owner does not transfer this.",
     );
   }
   const assertSession = () => {
     options.signal?.throwIfAborted();
     selected.readCurrent();
-    admitted.requester.assertCurrent();
+    authority.assertCurrent();
   };
   if (adopting && caller.workspacePrAdoptionSessionId !== loaded.entry.sessionId) {
     throw new Error("The conversation changed before PR preparation handoff.");
@@ -334,12 +339,19 @@ export async function performSessionGitHubPreparation(
         review,
       };
     }
+    // Refresh keeps the first association's origin, including legacy absence.
+    const origin = previous
+      ? previous.origin
+      : inspected.ownPublication
+        ? "session-publication"
+        : "external-pr";
     // Finish the accepted source before admitting another head, including after a restart.
     const binding: SessionGitHubPullRequestBinding =
       previous && previous.preparedHeadCommit !== previous.head.commit
         ? { ...previous, base: structuredClone(pullRequest.base) }
         : {
             ...structuredClone(pullRequest),
+            ...(origin ? { origin } : {}),
             ...(preparedHead ? { preparedHeadCommit: preparedHead } : {}),
           };
     const reviewOnly = preparedHead === binding.head.commit;

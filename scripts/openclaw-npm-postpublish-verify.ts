@@ -1225,11 +1225,17 @@ export async function fetchRegistryJson(
 
 function isRetryableRegistryProvenanceError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
+  if (
+    message.includes("npm provenance attestation") ||
+    message.includes("npm registry signature") ||
+    message.includes("registry integrity")
+  ) {
+    return false;
+  }
   return (
     /npm registry request failed \((?:404|408|425|429|5\d\d)\)/u.test(message) ||
     message.includes("npm registry metadata is incomplete") ||
     message.includes("npm registry provenance metadata is incomplete") ||
-    message.includes("npm provenance attestation does not bind") ||
     /aborted|fetch failed|network|timeout|timed out/u.test(message)
   );
 }

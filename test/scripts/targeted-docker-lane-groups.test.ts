@@ -21,6 +21,12 @@ const cells = (groups: Group[]) =>
     group.published_upgrade_survivor_scenarios,
   ]);
 
+it("runs packaged older-runtime recovery once without historical baseline fan-out", () => {
+  const lane = "package-installed-recovery-older-runtime";
+  const groups = planGroups(lane, "2026.9.3 2026.9.4", "base legacy-operator-state");
+  expect(groups).toEqual([{ docker_lanes: lane, label: lane }]);
+});
+
 it("retains the reported 9.4 sibling-import cell when current-version baselines are omitted", () => {
   const groups = planGroups(
     "published-upgrade-survivor",

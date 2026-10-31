@@ -14,7 +14,7 @@ import type { CronJobsEnabledFilter, CronJob } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -432,7 +432,7 @@ function JobRow(
             disabled={props.busy || !props.connected}
             onClick={() => props.onRun(props.job, "force")}
           >
-            <Icon name="play" />
+            {sessionIcon("play", 12, 1.5)}
           </button>
           <EnabledSwitch {...props} job={props.job} compact />
           <JobMenu

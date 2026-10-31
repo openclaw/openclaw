@@ -108,7 +108,11 @@ requesting person. The URL must name a PR on the configured GitHub host. Copied
 Files, Commits and Checks links, query strings and comment or review anchors
 resolve to the same canonical PR. The Gateway checks numeric account identity, current session access and the selected
 shared publisher. A private repository also requires current repository access
-for the linked account; shared credentials alone do not grant that access.
+for the linked account; shared credentials alone do not grant a guest that access.
+A currently authorized maintainer with full operator write permission can inspect
+another person's PR through the shared publisher without linking a personal GitHub
+account. The current selected caller capability and session access are checked
+throughout the action; a previous maintainer turn grants no authority to later turns.
 
 Inspection returns the canonical PR URL, author, state, base and head repository
 IDs, branches and observed commits. Closed and merged PRs retain their state;
@@ -126,7 +130,7 @@ to the requesting person. For the current conversation's existing publication,
 read metadata with `edit` without a title or body. For new work, use `publish`;
 it checks the selected publisher at the publication boundary. A bot-authored PR
 from another conversation is not eligible for own-PR import just because the
-publisher created it; continue in its original publication conversation.
+publisher created it; guests continue in its original publication conversation.
 
 For an open PR originally published from this conversation, `refresh_base`
 selects its current GitHub destination before integrating the base into the
@@ -144,12 +148,17 @@ the saved work, and returns any conflicts. The next publication appends to the
 same PR. This also works when the managed publisher authored the PR, as long as
 the PR author is the publisher account recorded for this conversation's
 publication. Assigning a new session owner does not change who can prepare it:
-only the person who started the conversation can.
+the creator or a currently authorized full-write maintainer can prepare it.
 
 For this recorded publication in public base and head repositories, a personal
 GitHub link is not required; the currently selected publisher must still match
 the recorded publisher. Private repositories and imports of other PRs retain
-their linked-account and repository-access requirements.
+their linked-account and repository-access requirements for guests.
+An update receipt for an imported PR does not give a guest the author's identity,
+even when its branch name matches the conversation's branch. Preparation records
+whether this conversation had already published the PR before its first binding
+and preserves that fact through refresh and recovery. Existing bindings retain
+their continuation behavior.
 
 To import your own existing PR into a local conversation, use `github_publish` with
 `action: "prepare_pr"` and `pullRequestUrl`. This action is offered only in
@@ -157,8 +166,13 @@ sessions with a writable managed sandbox or an ordinary local Docker or Podman
 sandbox; sessions that run directly on the host do not see it. A separate
 inspection call is
 optional: preparation verifies the current linked author, repository access,
-original head and publisher write eligibility again. The request can be made in
-one message or established earlier in the conversation before the URL arrives.
+original head and publisher write eligibility again. A current full-write
+maintainer can also prepare or continue the target PR in another person's
+conversation without being its creator or the PR author. This uses the same
+shared publisher and writable sandbox, preserves the guest's permissions and
+identity, and keeps current authority through any preparation handoff. The request
+can be made in one message or established earlier in the conversation before the
+URL arrives.
 An explicitly empty managed workspace can receive the PR without selecting a
 project first. Existing managed projects must match the PR's head or base
 repository.
@@ -231,8 +245,9 @@ and is not a publication receipt.
 After preparation, ordinary shared publication appends changes to the original
 PR's head repository and branch. It preserves the PR number, author, existing
 commits, discussion and draft state, including an update that reverts the original
-contribution completely. The Gateway rechecks the linked author,
-repository access, publisher permission and remote head before pushing. A fork
+contribution completely. The Gateway rechecks current requester eligibility,
+including linked authorship for guests, repository access, publisher permission
+and remote head before pushing. A fork
 can use GitHub's maintainer-edit permission without granting the publisher direct
 write access to the fork. Publisher credentials remain outside the sandbox.
 
@@ -280,19 +295,32 @@ each paired with its observed `expectedTitle`/`expectedBody`. The observed head 
 be newer than `publication.headCommit`; editing metadata does not rewrite that
 historical receipt. Other receipt-backed actions still require the receipt head.
 Keep the attribution, publication marker and footer unchanged in the full body.
-Omitted fields stay unchanged. Guests can edit their own session's PR; no child or
-arbitrary PR selector is accepted. Edit never synchronizes, stages, commits or
+Omitted fields stay unchanged. Edit accepts no child-session selector. It never synchronizes, stages, commits or
 pushes workspace files, and never changes PR lifecycle state. Closed PRs are read-only.
 An unsuccessful later source publication does not hide the existing PR from edit.
+
+To edit an existing PR without importing its source, include `pullRequestUrl` with
+`action: "edit"`. Read first, then repeat the same URL with the observed
+`expectedHeadCommit` and field preconditions. Do not send `requestId` for an
+explicit URL. This target takes precedence over any PR already associated with
+the conversation and returns `pullRequest`, not a publication receipt.
+
+The Gateway verifies the current requester's linked authorship or authorized
+maintainer access, repository identity and private repository access. An
+inspection does not grant later authority. GitHub must permit the metadata write;
+source branch push permission and branch protection do not govern this operation.
+The conversation keeps its current workspace and PR association. After an
+uncertain response, read again with `action: "edit"` and the same URL before
+retrying, without the old write preconditions.
 
 Stale observed values are rejected. This is not atomic GitHub compare-and-swap:
 external edits or pushes can race the PATCH. A head change detected after dispatch
 can mean the metadata was applied but confirmation failed. After a lost response,
 the Gateway rereads the same PR; already-applied values need no second write.
-Before retrying uncertainty, read again with only `{ "action": "edit" }`, without
-reusing the previous write preconditions. Omitted action or `publish` still
-publishes workspace source; its title/body are creation-only and do not edit an
-existing PR.
+Before retrying uncertainty, read again with `action: "edit"` and the same
+`pullRequestUrl` when explicitly selected, without reusing the previous write
+preconditions. Omitted action or `publish` still publishes workspace source; its
+title/body are creation-only and do not edit an existing PR.
 
 Guests can mark their own current session's shared draft ready for review with
 `github_publish` and `action: "ready"`. First read its state with `action: "edit"`,
@@ -361,7 +389,7 @@ This check covers only workflow definition files. Workflows commonly run code fr
 
 Local session-owned worktrees can use the same **Publish PR** action in the Control UI. The Gateway derives the managed worktree, repository, branch, base, and head from current session ownership. It never accepts those authority facts from the browser or model. Publication retries use a durable request ID, an exact commit marker, remote branch observation, and pull-request lookup by head branch so a Gateway restart or lost response does not create duplicate commits, pushes, or pull requests.
 
-Automatic shared-publication recovery backs off after an unresolved attempt: one minute, then two, four, eight, sixteen, and at most one attempt every thirty minutes. Each request has its own cooldown; an unsettled request still prevents later requests from overtaking it in the same worktree. The cooldown and latest diagnostic are held in memory and reset when the Gateway restarts. The durable publication receipt and recorded effects remain unchanged.
+Automatic shared-publication recovery waits one minute after the first failed attempt and two minutes after the second. After three failed attempts, or a failed attempt on a receipt at least one hour old, it stops GitHub effect recovery and marks the receipt failed with an unconfirmed outcome. If that settlement fails, later attempts retry settlement without repeating GitHub effects. Each request has its own cooldown; an unsettled request still prevents later requests from overtaking it in the same worktree. The attempt count, cooldown, and latest diagnostic reset when the Gateway restarts, but receipt age still bounds failed recovery. Recorded effects and saved work are retained.
 
 During cooldown, publication status includes the remaining wait and the latest failure. Base-fetch failures identify the failed stage and native reason, including timeouts, with bounded, redacted Git diagnostics in status and the recovery warning. Inspect the original branch and PR, repair the reported access, connectivity, or Git-object problem, and let recovery reconcile the existing request. A failed observation does not establish that a push or PR creation failed; do not request a replacement publication to recover it.
 

@@ -84,19 +84,29 @@ export function LogsView(props: LogsProps) {
     <PanelRefreshStatus status={props.status} className="logs-refresh-status" />
   );
   const needle = createMemo(() => normalizeLowercaseStringOrEmpty(props.filterText));
-  const filtered = createMemo(() =>
-    props.entries.filter((entry) => {
-      if (entry.level && !props.levelFilters[entry.level]) {
-        return false;
+  const filtered = createMemo(() => {
+    const query = needle();
+    const matches =
+      !query && LOG_LEVELS.every((level) => props.levelFilters[level])
+        ? null
+        : (entry: LogRow) =>
+            (!entry.level || props.levelFilters[entry.level]) &&
+            (!query ||
+              normalizeLowercaseStringOrEmpty(
+                [entry.message, entry.subsystem, entry.raw].filter(Boolean).join(" "),
+              ).includes(query));
+    const rows: LogRow[] = [];
+    const byKey = new Map<VirtualItem["key"], number>();
+    for (const entry of props.entries) {
+      if (matches && !matches(entry)) {
+        continue;
       }
-      if (!needle()) {
-        return true;
-      }
-      return normalizeLowercaseStringOrEmpty(
-        [entry.message, entry.subsystem, entry.raw].filter(Boolean).join(" "),
-      ).includes(needle());
-    }),
-  );
+      byKey.set(entry.id, rows.length);
+      rows.push(entry);
+    }
+    return { rows, byKey };
+  });
+  const rows = () => filtered().rows;
   // Check system timezone on row updates without invalidating unchanged rows' timestamps.
   const timeFormatter = createMemo(
     () => {
@@ -115,15 +125,9 @@ export function LogsView(props: LogsProps) {
     needle() || LOG_LEVELS.some((level) => !props.levelFilters[level]) ? "filtered" : "visible";
 
   let stream: HTMLDivElement;
-  const rowsByKey = createMemo(
-    () =>
-      new Map<VirtualItem["key"], { row: LogRow; index: number }>(
-        filtered().map((row, index) => [row.id, { row, index }]),
-      ),
-  );
   const getItemKey = createMemo(() => {
     // Layout-only updates keep the extractor for this filtered snapshot.
-    const staticRows = filtered();
+    const staticRows = rows();
     return (index: number) => staticRows[index]!.id;
   });
   const [window, setWindow] = createSignal<{
@@ -144,6 +148,16 @@ export function LogsView(props: LogsProps) {
   const scrollRequest = {};
   let readerScrollPending = false;
   let synchronizeScrollOffset: ((scrolling: boolean) => void) | undefined;
+  const skipSizeAdjustment = () => false;
+  const updateSizeAdjustment = (
+    instance: Virtualizer<HTMLDivElement, HTMLDivElement>,
+    scrolling: boolean,
+    autoFollow = props.autoFollow,
+  ) => {
+    // Measurement writes interrupt WebKit's wheel travel. Keep idle reader anchoring.
+    instance.shouldAdjustScrollPositionOnItemSizeChange =
+      scrolling && !autoFollow ? skipSizeAdjustment : undefined;
+  };
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLDivElement>({
     count: 0,
     getScrollElement: () => stream,
@@ -151,10 +165,14 @@ export function LogsView(props: LogsProps) {
     estimateSize: () => 44,
     observeElementRect,
     observeElementOffset: (instance, notify) => {
-      synchronizeScrollOffset = (scrolling) => notify(stream.scrollTop, scrolling);
+      const updateOffset = (offset: number, scrolling: boolean) => {
+        updateSizeAdjustment(instance, scrolling);
+        notify(offset, scrolling);
+      };
+      synchronizeScrollOffset = (scrolling) => updateOffset(stream.scrollTop, scrolling);
       return observeElementOffset(instance, (offset, scrolling) => {
         readerScrollPending = false;
-        notify(offset, scrolling);
+        updateOffset(offset, scrolling);
       });
     },
     scrollToFn: elementScroll,
@@ -181,8 +199,8 @@ export function LogsView(props: LogsProps) {
   });
   createLayoutMeasurement(
     () => ({
-      rows: filtered(),
-      byKey: rowsByKey(),
+      rows: rows(),
+      byKey: filtered().byKey,
       getItemKey: getItemKey(),
       autoFollow: props.autoFollow,
     }),
@@ -201,11 +219,14 @@ export function LogsView(props: LogsProps) {
           virtualizer.itemSizeCache.delete(key);
         }
       }
+      updateSizeAdjustment(virtualizer, virtualizer.isScrolling, next.autoFollow);
       virtualizer.setOptions({
         ...virtualizer.options,
         count: next.rows.length,
         getItemKey: next.getItemKey,
         followOnAppend: next.autoFollow,
+        // Follow-off readers pin measurements only once they reach the end.
+        scrollEndThreshold: next.autoFollow ? 120 : 0,
       });
       publish();
     },
@@ -227,8 +248,9 @@ export function LogsView(props: LogsProps) {
   const rendered = createMemo(() =>
     window().items.flatMap((item) => {
       // A filter/trim can settle before its next measured range. Keep surviving keys only.
-      const current = rowsByKey().get(item.key);
-      return current ? [{ ...current, top: item.start }] : [];
+      const current = filtered();
+      const index = current.byKey.get(item.key);
+      return index === undefined ? [] : [{ row: current.rows[index]!, index, top: item.start }];
     }),
   );
   function Row(rowProps: { item: { row: LogRow; index: number; top: number } }) {
@@ -241,10 +263,10 @@ export function LogsView(props: LogsProps) {
     return (
       <div
         ref={(node) => (element = node)}
-        class={["log-row", { "log-row--last": rowProps.item.index === filtered().length - 1 }]}
+        class={["log-row", { "log-row--last": rowProps.item.index === rows().length - 1 }]}
         role="listitem"
         aria-posinset={rowProps.item.index + 1}
-        aria-setsize={filtered().length}
+        aria-setsize={rows().length}
         data-index={rowProps.item.index}
         style={{
           position: "absolute",
@@ -284,10 +306,10 @@ export function LogsView(props: LogsProps) {
           </Loading>
           <button
             class="btn"
-            disabled={filtered().length === 0}
+            disabled={rows().length === 0}
             onClick={() =>
               props.onExport(
-                filtered().map((entry) => entry.raw),
+                rows().map((entry) => entry.raw),
                 exportFileLabel(),
               )
             }
@@ -395,12 +417,20 @@ export function LogsView(props: LogsProps) {
               <Loading fallback={<LoadingState />}>{loading() ? <LoadingState /> : null}</Loading>
             }
           >
-            <div role="list" style={{ position: "relative", height: `${window().height}px` }}>
+            {/* Rows must not extend the native scroll range before their spacer commits. */}
+            <div
+              role="list"
+              style={{
+                position: "relative",
+                height: `${windowHeight()}px`,
+                overflow: windowHeight() > 0 ? "clip" : undefined,
+              }}
+            >
               <For
                 each={rendered()}
                 keyed={(item) => item.row.id}
                 fallback={
-                  <Show when={filtered().length === 0}>
+                  <Show when={rows().length === 0}>
                     <SettingsEmpty message={t("gatewayLogs.empty")} />
                   </Show>
                 }

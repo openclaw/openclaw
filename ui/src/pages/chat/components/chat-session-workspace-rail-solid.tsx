@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, isPending, Loading, Match, Show, Switch } from "solid-js";
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import { shortestFileLabels } from "../../../components/file-kind.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
@@ -165,9 +166,9 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
     const artifacts = workspace.list?.artifacts ?? [];
     const browser = workspace.list?.browser;
     const entries = browser?.entries ?? [];
-    const search = normalizeOptionalString(workspace.browserSearch)?.toLowerCase() ?? "";
+    const search = foldSearchCase(normalizeOptionalString(workspace.browserSearch) ?? "");
     const matches = (...values: (string | undefined)[]) =>
-      values.some((value) => value?.toLowerCase().includes(search));
+      values.some((value) => value !== undefined && foldSearchCase(value).includes(search));
     const modified = files.filter((file) => file.kind === "modified");
     const readFiles = files.filter((file) => file.kind === "read");
     const filters = [
