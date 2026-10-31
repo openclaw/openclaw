@@ -109,12 +109,14 @@ function renderCodeModeCatalogIndex(lines: readonly string[], total: number): st
 }
 
 function formatCodeModeCatalogIndex(bindings: readonly CodeModeCatalogBinding[]): string {
+  const isPriorityTool = (entry: CodeModeCatalogBinding) =>
+    (entry.id === `openclaw:core:${entry.name}` && isCoreCodingSurfaceToolName(entry.name)) ||
+    entry.name === "automations" ||
+    entry.name === "cron" ||
+    entry.name === "message";
+
   const priority = (entry: CodeModeCatalogBinding) =>
-    entry.id === `openclaw:core:${entry.name}` && isCoreCodingSurfaceToolName(entry.name)
-      ? 0
-      : entry.output
-        ? 1
-        : 2;
+    isPriorityTool(entry) ? 0 : entry.output ? 1 : 2;
   const lines = bindings
     // Keep the same core file/shell contracts visible as Tool Search, even without
     // declared outputs. Otherwise catalog growth hides their input argument names.
