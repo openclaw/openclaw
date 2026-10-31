@@ -340,7 +340,9 @@ beforeAll(() => {
       registrar = value;
     },
     registerGatewayMethod: (name, handler) => {
-      methods.set(name, handler);
+      methods.set(name, async (opts) => {
+        await handler(opts);
+      });
     },
   });
   registerSyntheticPlugin(api);
