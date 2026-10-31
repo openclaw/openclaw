@@ -17,7 +17,9 @@ import * as gatewayCredentials from "./gateway-store.credentials.ts";
 import { loadSettings, persistSessionToken, saveSettings } from "./settings.ts";
 
 const mainRuntime = vi.hoisted(() => ({ startControlUi: vi.fn<typeof startControlUi>() }));
+// mock-isolation: Observe entrypoint handoff without mounting the full application.
 vi.mock("../main.runtime.ts", () => mainRuntime);
+// mock-isolation: Exercise the entrypoint independently of jsdom's browser capability probe.
 vi.mock("./boot-capabilities.ts", () => ({ unsupportedControlUiBrowser: false }));
 
 let runtime: ReturnType<typeof bootstrapApplication> | undefined;
@@ -106,7 +108,7 @@ it("prepares credentials once at adoption before starting New", async () => {
   expect(wsInstances).toHaveLength(1);
   expect(routerStart).toHaveBeenCalledOnce();
   expect(runtime.router.getState().matches[0]?.routeId).toBe("new-session");
-  const connect = JSON.parse(socket.sent[0]);
+  const connect = JSON.parse(socket.sent[0] ?? "{}");
   expect(connect).toMatchObject({
     method: "connect",
     params: { auth: { token: "synthetic-token" } },
@@ -146,7 +148,7 @@ it("rejects preconnection when the document URL changes before adoption", async 
   await starting;
   expect(application.context.gateway.snapshot.client).not.toBe(connection.transport.client);
   expect(wsInstances).toHaveLength(2);
-  expect(wsInstances[0].readyState).toBe(3);
+  expect(wsInstances[0]?.readyState).toBe(3);
 });
 
 it.each(["native", "confirmation", "document", "relay"])(

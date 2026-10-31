@@ -54,7 +54,7 @@ it("opens without auth work and adopts the canonical owner once on the same sock
   await vi.advanceTimersByTimeAsync(0);
   expect(wsInstances).toHaveLength(1);
   expect(socket.sent).toHaveLength(1);
-  const connect = JSON.parse(socket.sent[0]);
+  const connect = JSON.parse(socket.sent[0] ?? "{}");
   expect(connect).toMatchObject({
     method: "connect",
     params: {
@@ -114,7 +114,7 @@ it("retains protocol retry and signs only the replacement socket's challenge", a
   await vi.advanceTimersByTimeAsync(0);
   expect(retired.sent).toEqual([]);
   expect(replacement.sent).toHaveLength(1);
-  expect(JSON.parse(replacement.sent[0])).toMatchObject({
+  expect(JSON.parse(replacement.sent[0] ?? "{}")).toMatchObject({
     params: { device: { nonce: "replacement-challenge" } },
   });
   expect(nodes.loadOrCreateDeviceIdentity).toHaveBeenCalledOnce();

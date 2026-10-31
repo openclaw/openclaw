@@ -1,10 +1,8 @@
-import type { ControlUiFocusLocation } from "@openclaw/session-url-contract";
 import type { RouteLocation, Router } from "@openclaw/uirouter";
 import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
-import type { ApplicationRouter } from "../app-routes.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import type { ChannelCapability, createChannelCapability } from "../lib/channels/index.ts";
@@ -21,10 +19,9 @@ import type { reviewPrivateComposerDraft } from "../pages/chat/components/privat
 import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ControlUiPluginCapability } from "../plugins/control-ui-capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
-import type { ControlUiDocumentMode } from "./approval-deep-link.ts";
 import type { AssistantDock } from "./assistant-dock.ts";
 import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
-import type { ApplicationConfigCapability, ReadOnlyConfigNotice } from "./config.ts";
+import type { ApplicationConfigCapability } from "./config.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
@@ -85,24 +82,6 @@ export type ApplicationNavigationOptions = Partial<
 export type MountedApplicationShell = {
   readonly element: HTMLElement;
   readonly routeOutlet?: ControlUiReadinessOutlet;
-};
-
-export type ApplicationRuntime = {
-  readonly context: ApplicationContext;
-  readonly router: ApplicationRouter;
-  readonly documentMode: ControlUiDocumentMode | null;
-  readonly readOnlyConfig?: ReadOnlyConfigNotice;
-  readonly warmBoot: boolean;
-  readonly focusLocation: ControlUiFocusLocation | null;
-  readonly pendingGatewayConnection: {
-    readonly gatewayUrl: string;
-    readonly token: string | null;
-  } | null;
-  readonly confirmPendingGatewayConnection: () => void;
-  readonly cancelPendingGatewayConnection: () => void;
-  readonly setShell: (shell: MountedApplicationShell | undefined) => void;
-  start: () => Promise<void>;
-  stop: () => void;
 };
 
 type ChatAttachmentHandoffKey = {

@@ -55,7 +55,7 @@ import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
-import type { ApplicationRuntime, MountedApplicationShell } from "./context-types.ts";
+import type { MountedApplicationShell } from "./context-types.ts";
 import type { ApplicationNavigationOptions, ApplicationContext } from "./context.ts";
 import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { EarlyApplicationGateway } from "./early-gateway.ts";
@@ -90,7 +90,7 @@ import { openUpdateFailureTriage } from "./update-triage.ts";
 import { seedUserPreferences } from "./user-prefs-cache.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
-export type { ApplicationRuntime } from "./context-types.ts";
+export type { ApplicationRuntime } from "./application-runtime.ts";
 
 type PendingRouterStartNavigation = {
   location: RouteLocation;
@@ -100,7 +100,7 @@ type PendingRouterStartNavigation = {
 export function bootstrapApplication(
   initial = prepareApplicationStartup(),
   earlyGateway?: EarlyApplicationGateway,
-): ApplicationRuntime {
+): import("./application-runtime.ts").ApplicationRuntime {
   const {
     history,
     basePath,
