@@ -129,6 +129,7 @@ const enApprovals = {
     invalidResponse: "The gateway returned an invalid approval history response.",
     unknown: "Unknown",
     notApplicable: "N/A",
+    warningLabel: "Warning",
     columns: {
       resolved: "Resolved",
       kind: "Kind",

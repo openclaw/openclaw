@@ -2045,6 +2045,16 @@ select.settings-select:not([multiple]) {
   vertical-align: middle;
 }
 
+/* Exec warning recorded with an approval; shown under the command in approval history. */
+.approval-history-warning {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--warn);
+}
+
 .data-table-empty-cell {
   padding: 46px 16px !important;
   color: var(--muted);

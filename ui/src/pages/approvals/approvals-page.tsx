@@ -25,6 +25,7 @@ import type {
   ExecApprovalStandingGrant,
 } from "../../../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { execWarningText } from "../../app/approval-presentation.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { parseApprovalResolvedEvent } from "../../app/exec-approval.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
@@ -126,10 +127,16 @@ function EmptyRow(props: { columns: number; label: string }) {
     </tr>
   );
 }
-function Cell(props: { labelKey: string; value: JSX.Element; mono?: boolean }) {
+type CellProps = { labelKey: string; value: JSX.Element; warning?: string | null; mono?: boolean };
+function Cell(props: CellProps) {
   return (
     <td class={{ mono: props.mono }} data-label={t(props.labelKey)}>
       {props.value}
+      {props.warning ? (
+        <span class="approval-history-warning" role="note">
+          {t("approvalHistory.warningLabel")}: {props.warning}
+        </span>
+      ) : null}
     </td>
   );
 }
@@ -539,7 +546,12 @@ export function ApprovalsPage() {
           labelKey="approvalHistory.columns.kind"
           value={t(APPROVAL_KIND_LABELS[props.item.presentation.kind])}
         />
-        <Cell labelKey="approvalHistory.columns.request" value={requestLabel(props.item)} mono />
+        <Cell
+          labelKey="approvalHistory.columns.request"
+          mono
+          value={requestLabel(props.item)}
+          warning={execWarningText(props.item.presentation)}
+        />
         <Cell
           labelKey="approvalHistory.columns.decision"
           value={

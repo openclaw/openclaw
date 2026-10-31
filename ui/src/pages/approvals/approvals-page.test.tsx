@@ -439,3 +439,42 @@ it("retries a failed revoke without losing the row or accepting a stale ledger r
   expect(p.text(grantsTable)).toContain("Revoked");
   expect(p.button()).toBeNull();
 });
+
+it("shows a recorded exec warning beside the command without executing its markup", async () => {
+  const warningText = "This command requests external network access.";
+  const markupWarning = '<img src=x onerror="alert(1)">';
+  const warned = (
+    id: string,
+    resolvedAtMs: number,
+    text: string,
+  ): ApprovalHistoryResult["items"][number] => ({
+    ...terminal(id, resolvedAtMs),
+    presentation: {
+      kind: "exec",
+      commandText: `echo ${id}`,
+      warningText: text,
+      allowedDecisions: ["deny"],
+    },
+  });
+  const p = createPage({
+    history: () =>
+      Promise.resolve({
+        items: [warned("warned", 2_000, warningText), terminal("plain", 3_000)],
+      }),
+  });
+  await p.waitText(historyTable, "echo warned");
+  const notes = p.query(historyTable)!.querySelectorAll<HTMLElement>(".approval-history-warning");
+  expect(notes).toHaveLength(1);
+  expect(notes[0]?.getAttribute("role")).toBe("note");
+  expect(notes[0]?.textContent).toBe(`Warning: ${warningText}`);
+  expect(p.text(`${historyTable} tbody tr:nth-child(2)`)).not.toContain("Warning");
+
+  const markup = warned("markup", 1_000, markupWarning);
+  const rejected = createPage({
+    history: () => Promise.resolve({ items: [markup] }),
+  });
+  await rejected.waitText(historyTable, "echo markup");
+  const markupNote = rejected.query(`${historyTable} .approval-history-warning`)!;
+  expect(markupNote.textContent).toBe(`Warning: ${markupWarning}`);
+  expect(markupNote.querySelector("img")).toBeNull();
+});
