@@ -488,27 +488,18 @@ extension OpenClawChatViewModel {
         // Adopt the server record onto the exactly correlated row even when the
         // run's final event already cleared pending state. Same-content turns
         // without this key remain distinct.
-        let incoming: [OpenClawChatMessage] = if ingested.count > 1, let user = ingested.last,
-                                                 adoptCorrelatedUserMessage(
-                                                     incoming: user,
-                                                     precedingMessages: Array(ingested.dropLast()))
-        {
-            []
-        } else {
-            ingested.filter { !adoptCorrelatedUserMessage(incoming: $0) }
-        }
-        if incoming.isEmpty {
+        let last = ingested[ingested.count - 1]
+        if adoptCorrelatedUserMessage(incoming: last, precedingMessages: Array(ingested.dropLast())) {
             self.clearActiveSessionRunIndicatorIfLatestUserAnswered()
             self.applyDeferredExternalStateIfReady()
             return
         }
-        let canonical = incoming.filter { !adoptProvisionalFinalMessage(incoming: $0) }
-        if canonical.isEmpty {
+        if adoptProvisionalFinalMessage(incoming: last) {
             self.clearActiveSessionRunIndicatorIfLatestUserAnswered()
             return
         }
 
-        let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + canonical)
+        let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + ingested)
         replaceMessages(Self.dedupeMessages(reconciled))
         pruneProvisionalFinalMessages()
         pruneRunMessageScopes()
