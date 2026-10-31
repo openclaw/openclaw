@@ -1871,6 +1871,41 @@ if (commandArgs[0] === "list") {
     expect(Number(readFileSync(callsPath, "utf8"))).toBe(scenario.attempts);
   });
 
+  it.each([false, true])("bounds Windows script staging recovery (persistent=%s)", (persistent) => {
+    const tempDir = makeTempDir(tempDirs, "openclaw-parallels-windows-write-");
+    const callsPath = join(tempDir, "writes");
+    const effectsPath = join(tempDir, "effects");
+    writeNodeFakePrlctl(
+      tempDir,
+      `const fs = process.getBuiltinModule("node:fs");
+      if (args.includes("-EncodedCommand")) {
+        const p = ${JSON.stringify(callsPath)};
+        const count = fs.existsSync(p) ? Number(fs.readFileSync(p, "utf8")) + 1 : 1;
+        fs.writeFileSync(p, String(count));
+        if (count === 1 || ${persistent}) {
+          console.error("PrlJob_GetRetCode: Invalid argument. An invalid argument was passed.");
+          process.exit(255);
+        }
+      } else if (args.at(-1)?.startsWith("powershell.exe ")) {
+        fs.appendFileSync(${JSON.stringify(effectsPath)}, "effect\\n");
+        console.log("ready");
+      }`,
+    );
+    withEnv(fakePrlctlEnv(tempDir), () => {
+      const invoke = () =>
+        new WindowsGuest("Windows VM", new PhaseRunner(tempDir)).powershell("exit 0");
+      if (persistent) {
+        expect(invoke).toThrow("Windows guest script write failed with exit code 255");
+      } else {
+        expect(invoke()).toBe("ready");
+      }
+    });
+    expect(Number(readFileSync(callsPath, "utf8"))).toBe(2);
+    expect(existsSync(effectsPath) ? readFileSync(effectsPath, "utf8") : "").toBe(
+      persistent ? "" : "effect\n",
+    );
+  });
+
   it("carries refreshed Windows guest environment into every PowerShell script", () => {
     const tempDir = makeTempDir(tempDirs, "openclaw-parallels-windows-env-");
     const scriptsPath = join(tempDir, "scripts.jsonl");
