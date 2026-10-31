@@ -15,7 +15,10 @@ const mocks = vi.hoisted(() => ({
   log: vi.fn(),
   writeJson: vi.fn(),
 }));
-vi.mock("../../infra/update-run-reader.js", () => ({ getUpdateRunAsync: mocks.readRun }));
+vi.mock("../../infra/update-run-reader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-run-reader.js")>()),
+  getUpdateRunAsync: mocks.readRun,
+}));
 // Windows may canonicalize a recorded path's case or 8.3 spelling.
 const pinSpelling = vi.hoisted(() => ({
   canonical: undefined as ((p: string) => string) | undefined,
@@ -173,7 +176,7 @@ async function run(c: Capture) {
 }
 
 it.each([
-  ["absent", "ambiguous"],
+  ["absent", "warning"],
   ["failed", "unresolved"],
   ["unavailable", "unreadable"],
 ] as const)("reuses one injected %s ledger observation", async (state, status) => {
@@ -424,7 +427,7 @@ it("reports a capture-root enumeration failure globally", async () => {
   const store = `${stateDir}.update-captures`;
   await fs.writeFile(store, "not a directory");
   const status = await inspect();
-  expect(status.recoverySetsError).toMatch(/ENOTDIR|not a directory/i);
+  expect(status.recoverySetsError).toMatch(/not a directory/i);
   expect(status).not.toHaveProperty("recoverySets");
   expect(await text(store)).toBe("not a directory");
 });
