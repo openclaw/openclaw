@@ -308,6 +308,10 @@ Older builds do not reinterpret the new certificate as lineage completion.
 macOS and retained Bun process-group owners still require kernel group
 disappearance. Permission-denied checks never prove absence. A completed command
 or closed output pipe alone does not establish that its descendants stopped.
+A descendant that leaves the process group, such as a daemonized tmux server,
+can outlive cleanup there. Exec then still reports the command's own exit, adds a
+note that a detached process may still be running, and records the cleanup as
+uncertain; a failed or canceled command keeps reporting the cleanup failure.
 Local TUI shell shutdown uses the same cleanup owner for its own commands.
 If the host was busy, cleanup processes queued native completion events before
 reporting a timeout.
