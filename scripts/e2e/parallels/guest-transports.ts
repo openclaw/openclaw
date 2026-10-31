@@ -477,7 +477,11 @@ if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not wr
     // Setup can consume the active budget before the first launch; still observe
     // its real result before using the deadline to suppress later attempts.
     for (let attempt = 1; attempt <= 5 && (attempt === 1 || Date.now() < deadline); attempt++) {
-      options.beforeLaunchAttempt?.();
+      // Successful staging already proved readiness. Avoid another guest
+      // session between that proof and the first Windows launch.
+      if (attempt > 1) {
+        options.beforeLaunchAttempt?.();
+      }
       const launch = runCommand(
         "prlctl",
         windowsPowerShellArgs(

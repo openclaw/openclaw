@@ -1953,6 +1953,28 @@ if (commandArgs[0] === "list") {
     );
   });
 
+  it.each([false, true])(
+    "reuses successful Windows staging readiness (write retry=%s)",
+    async (retry) => {
+      const beforeLaunchAttempt = vi.fn();
+      let writes = 0;
+      await expect(
+        runWindowsBackground({
+          label: "staging readiness",
+          beforeLaunchAttempt,
+          runCommand: (_command, _args, options) => {
+            if (options?.input) {
+              return fakeResult(++writes === 1 && retry ? 255 : 0);
+            }
+            return fakeResult(1);
+          },
+        }),
+      ).rejects.toThrow("background launch failed with exit code 1");
+      expect(beforeLaunchAttempt).toHaveBeenCalledTimes(retry ? 1 : 0);
+      expect(writes).toBe(retry ? 2 : 1);
+    },
+  );
+
   it("paces ambiguous Windows background launch materialization probes", async () => {
     let calls = 0;
     const runCommand = vi.fn(() => {
