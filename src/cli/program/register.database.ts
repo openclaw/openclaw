@@ -98,7 +98,7 @@ export function registerDatabaseCommand(program: Command): void {
 
   const migrationCapture = database
     .command("migration-capture")
-    .description("Preserve exact offline SQLite state with a filesystem archive for migration");
+    .description("Preserve exact offline or externally quiesced SQLite state for migration");
   migrationCapture
     .command("capabilities")
     .option("--json", "emit machine-readable JSON", false)
@@ -110,14 +110,22 @@ export function registerDatabaseCommand(program: Command): void {
         profile: "exact-sqlite-migration",
         restoreTarget: "empty-staging-only",
         logicalPaths: "same-state-and-config-roots",
+        externallyQuiesced: true,
       }),
     );
   migrationCapture
     .command("create")
-    .requiredOption(
+    .option(
       "--base-archive <archive>",
-      "fresh verified filesystem archive for the same stopped source",
+      "fresh verified filesystem archive for the same stopped source (offline capture)",
     )
+    .option(
+      "--externally-quiesced",
+      "capture from an existing host-held Gateway suspension without stopping it",
+      false,
+    )
+    .option("--request-id <id>", "request ID of the existing non-drain suspension")
+    .option("--suspension-id <id>", "existing ready suspension ID")
     .requiredOption(
       "--output <directory>",
       "new private capture directory outside the source roots",
