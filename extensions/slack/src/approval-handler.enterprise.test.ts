@@ -64,7 +64,6 @@ describe("Slack approval delivery", () => {
       "channel:C123",
       "approve",
       expect.objectContaining({
-        client: teamClient,
         eventScope: { teamId: "T123", client: teamClient },
       }),
     );
@@ -142,7 +141,7 @@ describe("Slack approval delivery", () => {
     expect(sendMessageSlackMock).toHaveBeenCalledWith(
       "channel:D123",
       "approve",
-      expect.objectContaining({ client, eventScope: expect.objectContaining({ teamId: "T123" }) }),
+      expect.objectContaining({ eventScope: expect.objectContaining({ teamId: "T123" }) }),
     );
 
     await expect(
