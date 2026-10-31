@@ -166,7 +166,8 @@ export function resolveClosestSize(params: {
   }
   const requested = parseSizeValue(params.requestedSize);
   const requestedAspectRatio = parseAspectRatioValue(params.requestedAspectRatio);
-  if (!requested && !requestedAspectRatio) {
+  const requestedRatio = requested?.aspectRatio ?? requestedAspectRatio?.value;
+  if (requestedRatio === undefined) {
     return undefined;
   }
 
@@ -176,9 +177,7 @@ export function resolveClosestSize(params: {
       return undefined;
     }
     return {
-      primary: Math.abs(
-        Math.log(parsed.aspectRatio / (requested?.aspectRatio ?? requestedAspectRatio!.value)),
-      ),
+      primary: Math.abs(Math.log(parsed.aspectRatio / requestedRatio)),
       secondary: requested ? Math.abs(Math.log(parsed.area / requested.area)) : parsed.area,
     };
   });
