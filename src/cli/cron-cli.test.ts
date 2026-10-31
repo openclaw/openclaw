@@ -383,6 +383,56 @@ it("lists jobs with normalized agent filter", async () => {
   });
 });
 
+it("passes filter and sort flags through to cron.list", async () => {
+  await runCronCommand([
+    "cron",
+    "list",
+    "--enabled",
+    "disabled",
+    "--schedule-kind",
+    "cron",
+    "--last-run-status",
+    "error",
+    "--trigger",
+    "conditional",
+    "--sort-by",
+    "name",
+    "--sort-dir",
+    "desc",
+  ]);
+  expect(rpcParams("cron.list")).toEqual({
+    includeDisabled: false,
+    enabled: "disabled",
+    scheduleKind: "cron",
+    lastRunStatus: "error",
+    trigger: "conditional",
+    sortBy: "name",
+    sortDir: "desc",
+    limit: 200,
+    offset: 0,
+  });
+});
+
+it("omits filter flags when not provided", async () => {
+  await runCronCommand(["cron", "list"]);
+  const params = rpcParams("cron.list");
+  expect(params).not.toHaveProperty("enabled");
+  expect(params).not.toHaveProperty("scheduleKind");
+  expect(params).not.toHaveProperty("sortBy");
+  expect(params).not.toHaveProperty("sortDir");
+});
+
+it.each([
+  ["--enabled", "bogus"],
+  ["--schedule-kind", "bogus"],
+  ["--last-run-status", "bogus"],
+  ["--trigger", "bogus"],
+  ["--sort-by", "bogus"],
+  ["--sort-dir", "bogus"],
+])("rejects invalid value for %s", async (flag, value) => {
+  await expect(runCronCommand(["cron", "list", flag, value])).rejects.toThrow();
+});
+
 it("paginates cron show lookups", async () => {
   resetGatewayMock();
   callGatewayFromCli.mockImplementation(
