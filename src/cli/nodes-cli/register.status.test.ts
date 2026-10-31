@@ -88,3 +88,59 @@ describe.each(["status", "describe"])("nodes %s rendering", (command) => {
     },
   );
 });
+
+describe("nodes describe recorded contact facts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  async function renderDescribe(described: Record<string, unknown>): Promise<string> {
+    mocks.call.mockResolvedValue(described);
+    const nodes = new Command("nodes");
+    registerNodesStatusCommands(nodes);
+    await nodes.parseAsync(["describe", "--node", "node-1"], { from: "user" });
+    return mocks.log.mock.calls.map(([line]) => String(line)).join("\n");
+  }
+
+  it("renders the last Gateway contact and the live connection age", async () => {
+    const output = await renderDescribe({
+      nodeId: "node-1",
+      paired: true,
+      connected: true,
+      connectedAtMs: now - 4 * 60 * 60 * 1000,
+      lastConnectedAtMs: now - 4 * 60 * 60 * 1000,
+      lastSeenAtMs: now - 2 * 60 * 1000,
+      lastActiveAtMs: now - 5 * 1000,
+    });
+
+    expect(output).toContain("Last seen");
+    expect(output).toContain("2m ago");
+    expect(output).toContain("connected 4h ago");
+    // Recorded contact is a separate fact from the last user input row.
+    expect(output).toContain("Last input");
+    expect(output).toContain("just now");
+  });
+
+  it("keeps the stored connection age for a disconnected node", async () => {
+    const output = await renderDescribe({
+      nodeId: "node-1",
+      paired: true,
+      connected: false,
+      lastConnectedAtMs: now - 3 * 24 * 60 * 60 * 1000,
+      lastSeenAtMs: now - 2 * 24 * 60 * 60 * 1000,
+    });
+
+    expect(output).toContain("Last seen");
+    expect(output).toContain("2d ago");
+    expect(output).toContain("last connected 3d ago");
+  });
+
+  it("omits both rows when the Gateway records no contact facts", async () => {
+    const output = await renderDescribe({ nodeId: "node-1", paired: true, connected: false });
+
+    expect(output).not.toContain("Last seen");
+    expect(output).not.toContain("last connected");
+  });
+});

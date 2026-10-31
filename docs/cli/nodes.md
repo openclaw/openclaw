@@ -45,6 +45,13 @@ Unavailable load or disk readings are omitted. Offline nodes show the saved
 snapshot with an age such as `(last known 27d ago)`, measured from the snapshot's
 original timestamp. See [Node host stats](/gateway/protocol/presence#node-host-stats).
 
+`describe` also reports the recorded contact facts, which stay meaningful for a
+node that is offline. `Last seen` is the newest recorded Gateway contact (live
+presence or the stored pairing record). `Connection` reads `connected <age>` for
+a live node and `last connected <age>` from stored connection history once the
+node is offline. `Last input` remains the last user interaction and does not
+measure liveness.
+
 `--node` accepts an exact ID, IP address, display name, or ID prefix of at least six characters. Exact ID and IP matches take precedence over names and prefixes. Within the strongest match, connected nodes take precedence. If clients share a name, use an exact ID to disambiguate. Client type does not choose the target.
 
 ## Pairing
