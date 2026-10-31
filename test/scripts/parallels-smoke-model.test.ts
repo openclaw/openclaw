@@ -996,7 +996,7 @@ process.exit(73);
         new PhaseRunner(makeTempDir(tempDirs, "openclaw-windows-git-")),
       );
       vi.spyOn(guest, "exec").mockReturnValue(installed ? "git version 2.56.0" : "");
-      const powershell = vi.spyOn(guest, "powershell").mockReturnValue("");
+      const installGit = vi.spyOn(guest, "powershell").mockReturnValue("");
       const getMinGitZipPath = vi.fn().mockResolvedValue("/tmp/mingit.zip");
       await ensureGuestGit({
         guest,
@@ -1011,7 +1011,7 @@ process.exit(73);
             },
       });
       expect(getMinGitZipPath).toHaveBeenCalledTimes(installed ? 0 : 1);
-      expect(powershell).toHaveBeenCalledTimes(installed ? 0 : 1);
+      expect(installGit).toHaveBeenCalledTimes(installed ? 0 : 1);
     },
   );
 
