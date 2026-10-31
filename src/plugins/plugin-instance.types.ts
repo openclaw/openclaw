@@ -1,6 +1,12 @@
 import type { Static } from "typebox";
 import type { PluginRuntimeRetentionSchema } from "../../packages/gateway-protocol/src/schema/plugin-retention.js";
 
+export type PluginInstanceDisposalCleanup = {
+  failures: unknown[];
+  hostFailure?: { error: unknown };
+  moduleCleanups: Array<() => void | Promise<void>>;
+};
+
 /** Payload-free facts shared with administrator inspection. */
 export type PluginRetentionSnapshot = Static<typeof PluginRuntimeRetentionSchema>;
 export type PluginRetainedReference = Omit<PluginRetentionSnapshot["references"][number], "ageMs">;
@@ -68,6 +74,7 @@ export type PluginModuleLoaderRecovery = {
 
 /** Runtime and setup loaders use the same instance-owned captured source. */
 export interface PluginModuleLoaderOwner extends PluginInstanceResource, PluginInstanceAdmission {
+  setupPreparationFailure?: Error;
   controlPlaneInitialized: boolean;
   sourceDigest?: string;
   onModuleDispose(cleanup: () => void | Promise<void>): void;

@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { bundledModuleRegions } from "./lib/bundled-module-regions.mjs";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
@@ -40,8 +41,9 @@ const REQUIRED_PACKED_PATHS = [
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
+const PRIVATE_QA_SOURCE_PREFIX = "extensions/qa-lab/";
 const FORBIDDEN_PRIVATE_QA_CONTENT_MARKERS = [
-  "//#region extensions/qa-lab/",
+  `//#region ${PRIVATE_QA_SOURCE_PREFIX}`,
   "qa-channel/runtime-api.js",
   "qa-channel.js",
   "qa-channel-protocol.js",
@@ -505,9 +507,11 @@ export function collectForbiddenPackedContentErrors(
     } catch {
       continue;
     }
-    const matchedMarker = FORBIDDEN_PRIVATE_QA_CONTENT_MARKERS.find((marker) =>
-      content.includes(marker),
-    );
+    const matchedMarker =
+      FORBIDDEN_PRIVATE_QA_CONTENT_MARKERS.find((marker) => content.includes(marker)) ??
+      [...bundledModuleRegions(content)].find((match) =>
+        match[1]?.startsWith(PRIVATE_QA_SOURCE_PREFIX),
+      )?.[0];
     if (!matchedMarker) {
       continue;
     }

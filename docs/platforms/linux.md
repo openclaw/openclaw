@@ -656,14 +656,19 @@ host/container memory and half that memory remaining after Gateway RSS.
 Existing per-exec memory limits and child-first OOM policy still apply.
 `memory.high` applies reclaim pressure; it is not a hard memory limit.
 
-An aggregate `io.max` ceiling budgets a memory-sized IO backlog over five
-minutes, split equally between reads and writes and across devices backing the
-Gateway state directory. Each direction receives `memory.high / 600 / deviceCount`
-bytes per second and that rate divided by `4096` operations per second. Half of
-any finite ancestor IO limit further caps the corresponding rate. This is a
-deliberate pressure budget, not measured disk bandwidth: a 4 GiB memory allowance
-on one device gives about 6.8 MiB/s in each direction. Gateway IO remains outside
-the exec ceiling.
+An aggregate `io.max` ceiling covers agent-exec IO on each device backing the
+Gateway state directory. Non-rotational devices receive **160 MiB/s in each
+direction and 40,960 read/write operations per second**, independent of RAM or
+device count. Classification uses the logical device's `queue/rotational` value,
+including md/dm devices, rather than separately throttling their members.
+Rotational devices, or devices without that attribute, retain the conservative
+pressure budget: `memory.high / 600 / deviceCount` bytes per second in each
+direction, with that rate divided by `4096` operations per second. These are
+policy ceilings, not measured disk bandwidth. For example, a 4 GiB memory
+allowance on one SSD gives 160 MiB/s per direction; on a rotational device it
+gives about 6.8 MiB/s. Half of any finite ancestor IO limit further caps each
+corresponding rate. Gateway IO remains outside the exec ceiling. The policy is
+applied at Gateway startup.
 
 Enable this policy for an older managed unit with an explicit
 `openclaw doctor --fix` or `openclaw gateway install --force`. Normal updates

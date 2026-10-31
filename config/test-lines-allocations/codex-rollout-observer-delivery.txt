@@ -1,0 +1,2 @@
+# Explicit delivered invalidation, stable-directory cache reuse and deterministic watcher-loss lifecycle; real rollout files and exact membership oracles remain.
+19

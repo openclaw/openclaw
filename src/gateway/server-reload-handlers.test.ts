@@ -134,6 +134,7 @@ import {
   createCronRestartPlan,
   createDirectConfigWriteFixture,
   createDefaultGatewayReloadState,
+  createHotReloadHandlerTestParams,
   createManagedReloadTestParams,
   createGatewayRestartPlan,
   createHotTailPlan,
@@ -285,38 +286,28 @@ function createGatewayReloadHandlers(
   },
 ) {
   const { requestRecoveryRestart, ...handlerParams } = params;
-  let state = createDefaultGatewayReloadState();
-  return createGatewayReloadHandlersImpl({
-    scheduler: createTestGatewayScheduler("fake-timers"),
-    getPluginRegistry: requireActivePluginChannelRegistry,
-    deps: {} as never,
-    broadcast: vi.fn(),
-    getState: () => state,
-    setState: (nextState) => {
-      state = nextState;
-    },
-    startChannel: vi.fn(async () => new Map()),
-    stopChannel: vi.fn(async () => {}),
-    releaseChannelRouteHandoffs: vi.fn(),
-    pruneInactiveChannelAccountState: vi.fn(),
-    stopPostReadySidecars: vi.fn(),
-    reloadPlugins: vi.fn<ReloadHandlerParams["reloadPlugins"]>(async ({ prepareConfigEffects }) => {
-      prepareConfigEffects({ pluginIds: new Set(), channels: new Set() }).retire();
-      return makePluginReloadResult();
+  return createGatewayReloadHandlersImpl(
+    createHotReloadHandlerTestParams({
+      scheduler: createTestGatewayScheduler("fake-timers"),
+      getPluginRegistry: requireActivePluginChannelRegistry,
+      deps: {} as never,
+      stopPostReadySidecars: vi.fn(),
+      reloadPlugins: vi.fn<ReloadHandlerParams["reloadPlugins"]>(
+        async ({ prepareConfigEffects }) => {
+          prepareConfigEffects({ pluginIds: new Set(), channels: new Set() }).retire();
+          return makePluginReloadResult();
+        },
+      ),
+      ...handlerParams,
+      cronReconciliation: params.cronReconciliation ?? createTestCronReconciliation(),
+      ...(requestRecoveryRestart === null
+        ? {}
+        : {
+            requestRecoveryRestart:
+              requestRecoveryRestart ?? requestGatewayRestartWithSignalAdmission,
+          }),
     }),
-    logHooks: createInfoWarnErrorLogger(),
-    logChannels: makeChannelLogger(),
-    logCron: { error: vi.fn() },
-    logReload: makeReloadLogger(),
-    ...handlerParams,
-    cronReconciliation: params.cronReconciliation ?? createTestCronReconciliation(),
-    ...(requestRecoveryRestart === null
-      ? {}
-      : {
-          requestRecoveryRestart:
-            requestRecoveryRestart ?? requestGatewayRestartWithSignalAdmission,
-        }),
-  });
+  );
 }
 
 function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
@@ -334,10 +325,6 @@ function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
           return makePluginReloadResult();
         },
       ),
-      logHooks: createInfoWarnErrorLogger(),
-      logChannels: makeChannelLogger(),
-      logCron: { error: vi.fn() },
-      logReload: createInfoWarnErrorLogger(),
       channelManager: {
         pruneInactiveChannelAccountState: vi.fn(),
         releaseChannelRouteHandoffs: vi.fn(),

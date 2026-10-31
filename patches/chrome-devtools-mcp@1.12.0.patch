@@ -1,5 +1,5 @@
 diff --git a/build/src/McpPage.js b/build/src/McpPage.js
-index 1a41395e7df34a09a3c4461ed7c3e2f6b3c8b93e..11e24750d4be1b17b546c1696d74bbefb0e9bdef 100644
+index 326ce51019807f60a9c5a7c6c348c2b9d994a0f5..4ada9990f6135e48fa0abd541b279040ddc95c61 100644
 --- a/build/src/McpPage.js
 +++ b/build/src/McpPage.js
 @@ -1,3 +1,4 @@
@@ -11,12 +11,12 @@ index 1a41395e7df34a09a3c4461ed7c3e2f6b3c8b93e..11e24750d4be1b17b546c1696d74bbef
  import { createTargetUniverse, } from './devtools/DevtoolsUtils.js';
  import { ConsoleCollector, NetworkCollector, } from './collectors/PageCollector.js';
  import { TextSnapshot } from './TextSnapshot.js';
--import { PredefinedNetworkConditions, DevTools, } from './third_party/index.js';
-+import { PredefinedNetworkConditions, DevTools, CdpFrame, } from './third_party/index.js';
+-import { PredefinedNetworkConditions, DevTools, lighthouseNavigation, lighthouseSnapshot, } from './third_party/index.js';
++import { PredefinedNetworkConditions, DevTools, CdpFrame, lighthouseNavigation, lighthouseSnapshot, } from './third_party/index.js';
  import { logger } from './utils/logger.js';
  import { getNetworkMultiplierFromString, WaitForHelper, } from './utils/WaitForHelper.js';
  export function replaceHtmlElementsWithUids(schema) {
-@@ -756,7 +757,7 @@ export class McpPage {
+@@ -788,7 +789,7 @@ export class McpPage {
                  logger?.(`No backendNodeId for stashed DOM element with index ${index}`);
                  return `stashed-${index}`;
              }
@@ -25,7 +25,7 @@ index 1a41395e7df34a09a3c4461ed7c3e2f6b3c8b93e..11e24750d4be1b17b546c1696d74bbef
              if (!cdpElementId) {
                  logger?.(`Could not get cdpElementId for backend node ${backendNodeId}`);
                  return `stashed-${index}`;
-@@ -858,44 +859,62 @@ export class McpPage {
+@@ -890,44 +891,62 @@ export class McpPage {
          }
      }
      async getMatchedStylesForUid(uid) {
@@ -124,20 +124,20 @@ index 1a41395e7df34a09a3c4461ed7c3e2f6b3c8b93e..11e24750d4be1b17b546c1696d74bbef
          try {
 diff --git a/build/src/OPENCLAW_PATCH_NOTICE.md b/build/src/OPENCLAW_PATCH_NOTICE.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..a4368f7be10460561cdcd2c8f32ebe3a9f852e33
+index 0000000000000000000000000000000000000000..de42ed3568fe1e8386948c0e3d38dd0369a9acb3
 --- /dev/null
 +++ b/build/src/OPENCLAW_PATCH_NOTICE.md
 @@ -0,0 +1,27 @@
 +# Temporary OpenClaw snapshot identity patch
 +
-+This package remains `chrome-devtools-mcp@1.11.0`. OpenClaw modifies two
++This package remains `chrome-devtools-mcp@1.12.0`. OpenClaw modifies two
 +published runtime files to backport the snapshot identity repair proposed in
 +https://github.com/ChromeDevTools/chrome-devtools-mcp/pull/2788.
 +
 +The reviewed upstream source is commit
 +`06c8d4bc44f68bde8bd3fcd97dcc47375df81fe9`, forward-ported onto the
-+`chrome-devtools-mcp-v1.11.0` source tag at
-+`a878bcad39584337e055778353246820deafa7c0`.
++`chrome-devtools-mcp-v1.12.0` source tag at
++`af2834411a564d366f9cab63efb046d9084f4dba`.
 +
 +- `TextSnapshot.js` carries the reviewed snapshot-owner implementation.
 +- `McpPage.js` supplies the known element frame for DOM-result reverse lookup
@@ -145,18 +145,18 @@ index 0000000000000000000000000000000000000000..a4368f7be10460561cdcd2c8f32ebe3a
 +  lookup stays within the captured renderer and fails closed when the embedded
 +  DevTools target cannot represent a cross-renderer frame.
 +
-+Version 1.11.0 already exports its bundled `CdpFrame` implementation, so this
++Version 1.12.0 already exports its bundled `CdpFrame` implementation, so this
 +patch does not modify third-party bundle code.
 +
-+The original package is the published npm 1.11.0 tarball with integrity
-+`sha512-CytJ/5tnzrS+J/74be2P5aCOsS/mmGRHys/Si+IYC4ucrbnWAmES/dYdxGJjeUCECRcoFUilZAysdjlwqUjXIA==`.
++The original package is the published npm 1.12.0 tarball with integrity
++`sha512-lAGpH0zXT1ZdaPefP1KK/MvxwihOlu7VGQ7p4wbhD9OhN17vUC4KWk/ImUYR9DE4s+7r4r0ySV4xr2OkTa7ZMA==`.
 +The original `LICENSE` and `build/src/third_party/THIRD_PARTY_NOTICES` remain
 +unchanged.
 +
 +Remove this patch and notice after adopting a published upstream release that
 +contains the repair and passes the same snapshot/stdio regression proof.
 diff --git a/build/src/TextSnapshot.js b/build/src/TextSnapshot.js
-index 8f7caebc467b80ced834d9fa7574f6591a306487..256c6ae718b2fac18fe6ee53e2dbcc383c631a3d 100644
+index 26e64388bf5eb44d6a6699ace98c9bbe7aa25c67..2d505bbff196141bf042679087d16a184be83052 100644
 --- a/build/src/TextSnapshot.js
 +++ b/build/src/TextSnapshot.js
 @@ -1,3 +1,4 @@
@@ -164,12 +164,18 @@ index 8f7caebc467b80ced834d9fa7574f6591a306487..256c6ae718b2fac18fe6ee53e2dbcc38
  /**
   * @license
   * Copyright 2025 Google LLC
-@@ -55,7 +56,17 @@ var __disposeResources = (this && this.__disposeResources) || (function (Suppres
+@@ -55,6 +56,7 @@ var __disposeResources = (this && this.__disposeResources) || (function (Suppres
      var e = new Error(message);
      return e.name = "SuppressedError", e.error = error, e.suppressed = suppressed, e;
  });
 +import { CdpFrame } from './third_party/index.js';
  import { logger } from './utils/logger.js';
+ import { withTimeout } from './utils/timeout.js';
+ const ACCESSIBILITY_SNAPSHOT_TIMEOUT_MS = 10_000;
+@@ -66,6 +68,15 @@ const ACCESSIBILITY_SNAPSHOT_TIMEOUT_MS = 10_000;
+ function isLayoutOnlyNode(node) {
+     return node.role === 'InlineTextBox';
+ }
 +function stableNodeKey(node, sessionId) {
 +    if (!sessionId ||
 +        !node.loaderId ||
@@ -182,7 +188,7 @@ index 8f7caebc467b80ced834d9fa7574f6591a306487..256c6ae718b2fac18fe6ee53e2dbcc38
  export class TextSnapshot {
      static nextSnapshotId = 1;
      static resetCounter() {
-@@ -67,6 +78,7 @@ export class TextSnapshot {
+@@ -77,6 +88,7 @@ export class TextSnapshot {
      selectedElementUid;
      hasSelectedElement;
      verbose;
@@ -190,7 +196,7 @@ index 8f7caebc467b80ced834d9fa7574f6591a306487..256c6ae718b2fac18fe6ee53e2dbcc38
      constructor(data) {
          this.root = data.root;
          this.idToNode = data.idToNode;
-@@ -74,9 +86,31 @@ export class TextSnapshot {
+@@ -84,9 +96,31 @@ export class TextSnapshot {
          this.selectedElementUid = data.selectedElementUid;
          this.hasSelectedElement = data.hasSelectedElement;
          this.verbose = data.verbose;
@@ -219,14 +225,25 @@ index 8f7caebc467b80ced834d9fa7574f6591a306487..256c6ae718b2fac18fe6ee53e2dbcc38
 +            }
 +            return state.client;
 +        };
-         const rootNode = await page.pptrPage.accessibility.snapshot({
+         const rootNode = await withTimeout(page.pptrPage.accessibility.snapshot({
              includeIframes: true,
              interestingOnly: !verbose,
-@@ -91,32 +125,90 @@ export class TextSnapshot {
+@@ -104,26 +138,62 @@ export class TextSnapshot {
          let idCounter = 0;
          const idToNode = new Map();
          const seenUniqueIds = new Set();
 -        const seenBackendNodeIds = new Set();
+-        const assignIds = (node) => {
+-            let id = '';
+-            // @ts-expect-error untyped backendNodeId.
+-            const backendNodeId = node.backendNodeId;
+-            if (backendNodeId !== undefined) {
+-                // @ts-expect-error untyped loaderId.
+-                const uniqueBackendId = `${node.loaderId}_${backendNodeId}`;
+-                const existingMcpId = uniqueBackendNodeIdToMcpId.get(uniqueBackendId);
+-                if (existingMcpId !== undefined) {
+-                    // Re-use MCP exposed ID if the uniqueId is the same.
+-                    id = existingMcpId;
 +        const nodeFrames = new Map();
 +        const documentIds = new Map();
 +        const nodesByFrame = new Map();
@@ -243,14 +260,20 @@ index 8f7caebc467b80ced834d9fa7574f6591a306487..256c6ae718b2fac18fe6ee53e2dbcc38
 +                        throw new Error('Snapshot document disappeared. Take a new snapshot.');
 +                    }
 +                    frame = handle.frame;
-+                }
+                 }
+-                else {
+-                    // Only generate a new ID if we have not seen the node before.
+-                    id = `${snapshotId}_${idCounter++}`;
+-                    uniqueBackendNodeIdToMcpId.set(uniqueBackendId, id);
 +                catch (e_1) {
 +                    env_1.error = e_1;
 +                    env_1.hasError = true;
 +                }
 +                finally {
 +                    __disposeResources(env_1);
-+                }
+                 }
+-                seenUniqueIds.add(uniqueBackendId);
+-                seenBackendNodeIds.add(backendNodeId);
 +            }
 +            const key = stableNodeKey(node, currentClient(frame).id());
 +            if (key !== undefined) {
@@ -270,40 +293,25 @@ index 8f7caebc467b80ced834d9fa7574f6591a306487..256c6ae718b2fac18fe6ee53e2dbcc38
 +                uniqueBackendNodeIdToMcpId.delete(key);
 +            }
 +        }
-         const assignIds = (node) => {
--            let id = '';
--            // @ts-expect-error untyped backendNodeId.
--            const backendNodeId = node.backendNodeId;
--            // @ts-expect-error untyped loaderId.
--            const uniqueBackendId = `${node.loaderId}_${backendNodeId}`;
--            const existingMcpId = uniqueBackendNodeIdToMcpId.get(uniqueBackendId);
--            if (existingMcpId !== undefined) {
--                // Re-use MCP exposed ID if the uniqueId is the same.
--                id = existingMcpId;
++        const assignIds = (node) => {
 +            const frame = nodeFrames.get(node);
 +            if (!frame) {
 +                throw new Error('Snapshot node has no frame');
-             }
--            else {
--                // Only generate a new ID if we have not seen the node before.
--                id = `${snapshotId}_${idCounter++}`;
--                uniqueBackendNodeIdToMcpId.set(uniqueBackendId, id);
++            }
 +            const key = stableNodeKey(node, currentClient(frame).id());
 +            const stableKey = key !== undefined && keyCounts.get(key) === 1 ? key : undefined;
-+            const id = (stableKey !== undefined
++            const id = node.backendNodeId === undefined ? '' : (stableKey !== undefined
 +                ? uniqueBackendNodeIdToMcpId.get(stableKey)
 +                : undefined) ?? `${snapshotId}_${idCounter++}`;
 +            if (stableKey !== undefined) {
 +                uniqueBackendNodeIdToMcpId.set(stableKey, id);
 +                seenUniqueIds.add(stableKey);
              }
--            seenUniqueIds.add(uniqueBackendId);
--            seenBackendNodeIds.add(backendNodeId);
              const nodeWithId = {
                  ...node,
-                 id,
-                 children: node.children
-                     ? node.children.map(child => assignIds(child))
+@@ -133,7 +203,27 @@ export class TextSnapshot {
+                         .filter(child => !isLayoutOnlyNode(child))
+                         .map(child => assignIds(child))
                      : [],
 +                elementHandle: async () => {
 +                    currentClient(frame);
@@ -329,12 +337,12 @@ index 8f7caebc467b80ced834d9fa7574f6591a306487..256c6ae718b2fac18fe6ee53e2dbcc38
              // The AXNode for an option doesn't contain its `value`.
              // Therefore, set text content of the option as value.
              if (node.role === 'option') {
-@@ -129,13 +221,14 @@ export class TextSnapshot {
+@@ -148,13 +238,14 @@ export class TextSnapshot {
              return nodeWithId;
          };
          const rootNodeWithId = assignIds(rootNode);
--        await TextSnapshot.insertExtraNodes(page, idToNode, seenUniqueIds, snapshotId, idCounter, rootNodeWithId, seenBackendNodeIds, options.extraHandles ?? []);
-+        await TextSnapshot.insertExtraNodes(page, idToNode, seenUniqueIds, snapshotId, idCounter, nodesByFrame, documentIds, currentClient, options.extraHandles ?? []);
+-        await TextSnapshot.#insertExtraNodes(page, idToNode, seenUniqueIds, snapshotId, idCounter, rootNodeWithId, seenBackendNodeIds, options.extraHandles ?? []);
++        await TextSnapshot.#insertExtraNodes(page, idToNode, seenUniqueIds, snapshotId, idCounter, nodesByFrame, documentIds, currentClient, options.extraHandles ?? []);
          const snapshot = new TextSnapshot({
              root: rootNodeWithId,
              snapshotId: String(snapshotId),
@@ -345,7 +353,7 @@ index 8f7caebc467b80ced834d9fa7574f6591a306487..256c6ae718b2fac18fe6ee53e2dbcc38
          });
          const data = options.devtoolsData ?? (await page.getDevToolsData());
          if (data?.cdpBackendNodeId) {
-@@ -150,66 +243,89 @@ export class TextSnapshot {
+@@ -169,66 +260,89 @@ export class TextSnapshot {
          }
          return snapshot;
      }
@@ -381,8 +389,8 @@ index 8f7caebc467b80ced834d9fa7574f6591a306487..256c6ae718b2fac18fe6ee53e2dbcc38
      // ExtraHandles represent DOM nodes which might not be part of the accessibility tree, e.g. DOM nodes
      // returned by third-party developer tools. We insert them into the tree by finding the closest ancestor
      // in the tree and inserting the node as a child. The ancestor's child nodes are re-parented if necessary.
--    static async insertExtraNodes(page, idToNode, seenUniqueIds, snapshotId, idCounter, rootNodeWithId, seenBackendNodeIds, extraHandles) {
-+    static async insertExtraNodes(page, idToNode, seenUniqueIds, snapshotId, idCounter, nodesByFrame, documentIds, currentClient, extraHandles) {
+-    static async #insertExtraNodes(page, idToNode, seenUniqueIds, snapshotId, idCounter, rootNodeWithId, seenBackendNodeIds, extraHandles) {
++    static async #insertExtraNodes(page, idToNode, seenUniqueIds, snapshotId, idCounter, nodesByFrame, documentIds, currentClient, extraHandles) {
          const { uniqueBackendNodeIdToMcpId } = page;
          const createExtraNode = async (handle) => {
 -            const backendNodeId = await handle.backendNodeId();
@@ -468,7 +476,7 @@ index 8f7caebc467b80ced834d9fa7574f6591a306487..256c6ae718b2fac18fe6ee53e2dbcc38
                  while (ancestorHandle) {
                      stack.use(ancestorHandle);
                      const ancestorElement = ancestorHandle.asElement();
-@@ -218,9 +334,9 @@ export class TextSnapshot {
+@@ -237,9 +351,9 @@ export class TextSnapshot {
                      }
                      const ancestorBackendId = await ancestorElement.backendNodeId();
                      if (ancestorBackendId) {
@@ -481,7 +489,7 @@ index 8f7caebc467b80ced834d9fa7574f6591a306487..256c6ae718b2fac18fe6ee53e2dbcc38
                          if (ancestorNode) {
                              return ancestorNode;
                          }
-@@ -230,40 +346,37 @@ export class TextSnapshot {
+@@ -249,40 +363,37 @@ export class TextSnapshot {
                  }
                  return null;
              }
@@ -543,7 +551,7 @@ index 8f7caebc467b80ced834d9fa7574f6591a306487..256c6ae718b2fac18fe6ee53e2dbcc38
              }
              catch (e) {
                  logger?.(`Failed to collect descendants for backend node ${backendNodeId}`, e);
-@@ -303,8 +416,15 @@ export class TextSnapshot {
+@@ -322,8 +433,15 @@ export class TextSnapshot {
                  continue;
              }
              idToNode.set(extraNode.id, extraNode);

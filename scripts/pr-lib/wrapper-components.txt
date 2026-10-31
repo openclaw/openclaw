@@ -377,6 +377,7 @@ src/agents/worktrees/git-path-inventory.ts
 src/agents/worktrees/git-worktree-operations.runtime.ts
 src/agents/worktrees/git.ts
 src/agents/worktrees/name.ts
+src/agents/worktrees/object-hydration.ts
 src/agents/worktrees/owner.ts
 src/agents/worktrees/pending-slots.ts
 src/agents/worktrees/pending-slots.worker.ts
@@ -1609,6 +1610,7 @@ src/plugins/plugin-control-plane-context.ts
 src/plugins/plugin-generation-artifact.ts
 src/plugins/plugin-generation-capture.ts
 src/plugins/plugin-generation-file-capture.ts
+src/plugins/plugin-generation-metrics.ts
 src/plugins/plugin-generation-receipt.ts
 src/plugins/plugin-generation-source-lookup.ts
 src/plugins/plugin-install-default-choice.ts

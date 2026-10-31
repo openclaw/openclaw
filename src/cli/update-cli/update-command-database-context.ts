@@ -12,6 +12,7 @@ import {
   isCandidateAdmissionContextCovered,
 } from "./schema-preflight.js";
 import { UpdatePreMutationError } from "./shared.js";
+import { readUpdateChannelConfig } from "./update-command-config.js";
 import {
   formatUpdateAncestryBlockMessage,
   resolveForegroundUpdateAdmission,
@@ -21,6 +22,7 @@ import {
   resolveOwnedManagedUpdatePreflightEnv,
 } from "./update-command-managed-context.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   collectServiceInspectionFailureFacts,
   GatewayServiceUpdateOwnershipError,
@@ -163,11 +165,21 @@ export async function inspectUpdateDatabaseContexts(
     const configValidation = params.candidateAdmissionChecks?.includes("config")
       ? ("candidate" as const)
       : undefined;
+    // Already-current updates skip candidate admission. Preview Doctor's repair for
+    // the selected config so maintenance can persist it through the normal writer.
+    const legacyConfigPlan =
+      params.legacyConfigPlan ??
+      (params.packageAlreadyCurrent
+        ? await withOwnedManagedUpdateEnv(
+            inspected.managedEnv ?? process.env,
+            async () => (await readUpdateChannelConfig(true)).legacyConfigPlan,
+          )
+        : undefined);
     const managed = await captureOwnedManagedUpdatePreflightContext({
       stopState: inspected.service,
       processEnv: process.env,
       invocationCwd: params.invocationCwd,
-      legacyConfigPlan: params.legacyConfigPlan,
+      legacyConfigPlan,
       configValidation,
     });
     // Redirected package replacement does not own the invoking installation's stores.
@@ -178,7 +190,7 @@ export async function inspectUpdateDatabaseContexts(
             legacyConfigPlan:
               params.callerLegacyConfigPlan?.snapshot.path === resolveConfigPath()
                 ? params.callerLegacyConfigPlan
-                : params.legacyConfigPlan,
+                : legacyConfigPlan,
             configValidation,
           }),
         ];

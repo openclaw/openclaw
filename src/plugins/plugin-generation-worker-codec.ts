@@ -4,6 +4,7 @@ import {
   snapshotPluginRecoverySourceResolver,
   type PluginRecoverySourceResolverSnapshot,
 } from "./plugin-generation-source-lookup.js";
+import { isPluginSourcePreparationOperation } from "./plugin-instance-error.js";
 import {
   isOwnedPluginNativeRecovery,
   restorePluginNativeRecovery,
@@ -84,6 +85,11 @@ export class GenerationCodec {
     const released = [...this.released];
     this.released.clear();
     return released;
+  }
+
+  isSourcePreparationCall(handle: number): boolean {
+    const operation = this.handles.get(handle);
+    return typeof operation === "function" && isPluginSourcePreparationOperation(operation);
   }
 
   releaseReceivedHandles(handles: readonly number[]): void {

@@ -92,6 +92,7 @@ type GatewayBenchCase = {
   providerStaticCatalogStallMs?: number;
   publicationGitDelayMs?: number;
   publicationApiDelayMs?: number;
+  teamScale?: boolean;
   runByDefault?: boolean;
 };
 
@@ -177,6 +178,7 @@ const BOOLEAN_FLAGS = new Set([
   "--installed-child",
   "--installed-cpu-diagnostic",
   "--seed-only",
+  "--team-scale",
 ]);
 const VALUE_FLAGS = new Set([
   "--case",
@@ -459,6 +461,12 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     }
   }
   let cases = installedCohort ? [] : resolveCases(flags.get("--case") ?? []);
+  if (flags.has("--team-scale")) {
+    if (cases.length !== 1 || cases[0]?.id !== "teamBoot") {
+      throw new CliArgumentError("--team-scale requires --case teamBoot");
+    }
+    cases = [{ ...cases[0], teamScale: true, pluginCount: 46 }];
+  }
   if (flags.has("--publication-git-delay-ms")) {
     if (cases.length !== 1 || cases[0]?.id !== "teamBoot" || process.platform === "win32") {
       throw new CliArgumentError("--publication-git-delay-ms requires --case teamBoot on POSIX");
@@ -586,6 +594,7 @@ Options:
   --fixture-root <path> Prepared teamBoot or slowAgentDatabase fixture (requires --runs 1 --warmup 0)
   --seed-only         Create a new --fixture-root without launching a Gateway
   --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels config for teamBoot
+  --team-scale                   Seed 46 plugins, 12 GiB shared/35 GiB agent data and 62k workspace files
   --publication-git-delay-ms <n> Seed one pending teamBoot publication with a slow local Git read (1–30000)
   --publication-api-delay-ms <n> Recover four historical publications through delayed mock GitHub reads (200–800)
   --agent-database-mib <n> Synthetic slow-agent cache payload (default: 512)
@@ -1356,6 +1365,7 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
       ]);
     const now = Date.parse("2026-10-19T00:00:00Z");
     const agents = buildBenchAgentList(root, benchCase.agentTopology)!;
+    const cipher = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16));
     const databasePaths: string[] = [];
     let statePath = "";
     try {
@@ -1376,6 +1386,18 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
           { agentId, env },
         );
         database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        if (benchCase.teamScale && databasePaths.length === 0) {
+          // Inert canonical cache pages model a large agent DB without inventing schema.
+          const insert = database.db.prepare(
+            "INSERT INTO cache_entries(scope, key, blob, updated_at) VALUES ('startup-benchmark', ?, ?, ?)",
+          );
+          for (let index = 0; index < 35 * 1024; index++) {
+            insert.run(String(index), cipher.update(Buffer.alloc(1024 * 1024)), now);
+            if (index % 32 === 31) {
+              database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+            }
+          }
+        }
         databasePaths.push(database.path);
       }
       const state = stateDb.openOpenClawStateDatabase({ env });
@@ -1400,8 +1422,8 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
       }
       // An inert machine-state namespace adds real, incompressible pages without
       // making startup parse 128 MiB of synthetic records or changing the schema.
-      const cipher = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16));
-      for (let index = 0; index < 128; index++) {
+      const sharedMib = benchCase.teamScale ? 12 * 1024 : 128;
+      for (let index = 0; index < sharedMib; index++) {
         if (index % 8 === 0 && process.platform === "linux") {
           const dirtyKb = Number(
             /^Dirty:\s+(\d+) kB$/mu.exec(readFileSync("/proc/meminfo", "utf8"))?.[1],
@@ -1419,17 +1441,29 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
           await delay(100);
         }
       }
+      if (benchCase.teamScale) {
+        for (let index = 0; index < 62_000; index++) {
+          const workspace = agents[index % agents.length]!.workspace;
+          const directory = path.join(workspace, `synthetic-${Math.floor(index / 1000)}`);
+          mkdirSync(directory, { recursive: true });
+          writeFileSync(path.join(directory, `${index}.bin`), cipher.update(Buffer.alloc(19_050)));
+        }
+      }
     } finally {
       await agentDb.closeOpenClawAgentDatabasesAsync();
       await stateDb.closeOpenClawStateDatabaseAsync();
     }
     writeBenchmarkJson(
       {
-        pluginCount: 44,
+        pluginCount: benchCase.pluginCount,
+        teamScale: benchCase.teamScale ?? false,
+        workspaceFileCount: benchCase.teamScale ? 62_000 : 0,
+        workspaceBytes: benchCase.teamScale ? 62_000 * 19_050 : 0,
         bundledPluginFixture: benchCase.bundledPluginFixture ?? {},
         publicationGitDelayMs: benchCase.publicationGitDelayMs,
         publicationApiDelayMs: benchCase.publicationApiDelayMs,
-        externalPluginCount: 44 - (benchCase.bundledPluginFixture?.plugins?.allow?.length ?? 0),
+        externalPluginCount:
+          benchCase.pluginCount! - (benchCase.bundledPluginFixture?.plugins?.allow?.length ?? 0),
         agentCount: agents.length,
         sessionCount: agents.length * 1250,
         stateDatabaseBytes: statSync(statePath).size,
@@ -2177,7 +2211,11 @@ async function main() {
         bundledPluginFixture?: OpenClawConfig;
         publicationGitDelayMs?: number;
         publicationApiDelayMs?: number;
+        teamScale?: boolean;
       };
+      if (Boolean(fixture.teamScale) !== Boolean(options.cases[0]?.teamScale)) {
+        throw new CliArgumentError("--team-scale must match the prepared fixture");
+      }
       if (
         JSON.stringify(fixture.bundledPluginFixture ?? {}) !==
         JSON.stringify(options.cases[0]?.bundledPluginFixture ?? {})
