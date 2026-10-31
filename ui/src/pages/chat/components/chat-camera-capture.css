@@ -8,11 +8,7 @@ openclaw-chat-camera-capture {
     box-sizing: border-box;
     max-height: var(--openclaw-modal-height-limit);
     overflow: auto;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-xl);
-    background: var(--bg);
     color: var(--text);
-    box-shadow: var(--shadow-xl);
   }
   header {
     display: flex;
