@@ -23,7 +23,12 @@ export class BrowserPanelPendingInput {
     this.lastInspectAt = 0;
   }
 
-  scheduleRefresh(delayMs: number, refresh: () => void, ready: () => boolean = () => true): void {
+  scheduleRefresh(
+    delayMs: number,
+    refresh: () => void,
+    ready: () => boolean = () => true,
+    retryMs = delayMs,
+  ): void {
     if (this.refreshTimer !== undefined) {
       // Keep the first deadline: sustained typing or scrolling must not starve feedback.
       return;
@@ -34,7 +39,7 @@ export class BrowserPanelPendingInput {
         refresh();
       } else {
         // Preserve trailing feedback without replacing a capture that is still in flight.
-        this.scheduleRefresh(delayMs, refresh, ready);
+        this.scheduleRefresh(retryMs, refresh, ready, retryMs);
       }
     }, delayMs);
   }

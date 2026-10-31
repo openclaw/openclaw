@@ -74,17 +74,14 @@ describe("Browser panel", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
-  it("prefixes bare hosts with https", () => {
+  it("normalizes URL drafts", () => {
     expect(normalizeBrowserUrlDraft("example.com")).toBe("https://example.com/");
     expect(normalizeBrowserUrlDraft("  github.com/openclaw/openclaw ")).toBe(
       "https://github.com/openclaw/openclaw",
     );
-  });
-
-  it("rejects empty and non-http(s) inputs", () => {
-    expect(normalizeBrowserUrlDraft("   ")).toBeNull();
-    expect(normalizeBrowserUrlDraft("javascript:alert(1)")).toBeNull();
-    expect(normalizeBrowserUrlDraft("file:///etc/passwd")).toBeNull();
+    for (const draft of ["   ", "javascript:alert(1)", "file:///etc/passwd"]) {
+      expect(normalizeBrowserUrlDraft(draft)).toBeNull();
+    }
   });
 
   it("restores persisted open state when a mounted tag upgrades lazily", async () => {
@@ -156,13 +153,12 @@ describe("Browser panel", () => {
 
     const failure = createDeferred<unknown>();
     tabsReply = failure.promise;
-    const preview = panel.querySelector(".bp-shot");
 
     panel.querySelector<HTMLTextAreaElement>(".bp-input")?.focus();
     toggle(panel, { open: true });
     await panel.updateComplete;
 
-    expect(panel.querySelector(".bp-shot")).toBe(preview);
+    expect(panel.querySelector(".bp-shot")).toBe(image);
     expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
     const reload = panel.querySelector('button[aria-label="Reload"]');
     expect(reload?.getAttribute("aria-busy")).toBe("true");
@@ -173,8 +169,7 @@ describe("Browser panel", () => {
     await waitForSolid(() => expect(reload?.getAttribute("aria-busy")).toBe("false"));
 
     expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
-    expect(panel.querySelector(".bp-shot")).toBe(preview);
-    expect(reload?.getAttribute("aria-busy")).toBe("false");
+    expect(panel.querySelector(".bp-shot")).toBe(image);
     expect(panel.querySelector('[role="alert"]')?.textContent).toContain(
       "Refresh connection interrupted",
     );
@@ -508,22 +503,32 @@ describe("Browser panel", () => {
       }
     });
 
-    it("uses input for uncancelable commits and preserves text/edit order across async requests", async () => {
-      const { request, input, actions } = await mountForm();
+    it("uses input for uncancelable commits and batches queued text without crossing keys or clicks", async () => {
+      const { request, input, actions } = await mountForm({ clickable: true });
       const insert = createDeferred<unknown>();
       request.mockImplementationOnce(async () => insert.promise);
       sendInput(input, "beforeinput", "insertText", "hello", { cancelable: false });
       expect(request).not.toHaveBeenCalled();
       input.value = "hello";
       sendInput(input, "input", "insertText", "hello");
+      const type = (text: string) => sendInput(input, "beforeinput", "insertText", text);
+      type("a");
+      type("b");
       sendInput(input, "beforeinput", "deleteContentBackward");
       expect(input.value).toBe("");
+      type("c");
+      input.click();
+      type("d");
       expect(request).toHaveBeenCalledTimes(1);
       insert.resolve({ ok: true });
       await vi.advanceTimersByTimeAsync(0);
       expect(actions()).toMatchObject([
         { kind: "insertText", text: "hello" },
+        { kind: "insertText", text: "ab" },
         { kind: "press", key: "Backspace" },
+        { kind: "insertText", text: "c" },
+        { kind: "clickCoords" },
+        { kind: "insertText", text: "d" },
       ]);
     });
 

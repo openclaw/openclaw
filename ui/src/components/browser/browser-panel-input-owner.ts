@@ -64,6 +64,13 @@ type BrowserPanelDrawingGesture = {
   stroke: AnnotationStroke;
 };
 
+type BrowserPanelQueuedText = {
+  text: string;
+  client: BrowserRequestClient;
+  targetId: string;
+  sent: boolean;
+};
+
 /** Owns pointer, keyboard, annotation, and inspection input for the browser surface. */
 export class BrowserPanelInputOwner {
   elements: {
@@ -80,6 +87,8 @@ export class BrowserPanelInputOwner {
   private clickSequence = 0;
   private inputGeneration = 0;
   private pendingText: Promise<boolean | undefined> | null = null;
+  // The newest queued input when it is text; later text joins it until it is sent.
+  private queuedText: BrowserPanelQueuedText | null = null;
   private compositionCurrent: (() => boolean) | null = null;
   private scrollPoint: { x: number; y: number } | null = null;
   private touchScroll: {
@@ -98,6 +107,7 @@ export class BrowserPanelInputOwner {
     this.cancelOverlayPointerGesture();
     this.pendingClick = null;
     this.pendingText = null;
+    this.queuedText = null;
     this.compositionCurrent = null;
     this.touchScroll = null;
     const input = this.elements.input;
@@ -150,6 +160,8 @@ export class BrowserPanelInputOwner {
       );
     };
     this.clickSequence += 1;
+    // Later text targets the field this click focuses, never an earlier request.
+    this.queuedText = null;
     // Preserve click order and failure: a failed click can leave the previous field focused.
     const previous = this.pendingText
       ? Promise.all([this.pendingClick, this.pendingText])
@@ -294,9 +306,7 @@ export class BrowserPanelInputOwner {
     const current = this.compositionCurrent;
     this.compositionCurrent = null;
     if (current?.() && event.data) {
-      this.runAfterClick((client, targetId) =>
-        insertBrowserText(client, { targetId, text: event.data }),
-      );
+      this.queueText(event.data);
     }
     if (event.currentTarget instanceof HTMLTextAreaElement) {
       event.currentTarget.value = "";
@@ -319,7 +329,7 @@ export class BrowserPanelInputOwner {
       // The empty proxy cannot identify the remote range a local correction would replace.
       this.host.setState("noticeText", t("browser.manualTextCorrection"));
     } else if (["insertText", "insertFromPaste"].includes(event.inputType) && text) {
-      this.runAfterClick((client, targetId) => insertBrowserText(client, { targetId, text }));
+      this.queueText(text);
     } else {
       const key =
         event.inputType === "deleteContentBackward"
@@ -370,23 +380,54 @@ export class BrowserPanelInputOwner {
     }
     const text = event.clipboardData.getData("text/plain");
     if (text) {
-      this.runAfterClick((client, targetId) => insertBrowserText(client, { targetId, text }));
+      this.queueText(text);
     }
+  }
+
+  private admittedTarget(): { client: BrowserRequestClient; targetId: string } | null {
+    const targetId = this.host.activeTargetId;
+    const client = this.host.operations.captureClient();
+    return client &&
+      targetId &&
+      this.host.view?.targetId === targetId &&
+      this.host.mode === "interact"
+      ? { client, targetId }
+      : null;
+  }
+
+  /** Text queued behind a slow request joins the next insertion. */
+  private queueText(text: string): void {
+    const target = this.admittedTarget();
+    if (!target) {
+      return;
+    }
+    const queued = this.queuedText;
+    if (
+      queued &&
+      !queued.sent &&
+      queued.client === target.client &&
+      queued.targetId === target.targetId
+    ) {
+      queued.text += text;
+      return;
+    }
+    const entry = { text, ...target, sent: false };
+    this.runAfterClick((client, targetId) => {
+      entry.sent = true;
+      return insertBrowserText(client, { targetId, text: entry.text });
+    });
+    this.queuedText = entry;
   }
 
   private runAfterClick(
     action: (client: BrowserRequestClient, targetId: string) => Promise<void>,
   ): void {
-    const targetId = this.host.activeTargetId;
-    const client = this.host.operations.captureClient();
-    if (
-      !client ||
-      !targetId ||
-      this.host.view?.targetId !== targetId ||
-      this.host.mode !== "interact"
-    ) {
+    const target = this.admittedTarget();
+    if (!target) {
       return;
     }
+    this.queuedText = null;
+    const { client, targetId } = target;
     const epoch = this.host.operations.epoch;
     const generation = this.inputGeneration;
     const run = (): Promise<boolean> | undefined => {

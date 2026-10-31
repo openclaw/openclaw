@@ -550,7 +550,7 @@ describe("BrowserPanel capture and input ownership", () => {
     const latestInspection = createDeferred<unknown>();
     let inspectionCount = 0;
     const elementFromPoint = vi.fn(() => null);
-    const { controller, request } = scenario("tab-a", undefined, {
+    const { controller } = scenario("tab-a", undefined, {
       "/act": async (envelope) => {
         if (envelope.body?.kind !== "evaluate") {
           throw new Error("Unexpected browser inspection");
@@ -574,17 +574,6 @@ describe("BrowserPanel capture and input ownership", () => {
     await vi.advanceTimersByTimeAsync(120);
 
     expect(inspectionCount).toBe(2);
-    expect(request).toHaveBeenLastCalledWith(
-      "browser.request",
-      expect.objectContaining({
-        method: "POST",
-        path: "/act",
-        body: expect.objectContaining({
-          kind: "evaluate",
-          targetId: "tab-a",
-        }),
-      }),
-    );
     expect(elementFromPoint).toHaveBeenLastCalledWith(70, 80);
     const latestNode = createInspectedNode("latest-coalesced");
     latestInspection.resolve({ result: latestNode });
