@@ -516,7 +516,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       draftStream &&
       draftPreview.isProgressMode &&
       info.kind === "block" &&
-      !deliverablePayload.isCommentary
+      !deliverablePayload.isCommentary &&
+      !deliverablePayload.isCompactionNotice
     ) {
       const reply = resolveSendableOutboundReplyParts(deliverablePayload);
       if (!reply.hasMedia && !deliverablePayload.isError) {

@@ -69,7 +69,8 @@ export function createDiscordBeforePayloadDelivery(params: {
       params.draftPreview.isProgressMode &&
       info.kind === "block" &&
       !resolveSendableOutboundReplyParts(payload).hasMedia &&
-      !payload.isError
+      !payload.isError &&
+      !payload.isCompactionNotice
     ) {
       return null;
     }
