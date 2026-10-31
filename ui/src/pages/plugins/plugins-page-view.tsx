@@ -104,7 +104,8 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     return staticAsk ? () => void staticAsk() : undefined;
   });
   const configState = () => page().context.runtimeConfig.state;
-  const configAnalysis = createMemo(() => analyzeConfigSchema(configState().configSchema));
+  const rawConfigSchema = createMemo(() => configState().configSchema);
+  const configAnalysis = createMemo(() => analyzeConfigSchema(rawConfigSchema()));
   const detailPluginId = () => page().state.detail?.pluginId;
   const catalogId = () => page().state.catalogDetail?.id ?? "";
   const catalogInstallable = createMemo(() => {
