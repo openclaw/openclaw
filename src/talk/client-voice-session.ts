@@ -1,7 +1,9 @@
 /** Durable per-agent voice-call records for Talk continuity and mutation evidence. */
+import fs from "node:fs/promises";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   appendTranscriptMessage,
+  patchSessionEntryCore,
   publishTranscriptUpdate,
 } from "../config/sessions/session-accessor.js";
 import { appendExpectedSessionTranscriptTurn } from "../config/sessions/session-accessor.sqlite-transcript-turn.js";
@@ -404,6 +406,33 @@ function appendVoiceTranscript(
                   message: appended.message,
                   messageId: appended.messageId,
                 });
+                // A voice-only session never runs an agent turn, so this append is the
+                // only place that records its interaction time. Skip the touch when the
+                // agent database was displaced or removed: recovery owns that state and
+                // reopening it here would recreate metadata it deliberately dropped.
+                const entryScope = {
+                  agentId: normalized.agentId,
+                  sessionKey: normalized.sessionKey,
+                  sessionId: entry.sessionId,
+                  ...(normalized.sessionTarget.storePath
+                    ? { storePath: normalized.sessionTarget.storePath }
+                    : {}),
+                };
+                // Best effort: a drifted, displaced, or worker-owned database must not fail
+                // the transcript write that already committed; recovery owns that state.
+                try {
+                  // An empty placeholder is what recovery leaves behind when it displaces
+                  // the database, so only touch a non-empty one.
+                  const agentDb = resolveOpenClawAgentSqlitePath({ agentId: normalized.agentId });
+                  if ((await fs.stat(agentDb)).size > 0) {
+                    await patchSessionEntryCore(entryScope, () => ({
+                      lastInteractionAt: timestamp,
+                      updatedAt: timestamp,
+                    }));
+                  }
+                } catch {
+                  // Keep the committed transcript authoritative; the timestamp retries later.
+                }
               }
 
               if (!workerTranscript) {

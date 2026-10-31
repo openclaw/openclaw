@@ -5,7 +5,10 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntryReadOnly,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import * as sessionEvents from "../config/sessions/session-accessor.sqlite-events.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { readSessionTranscriptBoundedMessageTailPageAsync } from "../gateway/session-transcript-readers.js";
@@ -639,3 +642,22 @@ it.each([
     }
   },
 );
+
+it("records the interaction time for a voice-only session", async () => {
+  await seedSession(target.sessionKey);
+  const voiceSessionId = await createVoiceSession({ now: 1 });
+  const timestamp = 1_700_000_123_456;
+
+  await appendClientVoiceTranscript({
+    ...target,
+    sessionTarget: { sessionKey: target.sessionKey },
+    voiceSessionId,
+    entryId: "voice-only-interaction",
+    role: "user",
+    text: "voice only turn",
+    timestamp,
+  });
+
+  const entry = loadSessionEntryReadOnly({ agentId: "main", sessionKey: target.sessionKey });
+  expect(entry?.lastInteractionAt).toBe(timestamp);
+});
