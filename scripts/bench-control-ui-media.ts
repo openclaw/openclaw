@@ -4,16 +4,20 @@ import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { chromium, webkit, type CDPSession, type Page } from "playwright";
+import { chromium, webkit, type CDPSession, type Page, type Request } from "playwright";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
+import { encodeImageThumbnail } from "../src/gateway/managed-image-thumbnail-cache.js";
 import { encodePngRgb } from "../src/media/png-encode.js";
+import { normalizeChatImageRenditionWidth } from "../src/shared/chat-image-renditions.js";
 import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionPath,
+  createControlUiMockBootstrapConfig,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
-  startBuiltControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { createControlUiTeamScaleFixture } from "../ui/src/test-helpers/control-ui-team-scale-fixture.ts";
+import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 
 const { values } = parseArgs({
   options: {
@@ -66,6 +70,22 @@ function raster(width: number, height: number) {
 }
 const photograph = raster(1600, 900);
 const icon = raster(40, 40);
+const thumbnails = new Map(
+  await Promise.all(
+    ([480, 960, 1920] as const).map(
+      async (width) => [width, await encodeImageThumbnail(photograph, width)] as const,
+    ),
+  ),
+);
+function mediaKind(url: URL) {
+  if (url.pathname.includes("/__openclaw__/assistant-media")) {
+    return url.searchParams.get("meta") === "1" ? "metadata" : "image";
+  }
+  if (/\/api\/users\/[^/]+\/avatar/u.test(url.pathname)) {
+    return "avatar";
+  }
+  return url.pathname.includes("/__openclaw__/link-favicon") ? "favicon" : undefined;
+}
 async function frames(page: Page) {
   await page.evaluate(
     () =>
@@ -103,7 +123,7 @@ const servers: Array<{
   directory: string;
   build: { buildId: string; version: string };
   sha256: string;
-  server: Awaited<ReturnType<typeof startBuiltControlUiE2eServer>>;
+  server: Awaited<ReturnType<typeof startControlUiBenchGatewayServer>>;
 }> = [];
 type MediaSnapshot = {
   nonce: string;
@@ -176,9 +196,9 @@ type Result = {
   bootDuplicates?: Array<[string, number]>;
   duplicates?: Array<[string, number]>;
   cacheProbe?: {
-    transport: "synthetic-route";
-    browserHttpCache: "disabled-by-playwright-routing";
-    routeFulfillments: Record<string, number>;
+    transport: "native-http";
+    browserHttpCache: "enabled";
+    serverRequests: Array<{ method: string; url: string }>;
     fetchAttempts: {
       cacheOnly: MediaFetchAttempt[];
       networkEligible: MediaFetchAttempt[];
@@ -209,7 +229,7 @@ try {
       directory: path.resolve(directory),
       build: JSON.parse(raw),
       sha256: createHash("sha256").update(html).digest("hex"),
-      server: await startBuiltControlUiE2eServer(path.resolve(directory)),
+      server: await startControlUiBenchGatewayServer(path.resolve(directory)),
     });
   }
   for (const profile of profiles) {
@@ -226,14 +246,31 @@ try {
         page.setDefaultTimeout(30_000);
         const cdp = engine === "chromium" ? await context.newCDPSession(page) : undefined;
         const requests = new Map<string, number>();
-        const routeFulfillments = new Map<string, number>();
         const authContexts = new Map<string, number>();
-        let pendingMedia = 0;
+        const pendingMedia = new Set<Request>();
+        const serverRequestOffset = slot.server.requests.length;
         let mediaTransferAt = 0;
         const errors: string[] = [];
         const events: Array<Record<string, unknown>> = [];
         let tracing = false;
         page.on("pageerror", (error) => errors.push(error.message));
+        page.on("request", (request) => {
+          const url = new URL(request.url());
+          const kind = mediaKind(url);
+          if (!kind) {
+            return;
+          }
+          const headers = request.headers();
+          const contextKey = `${headers.authorization ?? ""}\n${headers.cookie ?? ""}`;
+          if (!authContexts.has(contextKey)) {
+            authContexts.set(contextKey, authContexts.size + 1);
+          }
+          const resource = `${kind}:${request.method()}:context-${authContexts.get(contextKey)}:${url.href}`;
+          requests.set(resource, (requests.get(resource) ?? 0) + 1);
+          pendingMedia.add(request);
+        });
+        page.on("requestfinished", (request) => pendingMedia.delete(request));
+        page.on("requestfailed", (request) => pendingMedia.delete(request));
         page.on("console", (message) => {
           if (message.type() === "error") {
             errors.push(message.text());
@@ -537,19 +574,6 @@ try {
             sidebarAvatars: true,
             transcriptMessages: 96,
           });
-          await page.route("**/*", async (route) => {
-            const asset = fixture.assets.get(new URL(route.request().url()).pathname);
-            if (!asset) {
-              return route.fallback();
-            }
-            const { delayMs, ...response } = asset;
-            if (delayMs) {
-              await new Promise((resolve) => {
-                setTimeout(resolve, delayMs);
-              });
-            }
-            return route.fulfill(response);
-          });
           const messages = Array.from({ length: 96 }, (_, index) => ({
             role: index % 2 ? "assistant" : "user",
             timestamp: 1_800_000_000_000 + index,
@@ -586,7 +610,7 @@ try {
           const methodResponses = { ...fixture.scenario.methodResponses };
           delete methodResponses["chat.startup"];
           delete methodResponses["chat.history"];
-          await installMockGateway(page, {
+          const scenario = {
             ...fixture.scenario,
             methodResponses,
             serverBuildId: slot.build.buildId,
@@ -594,72 +618,57 @@ try {
             automaticallyFetchFavicons: true,
             historyMessages: messages,
             sessionTranscripts: { [fixture.selectedSessionKey]: { messages } },
+          };
+          slot.server.setFixtureReader(async (pathname, url) => {
+            if (pathname === CONTROL_UI_BOOTSTRAP_CONFIG_PATH) {
+              return {
+                body: JSON.stringify(createControlUiMockBootstrapConfig(scenario)),
+                contentType: "application/json",
+              };
+            }
+            const kind = mediaKind(url);
+            if (!kind) {
+              return fixture.assets.get(pathname);
+            }
+            await heldMedia;
+            const metadata = kind === "metadata";
+            const thumbnail = kind === "image" && url.searchParams.get("variant") === "thumbnail";
+            const body = metadata
+              ? JSON.stringify({
+                  available: true,
+                  mediaTicket: "synthetic-media-ticket",
+                  mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
+                })
+              : thumbnail
+                ? thumbnails.get(normalizeChatImageRenditionWidth(url.searchParams.get("width")))!
+                : kind === "image"
+                  ? photograph
+                  : icon;
+            if (profile === "remote") {
+              // Only real HTTP requests share this 10 Mbps budget after one RTT.
+              mediaTransferAt =
+                Math.max(Date.now() + 100, mediaTransferAt) + Buffer.byteLength(body) / 1250;
+              await new Promise((resolve) => {
+                setTimeout(resolve, mediaTransferAt - Date.now());
+              });
+            }
+            return {
+              body,
+              contentType: metadata ? "application/json" : thumbnail ? "image/webp" : "image/png",
+              headers: {
+                "Cache-Control": metadata
+                  ? "private, no-store"
+                  : kind === "image"
+                    ? "private, no-cache"
+                    : "private, max-age=3600",
+                Vary: "Authorization, Cookie",
+              },
+            };
           });
-          await page.route(
-            /\/(?:__openclaw__\/(?:assistant-media|link-favicon)|api\/users\/[^/]+\/avatar)/u,
-            async (route) => {
-              const url = new URL(route.request().url());
-              const metadata = url.searchParams.get("meta") === "1";
-              const kind = url.pathname.includes("assistant-media")
-                ? metadata
-                  ? "metadata"
-                  : "image"
-                : url.pathname.includes("avatar")
-                  ? "avatar"
-                  : "favicon";
-              // Keep revision/ticket/size queries and auth scopes distinct, without recording credentials.
-              const headers = route.request().headers();
-              const contextKey = `${headers.authorization ?? ""}\n${headers.cookie ?? ""}`;
-              if (!authContexts.has(contextKey)) {
-                authContexts.set(contextKey, authContexts.size + 1);
-              }
-              const resource = `${kind}:${route.request().method()}:context-${authContexts.get(contextKey)}:${url.href}`;
-              requests.set(resource, (requests.get(resource) ?? 0) + 1);
-              pendingMedia += 1;
-              try {
-                await heldMedia;
-                const body = kind === "image" ? photograph : icon;
-                if (profile === "remote") {
-                  // Routed responses share a 10 Mbps budget after one request RTT.
-                  mediaTransferAt =
-                    Math.max(Date.now() + 100, mediaTransferAt) +
-                    (metadata ? 200 : body.length) / 1250;
-                  await new Promise((resolve) => {
-                    setTimeout(resolve, mediaTransferAt - Date.now());
-                  });
-                }
-                await route.fulfill(
-                  metadata
-                    ? {
-                        json: {
-                          available: true,
-                          mediaTicket: "synthetic-media-ticket",
-                          mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-                        },
-                      }
-                    : {
-                        contentType: "image/png",
-                        body,
-                        headers: { "Cache-Control": "public, max-age=3600" },
-                      },
-                );
-                const fulfillment = `${route.request().resourceType()}:${resource}`;
-                routeFulfillments.set(fulfillment, (routeFulfillments.get(fulfillment) ?? 0) + 1);
-              } finally {
-                pendingMedia -= 1;
-              }
-            },
-          );
+          await installMockGateway(page, scenario);
+          // The server owns bootstrap and media; interception would disable HTTP cache.
+          await page.unrouteAll();
           await cdp?.send("Performance.enable", { timeDomain: "threadTicks" });
-          await cdp?.send("Network.enable");
-          if (cdp && profile === "remote") {
-            await cdp.send("Network.emulateNetworkConditions", {
-              offline: false,
-              latency: 100,
-              downloadThroughput: 1_250_000,
-              uploadThroughput: 1_250_000,
-            });
-          }
           await page.goto(
             new URL(controlUiSessionPath(fixture.selectedSessionKey), slot.server.baseUrl).href,
           );
@@ -703,7 +712,7 @@ try {
               // Allow intersection admission and fetch-to-img handoff before testing quiescence.
               await frames(page);
               const loading =
-                pendingMedia > 0 ||
+                pendingMedia.size > 0 ||
                 (await page.evaluate(() =>
                   [...document.images].some((image) => {
                     // Unadmitted off-screen placeholders have neither src nor loading state.
@@ -751,10 +760,10 @@ try {
                     return true;
                   }),
                 ));
-              settledFrames = pendingMedia === 0 && !loading ? settledFrames + 1 : 0;
+              settledFrames = pendingMedia.size === 0 && !loading ? settledFrames + 1 : 0;
               if (Date.now() > deadline) {
                 throw new Error(
-                  `Media did not settle: ${pendingMedia} admitted HTTP requests pending`,
+                  `Media did not settle: ${pendingMedia.size} browser requests pending`,
                 );
               }
               if (!settledFrames) {
@@ -921,9 +930,11 @@ try {
             )
             .catch(() => null);
           result.cacheProbe = {
-            transport: "synthetic-route",
-            browserHttpCache: "disabled-by-playwright-routing",
-            routeFulfillments: Object.fromEntries(routeFulfillments),
+            transport: "native-http",
+            browserHttpCache: "enabled",
+            serverRequests: slot.server.requests
+              .slice(serverRequestOffset)
+              .filter((request) => mediaKind(new URL(request.url, slot.server.baseUrl))),
             fetchAttempts: fetchAttempts
               ? {
                   cacheOnly: fetchAttempts.filter((attempt) => attempt.cache === "only-if-cached"),
@@ -932,7 +943,7 @@ try {
                   ),
                 }
               : null,
-            // Every media response is fulfilled in-process; this run does not measure downloads.
+            // Server requests are wire admissions, not decoded bytes or complete downloads.
             networkDownloads: null,
           };
           results.push(result);
@@ -993,6 +1004,9 @@ try {
           messages: 96,
           uniqueImages: 16,
           imageSize: [1600, 900],
+          thumbnailBytes: Object.fromEntries(
+            [...thumbnails].map(([width, bytes]) => [width, bytes.length]),
+          ),
           dimensions: values.dimensions,
           uniqueHosts: 8,
           avatars: 120,
@@ -1000,9 +1014,9 @@ try {
         timing,
         results,
         acceptance:
-          "Zero stable-viewport media CLS; inspect repeated route admissions alongside cache-only fetch attempts before attributing application reuse; inspect live blobs after native app-host disconnection without document reload. Route admissions and fulfillments are not network downloads or browser-cache hits. >=10 AB/BA pairs: median <=5% regression and p95 not worse; noisy hosts require a separate A/A control and 20 pairs judged by CDP CPU plus structural counters.",
+          "Zero stable-viewport media CLS; compare browser admissions, cache-only fetch attempts and server HTTP requests before attributing application reuse; inspect live blobs after native app-host disconnection without document reload. >=10 AB/BA pairs: median <=5% regression and p95 not worse; noisy hosts require a separate A/A control and 20 pairs judged by CDP CPU plus structural counters.",
         limitations:
-          "Synthetic Gateway RPC has no RTT. Chromium static HTTP uses CDP 100ms/10Mbps throttling; WebKit static HTTP is unthrottled. Both engines use equivalent explicit routed-media delay because Playwright fulfillment bypasses network emulation. WebKit has no CDP CPU/heap/trace metrics. Unsupported native Layout Instability is reported as null, not zero; geometry changes are diagnostic rectangles, not CLS. Playwright routing disables HTTP cache; duplicate route-admission counters test application ownership. Fulfillments are synthetic responses, not network downloads; browser cache effectiveness and real download counts are unmeasured. CDP durations include media load and scroll, not navigation or disposal; heap metrics are JS heap only, not native decoded-image memory. No total decoded-memory claim.",
+          "Synthetic Gateway RPC has no RTT. Static HTTP is unthrottled and outside the measured interval. Remote media HTTP responses use one server-side100ms/shared10Mbps delay in both engines; browser-cache-only reads never reach that delay. Browser request events include cache hits; server requests count wire admissions, not completed downloads. WebKit has no CDP CPU/heap/trace metrics. Unsupported native Layout Instability is reported as null, not zero; geometry changes are diagnostic rectangles, not CLS. CDP durations include media load and scroll, not navigation or disposal; heap metrics are JS heap only, not native decoded-image memory. No total decoded-memory claim.",
       },
       null,
       2,
