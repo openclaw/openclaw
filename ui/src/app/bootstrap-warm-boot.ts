@@ -217,9 +217,28 @@ export function subscribeBootRecordPersistence(
     }
   };
   // Persist admitted owner snapshots independently of mounted views.
-  const stops = [gateway, agents, sessions].map((capability) =>
-    capability.subscribe(persistLiveBootRecord),
-  );
+  let lastGroupSettings: typeof sessions.state.groupSettings | undefined;
+  let lastSectionOrder: typeof sessions.state.sectionOrder | undefined;
+  let lastGroupsStatus: ReturnType<typeof sessions.groupsStatus> | undefined;
+  const stops = [
+    gateway.subscribe(persistLiveBootRecord),
+    agents.subscribe(persistLiveBootRecord),
+    sessions.subscribe((state) => {
+      const groupsStatus = sessions.groupsStatus();
+      // Row publications cannot change the boot catalog or postpone its pending write.
+      if (
+        lastGroupSettings === state.groupSettings &&
+        lastSectionOrder === state.sectionOrder &&
+        lastGroupsStatus === groupsStatus
+      ) {
+        return;
+      }
+      lastGroupSettings = state.groupSettings;
+      lastSectionOrder = state.sectionOrder;
+      lastGroupsStatus = groupsStatus;
+      persistLiveBootRecord();
+    }),
+  ];
   const readOfflineAgents = () => {
     const account = readOfflineStorageScope({ client: gateway.snapshot.client });
     return gateway.connectionRevision === connectionRevision &&

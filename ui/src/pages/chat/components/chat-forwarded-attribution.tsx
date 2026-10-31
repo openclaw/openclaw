@@ -6,9 +6,11 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { SessionLink } from "../../../components/solid/session-link.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import type { ChatDisplayFacts } from "../../../lib/chat/row-display-facts.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { ForwardedAvatar, type ForwardedAvatarOptions } from "../chat-avatar-view.tsx";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { readAutomationRun } from "../chat-turn-boundary.ts";
 
 registerChatMessageMetadataEnglish();
@@ -18,6 +20,7 @@ export type ForwardedAttributionOptions = ForwardedAvatarOptions & {
   basePath?: string;
   linkSource?: boolean;
   updateCount?: number;
+  displayFacts?: ChatDisplayFacts;
 };
 
 type ForwardedGroup = Pick<MessageGroup, "senderSession"> & Partial<Pick<MessageGroup, "messages">>;
@@ -66,16 +69,21 @@ function forwardedSource(group: ForwardedGroup, opts: ForwardedAttributionOption
     sourceIsMainSession,
     sourceLabel,
     sourceAgentPrefix,
+    display: sourceLabel
+      ? undefined
+      : opts.displayFacts?.forRow(persistedMessageEntryId(group.messages?.[0]?.message)),
   };
 }
 
 type ForwardedSource = ReturnType<typeof forwardedSource>;
 
-function sessionTitleRefs() {
+function sessionTitleRefs(source: () => ForwardedSource) {
   let target: HTMLElement;
   let label: HTMLSpanElement;
   onSettled(() =>
-    target.hasAttribute("data-session-key") ? registerSessionTitleTarget(target, label) : undefined,
+    target.hasAttribute("data-session-key")
+      ? registerSessionTitleTarget(target, label, source().display)
+      : undefined,
   );
   return {
     target: (element: HTMLElement) => {
@@ -88,7 +96,7 @@ function sessionTitleRefs() {
 }
 
 function ForwardedSourceLabel(props: { source: ForwardedSource; label: string }) {
-  const refs = sessionTitleRefs();
+  const refs = sessionTitleRefs(() => props.source);
   return (
     <span
       ref={refs.target}
@@ -123,6 +131,7 @@ function ForwardedLink(props: { source: ForwardedSource; basePath?: string }) {
               label={initialLabel()}
               titled={Boolean(props.source.sourceLabel)}
               agent={Boolean(props.source.sourceIsOtherAgent && props.source.sourceIsMainSession)}
+              display={props.source.display}
             />
           )}
         </Show>

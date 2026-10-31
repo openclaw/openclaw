@@ -6,7 +6,7 @@ import {
   getFeishuLifecycleTestMocks,
   resetFeishuLifecycleTestMocks,
 } from "./lifecycle.test-support.js";
-import { processedCardActions, resolvedCardActionChatTypes } from "./card-action-state.js";
+import { cardActionReplayGuard, resolvedCardActionChatTypes } from "./card-action-state.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import {
   createFeishuLifecycleConfig,
@@ -152,7 +152,7 @@ describe("Feishu event reply lifecycle", () => {
     vi.useRealTimers();
     resetFeishuLifecycleTestMocks();
     lastRuntime = createRuntimeEnv();
-    processedCardActions.clear();
+    cardActionReplayGuard.clearMemory();
     resolvedCardActionChatTypes.clear();
     setFeishuLifecycleStateDir("openclaw-feishu-lifecycle");
   });
@@ -160,7 +160,7 @@ describe("Feishu event reply lifecycle", () => {
   afterEach(async () => {
     try {
       await stopFeishuLifecycleMonitors();
-      processedCardActions.clear();
+      cardActionReplayGuard.clearMemory();
       resolvedCardActionChatTypes.clear();
       restoreFeishuLifecycleStateDir(originalStateDir);
     } finally {

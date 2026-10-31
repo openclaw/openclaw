@@ -174,6 +174,7 @@ function readProjectionRows(
       "preparation_key",
       "preparation_purpose",
       "provision_operation_id",
+      "resource_receipt_json",
       "node_setup_id",
       "node_device_id",
       "shared_host",
@@ -208,7 +209,8 @@ function readProjectionRows(
         .select("environment_id")
         .where("session_id", "in", ids)
         .where("environment_id", "is not", null),
-    );
+    )
+    .$assertType<Selectable<StateDatabase["worker_environments"]>>();
   // Each recovery table contributes independently, including local and terminal placements.
   // The native sync executor returns JSON text without Kysely's result plugins.
   return executeSqliteQuerySync(

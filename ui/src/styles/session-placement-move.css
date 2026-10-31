@@ -4,9 +4,6 @@
 
 .session-move-modal .session-move {
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--overlay-modal-radius);
-  background: var(--bg-elevated);
 }
 
 .session-move {
@@ -24,12 +21,12 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 20px 24px 10px;
+  padding: var(--overlay-modal-padding) var(--overlay-modal-padding) 10px;
 }
 
 .session-move__header h2 {
   margin: 0;
-  font-size: 17px;
+  font-size: var(--overlay-modal-title-size);
   font-weight: 600;
   line-height: 24px;
 }
@@ -37,18 +34,18 @@
 .session-move__close {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: var(--overlay-modal-close-size);
+  height: var(--overlay-modal-close-size);
   flex: none;
   border: 0;
-  border-radius: 50%;
+  border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--muted);
 }
 
 .session-move__close svg {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
 }
 
 .session-move__scroll {
@@ -346,11 +343,7 @@
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  padding: 12px 24px 20px;
-}
-
-.session-move__actions .btn {
-  border-radius: 8px;
+  padding: 12px var(--overlay-modal-padding) var(--overlay-modal-padding);
 }
 
 .session-move__status {

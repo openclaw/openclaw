@@ -1,4 +1,5 @@
 import { onSettled } from "solid-js";
+import type { ChatRowDisplay } from "../../lib/chat/row-display-facts.ts";
 import { registerSessionTitleTarget } from "../markdown-link-display.ts";
 
 export function SessionLink(props: {
@@ -7,11 +8,12 @@ export function SessionLink(props: {
   titled?: boolean;
   agent?: boolean;
   href?: string;
+  display?: ChatRowDisplay;
   onOpen?: () => void;
 }) {
   let target: HTMLAnchorElement;
   let label: HTMLSpanElement;
-  onSettled(() => registerSessionTitleTarget(target, label));
+  onSettled(() => registerSessionTitleTarget(target, label, props.display));
   return (
     <a
       ref={(element) => (target = element)}
