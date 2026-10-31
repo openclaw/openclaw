@@ -21,7 +21,7 @@ import {
   resolveProviderEnvAuthLookupMaps,
 } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
-import { ProviderAuthError } from "./model-auth-runtime-shared.js";
+import { isProviderAuthError } from "./model-auth-runtime-shared.js";
 
 type AgentDiscoveryAuthLookupOptions = {
   config?: OpenClawConfig;
@@ -141,11 +141,7 @@ function syntheticAuthParams(options: AgentDiscoveryAuthLookupOptions, provider:
  * catalog availability reports it per model, so it must not fail the other providers.
  */
 function isUnavailablePluginOwnedAuth(error: unknown, provider: string): boolean {
-  return (
-    error instanceof ProviderAuthError &&
-    error.code === "missing-provider-auth" &&
-    error.provider === provider
-  );
+  return isProviderAuthError(error, "missing-provider-auth") && error.provider === provider;
 }
 
 function addSyntheticCredential(
