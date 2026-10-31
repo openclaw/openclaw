@@ -146,6 +146,31 @@ it.for(["resolve", "reject"] as const)(
   },
 );
 
+it("preserves explicitly supplied deferred subscription payloads", async ({ gatewayPage }) => {
+  gatewayPage.execute(
+    createControlUiMockGatewayInitScript({
+      heldMethods: ["chat.startup"],
+    }),
+  );
+  const { send, frames } = gatewayPage.connect();
+  const gateway = (gatewayPage.window as MockGatewayWindow).openclawControlUiE2eGateway!;
+  await flush();
+  const key = "agent:main:main";
+  const payloads = [
+    { key },
+    { key, initialHistory: { ok: true, payload: { messages: ["Explicit history"] } } },
+  ];
+  for (const [index, payload] of payloads.entries()) {
+    const id = `explicit-${index}`;
+    gateway.deferNext("sessions.messages.subscribe");
+    send(id, "sessions.messages.subscribe", { key, initialHistory: {} });
+    await flush();
+    gateway.resolveDeferred("sessions.messages.subscribe", payload);
+    expect(frames.at(-1)).toMatchObject({ id, ok: true });
+    expect(frames.at(-1)?.payload).toEqual(payload);
+  }
+});
+
 it("replaces the static startup and history transcript together", async ({ gatewayPage }) => {
   const stale = { messages: [{ role: "assistant", content: "Saved witness" }], hasMore: false };
   gatewayPage.execute(

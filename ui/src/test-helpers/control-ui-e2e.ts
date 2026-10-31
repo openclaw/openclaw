@@ -669,7 +669,7 @@ function installControlUiMockGateway(
   type DeferredResponse = {
     method: string;
     params?: unknown;
-    respond: (response: unknown) => void;
+    respond: (response: unknown, defaultResponse?: boolean) => void;
   };
   type MockTerminalSession = {
     sessionId: string;
@@ -1986,11 +1986,11 @@ function installControlUiMockGateway(
     socket: MockWebSocket,
     respond: (response: unknown, deferred?: boolean) => void,
   ): (() => void) | undefined {
-    const complete = (response: unknown, deferred = false) => {
+    const complete = (response: unknown, deferred = false, defaultResponse = false) => {
       if (
+        defaultResponse &&
         method === "sessions.messages.subscribe" &&
         !hasOwn(scenario.methodResponses, method) &&
-        !requestHandlers.has(method) &&
         subscriptionRouting.completeInitialHistory(
           params,
           response,
@@ -2009,7 +2009,7 @@ function installControlUiMockGateway(
       deferredRequests.responses.push({
         method,
         params,
-        respond: (response) => complete(response, true),
+        respond: (response, defaultResponse) => complete(response, true, defaultResponse),
       });
       return undefined;
     }
@@ -2022,7 +2022,7 @@ function installControlUiMockGateway(
           emit: (event, payload) => emitGatewayEvent(socket, event, payload),
         });
       } else {
-        complete(buildResponse(method, params));
+        complete(buildResponse(method, params), false, true);
       }
     };
   }
@@ -2238,11 +2238,10 @@ function installControlUiMockGateway(
     requests,
     resolveDeferred(method, payload, options) {
       for (const response of deferredRequests.take(method, options)) {
+        const responsePayload = payload ?? buildResponse(response.method, response.params);
         response.respond(
-          responseFixtures.applyAgentModel(
-            response.method,
-            payload ?? buildResponse(response.method, response.params),
-          ),
+          responseFixtures.applyAgentModel(response.method, responsePayload),
+          payload == null && !requestHandlers.has(method),
         );
       }
     },
