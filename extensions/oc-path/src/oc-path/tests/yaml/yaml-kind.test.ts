@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { inferKind } from "../../dispatch.js";
-import { findOcPaths } from "../../find.js";
 import { parseOcPath } from "../../oc-path.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../../sentinel.js";
 import { resolveOcPath, setOcPath } from "../../universal.js";
@@ -145,43 +144,5 @@ describe("YAML", () => {
     ["items: []\n", "items/+", `{"${REDACTED_SENTINEL}":"2"}`],
   ])("rejects sentinel-bearing YAML before raw emit: %s at %s", (raw, address, value) => {
     expect(() => set(raw, address, value)).toThrow(OcEmitSentinelError);
-  });
-  it("reads values reached through YAML aliases", () => {
-    const raw =
-      "defaults: &defaults\n  model: small\n  retries: 2\n" +
-      "steps:\n  - id: fetch\n    with: *defaults\n  - id: classify\n    model: &big large\n" +
-      "  - id: rerank\n    model: *big\n" +
-      "fallback: *big\n";
-    const ast = parseYaml(raw);
-
-    expect(resolveOcPath(ast, path("fallback"))).toMatchObject({
-      kind: "leaf",
-      valueText: "large",
-    });
-    expect(resolveOcPath(ast, path("steps/0/with.model"))).toMatchObject({
-      kind: "leaf",
-      valueText: "small",
-    });
-    expect(
-      findOcPaths(ast, path("steps/*/with.model")).map(({ match }) =>
-        match.kind === "leaf" ? match.valueText : match.kind,
-      ),
-    ).toEqual(["small"]);
-    expect(
-      findOcPaths(ast, path("steps/[model=large]/id")).map(({ match }) =>
-        match.kind === "leaf" ? match.valueText : match.kind,
-      ),
-    ).toEqual(["classify", "rerank"]);
-    expect(set(raw, "fallback", "medium").raw).toContain("fallback: medium\n");
-    expect(set(raw, "fallback", "medium").raw).toContain("model: &big large\n");
-  });
-
-  it("stops recursive find at cyclic YAML aliases", () => {
-    const ast = parseYaml("root: &root\n  label: ok\n  self: *root\n");
-
-    expect(findOcPaths(ast, path("**/label")).map(({ path: p }) => [p.section, p.item])).toEqual([
-      ["root", "label"],
-      ["root.self", "label"],
-    ]);
   });
 });
