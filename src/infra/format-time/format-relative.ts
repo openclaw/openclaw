@@ -30,9 +30,13 @@ export function formatTimeAgo(
   if (minutes < 1) {
     return suffix ? "just now" : `${totalSeconds}s`;
   }
-  const hours = Math.round(minutes / 60);
+  const hours = Math.round(durationMs / 3_600_000);
   const label =
-    minutes < 60 ? `${minutes}m` : hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
+    minutes < 60
+      ? `${minutes}m`
+      : hours < 48
+        ? `${hours}h`
+        : `${Math.round(durationMs / 86_400_000)}d`;
   return suffix ? `${label} ago` : label;
 }
 

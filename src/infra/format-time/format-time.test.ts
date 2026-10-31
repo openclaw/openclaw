@@ -135,6 +135,9 @@ it.each([
   [30000, undefined, "1m ago"],
   [47 * 3600000, undefined, "47h ago"],
   [48 * 3600000, undefined, "2d ago"],
+  // 2d 11h 29m 45.6s double-rounded to 3d because 59.5h rounded to 60h, then 2.5d to 3d.
+  [214_185_600, undefined, "2d ago"],
+  [300_585_600, undefined, "3d ago"],
   [0, { suffix: false }, "0s"],
   [7200000, { suffix: false }, "2h"],
 ] as const)("formats relative age for %j (%j)", (input, options, expected) => {
