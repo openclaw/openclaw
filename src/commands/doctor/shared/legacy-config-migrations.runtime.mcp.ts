@@ -1,19 +1,15 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   getRecord,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import {
-  canonicalizeConfiguredMcpServer,
   isKnownCliMcpTypeAlias,
+  MCP_SERVER_TIMEOUT_ALIASES,
+  migrateLegacyConfiguredMcpServer,
 } from "../../../config/mcp-config-normalize.js";
 import { isRecord } from "./legacy-config-record-shared.js";
-
-const MCP_SERVER_TIMEOUT_ALIASES = [
-  ["connectTimeout", "connectionTimeoutMs"],
-  ["connect_timeout", "connectionTimeoutMs"],
-  ["timeout", "requestTimeoutMs"],
-] as const;
 
 function mcpServerRules(
   message: string,
@@ -50,48 +46,9 @@ function migrateMcpServers(servers: unknown, pathPrefix: string, changes: string
     if (!isRecord(entry)) {
       continue;
     }
-    let server = entry;
-    const disabled = server.disabled;
-    if (typeof disabled === "boolean") {
-      if (typeof server.enabled !== "boolean") {
-        server.enabled = !disabled;
-        changes.push(
-          `Moved ${pathPrefix}.${serverName}.disabled ${disabled} → enabled ${!disabled}.`,
-        );
-      } else {
-        changes.push(
-          `Removed ${pathPrefix}.${serverName}.disabled ${disabled} because enabled is already set to ${server.enabled}.`,
-        );
-      }
-      delete server.disabled;
-    }
-    for (const [alias, canonical] of MCP_SERVER_TIMEOUT_ALIASES) {
-      if (!Object.hasOwn(server, alias)) {
-        continue;
-      }
-      const value = server[alias];
-      // Old runtime only honored positive alias seconds; canonical fields are
-      // finite().positive(), so migrating 0/negative/overflow would fail validation.
-      if (
-        server[canonical] === undefined &&
-        typeof value === "number" &&
-        value > 0 &&
-        Number.isFinite(value * 1_000)
-      ) {
-        server[canonical] = value * 1_000;
-        changes.push(
-          `Moved ${pathPrefix}.${serverName}.${alias} → ${canonical} (${value * 1_000} ms).`,
-        );
-      } else {
-        changes.push(
-          `Removed ${pathPrefix}.${serverName}.${alias} (${canonical} already set or alias invalid).`,
-        );
-      }
-      delete server[alias];
-    }
-    if (hasMcpServerLegacyAliases(server) || isKnownCliMcpTypeAlias(server.type)) {
-      server = canonicalizeConfiguredMcpServer(server);
-      records[serverName] = server;
+    const normalized = migrateLegacyConfiguredMcpServer(entry);
+    if (!isDeepStrictEqual(normalized, entry)) {
+      records[serverName] = normalized;
       changes.push(`Canonicalized legacy aliases in ${pathPrefix}.${serverName}.`);
     }
   }

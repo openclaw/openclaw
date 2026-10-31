@@ -16,6 +16,12 @@ const CLI_MCP_TYPE_TO_OPENCLAW_TRANSPORT: Record<string, OpenClawMcpHttpTranspor
   stdio: "stdio",
 };
 
+export const MCP_SERVER_TIMEOUT_ALIASES = [
+  ["connectTimeout", "connectionTimeoutMs"],
+  ["connect_timeout", "connectionTimeoutMs"],
+  ["timeout", "requestTimeoutMs"],
+] as const;
+
 /** Strict writes reject ambiguity; runtime reads retain legacy behavior with a warning. */
 export function collectMcpTransportIssues(
   config: OpenClawConfig,
@@ -37,7 +43,7 @@ export function collectMcpTransportIssues(
         isRecord(existing) &&
         isDeepStrictEqual(
           canonicalizeConfiguredMcpServer(server),
-          canonicalizeConfiguredMcpServer(existing),
+          migrateLegacyConfiguredMcpServer(existing),
         )
       ) {
         return [];
@@ -111,6 +117,36 @@ export function canonicalizeConfiguredMcpServer(
     }
     delete codex.default_tools_approval_mode;
     next.codex = codex;
+  }
+  return next;
+}
+
+/** Doctor and compatibility comparisons share the retired-key migration semantics. */
+export function migrateLegacyConfiguredMcpServer(
+  server: Record<string, unknown>,
+): Record<string, unknown> {
+  const next = canonicalizeConfiguredMcpServer(server);
+  if (typeof next.disabled === "boolean") {
+    if (typeof next.enabled !== "boolean") {
+      next.enabled = !next.disabled;
+    }
+    delete next.disabled;
+  }
+  for (const [alias, canonical] of MCP_SERVER_TIMEOUT_ALIASES) {
+    if (!Object.hasOwn(next, alias)) {
+      continue;
+    }
+    const value = next[alias];
+    // Retired timeouts were seconds; preserve canonical values and discard invalid aliases.
+    if (
+      next[canonical] === undefined &&
+      typeof value === "number" &&
+      value > 0 &&
+      Number.isFinite(value * 1_000)
+    ) {
+      next[canonical] = value * 1_000;
+    }
+    delete next[alias];
   }
   return next;
 }

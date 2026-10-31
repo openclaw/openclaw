@@ -39,7 +39,7 @@ it.each(["mcp", "nodeHost"] as const)(
       const wrap = (server: McpServerConfig, legacy = false): OpenClawConfig => {
         const mcp = {
           servers: {
-            docs: server,
+            docs: legacy ? { ...server, disabled: true, connectTimeout: 3, timeout: 12 } : server,
             ...(legacy ? { disabled: { command: "never-run", disabled: true } } : {}),
           },
         };
@@ -107,7 +107,12 @@ it.each(["mcp", "nodeHost"] as const)(
       const { type: _type, ...canonical } = shared;
       expect(
         owner === "mcp" ? persisted.mcp?.servers?.docs : persisted.nodeHost?.mcp?.servers?.docs,
-      ).toEqual({ ...canonical, transport: "streamable-http" });
+      ).toEqual({
+        ...canonical,
+        transport: "streamable-http",
+        enabled: false,
+        connectionTimeoutMs: 3000,
+      });
       expect(
         migrateLegacyConfig(persisted, {
           sourceConfigBeforeMigrations: persisted,
