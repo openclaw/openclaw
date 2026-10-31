@@ -199,10 +199,24 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
   const origins = new Map(
     classificationResult.classifications.map((entry) => [entry.relativePath, entry.originClass]),
   );
-  return candidates.filter(
-    (_file, index) =>
-      !isMemoryOriginEligibleForAutomaticInjection(origins.get(relativePaths[index]!)),
-  );
+  return candidates.filter((_file, index) => {
+    const relativePath = relativePaths[index]!;
+    const originClass = origins.get(relativePath);
+    if (isMemoryOriginEligibleForAutomaticInjection(originClass)) {
+      return false;
+    }
+    // Quarantine persists across turns: report each excluded file once per process.
+    const warningKey = `memory-provenance-exclusion\u0000${resolveUserPath(params.workspaceDir)}\u0000${relativePath}\u0000${originClass ?? ""}`;
+    if (
+      params.warn &&
+      rememberBoundedKey(seenBootstrapWarnings, warningKey, BOOTSTRAP_WARNING_DEDUPE_LIMIT)
+    ) {
+      params.warn(
+        `excluding ${relativePath} from automatic memory context: memory provenance is ${originClass ?? "unclassified"}; run \`openclaw doctor\` for the last recorded write`,
+      );
+    }
+    return true;
+  });
 }
 
 /** Resolves hook-adjusted, session-filtered bootstrap files for a run. */

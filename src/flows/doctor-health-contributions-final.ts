@@ -332,6 +332,26 @@ export function resolveFinalDoctorHealthContributions(params: {
         await noteBootstrapFileSize(ctx.cfg);
       },
     }),
+    createDoctorHealthContribution("doctor:memory-provenance", "Memory provenance", {
+      healthChecks: {
+        description:
+          "Root MEMORY.md and USER.md with untrusted provenance are excluded from automatic context.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          const { collectMemoryProvenanceExclusionFindings } =
+            await import("../commands/doctor-memory-provenance.js");
+          return collectMemoryProvenanceExclusionFindings(ctx.cfg);
+        },
+      },
+      async run(ctx) {
+        const { collectMemoryProvenanceExclusionFindings } =
+          await import("../commands/doctor-memory-provenance.js");
+        renderStructuredHealthFindings(
+          ctx,
+          await collectMemoryProvenanceExclusionFindings(ctx.cfg),
+        );
+      },
+    }),
     createDoctorHealthContribution(
       "doctor:heartbeat-cadence-migration",
       "Heartbeat cadence migration",

@@ -109,6 +109,8 @@ restoration failure; slow startup does not undo a completed repair.
 
     This includes files declared by the bundled `bootstrap-extra-files` hook when a fresh Gateway startup would select it, provided each matched basename is one of those six (for example, `packages/core/AGENTS.md`). Other basenames are ignored. Doctor uses each agent's workspace and limits without importing or running custom hook handlers. It predicts fresh-start selection, not the previous handler generation that a running Gateway can retain after a failed hook reload.
 
+    Doctor also reports root `MEMORY.md` and `USER.md` files whose memory provenance is recorded as `untrusted` (check `core/doctor/memory-provenance`). Automatic context excludes those files. Each finding names the file and the time and session of the last recorded tracked write; that record keeps only the latest tracked write, so it may not be the write that quarantined the file. See [Freeform edits and quarantine](/concepts/memory-provenance#freeform-edits-and-quarantine).
+
   </Accordion>
   <Accordion title="11c. Shell completion">
     Doctor checks whether tab completion is installed for the current shell (zsh, bash, fish, or PowerShell):
