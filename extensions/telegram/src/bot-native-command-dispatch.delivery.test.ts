@@ -503,12 +503,18 @@ describe("Telegram registered plugin delivery", () => {
     expect(payload.message_thread_id).toBe("77");
     const previousRequests = http.requests.length;
     mediaUrl = forbidden;
-    await expect(
-      bot.handleUpdate({ update_id: 3211, message: groupCommand("/plug", 77) }),
-    ).rejects.toThrow(/not under an allowed directory/);
+    await bot.handleUpdate({ update_id: 3211, message: groupCommand("/plug", 77) });
+    const later = http.requests.slice(previousRequests);
+    expect(later.filter(({ method }) => method === "sendDocument")).toEqual([]);
+    // The forbidden file stays unread; the answer still reaches the routed topic.
     expect(
-      http.requests.slice(previousRequests).filter(({ method }) => method === "sendDocument"),
-    ).toEqual([]);
+      later
+        .filter(({ method }) => method === "sendMessage")
+        .map(({ fields }) => [fields.text, fields.message_thread_id]),
+    ).toContainEqual([
+      "Workspace report\n⚠️ private.pdf: Delivery failed. Try sending this file again.",
+      77,
+    ]);
   });
 
   it.each(["presentation", "reaction"] as const)(

@@ -7,7 +7,6 @@ import {
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
-import type { ReplyPayloadDelivery } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   buildOutboundMediaLoadOptions,
@@ -55,6 +54,8 @@ import { recordSentMessage } from "../sent-message-cache.js";
 import { resolveTelegramTargetChatType } from "../targets.js";
 import { planTelegramTextDeliveryPages } from "../telegram-text-delivery.js";
 import { emitTelegramMessageSentHooks } from "./delivery.hooks.js";
+import { deliverTelegramMediaWithTextFallback } from "./delivery.media-load-fallback.js";
+import { maybePinFirstDeliveredMessage } from "./delivery.pin.js";
 import { resolveTelegramReplyId, type TelegramThreadSpec } from "./helpers.js";
 import {
   resolveReplyQuoteForSend,
@@ -466,31 +467,6 @@ function createReplyDeliverer(
   return { deliverTextReply, deliverMediaReply };
 }
 
-async function maybePinFirstDeliveredMessage(params: {
-  pin: ReplyPayloadDelivery["pin"];
-  bot: Bot;
-  chatId: string;
-  firstDeliveredMessageId?: number;
-}): Promise<void> {
-  const shouldPin = params.pin === true || (typeof params.pin === "object" && params.pin.enabled);
-  if (!shouldPin || typeof params.firstDeliveredMessageId !== "number") {
-    return;
-  }
-  const notify = typeof params.pin === "object" && params.pin.notify === true;
-  try {
-    await params.bot.api.pinChatMessage(params.chatId, params.firstDeliveredMessageId, {
-      disable_notification: !notify,
-    });
-  } catch (err) {
-    if (typeof params.pin === "object" && params.pin.required === true) {
-      throw err;
-    }
-    logVerbose(
-      `telegram pinChatMessage failed chat=${params.chatId} message=${params.firstDeliveredMessageId}: ${formatErrorMessage(err)}`,
-    );
-  }
-}
-
 type DeliverRepliesParams = {
   replies: ReplyPayload[];
   cfg?: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
@@ -749,10 +725,14 @@ async function deliverReplyPlan(
       if (mediaList.length === 0 && resolvedReplyText) {
         firstDeliveredMessageId = await deliverTextReply(textReply);
       } else if (mediaList.length > 0) {
-        const mediaDelivery = await deliverMediaReply({
-          ...textReply,
-          reply,
-          mediaList,
+        const mediaDelivery = await deliverTelegramMediaWithTextFallback({
+          deliverMedia: () => deliverMediaReply({ ...textReply, reply, mediaList }),
+          deliverText: (text) => deliverTextReply({ ...textReply, text }),
+          text: reply.text,
+          mediaUrls: mediaList,
+          partlyDelivered: () => deliveredCount() > deliveredCountBeforeReply,
+          onFallback: (error) =>
+            params.runtime.error?.(danger(`telegram media not attached: ${String(error)}`)),
         });
         firstDeliveredMessageId = mediaDelivery.firstDeliveredMessageId;
         deliveredMediaUrls = mediaDelivery.mediaUrls;
