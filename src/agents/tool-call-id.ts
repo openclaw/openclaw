@@ -275,7 +275,8 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
   const used = new Set<string>(replaySafeThinking?.reservedIds ?? []);
   const assistantOccurrences = new Map<string, number>();
   const orphanToolResultOccurrences = new Map<string, number>();
-  const pendingByRawId = createToolCallOccurrenceQueue<string>();
+  // Pairing repair compares trimmed IDs; keep the same keys through rewriting.
+  const pendingByMatchingId = createToolCallOccurrenceQueue<string>();
   const preserveNativeAnthropicToolUseIds = options?.preserveNativeAnthropicToolUseIds === true;
   const duplicateToolCallIdStyle = options?.duplicateToolCallIdStyle;
 
@@ -315,12 +316,12 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
       duplicateToolCallIdStyle === "openai" && occurrence > 1
         ? allocateOpenAIStyleId(id, occurrence)
         : allocatePreservingNativeAnthropicId(id, occurrence);
-    pendingByRawId.add(id, next);
+    pendingByMatchingId.add(id.trim(), next);
     return next;
   };
 
   const resolveToolResultId = (id: string): string => {
-    const next = pendingByRawId.claim(id);
+    const next = pendingByMatchingId.claim(id.trim());
     if (next !== undefined) {
       return next;
     }
@@ -340,7 +341,7 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
 
   const preserveAssistantId = (id: string): string => {
     used.add(id);
-    pendingByRawId.add(id, id);
+    pendingByMatchingId.add(id.trim(), id);
     return id;
   };
 

@@ -10,6 +10,7 @@ import {
 } from "./session-transcript-repair.js";
 import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import { sparseAssistant, textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
+import { sanitizeToolCallIdsForCloudCodeAssist } from "./tool-call-id.js";
 
 const toolCall = (id: string, name = "read", args: Record<string, unknown> = {}) => ({
   type: "toolCall",
@@ -60,6 +61,34 @@ function getAssistantToolCallBlocks(
 }
 
 describe("sanitizeToolUseResultPairing", () => {
+  it.each([undefined, " call_1 ", "call_1", "\tcall_1\n"])(
+    "keeps padded calls paired through provider normalization (result ID: %j)",
+    (resultId) => {
+      const input = castAgentMessages([
+        sparseAssistant([toolCall(" call_1 ")]),
+        ...(resultId === undefined
+          ? []
+          : [
+              {
+                ...textToolResult(resultId, "read", "saved", { isError: false }),
+                call_id: resultId,
+              },
+            ]),
+      ]);
+      const repaired = sanitizeToolUseResultPairing(input);
+
+      expect(sanitizeToolCallIdsForCloudCodeAssist(repaired, "strict")).toMatchObject([
+        { role: "assistant", content: [{ type: "toolCall", id: "call1" }] },
+        {
+          role: "toolResult",
+          toolCallId: "call1",
+          isError: resultId === undefined,
+          ...(resultId === undefined ? {} : { call_id: "call1", content: [{ text: "saved" }] }),
+        },
+      ]);
+    },
+  );
+
   it("does not inspect lower-priority result aliases when the canonical id is present", () => {
     const legacyId = vi.fn(() => "stale_call");
     const result = textToolResult("call_1", "read", "ok", { isError: false });

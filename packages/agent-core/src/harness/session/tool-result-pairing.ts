@@ -18,6 +18,8 @@ type ToolCallLike = {
 type ToolCallOccurrence = {
   contentIndex: number;
   id: string;
+  // Keep id raw for synthesized results and downstream provider rewriting.
+  matchingId: string;
   name?: string;
   result?: ToolResultMessage;
   sourceResult?: ToolResultMessage;
@@ -224,7 +226,8 @@ export function classifyToolUseResultPairing(
     let frame: (typeof frameRecords)[number] | undefined;
     for (let contentIndex = 0; contentIndex < assistant.content.length; contentIndex += 1) {
       const toolCall = readToolCall(assistant.content[contentIndex]);
-      if (!toolCall) {
+      const matchingId = normalizeOptionalString(toolCall?.id);
+      if (!toolCall || !matchingId) {
         continue;
       }
       if (!frame) {
@@ -244,7 +247,7 @@ export function classifyToolUseResultPairing(
         };
         frameRecords.push(frame);
       }
-      frame.occurrences.push({ ...toolCall, contentIndex });
+      frame.occurrences.push({ ...toolCall, matchingId, contentIndex });
     }
   }
 
@@ -252,7 +255,7 @@ export function classifyToolUseResultPairing(
     const { occurrences } = frame;
     const pending = createToolCallOccurrenceQueue<ToolCallOccurrence>();
     for (const occurrence of occurrences) {
-      pending.add(occurrence.id, occurrence);
+      pending.add(occurrence.matchingId, occurrence);
     }
     for (let index = frame.startIndex + 1; index < frame.endIndex; index += 1) {
       const message = messages[index];
@@ -272,7 +275,7 @@ export function classifyToolUseResultPairing(
         occurrence.sourceResultIndex = index;
         continue;
       }
-      if (!id || !occurrences.some((candidate) => candidate.id === id)) {
+      if (!id || !occurrences.some((candidate) => candidate.matchingId === id)) {
         (frame.unclaimedResults ??= []).push({
           result: normalized,
           sourceResult: message,
@@ -288,7 +291,7 @@ export function classifyToolUseResultPairing(
         ? undefined
         : occurrences.find(
             (candidate) =>
-              candidate.id === id &&
+              candidate.matchingId === id &&
               candidate.result &&
               isSyntheticMissingToolResult(candidate.result),
           );
@@ -306,11 +309,11 @@ export function classifyToolUseResultPairing(
     for (const occurrence of frame.occurrences) {
       if (!occurrence.result || isSyntheticMissingToolResult(occurrence.result)) {
         unresolvedById ??= new Map();
-        const unresolved = unresolvedById.get(occurrence.id);
+        const unresolved = unresolvedById.get(occurrence.matchingId);
         if (unresolved) {
           unresolved.push(occurrence);
         } else {
-          unresolvedById.set(occurrence.id, [occurrence]);
+          unresolvedById.set(occurrence.matchingId, [occurrence]);
         }
       }
     }
