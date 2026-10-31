@@ -1,6 +1,5 @@
 import { createSignal, onSettled } from "solid-js";
 import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
-import { operatorScopeSatisfied } from "../../../../src/shared/operator-scope-compat.js";
 import type { CronJob, CronRunLogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../../app/operator-access.ts";
@@ -49,6 +48,7 @@ import {
 } from "./delivery-conversations.ts";
 import { createCronEventEditor } from "./event-editor.ts";
 import { resolveCronEventPatch, validateCronEventSelection } from "./event-source.ts";
+import { canManageCronJob } from "./human-owner.ts";
 import { createCronRouteSelection, resolveCronRouteData } from "./route-model.ts";
 import { createCronRunTranscript } from "./run-transcript.tsx";
 
@@ -138,19 +138,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   }
 
   function canManageJob(job: CronJob): boolean {
-    const snapshot = context().gateway.snapshot;
-    if (readGatewayOperatorAccess(snapshot).canAdmin) {
-      return true;
-    }
-    const identity = snapshot.selfUser?.identity;
-    const ownerId = job.ownerProfileId;
-    const directory = profileDirectory(context().gateway);
-    return Boolean(
-      ownerId &&
-      identity?.type === "profile" &&
-      (directory.get(ownerId)?.id ?? ownerId) === identity.id &&
-      operatorScopeSatisfied("operator.cron", snapshot.hello?.auth?.scopes ?? []),
-    );
+    return canManageCronJob(context().gateway, job);
   }
 
   function canManageCron(): boolean {
@@ -160,7 +148,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   function bindContext() {
     cleanups.splice(0).forEach((stop) => stop());
     const currentContext = context();
-    cleanups.push(profileDirectory(currentContext.gateway).subscribe(publish));
     let location = currentContext.router.getState().location;
     cleanups.push(
       currentContext.router.subscribe((state) => {
@@ -324,6 +311,15 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (!canRefreshCron() || !cron.connected || !cron.client) {
       return;
     }
+    // Owner choices share the page's visibility and Gateway admission, not an eager subscription.
+    const current = cron;
+    void profileDirectory(context().gateway)
+      .load(forceRefresh)
+      .then(() => {
+        if (canRefreshCron(current)) {
+          publish();
+        }
+      });
     if (!context().agents.state.agentsList && !context().agents.state.agentsLoading) {
       void context().agents.ensureList();
     }

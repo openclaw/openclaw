@@ -116,11 +116,12 @@ export function assertHumanCronExecutionAccess(
     patch?.schedule?.kind === "on-exit" ||
     patch?.schedule?.kind === "stream";
   // Pause, delete, and transfer remain available without authorizing another host process.
+  const currentFields = new Map(Object.entries(job));
   const passivePatch =
     patch &&
-    Object.keys(patch).every(
-      (key) =>
-        isDeepStrictEqual(patch[key as keyof CronJobPatch], job[key as keyof CronJob]) ||
+    Object.entries(patch).every(
+      ([key, value]) =>
+        isDeepStrictEqual(value, currentFields.get(key)) ||
         key === "name" ||
         key === "ownerProfileId" ||
         key === "displayName" ||

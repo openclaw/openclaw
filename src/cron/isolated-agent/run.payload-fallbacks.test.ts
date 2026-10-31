@@ -27,6 +27,8 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     harness.resolveEffectiveAgentRuntimeMock.mockReturnValue("codex");
 
     const result = await runJob({
+      ownerProfileId: "legacy-owner",
+      createdActor: { type: "human", source: "profile", id: "legacy-owner" },
       runtimeAuthorityRecoveryRequired: true,
       payload: { kind: "agentTurn", message: "use calendar", toolsAllow: ["read"] },
     });
@@ -40,6 +42,7 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
   it("does not reuse ambient credentials after human ownership transfer", async () => {
     const result = await runJob({
       ownerProfileId: "new-human-owner",
+      ownerTransferPending: true,
       runtimeAuthorityRecoveryRequired: true,
     });
     expect(result.status).toBe("error");

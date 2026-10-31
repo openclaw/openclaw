@@ -39,6 +39,7 @@ import { getCurrentSessionControllerOwner } from "../../sessions/session-control
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronExecutionIdle } from "../execution-idle.js";
+import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
 import { CronOperatorSourceError } from "../operator-source-error.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
@@ -101,19 +102,9 @@ async function runCronIsolatedAgentTurnInTrace(
   params: RunCronAgentTurnParams,
 ): Promise<RunCronAgentTurnResult> {
   params.assertCurrent?.();
-  // A human transfer retires captured credentials. Do not fall back to account
-  // overrides copied from the previous owner's source or retained run session.
-  if (
-    params.job.ownerProfileId &&
-    params.job.runtimeAuthorityRecoveryRequired &&
-    !params.job.runtimeAuthority &&
-    !params.job.inferenceBinding
-  ) {
-    return {
-      status: "error",
-      error:
-        "This automation needs fresh execution authority. Select an inference account or reauthorize it from an authenticated owner turn before running it.",
-    };
+  const ownerTransferError = resolveCronOwnerTransferRecoveryError(params.job);
+  if (ownerTransferError) {
+    return { status: "error", error: ownerTransferError };
   }
   const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const upstreamAbortSignal = params.abortSignal ?? params.signal;

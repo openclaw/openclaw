@@ -245,6 +245,11 @@ export function planCronJobMutation(
       runtimeAuthority: options.runtimeAuthority,
       explicitlyMutatesToolsAllow,
     });
+    // Neither an ordinary edit nor an app-only recovery flag proves fresh inference consent.
+    // Capture is admitted and rechecked by the caller's existing mutation commit guard.
+    if (mutation.kind === "update" && (options.runtimeAuthority || options.inferenceBinding)) {
+      delete nextJob.ownerTransferPending;
+    }
     if (nextJob.runtimeAuthority) {
       // Native inference authority replaces, rather than supplements, host credentials.
       delete nextJob.inferenceBinding;
