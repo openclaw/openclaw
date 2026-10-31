@@ -1,3 +1,4 @@
+import { SESSION_EVENT_TOOLS_ALLOW_LIMIT } from "../../../auto-reply/reply/session-event-target.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
@@ -47,6 +48,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     additionalInheritedToolNamesRef,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
+    sessionEventToolsAllow,
     toolsEnabled,
     toolsRaw,
   } = params.preparedToolBase;
@@ -222,6 +224,24 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         schemaProjection.tools,
         (tool) => getPluginToolMeta(tool),
       );
+      // Exec completion turns continue under the producer's event-source cap,
+      // which the coding tools filled at construction. Append the bundled tools
+      // that survived final policy by exact name: a marker or glob would admit
+      // tools a sender-scoped or intersected cap kept from this run (#183589).
+      // A refresh replaces earlier bundled names, so a quarantined tool drops out.
+      const bundledNames = new Set(normalizedBundledTools.map((tool) => tool.name));
+      const codingSurface = sessionEventToolsAllow.filter((name) => !bundledNames.has(name));
+      sessionEventToolsAllow.splice(0, sessionEventToolsAllow.length, ...codingSurface);
+      const bundledSurface = schemaProjection.tools
+        .map((tool) => tool.name)
+        .filter((name) => bundledNames.has(name) && !codingSurface.includes(name));
+      if (codingSurface.length + bundledSurface.length > SESSION_EVENT_TOOLS_ALLOW_LIMIT) {
+        log.warn(
+          `bundled tools exceed the session event tool bound (${SESSION_EVENT_TOOLS_ALLOW_LIMIT}); turns woken by exec completions keep only the coding tools. Narrow tools.allow to restore MCP there.`,
+        );
+      } else {
+        sessionEventToolsAllow.push(...bundledSurface);
+      }
       if (inheritedToolAllowlist?.length) {
         // Runtime availability limits this turn; independently approved workspace
         // capabilities remain delegable under the same final runtime cap.

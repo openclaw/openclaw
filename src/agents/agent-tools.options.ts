@@ -151,6 +151,8 @@ export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
   additionalInheritedToolNamesRef?: string[];
   /** The host owns continuation policy when this factory builds only part of its tool surface. */
   sessionEventSourcePolicy?: SessionEventSourcePolicy;
+  /** Mutable event-source cap; bundled tools append their final policy-filtered names later. */
+  sessionEventToolsAllowRef?: string[];
 };
 
 export type PluginCodingToolsOptions = Omit<

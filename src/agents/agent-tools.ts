@@ -651,6 +651,20 @@ function* assembleOpenClawCodingTools(
     hookContext,
     ...(options?.swarmCollector ? { approvalMode: "deny" as const } : {}),
   });
+  // Bundled MCP/LSP tools materialize after this factory returns; the attempt
+  // appends their final policy-filtered names to this same array so a turn
+  // woken by an exec completion keeps exactly the tools this run could call (#183589).
+  const sessionEventToolsAllow = options?.sessionEventToolsAllowRef ?? [];
+  sessionEventToolsAllow.splice(
+    0,
+    sessionEventToolsAllow.length,
+    ...finalizedTools.filter(turnAuthorized).map((tool) => tool.name),
+    // Provider-hosted search has no function tool; keep this turn's decision for it.
+    ...(!finalizedTools.some((tool) => tool.name === "web_search") &&
+    isConversationToolAllowed(capabilityProfile, "web_search")
+      ? ["web_search"]
+      : []),
+  );
   return finalizedTools.map(
     createCodingToolsGatewayCaller({
       options,
@@ -660,14 +674,7 @@ function* assembleOpenClawCodingTools(
       capabilityProfile,
       tools: finalizedTools,
       sessionEventSourcePolicy: options?.sessionEventSourcePolicy ?? {
-        toolsAllow: [
-          ...finalizedTools.filter(turnAuthorized).map((tool) => tool.name),
-          // Provider-hosted search has no function tool; keep this turn's decision for it.
-          ...(!finalizedTools.some((tool) => tool.name === "web_search") &&
-          isConversationToolAllowed(capabilityProfile, "web_search")
-            ? ["web_search"]
-            : []),
-        ],
+        toolsAllow: sessionEventToolsAllow,
       },
     }),
   );

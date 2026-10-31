@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { intersectSessionEventToolsAllow } from "../../../auto-reply/reply/session-event-target.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
-import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
@@ -47,6 +48,10 @@ vi.mock("../effective-tool-policy.js", () => ({
 
 import { prepareEmbeddedAttemptBundleTools as prepare } from "./attempt-bundle-tools.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
+import {
+  applyEmbeddedAttemptToolsAllow,
+  shouldCreateBundleMcpRuntimeForAttempt,
+} from "./attempt-tool-construction-plan.js";
 
 describe("prepareEmbeddedAttemptBundleTools", () => {
   beforeEach(() => {
@@ -83,6 +88,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         additionalInheritedToolNamesRef: [],
         localModelLeanPreserveToolNames: [],
         runtimeCapabilityProfile: resolveConversationCapabilityProfile({}),
+        sessionEventToolsAllow: [],
         toolsEnabled: true,
         toolsRaw,
       },
@@ -305,6 +311,109 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         { name: "server__read", pluginId: "bundle-mcp" },
       ]);
       expect(await listPersistedRuntimeToolSchemaQuarantines()).toEqual([]);
+    });
+  });
+
+  // #183589: a turn woken by an exec completion runs under the producer's
+  // event-source cap. Bundled tools materialize after the coding tools, so the
+  // cap must carry the exact MCP tools this run could call, nothing wider.
+  describe("session event tool surface", () => {
+    const mcpNames = ["fixture__read", "fixture__readAll", "fixture__write", "admin__reset"];
+    const mcpTools = () => mcpNames.map((name) => pluginTool(name, "bundle-mcp"));
+    function wokenTurn(producerToolsAllow: string[]) {
+      const toolsAllow = intersectSessionEventToolsAllow(undefined, producerToolsAllow);
+      return {
+        createsBundleMcp: shouldCreateBundleMcpRuntimeForAttempt({
+          toolsEnabled: true,
+          toolsAllow,
+        }),
+        mcpTools: toolNames(
+          applyEmbeddedAttemptToolsAllow(mcpTools(), toolsAllow, { toolMeta: getPluginToolMeta }),
+        ),
+      };
+    }
+    async function producer(allow: string[] | undefined, drop?: string) {
+      const input = createInput([], [createStubTool("exec")]);
+      input.attempt.config = {
+        mcp: { servers: { fixture: { command: "unused" }, admin: { command: "unused" } } },
+      };
+      if (allow) {
+        setAllow(input, allow);
+      }
+      // The coding tools filled the cap when they were constructed.
+      input.preparedToolBase.sessionEventToolsAllow = ["exec"];
+      mockMcp(mcpTools());
+      if (drop) {
+        mocks.applyFinalEffectiveToolPolicy.mockImplementation(
+          ({ bundledTools }: { bundledTools: Array<{ name: string }> }) =>
+            bundledTools.filter((tool) => tool.name !== drop),
+        );
+      }
+      const result = await prepare(input);
+      return { input, result, cap: input.preparedToolBase.sessionEventToolsAllow };
+    }
+
+    it.each<[string, string[] | undefined, string[]]>([
+      ["unrestricted", undefined, mcpNames],
+      [
+        "server glob",
+        ["exec", "fixture__*"],
+        ["fixture__read", "fixture__readAll", "fixture__write"],
+      ],
+      [
+        "namespace-reaching glob",
+        ["exec", "fixture*"],
+        ["fixture__read", "fixture__readAll", "fixture__write"],
+      ],
+      ["exact name", ["exec", "fixture__read"], ["fixture__read"]],
+      [
+        "intersected partial globs",
+        attachToolAllowlistIntersection(
+          [],
+          [
+            ["exec", "fixture__read*"],
+            ["exec", "fixture__*All"],
+          ],
+        ),
+        ["fixture__readAll"],
+      ],
+      ["coding-only", ["read", "exec"], []],
+    ])("carries the %s producer's final MCP tools by name", async (_name, allow, expected) => {
+      const { cap } = await producer(allow);
+      expect(cap).toEqual(["exec", ...expected]);
+      const woken = wokenTurn(cap);
+      expect(woken.createsBundleMcp).toBe(expected.length > 0);
+      expect(woken.mcpTools).toEqual(expected);
+    });
+
+    it("keeps a tool the producer's final policy denied out of the continuation", async () => {
+      // e.g. tools.toolsBySender["id:alice"].deny = ["admin__*"]: the woken turn has no
+      // sender, so only the captured names keep that denial.
+      const { cap } = await producer(undefined, "admin__reset");
+      expect(cap).toEqual(["exec", "fixture__read", "fixture__readAll", "fixture__write"]);
+      expect(wokenTurn(cap).mcpTools).not.toContain("admin__reset");
+    });
+
+    it("re-captures the surface on refresh and drops tools that no longer survive", async () => {
+      const { result, cap } = await producer(["exec", "fixture__read*"]);
+      await withRuntimeToolSchemaQuarantine((record) => result.refreshTools(record));
+      expect(cap).toEqual(["exec", "fixture__read", "fixture__readAll"]);
+      mocks.filterRuntimeCompatibleTools.mockImplementation((tools: Array<{ name: string }>) => ({
+        tools: tools.filter((tool) => tool.name !== "fixture__readAll"),
+        diagnostics: [],
+      }));
+      await withRuntimeToolSchemaQuarantine((record) => result.refreshTools(record));
+      expect(cap).toEqual(["exec", "fixture__read"]);
+    });
+
+    it("keeps the coding tools instead of exceeding the producer surface bound", async () => {
+      const input = createInput([], [createStubTool("exec")]);
+      input.attempt.config = { mcp: { servers: { fixture: { command: "unused" } } } };
+      const filled = Array.from({ length: 510 }, (_, index) => `tool_${index}`);
+      input.preparedToolBase.sessionEventToolsAllow = [...filled];
+      mockMcp(mcpTools());
+      await prepare(input);
+      expect(input.preparedToolBase.sessionEventToolsAllow).toEqual(filled);
     });
   });
 
