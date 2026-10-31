@@ -126,3 +126,25 @@ it.each(["", "/openclaw"])("navigates dashboard links with base path %s", (baseP
   link.dispatchEvent(handled);
   expect(onNavigate).toHaveBeenCalledOnce();
 });
+
+it.each([["münchen".normalize("NFC")], ["münchen".normalize("NFD")]])(
+  "matches NFC and NFD dashboard queries against NFD titles: %s",
+  async (query) => {
+    const nfdTitle = "München Monitor".normalize("NFD");
+    const { container } = mountSolid(() => (
+      <DashboardsView
+        data={routeData([
+          { ...dashboard, key: "agent:main:dashboard:muenchen", displayName: nfdTitle },
+        ])}
+        readReady={() => undefined}
+        filters={{ ...filters, query }}
+        handlers={handlers}
+      />
+    ));
+
+    await waitForSolid(() => {
+      expect(container.querySelector("[data-dashboard-session]")?.textContent).toContain(nfdTitle);
+    });
+    expect(container.querySelector("[data-dashboards-empty]")).toBeNull();
+  },
+);
