@@ -1,15 +1,33 @@
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   onTrustedInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import { registerSerializedJsonArray } from "./serialized-json.js";
-import { SessionListViewCache } from "./session-list-view-cache.js";
+import { SessionListViewCache, shareSessionRowFacts } from "./session-list-view-cache.js";
 import { serializeSessionRow } from "./session-row-serialization.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 const row: GatewaySessionRow = { key: "one", kind: "direct", updatedAt: 1, rowMode: "sidebar" };
+
+it("packs all-row facts without encoding their identical recipient lists", () => {
+  const rows = ["one", "two", "three"].map((key) => ({
+    key,
+    kind: "direct" as const,
+    updatedAt: 1,
+    pinned: false,
+    visibility: "shared" as const,
+  }));
+  using join = vi.spyOn(Array.prototype, "join");
+  const packed = shareSessionRowFacts(rows);
+  const joins = join.mock.calls.length;
+  join.mockRestore();
+  expect(joins).toBe(0);
+  expect(packed.sharedFacts).toEqual([{ pinned: false, visibility: "shared" }]);
+  expect(packed.sessions.map((value) => value.sharedFacts)).toEqual([[0], [0], [0]]);
+});
+
 let cache: SessionListViewCache;
 let reports: { views: number; refs: number; estimatedBytes: number }[];
 let retirements: string[];

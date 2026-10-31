@@ -43,6 +43,12 @@ or starting model work. Start a new call to use the current route. Changing only
 the default Talk agent preserves an existing call's selected agent, and ending
 its audio transport does not cancel work already accepted by the Gateway.
 
+During process shutdown, Talk starts closing its transports before the Gateway
+drains received work. Its final persistence join runs under the shutdown plan's
+five-second cleanup grace. A stalled provider or write is reported as unfinished
+cleanup; the deadline does not certify that pending transcripts were saved.
+Embedded Gateways that remain in the process still join accepted cleanup.
+
 Native steering uses the current caller's tool policy and session permissions. The
 host captures the actual backend attempt's authority after policy preparation and
 checks that exact owner again before delivering a control. Changed caller authority, tool
@@ -78,3 +84,9 @@ an equivalent storage alias is not a replacement. A `talk.client.toolCall` ackno
 returns `agentId`, `agentSessionKey`, and `runId`; use that exact target for chat
 cancellation, history, and completion events, including when the resolved key is `global`. Transcription-only sessions
 without a key remain sessionless and do not select a default chat.
+
+During Gateway shutdown, Talk gives accepted persistence a grace period capped at
+30 seconds and derived from the remaining shutdown budget. It then requests abort
+and gives accepted work a second bounded period to settle. Completed writes keep
+their receipts; uncertain delivery is not replayed. If work ignores abort, shutdown
+reports retained resources instead of declaring that persistence completed.

@@ -113,8 +113,8 @@ export class PaneAttachmentCatalog {
               ? (request, signal) =>
                   attachmentCatalog.chat.resolveArtifactDownload!(request, signal)
               : undefined,
-            getTurnVideoMessages: (key) =>
-              getTranscriptState(chatProps.paneId).transcriptRenderContext.turnVideoMessages?.get(
+            getTurnMediaMessages: (key) =>
+              getTranscriptState(chatProps.paneId).transcriptRenderContext.turnMediaMessages?.get(
                 key,
               ),
           },

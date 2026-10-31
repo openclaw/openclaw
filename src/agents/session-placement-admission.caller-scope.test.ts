@@ -6,6 +6,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
 import {
+  attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   placements,
@@ -16,6 +17,7 @@ import {
   setupWorkerTurnLauncherTest,
   turn,
   unusedEnvironments,
+  type WorkerTurnLauncherOptions,
 } from "../gateway/worker-environments/worker-turn-launcher.test-support.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -61,9 +63,16 @@ const childClaim = (runId: string) => ({
   agentId: "main",
   runId,
 });
-function installWorkerProvider(environments = unusedEnvironments()) {
+function installWorkerProvider(
+  environments = unusedEnvironments(),
+  resolveWorkspace?: WorkerTurnLauncherOptions["resolveWorkspace"],
+) {
   uninstall = installSessionPlacementAdmissionProvider(
-    createWorkerSessionTurnPlacementProvider({ placements, environments }),
+    createWorkerSessionTurnPlacementProvider({
+      placements,
+      environments,
+      ...(resolveWorkspace ? { resolveWorkspace } : {}),
+    }),
   );
 }
 function expectChildReleased() {
@@ -142,11 +151,14 @@ describe("independent placement caller scope", () => {
       await seedActivePlacement();
       const input = turn(scenario === "reused run id" ? "parent-run" : "child-worker-run");
       const reachedWorkerExecution = new Error("test worker execution reached");
-      const get = vi.fn(() => {
+      const resolveWorkspace = vi.fn(async () => {
         expect(resolveActiveEmbeddedRunOwner(SESSION_ID)?.runId).toBe(input.runId);
         throw reachedWorkerExecution;
       });
-      installWorkerProvider({ ...unusedEnvironments(), get });
+      installWorkerProvider(
+        { ...unusedEnvironments(), get: attachedEnvironment },
+        resolveWorkspace,
+      );
       try {
         let queued: Promise<void> | undefined;
         const { promise: ready, resolve: release } = createDeferred();

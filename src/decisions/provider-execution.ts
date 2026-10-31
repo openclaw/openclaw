@@ -2,8 +2,8 @@ import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/mod
 import type { DecisionProviderContextV2 } from "./provider-context.js";
 import type { ProviderDecisionOutcomeV2 } from "./provider-outcomes.js";
 import type { DecisionProviderV2 } from "./provider-types.js";
+import { validateAdmittedDecisionResultV2 } from "./result-validation.js";
 import type { DecisionBatchV2 } from "./types-v2.js";
-import { validateAdmittedDecisionResultV2 } from "./validation-v2.js";
 
 /** Invoked and awaited within the prepared model's lifetime, with host-owned validation facts. */
 export async function evaluatePreparedDecisionProvider(params: {

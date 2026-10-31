@@ -265,11 +265,15 @@ async function finishSettledUpdate(
           !isUpdateGatewayReadinessPending(finalResult) &&
           finalResult.recovery?.serviceRestartSafe !== true
         ) {
-          await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(false);
-        } else {
-          if (currentServiceStop()?.windowsTaskAutoStartRecovery) {
-            onGatewayStartAttempted();
+          // Keep suspension recoverable until final recovery decides whether
+          // the installed runtime can start. Only a recorded data risk closes it.
+          if (
+            finalResult.recovery?.serviceRestartSafe === false &&
+            finalResult.recovery.dataAtRisk
+          ) {
+            await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(false);
           }
+        } else {
           await resumePostUpdateWindowsAutoStart(params, finalResult, currentServiceStop);
         }
       } catch (cause) {
@@ -322,13 +326,6 @@ async function finishSettledUpdate(
         }
       }
     }
-    await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(
-      rolledBack ||
-        isUpdateGatewayReadinessPending(finalResult) ||
-        finalResult.status === "ok" ||
-        (finalResult.recovery?.serviceRestartSafe === true &&
-          finalResult.recovery.service === "healthy"),
-    );
     assertCurrent();
     const cleanupFailure = await recordUpdatePackageCompletion(params, finalResult, assertCurrent);
     assertCurrent();
@@ -364,6 +361,26 @@ async function finishSettledUpdate(
       assertCurrent();
       rolledBack &&= isVerifiedUpdateRollback(finalResult);
     }
+    // Final recovery may still start the stopped Gateway. Retain the enabled
+    // task and its compensation until that owner's readiness check settles.
+    try {
+      await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(
+        rolledBack ||
+          isUpdateGatewayReadinessPending(finalResult) ||
+          finalResult.status === "ok" ||
+          (finalResult.recovery?.serviceRestartSafe === true &&
+            finalResult.recovery.service === "healthy"),
+      );
+    } catch (cause) {
+      rolledBack = false;
+      restoreFailure = await settlePostUpdateWindowsAutoStartFailure(
+        params,
+        finalResult,
+        result,
+        cause,
+        currentServiceStop,
+      );
+    }
     pendingResult = terminal.completeUpdateCommandResult(
       params,
       captured.interruptedResult(finalResult),
@@ -396,7 +413,6 @@ async function finishSettledUpdate(
   };
   const restoreWindowsAutoStart = (result: UpdateRunResult) =>
     resumePostUpdateWindowsAutoStart(params, result, currentServiceStop, {
-      beforeAttempt: onGatewayStartAttempted,
       onFailure: (cause) => reportResult(result, false, { cause }),
     });
 

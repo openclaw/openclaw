@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { packToArchive } from "../../src/plugins/test-helpers/archive-fixtures.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readJson, runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
@@ -37,12 +37,11 @@ it.skipIf(process.platform === "win32").each<IdentityCase>([
     ],
   ),
   ["projects-doctor", "missing-baseline", "ENOENT", []],
-])("%s candidate identity with %s bytes", (scenario, change, error, events) => {
+])("%s candidate identity with %s bytes", async (scenario, change, error, events) => {
   const root = tempDirs.make("upgrade-survivor-candidate-identity-");
   const candidate = path.join(root, "candidate", "package");
   const installed = path.join(root, "installed");
   const artifacts = path.join(root, "artifacts");
-  const tarball = path.join(root, "candidate.tgz");
   mkdirSync(path.join(candidate, "dist"), { recursive: true });
   mkdirSync(artifacts);
   mkdirSync(path.join(root, "runtime"));
@@ -52,7 +51,7 @@ it.skipIf(process.platform === "win32").each<IdentityCase>([
   writeFileSync(path.join(candidate, "dist/entry.mjs"), "export const payload = 'candidate';\n");
   cpSync(candidate, installed, { recursive: true });
   writeFileSync(path.join(installed, "dist/entry.mjs"), "export const payload = 'stale';\n");
-  execFileSync("tar", ["-czf", tarball, "-C", path.dirname(candidate), "package"]);
+  await packToArchive({ pkgDir: candidate, outDir: root, outName: "candidate.tgz" });
 
   const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
   const audited = scenario === "projects-doctor" || scenario === "workshop-doctor-recovery";

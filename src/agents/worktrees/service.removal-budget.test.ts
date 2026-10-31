@@ -233,9 +233,9 @@ it.each([
         const file = String(args[0]);
         if (stat && path.dirname(file) === directory) {
           if (damage === "byte-limited" && file.endsWith(".pack")) {
-            stat.size = 40 * 1024 * 1024;
+            stat.size = 1280 * 1024 * 1024;
           } else if (damage === "index-limited" && file.endsWith(".idx")) {
-            stat.size = 8 * 1024 * 1024;
+            stat.size = 32 * 1024 * 1024;
           }
         }
         return stat;

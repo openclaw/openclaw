@@ -159,10 +159,9 @@ export function modelCatalogParams(options: ModelsListParams): ModelsListParams 
 }
 
 export function modelCatalogKey(params: ModelsListParams): string {
-  const { refresh: _refresh, ...projection } = params;
   return JSON.stringify(
-    Object.entries(projection)
-      .filter(([, value]) => value !== undefined)
+    Object.entries(params)
+      .filter(([key, value]) => key !== "refresh" && value !== undefined)
       .toSorted(([a], [b]) => a.localeCompare(b)),
   );
 }

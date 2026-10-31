@@ -9,10 +9,12 @@
   overflow: auto;
   color: var(--text);
   font-family: var(--font-body);
-  background: var(--card);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--overlay-shadow);
+  border: 1px solid transparent;
+  border-radius: var(--menu-radius);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
+  corner-shape: superellipse(1.5);
   pointer-events: auto;
 }
 

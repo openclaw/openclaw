@@ -5,6 +5,8 @@ import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-tes
 import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
+import type { VoiceCallProvider } from "./providers/base.js";
+import type { guardedJsonApiRequest } from "./providers/shared/guarded-json-api.js";
 import {
   createMockSessionRuntime,
   registerFastContextMemoryProvider,
@@ -15,7 +17,8 @@ import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 
 const mocks = vi.hoisted(() => ({
-  managerInitialize: vi.fn(),
+  managerInitialize: vi.fn<(provider: VoiceCallProvider, webhookUrl: string) => Promise<void>>(),
+  carrierRequest: vi.fn<typeof guardedJsonApiRequest>(),
   managerStop: vi.fn(),
   managerGetCall: vi.fn(),
   webhookStart: vi.fn(),
@@ -36,6 +39,11 @@ const mocks = vi.hoisted(() => ({
   startTunnel: vi.fn(),
   setupTailscaleExposure: vi.fn(),
   cleanupTailscaleExposure: vi.fn(),
+}));
+
+vi.mock("./providers/shared/guarded-json-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./providers/shared/guarded-json-api.js")>()),
+  guardedJsonApiRequest: mocks.carrierRequest,
 }));
 
 vi.mock("./manager.js", () => ({
@@ -376,6 +384,44 @@ describe("createVoiceCallRuntime lifecycle", () => {
       }),
     ).rejects.toThrow(`${provider} requires a publicly reachable webhook URL`);
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("records outbound Twilio calls only for the opted-in account", async () => {
+    mocks.carrierRequest.mockResolvedValue({ sid: "CA-recording", status: "queued" });
+    for (const record of [true, false, undefined]) {
+      const config = createExternalProviderConfig({
+        provider: "twilio",
+        publicUrl: "https://voice.example.com/voice/webhook",
+      });
+      config.twilio = { ...config.twilio, record };
+      const runtime = await createRuntime({ config });
+      onTestFinished(() => runtime.stop());
+      const [provider] = expectDefined(mocks.managerInitialize.mock.calls.at(-1), "provider");
+      for (const inlineTwiml of [undefined, "<Response><Say>Hello</Say></Response>"]) {
+        await expect(
+          provider.initiateCall({
+            callId: "call-recording",
+            from: "+15550001234",
+            to: "+15550005678",
+            webhookUrl: "https://voice.example.com/voice/webhook",
+            inlineTwiml,
+          }),
+        ).resolves.toEqual({ providerCallId: "CA-recording", status: "queued" });
+        const [request] = expectDefined(mocks.carrierRequest.mock.calls.at(-1), "Twilio request");
+        expect(request.method).toBe("POST");
+        expect(request.url).toMatch(/\/Accounts\/AC123\/Calls\.json$/);
+        if (!(request.body instanceof URLSearchParams)) {
+          throw new Error("Twilio request must be form-encoded");
+        }
+        const form = request.body;
+        expect(form.get("Record")).toBe(record === true ? "true" : null);
+        expect(form.has("RecordingStatusCallback")).toBe(false);
+        expect(form.get(inlineTwiml ? "Twiml" : "Url")).toBe(
+          inlineTwiml ?? "https://voice.example.com/voice/webhook?callId=call-recording",
+        );
+      }
+    }
+    expect(mocks.carrierRequest).toHaveBeenCalledTimes(6);
   });
 
   it("accepts an explicit public URL without logging it twice", async () => {
