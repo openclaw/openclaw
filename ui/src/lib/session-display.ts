@@ -191,7 +191,7 @@ function parseSessionKey(key: string): {
   const normalized = normalizeLowercaseStringOrEmpty(key);
 
   if (key === "main" || /^agent:[^:]+:main$/u.test(key)) {
-    return { prefix: "", fallbackName: "Main Session" };
+    return { prefix: "", fallbackName: t("sessionsView.mainSession") };
   }
 
   if (key.includes(":subagent:")) {

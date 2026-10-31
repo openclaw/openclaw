@@ -50,6 +50,7 @@ describe("i18n", () => {
     ["en-US", "zh-CN", "zh-CN", "ltr"],
     ["fa-IR", null, "fa", "rtl"],
     ["ZH-hAnT-CN", null, "zh-TW", "ltr"],
+    ["pt-BR", "pt-PT", "pt-PT", "ltr"],
   ])("loads startup locale for browser %s and saved %s", async (language, saved, locale, dir) => {
     const documentElement = stubDocumentLocaleMetadata();
     vi.stubGlobal("navigator", { language });

@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
 import {
   isSessionTitlePending,
   resolveChannelSessionInfo,
@@ -8,6 +9,17 @@ import {
   resolveSessionWorkContext,
   resolveSessionWorkSubtitle,
 } from "./session-display.ts";
+
+vi.mock("../i18n/locales/pt-PT.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../i18n/locales/pt-PT.ts")>();
+  return {
+    ...actual,
+    pt_PT: {
+      ...actual.pt_PT,
+      sessionsView: { mainSession: "Sessão principal do catálogo de teste" },
+    },
+  };
+});
 
 describe("isSessionTitlePending", () => {
   const key = "agent:main:dashboard:naming";
@@ -46,6 +58,31 @@ describe("resolveSessionDisplayName", () => {
     );
     expect(resolveSessionDisplayName("agent:research:dashboard:main")).toBe("New session");
     expect(resolveSessionDisplayName("agent:research:main:thread")).toBe("main:thread");
+  });
+
+  it("localizes only unnamed main-session fallbacks and preserves saved names and keys", async () => {
+    const restoreI18n = captureI18nStateForTesting();
+    try {
+      await i18n.setLocale("pt-PT");
+      const fallback = "Sessão principal do catálogo de teste";
+      const keys = ["main", "agent:main:main", "agent:research:main"];
+
+      expect(keys.map((key) => resolveSessionDisplayName(key))).toEqual([
+        fallback,
+        fallback,
+        fallback,
+      ]);
+      expect(resolveSessionDisplayName("agent:research:main", { label: "Main Session" })).toBe(
+        "Main Session",
+      );
+      expect(
+        resolveSessionDisplayName("agent:research:main", {
+          displayName: "Research desk",
+        }),
+      ).toBe("Research desk");
+    } finally {
+      await restoreI18n();
+    }
   });
 
   // Rows are shaped like the Gateway projection: displayName plus the

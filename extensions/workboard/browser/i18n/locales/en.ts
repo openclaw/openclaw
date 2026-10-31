@@ -13,6 +13,7 @@ export default {
     statusQueued: "Queued",
   },
   workboard: {
+    title: "Workboard",
     partialCards:
       "{count} cards loaded. Search and filters apply to loaded cards. Load all cards to reorder them.",
     loadMoreCards: "Load more cards",

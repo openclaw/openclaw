@@ -5,6 +5,7 @@ export const SUPPORTED_LOCALES = [
   "zh-CN",
   "zh-TW",
   "pt-BR",
+  "pt-PT",
   "de",
   "es",
   "ja-JP",
@@ -35,6 +36,7 @@ export const LOCALE_MATCH_RULES: ReadonlyArray<readonly [string, Locale]> = [
   ["^zh.*-hans(?:-|$)", "zh-CN"],
   ["^zh.*-(?:tw|hk|mo)(?:-|$)", "zh-TW"],
   ["^zh", "zh-CN"],
+  ["^pt-pt(?:-|$)", "pt-PT"],
   ...SUPPORTED_LOCALES.filter((locale) => locale !== "en" && !locale.startsWith("zh")).map(
     (locale): readonly [string, Locale] => ["^" + locale.split("-")[0]!, locale],
   ),

@@ -108,7 +108,9 @@ export default defineControlUiPlugin({
     const registrations = [
       host.ui.registerPage({
         id: "workboard",
-        label: "Workboard",
+        get label() {
+          return t("workboard.title");
+        },
         mount: createLazyWorkboardPage(async () => {
           const { createWorkboardPage } = await import("./pages/workboard/workboard-page.tsx");
           return createWorkboardPage(workboard, (board) => {
@@ -124,7 +126,9 @@ export default defineControlUiPlugin({
       }),
       host.ui.registerNavigation({
         id: "workboard",
-        label: "Workboard",
+        get label() {
+          return t("workboard.title");
+        },
         page: workboardPageTarget(),
         icon: "kanban",
         order: 10,

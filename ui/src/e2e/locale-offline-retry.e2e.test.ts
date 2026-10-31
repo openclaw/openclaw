@@ -7,7 +7,8 @@ import {
   startControlUiE2eServer,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { configResponse, patchPrefs } from "./appearance-prefs.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -94,6 +95,44 @@ suite.define(() => {
         await picker.locator(`[role="option"][data-value="${value}"]`).textContent(),
       ).toContain("Svenska");
     }
+  });
+
+  it("keeps Portuguese (Portugal) distinct and selected after reload", async () => {
+    const context = await suite.newBrowserContext({
+      ...createControlUiE2eContextOptions(),
+      locale: "pt-BR",
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: { "config.get": configResponse({}, "pt-pt-before") },
+    });
+    await page.goto(`${suite.server.baseUrl}settings/appearance`);
+    const picker = page.locator("#settings-language openclaw-select-picker");
+    await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("pt-BR");
+
+    await picker.locator(".picker-select__trigger").click();
+    const brazilian = picker.locator('[role="option"][data-value="pt-BR"]');
+    const portuguese = picker.locator('[role="option"][data-value="pt-PT"]');
+    const brazilianLabel = (await brazilian.textContent())?.trim();
+    const portugueseLabel = (await portuguese.textContent())?.trim();
+    expect(brazilianLabel).toBeTruthy();
+    expect(portugueseLabel).toBeTruthy();
+    expect(portugueseLabel).not.toBe(brazilianLabel);
+
+    await selectPickerValue(picker, "pt-PT");
+    await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("pt-PT");
+    await page.locator("openclaw-config-page h1.page-title").waitFor({ state: "visible" });
+    await gateway.waitForRequest("config.patch");
+    const patches = await gateway.getRequests("config.patch");
+    expect(patchPrefs(patches[0]!)).toMatchObject({ locale: "pt-PT" });
+    await gateway.setMethodResponse(
+      "config.get",
+      configResponse({ locale: "pt-PT" }, "pt-pt-after"),
+    );
+
+    await page.reload();
+    await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("pt-PT");
+    expect(await pickerValue(picker)).toBe("pt-PT");
   });
 
   it("applies a locale whose first chunk request failed after the Gateway reconnects", async () => {

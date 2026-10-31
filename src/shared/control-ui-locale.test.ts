@@ -12,7 +12,10 @@ describe("resolveNavigatorLocale", () => {
     ["zh-MO", "zh-TW"],
     ["zh-Hans-Hant-CN", "zh-TW"],
     ["zh-Hant-Hans-HK", "zh-TW"],
-    ["pt-PT", "pt-BR"],
+    ["pt", "pt-BR"],
+    ["pt-BR", "pt-BR"],
+    ["pt-PT", "pt-PT"],
+    ["pt-PT-x-private", "pt-PT"],
     ["DE-at", "de"],
     ["ja-JP", "ja-JP"],
     ["sv-SE", "sv"],
@@ -26,7 +29,7 @@ describe("resolveNavigatorLocale", () => {
 
 it("accepts only exact supported explicit preferences", () => {
   expect(isSupportedLocale("pt-BR")).toBe(true);
-  expect(isSupportedLocale("pt-PT")).toBe(false);
+  expect(isSupportedLocale("pt-PT")).toBe(true);
   expect(isSupportedLocale("ZH-CN")).toBe(false);
   expect(isSupportedLocale(null)).toBe(false);
 });
