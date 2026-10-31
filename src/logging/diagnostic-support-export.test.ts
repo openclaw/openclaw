@@ -205,6 +205,41 @@ describe("diagnostic support export", () => {
     });
   });
 
+  it("omits IRC identities from every archive entry while retaining connection diagnostics", async () => {
+    const host = "irc.private.example.invalid";
+    const nick = "private_irc_nick";
+    const bindHost = "gateway.private.example.invalid";
+    const url = "https://public.example/diagnostics";
+    const irc = { host, nick, port: 6697, tls: true };
+    writeJson(path.join(tempDir, "openclaw.json"), { channels: { irc } });
+
+    const entries = await exportEntries({
+      readStatusSnapshot: async () => ({ gateway: { bindHost, port: 18789, url } }),
+      readHealthSnapshot: async () => ({ channels: { irc } }),
+    });
+
+    for (const [name, content] of Object.entries(entries)) {
+      for (const identity of [host, nick, bindHost]) {
+        expect(content, name).not.toContain(identity);
+      }
+    }
+    expect(readJsonEntry(entries, "config/sanitized.json")).toHaveProperty("channels.irc", {
+      host: "<redacted>",
+      nick: "<redacted>",
+      port: 6697,
+      tls: true,
+    });
+    expect(readJsonEntry(entries, "health/gateway-health.json")).toHaveProperty(
+      "data.channels.irc",
+      { host: "<redacted>", nick: "<redacted>", port: 6697, tls: true },
+    );
+    expect(readJsonEntry(entries, "status/gateway-status.json")).toHaveProperty("data.gateway", {
+      bindHost: "<redacted>",
+      port: 18789,
+      url,
+    });
+  });
+
   it("writeDiagnosticSupportExport writes a shareable zip without raw chats, webhook bodies, or secrets", async () => {
     const fakeToken = "sk-test-support-export-secret-token-1234567890";
     const privateChat = "private user said diagnose my bank transfer";

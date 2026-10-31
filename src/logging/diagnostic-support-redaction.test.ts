@@ -273,6 +273,45 @@ describe("diagnostic support redaction", () => {
     expect(sanitizeSupportConfigValue(18789, redaction, "port")).toBe(18789);
   });
 
+  it("masks standalone host and nickname fields without matching adjacent diagnostic names", () => {
+    const redaction = { env: {}, stateDir: tempDir };
+    const input = {
+      host: "irc.private.example.invalid",
+      hostname: "machine.private.example.invalid",
+      HOSTNAME: "upper.private.example.invalid",
+      bindHost: "gateway.private.example.invalid",
+      "bind-host": "hyphen.private.example.invalid",
+      bind_host: "underscore.private.example.invalid",
+      nick: "private_irc_nick",
+      nickname: "private_display_nick",
+      NICKNAME: "private_upper_nick",
+      hostCount: 2,
+      hostStatus: "ready",
+      ghost: "visible",
+      nicknameEnabled: true,
+      url: "https://public.example/diagnostics",
+    };
+    const expected = {
+      host: "<redacted>",
+      hostname: "<redacted>",
+      HOSTNAME: "<redacted>",
+      bindHost: "<redacted>",
+      "bind-host": "<redacted>",
+      bind_host: "<redacted>",
+      nick: "<redacted>",
+      nickname: "<redacted>",
+      NICKNAME: "<redacted>",
+      hostCount: 2,
+      hostStatus: "ready",
+      ghost: "visible",
+      nicknameEnabled: true,
+      url: "https://public.example/diagnostics",
+    };
+
+    expect(sanitizeSupportConfigValue(input, redaction)).toEqual(expected);
+    expect(sanitizeSupportSnapshotValue(input, redaction)).toEqual(expected);
+  });
+
   it("blocks prototype keys and caps support sanitizer width", () => {
     const redaction = {
       env: {
