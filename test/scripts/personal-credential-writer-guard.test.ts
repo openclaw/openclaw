@@ -602,7 +602,9 @@ it("batches semantic command types per file while retaining literal and owner ch
       ]),
     );
     expect(queries.every(Array.isArray)).toBe(true);
-    expect(queries.map((nodes) => (nodes as readonly ts.Node[]).length).toSorted()).toEqual([1, 3]);
+    expect(
+      queries.map((nodes) => (nodes as readonly ts.Node[]).length).toSorted((a, b) => a - b),
+    ).toEqual([1, 3]);
     expect(
       queries.flatMap((nodes) =>
         (nodes as readonly ts.Node[]).map((node) => node.getSourceFile().fileName),
