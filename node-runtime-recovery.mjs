@@ -764,9 +764,15 @@ export async function recoverNodeRuntime({
     env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1" ||
     !process.argv[1] ||
     isForegroundGmailRunInvocation(process.argv) ||
-    (process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) ||
-    !nodeRuntimeFailure(process.versions.node, await detectCurrentSqliteCapabilities())
+    (process.platform !== "win32" && isNativeHookRelayInvocation(process.argv))
   ) {
+    return false;
+  }
+  const currentNodeFailure = nodeRuntimeFailure(
+    process.versions.node,
+    await detectCurrentSqliteCapabilities(),
+  );
+  if (!currentNodeFailure) {
     return false;
   }
   const selected = await findUsableNodeRuntime({ homeDir, allowInstall, env });
@@ -776,7 +782,7 @@ export async function recoverNodeRuntime({
     return false;
   }
   process.stderr.write(
-    `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; current Node failed runtime admission).\n`,
+    `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; current Node failed runtime admission: ${currentNodeFailure})\n`,
   );
   return await runRespawnedChild(
     resolveOpenClawCliRespawn({
