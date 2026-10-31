@@ -1082,14 +1082,6 @@
     scrollbar-width: thin;
   }
 
-  & .chat-pane__sharing-roster[data-at-start="false"] {
-    --sharing-fade-top: 16px;
-  }
-
-  & .chat-pane__sharing-roster[data-at-end="false"] {
-    --sharing-fade-bottom: 16px;
-  }
-
   & .chat-pane__sharing-person {
     display: grid;
     width: 100%;

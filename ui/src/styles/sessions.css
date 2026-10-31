@@ -289,7 +289,6 @@
   align-items: center;
   gap: var(--space-1);
   height: 30px;
-  box-sizing: border-box;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -318,7 +317,6 @@
 .session-filter-input {
   width: 48px;
   height: 24px;
-  box-sizing: border-box;
   padding: 0 6px;
   color: var(--text);
   background: transparent;

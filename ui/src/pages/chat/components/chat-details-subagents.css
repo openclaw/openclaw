@@ -81,7 +81,6 @@
 .chat-details-subagents__spinner {
   color: var(--accent);
   display: block;
-  box-sizing: border-box;
   width: 8px;
   height: 8px;
   border: 1.5px solid currentColor;

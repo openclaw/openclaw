@@ -33,12 +33,10 @@
   width: max-content;
   min-width: 100%;
   padding: 4px 2px;
-  box-sizing: border-box;
 }
 .chat-activity-pills .activity-pill {
   position: relative;
   isolation: isolate;
-  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -154,7 +152,6 @@
   color: var(--danger);
 }
 .chat-activity-pills .activity-pill__spinner {
-  box-sizing: border-box;
   display: inline-block;
   width: 14px;
   height: 14px;
@@ -221,7 +218,6 @@
 }
 .chat-activity-pills .activity-pill__avatar {
   position: relative;
-  box-sizing: border-box;
   display: grid;
   place-items: center;
   width: 23px;
