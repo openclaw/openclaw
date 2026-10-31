@@ -92,6 +92,15 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "chat-saved-annotations-runtime";
     case "ui/src/pages/chat/components/chat-transcript-search-content.tsx":
       return "chat-search-runtime";
+    case "ui/src/pages/chat/components/chat-composer-plus-menu-content.tsx":
+    case "ui/src/pages/chat/components/chat-composer-plus-menu-body.tsx":
+    case "ui/src/pages/chat/components/chat-composer-plus-menu-frame.tsx":
+    case "ui/src/pages/chat/components/chat-composer-menu-rows.tsx":
+    case "ui/src/pages/chat/components/chat-camera-capture.tsx":
+    case "ui/src/pages/chat/components/chat-attachment-picker-policy.ts":
+    case "ui/src/i18n/locales/en-chat-camera.ts":
+      // Root and subviews share chrome; keep it in the root's compressed chunk.
+      return "chat-composer-plus-menu-content";
     case "ui/src/pages/chat/chat-composer-capability-host.tsx":
     case "ui/src/pages/chat/composer-library-session.ts":
       // Opened composer controls share the preloaded interaction runtime.
@@ -125,8 +134,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "template-creator-runtime";
     case "ui/src/pages/templates/draft-navigation.ts":
     case "ui/src/i18n/locales/en-agents-home.ts":
-      // Keep shared admission and roster labels independent of optional creator work.
-      return "virtual-core-runtime";
+    case "ui/src/pages/labs/labs-feature-state.ts":
+    case "ui/src/pages/labs/templates-lab-feature.ts":
+      // Draft navigation and its Labs gate belong to the optional template flow.
+      return "template-draft-runtime";
     case "src/shared/dedupe-by-key.ts":
       // Config search shares this helper without loading optional session UI.
       return "control-ui-boot-shared";
@@ -138,9 +149,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/app/assistant-media.ts":
     case "ui/src/lib/image-download.ts":
     case "ui/src/lib/download.ts":
-    case "src/shared/markdown-code.ts":
     case "src/shared/html-escape.ts":
-    case "src/shared/shell-quote.ts":
     case "src/utils/message-channel-constants.ts":
     case "src/utils/string-readers.ts":
     case "ui/src/components/file-kind.ts":
@@ -151,8 +160,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/sessions/session-archive-reason.ts":
     case "ui/src/lib/sessions/session-message-subscriptions.runtime.ts":
     case "packages/gateway-client/src/session-subscriptions.ts":
-    case "ui/src/pages/labs/labs-feature-state.ts":
-    case "ui/src/pages/labs/templates-lab-feature.ts":
     case "ui/src/i18n/locales/en-session-skill-library.ts":
     case "ui/src/pages/plugins/detail-tabs.ts":
     case "ui/src/components/confirm-dialog.ts":
@@ -180,7 +187,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/mcp-app-catalog.ts":
     case "ui/src/i18n/locales/en-mcp-app.ts":
     case "ui/src/components/mcp-app-launch.ts":
-    case "ui/src/components/mcp-app-view-lazy.ts":
     case "ui/src/lib/sessions/session-create-params.ts":
     case "packages/gateway-protocol/src/question-media.ts":
       // Shared catalogs and session parameters must not pull Chat into other routes.
@@ -409,7 +415,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "markdown-streaming-runtime";
     case "ui/src/styles/session-panel-rail.css":
       // Keep normal rail CSS in Chat; other panels import its neutral inline text.
-      return /[?&]inline(?:[=&]|$)/u.test(id) ? "deferred-ui-support" : undefined;
+      return /[?&]inline(?:[=&]|$)/u.test(id) ? "session-panel-rail-inline" : undefined;
     case "ui/src/pages/chat/session-snapshot-database.ts":
       // Warm boot reads while the Gateway connects; the chat boot group made it wait for the whole route.
       return "session-snapshot-database";

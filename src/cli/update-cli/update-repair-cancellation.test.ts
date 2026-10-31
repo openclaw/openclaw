@@ -25,6 +25,7 @@ import {
   withPublicationFence,
 } from "../../infra/package-update-publication.test-support.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import {
@@ -41,6 +42,7 @@ import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js"
 import { killPidIfAlive, waitForPidToExit } from "../../test-utils/process-tree.js";
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { registerUpdateCli } from "../update-cli.js";
+import { updateExecutorNativeEntrypoints as native } from "./update-command-executor-native-runtime.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { preparePackagePublication } from "./update-package-publication.test-support.js";
 
@@ -106,8 +108,9 @@ function createCrashFixture(root: string) {
       ),
     ).rows;
   const pidFile = path.join(root, "candidate.pid");
-  const script = path.join(root, "cancelled-original.mts");
-  const url = (relative: string) => JSON.stringify(new URL(relative, import.meta.url).href);
+  const script = path.join(root, "cancelled-original.mjs");
+  const url = (key: keyof typeof native) =>
+    JSON.stringify(resolveRuntimeWorkerUrl(native[key]).href);
   const fixture = {
     root,
     install,
@@ -128,9 +131,9 @@ import { createRequire } from "node:module";
 createRequire(import.meta.url)(${JSON.stringify(path.join(privateTmp, "private-handoff-guard.cjs"))});
 const now = Date.now;
 Date.now = () => now() - 50 * 60_000;
-const executor = await import(${url("./update-command-executor.ts")});
-const { createUpdateRun } = await import(${url("../../infra/update-run-ledger.ts")});
-const { readUpdateRunDriver } = await import(${url("../../infra/update-run-driver.ts")});
+const executor = await import(${url("executor")});
+const { createUpdateRun } = await import(${url("runLedger")});
+const { readUpdateRunDriver } = await import(${url("runDriver")});
 const run = createUpdateRun({ trigger: "cli", origin: { driver: readUpdateRunDriver(), admission: { owner: "installed" } } });
 await executor.withUpdateCommandExecutor(run.runId, async (owner) => {
   const fence = await owner.enter(${JSON.stringify(slot)});
@@ -145,22 +148,17 @@ await executor.withUpdateCommandExecutor(run.runId, async (owner) => {
 });
 `,
       );
-      const result = spawnSync(
-        resolveTestNodeExecPath(),
-        ["--import", "tsx", binding.nodeOption, script],
-        {
-          cwd: fileURLToPath(new URL("../../../", import.meta.url)),
-          env: childEnv,
-          encoding: "utf8",
-          timeout: 20_000,
-          killSignal: "SIGKILL",
-        },
-      );
+      const result = spawnSync(resolveTestNodeExecPath(), [binding.nodeOption, script], {
+        env: childEnv,
+        encoding: "utf8",
+        timeout: 20_000,
+        killSignal: "SIGKILL",
+      });
       expect([result.error, result.signal], result.stderr).toEqual([undefined, "SIGKILL"]);
       assertManagedHandoffTestConsumer(
         binding,
         result.pid,
-        fileURLToPath(new URL("../../", import.meta.url)),
+        fileURLToPath(new URL("../../", resolveRuntimeWorkerUrl(native.executor))),
       );
       fixture.candidate = Number(fs.readFileSync(pidFile, "utf8"));
       const family = rows();

@@ -1320,6 +1320,7 @@ src/infra/tmp-openclaw-dir.ts
 src/infra/update-capture-space.ts
 src/infra/update-channels.ts
 src/infra/update-database-generations.ts
+src/infra/update-database-path.ts
 src/infra/update-doctor-config-schema.ts
 src/infra/update-doctor-lint-schema.ts
 src/infra/update-doctor-migration-attribution.ts
@@ -1680,6 +1681,7 @@ src/plugins/plugin-scope.ts
 src/plugins/plugin-sdk-native-resolver.ts
 src/plugins/plugin-setup-module.ts
 src/plugins/plugin-shared-module-loader.ts
+src/plugins/plugin-shared-state-admission.ts
 src/plugins/plugin-source-admission-store.ts
 src/plugins/plugin-source-admission-context.ts
 src/plugins/plugin-source-admission.types.ts

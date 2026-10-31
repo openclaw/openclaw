@@ -168,7 +168,7 @@ it.each([
       steps: [capture!.step],
       durationMs: 0,
     };
-    if (lateRefusal) {
+    for (const name of lateRefusal ? ["first", "second"] : []) {
       const backup = capture!.backup!;
       finalResult.steps.push(
         recordUpdateDatabaseWrites(
@@ -178,12 +178,13 @@ it.each([
             generations: { [source]: "changed-during-doctor" },
             unchanged: false,
           },
-          { name: "post-update doctor" },
+          { name },
         ),
       );
       expect(finalResult.steps.at(-1)?.warnings).toContain(
         `Automatic database restoration unavailable: databases changed after snapshot capture; the writer is unknown. Snapshots retained at ${backup.directory}.`,
       );
+      expect(finalResult.steps.at(-1)?.diagnostics?.join("\n")).toContain("Doctor interval first;");
     }
     if (outcome === "rollback") {
       expect((await transaction!.rollback(() => {})).exitCode).toBe(0);

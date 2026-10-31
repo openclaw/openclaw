@@ -57,6 +57,7 @@ const failures = [
   ...[
     ["unsupported-format", "settings.toml", "application/toml"],
     ["delivery-failed", "bundle.7z", "application/x-7z-compressed"],
+    ["file-too-large", "orders-large.zip", "application/zip"],
   ].map(([code, label, mimeType]) =>
     attachment({ code, kind: "document", label, mimeType }, "attachment_error"),
   ),
@@ -161,6 +162,18 @@ describe("message-normalizer", () => {
     ["named failures beside delivered attachments", failures, failures],
   ])("normalizes %s", (_name, input, expected) => {
     expect(assistant(structuredClone(input)).content).toEqual(expected);
+  });
+
+  it("keeps structured size failures instead of the text-only client fallback", () => {
+    const failure = attachment(
+      { code: "file-too-large", kind: "document", label: "orders-large.zip" },
+      "attachment_error",
+    );
+    expect(
+      assistant([text("Created the export."), failure], {
+        text: "Created the export.\norders-large.zip is too large to attach.",
+      }).content,
+    ).toEqual([text("Created the export."), failure]);
   });
 
   it("normalizes mixed text, thinking, and tool content without a standalone tool envelope", () => {
