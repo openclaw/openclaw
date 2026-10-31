@@ -218,14 +218,21 @@ export function removeSidebarSnapshotSession(
     changed ||= !keep;
     return keep;
   };
-  const prune = (rows: SidebarSnapshotSession[]): SidebarSnapshotSession[] =>
-    rows.filter(retain).map((row) => ({
-      ...row,
-      children: prune(row.children),
-      childLoadParentKeys: row.childLoadParentKeys?.filter((parentKey) =>
-        retain({ key: parentKey }),
-      ),
-    }));
+  const prune = (rows: SidebarSnapshotSession[]): SidebarSnapshotSession[] => {
+    const kept: SidebarSnapshotSession[] = [];
+    for (const row of rows) {
+      if (retain(row)) {
+        kept.push({
+          ...row,
+          children: prune(row.children),
+          childLoadParentKeys: row.childLoadParentKeys?.filter((parentKey) =>
+            retain({ key: parentKey }),
+          ),
+        });
+      }
+    }
+    return kept;
+  };
   const next = {
     ...model,
     pinnedSessions: prune(model.pinnedSessions),

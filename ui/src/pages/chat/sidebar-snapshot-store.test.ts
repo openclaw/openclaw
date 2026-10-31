@@ -141,7 +141,10 @@ it("writes each changed presentation once across independent tab stores", async 
   const changed = { rows: ["Retained conversation"] };
   await Promise.all([write(peer, changed), write(first, changed)]);
   expect(
-    put.mock.calls.filter((_, index) => put.mock.instances[index]?.name === SIDEBAR),
+    put.mock.calls.filter((_, index) => {
+      const instance = put.mock.instances[index];
+      return instance instanceof IDBObjectStore && instance.name === SIDEBAR;
+    }),
   ).toHaveLength(2);
   expect(await read(peer)).toEqual(changed);
   now += 31 * 24 * 60 * 60 * 1000;
