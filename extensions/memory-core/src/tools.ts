@@ -562,7 +562,20 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
         const relPath = readStringParam(rawParams, "path", { required: true });
         const from = readPositiveIntegerParam(rawParams, "from");
         const lines = readPositiveIntegerParam(rawParams, "lines");
+        const heading = readStringParam(rawParams, "heading", {
+          required: rawParams.heading != null,
+        });
         const requestedCorpus = readCorpusParam(rawParams, ["memory", "wiki", "all"]);
+        if (heading && requestedCorpus && requestedCorpus !== "memory") {
+          return jsonResult({
+            path: relPath,
+            text: "",
+            status: "error",
+            code: "MEMORY_HEADING_UNSUPPORTED_CORPUS",
+            error:
+              "heading supports only corpus=memory (or omitted corpus). Omit heading for wiki/all reads.",
+          });
+        }
         const { readAgentMemoryFile } = await loadMemoryToolRuntime();
         return await executeMemoryReadResult({
           relPath,
@@ -580,6 +593,7 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
               relPath,
               from: from ?? undefined,
               lines: lines ?? undefined,
+              heading,
             }),
         });
       },

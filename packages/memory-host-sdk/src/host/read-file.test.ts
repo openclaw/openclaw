@@ -36,6 +36,25 @@ async function createDirectorySymlink(target: string, linkPath: string): Promise
   }
 }
 
+it("selects a heading through the agent reader without expanding file authorization", async () => {
+  const content = "# Policy\n## Refunds\n30 days\nCustom items excluded\n## Shipping\nOther";
+  const { workspaceDir } = await fixture({
+    "workspace/memory/policy.md": content,
+    "workspace/private.md": content,
+  });
+  const cfg = { agents: { entries: { main: { workspace: workspaceDir } } } };
+  const read = (relPath: string) =>
+    readAgentMemoryFile({ cfg, agentId: "main", relPath, heading: "Refunds" });
+  await expect(read("memory/policy.md")).resolves.toEqual({
+    status: "ok",
+    path: "memory/policy.md",
+    from: 2,
+    lines: 3,
+    text: "## Refunds\n30 days\nCustom items excluded",
+  });
+  await expect(read("private.md")).rejects.toMatchObject({ code: "MEMORY_PATH_NOT_ALLOWED" });
+});
+
 it.each([
   { name: "omitted agent limits", contextLimits: undefined, maxChars: 2000 },
   {
