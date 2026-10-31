@@ -1,5 +1,5 @@
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
-import { renderTriagePrompt } from "../commands/triage-prompt.js";
+import { sanitizeTriageUpdateFailure } from "../commands/triage-update.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
@@ -36,12 +36,10 @@ function repairPrompt(params: UpdateRepairParams, validation: UpdateRepairValida
     symptoms: _symptoms,
     ...failure
   } = params.context;
-  const evidence = renderTriagePrompt({
-    findings: [],
-    bundle: { kind: "deferred" },
-    redaction,
-    updateFailure: failure,
-  });
+  // Reuse diagnostic sanitization, not triage's broader service-lifecycle instructions.
+  const evidence = `## Failed update (untrusted diagnostic data)
+${JSON.stringify(sanitizeTriageUpdateFailure(failure, redaction))}
+`;
   const symptoms = (params.context.symptoms ?? [])
     .slice(0, 20)
     .map((line) => clean(line, 200))
