@@ -373,6 +373,7 @@ describe("session workspace state", () => {
     expect(content.uncommitted).toBeUndefined();
     await vi.advanceTimersByTimeAsync(500);
     expect(content.uncommitted).toBe(result);
+    expect(request.mock.calls.every(([, params]) => params.summaryOnly === true)).toBe(true);
     stop?.();
     request.mockResolvedValue(computing);
     const stopRefresh = content.requestUncommitted?.();
@@ -389,6 +390,44 @@ describe("session workspace state", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(request).toHaveBeenCalledTimes(4);
     expect(content.uncommitted).toBe(result);
+  });
+
+  it("shares matching uncommitted reads without handing summaries to the diff panel", async () => {
+    useFakeClock();
+    const summary = createDeferred<SessionsDiffResult>();
+    const full = createDeferred<SessionsDiffResult>();
+    const file = { path: "changed.ts", status: "modified" as const, additions: 1, deletions: 0 };
+    const result: SessionsDiffResult = {
+      sessionKey: "agent:main:current",
+      files: [file],
+      additions: 1,
+      deletions: 0,
+    };
+    const patch = { ...result, files: [{ ...file, patch: "+new line" }] };
+    const request = vi.fn((_method: string, params: { summaryOnly?: boolean }) =>
+      params.summaryOnly ? summary.promise : full.promise,
+    );
+    const { content } = diffHost(request);
+    const panel = content.load({ scope: "uncommitted" });
+    const stop = content.requestUncommitted?.();
+    const joined = content.load({ scope: "uncommitted" });
+    const stopJoined = content.requestUncommitted?.();
+    try {
+      expect(joined).toBe(panel);
+      expect(request).toHaveBeenCalledTimes(2);
+      summary.resolve(result);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(content.uncommitted).toBe(result);
+      full.resolve(patch);
+      expect(await panel).toBe(patch);
+      expect(content.uncommitted).toBe(result);
+    } finally {
+      stop?.();
+      stopJoined?.();
+      summary.resolve(result);
+      full.resolve(patch);
+      await panel;
+    }
   });
 
   it("retries a pending visible reload without publishing a retired load failure", async () => {

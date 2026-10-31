@@ -33,6 +33,7 @@ const localRepository = {
 async function selectRemoteProject(page: Page, query: string, name: RegExp) {
   await page.locator("#new-session-project-trigger").click();
   const picker = page.locator(".oc-popover.new-session-page__project-popover");
+  await picker.locator(".header-search__toggle").click();
   await picker.getByRole("searchbox", { name: "Search projects or paste a Git URL" }).fill(query);
   await picker.getByRole("button", { name }).click();
 }
@@ -166,6 +167,7 @@ suite.define(() => {
       const project = page.locator("#new-session-project-trigger");
       await project.click();
       const picker = page.locator(".oc-popover.new-session-page__project-popover");
+      await picker.locator(".header-search__toggle").click();
       await picker
         .getByRole("searchbox", { name: "Search projects or paste a Git URL" })
         .fill(cloneUrl);
@@ -340,6 +342,7 @@ suite.define(() => {
       const trigger = page.locator("#new-session-project-trigger");
       const place = page.locator(".oc-popover.new-session-page__project-popover");
       await trigger.click();
+      await place.locator(".header-search__toggle").click();
       const search = place.getByRole("searchbox", {
         name: "Search projects or paste a Git URL",
       });

@@ -8,6 +8,14 @@ title: "Updating"
 
 Keep OpenClaw up to date.
 
+Failed-update recovery on Linux restarts an installed Gateway through systemd.
+If a foreground OpenClaw process owns that service's state directory, recovery
+checks native restart permission and live identity, requests graceful shutdown, and waits for it to exit
+before starting the unit. Processes belonging to another supervisor are preserved.
+An inconclusive readiness check is reported separately from current serving health.
+This recovery repair is supplied by the candidate CLI; older updaters using
+`gateway restart --preserve-definition` can use it without an updater upgrade.
+
 App-owned packages declare their update owner in `openclaw-install-owner.json`
 at the package root. For `owner: "macos-app"`, update OpenClaw.app through its
 app updater to update the bundled Gateway and runtime together. `openclaw update`,
@@ -45,6 +53,14 @@ backup.
 
 ## Update implementation contract
 
+On macOS, Doctor reports generated service environment values surrounded by
+literal double quotes. Interactive `openclaw doctor` can back up the private env
+file and remove one outer quote pair after confirmation; unrelated bytes stay
+unchanged. Quotes can be intentional, so unattended Doctor and `doctor --fix --yes`
+only report this finding. Restart the affected gateway or node service after
+repair, and correct inherited shell values before reinstalling. This recovery
+requires the candidate Doctor; the service writer continues to preserve input values.
+
 Managed systemd Gateway activation also covers packages replaced outside
 `openclaw update`. Before ordinary startup admission, the native service reader
 must identify this process as the running unit's MainPID. Only older database
@@ -70,6 +86,14 @@ that never reached activation is removed after checking for surviving work;
 uncertain cleanup leaves a warning and retains the stage. Activation recovery
 and backups remain with their existing recovery owners. These changes must be
 present in the installed updater; a newer candidate cannot repair an old launcher.
+
+If an update driver disappears after the candidate was recorded as installed and
+serving, reconciliation records success with a driver-loss warning. It preserves
+plugin warnings and does not invent command exit codes or a current health check.
+Unverified candidates and recorded failures or recovery keep their failure path.
+The reconciling candidate must contain this change; it uses observations older
+updaters already record. A first update from an older release still uses that
+release's handoff launcher, and previously terminal history is not rewritten.
 
 Managed systemd stops bound the native command by the selected unit's effective
 stop timeout plus five seconds. Unavailable or infinite policy uses the finite

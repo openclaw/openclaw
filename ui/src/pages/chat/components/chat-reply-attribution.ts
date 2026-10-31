@@ -24,6 +24,12 @@ export type ReplyLine = {
 
 export const NO_REPLY_LINE: ReplyLine = { state: "hidden" };
 
+/** Splits a display name after its first word; names without spaces stay whole. */
+export function splitReplyName(name: string): { first: string; rest: string } {
+  const match = /^(\S+)(\s.*)$/su.exec(name);
+  return match ? { first: match[1]!, rest: match[2]! } : { first: name, rest: "" };
+}
+
 type ReplyContext = Pick<MessageGroup, "replyShared" | "replyTurnSource" | "runId">;
 
 function foundPreview(result: ReturnType<ReplyPreviewLookup>) {

@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
+import { versions } from "node:process";
+import { promiseHooks } from "node:v8";
 import { runWithAsyncStore } from "../shared/async-store.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -58,6 +60,8 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
   let longestTask = task;
   let longestPhase: string | undefined;
   let longestMs = 0;
+  let resumedPromise: Promise<unknown> | undefined;
+  let stopContinuations: (() => void) | undefined;
   const observeLoop = () => {
     const at = now();
     const from = heartbeatAt;
@@ -92,11 +96,58 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
     }
     segmentAt = at;
   };
+  const begin = (name: string, at: number) => {
+    active = true;
+    startedAt = segmentAt = at;
+    task = longestTask = name;
+    phase = longestPhase = undefined;
+    longestMs = 0;
+  };
+  const finish = (at: number) => {
+    active = false;
+    const elapsedMs = at - startedAt;
+    delayMaxMs = Math.max(delayMaxMs, elapsedMs);
+    if (elapsedMs >= STALL_MS) {
+      if (pending.length < MAX_PENDING_STALLS) {
+        pending.push({
+          elapsedMs,
+          task: longestPhase ? `${longestTask}:${longestPhase}` : longestTask,
+          taskMs: longestMs,
+          startedAt,
+          endedAt: at,
+        });
+      } else {
+        dropped++;
+      }
+    }
+  };
+  // Observe await continuations in their inherited context, never in the heartbeat.
+  // V8 hooks avoid async-id bookkeeping; retain only the executing Promise.
+  const continuations = {
+    before(promise: Promise<unknown>) {
+      const name = taskState.context.getStore();
+      if (!active && name !== undefined) {
+        resumedPromise = promise;
+        begin(name, now());
+      }
+    },
+    after(promise: Promise<unknown>) {
+      if (resumedPromise === promise) {
+        resumedPromise = undefined;
+        const at = now();
+        segment(at);
+        finish(at);
+      }
+    },
+  };
   const observer: TaskObserver = {
     currentName: () => (active ? task : undefined),
     stop() {
       clearInterval(heartbeat);
       heartbeat = undefined;
+      stopContinuations?.();
+      stopContinuations = undefined;
+      resumedPromise = undefined;
       if (taskState.observer === observer) {
         delete taskState.observer;
         taskState.context.disable();
@@ -110,11 +161,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       const enteredAt = now();
       const ownsTurn = !active;
       if (ownsTurn) {
-        active = true;
-        startedAt = segmentAt = enteredAt;
-        task = longestTask = "unattributed";
-        phase = longestPhase = undefined;
-        longestMs = 0;
+        begin("unattributed", enteredAt);
       } else {
         segment(enteredAt);
       }
@@ -130,22 +177,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
         task = previous;
         phase = previousPhase;
         if (ownsTurn) {
-          active = false;
-          const elapsedMs = at - startedAt;
-          delayMaxMs = Math.max(delayMaxMs, elapsedMs);
-          if (elapsedMs >= STALL_MS) {
-            if (pending.length < MAX_PENDING_STALLS) {
-              pending.push({
-                elapsedMs,
-                task: longestPhase ? `${longestTask}:${longestPhase}` : longestTask,
-                taskMs: longestMs,
-                startedAt,
-                endedAt: at,
-              });
-            } else {
-              dropped++;
-            }
-          }
+          finish(at);
         }
       }
     },
@@ -162,6 +194,17 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       heartbeat = enabled
         ? runInDetachedAsyncContext(() => setInterval(observeLoop, HEARTBEAT_MS).unref())
         : undefined;
+      if (enabled && !versions.bun) {
+        const stop = promiseHooks.createHook(continuations);
+        stopContinuations = () => stop();
+      } else {
+        stopContinuations?.();
+        stopContinuations = undefined;
+        if (resumedPromise !== undefined) {
+          resumedPromise = undefined;
+          active = false;
+        }
+      }
     },
     drain() {
       // The health sampler may be the first timer to resume after a blocked loop.

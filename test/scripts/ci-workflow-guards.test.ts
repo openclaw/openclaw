@@ -6312,6 +6312,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
+  it("prepares public declarations before packing the published-driver candidate", () => {
+    const step = requiredWorkflowStep(
+      readCiWorkflow().jobs["build-artifacts"].steps,
+      "Package published-driver candidate",
+    );
+    const run = expectDefined(step.run, "published-driver package preparation");
+    const declarations =
+      "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts";
+    expect(run).toContain(declarations);
+    expect(run.indexOf(declarations)).toBeLessThan(
+      run.indexOf("node scripts/package-openclaw-for-docker.mjs --skip-build"),
+    );
+    expect(run).not.toContain("--skip-check");
+  });
+
   it("uses candidate-owned script interfaces for frozen target CI", () => {
     const workflow = readCiWorkflow();
     const buildChecks = workflow.jobs["build-artifacts"].steps.find(

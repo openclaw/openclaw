@@ -10,6 +10,7 @@ import {
   projectTranscriptIndex,
   projectTranscriptRows,
 } from "./chat-transcript-message-index.ts";
+import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 
 const sessionKey = "agent:main:dashboard:0f6d5a1c-5a9e-4c1e-9b1a-2f3c4d5e6f70";
 
@@ -753,3 +754,45 @@ describe("system event presentation", () => {
     expect(chain.transcriptItems[1]).toBe(pending);
   });
 });
+
+it.each([
+  ["work in both runs", true],
+  ["work only in the later run", false],
+] as const)(
+  "keeps a collapsed browser preview after an earlier run's reply: %s",
+  (_name, early) => {
+    const browse = {
+      ...makeMessage("browse", 4, { role: "toolResult", content: "Opened", runId: "run-b" }),
+      toolName: "browser",
+      toolCallId: "browse",
+      details: {
+        browserTab: {
+          profile: "managed",
+          target: "host",
+          targetId: "tab-1",
+          url: "https://example.com",
+          title: "Example",
+        },
+      },
+    };
+    const chain = projectHistory([
+      history[0],
+      ...(early ? [makeTool("work-0", 2, "run-a", 20)] : []),
+      makeMessage("reply-a", 3, { runId: "run-a", stopReason: "stop" }),
+      browse,
+      makeMessage("reply-b", 5, { runId: "run-b", stopReason: "stop" }),
+    ]);
+    // No visible reply owns the rollup, so it stays outside the frames; its preview follows reply A.
+    expect(chain.transcriptItems.map((item) => item.kind)).toEqual([
+      "group",
+      "work-group",
+      "agent-run-frame",
+      "agent-run-frame",
+    ]);
+    const expanded = new Map<string, boolean>();
+    const previews = projectTranscriptWorkPreviews(chain.workGroups, { sessionKey, expanded });
+    const rows = projectTranscriptRows(indexFor(chain, expanded).rows, previews, []);
+    const [firstFrame] = framesOf(chain);
+    expect(rows.map((row) => row.key)).toContain(`work-previews:${firstFrame!.key}`);
+  },
+);

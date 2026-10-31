@@ -310,6 +310,12 @@ as `$HOME`, `$PATH`, and `$EDITOR` remain ordinary text; use lowercase `$home`,
 `$path`, or `$editor` to reference skills with those names. Escape a reference
 as `\$name` when it should stay literal.
 
+In the Control UI New session composer, selecting a registered project adds that
+project's eligible `skills/` and `.agents/skills/` entries to the `$` picker and
+slash commands, with the same precedence and allowlist as the execution
+workspace catalog above. They appear only when you could create a session in that
+project, and switching projects replaces the list.
+
 Skills with `disable-model-invocation: true` stay out of the `$` picker and the
 model's normal prompt, so the model cannot select them on its own. An authorized
 explicit `$skill-name` reference still invokes them; the flag only hides the

@@ -1173,6 +1173,10 @@
   overflow: auto;
 }
 
+.chat-group.user .chat-text :where(pre) {
+  background: var(--user-code-bg);
+}
+
 .chat-text :where(.code-block-wrapper pre) {
   border: 0;
   background: transparent;

@@ -201,6 +201,13 @@ at most two retries. Once a hook, model, or delivery may have performed work, it
 does not replay the occurrence; a failed scheduled run remains visible in cron
 history and the next schedule is a separate run.
 
+Logging changes never revoke scheduled work. Once a scheduled turn selects its
+model, edits to another provider's model configuration also leave it running.
+Adding models to the allowlist preserves the turn while its selected model remains
+allowed; removing that permission or changing its provider's configuration still
+rechecks the occurrence under current policy. These unrelated edits do not consume
+the occurrence's bounded readmission attempts.
+
 Session detail and process-list reads that encounter a retired model-catalog
 callback refresh their catalog binding once before preparing the response.
 If the replacement is unavailable, the read reports a session-read error.

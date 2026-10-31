@@ -1,4 +1,5 @@
 import type { PluginSourceCustodyFork } from "./plugin-generation-source-lookup.js";
+import type { PluginSourceSnapshotFacts } from "./plugin-generation-source.types.js";
 import type { PluginModuleCapture } from "./plugin-package-metadata-capture.js";
 
 /** Captured source custody and module lookup operations owned by one generation. */
@@ -8,6 +9,9 @@ export type PluginGenerationArtifact = {
   boundaryRoot: string;
   sourceAliases: Record<string, string>;
   sourceDigest: string;
+  sourceSnapshotFacts?: PluginSourceSnapshotFacts;
+  frozenSource?: true;
+  assertFrozenModule?: (filename: string) => void;
   linkHost: (hostRoot: string) => void;
   hasSource: (source: string) => boolean;
   resolve: (source: string, rejectHardlinks?: boolean) => string;

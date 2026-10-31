@@ -59,7 +59,13 @@ suite.define(() => {
         await expect.poll(() => popover.getAttribute("data-phase")).toBe("open");
       };
       await openFilters();
-      const search = popover.locator("input[type='text']");
+      await popover.locator(".header-search__toggle").click();
+      const search = popover.getByRole("searchbox");
+      await search.waitFor();
+      await filters.click();
+      await openFilters();
+      expect(await search.count()).toBe(0);
+      await popover.locator(".header-search__toggle").click();
       const flushSearch = async () => {
         await page.clock.runFor(201);
         await page.clock.resume();

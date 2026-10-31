@@ -7,7 +7,7 @@ import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
-import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
+import { isDefaultInstallIdentity, resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import { formatDoctorProgressPhase, type DoctorProgressMeasure } from "../infra/doctor-progress.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
@@ -172,6 +172,14 @@ export async function prepareDoctorInteractiveMaintenance(params: {
     // Refuse incompatible agent schemas before consent can pause the service.
     // Maintenance still rediscovers current facts after excluding publishers.
     await prepareDoctorDatabasePreflight();
+  }
+  if (process.platform === "darwin" && isDefaultInstallIdentity()) {
+    const [{ readSourceConfigBestEffort }, { noteMacGatewayPlatformWarnings }] = await Promise.all([
+      import("../config/io.runtime.js"),
+      import("../commands/doctor-platform-notes.js"),
+    ]);
+    // Schema admission has passed; repair before maintenance captures its service fingerprint.
+    await noteMacGatewayPlatformWarnings(await readSourceConfigBestEffort(), prompter);
   }
   const accepted = await prompter.confirmRuntimeRepair({
     message:

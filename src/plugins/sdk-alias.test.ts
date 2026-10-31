@@ -980,6 +980,7 @@ describe("plugin sdk alias helpers", () => {
       ["net-policy/url-protocol"],
       ["model-catalog-core/provider-id"],
       ["model-catalog-core/model-catalog-pricing"],
+      ["model-catalog-core/model-inference-capabilities"],
     ]);
     for (const entry of workspaceAliases) {
       fs.rmSync(entry.distFile);
@@ -1015,6 +1016,7 @@ describe("plugin sdk alias helpers", () => {
       ["net-policy/url-protocol"],
       ["model-catalog-core/provider-model-id-normalize"],
       ["model-catalog-core/model-catalog-pricing"],
+      ["model-catalog-core/model-inference-capabilities"],
     ]);
     const sourcePluginEntry = writeDemoEntry(fixture.root);
 

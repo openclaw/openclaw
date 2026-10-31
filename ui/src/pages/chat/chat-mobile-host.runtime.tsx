@@ -496,7 +496,10 @@ export function MobileHostChrome(
 export function MobileHostPage(props: MobileHostViewProps) {
   const detailsChild = () => Boolean(props.view.mobileHost?.destination.page);
   const mobileVisible = () =>
-    Boolean(props.view.mobileHost?.open && !props.view.mobileHost.suspended);
+    Boolean(
+      (props.view.mobileHost?.open || props.view.mobileHost?.exiting) &&
+      !props.view.mobileHost.suspended,
+    );
   return (
     <Show
       when={

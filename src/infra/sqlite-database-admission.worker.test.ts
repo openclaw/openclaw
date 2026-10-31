@@ -27,6 +27,7 @@ import {
   type AdmissionOperations,
 } from "./sqlite-database-admission.worker.test-support.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import type { SqliteWorkerReply } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
@@ -110,10 +111,58 @@ function readerWorker(location: string, program: string) {
         native: new URL("./node-sqlite.ts", import.meta.url).href,
         admission: new URL("./sqlite-database-admission.ts", import.meta.url).href,
         schema: new URL("./sqlite-schema-facts.ts", import.meta.url).href,
+        transaction: new URL("./sqlite-transaction.ts", import.meta.url).href,
       },
     },
   );
 }
+
+it("attributes a native BEGIN wait to a writer in another thread", async () => {
+  const location = path.join(tempDirs.make("sqlite-holder-"), "state.sqlite");
+  const database = openDatabase(location);
+  database.exec("CREATE TABLE proof (value); PRAGMA busy_timeout=0");
+  const worker = readerWorker(
+    location,
+    `
+    const { runSqliteImmediateTransactionSync } = await import(workerData.transaction);
+    const database = openNodeSqliteDatabase(workerData.location);
+    const release = new Int32Array(new SharedArrayBuffer(4));
+    Date.now = () => 1000;
+    runSqliteImmediateTransactionSync(database, () => {
+      parentPort.postMessage(release.buffer);
+      Atomics.wait(release, 0, 0);
+    }, { operationLabel: "localWorkspace.pruneLegacy" });
+    database.close();
+  `,
+  );
+  const exit = once(worker, "exit");
+  const [buffer] = await once(worker, "message");
+  const release = new Int32Array(buffer);
+  try {
+    vi.spyOn(Date, "now").mockReturnValue(2_500);
+    const logger = { warn: vi.fn() };
+    expect(() =>
+      runSqliteImmediateTransactionSync(database, () => {}, {
+        operationLabel: "pluginState.register",
+        logger,
+      }),
+    ).toThrow(/locked/);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "SQLite transaction lock wait failed",
+      expect.objectContaining({
+        holderAtWaitStart: {
+          operation: "localWorkspace.pruneLegacy",
+          threadId: worker.threadId,
+          heldMs: 1_500,
+        },
+      }),
+    );
+  } finally {
+    Atomics.store(release, 0, 1);
+    Atomics.notify(release, 0);
+    await exit;
+  }
+});
 
 it("settles worker facts through admission without echoing snapshots in ordinary replies", async () => {
   const location = path.join(tempDirs.make("sqlite-admission-reply-"), "shared.sqlite");

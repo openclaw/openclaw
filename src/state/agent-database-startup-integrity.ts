@@ -1,9 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
+import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteDatabaseHeader,
   type SqliteIntegrityDiagnostics,
 } from "../infra/sqlite-integrity.js";
+import type { SqliteTableContractReader } from "../infra/sqlite-schema-contract.js";
 import { isSqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   assertExistingDatabaseIdentity,
@@ -13,6 +15,7 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { createPermitPool } from "../shared/permit-pool.js";
 import { assertOpenClawAgentCurrentRuntimeSchema } from "./openclaw-agent-db-schema-helpers.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
 export type AgentDatabaseStartupIntegrity = { valid: SharedArrayBuffer };
 export type AgentDatabaseStartupVerifier = (input: {
@@ -63,7 +66,7 @@ function prepareAgentDatabaseStartupIntegrity(pathname: string, agentId: string)
   };
 }
 
-/** Provisional admission never substitutes for a migration or index repair's full gate. */
+/** Bounded admission repairs derived indexes; migrations retain their full gate. */
 export function admitAgentDatabaseStartupStructure(
   database: DatabaseSync,
   pathname: string,
@@ -73,17 +76,39 @@ export function admitAgentDatabaseStartupStructure(
 ): boolean {
   if (
     diagnostics?.integrityGateReason !== "no-proof" &&
+    diagnostics?.integrityGateReason !== "schema-mismatch" &&
     (!policy || Atomics.load(new Int32Array(policy.valid), 0) !== 1)
   ) {
     return false;
   }
   assertSqliteDatabaseHeader(database, pathname);
   try {
-    assertOpenClawAgentCurrentRuntimeSchema(database, {
-      agentId,
-      pathname,
-      requireCanonicalIndexes: true,
+    const validateSchema = (readTable?: SqliteTableContractReader) =>
+      assertOpenClawAgentCurrentRuntimeSchema(
+        database,
+        {
+          agentId,
+          pathname,
+          requireCanonicalIndexes: true,
+        },
+        readTable,
+      );
+    const startedAt = performance.now();
+    const repaired = repairCanonicalSqliteIndexes(database, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
+      nonUniqueOnly: true,
+      verifyPhysicalIntegrity: false,
+      validateAfterRepair: validateSchema,
+      validateUnchanged: validateSchema,
     });
+    if (diagnostics) {
+      diagnostics.canonicalIndexMs = Math.floor(performance.now() - startedAt);
+      diagnostics.repairedIndexCount = repaired.length;
+    }
+    if (repaired.length) {
+      createSubsystemLogger("state/agent-db").warn(
+        `Rebuilt canonical agent SQLite indexes for ${agentId} (${pathname}): ${repaired.join(", ")}`,
+      );
+    }
   } catch (error) {
     if (isSqliteSchemaMismatchError(error)) {
       return false;

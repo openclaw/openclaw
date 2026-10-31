@@ -295,7 +295,7 @@ export function projectChatTranscript(
     connectionEpoch: props.connectionEpoch,
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
     resolveArtifactDownload: props.resolveArtifactDownload,
-    getTurnVideoMessages: (key) => state.transcriptRenderContext.turnVideoMessages?.get(key),
+    getTurnMediaMessages: (key) => state.transcriptRenderContext.turnMediaMessages?.get(key),
     onRequestOpenImage: props.onRequestOpenImage,
     onOpenImage: props.onOpenImage,
     onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
@@ -651,7 +651,7 @@ export function projectChatTranscript(
     });
   }
   const transcriptRows = projectTranscriptRows(rows, workPreviews, contentRows);
-  state.transcriptRenderContext.turnVideoMessages = snapshot.turnVideoMessages;
+  state.transcriptRenderContext.turnMediaMessages = snapshot.turnMediaMessages;
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {
     // Search removes rows from the index, not from loaded history. Resolve the

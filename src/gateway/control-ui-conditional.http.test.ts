@@ -80,6 +80,8 @@ describe.each([
     for (const publicAsset of ["themes/absolutely.css", "sw.js"]) {
       await write(publicAsset, assetBody, modifiedAt);
     }
+    await write("sw.js.gz", gzipSync(assetBody));
+    await write("sw.js.br", brotliCompressSync(assetBody));
     await write(
       "index.html",
       `<html data-openclaw-control-ui-build-id="source-build"><head><script>const fragment = 'href="unfinished';</script><script src="./assets/app-fixture.js"></script><link href="./assets/app.css"><link rel="icon" href="./favicon.svg"><link rel="icon" href="${basePath}/favicon-32.png"></head></html>`,
@@ -182,6 +184,38 @@ describe.each([
   });
 
   describe.each(["GET", "HEAD"] as const)("%s", (method) => {
+    it.each(["gzip", "br"] as const)(
+      "negotiates bundled worker %s while retaining revalidation",
+      async (encoding) => {
+        const headers = { "Accept-Encoding": encoding };
+        const { response, body } = await requestAsset(
+          `${baseUrl}/sw.js?v=fixture-build`,
+          method,
+          headers,
+        );
+        const encoded = kind === "bundled";
+        expect(response.statusCode).toBe(200);
+        expect(response.headers).toMatchObject({
+          "cache-control": "no-cache",
+          "last-modified": lastModified,
+          vary: "Accept-Encoding",
+        });
+        expect(response.headers["content-encoding"]).toBe(encoded ? encoding : undefined);
+        const expected = encoded
+          ? (encoding === "br" ? brotliCompressSync : gzipSync)(assetBody)
+          : assetBody;
+        expect(response.headers["content-length"]).toBe(String(expected.byteLength));
+        expect(body).toEqual(method === "HEAD" ? Buffer.alloc(0) : expected);
+        const unchanged = await requestAsset(`${baseUrl}/sw.js?v=fixture-build`, method, {
+          ...headers,
+          "If-Modified-Since": lastModified,
+        });
+        expect(unchanged.response.statusCode).toBe(304);
+        expect(unchanged.response.headers["cache-control"]).toBe("no-cache");
+        expect(unchanged.body.byteLength).toBe(0);
+      },
+    );
+
     it.each(["gzip", "br", ""])(
       "serves the original without sidecars (Accept-Encoding: %s)",
       async (encoding) => {

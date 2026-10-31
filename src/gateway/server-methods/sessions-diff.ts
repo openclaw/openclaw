@@ -17,6 +17,7 @@ import { startDiffReadTiming, type DiffReadTiming } from "../../infra/diff-read-
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { loadCheckoutDiff } from "../../sessions/session-diff.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
 import { retainGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
@@ -68,11 +69,7 @@ function prepareDiffMetadata(params: SessionsDiffParams, cfg: OpenClawConfig) {
       },
     };
   }
-  let flights = metadataFlights.get(cfg);
-  if (!flights) {
-    flights = new Map();
-    metadataFlights.set(cfg, flights);
-  }
+  const flights = getOrCreateWeakOwnerMap(metadataFlights, cfg);
   const key = JSON.stringify([
     getRuntimeConfigSnapshotMetadata()?.revision,
     params.agentId,

@@ -31,8 +31,12 @@ export async function runWatchdog(kind, timeoutValue, [command, ...args]) {
     process.exit(1);
   }
 
+  // The scheduler's retained CID requires the launcher to share its group;
+  // otherwise a killed wrapper could publish before this child writes the CID.
+  const detached =
+    process.platform !== "win32" && !(docker && process.env.DOCKER_E2E_CONTAINER_CIDFILE);
   const child = spawn(command, args, {
-    detached: process.platform !== "win32",
+    detached,
     stdio: "inherit",
   });
   let timedOut = false;
@@ -53,7 +57,7 @@ export async function runWatchdog(kind, timeoutValue, [command, ...args]) {
     if (!child.pid) {
       return;
     }
-    const killTarget = process.platform === "win32" ? child.pid : -child.pid;
+    const killTarget = detached ? -child.pid : child.pid;
     try {
       process.kill(killTarget, signal);
     } catch {

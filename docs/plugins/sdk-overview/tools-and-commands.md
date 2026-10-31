@@ -48,6 +48,10 @@ Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
 provider- or plugin-specific policy to core prompt builders.
 
+A command handler that sends its own response can return `{ suppressReply: true }`:
+OpenClaw then sends no reply of its own for that command, neither the result text
+nor a missing-reply notice.
+
 Commands that receive `senderIsOwner` also receive the host's optional
 `assertOwnerCurrent` callback when admitted as an owner. Capture that callback
 before awaiting preparation and pass it to the mutation owner's current-authority

@@ -3,7 +3,6 @@ openclaw-browser-tab-card {
   max-width: 480px;
   margin-block: 6px;
   .card {
-    box-sizing: border-box;
     max-width: 320px;
     overflow: hidden;
     background: var(--card);
@@ -54,7 +53,6 @@ openclaw-browser-tab-card {
     height: 16px;
   }
   .icon img {
-    box-sizing: border-box;
     width: 20px;
     height: 20px;
     padding: 2px;
