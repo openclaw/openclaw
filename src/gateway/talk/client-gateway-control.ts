@@ -11,7 +11,7 @@ import {
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
-  controlRealtimeVoiceAgentRun,
+  controlTalkAgentRun,
   parseRealtimeVoiceAgentControlToolArgs,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
 } from "../../talk/agent-run-control.js";
@@ -177,10 +177,10 @@ export function createTalkClientGatewayControlOwner(
     const getToolAuthorityOverlay = params.getToolAuthorityOverlay;
     return async () => {
       assertActive();
-      const result = await (params.controlAgentRun ?? controlRealtimeVoiceAgentRun)({
+      const result = await (params.controlAgentRun ?? controlTalkAgentRun)({
         sessionKey: params.sessionTarget.canonicalKey,
         runTarget,
-        getToolAuthorityOverlay: getToolAuthorityOverlay
+        getToolAuthorityOverlayAsync: getToolAuthorityOverlay
           ? () => getToolAuthorityOverlay(runTarget?.toolAuthoritySource)
           : undefined,
         text: parsed.text,

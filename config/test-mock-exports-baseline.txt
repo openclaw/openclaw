@@ -5190,7 +5190,6 @@
 ["src/gateway/talk/handlers/index.test.ts","../../../agents/realtime-bootstrap-context.js","38772f77209fa682009937c9a3be41e2c0c1ab8e3a74051f13ea811af54c0370",1]
 ["src/gateway/talk/handlers/index.test.ts","../../../plugins/runtime/index.js","98765d083f5b19b6b2df8bb46064347d72b2b5e3f2e2aabeede87bd75adda8f2",1]
 ["src/gateway/talk/handlers/index.test.ts","../../../realtime-transcription/provider-registry.js","f9fcf8c2c05ab31e690435f43cf479c94609cd6161ad6f74b69187de040edcba",1]
-["src/gateway/talk/handlers/index.test.ts","../../../talk/agent-run-control.js","64cc26f1e3bbc2b554fb18fa43074fd1a4705beabd841d7b7d87c93ea923b1f4",1]
 ["src/gateway/talk/handlers/index.test.ts","../../../talk/provider-registry.js","d71920d0a5ab2b615cd3041dfab2d68b32d1200cc67da0f4c8d691736cf97b62",1]
 ["src/gateway/talk/handlers/index.test.ts","../../../tts/tts-synthesis.js","03d6cc1c7360314eaaed3110a54b296f3ce354351b9a38dc0a7957467d97438e",1]
 ["src/gateway/talk/handlers/index.test.ts","../../session-transcript-preview.js","2811ad4d8f8b44190a436efe14b1119ace4bb17de9ac9c9fc6923d1cac52f6f7",1]

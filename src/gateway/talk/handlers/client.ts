@@ -34,7 +34,7 @@ import {
   parseRealtimeVoiceAgentConsultArgs,
   buildRealtimeVoiceAgentConsultChatMessage,
 } from "../../../talk/agent-consult-tool.js";
-import { controlRealtimeVoiceAgentRun } from "../../../talk/agent-run-control.js";
+import { controlTalkAgentRun } from "../../../talk/agent-run-control.js";
 import {
   assertClientVoiceSessionOpen,
   resolveOpenClientVoiceSessionId,
@@ -664,10 +664,10 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         hasCurrentClientAuthority,
       });
       try {
-        const result = await controlRealtimeVoiceAgentRun({
+        const result = await controlTalkAgentRun({
           sessionKey: target.canonicalKey,
           runTarget,
-          getToolAuthorityOverlay: () =>
+          getToolAuthorityOverlayAsync: () =>
             prepareTalkClientControlAuthority({
               config: context.getRuntimeConfig(),
               agentRuntime: createPluginRuntime().agent,
