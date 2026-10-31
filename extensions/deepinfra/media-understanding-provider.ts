@@ -1,6 +1,4 @@
 import {
-  describeImageWithModel,
-  describeImagesWithModel,
   transcribeOpenAiCompatibleAudio,
   type MediaUnderstandingProvider,
 } from "openclaw/plugin-sdk/media-understanding";
@@ -27,6 +25,6 @@ export const deepinfraMediaUnderstandingProvider: MediaUnderstandingProvider = {
       defaultBaseUrl: DEEPINFRA_BASE_URL,
       defaultModel: DEEPINFRA_STT_FALLBACK_MODELS[0],
     }),
-  describeImage: describeImageWithModel,
-  describeImages: describeImagesWithModel,
+  describeImage: undefined,
+  describeImages: undefined,
 };

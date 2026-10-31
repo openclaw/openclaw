@@ -1,8 +1,4 @@
 // Deepinfra tests cover media understanding provider plugin behavior.
-import {
-  describeImagesWithModel,
-  describeImageWithModel,
-} from "openclaw/plugin-sdk/media-understanding";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { deepinfraMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
@@ -39,8 +35,8 @@ describe("deepinfra media understanding provider", () => {
         audio: 45,
       },
       transcribeAudio: expect.any(Function),
-      describeImage: describeImageWithModel,
-      describeImages: describeImagesWithModel,
+      describeImage: undefined,
+      describeImages: undefined,
     });
   });
 
