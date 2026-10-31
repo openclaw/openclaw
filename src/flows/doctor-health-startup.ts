@@ -138,17 +138,6 @@ export async function prepareDoctorHealthFlow(
       const { note } = await import("../../packages/terminal-core/src/note.js");
       note(prerequisite, "Gateway startup prerequisite");
     }
-    if (process.platform === "darwin" && isDefaultInstallIdentity()) {
-      const [{ noteMacGatewayPlatformWarnings }, { createDoctorPrompter }] = await Promise.all([
-        import("../commands/doctor-platform-notes.js"),
-        import("../commands/doctor-prompter.js"),
-      ]);
-      // Repair before maintenance captures the service fingerprint for restoration.
-      await noteMacGatewayPlatformWarnings(
-        config,
-        createDoctorPrompter({ runtime: effectiveRuntime, options }),
-      );
-    }
   }
   return { effectiveRuntime, repairRuntime, stateDirExistedAtStart, root };
 }
@@ -183,6 +172,14 @@ export async function prepareDoctorInteractiveMaintenance(params: {
     // Refuse incompatible agent schemas before consent can pause the service.
     // Maintenance still rediscovers current facts after excluding publishers.
     await prepareDoctorDatabasePreflight();
+  }
+  if (process.platform === "darwin" && isDefaultInstallIdentity()) {
+    const [{ readSourceConfigBestEffort }, { noteMacGatewayPlatformWarnings }] = await Promise.all([
+      import("../config/io.runtime.js"),
+      import("../commands/doctor-platform-notes.js"),
+    ]);
+    // Schema admission has passed; repair before maintenance captures its service fingerprint.
+    await noteMacGatewayPlatformWarnings(await readSourceConfigBestEffort(), prompter);
   }
   const accepted = await prompter.confirmRuntimeRepair({
     message:

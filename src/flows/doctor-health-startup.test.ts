@@ -12,7 +12,6 @@ const mocks = vi.hoisted(() => ({
 }));
 // mock-isolation: isolate startup from operator paths, config, tools, terminal and databases.
 vi.mock("../config/paths.js", () => ({
-  isDefaultInstallIdentity: () => false,
   resolveIsNixMode: () => false,
   resolveStateDir: () => "/synthetic/openclaw-state",
 }));

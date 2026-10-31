@@ -8,7 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { LAUNCH_AGENT_ENV_FILE_HEADER } from "../daemon/launchd-env-wrapper.js";
 import { runGatewayServicesHealth } from "../flows/doctor-health-contribution-runners.gateway.js";
-import { prepareDoctorHealthFlow } from "../flows/doctor-health-startup.js";
+import { prepareDoctorInteractiveMaintenance } from "../flows/doctor-health-startup.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import * as doctorPrompter from "./doctor-prompter.js";
@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   note: vi.fn(),
   readCommand: vi.fn(),
   findJobs: vi.fn(),
+  schemaPreflight: vi.fn(async () => {}),
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -28,14 +29,20 @@ vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand: mocks.readCommand }),
 }));
 vi.mock("../daemon/launchd.js", () => ({ findStaleOpenClawUpdateLaunchdJobs: mocks.findJobs }));
-// Keep real service locks in this test invocation's temporary directory.
+// mock-isolation: keep real service locks in this test invocation's temporary directory.
 vi.mock("../infra/tmp-openclaw-dir.js", async () => ({
   resolvePreferredOpenClawTmpDir: (await import("node:os")).tmpdir,
 }));
-// Foreign launchd inventory is a separate native boundary from env-file repair.
+// mock-isolation: foreign launchd inventory is a separate native boundary from env-file repair.
 vi.mock("./doctor-foreign-launchd-jobs.js", () => ({ noteMacForeignLaunchdJobs: async () => {} }));
-// Startup reads synthetic authored config before any database or service maintenance.
+// mock-isolation: startup reads synthetic authored config, never operator files.
 vi.mock("../config/io.runtime.js", () => ({ readSourceConfigBestEffort: async () => ({}) }));
+// mock-isolation: supply schema availability without opening unrelated databases.
+vi.mock("./doctor-database-preflight.js", () => ({
+  prepareDoctorDatabasePreflight: mocks.schemaPreflight,
+}));
+// mock-isolation: this repair must not check for or install a release.
+vi.mock("./doctor-update.js", () => ({ maybeOfferUpdateBeforeDoctor: async () => false }));
 
 import {
   collectGatewayPlatformWarnings,
@@ -91,7 +98,20 @@ it.each(["gateway", "node"])(
     expect(fs.readdirSync(directory)).toHaveLength(1);
     expect(JSON.stringify(mocks.note.mock.calls)).toContain("API_KEY");
     vi.spyOn(doctorPrompter, "createDoctorPrompter").mockReturnValue(prompter);
-    await prepareDoctorHealthFlow(defaultRuntime, {}, () => {});
+    const admission = {
+      runtime: defaultRuntime,
+      options: {},
+      databasePreflight: undefined,
+      root: null,
+      outro: () => {},
+    };
+    mocks.schemaPreflight.mockRejectedValueOnce(new Error("synthetic incompatible schema"));
+    await expect(prepareDoctorInteractiveMaintenance(admission)).rejects.toThrow(
+      "synthetic incompatible schema",
+    );
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+    expect(fs.readdirSync(directory)).toHaveLength(1);
+    await expect(prepareDoctorInteractiveMaintenance(admission)).resolves.toBe("accepted");
 
     expect(fs.readFileSync(file, "utf8")).toBe(
       before
