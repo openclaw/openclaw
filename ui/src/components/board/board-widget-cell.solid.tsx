@@ -505,15 +505,20 @@ function BoardWidgetCellContent(
     </Switch>
   );
 
-  const bodyBoundary = () =>
-    createErrorBoundary(
-      () => <Body />,
-      (error) => {
-        const caught = error();
-        setBodyError((current) => current ?? { error: caught });
-        return null;
-      },
-    );
+  const BodyBoundary = () => (
+    <>
+      {createErrorBoundary(
+        () => (
+          <Body />
+        ),
+        (error) => {
+          const caught = error();
+          setBodyError((current) => current ?? { error: caught });
+          return null;
+        },
+      )}
+    </>
+  );
 
   const presentation = () =>
     props.widget?.contentKind === "html" || props.widget?.frameUrl
@@ -649,7 +654,7 @@ function BoardWidgetCellContent(
             },
           ]}
         >
-          <Show when={bodyError()} fallback={<>{bodyBoundary()}</>}>
+          <Show when={bodyError()} fallback={<BodyBoundary />}>
             {(failure) => <BoardWidgetError error={failure().error} />}
           </Show>
           <Show when={actionFailed() && props.widget!.grantState !== "pending"}>
