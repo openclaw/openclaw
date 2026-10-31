@@ -69,10 +69,34 @@ function stripLeadingHtmlCommentScaffolding(
   return remaining;
 }
 
+const LEGACY_HEARTBEAT_SCRATCH_TEMPLATE = [
+  "```markdown",
+  "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
+  "# Add tasks below when you want the agent to check something periodically.",
+  "```",
+  "## Related",
+  "- [Heartbeat config](/gateway/config-agents)",
+] as const;
+
+function isLegacyHeartbeatScratchTemplate(content: string): boolean {
+  const lines = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return (
+    lines.length === LEGACY_HEARTBEAT_SCRATCH_TEMPLATE.length &&
+    lines.every((line, index) => line === LEGACY_HEARTBEAT_SCRATCH_TEMPLATE[index])
+  );
+}
+
 /** Missing scratch runs; an explicitly empty checklist does not. */
 export function isCronScratchEffectivelyEmpty(content: string | undefined | null): boolean {
   if (typeof content !== "string") {
     return false;
+  }
+  // Migrated heartbeat monitors can retain this exact documentation-only template.
+  if (isLegacyHeartbeatScratchTemplate(content)) {
+    return true;
   }
   const state = { inHtmlComment: false };
   for (const line of content.split("\n")) {
