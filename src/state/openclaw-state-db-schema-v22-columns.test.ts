@@ -230,6 +230,7 @@ describe("v21 upgrade preserves portable cursor and resume identities", () => {
           "exec_approvals_config",
           ...STATE_CURSOR_TABLES_V22,
           ...stateTemplateNamesMigration.tables,
+          "worker_environments",
         ],
         () =>
           withStateMigrationBackupForTest(options, () => {

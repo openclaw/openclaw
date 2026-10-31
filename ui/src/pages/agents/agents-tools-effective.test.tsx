@@ -421,6 +421,13 @@ describe("Agents effective-tools read", () => {
     await view.settleEffective();
     expect(view.calls()).toHaveLength(1);
     view.emit("config.changed", {});
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(1);
+    view.emit("chat.metadata.changed", {
+      agentId: "main",
+      modelCatalogChanged: true,
+      authChanged: true,
+    });
     expect(await view.settleEffective()).toMatchObject({
       groups: [{ tools: [{ label: "Inventory 2" }] }],
     });

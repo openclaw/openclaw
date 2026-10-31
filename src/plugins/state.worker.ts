@@ -30,6 +30,8 @@ import {
   type InstalledPluginIndexWriteLease,
   type InstalledPluginIndexWriteOperations,
 } from "./installed-plugin-index-store-write.js";
+import { mutatePluginSnapshotCandidatesInDatabase } from "./installed-plugin-snapshot-candidates.kernel.js";
+import { updateInstalledPluginSourceSnapshotsInDatabase } from "./installed-plugin-source-snapshot.worker.js";
 import {
   readHostedCatalogSnapshotInDatabase,
   writeHostedCatalogSnapshotInDatabase,
@@ -48,6 +50,26 @@ function indexWriteLease(identity: OpenClawStateLeaseIdentity): InstalledPluginI
 }
 
 export const pluginRuntimeOperations = {
+  "plugins.metadata.index.snapshotCandidates": (
+    input: InstalledPluginIndexWriteOperations["plugins.metadata.index.snapshotCandidates"]["input"],
+    { open },
+  ): InstalledPluginIndexWriteOperations["plugins.metadata.index.snapshotCandidates"]["output"] =>
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        indexWriteLease(input.identity).assertOwnedInTransaction(db);
+        return mutatePluginSnapshotCandidatesInDatabase(db, input);
+      },
+      { database: open() },
+    ),
+  "plugins.metadata.index.sourceSnapshots": (
+    input: InstalledPluginIndexWriteOperations["plugins.metadata.index.sourceSnapshots"]["input"],
+    { open },
+  ): InstalledPluginIndexWriteOperations["plugins.metadata.index.sourceSnapshots"]["output"] =>
+    updateInstalledPluginSourceSnapshotsInDatabase(
+      input.changes,
+      open(),
+      indexWriteLease(input.identity),
+    ),
   "plugins.metadata.index.write": (
     input: InstalledPluginIndexWriteOperations["plugins.metadata.index.write"]["input"],
     { open },

@@ -13,6 +13,12 @@ OpenClaw handles failures in two stages:
 1. **Auth-profile rotation** within the current provider.
 2. **Model fallback** to the next model in `agents.defaults.model.fallbacks`.
 
+When an assistant failure explicitly identifies an unknown, missing, or retired
+model, OpenClaw skips other credentials and advances to the configured fallback.
+Without a fallback, it surfaces the error. Account-access and plan restrictions,
+authentication failures, quota errors, and ambiguous not-found responses still
+allow profile rotation.
+
 Turn usage includes completed model candidates even when their answer is discarded
 during fallback. Costs retain each candidate's price; if any completed candidate's
 price is unavailable, the total cost stays unknown. The final selected model and

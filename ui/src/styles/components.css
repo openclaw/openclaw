@@ -342,7 +342,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   color: var(--muted);
 }
 
-/* Keep artwork at its resting size inside a consistent 25px circular ring.
+/* Keep artwork at its resting size inside a consistent 24px circular ring.
    Owner pairs retain their fitted trace below rather than shrinking their faces. */
 .session-glyph__ring {
   position: absolute;
@@ -1545,84 +1545,94 @@ select.settings-select:not([multiple]) {
   background: var(--bg);
 }
 
-:is(.code-block .hljs, .code-block-wrapper pre code.hljs) {
+:is(
+  .code-block .hljs,
+  .code-block-wrapper pre code.hljs,
+  :where(.chat-group.user .chat-text) pre code.hljs
+) {
   color: var(--text);
 }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-comment,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-quote {
-  color: var(--muted);
-  font-style: italic;
-}
+:is(
+  .code-block,
+  .code-block-wrapper pre code.hljs,
+  :where(.chat-group.user .chat-text) pre code.hljs
+) {
+  .hljs-comment,
+  .hljs-quote {
+    color: var(--hljs-comment);
+    font-style: italic;
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-keyword,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-selector-tag,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-subst {
-  color: var(--hljs-keyword);
-}
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-subst {
+    color: var(--hljs-keyword);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-number,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-literal,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-variable,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-template-variable,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-tag .hljs-attr {
-  color: var(--hljs-number);
-}
+  .hljs-number,
+  .hljs-literal,
+  .hljs-variable,
+  .hljs-template-variable,
+  .hljs-tag .hljs-attr {
+    color: var(--hljs-number);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-string,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-doctag {
-  color: var(--hljs-string);
-}
+  .hljs-string,
+  .hljs-doctag {
+    color: var(--hljs-string);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-title,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-section,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-selector-id,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-function .hljs-title {
-  color: var(--hljs-title);
-}
+  .hljs-title,
+  .hljs-section,
+  .hljs-selector-id,
+  .hljs-function .hljs-title {
+    color: var(--hljs-title);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-type,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-class .hljs-title,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-built_in,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-builtin-name {
-  color: var(--hljs-type);
-}
+  .hljs-type,
+  .hljs-class .hljs-title,
+  .hljs-built_in,
+  .hljs-builtin-name {
+    color: var(--hljs-type);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-attr,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-attribute,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-name,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-selector-class,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-selector-attr,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-selector-pseudo {
-  color: var(--hljs-attribute);
-}
+  .hljs-attr,
+  .hljs-attribute,
+  .hljs-name,
+  .hljs-selector-class,
+  .hljs-selector-attr,
+  .hljs-selector-pseudo {
+    color: var(--hljs-attribute);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-symbol,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-bullet,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-link {
-  color: var(--accent-2);
-}
+  .hljs-symbol,
+  .hljs-bullet,
+  .hljs-link {
+    color: var(--hljs-link);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-meta {
-  color: var(--hljs-meta);
-}
+  .hljs-meta {
+    color: var(--hljs-meta);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-deletion {
-  color: var(--hljs-deletion);
-  background: var(--danger-subtle);
-}
+  .hljs-deletion {
+    color: var(--hljs-deletion);
+    background: var(--danger-subtle);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-addition {
-  color: var(--hljs-addition);
-  background: var(--ok-subtle);
-}
+  .hljs-addition {
+    color: var(--hljs-addition);
+    background: var(--ok-subtle);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-emphasis {
-  font-style: italic;
-}
+  .hljs-emphasis {
+    font-style: italic;
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-strong {
-  font-weight: 600;
+  .hljs-strong {
+    font-weight: 600;
+  }
 }
 
 .markdown-plain-text-fallback {
@@ -2954,7 +2964,7 @@ td.data-table-key-col {
   flex: 0 0 auto;
 }
 
-/* Counts (PRs, outbox) sit beside the 12px glyph as compact metadata,
+/* Counts (outbox) sit beside the 12px glyph as compact metadata,
    not at the row's title size. */
 .session-row-badge {
   display: inline-flex;

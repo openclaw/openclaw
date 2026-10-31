@@ -207,7 +207,7 @@ describe("CommandPalette search", () => {
       const { context, palette, provider, query } = harness;
       await searchPalette(palette, "needle");
       expect(findPaletteOption(palette, "Needle old")).toBeDefined();
-      harness.emit("config.changed");
+      harness.emit("chat.metadata.changed", { modelCatalogChanged: true });
       await vi.advanceTimersByTimeAsync(200);
       if (replacement === "agent") {
         context.agentSelection.set("reviewer");

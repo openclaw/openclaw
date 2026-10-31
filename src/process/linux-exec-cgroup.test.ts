@@ -104,7 +104,7 @@ it("preserves half of inherited ceilings on both solid-state and rotational disk
 });
 
 it.each([2400 * MiB, 201828433920])(
-  "gives each non-rotational disk its own IO ceiling independent of host RAM (%s bytes)",
+  "gives each non-rotational disk 250 MiB/s and 40,960 IOPS independent of host RAM (%s bytes)",
   async (memory) => {
     vi.mocked(os.totalmem).mockReturnValue(memory);
     for (const device of fixture.devices) {
@@ -112,8 +112,8 @@ it.each([2400 * MiB, 201828433920])(
     }
     expect(await initializeGatewayExecCgroup("/state")).toContain("isolation active");
     expect(fixture.write.mock.calls.filter(([file]) => file.endsWith("/io.max"))).toEqual([
-      [`${exec}/io.max`, "9:127 rbps=167772160 wbps=167772160 riops=40960 wiops=40960"],
-      [`${exec}/io.max`, "8:0 rbps=167772160 wbps=167772160 riops=40960 wiops=40960"],
+      [`${exec}/io.max`, "9:127 rbps=262144000 wbps=262144000 riops=40960 wiops=40960"],
+      [`${exec}/io.max`, "8:0 rbps=262144000 wbps=262144000 riops=40960 wiops=40960"],
     ]);
   },
 );

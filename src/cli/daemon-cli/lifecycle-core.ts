@@ -510,11 +510,7 @@ export async function runServiceRestart(params: {
   let handledRepair: ServiceRecoveryResult<"restarted"> | null = null;
   let recoveredLoadedState: boolean | null = null;
   const { prepare: prepareGatewayRestartIntent, clear: clearPreparedRestartIntent } =
-    createServiceRestartIntent({
-      serviceNoun: params.serviceNoun,
-      service: params.service,
-      intent: restartIntent,
-    });
+    createServiceRestartIntent({ ...params, intent: restartIntent });
   const emitScheduledRestart = (
     restartStatus: ReturnType<typeof describeGatewayServiceRestart>,
     serviceLoaded: boolean,
@@ -678,9 +674,12 @@ export async function runServiceRestart(params: {
   try {
     let restartResult: GatewayServiceRestartResult | undefined;
     if (loaded && !handledRepair && !handledRecovery) {
-      await prepareGatewayRestartIntent();
+      if (!params.opts?.preserveDefinition) {
+        await prepareGatewayRestartIntent();
+      }
       try {
         restartResult = await params.service.restart({
+          prepareRestart: params.opts?.preserveDefinition ? prepareGatewayRestartIntent : undefined,
           preserveDefinition: configIssue ? true : params.opts?.preserveDefinition,
           env: process.env,
           stdout,

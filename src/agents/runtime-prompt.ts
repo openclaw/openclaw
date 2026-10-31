@@ -12,7 +12,7 @@ import { resolveDefaultModelForAgent } from "./model-selection.js";
 import { resolveRuntimeChannelPromptContext } from "./runtime-capabilities.js";
 import { detectRuntimeShell } from "./shell-utils.js";
 import type { SpawnRequesterConversationSource } from "./spawn-requester-origin.js";
-import { buildSystemPromptParams } from "./system-prompt-params.js";
+import { buildSystemPromptParams, resolveSystemPromptRepoRoot } from "./system-prompt-params.js";
 
 export async function resolveAgentRuntimePrompt(params: {
   config?: OpenClawConfig;
@@ -76,7 +76,7 @@ export async function resolveAgentRuntimePrompt(params: {
       ? { preparedRepoRoot: null }
       : Object.hasOwn(params, "preparedRepoRoot")
         ? { preparedRepoRoot: params.preparedRepoRoot }
-        : {}),
+        : { preparedRepoRoot: await resolveSystemPromptRepoRoot(params) }),
     preparedGitCoauthorPrompt,
     preparedSessionEntry: params.preparedSessionEntry,
     requesterProfileId: params.requesterProfileId,

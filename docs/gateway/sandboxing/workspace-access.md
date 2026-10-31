@@ -209,10 +209,11 @@ Reviewing against the old guest HEAD would
 also include upstream-only changes. The operation requires the prepared sandbox
 of the current agent; a direct RPC cannot supply another runtime. Publication
 refuses a pending integration and never silently merges new base changes into
-reviewed files. A retry or restart settles the existing retained source result
-through the workspace journal; host merge ancestry remains outside guest Git
-metadata. Worktree removal is deferred while the host integration is pending;
-finish refresh before retrying archive cleanup. Existing privileged PR actions
+reviewed files. A retry, restart, or later turn resumes the existing retained
+source result from the files it already applied instead of rolling them back, so
+a large refresh interrupted by a turn deadline still finishes; host merge
+ancestry remains outside guest Git metadata. Worktree removal is deferred while
+the host integration is pending; finish refresh before retrying archive cleanup. Existing privileged PR actions
 still require full operator write access.
 
 Finish refresh and conflict resolution before downgrading. An interrupted transfer

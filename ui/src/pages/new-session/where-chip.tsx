@@ -22,7 +22,7 @@ export type WhereChipProps = {
 export function WhereChip(props: WhereChipProps) {
   let picker: PopoverHandle | undefined;
   let pendingSearchFocus: Element | null | undefined;
-  const focusSearch = (search: HTMLInputElement) => {
+  const focusSearch = (search: HTMLElement) => {
     // The first chunk may arrive after native popover autofocus has finished.
     if (picker?.overlay.open && search.ownerDocument.activeElement === pendingSearchFocus) {
       search.focus({ preventScroll: true });

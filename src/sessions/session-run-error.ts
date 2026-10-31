@@ -25,6 +25,8 @@ type GatewaySessionRunFailure = {
   error: unknown;
   errorKind?: "state_contention";
   suppressErrorNotice?: boolean;
+  /** Host-authored copy already shown to the requester; wins over error-derived copy. */
+  notice?: string;
   assertCommitAllowed?: () => void;
   sessionEntryCurrent?: SessionEntryCurrentCheck;
 };
@@ -41,7 +43,8 @@ export async function recordGatewaySessionRunFailure(
     content:
       params.errorKind === "state_contention"
         ? STATE_CONTENTION_SUMMARY
-        : (renderAssistantRequestFailureCopy({ storageFailure }) ??
+        : (params.notice ??
+          renderAssistantRequestFailureCopy({ storageFailure }) ??
           renderCodexAppServerFailureCopy(sanitized) ??
           (isProviderRefusalNoticeText(sanitized)
             ? `Your request couldn't be completed: ${sanitized}`

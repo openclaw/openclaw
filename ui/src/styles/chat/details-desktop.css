@@ -16,13 +16,16 @@
   --details-meta-font-size: var(--control-ui-text-sm);
   --details-meta-line-height: 20px;
   --details-row-padding: 4px;
-  --details-row-height: 32px;
-  --details-row-padding-block: 4px;
+  --details-row-outset: 4px;
+  --details-row-height: 30px;
+  --details-row-padding-block: 3px;
   --details-row-icon-size: 15px;
   --details-row-icon-slot: 16px;
   --details-row-gap: 8px;
   --details-row-list-gap: 0px;
   --details-section-padding: 10px;
+  /* Follows the surface it sits on, so docked and floating panels read the same. */
+  --details-separator: color-mix(in srgb, var(--text) 8%, var(--details-surface));
   --scrollbar-size: 8px;
   --scrollbar-thumb-inset: 2px;
   --details-scrollbar-thumb: transparent;
@@ -133,10 +136,12 @@
   outline-offset: 3px;
 }
 
+/* Box center reads high beside mostly lowercase text; sit on the text's optical center. */
 .chat-details-desktop-section__heading > svg {
   flex: none;
   width: 14px;
   height: 14px;
+  margin-block-start: 2px;
   transform: rotate(-90deg);
 }
 
@@ -164,13 +169,20 @@
   margin-inline-start: 0;
 }
 
+/* Title and count differ in size, so they share a text baseline rather than a box center. */
+.chat-details-desktop-section__heading:has(.chat-details-desktop-section__count) {
+  align-items: baseline;
+  padding-block: 2px;
+}
+
 .chat-details-desktop-section__heading:has(.chat-details-desktop-section__count) > svg {
   order: 1;
+  align-self: center;
 }
 
 .chat-details-desktop-section__count {
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 4px;
   font-size: var(--details-meta-font-size);
   line-height: var(--details-meta-line-height);
@@ -329,11 +341,18 @@
     .chat-pr.chat-pr--summary,
     .session-progress-card__step
   ) {
-  width: 100%;
+  width: calc(100% + 2 * var(--details-row-outset));
   min-height: var(--details-row-height);
-  margin-inline: 0;
+  margin-inline: calc(-1 * var(--details-row-outset));
   padding: var(--details-row-padding-block) var(--details-row-padding);
   gap: var(--details-row-gap);
+}
+
+/* Row content sits on the heading axis; only the hover surface reaches past it. */
+.chat-details
+  .chat-details-desktop-body
+  :is(.chat-details-processes__row, .chat-environment__row:has(> .chat-environment__action)) {
+  margin-inline: calc(-1 * var(--details-row-outset));
 }
 
 .chat-details
@@ -408,8 +427,6 @@
 
 /* Rows retain their native renderers; only the desktop composition owns their metrics. */
 .chat-details .chat-details-desktop-body :is(.chat-details-people, .chat-outputs--desktop) {
-  --details-row-height: 28px;
-  --details-row-padding-block: 2px;
   display: grid;
 }
 
@@ -428,7 +445,9 @@
     .chat-details-people__avatar,
     .chat-summary__automation-icon,
     .chat-outputs__icon,
-    .chat-environment-desktop__machine-icon
+    .chat-environment-desktop__machine-icon,
+    .chat-details-subagents__avatar,
+    .chat-details-processes__icon
   ) {
   display: inline-flex;
   flex: 0 0 var(--details-row-icon-slot);
@@ -453,11 +472,18 @@
     .chat-outputs__icon > svg,
     .chat-outputs__icon > .chat-attachment-file-icon,
     .chat-environment-desktop__machine-icon > svg,
+    .chat-details-subagents__avatar > svg,
+    .chat-details-processes__icon > svg,
     .chat-details-people__avatar .viewer-avatar
   ) {
   flex: none;
   width: var(--details-row-icon-size);
   height: var(--details-row-icon-size);
+}
+
+.chat-details .chat-details-desktop-body .chat-details-subagents__avatar {
+  background: transparent;
+  color: var(--muted);
 }
 
 /* Collapsed People matches the native Subagents avatar, not the expanded row icon. */
@@ -488,6 +514,10 @@
   margin-inline-start: -7px;
 }
 
+.chat-details .chat-details-desktop-body .chat-environment__branch-controls {
+  padding-inline-start: calc(var(--details-row-icon-slot) + var(--details-row-gap));
+}
+
 /* The clickable child fills its row, including the existing hover surface. */
 .chat-details .chat-details-desktop-body .chat-environment__row:has(> .chat-environment__action) {
   padding: 0;
@@ -514,4 +544,77 @@
 
 .chat-details-desktop-environment:not(:first-child) > .chat-details-desktop-section {
   border-top: 1px solid var(--details-separator);
+}
+
+/* Task progress uses the same row and type as every other list in the panel. */
+.chat-details .chat-details-desktop-body .task-progress-details__plan .session-progress-card__step {
+  --details-row-height: 30px;
+  min-height: var(--details-row-height);
+  padding-block: var(--details-row-padding-block);
+  font-size: var(--details-row-font-size);
+  line-height: var(--details-row-line-height);
+}
+
+.chat-details
+  .chat-details-desktop-body
+  .task-progress-details--desktop[data-desktop-details]
+  .session-progress-card__step {
+  column-gap: var(--details-row-gap);
+}
+
+.chat-details .chat-details-desktop-body .session-progress-card__runtime {
+  color: var(--muted);
+  font-size: var(--details-meta-font-size);
+  font-weight: 400;
+}
+
+.chat-details
+  .chat-details-desktop-body
+  .task-progress-details__plan
+  .session-progress-card__step-marker {
+  flex-basis: var(--details-row-icon-slot);
+  width: var(--details-row-icon-slot);
+  height: var(--details-row-line-height);
+}
+
+.chat-details .chat-details-desktop-body .session-progress-card__step-marker svg {
+  width: var(--details-row-icon-size);
+  height: var(--details-row-icon-size);
+  stroke-width: 2px;
+}
+
+.chat-details .chat-details-desktop-body .session-progress-card__step-text {
+  font-size: var(--details-row-font-size);
+}
+
+.chat-details .chat-details-desktop-body .session-progress-card__markdown :is(p, li) {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* Icon buttons keep their hit area but draw their glyph on the right content edge. */
+.chat-details .chat-details-desktop-body .chat-pr__actions-trigger,
+.chat-details .chat-details-desktop-body .session-progress-card__options {
+  margin-inline-end: -6px;
+}
+
+.chat-details .chat-details-desktop-body .chat-details-processes__stop {
+  margin-inline-end: -4px;
+}
+
+.chat-details .chat-details-desktop-body .session-progress-card__options svg {
+  width: var(--details-row-icon-size);
+  height: var(--details-row-icon-size);
+}
+
+.chat-details .chat-details-desktop-body .chat-details-processes__view-all {
+  padding-inline-start: calc(var(--details-row-icon-slot) + var(--details-row-gap));
+}
+
+.chat-details .chat-details-desktop-body .chat-outputs__name {
+  color: var(--text);
+}
+
+.chat-details .chat-details-desktop-body .chat-outputs__row .chat-outputs__icon {
+  color: var(--muted);
 }

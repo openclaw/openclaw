@@ -187,6 +187,22 @@ describe("browser chrome helpers", () => {
     expect(formatted).not.toContain("supersecret123");
   });
 
+  it.each(["http://127.0.0.1", "ws://127.0.0.1", "http://localhost"])(
+    "reports a refused %s CDP connection",
+    async (origin) => {
+      const closed = createTcpServer(() => {});
+      const port = await listenOnLoopback(closed);
+      await new Promise<void>((resolve) => {
+        closed.close(() => resolve());
+      });
+
+      await expect(diagnoseChromeCdp(`${origin}:${port}`, 500, 500)).resolves.toMatchObject({
+        ok: false,
+        connectionRefused: true,
+      });
+    },
+  );
+
   it("surfaces Windows listener checks from a real empty-reply CDP probe", async () => {
     // A broken portproxy accepts the WSL-side socket and closes it without an
     // HTTP body. The host checks must survive the full probe/format path.
