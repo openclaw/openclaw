@@ -873,26 +873,20 @@ export class VoiceCallWebhookServer {
       return;
     }
 
-    if (!this.coreConfig) {
-      this.logger.warn("Core config missing; skipping auto-response");
-      return;
-    }
-    if (!this.agentRuntime) {
-      this.logger.warn("Agent runtime missing; skipping auto-response");
+    if (!this.coreConfig || !this.agentRuntime) {
+      this.logger.warn("Core config or agent runtime missing; skipping auto-response");
       return;
     }
 
     const response = this.manager.createAutoResponseGuard(call);
+    let delivered = false;
     const speakResponse = async (text: string): Promise<boolean> => {
-      if (!response.isCurrent()) {
-        this.logger.info(`Discarding superseded automatic reply ${callId}`);
-        return false;
-      }
       this.logger.info(`AI response queued ${callId} chars=${text.length}`);
       const result = await this.manager.speak(callId, text, {
         listenAfterPlayback: true,
         isCurrent: response.isCurrent,
       });
+      delivered ||= result.success;
       return result.success;
     };
     try {
@@ -918,8 +912,7 @@ export class VoiceCallWebhookServer {
       });
 
       if (result.error) {
-        this.logger.error(`Response generation error: ${result.error}`);
-        return;
+        throw new Error(result.error);
       }
 
       if (result.text && !result.deliveredEarly) {
@@ -927,6 +920,9 @@ export class VoiceCallWebhookServer {
       }
     } catch (err) {
       this.logger.error(`Auto-response error: ${String(err)}`);
+      if (!delivered) {
+        await speakResponse("Sorry, I hit a problem working out a response. Please try again.");
+      }
     } finally {
       response.release();
     }

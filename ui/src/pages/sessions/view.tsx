@@ -21,6 +21,7 @@ import {
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
+import { registerSessionMenuEnglish } from "../../i18n/locales/en-session-menu.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { presenceViewerLabel } from "../../lib/presence-users.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
@@ -35,6 +36,8 @@ import { categoryDropHandlers, SessionsAdvancedFilters } from "./sessions-filter
 import { TranscriptSearchForm, TranscriptSearchResults } from "./transcript-search-view.tsx";
 import type { SessionsProps } from "./view-types.ts";
 import "../../styles/sessions.css";
+
+registerSessionMenuEnglish();
 
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 

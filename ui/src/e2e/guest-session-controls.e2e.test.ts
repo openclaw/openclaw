@@ -276,17 +276,26 @@ suite.define(() => {
         const researchListCount = (
           await gateway.getRequests("sessions.list", { agentId: "research" })
         ).length;
+        const stopDescribeCount = (await gateway.getRequests("sessions.describe", { key })).length;
         await gateway.setOnline(false);
         await expect.poll(() => stop.isEnabled()).toBe(true);
         await stop.click();
         expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
         await navigate(otherAgentSession);
+        await gateway.deferNext("sessions.describe", { key });
         await gateway.setOnline(true);
         await gateway.waitForRequest("sessions.list", {
           after: researchListCount,
           match: { agentId: "research" },
         });
         await expect.poll(() => composer.isDisabled()).toBe(true);
+        const stopDescribe = await gateway.waitForRequest("sessions.describe", {
+          after: stopDescribeCount,
+          match: { key },
+        });
+        expect(requireRecord(stopDescribe.params)).toMatchObject({ key });
+        expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+        await gateway.resolveDeferred("sessions.describe");
         expect(requireRecord((await gateway.waitForRequest("chat.abort")).params)).toMatchObject({
           sessionKey: key,
           runId,

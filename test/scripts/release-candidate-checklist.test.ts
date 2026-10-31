@@ -284,7 +284,8 @@ describe("release candidate checklist", () => {
       ["--run-parallels", "--skip-parallels"],
       "--run-parallels and --skip-parallels cannot be combined",
     ],
-    [["--skip-dispatch"], "--skip-dispatch requires --full-release-run"],
+    [["--skip-dispatch"], "--skip-dispatch requires --full-release-validation-run-id"],
+    [["--full-release-validation-run-id", "111", "--full-release-run", "222"], "do not combine"],
     [["--workflow-ref", "release/2026.5.14"], "--workflow-ref must be main"],
     [["--tag", "v2026.7.1-alpha.3"], "Alpha releases are retired;"],
     [
@@ -305,6 +306,25 @@ describe("release candidate checklist", () => {
     expect(() =>
       parseArgs(flags.includes("--tag") ? flags : ["--tag", "v2026.5.14-beta.3", ...flags]),
     ).toThrow(message);
+  });
+
+  it("keeps help short-circuiting before deprecated alias conflict checks", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "scripts/release-candidate-checklist.mts",
+        "--help",
+        "--full-release-validation-run-id",
+        "111",
+        "--full-release-run",
+        "222",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Usage: pnpm release:candidate");
   });
 
   it("requires an explicit prepared route and preserves historical normal state semantics", () => {
@@ -1990,7 +2010,7 @@ describe("release candidate checklist", () => {
         "latest",
         "--publish-workflow-ref",
         preparedWorkflowRef,
-        "--full-release-run",
+        "--full-release-validation-run-id",
         "111",
         "--npm-preflight-run",
         "222",

@@ -56,7 +56,7 @@ import { resolveSessionConversationBindingContext } from "./session-conversation
 
 type ChannelStopTarget = SessionControllerInput | ReplyOperation;
 /** Selected agent/session pair whose Workshop review this Stop cancels. */
-export type ChannelStopReviewTarget = { agentId: string; sessionKey: string };
+type ChannelStopReviewTarget = { agentId: string; sessionKey: string };
 export type ChannelStopCapture = {
   controller: SessionControllerStopCapture;
   sessionId?: string;

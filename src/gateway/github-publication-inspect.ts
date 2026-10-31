@@ -142,6 +142,7 @@ export async function inspectOwnGitHubPullRequest(params: {
   assertCurrent: () => void;
 }): Promise<{
   result: Inspection;
+  details: Awaited<ReturnType<typeof readOwnGitHubPullRequest>>["details"];
   assertCurrent: () => void;
   ownPublication: boolean;
   publishedHeadCommit?: string;
@@ -187,6 +188,7 @@ export async function inspectOwnGitHubPullRequest(params: {
   });
   return {
     result: inspected.result,
+    details: inspected.details,
     assertCurrent: inspected.assertCurrent,
     ownPublication: inspected.ownPublication,
     requirePublicRepositories: inspected.requirePublicRepositories,

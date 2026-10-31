@@ -16,6 +16,8 @@ const activePane = ".chat-pane-cache__pane--active";
 const composerSelector = `${activePane} .agent-chat__composer-combobox textarea`;
 
 export type EngineScenario = Omit<InteractionScenario, "run"> & {
+  /** Some actions (such as creating a split pane) are desktop-only product controls. */
+  viewports?: readonly ("desktop" | "mobile")[];
   /** A fresh context stays unnavigated until the measured action starts. */
   navigation?: "measured" | "reload";
   /** Append to the mock Gateway's init script, preserving WebSocket wrapper order. */

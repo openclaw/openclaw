@@ -11,6 +11,7 @@ GUEST_PROFILE=""
 GUEST_PROFILE_PS=""
 GUEST_ARCH=""
 WINGET_EXPECTED_HASH=""
+VC_RUNTIME_CHECK='if exist "%WINDIR%\System32\vcruntime140.dll" (exit /b 0) else (exit /b 1)'
 WINDOWS_REBOOT_REQUIRED=0
 WINDOWS_REBOOT_STARTED=0
 SNAPSHOT=""
@@ -50,7 +51,7 @@ Options:
   -h, --help                  Show this help.
 
 prepare assumes Parallels Desktop is installed/activated and a Windows 11 VM already exists.
-It installs only reusable OpenClaw prerequisites: WSL platform/package, Git, and Node/npm.
+It installs reusable OpenClaw prerequisites: WSL platform/package, Git, Node/npm, and Visual C++ runtime.
 It refuses to create the baseline when the guest contains an OpenClaw CLI, app package, process,
 tray state, or WSL distro.
 EOF
@@ -646,6 +647,21 @@ ensure_node() {
   guest_node_supported || die "installed Node.js does not satisfy the OpenClaw runtime requirement"
 }
 
+ensure_vc_runtime() {
+  if guest_user_cmd "$VC_RUNTIME_CHECK" >/dev/null 2>&1; then
+    return
+  fi
+  winget_download "Microsoft.VCRedist.2015+.${GUEST_ARCH}"
+  local installer
+  installer="$(downloaded_installer 'Microsoft Visual C++*Machine*.exe')"
+  [[ -n "$installer" ]] || die "winget did not download the Visual C++ runtime installer"
+  installer="$(stage_installer "$installer" VCRedist 'Microsoft Corporation' "$WINGET_EXPECTED_HASH")"
+  say "Installing Visual C++ runtime for native addons"
+  run_windows_installer "$installer" /install /quiet /norestart
+  finish_installer_reboot
+  wait_for_check 'Visual C++ runtime' "$VC_RUNTIME_CHECK"
+}
+
 cleanup_installers() {
   guest_user_ps "if (Test-Path -LiteralPath '${GUEST_PROFILE_PS}/Downloads/OpenClawPrereqs') { Remove-Item -LiteralPath '${GUEST_PROFILE_PS}/Downloads/OpenClawPrereqs' -Recurse -Force }"
   guest_system_ps "if (Test-Path -LiteralPath '${SECURE_STAGE_DIR}') { Remove-Item -LiteralPath '${SECURE_STAGE_DIR}' -Recurse -Force }"
@@ -655,6 +671,7 @@ verify_baseline() {
   set_guest_paths
   guest_user_cmd 'git --version && node --version && npm --version'
   guest_node_supported || die "baseline Node.js is unsupported; rerun prepare with --baseline-snapshot <new-name> to upgrade it"
+  guest_user_cmd "$VC_RUNTIME_CHECK" || die "Visual C++ runtime is missing; rerun prepare with --baseline-snapshot <new-name>"
   guest_user_cmd 'wsl.exe --version' || die "MSI-backed WSL is unavailable"
   guest_user_cmd 'wsl.exe --status' || die "WSL status failed"
   guest_system_ps "if (-not (Get-CimInstance Win32_ComputerSystem).HypervisorPresent) { throw 'Windows hypervisor is not active; WSL 2 workloads cannot start' }"
@@ -683,11 +700,12 @@ prepare() {
   ensure_wsl_package
   ensure_git
   ensure_node
+  ensure_vc_runtime
   cleanup_installers
   restart_guest
   ensure_wsl_default_version
   verify_baseline
-  create_snapshot "$BASELINE_SNAPSHOT" "E2E-ready OpenClaw Windows baseline with WSL 2, Git, Node/npm, and no OpenClaw product state."
+  create_snapshot "$BASELINE_SNAPSHOT" "E2E-ready OpenClaw Windows baseline with WSL 2, Git, Node/npm, Visual C++ runtime, and no OpenClaw product state."
   say "Baseline ready: $BASELINE_SNAPSHOT"
 }
 
