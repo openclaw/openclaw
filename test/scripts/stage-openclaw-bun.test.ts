@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { vi } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
+import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 
 const it = createCommandTest();
 const nodeDirectory = path.dirname(resolveTestNodeExecPath());
@@ -76,8 +78,10 @@ it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
   ["release-archive-checksum", "sha256 mismatch"],
 ] as const)(
   "admits only pinned native payloads: %s",
-  ([scenario, expectedError], { command, expect }) =>
+  ([scenario, expectedError], { command, expect, onTestFinished }) =>
     command.lifetime.run(async () => {
+      const tools = vi.spyOn(command, "run");
+      onTestFinished(() => tools.mockRestore());
       const root = command.createTempDir("openclaw-bun-stage-");
       const file = (name: string) => path.join(root, name);
       const write = async (name: string, data: string | Buffer, mode?: number) => {
@@ -102,10 +106,9 @@ it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
         const executable = `${directory}/bun`;
         const asset = `${directory}.zip`;
         const binary = binaries[scenario === "architecture" ? otherArch : arch];
-        await write(executable, binary);
-        const archive = file(`downloads/${asset}`);
-        await run("/usr/bin/zip", ["-q", archive, executable]);
-        const archiveBytes = await readFile(archive);
+        // Staging assigns executable modes and verifies the real extracted bytes.
+        const archiveBytes = makeStoredZip({ [executable]: binary });
+        await write(`downloads/${asset}`, archiveBytes);
         await write(
           `.cache/openclaw-bun/${tag}/${asset}`,
           redownload ? "damaged cache" : archiveBytes,
@@ -117,6 +120,7 @@ it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
           executableSha256: checksum("executable-checksum", digest(binary)),
         };
       }
+      expect(tools.mock.calls.filter(([tool]) => tool === "/usr/bin/zip")).toHaveLength(0);
       const pin = {
         tag,
         revision: scenario === "revision" ? "wrong-revision" : revision,
