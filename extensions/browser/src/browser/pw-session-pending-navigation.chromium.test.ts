@@ -78,18 +78,14 @@ describe.runIf(
       deferInitialAutoAttach: true,
     });
     cleanups.push(() => connected.close());
+    const connectedContext = connected.contexts()[0];
+    if (!connectedContext) {
+      throw new Error("Expected the persistent Chromium context");
+    }
     await expect
-      .poll(() =>
-        connected
-          .contexts()[0]
-          .pages()
-          .some((page) => page.url().startsWith("data:")),
-      )
+      .poll(() => connectedContext.pages().some((page) => page.url().startsWith("data:")))
       .toBe(true);
-    const healthyPage = connected
-      .contexts()[0]
-      .pages()
-      .find((page) => page.url().startsWith("data:"));
+    const healthyPage = connectedContext.pages().find((page) => page.url().startsWith("data:"));
     expect(healthyPage).toBeDefined();
     await expect(healthyPage!.title()).resolves.toBe("healthy");
     await expect(healthyPage!.locator("p").textContent()).resolves.toBe("still usable");
@@ -104,10 +100,7 @@ describe.runIf(
     await reattachRelayPage(connected, targetId, 3000);
     await expect
       .poll(async () => {
-        const recovered = connected
-          .contexts()[0]
-          .pages()
-          .find((page) => page.url().endsWith("/pending"));
+        const recovered = connectedContext.pages().find((page) => page.url().endsWith("/pending"));
         return recovered ? await recovered.title() : undefined;
       })
       .toBe("recovered");

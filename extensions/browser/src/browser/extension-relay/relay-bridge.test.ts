@@ -483,15 +483,27 @@ it("resumes automatic recovery only for an explicitly reattached tab", async () 
   }
   await dispatch(firstCdp, 6, "Target.setAutoAttach", { autoAttach: true });
   await dispatch(firstCdp, 9, "Target.attachToBrowserTarget");
-  await dispatch(firstCdp, 10, "Target.getTargets", {}, response(first, 9)?.result.sessionId);
+  await dispatch(
+    firstCdp,
+    10,
+    "Target.getTargets",
+    {},
+    asOptionalRecord(response(first, 9)?.result)?.sessionId,
+  );
   await dispatch(secondCdp, 11, "Target.getTargets");
   expect(attached(first)).toHaveLength(2);
   expect(attached(second)).toHaveLength(1);
-  await dispatch(firstCdp, 7, "Runtime.evaluate", {}, response(first, 3)?.result.sessionId);
+  await dispatch(
+    firstCdp,
+    7,
+    "Runtime.evaluate",
+    {},
+    asOptionalRecord(response(first, 3)?.result)?.sessionId,
+  );
   expect(response(first, 7)?.error).toBeUndefined();
   // Repeated recovery must also suppress inventories between alias detach/attach.
   await dispatch(firstCdp, 12, "Target.detachFromTarget", {
-    sessionId: response(first, 3)?.result.sessionId,
+    sessionId: asOptionalRecord(response(first, 3)?.result)?.sessionId,
   });
   deliver(handlers, { type: "tabs", tabs: defaultTabs() });
   await flush();
