@@ -359,6 +359,7 @@ it.each([false, true])(
         "PRAGMA foreign_keys=OFF; CREATE TABLE integrity_parent(id INTEGER PRIMARY KEY); CREATE TABLE integrity_child(parent_id REFERENCES integrity_parent(id)); INSERT INTO integrity_child VALUES (42)",
       );
     }
+    expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
     await withAgentDatabaseStartupAdmission(async (admission) => {
       await assertOpenClawDatabasesReady({ env, config, operation: "gateway-startup" });
       const owner = admission.adopt();

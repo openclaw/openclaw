@@ -552,6 +552,8 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
         `${refusal}Update binary: ${path.join(root, "openclaw.mjs")}`,
         `${refusal}Gateway install root: unresolved`,
         `${refusal}${runtimeRecovery.expectedPlainRecovery("2026.3.23-2", "24.16.0", "absent", undefined, root)}`,
+        `Updater Node ${process.versions.node} at ${process.execPath}.`,
+        "PATH Node: not found.",
       ].join("\n"),
     );
   });

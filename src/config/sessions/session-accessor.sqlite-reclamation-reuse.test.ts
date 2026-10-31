@@ -6,7 +6,6 @@ import type { Worker, WorkerOptions } from "node:worker_threads";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import * as databaseProcessRole from "../../infra/database-engine/admission-scope.js";
 import {
-  revokeSqliteDatabaseAdmissionsForPath,
   readSqliteDatabaseIntegrityVerification,
   readSqliteDatabaseCleanClose,
 } from "../../infra/sqlite-database-admission.js";
@@ -18,6 +17,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   claimOpenClawAgentDatabaseLease,
+  invalidateOpenClawAgentDatabaseIntegrityBeforeMutation,
   releaseOpenClawAgentDatabaseLease,
   type OpenClawAgentDatabaseWorkerLeaseReceipt,
 } from "../../state/openclaw-agent-db-lease.js";
@@ -213,7 +213,7 @@ test("retained reclamation operations share the first full scan until the Gatewa
     });
   }
   closeOpenClawAgentDatabasesForTest(databaseOptions.env.OPENCLAW_STATE_DIR);
-  revokeSqliteDatabaseAdmissionsForPath(database.path);
+  invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(database.path);
   // Count the native admission carrier as well as the reclamation actor for this exact file.
   validation.admissionPath = database.path;
   const workerIds = new Set<number>();
@@ -221,7 +221,7 @@ test("retained reclamation operations share the first full scan until the Gatewa
     if (pass === 2) {
       await closeOpenClawAgentDatabasesAsync(databaseOptions.env.OPENCLAW_STATE_DIR);
       closeOpenClawAgentDatabasesForTest(databaseOptions.env.OPENCLAW_STATE_DIR);
-      revokeSqliteDatabaseAdmissionsForPath(database.path);
+      invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(database.path);
     }
     const diagnostics: SqliteSessionReclamationDiagnostics = {};
     await expect(reclaim({ plan, diagnostics })).resolves.toMatchObject({
@@ -588,7 +588,7 @@ test.each(["idle", "active"] as const)(
     const nativeCloses = observeNativeGenerationRetirement(fixture.database.path);
     validation.admissionPath = fixture.database.path;
     closeOpenClawAgentDatabasesForTest(fixture.options.env.OPENCLAW_STATE_DIR);
-    revokeSqliteDatabaseAdmissionsForPath(fixture.database.path);
+    invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(fixture.database.path);
     const close = vi.spyOn(SqliteReclamationWorker.prototype, "close");
     let drainOnCommit = false;
     let closesAtDrain: number | undefined;

@@ -6,7 +6,10 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { runSqliteIntegrityOperationInWorker } from "../infra/sqlite-integrity-operation.js";
-import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
+import {
+  assertSqliteIntegrityInWorker,
+  runSqliteIntegrityCheckInWorkerSync,
+} from "../infra/sqlite-integrity-worker.js";
 import {
   runSqliteIntegrityCheckSync,
   runSqliteIntegrityOperationSync,
@@ -173,6 +176,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
         steps,
         () => assertAgentDatabaseOpenAuthority(steps, assertCurrent),
         repair && !isMainThread ? (check, error) => repair(check, error, assertCurrent) : undefined,
+        isMainThread ? runSqliteIntegrityCheckInWorkerSync : undefined,
       );
     };
     const scope = getOpenClawDatabaseMaintenanceScope();
@@ -488,7 +492,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
         failure = undefined;
         try {
           pending.controller.signal.throwIfAborted();
-          runSqliteIntegrityCheckSync(check);
+          (isMainThread ? runSqliteIntegrityCheckInWorkerSync : runSqliteIntegrityCheckSync)(check);
         } catch (error) {
           failure = { error };
         }

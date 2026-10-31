@@ -32,6 +32,10 @@ import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import { createSessionRowCapabilityReader } from "./session-row-projection-identities.js";
 import * as records from "./session-row-projection-record.js";
 import { readSessionRowLookup, type prepareSessionRowScopes } from "./session-row-scope.js";
+import {
+  createSessionRuntimeResolution,
+  type SessionRuntimeResolution,
+} from "./session-runtime-resolution.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { deriveSessionTitle, type SessionChildLink } from "./session-utils-core.js";
@@ -60,7 +64,11 @@ export function createSessionRowModelFactsReader(params: {
   params.onFactsChange(() => {
     searchVocabulary = undefined;
   });
-  const read = (query: records.Lookup, metadataPrepared = false) => {
+  const read = (
+    query: records.Lookup,
+    metadataPrepared = false,
+    runtimeResolution?: SessionRuntimeResolution,
+  ) => {
     const row = params.lookup(query);
     if (!row?.entry) {
       throw new Error("Session changed while preparing search facts; retry the request");
@@ -76,6 +84,7 @@ export function createSessionRowModelFactsReader(params: {
       ...state,
       ...row,
       preparedModelMetadata: readPreparedGatewayModelMetadata(state.cfg),
+      runtimeResolution,
       source: {
         entry: row.storedEntry,
         readSourceEntry: (key) => params.readSourceEntry(row, key, metadataPrepared),
@@ -194,8 +203,9 @@ export function createSessionRowMaterializer(owner: {
     const cfg = owner.prepare();
     withAgentRosterFactsBatch(cfg, () => {
       const activitySummaryEnabledByAgent = new Map<string, boolean>();
+      const runtimeResolution = createSessionRuntimeResolution(cfg);
       const readRow: typeof readResidentSessionRow = (params) =>
-        readResidentSessionRow(params, activitySummaryEnabledByAgent);
+        readResidentSessionRow(params, activitySummaryEnabledByAgent, runtimeResolution);
       for (const [offset, id] of ids.entries()) {
         if (offset > 0 && performance.now() - started >= 12) {
           break;
@@ -317,6 +327,7 @@ export function readResidentSessionRow(
     repositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   },
   activitySummaryEnabledByAgent?: Map<string, boolean>,
+  runtimeResolution?: SessionRuntimeResolution,
 ) {
   const { row, cfg, context } = params;
   row.privateSource?.assertCurrent();
@@ -337,6 +348,7 @@ export function readResidentSessionRow(
       cfg,
       preparedAcpMeta: databaseFacts.acpMeta,
       preparedRuntimeOwnership: databaseFacts.runtimeOwnership,
+      runtimeResolution,
       preparedModelMetadata: readPreparedGatewayModelMetadata(cfg),
       preparedRepositoryWorkspace: databaseFacts.repositoryWorkspace,
       configuredAgentIds: params.configuredAgentIds,
