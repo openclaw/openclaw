@@ -6,6 +6,7 @@ import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import { applyReplyTagsToPayload } from "./reply-payloads-base.js";
 import { filterMessagingToolReplyPayload } from "./reply-payloads-dedupe.js";
 import {
@@ -13,6 +14,19 @@ import {
   createReplyToModeFilterForChannel,
   resolveReplyToMode,
 } from "./reply-threading.js";
+
+export function resolveFollowupPayloadContext(turn: AdmittedFollowupTurn) {
+  return {
+    cfg: turn.config,
+    messageProvider: turn.queued.run.messageProvider,
+    originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
+    originatingChannel: turn.queued.originatingChannel,
+    originatingChatType: turn.queued.originatingChatType,
+    originatingReplyToMode: turn.queued.originatingReplyToMode,
+    originatingTo: turn.queued.originatingTo,
+    originatingThreadId: turn.queued.originatingThreadId,
+  };
+}
 
 /** Normalizes delivery content, applies threading, and dedupes message-tool sends. */
 export function resolveFollowupDeliveryPayloads(params: {

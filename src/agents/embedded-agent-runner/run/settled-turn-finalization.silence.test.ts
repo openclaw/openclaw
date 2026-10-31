@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { resolveSourceReplyExpectation } from "../../../auto-reply/reply/source-reply-delivery-mode.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { MISSING_REPLY_NOTICE_TEXT } from "../../reply-completion.js";
 import {
   buildEmbeddedRunnerAssistant as makeAssistant,
   makeEmbeddedRunnerAttempt as makeAttempt,
@@ -10,6 +12,7 @@ import { useFinalizationAdmission } from "./settled-finalization-harness.test-su
 import { prepareTerminalWithSettledTurnFinalization as finalize } from "./settled-turn-finalization.js";
 import { createSettledFinalizationTestInput as makeInput } from "./settled-turn-finalization.test-support.js";
 import { finalizationReply, settledBatch } from "./settled-turn-fixtures.test-support.js";
+import { resolveTerminal, expectComplete } from "./terminal-resolution.test-support.js";
 
 const backendMocks = vi.hoisted(() => ({ finalize: vi.fn() }));
 const transcriptMocks = vi.hoisted(() => ({ append: vi.fn() }));
@@ -36,6 +39,80 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
       "optional",
     );
   });
+
+  it.each(["answered", "exhausted", "optional", "pending"] as const)(
+    "finishes an owed requester reply without replaying work: %s",
+    async (scenario) => {
+      const assistant = makeAssistant({ content: [{ type: "text", text: SILENT_REPLY_TOKEN }] });
+      const messages = [
+        {
+          role: "user" as const,
+          content: "Both workers have finished; answer the original request.",
+          timestamp: 0,
+        },
+        assistant,
+      ];
+      const attempt = makeAttempt({
+        sessionIdUsed: "session-settled",
+        messagesSnapshot: messages,
+        assistantTexts: [SILENT_REPLY_TOKEN],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptCompletedAssistant: assistant,
+        settledTurnFinalizationContext: {
+          source: "openclaw-transcript",
+          messages: Object.freeze(messages),
+        },
+      });
+      const input = makeInput(attempt, getContext());
+      const runAttempt = vi.spyOn(input.finalization.harness, "runAttempt");
+      Object.assign(input.terminalBase.runParams, {
+        trigger: "user",
+        terminalReplyExpectation: scenario === "optional" ? "optional" : "result-required",
+        inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+        resolveReplyDelivery: async () => (scenario === "pending" ? "pending" : "missing"),
+      });
+      backendMocks.finalize.mockResolvedValue(
+        scenario === "exhausted"
+          ? finalizationReply("empty", SILENT_REPLY_TOKEN)
+          : finalizationReply("answered", "Both results are ready."),
+      );
+      const result = await finalize(input);
+      expect(runAttempt).not.toHaveBeenCalled();
+      expect(backendMocks.finalize).toHaveBeenCalledTimes(
+        scenario === "exhausted" ? 2 : scenario === "answered" ? 1 : 0,
+      );
+      for (const [preparedAttempt] of backendMocks.finalize.mock.calls) {
+        expect(preparedAttempt).toMatchObject({
+          disableTools: true,
+          operation: "settled-tool-finalization",
+        });
+      }
+      if (scenario === "answered") {
+        expect(result.prepared.payloadsWithToolMedia).toEqual([
+          expect.objectContaining({ text: "Both results are ready." }),
+        ]);
+        expect(
+          getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia![0]!)
+            ?.deliverDespiteSourceReplySuppression,
+        ).toBe(true);
+      } else if (scenario === "exhausted") {
+        const terminal = await resolveTerminal({
+          runParams: input.terminalBase.runParams,
+          assistant: result.attemptAssistant,
+          attemptOverrides: result.attempt,
+          prepared: result.prepared,
+          settledTurnFinalizationOutcome: result.finalizationOutcome,
+        });
+        expectComplete(terminal);
+        expect(terminal.result.payloads).toEqual([
+          expect.objectContaining({ text: MISSING_REPLY_NOTICE_TEXT, isStatusNotice: true }),
+        ]);
+      } else {
+        expect(result.prepared.payloadsWithToolMedia).toEqual([]);
+      }
+    },
+  );
 
   it.each([
     ["required", "missing", "phased"],

@@ -77,6 +77,7 @@ describe("terminal resolution", () => {
     expect(resolved.result.payloads).toBeUndefined();
     expect(resolved.result.meta.error).toBeUndefined();
     expect(resolved.result.meta.terminalReply).toEqual({ disposition: "silent" });
+    expect(resolved.result.meta.inputAlreadyDelivered).toBe(true);
   });
 
   it("completes an empty post-tool turn after committed media delivery", async () => {

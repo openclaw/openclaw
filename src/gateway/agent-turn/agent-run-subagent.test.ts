@@ -72,6 +72,7 @@ function followupRequest(): FollowupRequest {
     runId,
     requesterSessionKey: "agent:main:main",
     requesterSessionId: "requester-session",
+    requesterStorePath: "/synthetic/requester/sessions.json",
     requesterAgentId: "main",
     targetSessionKey: childSessionKey,
     targetAgentId: "main",

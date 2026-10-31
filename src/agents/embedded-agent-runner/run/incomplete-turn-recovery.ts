@@ -345,6 +345,8 @@ export function isSettledTurnCutOffByOutputLimit(
 export function resolveSettledToolTerminalContinuation(
   params: IncompleteTurnRecoveryParams & {
     allowEmptyStopContinuation?: boolean;
+    /** The original requester owes a final after its children settled elsewhere. */
+    allowNoToolFinalization?: boolean;
     replyDeliveryState: ReplyDeliveryState;
     payloadCount: number;
     hasTerminalToolPresentation?: boolean;
@@ -372,9 +374,11 @@ export function resolveSettledToolTerminalContinuation(
     params.allowEmptyStopContinuation &&
     (assistantState.assistant?.stopReason === "stop" ||
       assistantState.assistant?.stopReason === "length") &&
-    attempt.toolMetas.length > 0 &&
+    ((attempt.toolMetas.length > 0 && attempt.itemLifecycle.startedCount > 0) ||
+      (params.allowNoToolFinalization &&
+        attempt.toolMetas.length === 0 &&
+        attempt.itemLifecycle.startedCount === 0)) &&
     attempt.toolMetas.every((tool) => tool.isError !== true && tool.asyncStarted !== true) &&
-    attempt.itemLifecycle.startedCount > 0 &&
     attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
     attempt.itemLifecycle.activeCount === 0 &&
     assistantState.visibleText.length === 0,
@@ -414,6 +418,7 @@ export function resolveSettledToolTerminalContinuation(
   // Only explicit current-attempt evidence permits extending the work. The
   // isolated finalizer remains text-only after possible effects or missing evidence.
   const keepTools =
+    !params.allowNoToolFinalization &&
     (assistantState.assistant?.stopReason === "stop" ||
       assistantState.assistant?.stopReason === "length") &&
     assistantState.visibleText.length === 0 &&

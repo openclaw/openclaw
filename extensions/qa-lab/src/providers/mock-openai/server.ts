@@ -856,10 +856,10 @@ async function buildResponsesPayload(
   }
   const terminalCompletionCase = terminalTurn?.caseName;
   const current = terminalTurn?.text ?? "";
-  if (terminalCompletionCase && terminalTurn?.kind === "settled") {
-    return buildAssistantEvents(mockSubagent.resolveMockSettledReply(terminalCompletionCase));
-  }
   if (terminalCompletionCase === "private") {
+    if (terminalTurn?.kind === "settled") {
+      return buildAssistantEvents(mockSubagent.resolveMockSettledReply(terminalCompletionCase));
+    }
     const nonce = QA_SUBAGENT_PRIVATE_RESULT_RE.exec(current)?.[0];
     const requestedSecondChild = input.some(
       (item) =>
@@ -898,31 +898,64 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (terminalCompletionCase && terminalTurn?.kind === "completion") {
-    const visibleRepresentation =
-      terminalCompletionCase === "silent" ? QA_SUBAGENT_TERMINAL_MARKERS.silent : undefined;
-    if (visibleRepresentation) {
-      if (completedToolName === "message") {
-        return buildAssistantEvents("");
+  if (
+    terminalCompletionCase &&
+    (terminalTurn?.kind === "completion" || terminalTurn?.kind === "settled")
+  ) {
+    // Completion and settled wakes are new messages in the same scenario.
+    // Recover its explicit kickoff without treating quoted history as a new one.
+    const kickoff =
+      allUserTexts
+        .map((text) => splitMockConversationContext(text).current)
+        .findLast((text) => /subagent terminal reply qa check:/i.test(text)) ?? "";
+    const requesterYielded = /yield until the worker finishes/i.test(kickoff);
+    if (terminalTurn.kind === "completion") {
+      if (requesterYielded || /keep ordinary completion quiet/i.test(kickoff)) {
+        return buildAssistantEvents(terminalCompletionCase === "visible" ? "" : "NO_REPLY");
       }
-      if (canCallMessage) {
-        const deliveryInstructions = extractAllRequestTexts(
-          input.filter((item) => item.role === "system" || item.role === "developer"),
-          body,
-        );
-        const requiresFinal =
-          /visible source replies are not automatically delivered for this run\.[\s\S]*set `?final=true`?/i.test(
-            deliveryInstructions,
+      const visibleRepresentation =
+        terminalCompletionCase === "silent" ? QA_SUBAGENT_TERMINAL_MARKERS.silent : undefined;
+      if (visibleRepresentation) {
+        if (completedToolName === "message") {
+          return buildAssistantEvents("");
+        }
+        if (canCallMessage) {
+          const deliveryInstructions = extractAllRequestTexts(
+            input.filter((item) => item.role === "system" || item.role === "developer"),
+            body,
           );
-        return buildToolCallEventsWithArgs("message", {
-          action: "send",
-          message: visibleRepresentation,
-          ...(requiresFinal ? { final: true } : {}),
-        });
+          const requiresFinal =
+            /visible source replies are not automatically delivered for this run\.[\s\S]*set `?final=true`?/i.test(
+              deliveryInstructions,
+            );
+          return buildToolCallEventsWithArgs("message", {
+            action: "send",
+            message: visibleRepresentation,
+            ...(requiresFinal ? { final: true } : {}),
+          });
+        }
+        return buildAssistantEvents(visibleRepresentation);
       }
-      return buildAssistantEvents(visibleRepresentation);
+      return buildAssistantEvents("The child run ended. Report its outcome to the requester.");
     }
-    return buildAssistantEvents("The child run ended. Report its outcome to the requester.");
+    if (!requesterYielded) {
+      return buildAssistantEvents(mockSubagent.resolveMockSettledReply(terminalCompletionCase));
+    }
+    if (terminalCompletionCase === "empty") {
+      return buildAssistantEvents("");
+    }
+    const marker = Object.entries(QA_SUBAGENT_TERMINAL_MARKERS).find(
+      ([caseName]) => caseName === terminalCompletionCase,
+    )?.[1];
+    if (
+      isSettledToolContinuation &&
+      marker &&
+      (terminalCompletionCase === "silent" || allInputText.includes(marker))
+    ) {
+      return buildAssistantEvents(`Reviewed worker result: ${marker}`);
+    }
+    // Yielded batches exercise both missing-answer dispositions before tool-free recovery.
+    return buildAssistantEvents(terminalCompletionCase === "silent" ? "NO_REPLY" : "");
   }
   const terminalWorkerCase = terminalTurn?.kind === "worker" ? terminalTurn.caseName : undefined;
   if (terminalWorkerCase) {
@@ -972,7 +1005,8 @@ async function buildResponsesPayload(
     if (!hasCompletedToolOutput && canCallSessionsSpawn) {
       const task =
         terminalCompletionCase === "empty" &&
-        QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE.test(current)
+        (QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE.test(current) ||
+          /yield until the worker finishes/i.test(current))
           ? "Subagent terminal reply QA worker: empty. Return no assistant output after the write."
           : `Subagent terminal reply QA worker: ${terminalCompletionCase}.`;
       return buildToolCallEventsWithArgs("sessions_spawn", {
@@ -983,8 +1017,10 @@ async function buildResponsesPayload(
       });
     }
     if (hasCompletedToolOutput) {
-      // A visible acknowledgment ends the requester turn; NO_REPLY keeps a
-      // delegated visible turn alive and hands completion to requester settlement.
+      if (/yield until the worker finishes/i.test(current) && canCallSessionsYield) {
+        return buildToolCallEventsWithArgs("sessions_yield", {});
+      }
+      // A visible acknowledgment ends the requester turn without yielding.
       if (
         terminalCompletionCase === "empty" &&
         QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE.test(current)

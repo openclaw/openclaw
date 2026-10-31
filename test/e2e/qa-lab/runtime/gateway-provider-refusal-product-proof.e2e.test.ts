@@ -13,8 +13,8 @@ import { listenLoopback, sendChat } from "./gateway-recovery.test-support.js";
 const REFUSAL_EXPLANATION = "Service unavailable. Try again.";
 const REFUSAL_TEXT =
   "The provider refused this request (category: reasoning_extraction). Revise the request and try again.";
-// Normal-history copy is separate from the recorder's private terminal diagnostic.
-const REFUSAL_NOTICE = "Your request couldn't be completed.";
+// Canonical category/next-step copy is public; the provider explanation remains private.
+const REFUSAL_NOTICE = `Your request couldn't be completed: ${REFUSAL_TEXT}`;
 
 type GatewayHistory = {
   messages?: Array<{ role?: unknown; content?: unknown; customType?: unknown }>;
@@ -135,7 +135,7 @@ it("keeps a structured Anthropic refusal terminal across retry and fallback", as
         openclawRunError: { runId: started.runId, summary: REFUSAL_NOTICE },
       });
       expect(refusals[0]).not.toHaveProperty("details.error");
-      expect(JSON.stringify(history.messages)).not.toContain(REFUSAL_TEXT);
+      expect(refusals[0]).not.toHaveProperty("openclawRunError.error");
       expect(JSON.stringify({ terminal, history })).not.toContain(REFUSAL_EXPLANATION);
 
       const receipts: Record<string, unknown>[] = [];

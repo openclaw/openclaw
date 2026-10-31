@@ -44,6 +44,7 @@ function createOwner(index: number): Owner {
     requesterSessionKey: "agent:main:requester",
     requesterSessionId: "synthetic-requester",
     requesterAgentId: "main",
+    requesterStorePath: "/synthetic/requester/sessions.json",
     targetSessionKey: "agent:main:child",
     targetAgentId: "main",
     custody: { signal: new AbortController().signal, assertCurrent: noop, release: noop, run },

@@ -231,8 +231,8 @@ export function resolveRequesterSettlePolicy(
       : {}),
   };
   const admissionMarker = yieldedFinalDeliverable ? { yieldedFinalDeliverable: true as const } : {};
-  // A prior wake may already have consumed every result in this yielded cohort.
-  const requireVisibleReply =
-    requesterYielded && !hasPrivateRows && completionRows.some(needsRequesterSettleFindings);
+  // Consuming child input does not discharge the yielded requester's final reply.
+  // The registry retires an answered cohort using its separate visible-final receipt.
+  const requireVisibleReply = requesterYielded && !parentOnly;
   return { privateRows, requireVisibleReply, parentOnly, requesterBinding, admissionMarker };
 }

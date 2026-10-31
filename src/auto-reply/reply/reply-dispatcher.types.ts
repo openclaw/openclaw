@@ -52,8 +52,14 @@ export type ReplyDispatchRuntimeInfo = {
   assertPlatformSendAuthorized?: () => void;
   /** @internal Bind this delivery's host-owned completion to a transformed payload. */
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
-  /** @internal Hand this waiting reply's live progress draft to the children it waits on. */
+  /** Hand off a confirmed draft in place of this waiting-only reply. */
   adoptProgressDraft?: ProgressContinuationCapability["adopt"];
+  /**
+   * Hand off a confirmed draft alongside this reply. Adapters using this
+   * capability must also deliver the payload and report its own outcome.
+   * Offered instead of adoptProgressDraft so existing adopters keep ordinary delivery.
+   */
+  adoptProgressDraftWithReply?: ProgressContinuationCapability["adopt"];
   /**
    * @deprecated The 2026.9.8 receipt handoff. The host never offers it, so adapters
    * that check for it keep ordinary waiting-reply delivery. Use `adoptProgressDraft`;

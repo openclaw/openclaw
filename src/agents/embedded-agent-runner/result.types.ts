@@ -137,6 +137,8 @@ export type EmbeddedRunTerminalToolFailure = {
 
 export type EmbeddedAgentRunMeta = {
   durationMs: number;
+  /** Matching persisted input already completed; acknowledge it without a new reply or send. */
+  inputAlreadyDelivered?: true;
   agentMeta?: EmbeddedAgentMeta;
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;

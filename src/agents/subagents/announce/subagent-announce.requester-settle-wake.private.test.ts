@@ -82,7 +82,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     }
     const call = deliveredCallArg();
     expect(call.completionRequesterSessionId).toBe("sess-main");
-    expect(call.requireVisibleReply).toBeUndefined();
+    expect(call.requireVisibleReply).toBe(yielded && marked ? true : undefined);
     expect(call.completionTarget).toBe(yielded && marked ? undefined : "parent");
     if (yielded && single) {
       expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-b:yield-1"));

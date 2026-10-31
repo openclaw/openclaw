@@ -1481,9 +1481,14 @@ describe("qa mock openai server", () => {
       ),
     ).toContain("QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK");
   });
-  it.each(["visible", "silent"])(
-    "handles captured current completion v4 for %s",
-    async (terminalCase) => {
+  it.each([
+    { terminalCase: "visible", quiet: false },
+    { terminalCase: "silent", quiet: false },
+    { terminalCase: "visible", quiet: true },
+    { terminalCase: "silent", quiet: true },
+  ])(
+    "handles captured current completion v4 for $terminalCase (quiet=$quiet)",
+    async ({ terminalCase, quiet }) => {
       const server = await startMockServer();
       // Preserve the captured first-completion order: old spawn/receipt/ack,
       // current plain handoff, then a separately projected runtime event.
@@ -1505,7 +1510,7 @@ describe("qa mock openai server", () => {
         ),
       );
       const input = userInputs(
-        "Subagent terminal reply QA check: visible.",
+        `Subagent terminal reply QA check: visible.${quiet ? " Keep ordinary completion quiet." : ""}`,
         {
           type: "function_call",
           name: "sessions_spawn",
@@ -1522,6 +1527,11 @@ describe("qa mock openai server", () => {
       );
       const tools = [SESSIONS_SPAWN_TOOL, MESSAGE_TOOL];
       const payload = await respond(server, input, { tools });
+      if (quiet) {
+        expectNoTool(payload);
+        expect(outputText(payload)).toBe(terminalCase === "visible" ? "" : "NO_REPLY");
+        return;
+      }
       if (terminalCase === "visible") {
         expectNoTool(payload);
         expect(outputText(payload)).not.toBe("");

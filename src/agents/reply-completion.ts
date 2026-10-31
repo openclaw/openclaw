@@ -63,6 +63,9 @@ export function resolveCompletionInputReplyExpectation(
   // Available child findings do not create a reply obligation for their parent.
   const isSubagentCompletion =
     sourceTool === "subagent_announce" || sourceTool === "subagent_settle";
+  if (params.requireVisibleReply && isSubagentCompletion) {
+    return "result-required";
+  }
   return params.requireVisibleReply || (params.expectsCompletionMessage && !isSubagentCompletion)
     ? "required"
     : "optional";
@@ -205,13 +208,25 @@ function readAcceptedUserReplyExpectation(
   return accepted.expectation;
 }
 
+/** The yielded requester, unlike an ordinary child event, still owes its own answer. */
+export function isRequiredRequesterSettlement(
+  params: Parameters<typeof resolveReplyExpectation>[0],
+): boolean {
+  return (
+    params.terminalReplyExpectation === "result-required" &&
+    params.privateCompletion !== true &&
+    params.inputProvenance?.kind === "inter_session" &&
+    params.inputProvenance.sourceTool === "subagent_settle"
+  );
+}
+
 /** Background failures are recorded; only an admitted user's missing answer needs chat text. */
 export function shouldDeliverMissingReplyNotice(
   params: Parameters<typeof resolveReplyExpectation>[0] & {
     currentInboundEventKind?: InboundEventKind;
   },
 ): boolean {
-  if (readAcceptedUserReplyExpectation(params)) {
+  if (readAcceptedUserReplyExpectation(params) || isRequiredRequesterSettlement(params)) {
     return true;
   }
   return (

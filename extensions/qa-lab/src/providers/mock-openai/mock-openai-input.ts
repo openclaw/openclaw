@@ -218,6 +218,15 @@ export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
       continue;
     }
     if (isMockSubagentSettledWake(current)) {
+      // Yield replay can sit between the kickoff and this wake. The current
+      // batch names its child, so do not recover its identity from older turns.
+      const caseName =
+        /(?:^|\n)\d+\. Child task[^\n]*\n<prompt-data>\nqa-terminal-(visible|silent|empty|restart|fallback|race|private)(?:-(?:first|second))?\n<\/prompt-data>/u.exec(
+          current,
+        )?.[1];
+      if (caseName) {
+        return { kind: "settled", text: current, caseName };
+      }
       settled = true;
       continue;
     }
