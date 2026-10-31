@@ -659,6 +659,13 @@ it.for([false, true])(
     await registry.updateRegistry(entry);
     const execResult = (stdout = "") => ({ code: 0, stdout, stderr: "" });
     vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
+      if (args[0] === "context" && args[1] === "inspect") {
+        return {
+          code: 0,
+          stdout: JSON.stringify({ Host: "unix:///synthetic/checkpoint-docker.sock" }),
+          stderr: "",
+        };
+      }
       if (args[0] === "info") {
         return execResult("checkpoint-daemon");
       }
