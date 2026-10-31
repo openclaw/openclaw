@@ -1,5 +1,7 @@
 // Cross-engine companion to the CDP-only cold-load and interaction benchmarks.
 // Uses their production HTTP server, synthetic Gateway, scenarios and assertions.
+// Long-tail sweep: --pages --engines chromium --cpu-throttle 4 --viewport both
+// Run Chromium at 1x and WebKit separately; --steps page-<route>-<phase> narrows follow-ups.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
@@ -33,6 +35,12 @@ import {
   type ControlUiEngine,
   type EngineMetrics,
 } from "./lib/control-ui-engine-metrics.ts";
+import {
+  collectEnginePageStructure,
+  createEnginePageScenarios,
+  enginePageCoverage,
+  enginePageFixtureCounts,
+} from "./lib/control-ui-engine-page-scenarios.ts";
 import { createEnginePluginMemoryScenarios } from "./lib/control-ui-engine-plugin-memory-scenarios.ts";
 import { createEngineStreamingScenarios } from "./lib/control-ui-engine-streaming-scenarios.ts";
 import { createEngineStyleScenarios } from "./lib/control-ui-engine-style-scenarios.ts";
@@ -45,6 +53,13 @@ import {
   type InteractionNavigationPreloads,
   type InteractionEvidence,
 } from "./lib/control-ui-interaction-scenarios.ts";
+import {
+  finishControlUiPageObserver,
+  installControlUiPageObserver,
+  readControlUiPageObserver,
+  resetControlUiPageObserver,
+  type ControlUiPageObservation,
+} from "./lib/control-ui-page-observer.ts";
 import { installControlUiResourceCounts } from "./lib/control-ui-resource-counts.ts";
 import {
   createWorkboardResourceFixture,
@@ -64,6 +79,8 @@ const { values } = parseArgs({
     "network-profiles": { type: "string", default: "localhost" },
     viewport: { type: "string", default: "both" },
     steps: { type: "string" },
+    pages: { type: "boolean", default: false },
+    "page-phases": { type: "string", default: "visit,action,leave" },
     pairs: { type: "string", default: "1" },
     trace: { type: "boolean", default: false },
     "cpu-only": { type: "boolean", default: false },
@@ -71,6 +88,11 @@ const { values } = parseArgs({
   },
 });
 const pairs = Number(values.pairs);
+const pageBenchmark = values.pages || values.steps?.split(",").some((id) => id.startsWith("page-"));
+const pagePhases = values["page-phases"].split(",");
+if (pagePhases.some((phase) => !["visit", "action", "leave"].includes(phase))) {
+  throw new Error("page-phases must contain visit, action and/or leave");
+}
 const engines: ControlUiEngine[] = values.engines.split(",").map((name) => {
   if (name !== "chromium" && name !== "webkit") {
     throw new Error(`Unsupported engine: ${name}`);
@@ -115,8 +137,6 @@ if (values.trace && values["cpu-only"]) {
   throw new Error("Choose --trace or --cpu-only; use separate untraced timing runs");
 }
 const artifactDir = createControlUiE2eArtifactDir("engines", values.output);
-// Playwright's temporary profiles and downloads belong with this run, too.
-process.env.TMPDIR = artifactDir;
 const viewports = [
   { name: "desktop", width: 1440, height: 1000 },
   { name: "mobile", width: 390, height: 844 },
@@ -131,7 +151,15 @@ const sourceRoots = [
   values["compare-source-root"],
   ...(values["control-source-root"] ?? []),
 ];
-const needsWorkboard = values.steps?.split(",").some((id) => id.startsWith("workboard-"));
+const needsWorkboard =
+  values.pages ||
+  values.steps
+    ?.split(",")
+    .some(
+      (id) =>
+        id.startsWith("workboard-") ||
+        /^page-(?:workboard|plugin)-(?:visit|action|leave)$/u.test(id),
+    );
 if (needsWorkboard && directories.some((_, index) => !sourceRoots[index])) {
   throw new Error("Workboard comparisons require a source root for each bundle");
 }
@@ -199,6 +227,7 @@ type Observation = {
   wallMs?: number;
   hostLoadAverage: number[];
   metrics?: EngineMetrics;
+  pageMetrics?: ControlUiPageObservation;
   requests?: Record<string, number>;
   evidence?: InteractionEvidence;
   navigationPreloads?: InteractionNavigationPreloads;
@@ -257,6 +286,7 @@ try {
     ...createEngineMemoryScenarios(),
     ...createEnginePluginMemoryScenarios(),
     ...createEngineStreamingScenarios(),
+    ...createEnginePageScenarios(),
     ...interactionScenarios.filter(
       (scenario) =>
         ids?.includes(scenario.id) ||
@@ -269,7 +299,9 @@ try {
   const scenarios = catalog.filter(({ id, explicitOnly, memory }) =>
     ids
       ? ids.some((selected) => selected === id || (selected === "memory" && memory))
-      : !explicitOnly,
+      : values.pages
+        ? id.startsWith("page-") && pagePhases.some((phase) => id.endsWith(`-${phase}`))
+        : !explicitOnly,
   );
   if (
     !scenarios.length ||
@@ -305,6 +337,8 @@ try {
           "./lib/control-ui-engine-memory.ts",
           "./lib/control-ui-engine-memory-scenarios.ts",
           "./lib/control-ui-engine-plugin-memory-scenarios.ts",
+          "./lib/control-ui-engine-page-scenarios.ts",
+          "./lib/control-ui-page-observer.ts",
           "./lib/control-ui-bench-gateway-server.ts",
         ].map(async (file) => [
           file,
@@ -338,7 +372,7 @@ try {
     order:
       "Serial network profile, engine and bundle order alternates each pair; fresh browser context per observation",
     acceptance:
-      "Census ranks >1.5x WebKit/Chromium. Fix proof: ten interleaved pairs plus A/A control; median regression <=5% and p95 no worse, otherwise ten more pairs. Profile/CPU and structural counts decide on a noisy host; >20% attributable regression blocks.",
+      "Page census ranks >1.3x WebKit/Chromium. Fix proof: ten interleaved pairs plus A/A control; median regression <=5% and p95 no worse, otherwise ten more pairs. Profile/CPU and structural counts decide on a noisy host; >20% attributable regression blocks.",
     boundary:
       "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request and every incoming mock Gateway frame (including the connect challenge); RPC replies thus include a simulated round trip, with no added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
     memoryContract:
@@ -350,6 +384,9 @@ try {
       navigation,
       memory,
     })),
+    ...(pageBenchmark
+      ? { pageCoverage: enginePageCoverage, pageFixtureCounts: enginePageFixtureCounts }
+      : {}),
   });
   for (const viewport of viewports) {
     for (const item of scenarios) {
@@ -408,6 +445,9 @@ try {
                 await throttle.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
               }
               await page.addInitScript("globalThis.__name = (fn) => fn");
+              if (scenario.id.startsWith("page-")) {
+                await installControlUiPageObserver(page);
+              }
               await page.addInitScript(installInteractionNavigationPreloadObserver);
               if (scenario.memory) {
                 await page.addInitScript(installControlUiResourceCounts);
@@ -524,6 +564,9 @@ try {
                 });
                 tracingStarted = true;
               }
+              if (scenario.id.startsWith("page-")) {
+                await resetControlUiPageObserver(page);
+              }
               measurement = await startEngineMeasurement(page, engine, {
                 trace: values.trace,
                 cpuOnly: values["cpu-only"],
@@ -587,10 +630,20 @@ try {
                 )) ?? undefined;
               await frames(page);
               observation.wallMs = performance.now() - start;
+              if (scenario.id.startsWith("page-")) {
+                await finishControlUiPageObserver(page);
+              }
               const activeMeasurement = measurement;
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
+              if (scenario.id.startsWith("page-")) {
+                observation.pageMetrics = await readControlUiPageObserver(page);
+                observation.evidence = {
+                  ...observation.evidence,
+                  ...(await collectEnginePageStructure(page)),
+                };
+              }
               if (values.trace || values["cpu-only"]) {
                 await writeJson(`${artifactPrefix}.inspector.json`, captured);
               }
@@ -721,6 +774,9 @@ const summary = [...cells.values()].map((cell) => {
   const passing = rows.filter((row) => row.status === "passed");
   // Keep completed intervals with browser errors visible; dropping them biases a buggy base.
   const measured = rows.filter((row) => row.wallMs !== undefined);
+  const pageRows = measured.flatMap((row) => row.pageMetrics ?? []);
+  const longestTasks = pageRows.flatMap((row) => row.longestLongTaskMs ?? []);
+  const shifts = pageRows.flatMap((row) => row.cls ?? []);
   return {
     viewport: cell.viewport,
     step: cell.step,
@@ -730,6 +786,15 @@ const summary = [...cells.values()].map((cell) => {
     passed: passing.length,
     failed: rows.length - passing.length,
     measured: measured.length,
+    targets: cell.step.startsWith("page-")
+      ? {
+          longTaskLimitMs: 50 * cpuThrottle,
+          longTaskMet: longestTasks.length
+            ? longestTasks.every((value) => value <= 50 * cpuThrottle)
+            : null,
+          clsMet: shifts.length ? shifts.every((value) => value === 0) : null,
+        }
+      : undefined,
     wallMs: distribution(measured.map((row) => row.wallMs!)),
     evidence: Object.fromEntries(
       [...new Set(measured.flatMap((row) => Object.keys(row.evidence ?? {})))].map((key) => [
@@ -758,10 +823,35 @@ const summary = [...cells.values()].map((cell) => {
         ),
       ]),
     ),
+    pageMetrics: Object.fromEntries(
+      (
+        [
+          "longestLongTaskMs",
+          "longTaskTotalMs",
+          "longTaskCount",
+          "cls",
+          "allShiftSum",
+          "elementsBefore",
+          "elementsAfter",
+        ] as const
+      ).map((metric) => [
+        metric,
+        distribution(
+          measured.flatMap((row) => {
+            const value = row.pageMetrics?.[metric];
+            return typeof value === "number" ? [value] : [];
+          }),
+        ),
+      ]),
+    ),
   };
 });
 await writeJson("summary.json", {
   planned,
+  executed: observations.length,
+  failed: observations.filter((row) => row.status === "failed").length,
+  skipped: planned - observations.length,
+  ...(pageBenchmark ? { pageCoverage: enginePageCoverage } : {}),
   passed: observations.filter((row) => row.status === "passed").length,
   summary,
   memory: observations.flatMap((row) =>
@@ -792,9 +882,11 @@ const rows = summary
         row.bundle === chromium.bundle &&
         row.networkProfile === chromium.networkProfile,
     );
+    const chromiumTiming = chromium.evidence.visitReadyMs ?? chromium.wallMs;
+    const webkitTiming = webkit?.evidence.visitReadyMs ?? webkit?.wallMs;
     const ratio =
-      chromium.wallMs && webkit?.wallMs ? webkit.wallMs.median / chromium.wallMs.median : null;
-    return { chromium, webkit, ratio };
+      chromiumTiming && webkitTiming ? webkitTiming.median / chromiumTiming.median : null;
+    return { chromium, webkit, chromiumTiming, webkitTiming, ratio };
   })
   .toSorted((a, b) => (b.ratio ?? 0) - (a.ratio ?? 0));
 await writeFile(
@@ -808,15 +900,35 @@ await writeFile(
     "",
     `Network profiles: ${networkProfiles.map(({ name, httpLatencyMs, gatewayLatencyMs }) => `${name} (${httpLatencyMs} ms per HTTP request; ${gatewayLatencyMs} ms per incoming Gateway frame)`).join("; ")}. The Gateway probe retains event ordering and uses no extra frame gap or throughput cap.`,
     "",
-    "| Viewport | Scenario | Network | Bundle | Chromium wall median/p95 (ms) | WebKit wall median/p95 (ms) | WebKit/Chromium |",
+    "Visit comparisons use browser-local route-ready time; other scenarios use wall time.",
+    "",
+    "| Viewport | Scenario | Network | Bundle | Chromium median/p95 (ms) | WebKit median/p95 (ms) | WebKit/Chromium |",
     "| --- | --- | --- | --- | --- | --- | --- |",
-    ...rows.map(({ chromium, webkit, ratio }) => {
+    ...rows.map(({ chromium, chromiumTiming, webkitTiming, ratio }) => {
       const format = (value: ReturnType<typeof distribution> | undefined) =>
         value
           ? `${value.median.toFixed(1)} / ${value.p95.toFixed(1)} (n=${value.n})`
           : "failed/absent";
-      return `| ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromium.wallMs)} | ${format(webkit?.wallMs)} | ${ratio?.toFixed(2) ?? "—"} |`;
+      return `| ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromiumTiming)} | ${format(webkitTiming)} | ${ratio?.toFixed(2) ?? "—"} |`;
     }),
+    ...(summary.some(({ step }) => step.startsWith("page-"))
+      ? [
+          "",
+          "## Per-page phases",
+          "",
+          `CPU throttle: ${cpuThrottle}x (Chromium only). Long-task target: ${cpuThrottle === 1 ? 50 : 200} ms. CLS target: 0; all-shift sum also includes shifts within 500 ms of user input. Missing WebKit observer entries are unavailable, never zero. Inspector phases require a separate traced run and are elapsed wall time in WebKit, thread CPU in Chromium. Wall includes driver and assertions.`,
+          "",
+          "| Engine | Viewport | Phase | Bundle | Passed/failed | Route ready median/p95 ms | Wall median/p95 ms | Longest task p95 ms | Script/style/layout median ms | CLS max | All shifts max | Elements after |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+          ...summary
+            .filter(({ step }) => step.startsWith("page-"))
+            .map((row) => {
+              const number = (value: number | undefined) => value?.toFixed(2) ?? "unavailable";
+              const readyTiming = row.evidence.visitReadyMs ?? row.evidence.leaveReadyMs;
+              return `| ${row.engine} | ${row.viewport} | ${row.step} | ${row.bundle} | ${row.passed}/${row.failed} | ${number(readyTiming?.median)}/${number(readyTiming?.p95)} | ${number(row.wallMs?.median)}/${number(row.wallMs?.p95)} | ${number(row.pageMetrics.longestLongTaskMs?.p95)} | ${number(row.metrics.scriptMs?.median)}/${number(row.metrics.styleMs?.median)}/${number(row.metrics.layoutMs?.median)} | ${number(row.pageMetrics.cls?.max)} | ${number(row.pageMetrics.allShiftSum?.max)} | ${number(row.pageMetrics.elementsAfter?.median)} |`;
+            }),
+        ]
+      : []),
     "",
     "Memory checkpoints follow two explicit GCs. WebKit snapshot self sizes omit some backing stores; engine categories and browser-tree RSS provide separate native/allocation evidence. RSS includes Inspector overhead and may exclude reparented platform services. Compare warm-to-late checkpoints within an engine, not absolute heap sizes between engines. Detached counts cover JSC wrappers versus V8 native DOM nodes; see per-checkpoint notes and unresolved counts. Memory scenario durations are excluded from the timing table.",
     "",

@@ -108,6 +108,7 @@ const webkitTestFiles = [
   "src/pages/new-session/project-chip.registration.browser.test.tsx",
   "src/pages/agents/agent-file-preview.browser.test.ts",
   "src/pages/skills/reader-shell.browser.test.tsx",
+  "src/pages/skills/view.clawhub.browser.test.ts",
   "src/lib/toast.browser.test.ts",
   "src/components/session-menu.browser.test.ts",
   "src/components/session-people-search.browser.test.ts",

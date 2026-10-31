@@ -209,6 +209,12 @@ export function PluginCatalogGrid<T extends { id: string }>(props: {
             cardStyle.borderBottomWidth,
           ].reduce((sum, value) => sum + Number.parseFloat(value), 0)
         : 0;
+      // Measure the natural bootstrap rows together before positioning the window.
+      for (const content of mounted.values()) {
+        if (content.height === 0) {
+          content.height = content.element.getBoundingClientRect().height;
+        }
+      }
       const heights = rowHeights(next.indexes, nextColumns, inset);
       const count = Math.ceil(next.items.length / nextColumns);
       return () => {
@@ -268,12 +274,9 @@ export function PluginCatalogGrid<T extends { id: string }>(props: {
     const columnCount = view().columns;
     const rowCount = Math.ceil(props.items.length / columnCount);
     const visibleRows = new Set(view().rows.map((row) => row.index));
-    // Bootstrap a bounded window before the first layout measurement.
+    // Natural tracks keep the initial viewport stable while its geometry is measured.
     if (visibleRows.size === 0) {
-      for (let row = 0; row < Math.min(4, rowCount); row++) {
-        visibleRows.add(row);
-      }
-      visibleRows.add(rowCount - 1);
+      return props.items.slice(0, 60);
     }
     // Data can move a focused card before the next measured frame. Keep its
     // native focus and adjacent Tab destinations alive at their new positions.
@@ -320,7 +323,7 @@ export function PluginCatalogGrid<T extends { id: string }>(props: {
     });
     const index = () => indexes().get(card.plugin().id)!;
     const position = (): JSX.CSSProperties | undefined => {
-      if (!windowed()) {
+      if (!windowed() || view().rows.length === 0) {
         return undefined;
       }
       const row = Math.floor(index() / view().columns);
@@ -367,6 +370,7 @@ export function PluginCatalogGrid<T extends { id: string }>(props: {
               position: "relative",
               height: `${view().height || Math.ceil(props.items.length / 4) * 136}px`,
               contain: "layout",
+              "align-content": "start",
             }
           : undefined
       }

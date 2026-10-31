@@ -80,11 +80,18 @@ it("windows skill discovery while preserving keyboard traversal, notices, detail
   const focused = card(boundary).querySelector<HTMLElement>(".plugin-catalog-card__status")!;
   focused.focus();
   await waitForSolid(() => expect(card(boundary + 1)).not.toBeNull());
-  await userEvent.keyboard("{Tab}");
+  // macOS WebKit visits buttons with Option-Tab under its default keyboard policy.
+  const optionTab =
+    navigator.platform.includes("Mac") &&
+    navigator.userAgent.includes("AppleWebKit") &&
+    !navigator.userAgent.includes("Chrome");
+  await userEvent.keyboard(optionTab ? "{Alt>}{Tab}{/Alt}" : "{Tab}");
   expect(document.activeElement).toBe(
     card(boundary + 1).querySelector(".skill-discovery-card__open"),
   );
-  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+  await userEvent.keyboard(
+    optionTab ? "{Alt>}{Shift>}{Tab}{/Shift}{/Alt}" : "{Shift>}{Tab}{/Shift}",
+  );
   expect(document.activeElement).toBe(focused);
 
   const expectEndVisible = async () => {
