@@ -95,7 +95,6 @@ function readFalVideoPayload(payload: unknown) {
     video: video
       ? {
           url: normalizeFalVideoUrl(video.url),
-          content_type: normalizeOptionalString(video.content_type),
         }
       : undefined,
     videos: videos?.map((entry) => {
@@ -104,7 +103,6 @@ function readFalVideoPayload(payload: unknown) {
       }
       return {
         url: normalizeFalVideoUrl(entry.url),
-        content_type: normalizeOptionalString(entry.content_type),
       };
     }),
     prompt: normalizeOptionalString(payload.prompt),
@@ -127,7 +125,6 @@ function readFalQueueResponse(payload: unknown) {
     status_url: normalizeOptionalString(payload.status_url),
     detail: normalizeOptionalString(payload.detail),
     response: payload.response === undefined ? undefined : readFalVideoPayload(payload.response),
-    prompt: normalizeOptionalString(payload.prompt),
     error: error ? { message: normalizeOptionalString(error.message) } : undefined,
   };
 }
