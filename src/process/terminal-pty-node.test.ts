@@ -14,9 +14,16 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
+import { runWithSpawnBroker } from "./spawn-broker/context.js";
+import { useSpawnBrokerTestFixture } from "./spawn-broker/host.test-support.js";
+import { supportsSpawnBrokerCommandTransport } from "./spawn-broker/pipe.js";
 import { spawnNodeTerminalPty } from "./terminal-pty-node.js";
 import type { TerminalPtyEvent } from "./terminal-pty-protocol.js";
-import type { TerminalPtyHandle, TerminalPtySpawnParams } from "./terminal-pty.js";
+import {
+  spawnTerminalPty,
+  type TerminalPtyHandle,
+  type TerminalPtySpawnParams,
+} from "./terminal-pty.js";
 
 const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: os.tmpdir(), TERM: "dumb" };
 const handles: TerminalPtyHandle[] = [];
@@ -50,6 +57,7 @@ afterEach(() => {
     handle.kill();
   }
 });
+const createBroker = useSpawnBrokerTestFixture(afterEach);
 
 describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
   it.each(["before", "prepared", "after"] as const)(
@@ -65,25 +73,28 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
           throw new Error("PTY policy revoked");
         }
       };
-      const starting = spawnNodeTerminalPty(
-        {
-          ...defaults,
-          args: ["-c", "touch started; IFS= read -r input; printf 'completed\\n'"],
-          cwd: directory,
-        },
-        assertAllowed,
-        (launch, settlement) => {
-          launchGrants++;
-          if (timing === "prepared") {
-            allowed = false;
-          }
-          assertAllowed();
-          if (!settlement) {
-            throw new Error("PTY launch did not retain native admission");
-          }
-          void settlement.then(() => nativeAdmission.resolve(), nativeAdmission.reject);
-          return launch();
-        },
+      const broker = supportsSpawnBrokerCommandTransport() ? await createBroker() : undefined;
+      const starting = runWithSpawnBroker(broker, () =>
+        spawnNodeTerminalPty(
+          {
+            ...defaults,
+            args: ["-c", "touch started; IFS= read -r input; printf 'completed\\n'"],
+            cwd: directory,
+          },
+          assertAllowed,
+          (launch, settlement) => {
+            launchGrants++;
+            if (timing === "prepared") {
+              allowed = false;
+            }
+            assertAllowed();
+            if (!settlement) {
+              throw new Error("PTY launch did not retain native admission");
+            }
+            void settlement.then(() => nativeAdmission.resolve(), nativeAdmission.reject);
+            return launch();
+          },
+        ),
       );
       if (timing === "before") {
         // The Node helper has started, but its boot acknowledgement has not arrived.
@@ -113,10 +124,17 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
     const directory = tempDirs.make("openclaw-pty-node-shim-");
     fs.writeFileSync(path.join(directory, "node"), "#!/bin/sh\nexit 42\n", { mode: 0o755 });
     vi.stubEnv("PATH", `${directory}${path.delimiter}${process.env.PATH ?? ""}`);
-    const handle = await start([
-      "-c",
-      'stty -echo; printf "READY\\n"; IFS= read -r input; stty size; printf "%s\\n%s\\n" "$input" "$TERM"; exit 7',
-    ]);
+    const broker = supportsSpawnBrokerCommandTransport() ? await createBroker() : undefined;
+    const handle = await runWithSpawnBroker(broker, () =>
+      (broker ? spawnTerminalPty : spawnNodeTerminalPty)({
+        ...defaults,
+        args: [
+          "-c",
+          'stty -echo; printf "BROKER:%s\\n" "$(ps -o ppid= -p "$PPID")"; printf "READY\\n"; IFS= read -r input; stty size; printf "%s\\n%s\\n" "$input" "$TERM"; exit 7',
+        ],
+      }),
+    );
+    handles.push(handle);
     let inputSent = false;
     const { state, done } = observe(handle, (output) => {
       if (!inputSent && output.includes("READY\r\n")) {
@@ -126,7 +144,10 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
       }
     });
     expect(await done).toEqual({ exitCode: 7, signal: 0 });
-    expect(state.output).toBe("READY\r\n37 101\r\nhello 🦞\r\nxterm-256color\r\n");
+    expect(state.output).toMatch(new RegExp(`^BROKER: *${broker?.pid ?? process.pid}\\r\\n`));
+    expect(state.output.slice(state.output.indexOf("READY"))).toBe(
+      "READY\r\n37 101\r\nhello 🦞\r\nxterm-256color\r\n",
+    );
     expect(isPidAlive(handle.pid)).toBe(false);
   });
 

@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { constants } from "node:os";
 import { toErrorObject } from "../infra/errors.js";
 import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
@@ -7,7 +6,9 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { killProcessTree, signalPtySessionTree } from "./kill-tree.js";
+import { BrokerChild } from "./spawn-broker/child.js";
 import type { SpawnInitiation } from "./spawn-initiation.js";
+import { spawnProcess } from "./spawn-utils.js";
 import type { TerminalPtyControl, TerminalPtyEvent } from "./terminal-pty-protocol.js";
 import type { TerminalPtyHandle, TerminalPtySpawnParams } from "./terminal-pty.js";
 
@@ -28,13 +29,22 @@ export async function spawnNodeTerminalPty(
   const child = runWithMainThreadTask(
     "process:spawn",
     () =>
-      spawn(node, resolveRuntimeWorkerArgv(worker, node), {
+      spawnProcess(node, resolveRuntimeWorkerArgv(worker, node), {
         stdio: ["ignore", "pipe", "pipe", "ipc"],
         serialization: "json",
         env: process.env,
       }),
     "pty-helper",
   );
+  const brokerChild = child instanceof BrokerChild ? child : undefined;
+  if (brokerChild) {
+    try {
+      await brokerChild.ready();
+    } catch (error) {
+      await brokerChild.waitForClose();
+      throw error;
+    }
+  }
   const stdout = child.stdout;
   const stderrPipe = child.stderr;
   if (!stdout || !stderrPipe) {
@@ -75,15 +85,38 @@ export async function spawnNodeTerminalPty(
       }, CLEANUP_TIMEOUT_MS);
     }
   };
-  const send = (message: TerminalPtyControl) => {
+  const send = (message: TerminalPtyControl, initiate?: SpawnInitiation) => {
     if (!child.connected) {
       return;
     }
-    child.send(message, (error) => {
+    const done = (error: Error | null) => {
       if (error) {
         fail(error);
       }
-    });
+    };
+    if (brokerChild) {
+      brokerChild.send(message, undefined, undefined, done, initiate);
+    } else {
+      const launch = () => child.send(message, done);
+      if (initiate) {
+        initiate(launch);
+      } else {
+        launch();
+      }
+    }
+  };
+  // The broker queues IPC. Check authority when the final launch frame is written.
+  const authorizeLaunch: SpawnInitiation = (launch) => {
+    beforeSpawn?.();
+    return initiateSpawn
+      ? initiateSpawn(
+          launch,
+          ready.promise.then(
+            () => {},
+            () => {},
+          ),
+        )
+      : launch();
   };
   const timeout = setTimeout(
     () => fail(new Error("Terminal Node worker startup timed out")),
@@ -130,21 +163,19 @@ export async function spawnNodeTerminalPty(
   child.on("message", (message: TerminalPtyEvent) => {
     if (message.type === "boot" || message.type === "prepared") {
       try {
-        beforeSpawn?.();
         if (message.type === "boot") {
-          send({ type: initiateSpawn ? "prepare" : "start", params });
+          if (initiateSpawn) {
+            beforeSpawn?.();
+            send({ type: "prepare", params });
+          } else {
+            send({ type: "start", params }, authorizeLaunch);
+          }
         } else {
           if (!initiateSpawn) {
             throw new Error("Terminal launch authority is unavailable");
           }
           // Rejection already joins helper exit, IPC close, and output EOF in finish().
-          initiateSpawn(
-            () => send({ type: "launch" }),
-            ready.promise.then(
-              () => {},
-              () => {},
-            ),
-          );
+          send({ type: "launch" }, authorizeLaunch);
         }
       } catch (error) {
         fail(toErrorObject(error, "PTY launch denied"));
