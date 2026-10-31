@@ -85,6 +85,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   compactBeforeRequest?: ReturnType<typeof createChatGPTV2CompactionBoundary>;
   images: ImageContent[];
   modelPrompt: string;
+  modelPromptProvenance?: EmbeddedRunAttemptParams["inputProvenance"];
   normalizeToolCallIds?: Parameters<typeof wrapStreamFnWithMessageTransform>[1];
   onFinalPromptText: (prompt: string) => void;
   assertHostActive?: SessionSourceAssertion;
@@ -288,6 +289,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
         carrier: input.appendOnlyRuntimeContext ? input.runtimeContextMessage : undefined,
         transcriptPrompt: input.transcriptPrompt,
         modelPrompt: input.modelPrompt,
+        modelPromptProvenance: input.modelPromptProvenance,
         prependContext: input.prependContext,
         appendContext: input.appendContext,
         shouldCapturePrompt: () => captureCurrentPromptForModel,
