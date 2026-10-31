@@ -33,7 +33,7 @@ const ChatDetailsProgress = lazy(() => import("./chat-details-progress.tsx"), {
 const ChatDetailsSession = lazy(() => import("./chat-details-session.tsx"), {
   export: "ChatDetailsSession",
 });
-const ChatDetailsDesktopComposition = lazy(() => import("./chat-details-session.tsx"), {
+export const ChatDetailsDesktopComposition = lazy(() => import("./chat-details-session.tsx"), {
   export: "ChatDetailsDesktopComposition",
 });
 const ChatDetailsMobileHostContent = lazy(() => import("../chat-details-mobile-host-content.tsx"), {

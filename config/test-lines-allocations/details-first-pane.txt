@@ -1,0 +1,3 @@
+235
+# Native chat/dashboard reload regression plus child-read failure/recovery coverage:
+# cached Details keeps its complete first-pane presentation and adopts live facts.
