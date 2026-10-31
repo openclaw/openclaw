@@ -5,7 +5,6 @@ import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { throwSettledAggregate } from "./error-graph-internal.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
-import { sqliteReadOnlyOperationRequiresProcessRetirement } from "./sqlite-readonly-operation-registry.js";
 import {
   readOnlyWorkerScope,
   type SqliteReadOnlyWorkerScope,
@@ -260,10 +259,12 @@ export function createSqliteReadOnlyWorkerPool(
         try {
           const value = await worker.run(pathname, options);
           options.signal?.throwIfAborted();
+          // Startup metadata can borrow host schema maintenance; native exit
+          // releases that admission. Keep the child handler registry out of the host.
           if (
             !stateful &&
             ((options.mode === "operation" &&
-              sqliteReadOnlyOperationRequiresProcessRetirement(options.command.type)) ||
+              options.command.type === "startupMetadata.readCurrent") ||
               !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources)
           ) {
             await closeSlot(selected);
