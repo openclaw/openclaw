@@ -101,7 +101,7 @@ function sendMedia(
   return bridge.handleToolCall({
     threadId: "thread-1",
     turnId: "turn-1",
-    callId: "send-media",
+    callId: `send-media-${target ?? "source"}`,
     namespace: null,
     tool: "message",
     arguments: {
@@ -353,6 +353,43 @@ describe("CodexAppServerEventProjector media projection", () => {
       );
     },
   );
+
+  it("matches confirmed workspace copies of a generated image by the bytes each send used", async () => {
+    const params = await createParams();
+    const { events } = await createProjection(params);
+    await events.completed(codexImage("generated-copy"));
+    const generated = Buffer.from(tinyPngBase64, "base64");
+    const copy = path.join(params.workspaceDir, "copy.png");
+    const outside = path.join(path.dirname(params.workspaceDir), "outside-copy.png");
+    await fs.writeFile(outside, generated);
+    const { bridge } = createMessageBridge(
+      async () => messageResult({ messageDelivery: receipt() }),
+      {
+        workspaceDir: params.workspaceDir,
+      },
+    );
+    // a: different bytes; b: same path overwritten with G after a's send; c: G outside the workspace.
+    for (const [to, file, bytes] of [
+      ["chat-a", copy, generated.subarray(1)],
+      ["chat-b", copy, generated],
+      ["chat-c", outside, undefined],
+    ] as const) {
+      await (bytes ? fs.writeFile(file, bytes) : undefined);
+      await sendMedia(bridge, file, to);
+    }
+    await events.complete();
+    const result = events.result(bridge.telemetry);
+    const generatedUrl = result.toolMediaUrls?.[0] ?? "";
+    const counted = (result.messagingToolSentTargets ?? []).map((t) => [
+      t.to,
+      t.mediaUrls?.includes(generatedUrl),
+    ]);
+    expect(Object.fromEntries(counted)).toEqual({
+      "chat-a": false,
+      "chat-b": true,
+      "chat-c": false,
+    });
+  });
 
   it("keeps correct local image delivery evidence for a partial saved-path send", async () => {
     const params = await createParams();

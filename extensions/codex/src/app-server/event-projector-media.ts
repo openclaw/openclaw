@@ -17,6 +17,7 @@ import {
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-store";
 import { isRecord, readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { digestMedia, mediaDigestAlias, type MediaDigest } from "./message-media-identity.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
@@ -42,6 +43,7 @@ export class CodexGeneratedMediaProjection {
   private readonly itemIds = new Set<string>();
   private generatedMediaObserved = false;
   private readonly mediaByItemId = new Map<string, { mediaUrl?: string; savedPath?: string }>();
+  private readonly digestByMediaUrl = new Map<string, MediaDigest>();
   private readonly gatewayMaterializedItemIds = new Set<string>();
   private readonly pendingMaterializationsByItemId = new Map<string, Promise<void>>();
   private readonly observedToolOutputImageIds = new Set<string>();
@@ -405,6 +407,7 @@ export class CodexGeneratedMediaProjection {
         ...this.mediaByItemId.get(params.itemId),
         mediaUrl: saved.path,
       });
+      this.digestByMediaUrl.set(saved.path, digestMedia(asset.buffer));
     } catch (error) {
       embeddedAgentLog.warn(
         params.source === "tool-output"
@@ -437,6 +440,14 @@ export class CodexGeneratedMediaProjection {
       if (savedPath) {
         generatedUrlBySource.set(normalizeMediaReferenceForComparison(savedPath), mediaUrl);
       }
+    }
+    // A model can send a byte-identical copy of a generated image from another
+    // local path. Each confirmed send carries the content alias of the bytes it sent.
+    for (const [mediaUrl, digest] of this.digestByMediaUrl) {
+      generatedUrlBySource.set(
+        normalizeMediaReferenceForComparison(mediaDigestAlias(digest)),
+        mediaUrl,
+      );
     }
     const sentMediaUrls = new Set(params.messagingToolSentMediaUrls);
     const generatedUrlsByTarget = new Map<MessagingToolSend, Set<string>>();
