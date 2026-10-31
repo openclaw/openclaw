@@ -173,6 +173,26 @@ at 12,000 characters; a truncation marker points to
 summary reports that notes are not available yet, including whether it is active.
 Reading notes does not regenerate the summary or export artifacts.
 
+### Preserving an imported recording's date
+
+For a recording made earlier, supply its actual start and end times when importing
+plain text with the `transcripts` tool:
+
+```json validate=false
+{
+  "action": "import",
+  "transcript": "Speaker: Example meeting notes.",
+  "startedAt": "2026-05-22T09:00:00-04:00",
+  "stoppedAt": "2026-05-22T09:30:00-04:00"
+}
+```
+
+Both timestamps must be valid RFC 3339 date-times with an explicit offset. The
+stored times are normalized to UTC, and the dated selector and meeting timeline
+use the recording start time. The end cannot precede the start. Omitted times
+retain the existing default of the import time. These options apply to import,
+not live capture, and do not add per-utterance timing to plain text.
+
 ### Selecting a capture
 
 The `transcripts` tool returns both the unchanged raw `sessionId` and an export

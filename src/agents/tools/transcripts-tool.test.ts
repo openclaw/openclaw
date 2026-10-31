@@ -282,6 +282,49 @@ describe("transcripts tool", () => {
   );
 });
 
+describe("historical transcript import timing", () => {
+  it("preserves the recording date through import, list, and show", async () => {
+    const h = harness();
+    const result = await h.execute({
+      action: "import",
+      transcript: "Speaker: Example meeting notes.",
+      startedAt: "2026-05-22T09:00:00-04:00",
+      stoppedAt: "2026-05-22T09:30:00-04:00",
+    });
+    const entries = await h.store.listSessionEntries();
+    expect(entries).toHaveLength(1);
+    const selector = entries[0]?.selector;
+    expect(selector).toMatch(/^2026-05-22\//);
+    expect(result.details).toMatchObject({ selector, utteranceCount: 1 });
+    const timing = {
+      startedAt: "2026-05-22T13:00:00.000Z",
+      stoppedAt: "2026-05-22T13:30:00.000Z",
+    };
+    expect(entries[0]?.session).toMatchObject(timing);
+    await expect(h.execute({ action: "list" })).resolves.toMatchObject({
+      details: { sessions: [expect.objectContaining({ selector, ...timing })] },
+    });
+    await expect(h.execute({ action: "show", selector })).resolves.toMatchObject({
+      details: { selector, ...timing },
+    });
+  });
+
+  it.each([
+    { startedAt: "2026-05-22T09:00:00" },
+    { startedAt: "2026-02-30T09:00:00Z" },
+    { startedAt: "2026-05-22T24:00:00Z" },
+    { startedAt: "not-a-date" },
+    { stoppedAt: "2026-05-22" },
+    { startedAt: "2026-05-22T09:00:00Z", stoppedAt: "2026-05-22T08:00:00Z" },
+  ])("rejects invalid recording times before persistence: %j", async (timestamps) => {
+    const h = harness();
+    await expect(
+      h.execute({ action: "import", transcript: "Example meeting notes.", ...timestamps }),
+    ).rejects.toThrow();
+    await expect(h.store.listSessionEntries()).resolves.toHaveLength(0);
+  });
+});
+
 describe("transcripts tool account ownership", () => {
   it("binds imports to the trusted account and admitted identity", async () => {
     const importTranscript = vi.fn<NonNullable<TranscriptSourceProvider["importTranscript"]>>(

@@ -6,6 +6,7 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { resolveStateDir } from "../../config/paths.js";
 import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { hasValidIsoCalendarComponents } from "../../shared/iso-time.js";
 import {
   createTranscriptsStore,
   exportTranscriptSummary,
@@ -199,10 +200,45 @@ const TranscriptsSchema = Type.Object(
     channelId: Type.Optional(Type.String({ minLength: 1 })),
     meetingUrl: Type.Optional(Type.String({ minLength: 1 })),
     transcript: Type.Optional(Type.String({ minLength: 1 })),
+    startedAt: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Recording start time for import only, as an RFC 3339 timestamp with an explicit offset.",
+      }),
+    ),
+    stoppedAt: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Recording end time for import only, as an RFC 3339 timestamp with an explicit offset.",
+      }),
+    ),
     speakerLabel: Type.Optional(Type.String({ minLength: 1 })),
   },
   { additionalProperties: false },
 );
+
+function readImportTimestamp(
+  params: Record<string, unknown>,
+  key: "startedAt" | "stoppedAt",
+  fallback: string,
+): string {
+  if (params[key] === undefined) {
+    return fallback;
+  }
+  const value = readTranscriptStringParam(params, key, { required: true });
+  const timestamp = Date.parse(value);
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(value) ||
+    !hasValidIsoCalendarComponents(value) ||
+    Number(value.slice(11, 13)) > 23 ||
+    !Number.isFinite(timestamp)
+  ) {
+    throw new Error(`${key} must be an RFC 3339 timestamp with an explicit offset`);
+  }
+  return new Date(timestamp).toISOString();
+}
 
 async function importTranscripts(params: {
   ctx: TranscriptsRuntimeContext;
@@ -231,13 +267,19 @@ async function importTranscripts(params: {
     source: providerSource,
   });
   assertTranscriptCaptureEnabled({ ...params.ctx, config: getConfig() });
+  const importedAt = new Date().toISOString();
+  const startedAt = readImportTimestamp(params.rawParams, "startedAt", importedAt);
+  const stoppedAt = readImportTimestamp(params.rawParams, "stoppedAt", importedAt);
+  if (Date.parse(stoppedAt) < Date.parse(startedAt)) {
+    throw new Error("stoppedAt must not be before startedAt");
+  }
   const requestedSessionId = readTranscriptStringParam(params.rawParams, "sessionId");
   const session: TranscriptSessionDescriptor = {
     sessionId: requestedSessionId ?? createTranscriptSessionId(),
     title: readTranscriptStringParam(params.rawParams, "title"),
     source: sanitizeTranscriptSourceLocator(providerSource),
-    startedAt: new Date().toISOString(),
-    stoppedAt: new Date().toISOString(),
+    startedAt,
+    stoppedAt,
     metadata: {
       ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
       sessionIdOrigin: requestedSessionId ? "supplied" : "generated",
