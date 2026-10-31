@@ -8,6 +8,7 @@ import {
   normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeGoogleModelId } from "./model-id.js";
+import { isOfficialGoogleAiStudioBaseUrl } from "./src/google-api-base-url.js";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_ANTIGRAVITY_PROVIDER_ID = "google-antigravity";
@@ -25,7 +26,13 @@ const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview", "gemini-2.5-fla
 const GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-flash"] as const;
 const GEMINI_4_TEMPLATE_IDS = ["gemini-4-argon"] as const;
 const GOOGLE_PROVIDER_PREFIX = "google/";
-const GOOGLE_NON_TEXT_MODEL_ID_MARKERS = ["-image", "-tts", "-live", "native-audio"] as const;
+const GOOGLE_NON_TEXT_MODEL_ID_MARKERS = [
+  "-image",
+  "-tts",
+  "-live",
+  "-embedding",
+  "native-audio",
+] as const;
 
 function normalizeGeminiProRequestId(id: string): string {
   if (id.startsWith(GOOGLE_PROVIDER_PREFIX)) {
@@ -55,6 +62,13 @@ export function isGoogleTextGenerationModelId(id: string): boolean {
     return false;
   }
   return GOOGLE_FORWARD_COMPAT_CASES.some((entry) => entry.match(lower));
+}
+
+export function isGoogleFlashTextModelId(id: string): boolean {
+  const lower = normalizeOptionalLowercaseString(googleFamilyModelId(id)) ?? "";
+  return (
+    isGoogleTextGenerationModelId(lower) && /^gemini-(?:\d+(?:\.\d+)?-)?flash(?:-|$)/.test(lower)
+  );
 }
 
 export function isGoogleNativeVideoModelId(id: string): boolean {
@@ -212,7 +226,17 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
           templateIds: templateIdsForProvider(providerId, family),
         }));
       },
-      patch,
+      patch: (context) => ({
+        ...(typeof patch === "function" ? patch(context) : patch),
+        ...(params.providerId === "google" &&
+        isOfficialGoogleAiStudioBaseUrl(context.template?.baseUrl)
+          ? {
+              api: isGoogleFlashTextModelId(lower) ? "google-interactions" : "google-generative-ai",
+            }
+          : params.providerId !== "google" && context.template?.api === "google-interactions"
+            ? { api: "google-generative-ai" }
+            : {}),
+      }),
     })),
   });
 }

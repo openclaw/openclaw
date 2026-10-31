@@ -64,6 +64,46 @@ it("keeps Google AI Studio and Vertex model ids aligned", () => {
   expect(models[0]).toEqual(expectedGemini("gemini-4-argon", "Gemini 4 Argon", true));
 });
 
+it("defaults only Google Flash catalog rows to Interactions, never Vertex", () => {
+  const provider = buildGoogleStaticCatalogProvider();
+  for (const model of provider.models) {
+    expect(model.api ?? provider.api, model.id).toBe(
+      model.id.includes("-flash") ? "google-interactions" : "google-generative-ai",
+    );
+  }
+  const vertex = buildGoogleVertexStaticCatalogProvider();
+  for (const model of vertex.models) {
+    expect(model.api ?? vertex.api, model.id).toBe("google-vertex");
+  }
+});
+
+it("routes discovered Flash aliases and future families without changing other models", async () => {
+  const flashIds = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-4-flash"];
+  const provider = await discover(
+    inventory({
+      models: [
+        ...flashIds.map((id) => liveRow(id, id, { supportedGenerationMethods: ["countTokens"] })),
+        liveRow("gemini-4-argon"),
+        liveRow("gemini-pro-latest"),
+        liveRow("gemma-4-27b-it"),
+        liveRow("gemini-4-flash-image"),
+        liveRow("gemini-4-flash-tts"),
+        liveRow("gemini-4-flash-live"),
+        liveRow("gemini-4-flash-embedding"),
+      ],
+    }),
+    true,
+  );
+  expect(provider.models.map((model) => model.id)).toEqual(
+    [...flashIds, "gemini-4-argon", "gemini-pro-latest", "gemma-4-27b-it"].toSorted(),
+  );
+  for (const model of provider.models) {
+    expect(model.api ?? provider.api, model.id).toBe(
+      flashIds.includes(model.id) ? "google-interactions" : "google-generative-ai",
+    );
+  }
+});
+
 it("builds the authenticated text catalog from Google models.list metadata", async () => {
   const release = vi.fn(async () => undefined);
   const firstPage = {

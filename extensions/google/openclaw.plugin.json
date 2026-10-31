@@ -117,6 +117,7 @@
           },
           {
             "id": "gemini-2.5-flash",
+            "api": "google-interactions",
             "name": "Gemini 2.5 Flash",
             "reasoning": true,
             "input": [
@@ -134,6 +135,7 @@
           },
           {
             "id": "gemini-2.5-flash-lite",
+            "api": "google-interactions",
             "name": "Gemini 2.5 Flash-Lite",
             "reasoning": true,
             "input": [
@@ -151,6 +153,7 @@
           },
           {
             "id": "gemini-3.5-flash",
+            "api": "google-interactions",
             "name": "Gemini 3.5 Flash",
             "reasoning": true,
             "input": [
@@ -171,6 +174,7 @@
           },
           {
             "id": "gemini-3.6-flash",
+            "api": "google-interactions",
             "name": "Gemini 3.6 Flash",
             "reasoning": true,
             "input": [
@@ -191,6 +195,7 @@
           },
           {
             "id": "gemini-3.7-flash",
+            "api": "google-interactions",
             "name": "Gemini 3.7 Flash",
             "reasoning": true,
             "input": [
@@ -214,6 +219,7 @@
           },
           {
             "id": "gemini-3.8-flash",
+            "api": "google-interactions",
             "name": "Gemini 3.8 Flash",
             "reasoning": true,
             "input": [
@@ -237,6 +243,7 @@
           },
           {
             "id": "gemini-3.5-flash-lite",
+            "api": "google-interactions",
             "name": "Gemini 3.5 Flash-Lite",
             "reasoning": true,
             "input": [
@@ -277,6 +284,7 @@
           },
           {
             "id": "gemini-3.1-flash-lite",
+            "api": "google-interactions",
             "name": "Gemini 3.1 Flash Lite",
             "reasoning": true,
             "input": [
@@ -297,6 +305,7 @@
           },
           {
             "id": "gemini-3-flash-preview",
+            "api": "google-interactions",
             "name": "Gemini 3 Flash Preview",
             "reasoning": true,
             "input": [

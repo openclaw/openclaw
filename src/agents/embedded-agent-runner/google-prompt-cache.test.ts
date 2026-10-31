@@ -41,6 +41,44 @@ function invoke(
 }
 
 describe("google prompt cache", () => {
+  it.each([
+    { cacheRetention: "short" },
+    { cacheRetention: "long" },
+    { cacheControlTtl: "5m" },
+    { cacheControlTtl: "1h" },
+    { cachedContent: "cachedContents/operator-cache" },
+    { cached_content: "cachedContents/operator-cache" },
+  ])("keeps Interactions requests inline with explicit cache config %j", async (extraParams) => {
+    const fetchMock = vi.fn();
+    vi.spyOn(providerFetch, "buildGuardedModelFetch").mockReturnValue(fetchMock);
+    const entries: SessionCustomEntry[] = [];
+    const { streamFn, getCapturedPayload } = createCapturingStreamFn();
+    const model = {
+      ...makeGoogleModel("gemini-3-flash-preview"),
+      api: "google-interactions" as const,
+    };
+    const context: Context = {
+      systemPrompt: `Stable instructions${SYSTEM_PROMPT_CACHE_BOUNDARY}Current facts`,
+      messages: [],
+      tools: [{ name: "lookup", description: "Lookup", parameters: Type.Object({}) }],
+    };
+    const wrapped = await prepareGooglePromptCacheStreamFn({
+      apiKey: "test-key",
+      extraParams,
+      model,
+      modelId: model.id,
+      provider: "google",
+      sessionManager: makeSessionManager(entries),
+      streamFn,
+    });
+    expect(wrapped).toBeUndefined();
+    await (wrapped ?? streamFn)(model, context, {});
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(entries).toEqual([]);
+    expect(streamFn.mock.lastCall?.[1]).toBe(context);
+    expect(getCapturedPayload()).not.toHaveProperty("cachedContent");
+  });
+
   it("keeps one stable resource across suffix changes, tool loops, and reload", async () => {
     const entries: SessionCustomEntry[] = [];
     const fetchMock = vi.fn(

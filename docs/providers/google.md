@@ -565,23 +565,32 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
 
 <AccordionGroup>
   <Accordion title="Gemini Interactions API (stateless)">
-    Gemini Interactions is an opt-in alternative to the default
-    `google-generative-ai` transport. Register a provider with
-    `api: "google-interactions"` and select models through that provider ID:
+    Gemini Flash text models use the Interactions API by default on the API-key
+    `google` provider. This includes Flash-Lite, `gemini-flash-latest`, and
+    forward-compatible Flash model IDs. Pro and other non-Flash models, including
+    the default `google/gemini-4-argon`, keep `google-generative-ai` (GenerateContent).
+    Vertex AI, Gemini CLI, image generation, speech, Live, embeddings, media
+    understanding, web search, and PDF processing keep their existing routes.
+
+    GenerateContent, music, and video SDK clients explicitly use `v1beta` unless
+    a configured base URL already includes an API version. Vertex AI keeps `v1`;
+    Live and browser-token routes keep their existing versions.
+
+    To force GenerateContent for a Flash model, set its existing `api` override:
 
     ```json5
     {
       models: {
         mode: "merge",
         providers: {
-          "google-interactions": {
+          google: {
             baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-            apiKey: "***",
-            api: "google-interactions",
+            api: "google-generative-ai",
             models: [
               {
                 id: "gemini-3.8-flash",
-                name: "Gemini 3.8 Flash (Interactions)",
+                name: "Gemini Flash",
+                api: "google-generative-ai",
                 reasoning: true,
                 input: ["text", "image"],
                 contextWindow: 1048576,
@@ -592,15 +601,22 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
         },
       },
       agents: {
-        defaults: { model: { primary: "google-interactions/gemini-3.8-flash" } },
+        defaults: { model: { primary: "google/gemini-3.8-flash" } },
       },
     }
     ```
 
-    This transport is stateless: OpenClaw sends `store: false`, does not retain a
-    server-side interaction ID, and replays the needed conversation context on
-    each request. Explicit Gemini `cachedContent` handles are not supported on
-    this route; use `google-generative-ai` for that feature.
+    A model-level `api` overrides the provider-level value; either explicit
+    setting wins over the catalog default. To use Interactions on another Gemini
+    text model, set `api: "google-interactions"` instead.
+
+    Interactions supports tool calling, thinking levels, image inputs, and
+    streamed replies. This transport is stateless: OpenClaw sends `store: false`,
+    does not retain a server-side interaction ID, and replays the needed
+    conversation context on each request. It relies on implicit caching:
+    OpenClaw skips explicit cache creation and ignores configured `cachedContent`
+    handles on this route, keeping instructions and tools inline. Select
+    `google-generative-ai` when you need explicit Gemini cache handles.
 
     Interrupted text replies use the normal transient-error retry and failover
     policy. Malformed streaming JSON fails the request instead of silently

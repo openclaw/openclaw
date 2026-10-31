@@ -113,14 +113,6 @@ describe("buildGoogleInteractionsParams", () => {
     ]);
   });
 
-  it("rejects unsupported explicit prompt caching locally", () => {
-    expect(() =>
-      params([user("Hello")], {
-        cachedContent: "cachedContents/123",
-      } as Record<string, unknown>),
-    ).toThrow(/Explicit prompt caching/);
-  });
-
   it("maps an explicit tool choice into generation_config", () => {
     const converted = buildGoogleInteractionsParams(
       model,

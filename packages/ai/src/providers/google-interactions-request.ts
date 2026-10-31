@@ -201,11 +201,8 @@ export function buildGoogleInteractionsParams<T extends GoogleApiType>(
   options: GoogleProviderOptions = {},
 ): GoogleInteractionsRequestBody {
   const optionRecord = asRecord(options);
-  if (optionRecord.cachedContent || optionRecord.cached_content) {
-    throw new Error(
-      "Explicit prompt caching ('cachedContent') is not supported with the Gemini Interactions API. The Interactions API handles caching implicitly on the server.",
-    );
-  }
+  // Interactions owns implicit caching; GenerateContent cachedContent settings
+  // must not prevent sending the full inline prompt and tools on this transport.
   if (optionRecord.videoMetadata || optionRecord.video_metadata) {
     throw new Error(
       "video_metadata clipping offsets are not supported with the Gemini Interactions API.",

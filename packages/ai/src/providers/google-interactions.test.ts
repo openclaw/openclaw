@@ -68,6 +68,63 @@ describe("google-interactions provider", () => {
     messages: [{ role: "user", content: "Hello", timestamp: 0 }],
   };
 
+  it.each(["cachedContent", "cached_content"])(
+    "streams with %s configured while keeping system instructions and tools inline",
+    async (cacheOption) => {
+      const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+        sseResponse(
+          'data: {"event_type":"step.delta","delta":{"type":"text","text":"Hello"}}\n\n' +
+            completedSse() +
+            "data: [DONE]\n\n",
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const context: Context = {
+        ...basicContext,
+        systemPrompt: "Keep instructions inline.",
+        tools: [
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      };
+      const options = {
+        apiKey: "test-key",
+        cacheRetention: "long",
+        [cacheOption]: "cachedContents/operator-cache",
+      };
+      const stream = streamGoogleInteractions(makeInteractionsModel(), context, options);
+      const events: AssistantMessageEvent[] = [];
+      for await (const event of stream) {
+        events.push(event);
+      }
+      expect((await stream.result()).content).toEqual([{ type: "text", text: "Hello" }]);
+      expect(events.some((event) => event.type === "text_delta")).toBe(true);
+      expect(events.at(-1)?.type).toBe("done");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(
+        "https://generativelanguage.googleapis.com/v1beta/interactions?alt=sse",
+      );
+      expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+        model: "gemini-3-flash-preview",
+        input: [{ type: "user_input", content: [{ type: "text", text: "Hello" }] }],
+        system_instruction: "Keep instructions inline.",
+        tools: [
+          {
+            type: "function",
+            name: "lookup",
+            description: "Look up a value",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+        store: false,
+        stream: true,
+      });
+    },
+  );
+
   it("exposes cumulative tool input before the provider completes the call", async ({
     onTestFinished,
   }) => {

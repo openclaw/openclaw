@@ -19,7 +19,7 @@ import {
   GOOGLE_PRO_MUSIC_MODEL,
 } from "./generation-provider-metadata.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
-import { resolveGoogleGenerativeAiApiOrigin } from "./provider-policy.js";
+import { resolveGoogleGenerativeAiSdkHttpOptions } from "./src/google-api-base-url.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 
@@ -58,9 +58,7 @@ export const googleMusicGenerationProvider: MusicGenerationProvider = {
     }
 
     const configured = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
-    const configuredBaseUrl = configured
-      ? resolveGoogleGenerativeAiApiOrigin(configured)
-      : undefined;
+    const httpOptions = resolveGoogleGenerativeAiSdkHttpOptions(configured);
     const operationTimeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const deadline = createProviderOperationDeadline({
       timeoutMs: operationTimeoutMs,
@@ -72,7 +70,7 @@ export const googleMusicGenerationProvider: MusicGenerationProvider = {
       const client = createGoogleGenAI({
         apiKey,
         httpOptions: {
-          ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
+          ...httpOptions,
           timeout: resolveProviderOperationTimeoutMs({
             deadline,
             defaultTimeoutMs: operationTimeoutMs,

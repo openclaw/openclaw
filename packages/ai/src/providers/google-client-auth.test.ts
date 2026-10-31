@@ -57,6 +57,28 @@ describe("Google SDK construction auth", () => {
   });
 
   it.each([
+    ["", "v1beta"],
+    ["https://generativelanguage.googleapis.com/v1beta", ""],
+    ["https://proxy.example.com/google/v1alpha", ""],
+    ["https://proxy.example.com/google/v1", ""],
+  ])("preserves the Google API version for base URL %s", async (baseUrl, apiVersion) => {
+    await streamGoogle({ ...googleModel, baseUrl }, context, { apiKey: "test-key" }).result();
+
+    expect(googleMockState.configs).toHaveLength(1);
+    expect(googleMockState.configs[0]).toMatchObject({
+      httpOptions: { apiVersion, ...(baseUrl ? { baseUrl } : {}) },
+    });
+  });
+
+  it("keeps Vertex on v1 without a configured endpoint", async () => {
+    await streamGoogleVertex({ ...vertexModel, baseUrl: "" }, context, {
+      apiKey: "test-key",
+    }).result();
+
+    expect(googleMockState.configs[0]).toMatchObject({ vertexai: true, apiVersion: "v1" });
+  });
+
+  it.each([
     ["gemini-2.5-pro", "low", 64, 2112, budget2048],
     ["gemini-2.5-pro", "off", 64, 192, { thinkingBudget: 128 }],
     ["gemini-2.5-flash", "off", 64, 64, { thinkingBudget: 0 }],
