@@ -235,6 +235,7 @@ export async function loadSessionDiff(
         sessionKey: params.sessionKey,
         baseCommit: managedBase?.baseCommit,
         summaryOnly: params.summaryOnly,
+        refreshIndex: Boolean(entry.worktree && !entry.repositoryWorkspaceId),
         poll: params.poll,
       };
       let result: SessionsDiffResult;

@@ -19,7 +19,7 @@ import {
 afterEach(cleanupUsagePageTest);
 
 describe("Usage query failure ownership", () => {
-  it("retains hidden charts and model options while a text query settles", async () => {
+  it("retains hidden analytics and model options while a text query settles", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-07T12:00:00Z"));
     focusDocument();
@@ -64,7 +64,26 @@ describe("Usage query failure ownership", () => {
     const cells = [...heatmap.querySelectorAll(".usage-heatmap__cell")];
     expect(cells.length).toBeGreaterThan(62);
     expect(cells.at(-1)?.getAttribute("aria-label")).toContain("200");
-    expect(page.querySelector(".cost-breakdown-compact")).not.toBeNull();
+    const breakdown = page.querySelector(".cost-breakdown-compact")!;
+    expect(breakdown).not.toBeNull();
+    const overviewCard = page.querySelector(".usage-overview-card")!;
+    const overviewHost = overviewCard.closest(".settings-section")!.parentElement!;
+    const grid = page.querySelector(".usage-grid")!;
+    const gridHost = grid.parentElement!;
+    const alphaRow = page.querySelector(
+      '.session-bar-selection[aria-label="synthetic-alpha session"]',
+    )!;
+    const expectAnalyticsHidden = (hidden: boolean) => {
+      expect(page.querySelector(".cost-breakdown-compact")).toBe(breakdown);
+      expect(page.querySelector(".usage-overview-card")).toBe(overviewCard);
+      expect(page.querySelector(".usage-grid")).toBe(grid);
+      for (const host of [overviewHost, gridHost]) {
+        expect(host.isConnected).toBe(true);
+        expect(host.hidden).toBe(hidden);
+        expect(host.hasAttribute("inert")).toBe(hidden);
+        expect(host.style.display).toBe(hidden ? "none" : "contents");
+      }
+    };
     const trigger = page.querySelector<HTMLButtonElement>('[id="usage-filter-model:trigger"]')!;
     const menu = trigger.closest<HTMLElement>(".usage-filter-select")!;
     menu.addEventListener(
@@ -93,7 +112,6 @@ describe("Usage query failure ownership", () => {
     expect(page.usageLoading).toBe(true);
     expect(page.read().data.totals).toBeNull();
     expect(page.read().data.overview).toBeUndefined();
-    expect(page.textContent).not.toContain("synthetic-alpha session");
     expect(trend.isConnected).toBe(true);
     expect(trend.hidden).toBe(true);
     expect(trend.hasAttribute("inert")).toBe(true);
@@ -104,9 +122,8 @@ describe("Usage query failure ownership", () => {
     expect(heatmapHost.hidden).toBe(true);
     expect(heatmapHost.hasAttribute("inert")).toBe(true);
     expect(heatmapHost.style.display).toBe("none");
-    expect(page.querySelector(".cost-breakdown-compact")).toBeNull();
-    expect(page.querySelector(".usage-overview-card")).toBeNull();
-    expect(page.querySelector(".usage-grid")).toBeNull();
+    expectAnalyticsHidden(true);
+    expect(alphaRow.isConnected).toBe(true);
     expect(menu.querySelectorAll(".usage-filter-option")[0]).toBe(options[0]);
     expect(menu.querySelectorAll(".usage-filter-option")[1]).toBe(options[1]);
     expect(options[0]!.getAttribute("aria-checked")).toBe("true");
@@ -128,7 +145,10 @@ describe("Usage query failure ownership", () => {
     const currentCells = [...heatmap.querySelectorAll(".usage-heatmap__cell")];
     currentCells.forEach((cell, index) => expect(cell).toBe(cells[index]));
     expect(currentCells.at(-1)?.getAttribute("aria-label")).toContain("100");
-    expect(page.querySelector(".cost-breakdown-compact")).not.toBeNull();
+    expectAnalyticsHidden(false);
+    expect(page.querySelector('.session-bar-selection[aria-label="synthetic-alpha session"]')).toBe(
+      alphaRow,
+    );
 
     reply = deferred<typeof original>();
     page.read().callbacks.filters.onQueryDraftChange("model:synthetic-beta");
@@ -140,7 +160,7 @@ describe("Usage query failure ownership", () => {
     expect(page.textContent).toContain("Synthetic filter failed");
     expect(trend.hidden).toBe(true);
     expect(heatmapHost.hidden).toBe(true);
-    expect(page.querySelector(".usage-grid")).toBeNull();
+    expectAnalyticsHidden(true);
     expect(menu.querySelectorAll(".usage-filter-option")[0]).toBe(options[0]);
     expect(menu.querySelectorAll(".usage-filter-option")[1]).toBe(options[1]);
   });
