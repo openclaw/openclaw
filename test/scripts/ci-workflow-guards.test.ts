@@ -6800,6 +6800,7 @@ fi
           RELEASE_TAG: "v2026.10.3",
           TAG_SHA: "a".repeat(40),
           WORKFLOW_SHA: "b".repeat(40),
+          BUILDER_SHA: "c".repeat(40),
           WORKFLOW_REF: "main",
           WORKFLOW_FULL_REF: "refs/heads/main",
           REQUEST_RUN_ID: "43",
@@ -6832,6 +6833,8 @@ fi
     const resumed = run("false", complete);
     expect(resumed.status, resumed.stderr).toBe(0);
     expect(resumed.args?.join(" ")).toContain(localArgs.join(" "));
+    expect(resumed.args?.join(" ")).toContain(`--tooling-sha ${"b".repeat(40)}`);
+    expect(resumed.args?.join(" ")).toContain(`--builder-sha ${"c".repeat(40)}`);
     const reused = run("true", complete);
     expect(reused.status, reused.stderr).toBe(0);
     expect(reused.args).not.toContain("--assets");
@@ -6994,7 +6997,7 @@ it("detaches Linux mirror-only writers from both completed core finalizers", () 
   });
 });
 
-it("reports stale Linux release requests before selected code runs", () => {
+it("accepts a completed Linux release request when the builder starts at a later main SHA", () => {
   const workflow = readWorkflow(".github/workflows/linux-app-release.yml");
   const job = workflow.jobs.validate_release;
   const requestStep = expectDefined((job.steps as WorkflowStep[])[0], "first request validation");
@@ -7027,7 +7030,12 @@ it("reports stale Linux release requests before selected code runs", () => {
       false,
     );
   }
-  for (const workflowSha of ["b".repeat(40), requestSha]) {
+  for (const [title, matching] of [
+    ["Linux App Release Request [v2026.8.2] desktop=false", true],
+    ["Linux App Release Request [v2026.8.2] desktop=true", true],
+    ["Linux App Release Request [v2026.8.2] desktop=true extra", false],
+  ] as const) {
+    const workflowSha = "b".repeat(40);
     expect(admitted({ ...github, workflow_sha: workflowSha })).toBe(true);
     expect(requestStep.name).toBe("Validate trusted release request");
     const output = path.join(tempDirs.make("openclaw-linux-request-"), "output");
@@ -7037,21 +7045,16 @@ it("reports stale Linux release requests before selected code runs", () => {
       env: {
         PATH: process.env.PATH,
         GITHUB_OUTPUT: output,
-        REQUEST_TITLE: "Linux App Release Request [v2026.8.2] desktop=false",
+        REQUEST_TITLE: title,
         REQUEST_HEAD_SHA: requestSha,
-        WORKFLOW_SHA: workflowSha,
       },
     });
-    const matching = workflowSha === requestSha;
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(matching ? 0 : 1);
     expect(readFileSync(output, "utf8")).toBe(
-      matching ? "release_tag=v2026.8.2\ndesktop_test_bundles=false\n" : "",
+      matching
+        ? `release_tag=v2026.8.2\ndesktop_test_bundles=${title.endsWith("true")}\nworkflow_sha=${requestSha}\n`
+        : "",
     );
-    if (!matching) {
-      expect(`${result.stdout}${result.stderr}`).toContain(
-        "::error::Main advanced after this Linux release request. Dispatch a new Linux App Release Request",
-      );
-    }
   }
 });
 
@@ -7257,7 +7260,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
   expect(
     linuxSteps.find(({ name }) => name === "Checkout trusted release tooling")?.with,
   ).toMatchObject({
-    ref: "${{ github.workflow_sha }}",
+    ref: "${{ steps.request.outputs.workflow_sha }}",
     path: ".release-tooling",
     "persist-credentials": false,
     "sparse-checkout":
@@ -7267,7 +7270,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
   expect(tooling?.env).toMatchObject({
     WORKFLOW_FULL_REF: "${{ github.ref }}",
     WORKFLOW_REF: "${{ github.ref_name }}",
-    WORKFLOW_SHA: "${{ github.workflow_sha }}",
+    WORKFLOW_SHA: "${{ steps.request.outputs.workflow_sha }}",
   });
   expect(tooling?.run).toContain(
     "node .release-tooling/scripts/release-tooling-identity.mjs verify",
@@ -7283,7 +7286,6 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
   expect(releaseRequest.env).toEqual({
     REQUEST_TITLE: "${{ github.event.workflow_run.display_title }}",
     REQUEST_HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
-    WORKFLOW_SHA: "${{ github.workflow_sha }}",
   });
   const requestRoot = tempDirs.make("openclaw-linux-release-request-");
   const requestOutput = path.join(requestRoot, "output");
@@ -7295,13 +7297,12 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
         GITHUB_OUTPUT: requestOutput,
         REQUEST_TITLE: title,
         REQUEST_HEAD_SHA: "a".repeat(40),
-        WORKFLOW_SHA: "a".repeat(40),
       },
     });
   const acceptedRequest = runReleaseRequest("Linux App Release Request [v2026.8.2] desktop=true");
   expect(acceptedRequest.status, `${acceptedRequest.stdout}${acceptedRequest.stderr}`).toBe(0);
   expect(readFileSync(requestOutput, "utf8")).toBe(
-    "release_tag=v2026.8.2\ndesktop_test_bundles=true\n",
+    `release_tag=v2026.8.2\ndesktop_test_bundles=true\nworkflow_sha=${"a".repeat(40)}\n`,
   );
   const rejectedRequest = runReleaseRequest(
     "Linux App Release Request [v2026.8.2] desktop=true extra",
