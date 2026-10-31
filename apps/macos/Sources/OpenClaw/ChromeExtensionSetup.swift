@@ -22,11 +22,25 @@ final class ChromeExtensionSetup {
     private var manualReplies: [UUID: CheckedContinuation<Result, Error>] = [:]
     private var manualTasks: [UUID: Task<Result, Error>] = [:]
 
-    init(performAction: (@MainActor (ChromeExtensionSetupAction) async throws -> Result)? = nil) {
+    init(
+        state: AppState? = nil,
+        performAction: (@MainActor (ChromeExtensionSetupAction) async throws -> Result)? = nil)
+    {
         if let performAction {
-            self.performAction = { action, _ in try await performAction(action) }
+            self.performAction = { action, _ in
+                if action != .inspect, let state {
+                    try state.prepareGatewayConfigForChromeExtensionSetup()
+                }
+                return try await performAction(action)
+            }
         } else {
-            self.performAction = { action, isCurrent in try await Self.runAction(action: action, isCurrent: isCurrent) }
+            self.performAction = { action, isCurrent in
+                if action != .inspect {
+                    let targetState = state ?? AppStateStore.shared
+                    try targetState.prepareGatewayConfigForChromeExtensionSetup()
+                }
+                return try await Self.runAction(action: action, isCurrent: isCurrent)
+            }
         }
     }
 
@@ -95,8 +109,9 @@ final class ChromeExtensionSetup {
         let nextAction: NextAction
     }
 
-    enum SetupError: LocalizedError {
+    enum SetupError: LocalizedError, Equatable {
         case missingCLI, unavailable, retired
+        case gatewayConfigSyncFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -104,6 +119,7 @@ final class ChromeExtensionSetup {
             case .unavailable:
                 "Chrome setup could not finish. Run openclaw browser extension setup on this Mac for details."
             case .retired: "The device settings document is no longer available."
+            case let .gatewayConfigSyncFailed(message): message
             }
         }
     }
