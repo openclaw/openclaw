@@ -161,6 +161,9 @@ jobs:
         uses: ./.release-harness/.github/actions/setup-playwright-chromium
         with:
           cache-mode: restore
+      - name: Install Playwright WebKit for Control UI E2E
+        if: startsWith(matrix.command, 'pnpm test:ui:e2e')
+        run: pnpm --dir ui exec playwright install --with-deps webkit
       - name: Build sandbox image
         run: scripts/sandbox-setup.sh
       - name: Download Bun test runtime
