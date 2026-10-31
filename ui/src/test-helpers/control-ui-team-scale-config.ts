@@ -10,11 +10,13 @@ export function withTeamScaleConfig(
   return {
     ...scenario,
     bootstrapPreferences: {
-      profileId: scenario.presenceUsers?.find((user) => user.self)?.id,
+      profileId:
+        scenario.bootstrapPreferences?.profileId ??
+        scenario.presenceUsers?.find((user) => user.self)?.id,
       config: display,
-      entries: asOptionalRecord(
-        asOptionalRecord(scenario.methodResponses?.["users.prefs.get"])?.entries,
-      ),
+      entries:
+        scenario.bootstrapPreferences?.entries ??
+        asOptionalRecord(asOptionalRecord(scenario.methodResponses?.["users.prefs.get"])?.entries),
     },
     featureMethods: ["config.get", "tts.speak", ...(scenario.featureMethods ?? [])],
     methodResponses: { "config.get": snapshot, ...scenario.methodResponses },
