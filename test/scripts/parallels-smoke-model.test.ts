@@ -678,6 +678,7 @@ guest_user_cmd() {
     'where node.exe') [[ "$guest_version" != missing ]] ;;
     'node.exe --version') [[ "$guest_version" != missing ]] && printf '%s\\r\\n' "$guest_version" ;;
     'git --version && node --version && npm --version'|'wsl.exe --version'|'wsl.exe --status') : ;;
+    *vcruntime140.dll*) : ;;
     *) printf 'unexpected guest command: %s\\n' "$1" >&2; return 1 ;;
   esac
 }
@@ -711,6 +712,24 @@ printf 'verified-node=%s\\n' "$guest_version"`,
       }
     },
   );
+
+  it("rejects a Windows baseline missing the native addon C++ runtime", () => {
+    const result = runWindowsPrepare(
+      `set -euo pipefail
+OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY=1 source "$1"
+set_guest_paths() { :; }
+guest_node_supported() { :; }
+guest_user_cmd() { [[ "$1" != *vcruntime140.dll* ]]; }
+guest_system_ps() { :; }
+get_wsl_default_version() { printf '2'; }
+assert_clean_product_state() { :; }
+assert_no_pending_reboot() { :; }
+verify_baseline`,
+      [],
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Visual C++ runtime");
+  });
 
   it("waits for Windows snapshot restoration before starting the guest", () => {
     const tempDir = makeTempDir(tempDirs, "openclaw-windows-restore-");
