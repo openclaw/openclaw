@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { markdownContentHtml } from "../lib/markdown-content.ts";
 import { observeFontLoading } from "../lib/reactive/font-loading.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
@@ -37,11 +38,13 @@ export function ProgressCardMarkdown(props: {
   const markdown = createMarkdownRef(() => {
     layoutRevision();
     const lines = props.previewLines;
-    const html = sanitized();
     return {
-      content: html,
+      content: sanitized(),
       prepareContent: lines
-        ? () => (container.clientWidth ? fitMarkdownPreview(html, container, lines) : "")
+        ? (content) =>
+            container.clientWidth
+              ? fitMarkdownPreview(markdownContentHtml(content), container, lines)
+              : ""
         : undefined,
     };
   });
@@ -95,13 +98,14 @@ function fitMarkdownPreview(html: string, container: HTMLElement, lines: number)
     range.setStart(source.content, 0);
     const prefix = (length: number) => {
       range.setEnd(source.content, 0);
-      if (length > 0) {
+      let remaining = length;
+      if (remaining > 0) {
         for (const text of texts) {
-          if (length <= text.length) {
-            range.setEnd(text, truncateUtf16Safe(text.data, length).length);
+          if (remaining <= text.length) {
+            range.setEnd(text, truncateUtf16Safe(text.data, remaining).length);
             break;
           }
-          length -= text.length;
+          remaining -= text.length;
         }
       }
       const fragment = range.cloneContents();
