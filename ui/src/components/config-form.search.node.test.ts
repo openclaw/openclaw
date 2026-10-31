@@ -24,11 +24,13 @@ function matches(query: string, schema: Schema, options: Partial<Search> = {}) {
 it.each([
   ["tag:security", true],
   ["mode tag:security", false],
+  ["tag:überwachung", true],
+  ["tag:cafe\u0301", true],
 ] as const)("matches text and tag criteria: %s", (query, expected) => {
   expect(
     matches(query, object({ auth: object({ token: string() }) }), {
       path: ["gateway"],
-      hints: { "gateway.auth.token": { label: "Access Token", tags: ["security", "secret"] } },
+      hints: { "gateway.auth.token": { label: "Access Token", tags: ["security", "überwachung".normalize("NFD"), "café"] } },
     }),
   ).toBe(expected);
 });
@@ -41,6 +43,8 @@ const closed: Schema = { items: [string("reachable")], additionalItems: false };
 const forbidden: Schema = { items: [{}, string("Forbidden")] };
 it.each([
   ["credential", array(object({ source: string("Credential") })), true],
+  ["münchen", array(string("München credential".normalize("NFD"))), true],
+  ["mu\u0308nchen", array(string("München credential")), true],
   ["overflow", array([string("outer")], overflow), true],
   ["forbidden", array(undefined, closed, forbidden), false],
 ] satisfies [string, Schema, boolean][])(
@@ -60,44 +64,6 @@ it("searches additional-property schemas before entries exist", () => {
         hints: { "servers.*.url": { help: "Endpoint used by the remote service" } },
       },
     ),
-  ).toBe(true);
-});
-
-/** Decomposed diaeresis (M + U+0308 + uchen) forces a real Unicode mismatch without NFC. */
-const NFD_DESCRIPTION = "München credential".normalize("NFD");
-const NFC_DESCRIPTION = "München credential".normalize("NFC");
-const NFC_QUERY = "münchen".normalize("NFC");
-const NFD_QUERY = "münchen".normalize("NFD");
-const NFC_TAG = "überwachung".normalize("NFC");
-const NFD_TAG = "überwachung".normalize("NFD");
-
-it("matches NFC and NFD config search text against NFD field text", () => {
-  expect(
-    matches(NFC_QUERY, object({ token: string(NFD_DESCRIPTION) }), { path: ["gateway"] }),
-  ).toBe(true);
-  expect(
-    matches(NFD_QUERY, object({ token: string(NFC_DESCRIPTION) }), { path: ["gateway"] }),
-  ).toBe(true);
-  expect(
-    matches(NFC_QUERY, object({ token: string(NFC_DESCRIPTION) }), { path: ["gateway"] }),
-  ).toBe(true);
-  expect(
-    matches("secrets", object({ token: string(NFD_DESCRIPTION) }), { path: ["gateway"] }),
-  ).toBe(false);
-});
-
-it("matches NFC and NFD tag: criteria against NFD field tags", () => {
-  expect(
-    matches(`tag:${NFC_TAG}`, object({ token: string() }), {
-      path: ["gateway"],
-      hints: { "gateway.token": { label: "Token", tags: [NFD_TAG] } },
-    }),
-  ).toBe(true);
-  expect(
-    matches(`tag:${NFD_TAG}`, object({ token: string() }), {
-      path: ["gateway"],
-      hints: { "gateway.token": { label: "Token", tags: [NFC_TAG] } },
-    }),
   ).toBe(true);
 });
 
