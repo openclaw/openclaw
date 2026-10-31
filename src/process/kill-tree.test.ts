@@ -47,7 +47,7 @@ function replacedIdentity(initial: string, replacement: string) {
 
 function expectTaskkillCall(index: number, args: string[]) {
   expect(spawnMock.mock.calls[index]).toStrictEqual([
-    "taskkill",
+    "C:\\Windows\\System32\\taskkill.exe",
     args,
     {
       detached: true,
@@ -134,12 +134,15 @@ describe("killProcessTree", () => {
     killSpy = vi.spyOn(process, "kill");
     platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     vi.useFakeTimers();
+    vi.stubEnv("SystemRoot", "C:\\Windows");
+    vi.stubEnv("WINDIR", undefined);
   });
 
   afterEach(() => {
     killSpy.mockRestore();
     platform.mockRestore();
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     vi.clearAllMocks();
   });
 
@@ -620,6 +623,21 @@ describe("killProcessTree", () => {
       );
     },
   );
+
+  it.each([
+    ["D:\\System Root", undefined, "D:\\System Root\\System32\\taskkill.exe"],
+    ["relative-root", "E:\\Windows", "E:\\Windows\\System32\\taskkill.exe"],
+  ])("on Windows resolves the OS taskkill path from %s / %s", (systemRoot, windir, executable) => {
+    platform.mockReturnValue("win32");
+    vi.stubEnv("SystemRoot", systemRoot);
+    vi.stubEnv("WINDIR", windir);
+    killProcessTree(8989);
+    expect(spawnMock).toHaveBeenCalledWith(executable, ["/T", "/PID", "8989"], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+  });
 
   it("on Windows exposes taskkill completion", async () => {
     const child = taskkillChild();
