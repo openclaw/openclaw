@@ -31,6 +31,7 @@ import {
   type TextOptions,
 } from "@clack/prompts";
 import { expectDefined } from "@openclaw/normalization-core";
+import { t } from "./i18n/index.js";
 import type { WizardPromptNavigation } from "./prompts.js";
 
 type NavigationPromptOptions<Options> = Omit<Options, "withGuide" | "maxItems" | "input"> & {
@@ -509,8 +510,8 @@ export function autocompleteMultiselectWithNavigationFooter<Value>(
 export function confirmWithNavigationFooter(
   opts: NavigationPromptOptions<Omit<ConfirmOptions, "active" | "inactive">>,
 ): Promise<boolean | symbol> {
-  const active = "Yes";
-  const inactive = "No";
+  const active = t("common.yes");
+  const inactive = t("common.no");
   return new ConfirmPrompt({
     active,
     inactive,

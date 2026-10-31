@@ -102,6 +102,13 @@ describe("buildOnboardingWelcome", () => {
   it.each([
     ["zh-CN", "你好，我是 OpenClaw", "是的 — 开始设置", "推理已就绪", "和我的智能体聊天"],
     ["zh-TW", "你好，我是 OpenClaw", "是的 — 開始設定", "推理已就緒", "與我的智慧代理聊天"],
+    [
+      "pt-PT",
+      "Olá, sou o OpenClaw — vamos preparar o seu agente.",
+      "Sim — configurar",
+      "A inferência está pronta.",
+      "Falar com o meu agente",
+    ],
   ] as const)(
     "localizes setup and ready welcomes in %s without translating command replies",
     async (locale, intro, setupLabel, readyTitle, readyLabel) => {
@@ -112,6 +119,7 @@ describe("buildOnboardingWelcome", () => {
       });
       const setup = await welcome(engine, { locale });
       expect(setup.text).toContain(intro);
+      expect(setup.text).toContain("**yes**");
       expect(setup.text).toContain("example/verified-model");
       expect(setup.text).toContain("/existing/workspace");
       expect(setup.question.options[0]).toMatchObject({ label: setupLabel, reply: "yes" });
