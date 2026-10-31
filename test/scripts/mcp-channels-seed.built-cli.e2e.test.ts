@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { runSessionStartupMigration } from "../../src/config/sessions/startup-migration.js";
+import { runSessionStartupMigration } from "../../src/config/sessions/startup-migration-runtime.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import {
   getSessionEntry,

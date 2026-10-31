@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
@@ -11,6 +12,7 @@ import {
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
+import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { execRequestAbortSignal } from "../../infra/exec-request-context.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.types.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
@@ -46,7 +48,10 @@ import type {
   SessionEventReceipt,
 } from "./session-event-contract.js";
 import { prepareSessionEventDelivery } from "./session-event-delivery.js";
-import { narrowSessionEventSettings } from "./session-event-policy.js";
+import {
+  captureScheduledSessionEventConfigPolicy,
+  narrowSessionEventSettings,
+} from "./session-event-policy.js";
 import {
   assertSessionEventTargetCurrent,
   assertSessionEventSettingsCurrent,
@@ -134,6 +139,11 @@ function enqueueSessionEventAttempt(
   // A policy publication rejected this occurrence's stale-config execution; finish()
   // re-admits it under the current policy when it never started.
   let configPublicationChanged = false;
+  let checkedConfig = cfg;
+  let checkedPublication = configPublication;
+  const configPolicyCurrent = options.scheduledAutomation
+    ? captureScheduledSessionEventConfigPolicy(cfg, agentId, options.scheduledAutomation.job)
+    : undefined;
   // Queue-owner abandonment (lifecycle cleanup) stays terminal.
   let abandoned = false;
   // The live re-admission attempt; receipt.cancel forwards to it once it exists.
@@ -220,15 +230,19 @@ function enqueueSessionEventAttempt(
   });
   const assertEffectCurrent = composeSessionSourceAssertion([assertCurrent], (assertSource) => {
     assertSource();
-    if (
-      getSessionEventRuntimeConfig() !== cfg ||
-      getRuntimeConfigSnapshotMetadata() !== configPublication
-    ) {
+    const currentConfig = getSessionEventRuntimeConfig();
+    const publication = getRuntimeConfigSnapshotMetadata();
+    if (currentConfig === checkedConfig && publication === checkedPublication) {
+      return;
+    }
+    if (!configPolicyCurrent?.(currentConfig, [route?.channel, target?.deliveryContext?.channel])) {
       // The dispatched run holds the config captured at enqueue; it must never execute
       // under a superseded policy. finish() re-admits an unstarted occurrence instead.
       configPublicationChanged = true;
       throw new Error("Session event configuration changed; retry under the current policy");
     }
+    checkedConfig = currentConfig;
+    checkedPublication = publication;
   });
   const accept = () => {
     if (accepted || settlement === "finished") {
@@ -288,7 +302,9 @@ function enqueueSessionEventAttempt(
       signal: startSignal,
       prepareCurrent,
       admission: automationAdmission,
-      onReady: runId ? start : undefined,
+      // Registered bootstrap hooks can perform arbitrary work before native preparation
+      // reports activity. Conservatively consume custody even if bootstrap is later skipped.
+      onReady: runId && hasInternalHookListeners("agent", "bootstrap") ? start : undefined,
     });
   };
   const finish = () => {
@@ -303,7 +319,6 @@ function enqueueSessionEventAttempt(
       } catch (error) {
         failure ??= error instanceof Error ? error : String(error);
       }
-      settlement = "finished";
       // Submitting custody ends at the first acceptance; a pre-acceptance re-admission
       // carries the still-live assertion so revoked ingress rejects the retry.
       const pendingAcceptanceAssertion = accepted ? undefined : acceptanceAssertion;
@@ -311,10 +326,21 @@ function enqueueSessionEventAttempt(
       // Producers never retry, so a policy publication that rejected an unstarted
       // occurrence re-admits it under the current policy instead of destroying it.
       // Stop, abort and abandonment still settle terminally.
-      const configChangeRetention =
+      const retainForConfigChange = () =>
         configPublicationChanged && !started && !deliveryAttempted && !signal.aborted && !abandoned;
       const attempt = readmissionAttempt;
-      const canReadmit = configChangeRetention && attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
+      if (retainForConfigChange() && attempt < MAX_CONFIG_READMISSION_ATTEMPTS) {
+        // Reuse this occurrence's bounded readmission, yielding before fresh authority.
+        await delay(100 * 2 ** readmissionAttempt, undefined, { signal }).catch(
+          (error: unknown) => {
+            if (!signal.aborted) {
+              throw error;
+            }
+          },
+        );
+      }
+      settlement = "finished";
+      const canReadmit = retainForConfigChange() && attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
       const status = signal.aborted ? "cancelled" : failure ? "failed" : "completed";
       if (status === "failed" && !canReadmit) {
         log.error("session event execution failed", {

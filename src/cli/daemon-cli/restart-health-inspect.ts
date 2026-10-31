@@ -120,6 +120,7 @@ export async function inspectGatewayRestart(params: {
     portUsage = await read("port-inspection", () =>
       inspectPortUsage(params.port, {
         probeHosts,
+        knownRuntimePid: runtime.status === "running" ? runtime.pid : undefined,
         ...(signal ? { signal } : {}),
       }),
     );

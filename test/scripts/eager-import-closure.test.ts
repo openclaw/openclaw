@@ -650,8 +650,8 @@ it.each<[name: string, entrypoints: string[], deferredOwners: string[], dynamic?
     ["src/infra/state-migrations.cron-run-logs.ts", "src/cron/run-history-detail.ts"],
   ],
   [
-    "shared-state read command handlers",
-    ["src/state/openclaw-state-read-handlers.ts"],
+    "state and session readiness",
+    ["src/state/openclaw-state-read-handlers.ts", "src/config/sessions/startup-migration.ts"],
     ["src/state/openclaw-agent-db.ts"],
   ],
   [

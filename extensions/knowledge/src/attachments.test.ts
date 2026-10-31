@@ -97,7 +97,8 @@ it("large Unicode source survives chunking, bounded preview, restart, search and
       `${"x".repeat(3999)}😀tail\n${"Original 🌱 evidence with Unicode\n".repeat(6000)}`,
     );
   const evidence = await upload(f, bytes);
-  expect(await readFile(path.join(f.root, "private", evidence.path))).toStrictEqual(bytes);
+  const stored = await readFile(path.join(f.root, "private", evidence.path));
+  expect(stored.equals(bytes), "stored original bytes").toBe(true);
   const receipt = await f.service.save_page(draft([evidence]), f.owner);
   const service = createKnowledgeService(f.api),
     read = await service.record({ includeEvidence: true, id: receipt.id }, f.owner);
@@ -117,16 +118,15 @@ it("large Unicode source survives chunking, bounded preview, restart, search and
     chunks.push(Buffer.from(result.data, "base64"));
     offset = result.nextOffset;
   } while (offset !== null);
-  expect(Buffer.concat(chunks)).toStrictEqual(bytes);
+  expect(Buffer.concat(chunks).equals(bytes), "downloaded original bytes").toBe(true);
   const search = await service.grep({ query: "ordinary" }, f.owner);
   expect(search.total).toBe(1);
   expect(Check(contract.operations.grep.output, search)).toBeTruthy();
   expect(search, "No undefined line locators for whole-file evidence").toStrictEqual(
     jsonRoundTrip(search),
   );
-  expect(
-    execFileSync("git", ["show", `HEAD:private/${evidence.path}`], { cwd: f.root }),
-  ).toStrictEqual(bytes);
+  const committed = execFileSync("git", ["show", `HEAD:private/${evidence.path}`], { cwd: f.root });
+  expect(committed.equals(bytes), "Git original bytes").toBe(true);
 });
 
 it("binary/PDF originals are never coerced into UTF-8; media remains outside automatic Git", async () => {
@@ -251,9 +251,8 @@ it("source files are independent of the catalog scan byte budget; legacy large t
   const legacy = await f.service.save_page({ ...draft([]), source }, f.owner);
   const record = await f.service.record({ includeEvidence: true, id: legacy.id }, f.owner);
   expect(record.evidence![0]!.sha256).toBe(createHash("sha256").update(source.text).digest("hex"));
-  expect(await readFile(path.join(f.root, "private", record.evidence![0]!.path))).toStrictEqual(
-    Buffer.from(source.text),
-  );
+  const original = await readFile(path.join(f.root, "private", record.evidence![0]!.path));
+  expect(original.equals(Buffer.from(source.text)), "legacy original bytes").toBe(true);
 });
 
 for (const stage of ["attachment-after-link", "attachment-before-receipt"]) {
@@ -353,7 +352,7 @@ it("native feature adapter accepts full-size upload and download chunks", async 
     chunks.push(chunk);
     offset = downloaded.nextOffset;
   } while (offset !== null);
-  expect(Buffer.concat(chunks)).toStrictEqual(bytes);
+  expect(Buffer.concat(chunks).equals(bytes), "downloaded original bytes").toBe(true);
 });
 
 it("agent download JSON survives the dynamic-tool response budget with continuation intact", async () => {
@@ -398,5 +397,5 @@ it("agent download JSON survives the dynamic-tool response budget with continuat
     chunks.push(chunk);
     offset = downloaded.nextOffset;
   } while (offset !== null);
-  expect(Buffer.concat(chunks)).toStrictEqual(bytes);
+  expect(Buffer.concat(chunks).equals(bytes), "downloaded original bytes").toBe(true);
 });

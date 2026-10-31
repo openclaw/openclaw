@@ -7,7 +7,7 @@ import {
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isMissingPathError } from "../infra/errors.js";
-import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
+import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { hashConfigIncludeRaw } from "./includes.js";
@@ -507,11 +507,8 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
         filePath: params.configPath,
         content: previousRaw,
         dirMode: params.stateDirectory
-          ? (readExistingStateRootMode(
-              path.dirname(params.configPath),
-              params.stateDirectory.path,
-              params.fsModule,
-            ) ?? 0o700)
+          ? (stateRootDirectoryMode(path.dirname(params.configPath), params.stateDirectory.path) ??
+            0o700)
           : 0o700,
         mode: 0o600,
         copyFallbackOnPermissionError: true,

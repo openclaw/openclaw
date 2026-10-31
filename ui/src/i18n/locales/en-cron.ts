@@ -172,6 +172,10 @@ const enCron = {
       summaryEveryHours: "Runs every {amount} hours",
       summaryEveryDays: "Runs every {amount} days",
       summaryOnce: "Runs once at {at}",
+      configuredTime: "Configured time",
+      summaryConfiguredAt: "Configured time: {at}",
+      nextRunAt: "Next run at {at}",
+      noNextRun: "No next run scheduled",
       summaryCron: "Cron schedule {expr}",
       summaryCronTz: "Cron schedule {expr} ({tz})",
       timezoneOptional: "Timezone",
@@ -307,7 +311,7 @@ const enCron = {
       cancel: "Cancel",
     },
     jobState: {
-      next: "Next",
+      nextRelative: "Next {at}",
     },
     runEntry: {
       noSummary: "No summary.",
