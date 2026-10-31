@@ -21,4 +21,16 @@ describe("WhatsAppConfigSchema", () => {
       WhatsAppConfigSchema.parse({ pluginHooks: { messageReceived: false } }).pluginHooks,
     ).toEqual({ messageReceived: false });
   });
+
+  it("keeps an existing actions block without editMessage valid", () => {
+    expect(
+      WhatsAppConfigSchema.parse({ actions: { reactions: true, polls: false } }).actions,
+    ).toEqual({ reactions: true, polls: false });
+  });
+
+  it("accepts the editMessage action gate", () => {
+    expect(
+      WhatsAppConfigSchema.parse({ actions: { editMessage: false } }).actions?.editMessage,
+    ).toBe(false);
+  });
 });

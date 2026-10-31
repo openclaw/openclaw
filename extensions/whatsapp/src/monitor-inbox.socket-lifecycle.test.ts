@@ -24,7 +24,7 @@ import {
   type InboxMonitorOptions,
   type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
-import { lookupInboundMessageMeta } from "./quoted-message.js";
+import { cacheInboundMessageMeta, lookupInboundMessageMeta } from "./quoted-message.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 function createAcceptedSendMessageMock() {
@@ -252,6 +252,283 @@ describe("web monitor inbox socket lifecycle", () => {
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
 
     await listener.close();
+  });
+
+  describe("editMessage", () => {
+    const remoteJid = "999@s.whatsapp.net";
+    const key = { remoteJid, id: "edit-target", fromMe: true } as const;
+
+    const startRetryingMonitor = () => {
+      const socketRef = createSocketRef();
+      return {
+        socketRef,
+        started: startInboxMonitor(vi.fn() as unknown as InboxOnMessage, {
+          socketRef,
+          shouldRetryDisconnect: () => true,
+          disconnectRetryPolicy: fastReconnectPolicy(2),
+        }),
+      };
+    };
+
+    it("leaves no send-ready proof behind when the queued edit is revoked", async () => {
+      const { started } = startRetryingMonitor();
+      const { listener, sock } = await started;
+      const revocation = new Error("originating run ended");
+
+      await listener.assertSendReady?.(key.remoteJid);
+      await expect(
+        listener.editMessage(key.remoteJid, key.id, "updated", () => {
+          throw revocation;
+        }),
+      ).rejects.toBe(revocation);
+      expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(1);
+
+      await listener.sendMessage(key.remoteJid, "next");
+
+      expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(2);
+      expect(sock.sendMessage).toHaveBeenCalledOnce();
+
+      await listener.close();
+    });
+
+    it("never retries a caller rejection, even one that reads like a disconnect", async () => {
+      const { started } = startRetryingMonitor();
+      const { listener, sock } = await started;
+      const revocation = new Error("originating run disconnected");
+
+      const result = listener
+        .editMessage(key.remoteJid, key.id, "updated", () => {
+          throw revocation;
+        })
+        .catch((error: unknown) => error);
+
+      expect(await result).toBe(revocation);
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
+
+      await listener.close();
+    });
+
+    it("surfaces the caller's revocation instead of retrying a disconnect", async () => {
+      const { started } = startRetryingMonitor();
+      const { listener, sock } = await started;
+      const revocation = new Error("originating run ended");
+      let revoked = false;
+      sock.sendMessage.mockImplementationOnce(async () => {
+        revoked = true;
+        throw new Error("connection closed");
+      });
+
+      const result = listener
+        .editMessage(key.remoteJid, key.id, "updated", () => {
+          if (revoked) {
+            throw revocation;
+          }
+        })
+        .catch((error: unknown) => error);
+
+      expect(await result).toBe(revocation);
+      expect(sock.sendMessage).toHaveBeenCalledOnce();
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
+
+      await listener.close();
+    });
+
+    it("surfaces the caller's revocation without waiting while the socket is away", async () => {
+      const { socketRef, started } = startRetryingMonitor();
+      const { listener, sock } = await started;
+      const revocation = new Error("originating run ended");
+      socketRef.current = null;
+
+      const result = listener
+        .editMessage(key.remoteJid, key.id, "updated", () => {
+          throw revocation;
+        })
+        .catch((error: unknown) => error);
+
+      expect(await result).toBe(revocation);
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
+
+      await listener.close();
+    });
+
+    it("retries a disconnected edit with the same message id while its caller is current", async () => {
+      const { socketRef, started } = startRetryingMonitor();
+      const { listener, sock } = await started;
+      const assertCurrent = vi.fn();
+      sock.sendMessage
+        .mockRejectedValueOnce(new Error("connection closed"))
+        .mockResolvedValueOnce({ key: { id: "edit-after-reconnect" } });
+      sleepWithAbortMock.mockImplementationOnce(async () => {
+        socketRef.current = sock as never;
+      });
+
+      await listener.editMessage(key.remoteJid, key.id, "updated", assertCurrent);
+
+      expect(sock.sendMessage).toHaveBeenCalledTimes(2);
+      const [firstCall, secondCall] = sock.sendMessage.mock.calls;
+      expect(firstCall?.slice(0, 2)).toEqual([remoteJid, { text: "updated", edit: key }]);
+      expect(secondCall?.[2]?.messageId).toBe(firstCall?.[2]?.messageId);
+      expect(assertCurrent.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+      await listener.close();
+    });
+
+    it("rejects without a write during a reachout timelock", async () => {
+      const { started } = startRetryingMonitor();
+      const { listener, sock } = await started;
+      sock.fetchAccountReachoutTimelock.mockResolvedValueOnce({
+        isActive: true,
+        enforcementType: "RESTRICT_ALL_COMPANIONS",
+        timeEnforcementEnds: new Date(Date.now() + 60_000),
+      });
+
+      await expect(listener.editMessage(key.remoteJid, key.id, "updated")).rejects.toThrow(
+        "WhatsApp reachout timelock is active",
+      );
+
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
+
+      await listener.close();
+    });
+
+    it("consumes the preflight proof, so the next send checks the timelock again", async () => {
+      const { started } = startRetryingMonitor();
+      const { listener, sock } = await started;
+
+      await listener.assertSendReady?.(key.remoteJid);
+      await listener.editMessage(key.remoteJid, key.id, "updated");
+
+      expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(1);
+
+      await listener.sendMessage(key.remoteJid, "next");
+
+      expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(2);
+
+      await listener.close();
+    });
+
+    const editEnvelope = (editedMessage: object, id = nextMessageId("edit-envelope")) => ({
+      key: { remoteJid, id, fromMe: true },
+      message: { protocolMessage: { key, editedMessage, type: 14 } },
+    });
+
+    it("creates no own-message entry for an id it never sent", async () => {
+      const baileysCache = createBaileysCacheSupport();
+      const { listener, sock } = await startInboxMonitor(vi.fn() as unknown as InboxOnMessage, {
+        recentMessageKeys: baileysCache.recentMessageKeys,
+      });
+      sock.sendMessage.mockResolvedValueOnce(
+        editEnvelope({ extendedTextMessage: { text: "updated" } }),
+      );
+
+      await listener.editMessage(key.remoteJid, key.id, "updated");
+
+      expect(lookupInboundMessageMeta(DEFAULT_ACCOUNT_ID, remoteJid, key.id)).toBeUndefined();
+      expect(baileysCache.recentMessageKeys.has(`${remoteJid}:${key.id}`)).toBe(false);
+
+      await listener.close();
+    });
+
+    it("leaves a cached foreign message untouched", async () => {
+      const baileysCache = createBaileysCacheSupport();
+      const { listener, sock } = await startInboxMonitor(vi.fn() as unknown as InboxOnMessage, {
+        recentMessageKeys: baileysCache.recentMessageKeys,
+      });
+      const foreign = { conversation: "theirs" };
+      baileysCache.recentMessageKeys.set(`${remoteJid}:${key.id}`, {
+        expiresAt: Date.now() + 60_000,
+        value: foreign,
+      });
+      cacheInboundMessageMeta(DEFAULT_ACCOUNT_ID, remoteJid, key.id, {
+        fromMe: false,
+        body: "theirs",
+      });
+      sock.sendMessage.mockResolvedValueOnce(
+        editEnvelope({ extendedTextMessage: { text: "updated" } }),
+      );
+
+      await listener.editMessage(key.remoteJid, key.id, "updated");
+
+      expect(lookupInboundMessageMeta(DEFAULT_ACCOUNT_ID, remoteJid, key.id)).toMatchObject({
+        fromMe: false,
+        body: "theirs",
+      });
+      expect(baileysCache.recentMessageKeys.get(`${remoteJid}:${key.id}`)?.value).toBe(foreign);
+
+      await listener.close();
+    });
+
+    it("keeps the envelope for retry receipts", async () => {
+      const baileysCache = createBaileysCacheSupport();
+      const { listener, sock } = await startInboxMonitor(vi.fn() as unknown as InboxOnMessage, {
+        recentMessageKeys: baileysCache.recentMessageKeys,
+      });
+      const envelope = editEnvelope({ extendedTextMessage: { text: "updated" } });
+      sock.sendMessage.mockResolvedValueOnce(envelope);
+
+      await listener.editMessage(key.remoteJid, key.id, "updated");
+
+      expect(baileysCache.recentMessageKeys.get(`${remoteJid}:${envelope.key.id}`)?.value).toBe(
+        envelope.message,
+      );
+      expect(
+        lookupInboundMessageMeta(DEFAULT_ACCOUNT_ID, remoteJid, envelope.key.id),
+      ).toBeUndefined();
+
+      await listener.close();
+    });
+
+    it("keeps a cached media proto while updating the caption meta", async () => {
+      const baileysCache = createBaileysCacheSupport();
+      const { listener, sock } = await startInboxMonitor(vi.fn() as unknown as InboxOnMessage, {
+        recentMessageKeys: baileysCache.recentMessageKeys,
+      });
+      const media = { imageMessage: { caption: "original", mimetype: "image/jpeg" } };
+      sock.sendMessage
+        .mockResolvedValueOnce({ key: { ...key }, message: media })
+        .mockResolvedValueOnce(editEnvelope({ extendedTextMessage: { text: "updated" } }));
+
+      await listener.sendMessage(remoteJid, "original");
+      await listener.editMessage(key.remoteJid, key.id, "updated");
+
+      expect(baileysCache.recentMessageKeys.get(`${remoteJid}:${key.id}`)?.value).toBe(media);
+      expect(lookupInboundMessageMeta(DEFAULT_ACCOUNT_ID, remoteJid, key.id)).toMatchObject({
+        fromMe: true,
+        body: "updated",
+      });
+
+      await listener.close();
+    });
+
+    it("updates the target's cached body", async () => {
+      const baileysCache = createBaileysCacheSupport();
+      const { listener, sock } = await startInboxMonitor(vi.fn() as unknown as InboxOnMessage, {
+        recentMessageKeys: baileysCache.recentMessageKeys,
+      });
+      const editedMessage = { extendedTextMessage: { text: "updated" } };
+      sock.sendMessage
+        .mockResolvedValueOnce({
+          key: { ...key },
+          message: { extendedTextMessage: { text: "original" } },
+        })
+        .mockResolvedValueOnce(editEnvelope(editedMessage));
+
+      await listener.sendMessage(remoteJid, "original");
+      await listener.editMessage(key.remoteJid, key.id, "updated");
+
+      expect(baileysCache.recentMessageKeys.get(`${remoteJid}:${key.id}`)?.value).toBe(
+        editedMessage,
+      );
+      expect(lookupInboundMessageMeta(DEFAULT_ACCOUNT_ID, remoteJid, key.id)).toMatchObject({
+        fromMe: true,
+        body: "updated",
+      });
+
+      await listener.close();
+    });
   });
 
   type ReachoutTimelockCase = {

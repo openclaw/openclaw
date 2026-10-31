@@ -1,4 +1,4 @@
-import type { AnyMessageContent, WAMessage } from "baileys";
+import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage } from "baileys";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { isWhatsAppNewsletterJid } from "../normalize-target.js";
@@ -35,8 +35,17 @@ type StructuredStickerSendOptions = {
   mimetype?: string;
 };
 
+export type WhatsAppSendApiSocket = WhatsAppSocketOperationAdapter & {
+  sendMessage: (
+    jid: string,
+    content: AnyMessageContent,
+    options?: MiscMessageGenerationOptions,
+    assertDirectAdapterHandoff?: () => void,
+  ) => Promise<WAMessage | undefined>;
+};
+
 export function createWebSendApi(params: {
-  sock: WhatsAppSocketOperationAdapter;
+  sock: WhatsAppSendApiSocket;
   defaultAccountId: string;
   resolveOutboundMentions?: (params: {
     jid: string;
@@ -246,6 +255,25 @@ export function createWebSendApi(params: {
         },
       });
       return normalizeWhatsAppSendResult(result, "reaction");
+    },
+    editMessage: async (
+      chatJid: string,
+      messageId: string,
+      text: string,
+      assertDirectAdapterHandoff?: () => void,
+    ): Promise<void> => {
+      const jid = resolveOutboundJid(chatJid);
+      const resolved = await resolveMentions(jid, text);
+      const content = addWhatsAppOutboundMentionsToContent(
+        { text: resolved.text, edit: { remoteJid: jid, id: messageId, fromMe: true } },
+        resolved.mentionedJids,
+      );
+      await runAcceptedSend("edit", params.defaultAccountId, async (capture) => {
+        capture(
+          await params.sock.sendMessage(jid, content, undefined, assertDirectAdapterHandoff),
+          "edit",
+        );
+      });
     },
     sendComposingTo: async (to: string): Promise<void> => {
       const jid = resolveOutboundJid(to);

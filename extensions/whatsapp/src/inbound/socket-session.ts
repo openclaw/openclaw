@@ -13,7 +13,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
 import { identitiesOverlap, type WhatsAppSelfIdentity } from "../identity.js";
-import { cacheInboundMessageMeta } from "../quoted-message.js";
+import { cacheInboundMessageMeta, lookupInboundMessageMeta } from "../quoted-message.js";
 import {
   DEFAULT_RECONNECT_POLICY,
   computeBackoff,
@@ -26,7 +26,6 @@ import {
   isWhatsAppSocketOperationTimeoutError,
   resolveWhatsAppSocketOperationTimeoutMs,
   withWhatsAppSocketOperationTimeout,
-  type WhatsAppSocketOperationAdapter,
   type WhatsAppSocketTimingOptions,
 } from "../socket-timing.js";
 import {
@@ -36,6 +35,7 @@ import {
   toWhatsappJidWithLid,
 } from "../targets-runtime.js";
 import {
+  readWhatsAppBaileysCacheEntry,
   rememberWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysMessageCache,
 } from "./baileys-cache.js";
@@ -48,6 +48,7 @@ import {
   type WhatsAppSocketListen,
 } from "./lifecycle.js";
 import { DisconnectReason } from "./runtime-api.js";
+import type { WhatsAppSendApiSocket } from "./send-api.js";
 import type { WebListenerCloseReason } from "./types.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason.loggedOut;
@@ -190,6 +191,34 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     );
   };
 
+  const rememberEditedOutboundMessage = (
+    remoteJid: string,
+    edit: proto.Message.IProtocolMessage,
+  ) => {
+    const targetId = edit.key?.id;
+    const editedMessage = edit.editedMessage;
+    if (!targetId || !editedMessage) {
+      return;
+    }
+    // Baileys resolves on the socket write and WhatsApp's refusal arrives later, so an edit can
+    // only refresh a message already known to be ours, never establish that it is.
+    const target = lookupInboundMessageMeta(options.accountId, remoteJid, targetId);
+    if (target?.fromMe !== true) {
+      return;
+    }
+    cacheInboundMessageMeta(options.accountId, remoteJid, targetId, {
+      ...target,
+      body: extractText(editedMessage),
+    });
+    const cached =
+      options.recentMessageKeys &&
+      readWhatsAppBaileysCacheEntry(options.recentMessageKeys, `${remoteJid}:${targetId}`);
+    // Retry receipts re-encrypt this proto, so a media message must keep its media fields.
+    if (cached?.conversation != null || cached?.extendedTextMessage) {
+      rememberBaileysMessage(remoteJid, targetId, editedMessage);
+    }
+  };
+
   const rememberOutboundMessage = (remoteJid: string, result: WAMessage | undefined) => {
     const messageId = result?.key?.id;
     if (!messageId) {
@@ -202,6 +231,10 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     });
     const message = result?.message;
     rememberBaileysMessage(remoteJid, messageId, message);
+    const protocolMessage = message?.protocolMessage;
+    if (protocolMessage?.editedMessage) {
+      return rememberEditedOutboundMessage(remoteJid, protocolMessage);
+    }
     // Baileys derives the participant for fromMe quotes from its own userJid.
     // Retain only the facts needed to avoid the cache-miss fromMe=false fallback.
     cacheInboundMessageMeta(options.accountId, remoteJid, messageId, {
@@ -221,12 +254,17 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     );
   };
 
-  const currentSocketOperations = (currentSock: WASocket) =>
+  // The hook runs inside the per-socket queue, so a queued write rechecks both owners at its turn.
+  const currentSocketOperations = (
+    currentSock: WASocket,
+    assertDirectAdapterHandoff?: () => void,
+  ) =>
     createWhatsAppSocketOperationTimeoutAdapter(currentSock, sendOperationTimeoutMs, {
       assertCurrent: () => {
         if (getCurrentSock() !== currentSock) {
           throw new Error(RECONNECT_IN_PROGRESS_ERROR);
         }
+        assertDirectAdapterHandoff?.();
       },
       onSendMessageTimeout: ({ jid, promise }) => trackLateAcceptedSend(jid, promise),
     });
@@ -311,6 +349,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     jid: string,
     content: AnyMessageContent,
     sendOptions?: MiscMessageGenerationOptions,
+    assertDirectAdapterHandoff?: () => void,
   ) => {
     // One logical send keeps its identity even if an ambiguous failure changes sockets.
     // Baileys treats an empty caller ID as missing, so pin that fallback before retrying.
@@ -324,14 +363,15 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       if (currentSock) {
         try {
           await assertCanSendToJid(jid, currentSock, { useVerifiedReady: true });
-          const result = await currentSocketOperations(currentSock).sendMessage(
-            jid,
-            content,
-            trackedOptions,
-          );
+          const result = await currentSocketOperations(
+            currentSock,
+            assertDirectAdapterHandoff,
+          ).sendMessage(jid, content, trackedOptions);
           rememberOutboundMessage(jid, result);
           return result;
         } catch (error) {
+          // Retry classification matches error text; a revoked caller must never wait for one.
+          assertDirectAdapterHandoff?.();
           if (!shouldRetryDisconnect() || !isRetryableSendDisconnectError(error)) {
             throw error;
           }
@@ -343,8 +383,12 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
             options.socketRef.current = null;
           }
         }
-      } else if (!shouldRetryDisconnect()) {
-        throw lastError;
+      } else {
+        // A caller revoked while the socket is away must not wait out the reconnect backoff.
+        assertDirectAdapterHandoff?.();
+        if (!shouldRetryDisconnect()) {
+          throw lastError;
+        }
       }
 
       if (attempt >= sendRetryMaxAttempts) {
@@ -362,7 +406,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     }
   };
 
-  const socketOperations: WhatsAppSocketOperationAdapter = {
+  const socketOperations: WhatsAppSendApiSocket = {
     sendMessage: sendTrackedMessage,
     sendPresenceUpdate: async (presenceLocal, jid) => {
       const currentSock = getCurrentSock();
