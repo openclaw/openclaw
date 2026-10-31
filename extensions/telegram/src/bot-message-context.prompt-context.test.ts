@@ -14,6 +14,7 @@ import {
   updateAmbientTranscriptWatermark,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it } from "vitest";
 import { createTelegramMessageContextRuntime } from "./bot-handlers.message-context.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
@@ -127,6 +128,7 @@ const ambientRows = [
 
 describe("Telegram prompt composition", () => {
   it.each([
+    { name: "fresh plain DM", existing: false, reply: false, include: true },
     { name: "existing plain DM", existing: true, reply: false, include: false },
     { name: "existing DM reply", existing: true, reply: true, include: true },
   ])(
@@ -158,11 +160,115 @@ describe("Telegram prompt composition", () => {
         expect(ctx?.ctxPayload.ChannelStructuredContext).toMatchObject([
           { payload: { messages: [{ message_id: "10", body: "Earlier DM turn" }] } },
         ]);
+        expect(ctx?.ctxPayload.SessionTranscriptContext).toMatchObject({
+          chatWindow: true,
+          historyLimit: 10,
+        });
+        expect(ctx?.ctxPayload.SessionTranscriptContext).not.toHaveProperty("deliveryOnly");
       } else {
         expect(ctx?.ctxPayload.ChannelStructuredContext).toBeUndefined();
+        expect(ctx?.ctxPayload.SessionTranscriptContext).toMatchObject({
+          chatWindow: true,
+          deliveryOnly: true,
+          historyLimit: 10,
+        });
       }
     },
   );
+
+  it("suppresses ordinary DM history while preserving delivery-only context through the prepared turn", async () => {
+    const cfg = config();
+    const storePath = cfg.session!.store!;
+    const scope = {
+      agentId: "main",
+      sessionId: "existing-dm-prepared",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: scope.sessionKey,
+      entry: {
+        sessionId: scope.sessionId,
+        updatedAt: 1_700_000_000_000,
+      },
+    });
+    await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "ordinary user turn" }],
+        timestamp: 1_700_000_001_000,
+      },
+    });
+    await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "ordinary assistant reply" }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5",
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1_700_000_002_000,
+      },
+    });
+    await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Time for your weigh-in." }],
+        api: "openclaw-transcript-artifact",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        openclawDeliveryMirror: { kind: "cron-direct-delivery-context" },
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1_700_000_003_000,
+      },
+    });
+
+    const bot = await createBot(true, true, cfg);
+    await deliverTelegramUpdate(bot, {
+      update_id: 12,
+      message: message(12, "200 pounds"),
+    });
+
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+    const observed = harness.replySpy.mock.calls[0]![0];
+    expect(observed.SessionTranscriptContext).toMatchObject({
+      chatWindow: true,
+      deliveryOnly: true,
+      historyLimit: 10,
+    });
+    expect(observed.ChannelStructuredContext).toMatchObject([
+      {
+        source: "session",
+        type: "chat_window",
+        payload: {
+          messages: [{ sender: "OpenClaw", body: "Time for your weigh-in." }],
+        },
+      },
+    ]);
+    const structuredJson = JSON.stringify(observed.ChannelStructuredContext);
+    expect(structuredJson).not.toContain("ordinary user turn");
+    expect(structuredJson).not.toContain("ordinary assistant reply");
+  });
 
   it("excludes old DM history but preserves explicit replies with a zero sender limit", async () => {
     const telegramCfg: TelegramAccountConfig = {
