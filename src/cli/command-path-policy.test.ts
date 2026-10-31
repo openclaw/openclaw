@@ -100,6 +100,7 @@ describe("command-path-policy", () => {
     ],
     ["configure", { configGuard: "skip", stateStoreGuard: "run" }],
     ["config file", { ...skip, ensureCliPath: false, ownsProtocolStdout: true }],
+    ["presence|presence query", { ...skip, loadPlugins: "never", ensureCliPath: false }],
     ["plugins update", { hideBanner: true }],
     ["plugins list|plugins lint", { ...skip, ensureCliPath: false }],
     [

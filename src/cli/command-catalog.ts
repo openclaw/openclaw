@@ -352,6 +352,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", networkProxy: "bypass" },
   },
   { commandPath: ["backup"], policy: { configGuard: "skip", networkProxy: "bypass" } },
+  // Read-only Gateway presence.query adapter; skip local startup preflight like gateway call.
+  { commandPath: ["presence"], policy: PASSIVE_STARTUP_POLICY },
   // Local TUI aliases run the embedded agent in this process, like `agent --local`.
   { commandPath: ["chat"], policy: { networkProxy: "default" } },
   { commandPath: ["config"], policy: { networkProxy: "bypass" } },
