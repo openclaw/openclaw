@@ -133,6 +133,7 @@ const enApprovals = {
       resolved: "Resolved",
       kind: "Kind",
       request: "Request",
+      warning: "Warning",
       decision: "Decision",
       reason: "Resolution reason",
       source: "Source agent / session",

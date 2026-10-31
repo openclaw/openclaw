@@ -439,3 +439,41 @@ it("retries a failed revoke without losing the row or accepting a stale ledger r
   expect(p.text(grantsTable)).toContain("Revoked");
   expect(p.button()).toBeNull();
 });
+
+const execTerminalWithWarning = (
+  id: string,
+  resolvedAtMs: number,
+  warningText: string | null,
+): ApprovalHistoryResult["items"][number] => ({
+  ...terminal(id, resolvedAtMs),
+  presentation: {
+    kind: "exec",
+    commandText: `echo ${id}`,
+    warningText,
+    allowedDecisions: ["deny"],
+  },
+});
+
+it("renders the exec approval warning text in the history table", async () => {
+  const p = createPage({
+    history: replyOnce({
+      items: [
+        execTerminalWithWarning("warned-exec", 3_000, "Dangerous: redirects to /dev/null"),
+        execTerminalWithWarning("plain-exec", 2_000, null),
+      ],
+    }),
+    grants: () => Promise.resolve({ grants: [] }),
+  });
+  await p.waitText(historyTable, "echo warned-exec");
+
+  const warningCells = () =>
+    [...p.query(historyTable)!.querySelectorAll("tbody tr")].map(
+      (row) => row.querySelectorAll("td")[3],
+    );
+  const [warned, plain] = warningCells();
+  const warning = (cell: Element | undefined) =>
+    cell?.querySelector<HTMLElement>(".approval-history__warning-text");
+
+  expect(warning(warned)?.textContent).toBe("Dangerous: redirects to /dev/null");
+  expect(warning(plain)).toBeNull();
+});
