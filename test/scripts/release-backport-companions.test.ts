@@ -1,10 +1,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { constants, cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const repositorySeeds = useAutoCleanupTempDirTracker(afterAll);
+let seed: ReturnType<typeof buildFixture> | undefined;
 const script = join(process.cwd(), "scripts/release-backport-companions.mjs");
 
 function git(root: string, args: string[]): string {
@@ -34,7 +36,14 @@ function audit(root: string, bounds: Record<string, string> = {}, separator = fa
 }
 
 function fixture() {
+  // Keep every ref/object private while the suite retains the completed five-commit graph.
+  seed ??= buildFixture(repositorySeeds.make("release-backport-companions-seed-"));
   const root = tempDirs.make("release-backport-companions-");
+  cpSync(seed.root, root, { recursive: true, mode: constants.COPYFILE_FICLONE });
+  return { ...seed, root };
+}
+
+function buildFixture(root: string) {
   git(root, ["init", "-q", "--initial-branch=main"]);
   git(root, ["config", "user.name", "Release Test"]);
   git(root, ["config", "user.email", "release-test@example.com"]);
