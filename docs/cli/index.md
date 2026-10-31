@@ -556,7 +556,10 @@ openclaw database migration-capture restore <capture> --target <empty-staging-di
 
 Quiesced capture authenticates to the selected local backend with its shared token
 or password. It creates its own verified filesystem archive and exact SQLite images
-under the same bounded suspension, preserving the source database and journal files.
+under the same bounded suspension without writing to the source database or journal
+files. The Gateway keeps its live ownership heartbeat: its own lease timestamps can
+advance during suspension. Capture does not stop those renewals or treat a captured
+lease as authority to activate restored state.
 It renews only the supplied controller request and refuses changed owners, expired
 suspensions, pending writes, and PostgreSQL sources. The controller must retain the
 suspension until capture finishes, then decide whether to resume or stop its Gateway.
