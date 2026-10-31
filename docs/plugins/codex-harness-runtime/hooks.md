@@ -21,6 +21,19 @@ history, verify that Codex unloaded the previous configuration, then append a
 complete superseding policy message before admitting the turn. Historical policy
 text can remain in the transcript; the later policy explicitly supersedes it.
 
+The complete native-thread carrier is delimited by `<openclaw_thread_policy>` on
+initial creation and refresh. The replacement notice targets only that OpenClaw
+policy, including older unlabelled versions, not the enclosing native developer
+message or all preceding context. Separately supplied parent-request persona,
+skills, memory and conversation instructions, independent native/project
+instructions, and user requests retain their authority. On connections without
+the inference relay, eligible workspace and refreshable instructions remain part
+of this native carrier and follow its existing replacement/removal semantics.
+
+Unchanged warm reuse adds no policy message. Explicit cold resumes still reassert
+the policy even when its text has not changed: the configuration fingerprint does
+not attest which policy remains in reconstructed model-visible history.
+
 Ordinary conversations use the same unsubscribe-and-resume flow over local stdio,
 WebSocket, Unix-socket, and stdio-proxy connections. The native conversation ID
 and history stay unchanged. OpenClaw verifies that the original app-server client

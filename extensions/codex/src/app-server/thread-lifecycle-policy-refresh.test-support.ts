@@ -245,7 +245,8 @@ export function registerThreadPolicyRefreshTests({
           }
           expect(requests.find(({ method }) => method === "thread/resume")?.params).toMatchObject({
             threadId,
-            developerInstructions: "replacement policy",
+            developerInstructions:
+              "<openclaw_thread_policy>\nreplacement policy\n</openclaw_thread_policy>",
           });
           expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(threadId);
         } else {
@@ -336,10 +337,8 @@ export function registerThreadPolicyRefreshTests({
           "thread/inject_items",
         ]);
         const policy = JSON.stringify(requests.at(-1)?.params);
-        expect(policy).toContain(
-          developerInstructions || "earlier OpenClaw generic policy is withdrawn",
-        );
-        expect(policy).toContain("It replaces earlier OpenClaw-supplied generic policy");
+        expect(policy).toContain(developerInstructions || "an empty block withdraws that policy");
+        expect(policy).toContain("This complete block replaces earlier versions of that policy");
         expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(threadId);
       } finally {
         close(wire);
