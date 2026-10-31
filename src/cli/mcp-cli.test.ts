@@ -388,6 +388,30 @@ it.each`
   },
 );
 
+it("rejects a reserved __proto__ key in --env and --header before writing", async () => {
+  await expectFailure(
+    '--env key "__proto__" is reserved; use a different key name.',
+    "add",
+    "docs",
+    "--command",
+    "node",
+    "--no-probe",
+    "--env",
+    "__proto__=injected",
+  );
+
+  await expectFailure(
+    '--header key "__proto__" is reserved; use a different key name.',
+    "add",
+    "docs",
+    "--url",
+    "https://mcp.example.com/mcp",
+    "--no-probe",
+    "--header",
+    "__proto__=injected",
+  );
+});
+
 it("rejects hexadecimal MCP timeout options before writing configuration", async () => {
   await expect(
     mcp("add", "docs", "--url", "https://mcp.example.com/mcp", "--timeout", "0x10", "--no-probe"),
