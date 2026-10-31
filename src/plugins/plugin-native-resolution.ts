@@ -3,9 +3,18 @@ export function getPluginBunConditions(requireMode: boolean): Set<string> {
   if (!process.execArgv.includes("--no-addons")) {
     conditions.add("node-addons");
   }
+  for (const condition of getPluginConfiguredConditions()) {
+    conditions.add(condition);
+  }
+  return conditions;
+}
+
+/** Keep explicit conditions distinct from runtime defaults when binding persisted source. */
+export function getPluginConfiguredConditions(): Set<string> {
+  const conditions = new Set<string>();
   for (let index = 0; index < process.execArgv.length; index += 1) {
     const argument = process.execArgv[index];
-    if (argument === "--conditions") {
+    if (argument === "--conditions" || argument === "-C") {
       const condition = process.execArgv[index + 1];
       if (condition && !condition.startsWith("-")) {
         conditions.add(condition);

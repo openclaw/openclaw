@@ -792,10 +792,18 @@ describe("queued runtime diagnostic phases", () => {
     const bound = withTrace(trace, phaseEmitter)!;
     const parentless = withTrace(undefined, phaseEmitter)!;
     const details = { threadCpuMs: 3 };
+    const clone = vi.spyOn(globalThis, "structuredClone");
     withTrace(trace, () => {
       parentless({ ...phase, name: "runtime.parentless" });
       bound({ ...phase, details });
     });
+    expect(
+      clone.mock.calls.some(
+        ([value]) =>
+          value && typeof value === "object" && "details" in value && value.details === details,
+      ),
+    ).toBe(true);
+    clone.mockRestore();
     details.threadCpuMs = 999;
     expect(events).toHaveLength(1);
     await drain();

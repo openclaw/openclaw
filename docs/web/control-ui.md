@@ -641,6 +641,10 @@ misses for current profile revisions, agent avatars, and resolved workspace icon
 the browser cache for up to one minute. New profile and agent image revisions use a new URL.
 This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
 
+Current Work applies complete session events without a periodic list refresh.
+Uncertain membership and reconnects still fetch an authoritative list. Activity
+History retains its one-minute fallback for people counts and pulse aggregates.
+
 Activity and previews in the sidebar roster refresh on session events
 and Gateway reconnects. Reusing cached ancestry for the selected session does not
 trigger another list read. Events collect in a randomized four-to-five-second window
