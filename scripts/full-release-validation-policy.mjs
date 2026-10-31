@@ -737,6 +737,25 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
     if (attempt.runAttempt !== expectedAttempt || attempt.jobs.length === 0) {
       throw new Error("release child attempt evidence is gapped");
     }
+    const identityNames = new Set();
+    for (const job of attempt.jobs) {
+      if (job?.status === "completed" && job?.conclusion === "skipped") {
+        continue;
+      }
+      const name = boundedString(job?.name, MAX_LABEL_LENGTH);
+      if (!name) {
+        throw new Error(`release child attempt ${expectedAttempt} contains an unnamed job`);
+      }
+      if (identityNames.has(name)) {
+        throw Object.assign(
+          new Error(
+            `release child attempt ${expectedAttempt} is unsealable due to duplicate job identity: ${name || "(unnamed)"}`,
+          ),
+          { code: "FRV_DUPLICATE_JOB_IDENTITY", runAttempt: expectedAttempt },
+        );
+      }
+      identityNames.add(name);
+    }
     const names = new Set();
     const completedNames = new Set(
       attempt.jobs.filter((job) => job?.status === "completed").map((job) => job.name),
@@ -761,14 +780,6 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
       const skipped = job.status === "completed" && job.conclusion === "skipped";
       if (skipped || (ghost && (completedNames.has(job.name) || runningNames.has(job.name)))) {
         continue;
-      }
-      if (names.has(job.name)) {
-        throw Object.assign(
-          new Error(
-            `release child attempt ${expectedAttempt} contains duplicate job identity: ${job.name}`,
-          ),
-          { code: "FRV_DUPLICATE_JOB_IDENTITY", runAttempt: expectedAttempt },
-        );
       }
       names.add(job.name);
       accepted.set(job.name, job);
@@ -1799,25 +1810,12 @@ export function planReleaseChildRerun({ childKey, jobs }) {
   if (failed.length === 1 && failed[0] === FULL_RELEASE_CHILD_EVIDENCE_JOB) {
     return { failed, mode: "receipt", producer: FULL_RELEASE_CHILD_EVIDENCE_JOB };
   }
-  const producerJob = jobs.find((job) => job.name === INSTALL_SMOKE_PAYLOAD_PRODUCER);
-  if (producerJob?.status === "completed" && producerJob.conclusion === "success") {
-    const local = (name) =>
-      name.startsWith(INSTALL_SMOKE_JOB_PREFIX) ? name.slice(INSTALL_SMOKE_JOB_PREFIX.length) : "";
-    const failedJobsRerun = installSmokeDependents(failed.map(local).filter(Boolean));
-    // A failed-jobs rerun that re-executes an attempt-bound consumer without the
-    // producer stays red, whether the consumer or an upstream image job failed.
-    if ([...failedJobsRerun].some((name) => INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS.has(name))) {
-      // A job rerun only re-executes the producer and its dependents; failures outside
-      // that closure (for example an upstream image build) need the whole run.
-      const producerDependents = installSmokeDependents([local(INSTALL_SMOKE_PAYLOAD_PRODUCER)]);
-      return failed.every(
-        (name) => producerDependents.has(local(name)) || INSTALL_SMOKE_CALLER_DEPENDENTS.has(name),
-      )
-        ? { failed, mode: "producer", producer: INSTALL_SMOKE_PAYLOAD_PRODUCER }
-        : { failed, mode: "all-jobs" };
-    }
+  if (failed.length !== 1) {
+    throw new Error(
+      `${childKey} has ${failed.length} blocking failed jobs; refusing a multi-job rerun because GitHub can create persistent duplicate jobs. Start a fresh all-group FRV instead`,
+    );
   }
-  return { failed, mode: "failed-jobs" };
+  return { failed, jobName: failed[0], mode: "single-job" };
 }
 
 function dispatchBlockers(children) {
