@@ -389,8 +389,17 @@ export function createCodexAppServerAgentHarness(
           preparedAuth.source !== "none" &&
           preparedAuth.source !== "harness" &&
           (preparedAuth.mode === "api-key" || preparedAuth.mode === "api_key");
-        if (!reproducibleApiKey) {
-          return unsupported("Codex Platform auth requires a prepared API key");
+        const reproducibleSharingOAuth =
+          provider === "openai" &&
+          preparedAuth.source === "profile" &&
+          preparedAuth.mode === "oauth" &&
+          preparedAuth.authFlow === "chatgpt-token-sharing" &&
+          ctx.modelProvider?.api === "openai-responses" &&
+          ctx.modelProvider.baseUrl?.replace(/\/$/u, "") === "https://api.openai.com/v1";
+        if (!reproducibleApiKey && !reproducibleSharingOAuth) {
+          return unsupported(
+            "Codex Platform auth requires a prepared API key or ChatGPT sharing profile",
+          );
         }
       }
       const appServer = readWorkerPluginConfig(
