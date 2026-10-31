@@ -1,14 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { stageFreeBsdManagedHandoffNativeRuntime } from "./update-managed-service-handoff-native.js";
+import { stageManagedHandoffNativeRuntime } from "./update-managed-service-handoff-native.js";
 import {
   MANAGED_HANDOFF_RUNTIME_ENTRY,
   managedHandoffRuntimeEntrypoint,
 } from "./update-managed-service-handoff-runtime-assets.js";
 
 /** Prepare the complete lease owner before launch; the caller owns partial-stage cleanup. */
-export function stageManagedHandoffRuntime(directory: string): string[] {
+export function stageManagedHandoffRuntime(
+  directory: string,
+  options?: { windowsBreakaway?: boolean },
+): string[] {
   const source = resolveRuntimeWorkerUrl(managedHandoffRuntimeEntrypoint);
   if (!source.pathname.endsWith(".mjs")) {
     throw new Error(
@@ -30,5 +33,9 @@ export function stageManagedHandoffRuntime(directory: string): string[] {
     staged.push(helper);
   }
   // Survives update-to-triage exec, then shares the helper's sensitive-file cleanup.
-  return [...staged, ...stageFreeBsdManagedHandoffNativeRuntime(directory)];
+  const native =
+    process.platform !== "win32" || options?.windowsBreakaway
+      ? stageManagedHandoffNativeRuntime(directory)
+      : [];
+  return [...staged, ...native];
 }

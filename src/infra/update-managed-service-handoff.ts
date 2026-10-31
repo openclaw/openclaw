@@ -81,6 +81,7 @@ import {
   resolveLegacyGatewayManagedUpdateLeaseDatabasePath as resolveLegacyGatewayDatabasePath,
 } from "./update-managed-service-handoff-legacy-store.js";
 import { MANAGED_HANDOFF_NATIVE_SCOPE_SOURCE } from "./update-managed-service-handoff-native-scope-source.js";
+import { loadWindowsManagedHandoffSpawner } from "./update-managed-service-handoff-native.js";
 import {
   prepareManagedHandoffCliRuntime,
   resolveManagedHandoffNodeExecutable,
@@ -1077,7 +1078,9 @@ async function spawnManagedServiceUpdateHandoff(
     if (helperParams.environmentPath) {
       await writeSystemdHandoffEnvironment(helperParams.environmentPath, env);
     }
-    helperParams.sensitivePaths.push(...stageManagedHandoffRuntime(dir));
+    const windowsBreakaway = params.supervisor === "schtasks" && !params.action;
+    helperParams.sensitivePaths.push(...stageManagedHandoffRuntime(dir, { windowsBreakaway }));
+    const spawnHelper = windowsBreakaway ? loadWindowsManagedHandoffSpawner(dir) : spawn;
     await fs.writeFile(scriptPath, `${HANDOFF_SCRIPT}\n`, { mode: 0o700 });
     await fs.writeFile(paramsPath, `${JSON.stringify(helperParams, null, 2)}\n`, { mode: 0o600 });
     await fs.writeFile(metaPath, `${JSON.stringify(metaFile, null, 2)}\n`, { mode: 0o600 });
@@ -1102,7 +1105,11 @@ async function spawnManagedServiceUpdateHandoff(
     };
     const spawned = systemdScope
       ? spawn(systemdScope.command, systemdScope.args, spawnOptions)
-      : spawn(handoffNodeExecutable, spawnArgs, spawnOptions);
+      : spawnHelper(handoffNodeExecutable, spawnArgs, {
+          ...spawnOptions,
+          // A detached process group still belongs to the Gateway's containing Jobs.
+          ...(windowsBreakaway ? { breakawayFromJob: true } : {}),
+        });
     const { stdin, stdout } = spawned;
     if (!stdin || !stdout) {
       throw new Error("Managed handoff control pipes are unavailable");

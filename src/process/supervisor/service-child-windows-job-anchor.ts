@@ -337,7 +337,8 @@ export function runServiceChildWindowsJobAnchor(): void {
       return;
     }
     try {
-      job = WindowsJob.create();
+      // Managed update handoffs explicitly leave both this Job and the task launcher's Job.
+      job = WindowsJob.create({ allowBreakaway: true });
       if (next.type === "prepare") {
         await send({ type: "prepared" });
         await Promise.race([launchGrant.promise, cleanupFinished.promise]);

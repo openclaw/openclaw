@@ -6,10 +6,13 @@ import { createManagedServiceManagerBoundary as managerBoundary } from "./update
 import { createManagedServiceChildMock as childMock } from "./update-managed-service-handoff-command.test-support.js";
 import { signalMockManagedUpdateHandoffReady as signalReady } from "./update-managed-service-handoff.test-support.js";
 
-const { kill, tmp, spawn } = vi.hoisted(() => ({
+const { kill, tmp, spawn, windowsSpawn, systemdInstallation } = vi.hoisted(() => ({
   kill: vi.fn(),
   tmp: vi.fn(),
   spawn: vi.fn(),
+  windowsSpawn: vi.fn(),
+  systemdInstallation:
+    vi.fn<typeof import("../daemon/systemd-scope.js").findSystemdGatewayInstallation>(),
 }));
 
 const mockedChildren = new Set<ReturnType<typeof createSpawnMock>>();
@@ -23,6 +26,16 @@ export function createSpawnMock(params?: { pid?: number }) {
 vi.mock("node:child_process", async (original) => ({
   ...(await original<typeof import("node:child_process")>()),
   spawn,
+}));
+
+vi.mock("./update-managed-service-handoff-native.js", async (original) => ({
+  ...(await original<typeof import("./update-managed-service-handoff-native.js")>()),
+  loadWindowsManagedHandoffSpawner: () => windowsSpawn,
+}));
+
+vi.mock("../daemon/systemd-scope.js", async (original) => ({
+  ...(await original<typeof import("../daemon/systemd-scope.js")>()),
+  findSystemdGatewayInstallation: systemdInstallation,
 }));
 
 vi.mock("../process/child-process-tree.js", async (original) => ({
@@ -46,6 +59,9 @@ export function useManagedServiceHandoffLifecycleFixture() {
     tmp.mockReturnValue(tempDirs.make("openclaw-handoff-coordinator-"));
     kill.mockReset();
     spawn.mockReset();
+    windowsSpawn.mockReset().mockImplementation((...args) => spawn(...args));
+    // Service fixtures must not discover or read an operator's system units.
+    systemdInstallation.mockReset().mockResolvedValue({ kind: "none" });
     spawn.mockImplementation((_command: string, args: string[]) => {
       const child = createSpawnMock();
       const { paramsPath } = artifacts.readManagedHandoffArtifacts(args);
@@ -93,6 +109,7 @@ export function useManagedServiceHandoffLifecycleFixture() {
     forceKillChildProcessTreeMock: kill,
     resolvePreferredOpenClawTmpDirMock: tmp,
     spawnMock: spawn,
+    spawnWindowsProcessMock: windowsSpawn,
     tempDirs,
     runManagedServiceManagerBoundary: managerBoundary({
       spawnMock: spawn,

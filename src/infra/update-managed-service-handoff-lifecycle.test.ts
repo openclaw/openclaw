@@ -41,6 +41,7 @@ const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-lifecycle-${p
 const {
   forceKillChildProcessTreeMock,
   spawnMock,
+  spawnWindowsProcessMock,
   tempDirs,
   runManagedServiceManagerBoundary: runBoundary,
 } = useManagedServiceHandoffLifecycleFixture();
@@ -768,6 +769,18 @@ describe("managed service update handoff", () => {
 
         expect(result.status).toBe("started");
         const { command, args, options, paramsPath } = handoffArtifacts(-1, result.logPath);
+        expect(spawnWindowsProcessMock).toHaveBeenCalledTimes(supervisor === "schtasks" ? 1 : 0);
+        if (supervisor === "schtasks") {
+          expect(spawnWindowsProcessMock).toHaveBeenCalledWith(
+            nodeExec,
+            args,
+            expect.objectContaining({
+              detached: true,
+              breakawayFromJob: true,
+              stdio: ["pipe", "pipe", expect.anything()],
+            }),
+          );
+        }
         const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf-8")) as {
           metaPath: string;
           serviceRecovery?: unknown;
