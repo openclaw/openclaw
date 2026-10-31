@@ -189,7 +189,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
   let pinKeys: string[];
   let sidebarParents: Array<{ key: string; childKeys: string[] }>;
   const sessionKeys = [
-    `agent:${agentId}:24800000-0000-4000-8000-000000000001`,
+    `agent:${agentId}:dashboard:24800000-0000-4000-8000-000000000001`,
     `agent:${agentId}:dashboard:24800001-0000-4000-8000-000000000001`,
   ];
   const baseOptions = parseTeamShapeOptions([
