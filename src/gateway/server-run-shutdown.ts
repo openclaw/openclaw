@@ -1,6 +1,7 @@
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasGatewayContextOwner } from "../plugins/runtime/gateway-request-scope.js";
 import { getProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
@@ -10,10 +11,7 @@ import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources
 import { activeSessionOperations } from "../sessions/session-controller.state.js";
 import { captureSessionControllerStop, stopSession } from "../sessions/session-controller.stop.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
-import {
-  GatewayShutdownCleanupRetainedError,
-  recordGatewayShutdownWarning,
-} from "./server-shutdown.js";
+import { recordGatewayShutdownWarning } from "./server-shutdown.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 
@@ -29,7 +27,6 @@ export type GatewayRunShutdownParams = {
 export async function prepareGatewayRunShutdown(
   params: GatewayRunShutdownParams & {
     warnings: string[];
-    exitAfterClose?: boolean;
   },
 ): Promise<{ released: Promise<void>; failure?: { error: unknown } }> {
   const sources = listRpcSourceEntries().filter(([, entry]) =>
@@ -108,26 +105,10 @@ export async function prepareGatewayRunShutdown(
       ? [source.adapter.projectSessionTerminalPersistence]
       : [],
   );
-  const released = Promise.all([
+  const released = Promise.allSettled([
     capture.settled,
     interrupted.released,
     ...terminalPersistence,
-  ]).then(() => undefined);
-  return {
-    failure,
-    released: params.exitAfterClose
-      ? raceWithTimeout(
-          released,
-          5_000,
-          () => {
-            // Do not dispose or reuse a generation whose raw cleanup is still live.
-            throw new GatewayShutdownCleanupRetainedError(
-              [],
-              "session admissions remain after shutdown grace",
-            );
-          },
-          { ref: false },
-        )
-      : released,
-  };
+  ]).then((results) => throwIfSettledRejected(results, "Session shutdown persistence failed"));
+  return { failure, released };
 }
