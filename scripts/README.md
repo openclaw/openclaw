@@ -341,6 +341,8 @@ matching their bundle's Workboard source. Run Chromium at `--cpu-throttle 1` and
 with `--steps page-<route>-visit,page-<route>-action,page-<route>-leave`.
 Use `--pages --page-phases visit` to validate every route's loaded state before
 the `--page-phases action,leave` sweep; the default includes all three phases.
+Virtualized inventories use their logical row count for readiness, including
+Cron's first 50 loaded jobs, rather than requiring every row to be mounted.
 The page table includes longest observed main-thread task, standard CLS, all
 layout shifts including those after input, and DOM counts. Unsupported browser
 metrics are null. DOM counts are collected after the measured interval so the
