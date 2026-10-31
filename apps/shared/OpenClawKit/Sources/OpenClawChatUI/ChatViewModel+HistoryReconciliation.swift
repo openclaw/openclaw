@@ -171,7 +171,8 @@ extension OpenClawChatViewModel {
             return [role, "idempotency", idempotencyKey].joined(separator: "|")
         }
         guard let id = ChatPayloadDecoding.trimmedNonEmptyString(message.transcriptMessageID) else { return nil }
-        return [role, "transcript", id].joined(separator: "|")
+        // Tool results split from one carrier share its gateway transcript ID.
+        return [role, "transcript", id, message.toolCallId ?? ""].joined(separator: "|")
     }
 
     static func adoptingCanonicalMessage(

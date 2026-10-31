@@ -478,7 +478,6 @@ extension OpenClawChatViewModel {
         // still retire its durable row before this handler returns early.
         confirmOutboxCommands(in: ingested)
         guard isCurrentSession else { return }
-        // Branch state follows the gateway carrier, not its expanded presentation rows.
         self.observeOutboxTranscriptTip(message, session: self.currentSessionSnapshot())
 
         self.invalidateHistorySnapshots()

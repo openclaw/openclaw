@@ -40,29 +40,6 @@ struct ChatToolResultIngestionTests {
     private static let user = #"{"role":"user","timestamp":1,"content":"Check both"}"#
     private static let answer = #"{"role":"assistant","timestamp":4,"stopReason":"stop","content":"Both checked"}"#
 
-    @Test func `v2026_10_3 cached messages decode without carrier field`() throws {
-        // Stable cache JSON predates toolResultCarrierTranscriptMessageID.
-        let fixture = Data("""
-        [\(Self.user),\(Self.parallel)]
-        """.utf8)
-        let decoder = JSONDecoder()
-        let cached = try decoder.decode([OpenClawChatMessage].self, from: fixture)
-        #expect(cached.count == 2)
-        #expect(cached.allSatisfy { $0.toolResultCarrierTranscriptMessageID == nil })
-        #expect(cached.last?.canonicalTranscriptMessageID == "carrier")
-        #expect(cached.first?.content.first?.text == "Check both")
-
-        let expanded = cached.flatMap(\.ingestedMessages)
-        #expect(expanded.map(\.role) == ["user", "toolResult", "toolResult"])
-        #expect(expanded.suffix(2).map(\.canonicalTranscriptMessageID) == ["carrier", "carrier"])
-        #expect(expanded.suffix(2).map(\.toolCallId) == ["a", "b"])
-        let restored = try decoder.decode(
-            [OpenClawChatMessage].self,
-            from: JSONEncoder().encode(expanded))
-        #expect(restored.suffix(2).map(\.canonicalTranscriptMessageID) == ["carrier", "carrier"])
-        #expect(restored.suffix(2).map { $0.content.first?.text } == ["Alpha output", "Beta output"])
-    }
-
     @Test func `parallel results`() throws {
         let messages = try OpenClawChatViewModel.decodeMessages([Self.raw(Self.parallel)])
         #expect(messages.map(\.role) == ["toolResult", "toolResult"])
@@ -71,7 +48,8 @@ struct ChatToolResultIngestionTests {
         #expect(messages.map { ChatMessageVisibleText.displayText(in: $0, includeThinking: false) } == [
             "Alpha output", "Beta output",
         ])
-        #expect(Set(messages.compactMap(\.transcriptMessageID)).count == 2)
+        #expect(messages.map(\.transcriptMessageID) == ["carrier", "carrier"])
+        #expect(Set(messages.compactMap(OpenClawChatViewModel.dedupeKey)).count == 2)
         let calls = try Self.raw(#"""
         {
           "role": "assistant",
@@ -547,9 +525,7 @@ struct ChatToolResultIngestionTests {
             messageId: nil,
             messageSeq: nil)))
         await vm.pendingCacheWriteTask?.value
-        #expect(vm.messages.map(\.transcriptMessageID) == [
-            carrierID + ":tool-result:0", carrierID + ":tool-result:1",
-        ])
+        #expect(vm.messages.map(\.transcriptMessageID) == [carrierID, carrierID])
         let scope = try #require(vm.outboxBranchScope(for: vm.currentSessionSnapshot()))
         let state = try #require(await store.branchState(for: scope))
         #expect(state.lastActiveLeafEntryID == carrierID)
@@ -615,7 +591,7 @@ struct ChatToolResultIngestionTests {
         // Exercise the actual SQLite encode/decode path before branch ancestry
         // reads the expanded rows. Pending commands keep the captured tip pinned.
         let cached = await store.loadTranscript(sessionKey: "main", agentID: nil)
-        #expect(cached.prefix(2).map(\.canonicalTranscriptMessageID) == [carrierID, carrierID])
+        #expect(cached.prefix(2).map(\.transcriptMessageID) == [carrierID, carrierID])
         vm.replaceMessages(cached)
         #expect(await vm.reconcileOutboxBranchScope(
             scope, branches: [Self.branch(leaf: "next-leaf")], previousState: state))
