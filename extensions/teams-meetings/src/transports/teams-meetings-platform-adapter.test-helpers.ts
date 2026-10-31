@@ -428,10 +428,8 @@ export function runAudioCaptureScript(params: {
     atob: globalThis.atob,
     location,
     window,
-    AudioContext: class AudioContext {
-      constructor() {
-        throw new Error("capture admitted");
-      }
+    AudioContext: function AudioContext() {
+      throw new Error("capture admitted");
     },
   }) as () => Promise<string>;
   return run();
