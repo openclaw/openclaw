@@ -5,6 +5,14 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI boot composer" });
 const sessionKey = "agent:main:boot-composer";
 const viewport = { width: 1280, height: 800 };
+const phoneViewport = { width: 390, height: 844 };
+const landscapeViewport = { width: 932, height: 430 };
+const phoneOptions = {
+  isMobile: true,
+  hasTouch: true,
+  userAgent:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+};
 
 function bootGateway(page: Parameters<typeof installMockGateway>[0], heldMethods: string[]) {
   return installMockGateway(page, {
@@ -74,20 +82,12 @@ suite.define(() => {
   });
 
   it.each([
-    { name: "desktop", options: { viewport } },
-    {
-      name: "phone",
-      options: {
-        viewport: { width: 390, height: 844 },
-        isMobile: true,
-        hasTouch: true,
-        userAgent:
-          "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
-      },
-    },
+    { name: "desktop", options: { viewport, isMobile: false } },
+    { name: "phone", options: { ...phoneOptions, viewport: phoneViewport } },
+    { name: "phone landscape", options: { ...phoneOptions, viewport: landscapeViewport } },
   ])(
     "keeps an unsent draft, its focus and its frame still when the session opens ($name)",
-    async ({ name, options }) => {
+    async ({ options }) => {
       await suite.withPage(options, async ({ page }) => {
         const gateway = await bootGateway(page, ["connect"]);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey), {
@@ -97,14 +97,14 @@ suite.define(() => {
         await boot.waitFor({ state: "visible" });
         // Like the chat composer, it takes focus only from the operator.
         expect(await boot.evaluate((el) => el === document.activeElement)).toBe(false);
-        if (name === "phone") {
+        if (options.isMobile) {
           await boot.tap();
         } else {
           await boot.click();
         }
         const text = "Draft, not yet sent, long enough to wrap onto another line of the composer";
         await page.keyboard.type(text);
-        await page.keyboard.press(name === "phone" ? "Enter" : "Shift+Enter");
+        await page.keyboard.press(options.isMobile ? "Enter" : "Shift+Enter");
         await page.keyboard.type("second line");
         // The caret moves into the draft; the handoff must keep it there.
         for (let index = 0; index < "line".length; index += 1) {

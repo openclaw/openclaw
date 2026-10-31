@@ -567,12 +567,38 @@
           .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content) {
           padding-bottom: 6px;
         }
+      }
 
+      @media (max-width: 900px),
+        (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
         /* Merged web chrome uses the mobile composer; native shells retain its base gap. */
         html:not(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome)
           :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
           .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content) {
           padding-bottom: 10px;
+        }
+      }
+
+      @media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+        html:not(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome)
+          :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+          .loading-skeleton:has(#openclaw-boot-composer) {
+          /* Measure available width outside the border, like the live composer. */
+          container-name: chat-composer;
+          container-type: inline-size;
+          padding-inline: 16px;
+        }
+
+        @container chat-composer (width > 560px) {
+          html:not(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome)
+            :is(
+              #openclaw-boot-composer:focus,
+              .loading-skeleton:has(.loading-skeleton__content) #openclaw-boot-composer
+            ) {
+            /* Match the live wide row's 6px + 10px top and 12px sides.
+               Preserve 62px of block padding for the reserved footer. */
+            padding: 16px 12px 46px;
+          }
         }
       }
 
