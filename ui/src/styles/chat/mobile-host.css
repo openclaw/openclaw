@@ -71,7 +71,7 @@
     transform var(--motion-sheet),
     translate var(--motion-sheet),
     border-radius var(--motion-sheet),
-    visibility var(--motion-sheet),
+    visibility 0s,
     z-index 0s var(--motion-sheet-duration);
   @starting-style {
     transform: translateY(100%);
@@ -84,6 +84,8 @@
   display: flex;
   visibility: hidden;
   transform: translateY(100%);
+  /* Visible until the exit ends, but at once on open so focus can enter it. */
+  transition-duration: var(--motion-sheet-duration);
 }
 
 .sidebar-region--mobile-host > .chat-mobile-host[data-mode="expanded"] {
