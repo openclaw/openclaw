@@ -2465,6 +2465,10 @@ snapshot so its next reader can still reuse it.
 These limits count resident payloads, not live caller handles. Empty cells held
 by active callers remain until release and do not force freshly loaded snapshots
 out of the cache.
+Transcript bodies also expire after five minutes without an actor handle. One
+detached owner timer releases these bodies while preserving entry and actor snapshot
+facts; sidebar reads do not renew their lifetime. Reopening an actor cancels its
+idle deadline, and an expired body reloads through the canonical transcript reader.
 If a receipt supersedes an in-flight read, that read uses the current replica.
 An empty replica permits one worker-read retry. A replacement before disclosure
 is reacquired once and authorized again; revoked authority still refuses the read.

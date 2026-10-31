@@ -61,6 +61,19 @@
 // This mode keeps a fixed viewer set instead of adding reconnect churn.
 // --stress-tool-search adds a verified catalog search before each --stress-tools execution.
 // --stress-network-tool adds a verified loopback HTTP tool inside each Code Mode cell.
+// Idle-content proof: use a fresh Team-shaped fixture and run this command first
+// with --seed-history, then without it (same ports and history options):
+// node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+//   --state-dir <fixture> --entry <built-revision>/dist/entry.js \
+//   --scenario session-idle-retention --sessions 170 --idle-child-sessions 73 \
+//   --runs 4 --plugins 40 --history-turns 40 --history-payload-kib 16 \
+//   --verify-history-replay --idle-active-sessions 4 --idle-active-hold-ms 60000 \
+//   --duration-ms 360000 --chunks 1 --chunk-interval-ms 1 --prompt-kib 16 \
+//   --diagnostics --heap-snapshot --port 42614 --mock-port 42616
+// Holds the final four turns at the mock-provider boundary during the final minute.
+// Verifies the full seeded historical wire prefix and ordering on reopen;
+// chat.history checks the presentation prefix, not raw durable transcript encoding.
+// Built idle runs omit the source-only first-text observer (no TTFT measurement).
 // Fixed N/2N retention usage: transcript-broadcast-run-retention.md.
 // --poll-between-rounds keeps list/mixed-RPC polling active between memory-soak cohorts.
 // On a fresh team-shape fixture, exercise sidebar/search and usage refresh with:
@@ -265,6 +278,9 @@ const { values } = parseArgs({
     "history-last-turns": { type: "string", default: "0" },
     "history-payload-kib": { type: "string", default: "0" },
     "verify-history-replay": { type: "boolean", default: false },
+    "idle-child-sessions": { type: "string" },
+    "idle-active-sessions": { type: "string", default: "0" },
+    "idle-active-hold-ms": { type: "string", default: "60000" },
     "seed-history": { type: "boolean", default: false },
     rounds: { type: "string", default: "5" },
     "duration-ms": { type: "string", default: "3600000" },
@@ -352,7 +368,10 @@ if (values["team-stress"] && (pluginCount < 4 || pluginCount > TEAM_STRESS_PLUGI
     `--team-stress requires --plugins between 4 and ${TEAM_STRESS_PLUGIN_IDS.length}`,
   );
 }
-const teamPluginCatalog = values["team-stress"] || values["turn-start-phases"];
+const teamPluginCatalog =
+  values["team-stress"] ||
+  values["turn-start-phases"] ||
+  (scenario === "session-idle-retention" && values["verify-history-replay"]);
 const syntheticPluginCount = teamPluginCatalog ? 0 : pluginCount;
 const teamStressPlugins: string[] = TEAM_STRESS_PLUGIN_IDS.slice(0, pluginCount);
 if (values["turn-start-rich-context"]) {
@@ -436,7 +455,9 @@ const historyTurns = integer(values["history-turns"], "--history-turns", 0);
 const historyLastTurns = integer(values["history-last-turns"], "--history-last-turns", 0);
 const historyPayloadBytes =
   integer(values["history-payload-kib"], "--history-payload-kib", 0) * 1024;
-const verifyHistoryReplay = values["verify-history-replay"];
+const verifyIdleHistory = idleScenario && values["verify-history-replay"];
+const verifyHistoryReplay = !idleScenario && values["verify-history-replay"];
+const verifySeededHistory = verifyHistoryReplay || verifyIdleHistory;
 if (
   (historyTurns || values["seed-history"]) &&
   !idleScenario &&
@@ -453,8 +474,15 @@ if (values["seed-history"] && !historyTurns) {
 if ((historyLastTurns || historyPayloadBytes) && !historyTurns) {
   throw new Error("--history-last-turns and --history-payload-kib require --history-turns");
 }
-if (verifyHistoryReplay && (!soakScenario || !historyTurns)) {
-  throw new Error("--verify-history-replay requires memory-soak and --history-turns > 0");
+if (values["verify-history-replay"] && ((!soakScenario && !idleScenario) || !historyTurns)) {
+  throw new Error(
+    "--verify-history-replay requires memory-soak or session-idle-retention with --history-turns > 0",
+  );
+}
+if (verifyIdleHistory && (!historyPayloadBytes || historyLastTurns)) {
+  throw new Error(
+    "Idle replay verification requires --history-payload-kib and equal-length histories",
+  );
 }
 if (verifyHistoryReplay && (historyLastTurns || historyPayloadBytes)) {
   throw new Error(
@@ -638,8 +666,24 @@ if (values["chat-active-after-tool"] && (!chatActiveHoldMs || runCount !== 1)) {
   throw new Error("--chat-active-after-tool requires --chat-active-hold-ms and --runs 1");
 }
 const sessionCount = idleScenario ? integer(values.sessions, "--sessions") : runCount;
+const idleChildSessions = integer(
+  values["idle-child-sessions"] ?? String(sessionCount),
+  "--idle-child-sessions",
+  0,
+);
+const idleActiveSessions = integer(values["idle-active-sessions"], "--idle-active-sessions", 0);
+const idleActiveHoldMs = integer(values["idle-active-hold-ms"], "--idle-active-hold-ms");
+if (
+  (!idleScenario && (values["idle-child-sessions"] !== undefined || idleActiveSessions)) ||
+  idleChildSessions > sessionCount ||
+  idleActiveSessions > Math.min(runCount, sessionCount)
+) {
+  throw new Error(
+    "Idle child/active counts require session-idle-retention; children <= sessions and active <= runs/sessions",
+  );
+}
 const historyBytesPerTurn = 16 * 1024;
-const historyReasoningBytes = 4 * 1024;
+const historyReasoningBytes = verifyIdleHistory ? historyPayloadBytes : 4 * 1024;
 function historyReasoningContent(index: number, turn: number, phase: "tool" | "answer") {
   return createCipheriv(
     "aes-256-ctr",
@@ -681,6 +725,9 @@ if (coldSessionRounds > rounds) {
   throw new Error("--cold-session-rounds must not exceed --rounds");
 }
 const durationMs = integer(values["duration-ms"], "--duration-ms");
+if (idleActiveSessions && idleActiveHoldMs > durationMs) {
+  throw new Error("--idle-active-hold-ms cannot exceed --duration-ms");
+}
 const warmupMs = integer(values["warmup-ms"], "--warmup-ms", 0);
 const roundIntervalMs = integer(values["round-interval-ms"], "--round-interval-ms");
 const rpcIntervalMs = integer(values["rpc-interval-ms"], "--rpc-interval-ms", 0);
@@ -1406,7 +1453,7 @@ applyMockOpenAiModelConfig(cfg, {
 if (values["auth-availability-storm"]) {
   cfg.models.providers.openai.apiKey = "openai:auth-availability-storm";
 }
-if (verifyHistoryReplay) {
+if (verifySeededHistory) {
   for (const model of cfg.models.providers.openai.models) {
     // The synthetic provider must fit the seed plus turns accumulated across restarts.
     model.contextWindow = 2_097_152;
@@ -2494,6 +2541,17 @@ const cronOperatorJobs: Array<{ id?: string; cohortId: string }> = values["cron-
   ? [{ cohortId: randomUUID() }]
   : [];
 let cronOperatorSetupCompleted = false;
+let idleHold: { arrived: () => void; release: Promise<void> } | undefined;
+const idleWireProof = new Map<
+  number,
+  {
+    digest: string;
+    requests: number;
+    bytes: number;
+    requestPreludeDigest: string;
+    requestPreludeChanges: number;
+  }
+>();
 let cohort:
   | {
       id: string;
@@ -2829,6 +2887,92 @@ const mock = createServer((req, res) => {
           }
         }
       }
+    }
+    if (
+      verifyIdleHistory &&
+      primary &&
+      cohort &&
+      Array.isArray(input) &&
+      keys.includes(cohort.turns.get(index)?.sessionKey ?? "")
+    ) {
+      const sessionKey = cohort.turns.get(index)?.sessionKey;
+      const sessionIndex = sessionKey === undefined ? -1 : keys.indexOf(sessionKey);
+      if (sessionIndex < 0) {
+        throw new Error("Idle replay request has no seeded session");
+      }
+      const expected = new Set(
+        Array.from({ length: historyTurns }, (_, turn) =>
+          historyReasoningContent(sessionIndex, turn, "tool"),
+        ),
+      );
+      const items = input.filter(isRecord);
+      const signed = items.filter(
+        (item) =>
+          item.type === "reasoning" &&
+          typeof item.encrypted_content === "string" &&
+          expected.has(item.encrypted_content),
+      );
+      const outputs = items.filter(
+        (item) =>
+          item.type === "function_call_output" &&
+          typeof item.call_id === "string" &&
+          item.call_id.includes("fixture-"),
+      );
+      if (signed.length !== historyTurns || outputs.length !== historyTurns) {
+        throw new Error(
+          `Seeded history missing at wire: session=${sessionIndex}, reasoning=${signed.length}/${historyTurns}, tool outputs=${outputs.length}/${historyTurns}`,
+        );
+      }
+      for (let turn = 0; turn < historyTurns; turn++) {
+        const signature = historyReasoningContent(sessionIndex, turn, "tool");
+        const outputText = `Synthetic file ${turn}.\n${historyReasoningContent(sessionIndex, turn, "answer")}`;
+        if (
+          !signed.some((item) => item.encrypted_content === signature) ||
+          !outputs.some((item) => contentText(item.output) === outputText)
+        ) {
+          throw new Error(`Seeded wire content changed: session=${sessionIndex}, turn=${turn}`);
+        }
+      }
+      const seedStart = input.findIndex((item) =>
+        readMockUserText(item)?.includes("Inspect synthetic file 0."),
+      );
+      const seedEnd = input.findIndex((item) =>
+        readMockUserText(item)?.includes("Reply with benchmark stream "),
+      );
+      if (seedStart < 0 || seedEnd <= seedStart) {
+        throw new Error("Missing seeded history boundaries in provider input");
+      }
+      // Include every original user/assistant/tool/reasoning item, excluding later turns.
+      const prefix = JSON.stringify(input.slice(seedStart, seedEnd));
+      const digest = createHash("sha256").update(prefix).digest("hex");
+      const previous = idleWireProof.get(sessionIndex);
+      if (previous && previous.digest !== digest) {
+        throw new Error(`Seeded wire ordering/bytes changed after reopen: ${sessionIndex}`);
+      }
+      const requestPreludeDigest = createHash("sha256")
+        .update(
+          JSON.stringify({
+            instructions: isRecord(body) ? body.instructions : undefined,
+            tools: isRecord(body) ? body.tools : undefined,
+            inputPrelude: input.slice(0, seedStart),
+          }),
+        )
+        .digest("hex");
+      const proof = {
+        digest,
+        requests: (previous?.requests ?? 0) + 1,
+        bytes: Buffer.byteLength(prefix),
+        requestPreludeDigest,
+        // Prelude changes are reported separately: dynamic turn facts are outside the seed.
+        requestPreludeChanges:
+          (previous?.requestPreludeChanges ?? 0) +
+          (previous && previous.requestPreludeDigest !== requestPreludeDigest ? 1 : 0),
+      };
+      idleWireProof.set(sessionIndex, proof);
+      appendFileSync(
+        path.join(output, "seeded-wire-census.jsonl"),
+        JSON.stringify({ sessionIndex, ...proof }) + "\n",
+      );
     }
     if (verifyHistoryReplay && primary) {
       const expected = expectedHistoricalReasoning[index - 1]!;
@@ -3351,7 +3495,7 @@ const env = {
   OPENCLAW_PROFILE: values["default-state-dir"] ? "default" : `team-shape-${port}`,
   OPENCLAW_SYSTEMD_UNIT: `openclaw-gateway-team-shape-${port}`,
   ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
-  ...(idleScenario ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
+  ...(idleScenario && /\.[cm]?ts$/.test(values.entry) ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
   ...(process.env.OPENCLAW_BENCH_RETAIN_TOOL_CONTEXT === "1"
     ? { OPENCLAW_BENCH_RETAIN_TOOL_CONTEXT: "1" }
     : {}),
@@ -3402,6 +3546,10 @@ function launch(args: string[], name: string, extraEnv: NodeJS.ProcessEnv = {}, 
     detached: true,
     stdio: ipc ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
   });
+  appendFileSync(
+    path.join(output, "children.jsonl"),
+    JSON.stringify({ pid: child.pid, name }) + "\n",
+  );
   child.stdout?.pipe(log, { end: false });
   child.stderr?.pipe(log, { end: false });
   child.on("message", (message: unknown) => {
@@ -3696,10 +3844,14 @@ if (values["seed-history"]) {
         lifecycleRevision: `${historyNamespace}-v1`,
         createdVia: "operator",
         visibility: "shared",
-        parentSessionKey: parentKey,
-        parentSessionId: `${historyNamespace}-parent`,
-        parentSessionLifecycleRevision: `${historyNamespace}-v1`,
-        spawnDepth: 1,
+        ...(!idleScenario || index < idleChildSessions
+          ? {
+              parentSessionKey: parentKey,
+              parentSessionId: `${historyNamespace}-parent`,
+              parentSessionLifecycleRevision: `${historyNamespace}-v1`,
+              spawnDepth: 1,
+            }
+          : {}),
         ...(verifyHistoryReplay && stressWorktree ? { spawnedCwd: stressWorktree } : {}),
       });
       const manager = await SessionManager.openAsync(
@@ -3709,7 +3861,7 @@ if (values["seed-history"]) {
       await manager.appendModelChange("openai", "gpt-4.1");
       await manager.appendThinkingLevelChange("off");
       const turns = index === keys.length - 1 && historyLastTurns ? historyLastTurns : historyTurns;
-      const reasoningReplayMetadata = verifyHistoryReplay
+      const reasoningReplayMetadata = verifySeededHistory
         ? buildOpenAIResponsesReasoningReplayMetadata(
             {
               ...cfg.models.providers.openai.models[0],
@@ -3733,15 +3885,15 @@ if (values["seed-history"]) {
               thinking: verifyHistoryReplay
                 ? "Inspecting the synthetic history fixture."
                 : `Synthetic reasoning ${turn}.`,
-              ...(verifyHistoryReplay ? { openclawReasoningReplay: reasoningReplayMetadata } : {}),
+              ...(verifySeededHistory ? { openclawReasoningReplay: reasoningReplayMetadata } : {}),
               thinkingSignature: JSON.stringify({
                 type: "reasoning",
                 id: verifyHistoryReplay
                   ? `rs_soak_history_${index}_${turn}_${phase}`
                   : `rs_fixture_${index}_${turn}`,
-                ...(verifyHistoryReplay ? { status: "completed" } : {}),
+                ...(verifySeededHistory ? { status: "completed" } : {}),
                 summary: [],
-                encrypted_content: verifyHistoryReplay
+                encrypted_content: verifySeededHistory
                   ? historyReasoningContent(index, turn, phase)
                   : promptContent.update(Buffer.alloc(historyPayloadBytes / 2)).toString("hex"),
               }),
@@ -3780,7 +3932,9 @@ if (values["seed-history"]) {
               type: "text",
               text: `Synthetic file ${turn}.\n${
                 historyPayloadBytes
-                  ? promptContent.update(Buffer.alloc(historyPayloadBytes / 2)).toString("hex")
+                  ? verifyIdleHistory
+                    ? historyReasoningContent(index, turn, "answer")
+                    : promptContent.update(Buffer.alloc(historyPayloadBytes / 2)).toString("hex")
                   : "Fixture content. ".repeat(128)
               }`,
             },
@@ -3809,8 +3963,9 @@ if (values["seed-history"]) {
         historyLastTurns,
         historyPayloadBytes,
         verifyHistoryReplay,
+        ...(idleScenario ? { idleChildSessions, verifyIdleHistory } : {}),
         ...(values["turn-start-phases"] ? { turnStartPort: port } : {}),
-        ...(verifyHistoryReplay ? { modelBaseUrl: cfg.models.providers.openai.baseUrl } : {}),
+        ...(verifySeededHistory ? { modelBaseUrl: cfg.models.providers.openai.baseUrl } : {}),
       }),
     );
   } finally {
@@ -3827,11 +3982,13 @@ if (historyTurns) {
     seeded.historyTurns !== historyTurns ||
     (seeded.historyLastTurns ?? 0) !== historyLastTurns ||
     (seeded.historyPayloadBytes ?? 0) !== historyPayloadBytes ||
+    (idleScenario && (seeded.idleChildSessions ?? sessionCount) !== idleChildSessions) ||
+    (verifyIdleHistory && !seeded.verifyIdleHistory) ||
     (values["turn-start-phases"] && seeded.turnStartPort !== port)
   ) {
     throw new Error("Run --seed-history with matching session count and history options first");
   }
-  if (verifyHistoryReplay && seeded.modelBaseUrl !== cfg.models.providers.openai.baseUrl) {
+  if (verifySeededHistory && seeded.modelBaseUrl !== cfg.models.providers.openai.baseUrl) {
     throw new Error("Deep-history reasoning replay requires the same --mock-port used to seed it");
   }
 }
@@ -4573,6 +4730,15 @@ async function runRound(
     reject,
   };
   const current = cohort;
+  if (idleHold) {
+    const hold = idleHold;
+    current.beforeRelease = async () => {
+      // Arrival timeout no longer applies once every held request has arrived.
+      clearTimeout(timeout);
+      hold.arrived();
+      await hold.release;
+    };
+  }
   const activeInputs: {
     sessionKey: string;
     runId: string;
@@ -6669,7 +6835,9 @@ try {
           message.role === "assistant" &&
           contentText(message.content).trim() === chunk.repeat(chunkCount).trim(),
       );
-      if (answers.length !== (phase === "reopened" ? 2 : 1)) {
+      const heldTurn =
+        idleActiveSessions > 0 && keys.slice(-idleActiveSessions).includes(sessionKey);
+      if (answers.length !== (phase === "reopened" ? (heldTurn ? 3 : 2) : 1)) {
         throw new Error(`idle-session answer missing or duplicated during ${phase}: ${sessionKey}`);
       }
       if (phase === "touched") {
@@ -7650,13 +7818,36 @@ try {
       if (round === 0) {
         const finishIdleDiagnostics = await startGatewayDiagnostics(gateway, "session-idle");
         const idleStartedAt = Date.now();
-        while (Date.now() - idleStartedAt < durationMs) {
-          await delay(Math.min(memoryIntervalMs, durationMs - (Date.now() - idleStartedAt)));
-          assertGatewayAlive();
-          await sampleMemory();
+        const waitIdle = async (untilMs: number) => {
+          while (Date.now() - idleStartedAt < untilMs) {
+            await delay(Math.min(memoryIntervalMs, untilMs - (Date.now() - idleStartedAt)));
+            assertGatewayAlive();
+            await sampleMemory();
+          }
+        };
+        await waitIdle(durationMs - (idleActiveSessions ? idleActiveHoldMs : 0));
+        const arrived = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        let activeWork: ReturnType<typeof runRound> | undefined;
+        try {
+          if (idleActiveSessions) {
+            idleHold = { arrived: arrived.resolve, release: release.promise };
+            activeWork = runRound(sender, undefined, keys.slice(-idleActiveSessions));
+            await Promise.race([
+              arrived.promise,
+              activeWork.then(() => {
+                throw new Error("Held idle turns settled before snapshot");
+              }),
+            ]);
+          }
+          await waitIdle(durationMs);
+          idleDiagnostics = await finishIdleDiagnostics();
+          postIdleResources = await sampleMemory(true, "post-idle");
+        } finally {
+          release.resolve();
+          await activeWork;
+          idleHold = undefined;
         }
-        idleDiagnostics = await finishIdleDiagnostics();
-        postIdleResources = await sampleMemory(true, "post-idle");
         // Verify the retained prefix after reopening; reading it now warms idle workers.
       }
     }
@@ -8496,6 +8687,10 @@ try {
           sessionCount,
           historyTurns,
           idleDurationMs: durationMs,
+          idleChildSessions,
+          idleActiveSessions,
+          idleActiveHoldMs,
+          seededWireProof: verifyIdleHistory ? Object.fromEntries(idleWireProof) : undefined,
           promptBytes,
           initialRetainedResources,
           postIdleResources,
@@ -8640,6 +8835,13 @@ try {
         2,
       ),
     );
+  }
+  if (
+    verifyIdleHistory &&
+    (idleWireProof.size !== sessionCount ||
+      [...idleWireProof.values()].some((proof) => proof.requests < 2))
+  ) {
+    throw new Error("Missing initial/reopened seeded wire proof");
   }
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));
   console.log(`RESULT ${path.join(output, "result.json")}`);

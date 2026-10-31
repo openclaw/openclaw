@@ -1,6 +1,7 @@
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
@@ -27,6 +28,10 @@ import {
   scopedWriteToken,
   scopedWriteTokens,
 } from "./session-actor-replica-receipts.js";
+import {
+  estimateSessionActorReplicaBytes as estimateReplicaBytes,
+  shareSessionActorReplicaEntrySkills as shareEntrySkills,
+} from "./session-actor-replica-values.js";
 import type {
   FileTarget,
   ReplicaCell,
@@ -43,57 +48,24 @@ import {
 import { isSessionEntryPublicationSourceCurrent } from "./session-entry-publication-source.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
-import { internSessionSkillSnapshot } from "./session-skill-snapshot-intern.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
-import type { SessionEntry } from "./types.js";
 
 const MAX_SNAPSHOTS = 128;
 const MAX_BYTES = 8 * 1024 * 1024;
+const TRANSCRIPT_IDLE_MS = 5 * 60_000;
 
 // Transcript producers replace changed rows and envelopes. Memoize array items
 // (rows or exact-context events), not their immutable payload descendants.
 const transcriptSizes = new WeakMap<object, number>();
 
-// Residency is a heap estimate, not a wire-size limit. Trusted postimages are
-// acyclic plain data; count strings without allocating or scanning their JSON.
-function estimateReplicaBytes(
-  value: unknown,
-  sizes?: WeakMap<object, number>,
-  memoizeDescendants = true,
-): number {
-  if (typeof value === "string") {
-    return 16 + value.length * 2;
-  }
-  if (!value || typeof value !== "object") {
-    return 8;
-  }
-  const known = sizes?.get(value);
-  if (known !== undefined) {
-    return known;
-  }
-  const childSizes = memoizeDescendants ? sizes : undefined;
-  let bytes = 32;
-  if (Array.isArray(value)) {
-    for (let index = 0; index < value.length; index++) {
-      if (index in value) {
-        bytes += 16 + estimateReplicaBytes(value[index], childSizes, false);
-      }
-    }
-  } else {
-    for (const key in value) {
-      bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key), childSizes);
-    }
-  }
-  sizes?.set(value, bytes);
-  return bytes;
-}
-
 const pool = resolveGlobalSingleton<ReplicaPool>(
   Symbol.for("openclaw.sessionActorReplicas"),
   () => ({ cells: new Map(), cellsBySessionKey: new Map(), snapshots: 0, bytes: 0 }),
   (owner) => {
+    clearTimeout(owner.transcriptIdleTimer);
+    owner.transcriptIdleTimer = undefined;
     owner.unsubscribe?.();
     owner.unsubscribe = undefined;
     for (const cell of owner.cells.values()) {
@@ -287,6 +259,7 @@ export function ensureReplicaSubscription(): void {
 }
 
 function discard(cell: ReplicaCell): void {
+  // Receipts may reinstall the same transcript; only actor acquisition renews its idle lifetime.
   if (cell.snapshot || cell.entry || cell.transcript) {
     pool.snapshots -= 1;
   }
@@ -298,20 +271,43 @@ function discard(cell: ReplicaCell): void {
   cell.bytes = 0;
 }
 
-function shareEntrySkills(entry: SessionEntry | undefined): SessionEntry | undefined {
-  if (!entry?.skillsSnapshot) {
-    return entry;
-  }
-  const snapshot = entry.skillsSnapshot;
-  const shared = internSessionSkillSnapshot(snapshot);
-  if (shared !== snapshot) {
-    // Prepared publications can be frozen; worker-decoded entries remain owned here.
-    if (Object.isFrozen(entry)) {
-      return { ...entry, skillsSnapshot: shared };
+function expireIdleTranscripts(): void {
+  pool.transcriptIdleTimer = undefined;
+  const now = Date.now();
+  let nextDeadline = Infinity;
+  for (const cell of pool.cells.values()) {
+    if (cell.handles || !cell.transcript || cell.transcriptIdleDeadline === undefined) {
+      continue;
     }
-    entry.skillsSnapshot = shared;
+    if (cell.transcriptIdleDeadline > now) {
+      nextDeadline = Math.min(nextDeadline, cell.transcriptIdleDeadline);
+      continue;
+    }
+    if (!cell.snapshot && !cell.entry) {
+      pool.snapshots -= 1;
+    }
+    pool.bytes -= cell.transcriptBytes;
+    cell.bytes -= cell.transcriptBytes;
+    cell.transcript = undefined;
+    cell.transcriptBytes = 0;
+    cell.transcriptIdleDeadline = undefined;
+    forgetUnused(cell);
   }
-  return entry;
+  if (nextDeadline !== Infinity) {
+    pool.transcriptIdleTimer = runInDetachedAsyncContext(() =>
+      setTimeout(expireIdleTranscripts, nextDeadline - now).unref(),
+    );
+  }
+}
+
+function releaseTranscriptResidency(cell: ReplicaCell): void {
+  if (!cell.handles && cell.transcript) {
+    // Receipt replacement and sidebar reads do not renew the actor's idle lifetime.
+    cell.transcriptIdleDeadline ??= Date.now() + TRANSCRIPT_IDLE_MS;
+    if (!pool.transcriptIdleTimer) {
+      expireIdleTranscripts();
+    }
+  }
 }
 
 function retainEntry(cell: ReplicaCell, entry: SessionActorEntryFacts): void {
@@ -369,6 +365,7 @@ function retainTranscript(cell: ReplicaCell, transcript: SessionActorTranscriptR
   cell.bytes += bytes - previousBytes;
   pool.bytes += bytes - previousBytes;
   touch(cell);
+  releaseTranscriptResidency(cell);
 }
 
 /** The caller already borrowed this immutable postimage under its live actor authority. */
@@ -644,6 +641,7 @@ export function createSessionActorReplica(params: {
   const key = sessionActorReplicaTargetKey(target);
   const owned = retainSessionActorReplicaCell(pool, target);
   owned.handles += 1;
+  owned.transcriptIdleDeadline = undefined;
   let closed = false;
 
   const invalidate = () => {
@@ -756,6 +754,7 @@ export function createSessionActorReplica(params: {
       }
       closed = true;
       owned.handles -= 1;
+      releaseTranscriptResidency(owned);
       forgetUnused(owned);
     },
   };
