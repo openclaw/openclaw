@@ -339,8 +339,7 @@ export function prepareChatSendUserTurn(params: {
     transferGatewayLocalUserIngress(client, ctx);
   }
   if (attachments.mediaPathOffloads.length > 0) {
-    // Pre-staged offloads must use structured facts and marker text so the
-    // dispatch path renders their prompt note without staging them a second time.
+    // Carry durable originals into turn preparation, which owns workspace staging.
     ctx.media = attachments.mediaPathOffloads;
   }
   const mediaPathOffloadsIncludeImages = attachments.mediaPathOffloads.some((fact) =>

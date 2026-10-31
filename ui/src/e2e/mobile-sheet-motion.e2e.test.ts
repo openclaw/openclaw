@@ -61,7 +61,7 @@ async function shellState(page: Page) {
     const region = shell.parentElement!.getBoundingClientRect();
     return {
       hidden: shell.hasAttribute("hidden"),
-      display: style.display,
+      visibility: style.visibility,
       mode: shell.getAttribute("data-mode"),
       height: shell.getBoundingClientRect().height,
       top: shell.getBoundingClientRect().top,
@@ -202,14 +202,14 @@ suite.define(() => {
         async (leaving) => {
           // Hidden immediately for focus and accessibility, but still sliding out on screen.
           expect(leaving.hidden).toBe(true);
-          expect(leaving.display).not.toBe("none");
+          expect(leaving.visibility).toBe("visible");
           expect(leaving.top).toBeGreaterThan(open.top + 10);
           // The page it showed slides away with it instead of blanking first.
           expect(await page.locator(".chat-panel-launcher-mobile").boundingBox()).not.toBeNull();
         },
       );
       await settle(page);
-      expect((await shellState(page)).display).toBe("none");
+      expect((await shellState(page)).visibility).toBe("hidden");
     });
   });
 
@@ -250,11 +250,11 @@ suite.define(() => {
         () => flick(page, 150),
         (dismissing) => {
           expect(dismissing.hidden).toBe(true);
-          expect(dismissing.display).not.toBe("none");
+          expect(dismissing.visibility).toBe("visible");
         },
       );
       await settle(page);
-      expect((await shellState(page)).display).toBe("none");
+      expect((await shellState(page)).visibility).toBe("hidden");
     });
   });
 
@@ -290,7 +290,7 @@ suite.define(() => {
       // Pulled most of the way out, the same slow release dismisses.
       await dragGrabber(page, back.height - 40, { steps: 20, stepMs: 40 });
       await settle(page);
-      expect((await shellState(page)).display).toBe("none");
+      expect((await shellState(page)).visibility).toBe("hidden");
     });
   });
 
@@ -410,7 +410,7 @@ suite.define(() => {
       const open = await shellState(page);
       expect(Math.abs(open.top + open.height - open.regionBottom)).toBeLessThan(1.5);
       await page.locator(".chat-mobile-host__header .chat-mobile-host__circle").first().click();
-      await expect.poll(async () => (await shellState(page)).display).toBe("none");
+      await expect.poll(async () => (await shellState(page)).visibility).toBe("hidden");
     });
   });
 });

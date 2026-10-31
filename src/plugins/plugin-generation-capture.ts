@@ -10,6 +10,7 @@ import {
   createPluginSourceLinkCapture,
   linkPluginGenerationDependency,
 } from "./plugin-generation-file-capture.js";
+import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import {
   createPluginGenerationCapture,
@@ -67,6 +68,13 @@ function createPluginGenerationArtifact(
   retained?: PluginSourceCustodyFork,
   captureForCustody = false,
 ): PluginGenerationArtifact {
+  const metrics = getPluginGenerationMetrics();
+  if (metrics) {
+    metrics.captures++;
+    if (retained) {
+      metrics.captureReuse++;
+    }
+  }
   const entryFiles = typeof entryFile === "string" ? [entryFile] : entryFile && [...entryFile];
   if (entryFiles?.length === 0) {
     throw new Error("Selective plugin capture requires at least one entry");
@@ -125,6 +133,7 @@ function createPluginGenerationArtifact(
       return existing.capturedRoot;
     }
     const packageMap = createPluginPackageMapReferences();
+    const packageKind = packages.size === 0 ? "package" : "dependency";
     const packageId = `package-${packages.size}`;
     const moduleRoot = path.join(directory, packageId, "node_modules");
     const parentName = path.basename(path.dirname(boundary));
@@ -184,6 +193,7 @@ function createPluginGenerationArtifact(
       boundary,
       destination,
       directory,
+      packageKind,
       outputRoot,
       capturedPaths,
       originalSources,
