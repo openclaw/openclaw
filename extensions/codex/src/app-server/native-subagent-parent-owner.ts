@@ -511,3 +511,24 @@ export function listNativeRequesterParents(
       ),
   );
 }
+
+export function releaseNativeParentIfChildrenSettled(
+  parentThreadId: string,
+  children: ReadonlyMap<string, ChildState>,
+  retentions: Map<string, () => void>,
+): void {
+  for (const child of children.values()) {
+    if (
+      child.parentThreadId === parentThreadId &&
+      !child.terminal &&
+      !child.settledWithoutCompletion
+    ) {
+      return;
+    }
+  }
+  // Pending completion delivery keeps its own custody, but must not block
+  // the parent from resuming to receive those results.
+  const release = retentions.get(parentThreadId);
+  retentions.delete(parentThreadId);
+  release?.();
+}
