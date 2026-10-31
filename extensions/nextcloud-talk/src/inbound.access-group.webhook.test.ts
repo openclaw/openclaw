@@ -1,9 +1,11 @@
 // Signed webhook over real HTTP -> real spool -> real inbound authorization.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, expect, it, vi } from "vitest";
-import { withOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
 import { createAccount as baseAccount, createRuntimeEnv } from "./inbound-media.test-fixtures.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
@@ -16,8 +18,11 @@ import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
 describe.skipIf(!isMainThread)(
   "nextcloud-talk access-group admission over a signed webhook",
   () => {
-    it("delivers a signed webhook from a room access group under an outer allowlist", () =>
-      withOpenClawTestState({ label: "nextcloud-access-group-webhook" }, async (state) => {
+    it("delivers a signed webhook from a room access group under an outer allowlist", async () => {
+      const stateDir = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-nextcloud-webhook-")),
+      );
+      try {
         const core = createPluginRuntimeMock();
         core.channel.pairing.readAllowFromStore = vi.fn(async () => []);
         setNextcloudTalkRuntime(core);
@@ -50,7 +55,7 @@ describe.skipIf(!isMainThread)(
           queue: createChannelIngressQueueForTests({
             channelId: "nextcloud-talk",
             accountId: account.accountId,
-            stateDir: state.stateDir,
+            stateDir,
           }),
           legacyReplayStore: null,
           runtime: { error: (message) => deliveries.push(`error:${message}`), log: vi.fn() },
@@ -94,6 +99,9 @@ describe.skipIf(!isMainThread)(
         await server.stop();
         abort.abort();
         await spool.stop();
-      }));
+      } finally {
+        await fs.rm(stateDir, { recursive: true, force: true });
+      }
+    });
   },
 );
