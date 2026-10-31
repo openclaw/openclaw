@@ -119,6 +119,7 @@ export const UI_APPEARANCE_DEFAULTS = {
   lobsterPetVisits: true,
   lobsterPetSounds: false,
   sessionDeleteConfirm: true,
+  archiveShortcutEnabled: true,
 } as const;
 
 export type UiSettings = {
@@ -182,6 +183,11 @@ export type UiSettings = {
   // opting out on one browser must not lower the bar on the operator's others,
   // so this stays out of the synced ui.prefs set in server-prefs-state.ts.
   sessionDeleteConfirm?: boolean;
+  // Direct Archive chord (⌘⇧A / Ctrl+Shift+A, default true). Device-local on
+  // purpose: the browser collision is per-browser (Chrome tab search, Firefox
+  // Add-ons), so one browser opting out must not remove the chord on the
+  // operator's others; it stays out of the synced ui.prefs set.
+  archiveShortcutEnabled?: boolean;
   chatModelChangeConfirm?: boolean;
   // Device-local opt-in: route eligible external links into the Gateway browser panel.
   openLinksInControlUiBrowser?: boolean;

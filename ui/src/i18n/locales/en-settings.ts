@@ -35,6 +35,9 @@ const enSettings = {
     sendShortcut: "Send shortcut",
     sendShortcutHint:
       "Desktop only. On mobile, Enter adds a new line; use the Send button to send.",
+    archiveShortcut: "Archive keyboard shortcut",
+    archiveShortcutHint:
+      "Use ⌘⇧A on Mac or Ctrl+Shift+A on Windows/Linux to archive the current chat. Turn this off when your browser owns the chord (Chrome tab search, Firefox add-ons). Archive stays available in the chat header menu and with its A key.",
     sendShortcutEnter: "Enter",
     followUpMode: "Follow-ups while the agent is working",
     followUpModeQueue: "Queue until the run ends",

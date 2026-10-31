@@ -50,6 +50,28 @@ it.each([
   expect(dialog.querySelector("openclaw-modal-dialog")).toBeNull();
 });
 
+it("hides the direct Archive row when this browser disables the chord", async () => {
+  vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+  const dialog = await openDialog();
+  const hasRow = (label: string) =>
+    Array.from(dialog.querySelectorAll(".shortcut-row")).some((row) =>
+      row.textContent?.includes(label),
+    );
+
+  expect(hasRow("Archive current session")).toBe(true);
+
+  dialog.archiveShortcutEnabled = false;
+  await dialog.updateComplete;
+
+  expect(hasRow("Archive current session")).toBe(false);
+  // The rest of the Chat section still renders, with truthful Send hints.
+  expect(chips(dialog, "Send message")).toEqual(["Enter"]);
+
+  dialog.sendShortcut = "modifier-enter";
+  await dialog.updateComplete;
+  expect(chips(dialog, "Send message")).toEqual(["Ctrl", "Enter"]);
+});
+
 it("keeps mobile Return for a new line and omits submission shortcuts", async () => {
   vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
   vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux armv8l");

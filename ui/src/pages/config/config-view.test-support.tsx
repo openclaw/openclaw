@@ -169,6 +169,7 @@ export const baseProps = () => ({
   chatSendShortcutOverridden: false,
   chatSendShortcutProvenance: "default" as const,
   chatSendShortcutResetValue: "enter" as const,
+  archiveShortcutEnabled: true,
   chatFollowUpMode: undefined,
   chatFollowUpModeOverridden: false,
   chatFollowUpModeProvenance: "default" as const,

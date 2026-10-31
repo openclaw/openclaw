@@ -103,7 +103,11 @@ export type ChatState = StreamCausalBoundaryState & {
   hello: GatewayHelloOk | null;
   selfUser?: AuthenticatedUser | null;
   canvasPluginSurfaceUrl?: string | null;
-  settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
+  settings?: {
+    chatPersistCommentary?: boolean;
+    gatewayUrl?: string | null;
+    archiveShortcutEnabled?: boolean;
+  };
   sessions?: Partial<SessionCapability>;
   chatSessionMessageSubscriptionRequestedKey?: string | null;
   chatSessionMessageSubscription?: SessionMessageSubscription | null;

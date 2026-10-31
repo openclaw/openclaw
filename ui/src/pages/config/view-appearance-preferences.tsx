@@ -442,6 +442,12 @@ export function ChatPreferencesSection(props: ConfigProps) {
           title={t("chat.composer.holdToRecordSetting")}
           hint={t("chat.composer.holdToRecordSettingDescription")}
         />
+        <LocalToggleRow
+          config={props}
+          setting="archiveShortcutEnabled"
+          title={t("chat.archiveShortcut")}
+          hint={t("chat.archiveShortcutHint")}
+        />
       </div>
     </section>
   );
