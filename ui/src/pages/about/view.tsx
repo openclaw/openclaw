@@ -90,58 +90,65 @@ function Unavailable() {
   return <span class="muted">{t("aboutPage.unavailable")}</span>;
 }
 
-function BuildEntry(props: { name: string; build: AboutBuild }) {
+function BuildFacts(props: { title: string; label: string; build: AboutBuild }) {
   const builtAt = createMemo(() =>
     formatDateTimeMs(Date.parse(props.build.builtAt ?? ""), BUILT_AT_FORMAT, ""),
   );
   return (
-    <div class="about-build">
-      <dt class="about-build__name">{props.name}</dt>
-      <dd class="about-build__details">
-        <Show when={props.build.version} fallback={<Unavailable />}>
-          {(version) => (
-            <>
-              <code class="about-build__version" dir="ltr">
-                <span class="sr-only">{t("aboutPage.version")} </span>
+    <SettingsSection title={props.title}>
+      <dl class="settings-kv about-build-grid" aria-label={props.label}>
+        <dt>{t("aboutPage.version")}</dt>
+        <dd>
+          <Show when={props.build.version} fallback={<Unavailable />}>
+            {(version) => (
+              <code dir="ltr" title={version()}>
                 {version()}
               </code>
-              <Show when={props.build.commit}>
-                {(commit) => (
-                  <span class="about-build__commit">
-                    <code dir="ltr" title={commit()}>
-                      <span class="sr-only">{t("aboutPage.commit")} </span>
-                      {commit().slice(0, SHORT_COMMIT_LENGTH)}
-                    </code>
-                    <CopyButton text={commit()} idleLabel={t("aboutPage.copyCommit")} bare />
-                  </span>
-                )}
-              </Show>
-              <Show when={(builtAt() && props.build.builtAt) || props.build.branch}>
-                <div class="about-build__meta">
-                  <Show when={builtAt() && props.build.builtAt}>
-                    {(iso) => (
-                      <time dir="auto" datetime={iso()} title={iso()}>
-                        <span class="sr-only">{t("aboutPage.built")} </span>
-                        {builtAt()}
-                      </time>
-                    )}
-                  </Show>
-                  <Show when={props.build.branch}>
-                    {(branch) => (
-                      <code class="about-build__branch" dir="ltr" title={branch()}>
-                        <span class="sr-only">{t("aboutPage.branch")} </span>
-                        {branch()}
-                        {props.build.dirty === true ? "*" : ""}
-                      </code>
-                    )}
-                  </Show>
-                </div>
-              </Show>
+            )}
+          </Show>
+        </dd>
+        <Show when={props.build.commit}>
+          {(commit) => (
+            <>
+              <dt>{t("aboutPage.commit")}</dt>
+              <dd>
+                <span class="about-commit">
+                  <code dir="ltr" title={commit()}>
+                    {commit().slice(0, SHORT_COMMIT_LENGTH)}
+                  </code>
+                  <CopyButton text={commit()} idleLabel={t("aboutPage.copyCommit")} />
+                </span>
+              </dd>
             </>
           )}
         </Show>
-      </dd>
-    </div>
+        <Show when={props.build.branch}>
+          {(branch) => (
+            <>
+              <dt>{t("aboutPage.branch")}</dt>
+              <dd>
+                <code dir="ltr" title={branch()}>
+                  {branch()}
+                  {props.build.dirty === true ? "*" : ""}
+                </code>
+              </dd>
+            </>
+          )}
+        </Show>
+        <Show when={builtAt() && props.build.builtAt}>
+          {(iso) => (
+            <>
+              <dt>{t("aboutPage.built")}</dt>
+              <dd>
+                <time dir="auto" datetime={iso()} title={iso()}>
+                  {builtAt()}
+                </time>
+              </dd>
+            </>
+          )}
+        </Show>
+      </dl>
+    </SettingsSection>
   );
 }
 
@@ -198,12 +205,16 @@ export function AboutView(props: AboutProps) {
           </For>
         </nav>
       </section>
-      <SettingsSection>
-        <dl class="about-builds" aria-label={t("aboutPage.buildDetails")}>
-          <BuildEntry name={t("aboutPage.artifactTitle")} build={props.buildInfo} />
-          <BuildEntry name={t("aboutPage.gateway")} build={props.gateway} />
-        </dl>
-      </SettingsSection>
+      <BuildFacts
+        title={t("aboutPage.artifactTitle")}
+        label={t("aboutPage.artifactDetails")}
+        build={props.buildInfo}
+      />
+      <BuildFacts
+        title={t("aboutPage.gateway")}
+        label={t("aboutPage.gateway")}
+        build={props.gateway}
+      />
       <p class="about-footer">{t("aboutPage.license")}</p>
     </SettingsPage>
   );

@@ -222,150 +222,21 @@
   }
 }
 
-/* Identity rail. One grid owns the name, version, and commit columns so every
-   entry shares the same edges; entries and their details are subgrids of it.
-   Row one is a fixed 24px track (the copy button's size) and every item in it
-   aligns on the first baseline, so mixed sans/mono sizes share one text line. */
-.about-builds {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr) auto;
-  column-gap: var(--space-5);
-  margin: 0;
+/* About labels are short, so the shared 120px settings label track leaves an
+   oversized gutter here. Keep the values close while preserving room to wrap. */
+.about-build-grid {
+  grid-template-columns: max-content minmax(0, 1fr);
 }
 
-.about-build {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: subgrid;
-  grid-template-rows: 24px auto;
-  align-items: baseline;
-  padding: var(--space-3) var(--space-4);
-}
-
-.about-build + .about-build {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
-.about-build__name {
-  grid-column: 1;
-  grid-row: 1;
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-md);
-  font-weight: 500;
-  line-height: 24px;
-}
-
-.about-build__details {
-  display: grid;
-  grid-column: 2 / -1;
-  grid-row: 1 / -1;
-  grid-template-columns: subgrid;
-  grid-template-rows: subgrid;
-  align-items: baseline;
-  min-width: 0;
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: 24px;
-}
-
-.about-build code {
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
-}
-
-.about-build__version {
-  grid-column: 1;
-  grid-row: 1;
-  min-width: 0;
-  color: var(--text);
-  overflow-wrap: anywhere;
-}
-
-/* The copy button's hit area changes with the Settings touch-target contract;
-   its margins cancel that area so the 14px glyph keeps a fixed gap from the
-   hash and sits exactly on the card's content edge at every size. */
-.about-build__commit {
-  --about-copy-size: 24px;
-  --about-copy-inset: calc((var(--about-copy-size) - 14px) / 2);
-
-  display: inline-flex;
-  grid-column: 2;
-  grid-row: 1;
-  align-items: baseline;
-}
-
-.about-build__commit code {
-  user-select: all;
-}
-
-.about-build__meta {
-  display: flex;
-  grid-column: 1 / -1;
-  grid-row: 2;
-  align-items: baseline;
-  gap: var(--space-3);
-  min-width: 0;
-  font-size: var(--control-ui-text-xs);
-  line-height: 18px;
-  font-variant-numeric: tabular-nums;
-}
-
-.about-build__meta time {
-  flex: none;
-}
-
-.about-build__branch {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Shared copy control at the compact inline icon-button size. */
-.about-build .chat-copy-btn {
+.about-commit {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  align-self: center;
-  width: var(--about-copy-size);
-  height: var(--about-copy-size);
-  margin-block: calc(12px - var(--about-copy-size) / 2);
-  margin-inline: calc(var(--space-3) - var(--about-copy-inset)) calc(0px - var(--about-copy-inset));
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  cursor: var(--cursor-action);
-  transition:
-    color var(--duration-fast, 120ms) ease,
-    background var(--duration-fast, 120ms) ease;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
-/* Idle states only: shared copied/error states keep their own feedback colors. */
-.about-build .chat-copy-btn:not([data-copy-state]) {
-  background: transparent;
-}
-
-.about-build .chat-copy-btn:not([data-copy-state]):hover {
-  background: var(--bg-hover);
-  color: var(--text-strong);
-}
-
-.about-build .chat-copy-btn svg {
-  width: 14px;
-  height: 14px;
-}
-
-/* Matches the Settings touch-target media query in settings.css. */
-@media (pointer: coarse), (max-width: 640px) {
-  .about-build__commit {
-    --about-copy-size: 44px;
-  }
-}
-
-@media (max-width: 560px) {
-  .about-builds {
-    column-gap: var(--space-3);
-  }
+.about-commit code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: all;
 }

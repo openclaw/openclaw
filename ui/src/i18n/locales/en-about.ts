@@ -19,7 +19,6 @@ const enAbout = {
     license: "© 2026 OpenClaw Foundation — MIT License.",
     artifactTitle: "Control UI",
     artifactDetails: shared.artifactDetails,
-    buildDetails: "Build information",
     version: "Version",
     commit: shared.commit,
     branch: "Branch",

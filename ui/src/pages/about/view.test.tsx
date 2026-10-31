@@ -85,32 +85,39 @@ it("renders the hero, links, license, and Clawd's active wave", () => {
   expect(query(".about-footer")?.textContent).toContain("MIT License");
 });
 
-it("renders the Control UI and Gateway as matching identity-rail entries", async () => {
-  const { query } = render();
-  const rail = query(".settings-group dl.about-builds");
-  expect(rail?.getAttribute("aria-label")).toBe("Build information");
-  const entries = Array.from(rail?.querySelectorAll(":scope > .about-build") ?? []);
-  expect(entries.map((entry) => entry.querySelector("dt")?.textContent)).toEqual([
-    "Control UI",
-    "Gateway",
-  ]);
-  const [ui, gateway] = entries;
-  expect(ui?.querySelector(".about-build__version")?.textContent).toBe("Version 2026.7.10");
-  expect(ui?.querySelector(".about-build__commit code")).toMatchObject({
-    textContent: `Commit ${COMMIT.slice(0, 7)}`,
+function facts(container: HTMLElement, label: string) {
+  const list = container.querySelector(`dl.settings-kv[aria-label="${label}"]`);
+  const rows = new Map<string, Element>();
+  for (const term of Array.from(list?.querySelectorAll("dt") ?? [])) {
+    rows.set(term.textContent ?? "", term.nextElementSibling!);
+  }
+  return { list, rows };
+}
+
+it("shows Control UI and Gateway build identity with the shared settings facts", async () => {
+  const { container } = render();
+  const headings = Array.from(container.querySelectorAll(".settings-section__heading"));
+  expect(headings.map((heading) => heading.textContent)).toEqual(["Control UI", "Gateway"]);
+  const ui = facts(container, "Control UI build details");
+  const gateway = facts(container, "Gateway");
+  expect([...ui.rows.keys()]).toEqual(["Version", "Commit", "Branch", "Built"]);
+  expect([...gateway.rows.keys()]).toEqual(["Version", "Commit", "Built"]);
+  expect(ui.rows.get("Version")?.textContent).toBe("2026.7.10");
+  expect(ui.rows.get("Commit")?.querySelector("code")).toMatchObject({
+    textContent: COMMIT.slice(0, 7),
     title: COMMIT,
     dir: "ltr",
   });
-  expect(ui?.querySelector(".about-build__branch")?.textContent).toContain("feature/build-chip*");
-  expect(gateway?.querySelector(".about-build__version")?.textContent).toBe("Version 2026.7.9");
-  expect(gateway?.querySelector(".about-build__commit code")?.textContent).toBe("Commit abcdef0");
-  for (const entry of entries) {
-    expect(entry.querySelector(".about-build__commit button")?.getAttribute("aria-label")).toBe(
-      "Copy full commit hash",
-    );
+  expect(ui.rows.get("Branch")?.textContent).toBe("feature/build-chip*");
+  expect(gateway.rows.get("Version")?.textContent).toBe("2026.7.9");
+  expect(gateway.rows.get("Commit")?.querySelector("code")?.textContent).toBe("abcdef0");
+  for (const list of [ui, gateway]) {
+    expect(
+      list.rows.get("Commit")?.querySelector("button.chat-copy-btn")?.getAttribute("aria-label"),
+    ).toBe("Copy full commit hash");
   }
-  const uiTime = ui?.querySelector(".about-build__meta time");
-  expect(uiTime).toMatchObject({ dateTime: BUILT_AT, title: BUILT_AT, dir: "auto" });
+  const time = ui.rows.get("Built")?.querySelector("time");
+  expect(time).toMatchObject({ dateTime: BUILT_AT, title: BUILT_AT, dir: "auto" });
   for (const locale of ["en", "de"] as const) {
     await i18n.setLocale(locale);
     flush();
@@ -123,12 +130,9 @@ it("renders the Control UI and Gateway as matching identity-rail entries", async
       timeZone: "UTC",
       timeZoneName: "short",
     });
-    const label = uiTime?.querySelector(".sr-only")?.textContent ?? "";
-    expect(uiTime?.textContent).toBe(`${label}${stamp.format(new Date(BUILT_AT))}`);
+    expect(time?.textContent).toBe(stamp.format(new Date(BUILT_AT)));
   }
-  // Labels stay available to assistive technology without visible helper copy.
-  expect(rail?.querySelectorAll(".sr-only")).not.toHaveLength(0);
-  expect(query(".settings-section__desc")).toBeNull();
+  expect(container.querySelector(".settings-section__desc")).toBeNull();
 });
 
 it("omits unknown facts and marks a disconnected Gateway unavailable", () => {
@@ -136,10 +140,11 @@ it("omits unknown facts and marks a disconnected Gateway unavailable", () => {
     { gateway: { version: null, commit: null, builtAt: null } },
     { commit: null, builtAt: null, branch: null },
   );
-  const [ui, gateway] = Array.from(container.querySelectorAll(".about-build"));
-  expect(ui?.querySelector(".about-build__version")?.textContent).toBe("Version 2026.7.10");
-  expect(ui?.querySelector(".about-build__commit")).toBeNull();
-  expect(ui?.querySelector(".about-build__meta")).toBeNull();
-  expect(gateway?.querySelector("dd")?.textContent).toBe("Unavailable");
-  expect(container.querySelector(".about-build button")).toBeNull();
+  const ui = facts(container, "Control UI build details");
+  const gateway = facts(container, "Gateway");
+  expect([...ui.rows.keys()]).toEqual(["Version"]);
+  expect(ui.rows.get("Version")?.textContent).toBe("2026.7.10");
+  expect([...gateway.rows.keys()]).toEqual(["Version"]);
+  expect(gateway.rows.get("Version")?.textContent).toBe("Unavailable");
+  expect(container.querySelector(".chat-copy-btn")).toBeNull();
 });
