@@ -7,6 +7,7 @@ import {
   parseCrabboxCleanupProfile,
   resolveCrabboxWarmImageProfile,
 } from "./crabbox-worker-profile.js";
+import { inspectWithContext } from "./crabbox-worker-provision-commands.js";
 import type { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 
 export function createCrabboxWorkerTeardown(dependencies: {
@@ -62,6 +63,10 @@ export function createCrabboxWorkerTeardown(dependencies: {
           throw new Error("Crabbox exact resource teardown authority is unavailable");
         }
         lease.assertCurrent();
+        if (context.retention) {
+          await inspectWithContext({ ...context, signal: lease.signal, exactTeardown: true });
+          lease.assertCurrent();
+        }
         // Receipt-bound Sandbox disks never enter reusable-image capture. The CLI checks
         // its exact claim/resource binding and waits for confirmed deletion.
         await stopLease(

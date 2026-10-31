@@ -69,6 +69,7 @@ export function environment(): WorkerEnvironmentRecord {
     profileSnapshot: { settings: { device: "node-1" } },
     provisionOperationId: "provision-1",
     resourceReceipt: null,
+    retention: null,
     nodeSetupId: null,
     nodeDeviceId: "node-1",
     sharedHost: true,

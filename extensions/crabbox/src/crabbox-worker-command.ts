@@ -1,6 +1,9 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { redactSensitiveText, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
-import type { WorkerResourceReceipt } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  WorkerResourceReceipt,
+  WorkerRetentionPolicy,
+} from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { escapeRegExp, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { runCrabboxProcess } from "./crabbox-process.js";
@@ -19,6 +22,7 @@ export type LeaseCommandContext = {
   id: string;
   provider: string;
   resourceReceipt?: WorkerResourceReceipt;
+  retention?: WorkerRetentionPolicy;
   assertCurrent?: () => void;
 };
 
@@ -293,11 +297,15 @@ export async function stopCrabboxLease(params: {
   provider: string;
   warn: (message: string) => void;
   resourceReceipt?: WorkerResourceReceipt;
+  retention?: WorkerRetentionPolicy;
   assertCurrent?: () => void;
   onCleanupAccepted?: () => void;
   signal?: AbortSignal;
 }): Promise<void> {
   const deadline = performance.now() + CRABBOX_STOP_TIMEOUT_MS;
+  if (params.retention && !params.resourceReceipt) {
+    throw new Error("Crabbox retained teardown requires the original resource receipt");
+  }
   const stop = async (wait: boolean): Promise<"released" | "accepted" | "blocking"> => {
     const timeoutMs = deadline - performance.now();
     if (timeoutMs <= 0) {

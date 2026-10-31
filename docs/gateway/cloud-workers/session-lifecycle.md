@@ -7,6 +7,36 @@ read_when: "You are moving, stopping, or recovering a placed session, or you nee
 
 Dispatch a session to a worker, synchronize its workspace, and move, stop, or recover it. The Gateway retains the conversation and accepted workspace results even when a worker machine is lost.
 
+## Retained-disk lifecycle integration
+
+The environment owner supports an explicitly admitted retained-disk policy and
+pause/resume against its original resource receipt. This internal integration
+surface does not change profile defaults, prepared reserves, idle suspension,
+workspace mirroring, or disk-authority activation. It adopts no new Crabbox release.
+
+Acquisition policy is committed before allocation. Each lifecycle operation records
+its ID, action, and expected provider claim revision before effects. Restart and
+lost-reply recovery keep that operation and resource; uncertain observations never
+authorize deletion or replacement. Explicit Stop still requires final workspace
+save and confirmed exact-resource deletion.
+
+Compute windows are finite and never renewed by activity. Maintenance may close
+expired compute, but new compute requires an explicit authorized wake. New execution
+admission rejects expired or unfinished windows; accepted transcript/result
+settlement keeps its existing owner. The internal **ensureRetainedRunning** operation
+checks resource identity, environment epoch, and current caller authority, waits for
+the original enrolled node, and verifies runtime admission through the existing
+supervisor and bundle installer. Provider resume alone is not usable readiness.
+
+Crabbox checks Linux Azure Sandbox retention capabilities, owner binding, policy,
+window, and independent lifecycle readback. One unavailable provider cannot prevent
+unrelated environments from recovering. Cold-boot reconnect requires a separately
+qualified node/controller release; Crabbox 0.80.0 capability metadata is not that proof.
+
+Shared-state schema 39 adds nullable lifecycle custody after disk-authority schema 38.
+Older environments remain unretained. Package-only downgrade is refused; restore the
+matching pre-upgrade backup and binary only after settling retained operations and cleanup.
+
 ## Dispatch a session
 
 `sessions.dispatch` rejects a busy session without interrupting its active work. Wait for the current turn to finish, then retry. For an idle session, dispatch closes local turn admission, validates the workspace source, provisions the lease for the selected execution mode, and runs setup. With project warm images enabled, it prepares the committed checkout and node runtime and captures any needed image before enrollment. It then enrolls the node, installs the required pinned Gateway bundle, applies the session workspace, and returns once the placement reaches `active` ownership. Gateway-source inventory validation happens before provider allocation. Repository-only inventory is captured on the enrolled node after fetching the pinned source; either path reports actionable size or entry limits. Budget several minutes for the first cloud dispatch, including capture when needed; later dispatches can reuse the image, project seed, and runtime installs. After that, talk to the session as usual. OpenClaw turns route to the worker process; Codex native operations run on the authorized cloud node, paired device, or supported SSH-backed provider.

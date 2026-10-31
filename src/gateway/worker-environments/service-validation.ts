@@ -19,6 +19,7 @@ import {
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
 import { requireWorkerResourceReceipt } from "../../plugins/worker-resource-receipt.js";
+import { requireWorkerRetentionObservation } from "../../plugins/worker-retention.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
@@ -154,10 +155,14 @@ export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
   ) {
     throw new Error("Worker provider returned an invalid inspection status");
   }
-  const receipt =
-    value.resourceReceipt === undefined
+  const receipt = {
+    ...(value.resourceReceipt === undefined
       ? {}
-      : { resourceReceipt: requireWorkerResourceReceipt(value.resourceReceipt) };
+      : { resourceReceipt: requireWorkerResourceReceipt(value.resourceReceipt) }),
+    ...(value.retention === undefined
+      ? {}
+      : { retention: requireWorkerRetentionObservation(value.retention) }),
+  };
   if (status === "active") {
     if (value.sharedHost !== undefined && typeof value.sharedHost !== "boolean") {
       throw new Error("Worker provider returned an invalid inspection result");

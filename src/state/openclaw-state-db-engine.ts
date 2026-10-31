@@ -50,6 +50,7 @@ import {
 } from "./openclaw-state-db-schema-v36-template-names.js";
 import { withLegacyWorkerResourceReceipts } from "./openclaw-state-db-schema-v37-resource-receipts.js";
 import { withLegacyRepositoryDiskAuthority } from "./openclaw-state-db-schema-v38-repository-disk.js";
+import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker-retention.js";
 import {
   admitStateSchemaFacts,
   PostgresSchemaAdmissionUnavailableError,
@@ -189,9 +190,13 @@ function statePostgresVersionSql(version: number): string {
 }
 
 function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
+  const statePostgresSchemaV38 = {
+    ...statePostgresSchema,
+    postgres: withLegacyWorkerRetention(statePostgresSchema.postgres),
+  };
   const statePostgresSchemaV37 = {
-    postgres: withLegacyRepositoryDiskAuthority(statePostgresSchema.postgres),
-    postgresFragments: statePostgresSchema.postgresFragments.map((fragment) => ({
+    postgres: withLegacyRepositoryDiskAuthority(statePostgresSchemaV38.postgres),
+    postgresFragments: statePostgresSchemaV38.postgresFragments.map((fragment) => ({
       ...fragment,
       sql: withLegacyRepositoryDiskAuthority(fragment.sql),
     })),
@@ -390,10 +395,17 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     {
       version: 38,
       fromSchema: statePostgresSchemaV37,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV38,
       sql: `ALTER TABLE IF EXISTS session_repository_workspaces ADD COLUMN disk_authority_json text COLLATE "C";
         ALTER TABLE worker_workspace_pending_results ADD COLUMN repository_disk_authority_json text COLLATE "C";
         ${statePostgresVersionSql(38)}`,
+    },
+    {
+      version: 39,
+      fromSchema: statePostgresSchemaV38,
+      schema: statePostgresSchema,
+      sql: `ALTER TABLE worker_environments ADD COLUMN retention_json text COLLATE "C";
+        ${statePostgresVersionSql(39)}`,
     },
   ];
 }

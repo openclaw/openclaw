@@ -5,6 +5,10 @@ import type {
   WorkerResourceReceipt,
   WorkerSshEndpoint,
 } from "../../plugins/capability-provider.types.js";
+import type {
+  WorkerEnvironmentRetention,
+  WorkerRetentionPolicy,
+} from "../../plugins/worker-retention.types.js";
 import type { WorkerSessionPlacementDispatchIdentity } from "./placement-record.js";
 import type { WorkerEnvironmentLeasedState, WorkerEnvironmentUnleasedState } from "./state.js";
 
@@ -44,6 +48,7 @@ type RecordBase = RecordIdentity & {
   preparation: WorkerEnvironmentPreparation | null;
   provisionOperationId: string;
   resourceReceipt: WorkerResourceReceipt | null;
+  retention: WorkerEnvironmentRetention | null;
   nodeSetupId: string | null;
   nodeDeviceId: string | null;
   sharedHost: boolean | null;
@@ -73,6 +78,7 @@ type LeasedRecord = {
 export type WorkerEnvironmentRecord = RecordBase & (UnleasedRecord | LeasedRecord);
 export type WorkerEnvironmentIntentInput = RecordIdentity & {
   preparation?: WorkerEnvironmentPreparationIntent;
+  retention?: WorkerRetentionPolicy;
   profileSnapshot: WorkerProfile;
   provisionOperationId: string;
 };

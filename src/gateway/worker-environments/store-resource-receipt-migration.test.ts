@@ -84,6 +84,7 @@ it.each(["runtime", "doctor"] as const)(
       expect(database.db.prepare("SELECT * FROM worker_environments").get()).toEqual({
         ...before,
         resource_receipt_json: null,
+        retention_json: null,
       });
       const store = await createWorkerEnvironmentStore({ database });
       expect(store.get("environment")?.resourceReceipt).toBeNull();

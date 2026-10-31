@@ -72,6 +72,7 @@ import {
   withLegacyTemplateStateCompatibility,
 } from "./openclaw-state-db-schema-v36-template-names.js";
 import { stateWorkerDiskMigrations } from "./openclaw-state-db-schema-v38-repository-disk.js";
+import { stateWorkerRetentionMigration } from "./openclaw-state-db-schema-v39-worker-retention.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -535,6 +536,7 @@ export const versionedStateMigrations = [
   stateLocalWorkspaceCasMigration,
   stateTemplateNamesMigration,
   ...stateWorkerDiskMigrations,
+  stateWorkerRetentionMigration,
 ] as const;
 
 /** Recent version migrations own only their tables; Doctor owns unrelated historical repair. */
@@ -560,6 +562,7 @@ export function migrateBoundedStateSchema(
     stateLocalWorkspaceCasMigration,
     stateTemplateNamesMigration,
     ...stateWorkerDiskMigrations,
+    stateWorkerRetentionMigration,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.

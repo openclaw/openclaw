@@ -18,6 +18,7 @@ import type {
 } from "./environment-record.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { isWorkerEnvironmentAttachedTo } from "./placement-target.js";
+import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 
 export type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -56,6 +57,7 @@ export function requireCurrentWorkerTurnEnvironment(params: {
   }
   if (
     !isWorkerEnvironmentAttachedTo(environment, placement) ||
+    !isWorkerRetainedWindowOpen(environment) ||
     !bootstrapReceipt ||
     bootstrapReceipt.bundleHash !== placement.workerBundleHash
   ) {
@@ -121,7 +123,8 @@ export function admitWorkerConnection(params: {
       environment.state !== "idle" &&
       environment.state !== "attached") ||
     environment.destroyRequestedAtMs !== null ||
-    !environment.bootstrapReceipt
+    !environment.bootstrapReceipt ||
+    !isWorkerRetainedWindowOpen(environment, params.nowMs)
   ) {
     return { ok: false, reason: "environment-unavailable" };
   }

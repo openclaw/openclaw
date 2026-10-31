@@ -122,6 +122,7 @@ try {
       preparation: null,
       provisionOperationId: `synthetic-provision-${index}`,
       resourceReceipt: null,
+      retention: null,
       nodeSetupId: null,
       nodeDeviceId: null,
       sharedHost: false,

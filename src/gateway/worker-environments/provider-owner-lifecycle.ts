@@ -56,6 +56,7 @@ export function createWorkerProviderOwnerLifecycle(
     leaseId,
     profile: requireWorkerProfile(record.profileSnapshot.settings),
     ...(record.resourceReceipt ? { resourceReceipt: record.resourceReceipt } : {}),
+    ...(record.retention ? { retention: record.retention.policy } : {}),
   });
 
   const requireCurrentOwner = (record: WorkerEnvironmentRecord): WorkerEnvironmentRecord => {

@@ -2002,7 +2002,8 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   destroy_requested_at_ms INTEGER,
   last_error TEXT,
   shared_host INTEGER,
-  resource_receipt_json TEXT
+  resource_receipt_json TEXT,
+  retention_json TEXT
 ) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease

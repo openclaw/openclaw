@@ -60,10 +60,47 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 36      | Starter install tables, record versions, and provenance use canonical Template names; unrelated data and absent optional provenance stay unchanged                                                                                                                                                                                             | Unreleased          |
 | 37      | Immutable provider resource receipts retained with worker environments through terminal cleanup                                                                                                                                                                                                                                                | Unreleased          |
 | 38      | Repository disk authority and the original authority of pending workspace results                                                                                                                                                                                                                                                              | Unreleased          |
+| 39      | Immutable retained-worker acquisition policy, pending pause/resume operations, and provider observations                                                                                                                                                                                                                                       | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 39
+
+Schema 39 implements the retained-lifecycle storage step of the
+[accepted retained-resource design](https://github.com/openclaw/openclaw/issues/188796).
+It adds nullable `worker_environments.retention_json` through the existing
+environment writer, not a second lease owner or sidecar store. This shared-state
+version is independent of agent schema 39.
+
+The field stores an immutable acquisition policy (original owner binding and
+compute-window duration), one unfinished pause/resume operation (operation ID,
+action, and expected provider claim revision), and the latest provider observation.
+The policy is durable before allocation. An exact intent replay preserves it;
+changing or adding policy to an existing environment is refused. Existing leases
+migrate to `NULL` and keep their original unretained behavior.
+
+A new operation requires the current environment owner, an exact stored resource
+receipt and lease, the observed claim revision, and no destroy request or competing
+operation. Exact unfinished operations can replay after restart. Observations clear
+an operation only when their operation ID, action, and expected revision all match,
+the phase is `observed`, and the state is `suspended` for pause or `running` for
+resume. Transport errors, unavailable observations, and unrelated or pending outcomes
+retain the unfinished operation. Recording an expired compute window does not delete
+a disk or settle teardown; confirmed provider deletion remains necessary.
+
+SQLite and PostgreSQL add one nullable text column without a row rewrite, backfill,
+new index, or scan in the DDL itself. The verified table-scoped backup and integrity
+check cover `worker_environments` plus schema publication metadata; unrelated
+repository and pending-result authority bytes remain unchanged. Backup cost scales
+with retained environment history. The largest deployment's row count is not known
+from the implementation checkout and must be recorded with deployment qualification.
+
+The column and schema/content markers publish atomically. Package metadata and the
+native shared-state reader ceiling advance to 39; older builds refuse the newer
+schema rather than ignoring pending lifecycle intent. Downgrade restores the verified
+pre-upgrade backup with its matching binary. No schema-38 migration is rewritten.
 
 ### State schema 38
 

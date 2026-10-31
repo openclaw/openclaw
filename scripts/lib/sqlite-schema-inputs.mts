@@ -57,7 +57,7 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
     inputs.push({ id, store, sql });
   };
   add("state", "state", OPENCLAW_STATE_SCHEMA_SQL);
-  for (const version of [38, 37, 36, 35, 31, 27, 26]) {
+  for (const version of [39, 38, 37, 36, 35, 31, 27, 26]) {
     add(`state-before-v${version}`, "state", getOpenClawStatePredecessorSchema(version - 1));
   }
   add("agent", "agent", OPENCLAW_AGENT_SCHEMA_SQL);

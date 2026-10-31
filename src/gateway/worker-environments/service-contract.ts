@@ -70,6 +70,7 @@ export type WorkerEnvironmentServiceRecord = {
   inference?: "worker";
   leaseId: string | null;
   resourceReceipt: WorkerEnvironmentRecord["resourceReceipt"];
+  retention?: WorkerEnvironmentRecord["retention"];
   nodeDeviceId?: string | null;
   sharedHost: boolean | null;
   state: WorkerEnvironmentState;

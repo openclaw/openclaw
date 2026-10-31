@@ -4,6 +4,7 @@ import {
   WorkerProviderError,
   type WorkerMachineOption,
   type WorkerProfile,
+  type WorkerRetentionPolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isSecretRef, isValidSecretRef } from "openclaw/plugin-sdk/secret-input";
 import type { SecretRef } from "openclaw/plugin-sdk/secret-ref-runtime";
@@ -499,10 +500,19 @@ export function buildCrabboxAllocationArgs(
   profile: CrabboxProfile,
   leaseId: string,
   slug: string,
+  retention?: WorkerRetentionPolicy,
 ): string[] {
   const args = [
     "--provider",
     profile.provider,
+    ...(retention
+      ? [
+          "--azure-sandbox-retention",
+          "session-disk",
+          "--azure-sandbox-owner-binding",
+          retention.ownerBinding,
+        ]
+      : []),
     ...(profile.azureSandboxDiskId ? ["--azure-sandbox-disk-id", profile.azureSandboxDiskId] : []),
     "--network",
     "public",
@@ -515,7 +525,7 @@ export function buildCrabboxAllocationArgs(
       : []),
     ...(profile.target === "macos" ? ["--target", "macos", "--market", "on-demand"] : []),
     "--ttl",
-    profile.ttl,
+    retention ? `${retention.computeWindowSeconds}s` : profile.ttl,
     "--idle-timeout",
     profile.idleTimeout,
     "--lease-id",

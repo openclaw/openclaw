@@ -180,7 +180,7 @@ function readProjectionRows(
       "node_device_id",
       "shared_host",
       "lease_id",
-      "resource_receipt_json",
+      "retention_json",
       "ssh_host",
       "ssh_port",
       "ssh_user",

@@ -16,6 +16,7 @@ import { workerEnvironmentServiceError as serviceError } from "./environment-err
 import type { WorkerLiveEventReceiver } from "./live-events.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
 import { WorkerSessionAlreadyAttachedError } from "./session-attachment.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
@@ -69,7 +70,9 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
     createWorkerCredentialMaterial(options.generateWorkerCredential, claim);
 
   const validateTurnClaim = (claim: WorkerSessionTurnClaim): boolean =>
-    claim.owner.kind === "worker" && options.placementStore?.validateWorkerTurn(claim) === true;
+    claim.owner.kind === "worker" &&
+    isWorkerRetainedWindowOpen(store.get(claim.owner.environmentId), now()) &&
+    options.placementStore?.validateWorkerTurn(claim) === true;
 
   const assertTurnClaim = (claim: WorkerSessionTurnClaim) => {
     if (!validateTurnClaim(claim)) {

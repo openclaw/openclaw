@@ -1,6 +1,7 @@
 import { supportsCurrentWorkerLaunch } from "../../worker/worker-build-identity.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
 
 export type WorkerPlacementCancellationTarget = Readonly<
   Pick<WorkerSessionPlacementRecord, "state" | "generation" | "environmentId" | "activeOwnerEpoch">
@@ -54,6 +55,7 @@ export function assertWorkerSandboxEnvironment(
 ): void {
   if (
     !isWorkerEnvironmentAttachedTo(environment, placement) ||
+    !isWorkerRetainedWindowOpen(environment) ||
     environment.environmentId !== placement.environmentId ||
     (sandbox.backendId === "node" && environment.nodeDeviceId !== sandbox.placementNodeId)
   ) {
@@ -67,6 +69,7 @@ export function isCurrentActiveWorkerEnvironment(
 ): boolean {
   return (
     isExactAttachedEnvironment(environment, placement) &&
+    isWorkerRetainedWindowOpen(environment) &&
     environment?.bootstrapReceipt?.bundleHash === placement.workerBundleHash &&
     // A persisted bundle hash can still match a worker using an older launch shape.
     // Recovery may reuse only the currently admitted execution-context dialect.
