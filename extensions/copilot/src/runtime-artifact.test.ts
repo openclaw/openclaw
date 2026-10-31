@@ -28,12 +28,9 @@ async function fixture() {
   const root = tempDirs.make("copilot-runtime-artifact-");
   const sdkRoot = path.join(root, "sdk");
   // Public platform package names published by @github/copilot-sdk.
-  const report = process.report.getReport() as { header: { glibcVersionRuntime?: string } };
-  const os =
-    process.platform === "linux" && !report.header.glibcVersionRuntime
-      ? "linuxmusl"
-      : process.platform;
-  const platform = `${os}-${process.arch}`;
+  const { header } = process.report.getReport() as { header: { glibcVersionRuntime?: string } };
+  const libc = process.platform === "linux" && !header.glibcVersionRuntime ? "musl" : "";
+  const platform = `${process.platform}${libc}-${process.arch}`;
   const packageName = `@github/copilot-sdk-${platform}`;
   const runtimeRoot = path.join(root, "runtime");
   const prebuild = path.join(runtimeRoot, "prebuilds", platform);
@@ -66,6 +63,7 @@ async function fixture() {
 describe("Copilot runtime artifacts", () => {
   it("preserves native links across equivalent captures and invalidates changed bytes", async () => {
     const files = await fixture();
+    using report = vi.spyOn(process.report, "getReport");
     const original = await captureCopilotRuntimeArtifact();
     expect(original.connection).toMatchObject({ kind: "stdio", path: files.executable });
     const nativeCapture = path.join(files.root, "native-capture");
@@ -82,6 +80,7 @@ describe("Copilot runtime artifacts", () => {
     await expect(validateCopilotRuntimeArtifact(captured.binding)).resolves.toBe(true);
     await fs.writeFile(nativeCapture, "changed captured runtime");
     await expect(validateCopilotRuntimeArtifact(captured.binding)).resolves.toBe(false);
+    expect(report).not.toHaveBeenCalled();
   });
 
   it("requires restart when the loaded SDK changes on disk", async () => {

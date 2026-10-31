@@ -48,11 +48,12 @@ function isMissingMatrixCryptoRuntimeError(error: unknown): boolean {
 }
 
 function isMuslRuntime(): boolean {
+  // A diagnostic report reverse-resolves every open socket and can stall the
+  // Gateway for seconds per socket on a slow resolver. Read the loaded libc instead.
   try {
-    const report = process.report?.getReport?.() as
-      | { header?: { glibcVersionRuntime?: string } }
-      | undefined;
-    return !report?.header?.glibcVersionRuntime;
+    return !/\/libc(?:\.so\.6|-\d[\d.]*\.so)(?:\s|$)/mu.test(
+      fs.readFileSync("/proc/self/maps", "utf8"),
+    );
   } catch {
     return true;
   }
@@ -133,11 +134,29 @@ export async function ensureMatrixCryptoRuntime(): Promise<void> {
   await defaultMatrixCryptoRuntimeEnsurePromise;
 }
 
+// The package's native loader detects musl with process.report.getReport(); without
+// excludeNetwork that report reverse-resolves every open socket on the main thread.
+function requireMatrixCryptoRuntime(): void {
+  // @types/node does not declare excludeNetwork; runtimes without process.report skip it.
+  const report: (NodeJS.ProcessReport & { excludeNetwork?: boolean }) | undefined = process.report;
+  const excludeNetwork = report?.excludeNetwork;
+  if (report) {
+    report.excludeNetwork = true;
+  }
+  try {
+    defaultRequireFn("@matrix-org/matrix-sdk-crypto-nodejs");
+  } finally {
+    if (report) {
+      report.excludeNetwork = excludeNetwork;
+    }
+  }
+}
+
 async function ensureMatrixCryptoRuntimeOnce(): Promise<void> {
   const nativeBindingPath = resolveMatrixCryptoNativeBindingPath();
   removeIncompleteMatrixCryptoNativeBinding(nativeBindingPath);
   try {
-    defaultRequireFn("@matrix-org/matrix-sdk-crypto-nodejs");
+    requireMatrixCryptoRuntime();
     return;
   } catch (err) {
     if (!isMissingMatrixCryptoRuntimeError(err)) {
@@ -170,7 +189,7 @@ async function ensureMatrixCryptoRuntimeOnce(): Promise<void> {
   if (failure !== undefined) {
     throw new Error(failure || "Matrix crypto runtime bootstrap failed.");
   }
-  defaultRequireFn("@matrix-org/matrix-sdk-crypto-nodejs");
+  requireMatrixCryptoRuntime();
 }
 
 export async function ensureMatrixSdkInstalled(params?: {

@@ -20,9 +20,8 @@ vi.mock("node:module", async (importOriginal) => {
 });
 
 function resolveTestNativeBindingFilename(): string | null {
-  const report = process.platform === "linux" ? process.report?.getReport?.() : undefined;
-  const isMusl = !(report as { header?: { glibcVersionRuntime?: string } } | undefined)?.header
-    ?.glibcVersionRuntime;
+  const { header } = process.report.getReport() as { header: { glibcVersionRuntime?: string } };
+  const isMusl = process.platform === "linux" && !header.glibcVersionRuntime;
   const suffixes: Record<string, string | null> = {
     "darwin-arm64": "darwin-arm64",
     "darwin-x64": "darwin-x64",
@@ -77,10 +76,12 @@ describe("ensureMatrixCryptoRuntime", () => {
       if (mode === "truncated") {
         fs.writeFileSync(artifact, Buffer.alloc(16));
       }
-      const bindingSizes: number[] = [];
+      using report = vi.spyOn(process.report, "getReport");
+      const processReport = Object.assign(process.report, { excludeNetwork: false });
+      const loads: string[] = [];
       cryptoRequire.mockImplementation(() => {
         const size = fs.existsSync(artifact) ? fs.statSync(artifact).size : 0;
-        bindingSizes.push(size);
+        loads.push(`${size}:${processReport.excludeNetwork}`);
         if (size !== bytes) {
           throw new Error(
             "Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu' (required by matrix sdk)",
@@ -90,8 +91,8 @@ describe("ensureMatrixCryptoRuntime", () => {
       });
       await Promise.all([ensureMatrixCryptoRuntime(), ensureMatrixCryptoRuntime()]);
       await ensureMatrixCryptoRuntime();
-      expect(fs.readFileSync(artifact)).toEqual(Buffer.alloc(bytes));
-      expect(bindingSizes).toEqual([0, bytes]);
+      expect(loads).toEqual(["0:true", `${bytes}:true`]);
+      expect([report.mock.calls.length, processReport.excludeNetwork]).toEqual([0, false]);
     },
   );
 
