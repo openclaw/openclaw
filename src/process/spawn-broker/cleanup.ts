@@ -212,12 +212,23 @@ function brokerGroupHasLiveMembers(pgid: number): boolean {
   if (process.platform !== "linux") {
     return true;
   }
-  for (const member of readProcessGroupMembers(1000)) {
-    if (member.pgid === pgid && !isPidDefinitelyDead(member.pid)) {
-      return true;
+  let observedMember = false;
+  try {
+    for (const member of readProcessGroupMembers(1000)) {
+      if (member.pgid !== pgid) {
+        continue;
+      }
+      observedMember = true;
+      if (!isPidDefinitelyDead(member.pid)) {
+        return true;
+      }
     }
+  } catch {
+    // An unreadable census must not cancel the kernel-visible TERM/KILL backstop.
+    return !groupGone(pgid);
   }
-  return false;
+  // An empty census is not proof of death while the kernel still sees the group.
+  return !observedMember && !groupGone(pgid);
 }
 
 /** A broker's private group retains non-detached children before PID publication. */

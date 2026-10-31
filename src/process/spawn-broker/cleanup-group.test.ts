@@ -1,6 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../supervisor/cancellation-policy.js";
-import { drainCurrentBrokerProcessGroup, terminateLostBrokerChild } from "./cleanup.js";
+import {
+  drainCurrentBrokerProcessGroup,
+  terminateBrokerProcessGroup,
+  terminateLostBrokerChild,
+} from "./cleanup.js";
 
 const boundary = vi.hoisted(() => ({
   census: vi.fn(),
@@ -53,6 +57,57 @@ it.skipIf(process.platform === "win32").each(["owned", "moved-group", "unknown-b
     } else {
       expect(kill).not.toHaveBeenCalled();
     }
+  },
+);
+
+it.skipIf(process.platform !== "linux").each(["empty", "unavailable"])(
+  "retains and escalates a kernel-visible broker group when its census is %s",
+  async (census) => {
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+    const pid = 123456789;
+    if (census === "unavailable") {
+      boundary.census.mockImplementation(() => {
+        throw new Error("census unavailable");
+      });
+    } else {
+      boundary.census.mockReturnValue([]);
+    }
+    boundary.delay.mockImplementation(
+      (ms: number) =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, ms);
+        }),
+    );
+    let alive = true;
+    const kill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === 0 && !alive) {
+        throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      }
+      return true;
+    });
+    const cleanup = terminateBrokerProcessGroup(pid);
+    let settled = false;
+    void cleanup.settled.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      expect(kill).toHaveBeenCalledWith(-pid, "SIGTERM");
+      await vi.advanceTimersByTimeAsync(GRACEFUL_CANCEL_TIMEOUT_MS);
+      expect(kill).toHaveBeenCalledWith(-pid, "SIGKILL");
+      expect(settled).toBe(false);
+    } finally {
+      alive = false;
+      await vi.advanceTimersByTimeAsync(50);
+      await cleanup.settled.catch(() => {});
+    }
+    await expect(cleanup.settled).resolves.toBeUndefined();
   },
 );
 
