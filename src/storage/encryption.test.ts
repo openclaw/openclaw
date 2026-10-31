@@ -19,7 +19,7 @@ it.each([0, SEGMENT_BYTES, 3 * SEGMENT_BYTES + 17])("round trips %i bytes", asyn
   const ciphertext = await collect(storage.encryptStorageObject(unevenChunks(plaintext), key));
   expect(ciphertext.length).toBe(storage.encryptedStorageSize(size));
   expect(storage.plaintextStorageSize(ciphertext.length)).toBe(size);
-  expect(await decrypt(ciphertext, key)).toEqual(plaintext);
+  expect(plaintext.equals(await decrypt(ciphertext, key)), "decrypted plaintext bytes").toBe(true);
 });
 
 it("rejects impossible stored sizes", () => {

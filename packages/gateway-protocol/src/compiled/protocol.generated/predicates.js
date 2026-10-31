@@ -1455,7 +1455,7 @@ var External = [
     IsUuid,
     /(^action$|^requestId$|^expectedHeadCommit$|^evidence$|^sessionKey$|^agentId$)/u,
     /(^path$|^sha256$|^sizeBytes$)/u,
-    /(^action$|^requestId$|^expectedHeadCommit$|^title$|^body$|^expectedTitle$|^expectedBody$|^sessionKey$|^agentId$)/u,
+    /(^action$|^pullRequestUrl$|^requestId$|^expectedHeadCommit$|^title$|^body$|^expectedTitle$|^expectedBody$|^sessionKey$|^agentId$)/u,
     /(^action$|^publishingSessionKey$|^requestId$|^expectedHeadCommit$|^mergeMethod$|^sessionKey$|^agentId$)/u,
     /(^action$|^conflictsResolved$|^baseCommit$|^sessionKey$|^agentId$)/u,
     /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u,
@@ -16689,6 +16689,9 @@ var External = [
       (unique_1646, unique_1647) => External[835].test(unique_1646) || check_2(value[unique_1646]),
     ) &&
     check_369(value.action) &&
+    (value.pullRequestUrl === void 0 ||
+      !("pullRequestUrl" in value) ||
+      check_619(value.pullRequestUrl)) &&
     (value.requestId === void 0 || !("requestId" in value) || check_2497(value.requestId)) &&
     (value.expectedHeadCommit === void 0 ||
       !("expectedHeadCommit" in value) ||

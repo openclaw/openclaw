@@ -14,6 +14,7 @@ type Flow = {
   closed: boolean;
   stop: () => void;
   transmit: (chunk: Buffer, deliveredAtMs: number, receivedAtMs: number) => void;
+  delivered?: (chunk: Buffer, atMs: number) => void;
 };
 
 /** One shared direction; propagation overlaps later packet transmission. */
@@ -79,6 +80,7 @@ export function createControlUiWireLink({
             selected.blocked = true;
             selected.source.pause();
           }
+          selected.delivered?.(packet, performance.now());
           finish(selected);
         }
       },
@@ -108,7 +110,12 @@ export function createControlUiWireLink({
   };
 
   return {
-    connect(source: Readable, target: Writable, onTransmit: Flow["transmit"]): () => void {
+    connect(
+      source: Readable,
+      target: Writable,
+      onTransmit: Flow["transmit"],
+      onDelivered?: Flow["delivered"],
+    ): () => void {
       if (closed) {
         throw new Error("Control UI wire link is closed");
       }
@@ -124,6 +131,7 @@ export function createControlUiWireLink({
         closed: false,
         stop,
         transmit: onTransmit,
+        delivered: onDelivered,
       };
       function dispose(destroySource: boolean) {
         if (flow.closed) {

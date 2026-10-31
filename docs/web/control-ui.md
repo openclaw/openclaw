@@ -440,6 +440,10 @@ brings the selected agent into view.
 
 ## Download files
 
+Files search is case-insensitive, including the Greek sigma forms `Σ`, `σ`, and
+`ς`. Search comparison leaves saved filenames and file contents unchanged;
+punctuation and spaces inside the query still match literally.
+
 When a reply file in the current session is too large to attach, its card offers **Find in Files**.
 This searches the current session's Files using the filename as a hint. Choose
 the intended file by its folder, then use **Download file**. The search does not
