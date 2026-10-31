@@ -59,6 +59,7 @@ import {
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
@@ -71,10 +72,7 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import {
-  resolveCronActiveRuntimeConfig,
-  resolveCronAgentConfig,
-} from "./isolated-agent/run-config.js";
+import { resolveCronAgentConfig } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
 import {
@@ -489,7 +487,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     let releaseRuntime = () => {};
     try {
       const request = {
-        runtimeConfig: resolveCronActiveRuntimeConfig(deps.config),
+        runtimeConfig: selectLiveRuntimeConfig(deps.config),
         jobId: params.job.id,
         agentId: params.job.agentId,
         toolsAllow: params.job.payload.toolsAllow,

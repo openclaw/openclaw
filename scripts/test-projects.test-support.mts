@@ -127,6 +127,7 @@ import {
 } from "./lib/vitest-cli-mode.mts";
 import {
   isCiLikeEnv,
+  parseOptionalPositiveInt,
   resolveLocalFullSuiteProfile,
   type VitestHostInfo,
 } from "./lib/vitest-local-scheduling.mts";
@@ -5209,7 +5210,7 @@ function shouldUseWholeConfigTarget(kind: string, targetArg: string, cwd: string
   return isControlUiSourcePath(relative);
 }
 
-function createVitestArgs(
+export function createVitestArgs(
   params: Pick<VitestRunPlan, "config" | "forwardedArgs" | "watchMode"> & {
     env?: NodeJS.ProcessEnv;
   },
@@ -5707,7 +5708,7 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
       },
     ];
   }
-  const parallelShardCount = parsePositiveInt(
+  const parallelShardCount = parseOptionalPositiveInt(
     process.env.OPENCLAW_TEST_PROJECTS_PARALLEL,
     "OPENCLAW_TEST_PROJECTS_PARALLEL",
   );
@@ -5823,23 +5824,8 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
   });
 }
 
-function parsePositiveInt(value: string | undefined, label: string) {
-  const text = value?.trim();
-  if (!text) {
-    return null;
-  }
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${label} must be a positive integer; got: ${value}`);
-  }
-  const parsed = Number(text);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${label} must be a positive integer; got: ${value}`);
-  }
-  return parsed;
-}
-
 function hasConservativeVitestWorkerBudget(env: NodeJS.ProcessEnv) {
-  const workerBudget = parsePositiveInt(
+  const workerBudget = parseOptionalPositiveInt(
     env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS,
     env.OPENCLAW_VITEST_MAX_WORKERS === undefined
       ? "OPENCLAW_TEST_WORKERS"
@@ -5897,7 +5883,7 @@ export function resolveParallelFullSuiteConcurrency(
 ) {
   let env = envInput;
   env ??= process.env;
-  const override = parsePositiveInt(
+  const override = parseOptionalPositiveInt(
     env.OPENCLAW_TEST_PROJECTS_PARALLEL,
     "OPENCLAW_TEST_PROJECTS_PARALLEL",
   );
@@ -6093,7 +6079,7 @@ export function createVitestRunSpecs(
           : baseEnv,
       includeFilePath,
       includePatterns: plan.includePatterns,
-      pnpmArgs: createVitestArgs(plan),
+      pnpmArgs: createVitestArgs({ ...plan, env: baseEnv }),
       preflightPnpmArgs: createVitestPreflightPnpmArgs(plan.config),
       watchMode: plan.watchMode,
     };

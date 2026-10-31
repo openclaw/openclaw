@@ -1,6 +1,6 @@
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
-import { interactionScenarios } from "./control-ui-interaction-scenarios.ts";
+import { cronLoadedJobCount, interactionScenarios } from "./control-ui-interaction-scenarios.ts";
 
 /** Fixed work spans WebKit's coarse CPU samples; probes also count hot-path operations. */
 export function createEngineActionScenarios(): readonly EngineScenario[] {
@@ -84,7 +84,7 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
         await frames(page);
         if (
           (await search.inputValue()) !== query ||
-          (await page.locator(".cron-table__row").count()) !== 500 ||
+          (await cronLoadedJobCount(page)) !== 500 ||
           (await gateway.getRequests("cron.list")).length !== before
         ) {
           throw new Error("Unbound Cron input changed the retained rows or issued a request");
@@ -180,7 +180,7 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
           await frames(page);
           if (
             (await search.inputValue()) !== query ||
-            (await page.locator(".cron-table__row").count()) !== 500 ||
+            (await cronLoadedJobCount(page)) !== 500 ||
             (await page.locator(".cron-table").getAttribute("aria-busy")) !== "true" ||
             (await gateway.getRequests("cron.list")).length !== heldRequests ||
             !(await search.evaluate((element) => element === document.activeElement))

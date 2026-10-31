@@ -23,6 +23,14 @@ On a first login without a saved cursor, Matrix ignores pre-startup history for
 the entire sync session, including rooms joined later. Those messages remain
 excluded when cached sync is replayed.
 
+## Final reply recovery
+
+Final replies that send a new message use the durable delivery queue. After a
+transient send failure, the Gateway can recover the reply without another
+inbound message, including after a restart. Recovery reuses saved Matrix
+transactions so a message accepted before its response was lost is not duplicated.
+Finalizing an existing streaming preview keeps its existing delivery path.
+
 ## Streaming previews
 
 Matrix reply streaming is opt-in. `streaming.mode` controls how OpenClaw delivers the in-flight assistant reply; `streaming.block.enabled` controls whether each completed block is kept as its own Matrix message.

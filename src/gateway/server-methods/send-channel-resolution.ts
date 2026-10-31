@@ -1,10 +1,5 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-  selectApplicableRuntimeConfig,
-} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
@@ -62,16 +57,4 @@ export async function resolveGatewayOutboundTarget(params: {
     };
   }
   return { ok: true as const, to: resolved.to };
-}
-
-export function resolveMessageActionRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const runtimeConfig = getRuntimeConfigSnapshot();
-  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
-  if (!runtimeConfig || !runtimeSourceConfig) {
-    return cfg;
-  }
-  // Message actions must use the hot runtime snapshot when it matches the caller's source config.
-  return (
-    selectApplicableRuntimeConfig({ inputConfig: cfg, runtimeConfig, runtimeSourceConfig }) ?? cfg
-  );
 }
