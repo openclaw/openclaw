@@ -10,6 +10,12 @@ sidebarTitle: "Offline and reconnect"
 
 What survives a dropped connection, and how the Control UI recovers when it returns.
 
+An initial connection has a two-second grace period before connection feedback
+appears. A failed or closed connection shows feedback immediately, and retries
+keep it visible until the Gateway connects. Cached conversations retain their
+header controls; the connection indicator appears below them without moving the
+header. Resolving a session link or loading history does not imply a lost connection.
+
 Returning to a suspended tab or regaining network connectivity can recover a
 stale connection. These signals do not retry a connection that requires a page
 reload, corrected credentials, or a new pairing request. Follow the displayed
@@ -419,7 +425,8 @@ With the sidebar collapsed, a flag beside the avatar appears for four seconds on
 Hover or focus the avatar to reopen it. If the flag would cover a composer or other writing
 controls, the avatar tooltip carries the status instead. The tooltip is hidden while the flag is visible.
 On mobile, status replaces the header breadcrumb and badges the menu button; opening the drawer
-shows the full footer row. Brief disconnects keep the existing two-second grace.
+shows the full footer row. Initial connection attempts use the two-second grace;
+an observed connection close shows status immediately.
 
 The status includes the total queued messages and session changes, plus **Retry** when an immediate connection
 attempt is available. Hover or focus for the redacted connection error. Settings keeps its save feedback

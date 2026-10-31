@@ -233,27 +233,22 @@ function ChatPaneHeaderChrome(
           </Show>
           <Show when={!props.mergedChrome}>
             <div class="chat-pane__identity-actions">
-              <Show
-                when={
-                  props.gatewayStatus?.kind !== "offline" &&
-                  props.gatewayStatus?.kind !== "reconnecting"
-                }
-              >
-                {props.sessionMenu}
-                <Show when={presented()}>
-                  <ChatPaneVersionsMenu
-                    menu={{
-                      catalog: props.catalog,
-                      branches: props.branches,
-                      branchSwitchDisabledReason: props.branchSwitchDisabledReason,
-                      onBranchSelect: props.onBranchSelect,
-                    }}
-                  />
-                </Show>
+              {props.sessionMenu}
+              <Show when={presented()}>
+                <ChatPaneVersionsMenu
+                  menu={{
+                    catalog: props.catalog,
+                    branches: props.branches,
+                    branchSwitchDisabledReason: props.branchSwitchDisabledReason,
+                    onBranchSelect: props.onBranchSelect,
+                  }}
+                />
               </Show>
               <Show
                 when={
-                  props.gatewayStatus?.kind ?? (props.savedConversation ? "reconnecting" : null)
+                  props.gatewayStatus?.kind && props.gatewayStatus.kind !== "connected"
+                    ? props.gatewayStatus.kind
+                    : null
                 }
               >
                 {(kind) => (

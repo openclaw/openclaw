@@ -221,12 +221,12 @@ describe("chat pane header", () => {
     expect(onToggleSidePanel).toHaveBeenCalledTimes(2);
   });
 
-  it("replaces desktop session actions with native connection status and Retry, then restores them", () => {
+  it("keeps desktop session actions beside native connection status and Retry", () => {
     const onRetry = vi.fn();
     const { container, update } = mountHeader({ sessionMenuAction: chatPaneHeaderSessionMenu() });
     expect(container.querySelector("openclaw-chat-header-session-menu")).not.toBeNull();
     update({ gatewayStatus: { kind: "offline", onRetry } });
-    absent(container, "openclaw-chat-header-session-menu, openclaw-chat-pane-versions-menu");
+    expect(container.querySelector("openclaw-chat-header-session-menu")).not.toBeNull();
     expect(text(container, '[role="status"]')).toContain("Disconnected");
     container.querySelector<HTMLButtonElement>(".chat-pane__connection-retry")!.click();
     expect(onRetry).toHaveBeenCalledOnce();
@@ -246,7 +246,7 @@ describe("chat pane header", () => {
     const savedStatus = () => text(container, ".chat-pane__connection-state");
     expect(savedStatus()).toBe("Saved conversation · Reconnecting…");
     update({ gatewayStatus: undefined });
-    expect(savedStatus()).toBe("Saved conversation · Reconnecting…");
+    absent(container, ".chat-pane__connection");
     update({ gatewayStatus: { kind: "offline" } });
     expect(savedStatus()).toBe("Saved conversation · Disconnected");
     update({ savedConversation: false, gatewayStatus: { kind: null } });

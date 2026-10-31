@@ -12,6 +12,7 @@ import { EMPTY_SESSION_MENU_DATA } from "../../components/session-menu-data.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { resolveGatewayStatus } from "../../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { resolveChatAgentIdentity } from "./chat-agent-id.ts";
 import {
@@ -20,7 +21,6 @@ import {
   getChatBranchesQueryState,
   loadChatBranches,
 } from "./chat-history-branches.ts";
-import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { createChatMobilePeopleMentions } from "./chat-mobile-people-mentions.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
@@ -450,14 +450,12 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,
-      gatewayStatus: this.gatewayStatus,
-      savedConversation: Boolean(
-        this.state &&
-        (!this.state.connected ||
-          this.routeResolutionPending ||
-          isInitialChatHistoryUnavailable(this.state)) &&
-        this.state.chatMessages.length,
-      ),
+      gatewayStatus: this.gatewayStatus ?? {
+        kind: resolveGatewayStatus(sharingSnapshot),
+        lastError: sharingSnapshot.lastError,
+        onRetry: this.context.gateway.connect,
+      },
+      savedConversation: Boolean(this.state?.chatMessages.length && !this.state.connected),
       title,
       titlePending: !catalog && !title ? true : undefined,
       agent:
