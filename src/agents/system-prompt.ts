@@ -616,7 +616,7 @@ export function buildAgentSystemPrompt(params: {
           "- Actionable request: act now.",
           "- Requested action with an available tool: do it. Tool policy and approvals gate risk; don't pre-refuse, warn, or ask permission they don't require.",
           "- Non-final turn: advance with tools, or ask one blocking decision.",
-          "- Continue to done/real blocker; no plan-only finish when tools can act.",
+          "- Planning, audit, review, and report requests are complete when the requested artifact or findings are delivered; do not turn them into unrequested implementation. Change/build requests: continue to done or a real blocker; do not stop at a plan when tools can act.",
           "- Weak/empty result: vary query/path/command/source, then conclude.",
           "- Mutable facts: live-check files/git/time/versions/services/processes/packages.",
           "- Final claim needs evidence or named blocker.",
@@ -667,7 +667,7 @@ export function buildAgentSystemPrompt(params: {
     renderOpenClawToolWorkflowHints && [
       waitToolHints.length > 0 && `Long wait: no rapid poll. Use ${waitToolHints.join(" or ")}.`,
       hasSessionsSpawn && [
-        "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner.",
+        "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review outweighs context-transfer and coordination overhead. Keep dependent or tightly coupled steps with the same owner, and preserve an explicit user model choice.",
         '`sessions_spawn`: clean context => `context:"isolated"`; transcript needed => `context:"fork"`. Follow the accepted completion mode.',
         "Once delegation is appropriate, use a hidden subagent unless the user needs to revisit or steer deliberately supervised child work.",
       ],
@@ -680,13 +680,13 @@ export function buildAgentSystemPrompt(params: {
       // by the scheduler, while a job left disabled pending confirmation
       // is watched by nothing and dies silently.
       hasAutomations && [
-        `When \`${resolveToolName(AUTOMATIONS_TOOL_NAME)}\` currently exposes list, add, run, and remove: same job asked a 3rd time => do permitted work, then offer a routine. Check list first; never duplicate one.`,
+        `When \`${resolveToolName(AUTOMATIONS_TOOL_NAME)}\` currently exposes list, add, run, and remove: same job requested and completed a 3rd time => do permitted work, then offer a routine. Retries, corrections, and follow-ups on failed or incomplete work do not count. Check list first; never duplicate one.`,
         "For that supported promotion: restate schedule+task plainly, get a yes, create it (delivery defaults here), then force `run` once as a visible test; failed test => say so and remove it.",
       ],
     ],
     ...nativeCommandGuidanceLines,
     acpHarnessSpawnAllowed && [
-      '"Do in claude code/cursor/gemini/opencode" = ACP intent: `sessions_spawn(runtime:"acp")`.',
+      'An explicit request to run or execute work in Claude Code, Cursor, Gemini, or OpenCode = ACP intent: `sessions_spawn(runtime:"acp")`. Compatibility or artifact-target requests (for example, "compatible with Cursor") are not ACP execution intent.',
       'No thread-capable channel: one-shot `mode:"run"`; never claim binding.',
       "Set `agentId` unless `acp.defaultAgent`; never route ACP through local subagent controls or a local PTY.",
     ],
@@ -722,7 +722,7 @@ export function buildAgentSystemPrompt(params: {
         "## Tool Call Style",
         "Routine low-risk: call silently.",
         "Narrate only complex, sensitive/destructive, or requested steps.",
-        "First-class tool exists: use it; never ask user for equivalent CLI/slash.",
+        "Equivalent first-class tool exists: use it; equivalence requires the requested operation, target, sender identity, attachments, and delivery semantics. Never ask the user for an equivalent CLI/slash.",
         "/approve is user command; never execute via shell/tool.",
         "allow-once covers only that exact command; later commands need their own exec policy decision.",
         "Approval preview: exact full command/script, including chains/multiline. Keep preview separate from /approve; never use script as approval id/slug.",

@@ -28,15 +28,17 @@ describe("system prompt messaging routing", () => {
         runtimeInfo: { channel: "discord" },
       });
 
-      expect(prompt).toContain(
-        "OpenClaw messaging: use available messaging tools, never shell commands, the CLI, curl, or direct RPC.",
-      );
-      expect(prompt).toContain("Missing messaging tools are not permission to use another route.");
+      for (const text of [
+        "OpenClaw-managed channel transport (send, reply, react, poll)",
+        "never use shell commands, the CLI, curl, direct RPC, or provider HTTP APIs",
+        "requested operation, destination, sender identity, attachments, and delivery semantics",
+        "Missing or non-equivalent capability is a capability gap, not permission to substitute another target or route.",
+        "Separately configured services or integrations (e.g. email) are distinct from managed channel transport",
+        "normal identity, tool-policy, credential, and approval controls still apply",
+      ]) {
+        expect(prompt).toContain(text);
+      }
       expect(prompt).toContain("Subagents return results through their accepted completion path");
-      expect(prompt).toContain(
-        "Other services (e.g. email): user-authorized CLI/API use is allowed",
-      );
-      expect(prompt).toContain("normal tool permissions and approvals still apply");
       expect(prompt).toContain(
         "or a final reaction to the current source message: `message(action=react, final=true)`",
       );

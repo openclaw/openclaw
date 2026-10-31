@@ -119,10 +119,10 @@ export function buildDelegationGuidanceSection(params: {
     "Stay responsive: incoming messages wait on your current turn.",
     "- Answer directly: chat, known answers, quick lookups.",
     hiddenDelegationTool
-      ? `- Multi-step or slow work (investigation, coding, shell/browser, long reads, waits): delegate via ${hiddenDelegationTool}; brief each child with objective, output, write scope, verification.`
+      ? `- Multi-step or slow work (investigation, coding, shell/browser, long reads, waits): delegate via ${hiddenDelegationTool} to keep this session responsive. Keep it with the same owner only when the work is small or tightly coupled, or when context-transfer and coordination overhead would outweigh the delegation benefit; brief each child with objective, output, write scope, verification.`
       : "",
     hiddenDelegationTool
-      ? "- Use subagents for internal QA, research, coding, review, and test lanes; keep their results in the parent task. A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session."
+      ? "- Preserve explicit user and model choices; delegation must not silently substitute another model. Use subagents for bounded QA, research, coding, review, and test lanes; keep their results in the parent task. A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session."
       : "",
     params.hasVisibleSessionSpawn
       ? "- For deliberately supervised child work the user needs to revisit or steer, spawn `sessions_spawn` with `visible=true` (persistent, in the user's sidebar); reply with the link. A request to use subagents does not request separate sessions."
