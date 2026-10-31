@@ -54,6 +54,15 @@ it("hydrates display-visible assistant content without tool payloads", async () 
   expect(fields.ReplyToBody).not.toContain("tool_call");
 });
 
+it("keeps the visible quote after hidden reasoning within the display window", async () => {
+  expect(
+    await resolveMessage({
+      role: "assistant",
+      content: "<think>" + "x".repeat(4_000) + "</think>visible answer",
+    }),
+  ).toEqual({ ReplyToId: "msg-1", ReplyToBody: "visible answer", ReplyToSender: "Molty" });
+});
+
 it.each([
   [
     "user",

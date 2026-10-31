@@ -1,6 +1,7 @@
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as markdown from "../../packages/markdown-core/src/markdown-code-regions.js";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -62,6 +63,39 @@ function mirror(fields: Record<string, unknown> = {}) {
 }
 const payloadFor = (message: unknown) =>
   projectSessionMessagePayload({ sessionKey: "agent:main:main", message }).payload;
+
+it.each(["scalar", "block"])("bounds %s preview Markdown before parsing managed media", (shape) => {
+  const raw = "MEDIA:./proof.png\n```md\n" + "x".repeat(20_000) + "\n```";
+  const source = assistant({
+    content: shape === "scalar" ? raw : [text(raw)],
+    openclawDelivery: { mediaUrls: ["./proof.png"] },
+  });
+  const scan = vi.spyOn(markdown, "findMarkdownCodeRegions");
+  try {
+    const result = project([source], { maxChars: 128 });
+    expect(scan).toHaveBeenCalled();
+    expect(Math.max(...scan.mock.calls.map(([input]) => input.length))).toBeLessThanOrEqual(146);
+    expect(result[0]).toHaveProperty("__openclaw", {
+      id: "real-answer",
+      truncated: true,
+      reason: "display-cap",
+    });
+    expect(JSON.stringify(result)).toContain("...(truncated)...");
+    expect(JSON.stringify(result)).not.toContain("MEDIA:");
+    expect(source.content).toEqual(shape === "scalar" ? raw : [text(raw)]);
+  } finally {
+    scan.mockRestore();
+  }
+});
+
+it("does not turn a capped blank completion into a visible reply", () => {
+  expect(
+    project([assistant({ content: " ".repeat(128), stopReason: "stop" })], {
+      maxChars: 16,
+    }),
+  ).toEqual([]);
+});
+
 function expectPrepared(source: Record<string, unknown>, content: unknown[]) {
   const before = structuredClone(source);
   const expected = [{ ...source, display: true, content }];

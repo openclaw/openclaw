@@ -271,7 +271,10 @@ function isPureStreamErrorFallbackAssistantMessage(message: Record<string, unkno
   );
 }
 
-function hasVisibleAssistantDisplayContent(message: Record<string, unknown>): boolean {
+function hasVisibleAssistantDisplayContent(
+  message: Record<string, unknown>,
+  maxChars = Number.MAX_SAFE_INTEGER,
+): boolean {
   if (
     message.role !== "assistant" ||
     message.display === false ||
@@ -279,7 +282,7 @@ function hasVisibleAssistantDisplayContent(message: Record<string, unknown>): bo
   ) {
     return false;
   }
-  const sanitized = sanitizeChatHistoryMessage(message, Number.MAX_SAFE_INTEGER).message as Record<
+  const sanitized = sanitizeChatHistoryMessage(message, maxChars).message as Record<
     string,
     unknown
   >;
@@ -392,7 +395,13 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
       pendingIndexes.push(index);
       return;
     }
-    const hasVisibleAssistant = hasVisibleAssistantDisplayContent(message);
+    // Recovery matching needs the full reply; ordinary visibility checks use the preview bound.
+    const hasVisibleAssistant = hasVisibleAssistantDisplayContent(
+      message,
+      unseenPending || pendingIndexes.length > 0
+        ? Number.MAX_SAFE_INTEGER
+        : (options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS),
+    );
     if (
       message.role === "assistant" &&
       (message.stopReason === "stop" || message.stopReason === "length") &&
@@ -602,8 +611,14 @@ export function projectChatDisplayMessagesWithState(
       }
     }
   }
-  // Recovery already admitted records and consumed assistant display content.
-  const sanitizedMessages = sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER, {
+  // TTS hashes and delivery deduplication compare complete normalized text.
+  // Ordinary previews must be bounded before sanitation parses their Markdown.
+  const normalizationMaxChars = projectedErrors.some(
+    (message) => message.openclawTtsSupplement || isTranscriptOnlyOpenClawAssistantMessage(message),
+  )
+    ? Number.MAX_SAFE_INTEGER
+    : (options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS);
+  const sanitizedMessages = sanitizeChatHistoryMessages(projectedErrors, normalizationMaxChars, {
     includeCommentaryFallbacks: options?.includeCommentaryFallbacks,
   });
   const commentaryFallbacksObserved =
