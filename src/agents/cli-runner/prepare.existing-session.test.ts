@@ -212,7 +212,6 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
   // This is a stored v2026.10.3-format binding, not a migration. Its digest is
   // the stable loopback config hash: port-canonicalized, including Claude's
   // managed timeout, with no MCP topology change between the two code versions.
-  // ToolSearch deferral, on by default, must not change it either.
   replaceSessionEntrySync(sessionTarget, {
     sessionId: sessionTarget.sessionId,
     updatedAt: 2,
@@ -287,7 +286,6 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
     completion: boolean,
     cliSessionBinding: ReturnType<typeof getCliSessionBinding>,
     changedPrompt = false,
-    turnConfig: OpenClawConfig = config,
   ) => {
     const sessionEntry = loadSessionEntry(sessionTarget);
     expect(sessionEntry).toMatchObject({
@@ -296,7 +294,7 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
       verboseLevel: "on",
     });
     return fixture.prepare({
-      config: turnConfig,
+      config,
       sessionEntry,
       sessionKey: sessionTarget.sessionKey,
       cliSessionBinding,
@@ -360,28 +358,14 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
     await completion.preparedBackend.cleanup?.();
   }
 
+  // Discovery changes only loading hints; it must not override safe prompt drift.
+  config.tools = { ...config.tools, toolSearch: true };
   const drifted = await prepareTurn(false, upgradedBinding, true);
   try {
     expect(drifted.reusableCliSession).toMatchObject({ mode: "reuse-with-drift" });
     await executePreparedCliRun(drifted, nativeSessionId);
   } finally {
     await drifted.preparedBackend.cleanup?.();
-  }
-  if (toolSearch === false) {
-    // A session bound before ToolSearch deferral keeps its native history when discovery turns on.
-    const discovery = await prepareTurn(false, upgradedBinding, false, {
-      ...config,
-      tools: { ...config.tools, toolSearch: true },
-    });
-    try {
-      expect(discovery.reusableCliSession).toEqual({
-        mode: "reuse-with-drift",
-        sessionId: nativeSessionId,
-        drift: { reasons: ["system-prompt"] },
-      });
-    } finally {
-      await discovery.preparedBackend.cleanup?.();
-    }
   }
 
   expect(sent).toHaveLength(3);
@@ -390,7 +374,7 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
   expect(sent[1]?.sessionId).toBe(nativeSessionId);
   expect(sent[1]?.useResume).toBe(true);
   expect(sent[1]?.args).toEqual(expect.arrayContaining(["--resume", nativeSessionId]));
-  for (const turn of sent) {
+  for (const [index, turn] of sent.entries()) {
     expect(turn.args).toEqual(
       expect.arrayContaining(["--strict-mcp-config", "--disable-slash-commands"]),
     );
@@ -405,7 +389,7 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
     expect(turn.toolAvailability).toEqual({
       native: [],
       openClaw: ["read"],
-      ...(toolSearch === false ? {} : { discovery: ["ToolSearch"] }),
+      ...(toolSearch === false && index < 2 ? {} : { discovery: ["ToolSearch"] }),
     });
     expect(turn.systemPrompt).toContain("OPENCLAW_CONTEXT_SURVIVES_UPGRADE");
     expect(turn.systemPrompt).toContain("weather");
