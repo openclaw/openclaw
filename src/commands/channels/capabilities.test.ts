@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
-import { ExpectedCliError } from "../../cli/failure-output.js";
 import type { OpenClawConfig, replaceConfigFile } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
@@ -91,6 +90,8 @@ const accountRequired =
   "--account requires a specific --channel. Run openclaw channels list to choose one.";
 const targetRequired =
   "--target requires a specific --channel. Run openclaw channels list to choose one.";
+const channelBlank = "--channel must not be blank";
+const targetBlank = "--target must not be blank";
 const pending = () => Promise.withResolvers<never>().promise;
 const reportHeader = "slack default\nSupport: chatTypes=direct\nActions: send, broadcast, poll";
 
@@ -147,6 +148,14 @@ describe("channelsCapabilitiesCommand", () => {
     ["target without channel", { target: "channel:1", json: true }, targetRequired, 0],
     ["target with all", { channel: "all", target: "channel:1" }, targetRequired, 0],
     ["account before target", { account: "ghost", target: "channel:1" }, accountRequired, 0],
+    ["blank channel", { channel: "" }, channelBlank, 0],
+    ["whitespace-only channel", { channel: " \t " }, channelBlank, 0],
+    ["blank agent with all", { channel: "all", agent: " " }, "--agent must not be blank", 0],
+    // --account is absent from this table because parseAccountSelector rejects it at
+    // option-parse time, and src/cli/account-selector-boundary.test.ts already proves
+    // the blank case (`--account ""`) for this route, before command startup.
+    ["blank target without channel", { target: "  " }, targetBlank, 0],
+    ["blank target with channel", { channel: "discord", target: "", json: true }, targetBlank, 0],
     [
       "unknown channel",
       { channel: "definitely-not-a-channel", json: true },
@@ -165,12 +174,11 @@ describe("channelsCapabilitiesCommand", () => {
 
     const failure = channelsCapabilitiesCommand(options, runtime);
 
-    await expect(failure).rejects.toBeInstanceOf(ExpectedCliError);
-    await expect(failure).rejects.toMatchObject({
-      message,
-      humanOutput: message,
-      machineOutput: message,
-    });
+    await expect(failure).rejects.toMatchObject(
+      message === channelBlank
+        ? { name: "Error", message }
+        : { name: "ExpectedCliError", message, humanOutput: message, machineOutput: message },
+    );
     expect(logs).toStrictEqual([]);
     expect(errors).toStrictEqual([]);
     expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledTimes(calls);
@@ -180,6 +188,34 @@ describe("channelsCapabilitiesCommand", () => {
     expect(probeAccount).not.toHaveBeenCalled();
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(mocks.refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
+  });
+
+  it("reports every configured account when --account is omitted", async () => {
+    const plugin = selectPlugin();
+    plugin.config.listAccountIds = () => ["ops", "sales"];
+    plugin.config.resolveAccount = (_cfg, accountId) => ({ accountId });
+
+    await channelsCapabilitiesCommand({ channel: "slack", json: true }, runtime);
+
+    const payload = JSON.parse(logs[0] ?? "{}") as {
+      channels?: Array<{ accountId?: string }>;
+    };
+    expect(payload.channels?.map((entry) => entry.accountId)).toStrictEqual(["ops", "sales"]);
+  });
+
+  it("reports every channel when --channel is omitted", async () => {
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+      buildPlugin({ id: "slack" }),
+      buildPlugin({ id: "discord" }),
+    ]);
+
+    await channelsCapabilitiesCommand({ json: true }, runtime);
+
+    const payload = JSON.parse(logs[0] ?? "{}") as {
+      channels?: Array<{ channel?: string }>;
+    };
+    expect(payload.channels?.map((entry) => entry.channel)).toStrictEqual(["slack", "discord"]);
+    expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
   });
 
   it.each([
