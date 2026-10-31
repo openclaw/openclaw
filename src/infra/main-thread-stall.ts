@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
+import { versions } from "node:process";
 import { promiseHooks } from "node:v8";
 import { runWithAsyncStore } from "../shared/async-store.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -193,7 +194,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       heartbeat = enabled
         ? runInDetachedAsyncContext(() => setInterval(observeLoop, HEARTBEAT_MS).unref())
         : undefined;
-      if (enabled && !process.versions.bun) {
+      if (enabled && !versions.bun) {
         const stop = promiseHooks.createHook(continuations);
         stopContinuations = () => stop();
       } else {
