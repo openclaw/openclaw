@@ -35,6 +35,7 @@ import {
 import type { SqliteSnapshotChangeReason } from "./sqlite-snapshot-diagnostics.js";
 import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
 import { MAX_SNAPSHOT_ATTEMPTS, waitForSnapshotRetrySync } from "./sqlite-snapshot-policy.js";
+import { renameStagedSnapshotFile } from "./sqlite-snapshot-rename.js";
 import {
   createSqliteSnapshotStagingDirectory,
   createSqliteSnapshotStagingDirectorySync,
@@ -381,7 +382,7 @@ function* createStableReadOnlyCopyInTempDirectory(
         throw new SqliteSourceChangedError("main-changed-during-copy");
       }
       fs.rmSync(snapshotPath, { force: true });
-      fs.renameSync(firstPath, snapshotPath);
+      renameStagedSnapshotFile(firstPath, snapshotPath);
     }
 
     if (readSourceJournalMode(pathname, expectedSourceIdentity) !== journalMode) {
