@@ -8,6 +8,9 @@ import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusi
 import { listen } from "../../../lib/reactive/listener.ts";
 import { clearChatModelSearchOnEscape } from "./chat-model-picker-search.ts";
 
+const MOBILE_COMPOSER_OVERLAY_QUERY =
+  "(max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
+
 const composerPickerDismissals = new WeakMap<
   Document,
   { owners: Set<symbol>; dispose: () => void }
@@ -40,7 +43,18 @@ function bindChatPickerOverlay(
   overlay.bindTrigger(trigger);
   const anchor = createOverlayAnchor(surface, { sameRoot: true });
   const sync = () => {
-    anchor.update(trigger, "top-end");
+    const mobile = details.ownerDocument.defaultView?.matchMedia?.(
+      MOBILE_COMPOSER_OVERLAY_QUERY,
+    ).matches;
+    const raisedToolbar =
+      details.closest(".agent-chat__composer-shell")?.getAttribute("data-mobile-composer") ===
+      "true";
+    anchor.update(
+      mobile && !raisedToolbar
+        ? (details.closest<HTMLElement>(".agent-chat__input") ?? trigger)
+        : trigger,
+      "top-end",
+    );
     if (!overlay.request(details.open)) {
       details.open = overlay.open;
     }
