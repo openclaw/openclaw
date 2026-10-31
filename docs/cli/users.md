@@ -57,6 +57,13 @@ The shared **Owner** profile cannot be merged in either direction. Repeating an
 already completed merge into the same target succeeds. If the source points to
 another survivor, the command fails and names that current profile.
 
+On a single-user Gateway, a personal sign-in, such as Tailscale Serve identity
+with `gateway.auth.allowTailscale`, creates a durable personal profile next to
+the shared **Owner** profile. Turning that sign-in off does not remove it, and
+there is no command to delete it or merge it into **Owner**. Token and password
+connections keep using **Owner**. The personal profile keeps its email aliases
+and saved preferences, and a later sign-in with the same identity reuses it.
+
 Human output names the survivor and retired ID. JSON returns `profile`, the
 surviving profile, and `movedAliasKinds`, the alias categories actually moved:
 `email`, `provider`, or `channel`. An unchanged repeat returns an empty list.
