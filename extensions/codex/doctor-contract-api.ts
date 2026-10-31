@@ -1,6 +1,10 @@
+import { statSync } from "node:fs";
+import path from "node:path";
+import { safePathSegmentHashed } from "@openclaw/fs-safe/advanced";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveConfigDir, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { codexOrphanedSessionBindingMigration } from "./src/migration/session-binding-orphans.js";
 
 type LegacyConfigRule = {
@@ -8,6 +12,51 @@ type LegacyConfigRule = {
   message: string;
   match: (value: unknown) => boolean;
 };
+
+function isStaleManagedCodexGenerationCommand(command: unknown): boolean {
+  try {
+    if (typeof command !== "string") {
+      return false;
+    }
+    const trimmed = command.trim();
+    const hasHomePrefix = trimmed === "~" || trimmed.startsWith("~/") || trimmed.startsWith("~\\");
+    if (!trimmed || (!path.isAbsolute(trimmed) && !hasHomePrefix)) {
+      return false;
+    }
+
+    const resolved = resolveUserPath(trimmed);
+    const projectsDir = path.join(resolveConfigDir(process.env), "npm", "projects");
+    const relative = path.relative(projectsDir, resolved);
+    const [name, ...remainingSegments] = relative.split(path.sep);
+    if (!name || remainingSegments.length === 0) {
+      return false;
+    }
+    const projectDir = path.join(projectsDir, name);
+    if (path.dirname(projectDir) !== projectsDir) {
+      return false;
+    }
+
+    // The generation directory shape is owned by src/plugins/install-paths.ts.
+    const generationPrefix = `${safePathSegmentHashed("@openclaw/codex")}__openclaw-generation__`;
+    if (
+      !name.startsWith(generationPrefix) ||
+      !/^g-[a-f0-9]{16}$/u.test(name.slice(generationPrefix.length))
+    ) {
+      return false;
+    }
+
+    try {
+      statSync(projectDir);
+      return false;
+    } catch (error) {
+      const code =
+        typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+      return code === "ENOENT" || code === "ENOTDIR";
+    }
+  } catch {
+    return false;
+  }
+}
 
 function hasRetiredDynamicToolsProfile(value: unknown): boolean {
   return Object.hasOwn(asNullableRecord(value) ?? {}, "codexDynamicToolsProfile");
@@ -112,6 +161,10 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   const rawPluginConfig = asNullableRecord(rawEntry?.config);
   const rawCodexPlugins = asNullableRecord(rawPluginConfig?.codexPlugins);
   const rawAppServer = asNullableRecord(rawPluginConfig?.appServer);
+  const hasStaleManagedCodexGenerationCommand = isStaleManagedCodexGenerationCommand(
+    rawAppServer?.command,
+  );
+
   if (
     !rawPluginConfig ||
     (!hasRetiredDynamicToolsProfile(rawPluginConfig) &&
@@ -119,7 +172,8 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
       !hasRetiredApprovalPolicy(rawAppServer) &&
       !hasRetiredTurnIdleTimeout(rawAppServer) &&
       !hasRetiredCyberFailoverModel(rawAppServer?.cyberFailover) &&
-      !hasBlankNetworkProxyOptionalFields(rawAppServer))
+      !hasBlankNetworkProxyOptionalFields(rawAppServer) &&
+      !hasStaleManagedCodexGenerationCommand)
   ) {
     return { config: cfg, changes: [] };
   }
@@ -153,6 +207,13 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   }
 
   const nextAppServer = asNullableRecord(nextPluginConfig.appServer);
+  if (nextAppServer && hasStaleManagedCodexGenerationCommand) {
+    delete nextAppServer.command;
+    changes.push(
+      "Removed plugins.entries.codex.config.appServer.command; it pointed into an OpenClaw-managed Codex plugin generation that no longer exists. Without it, stdio Codex app-server starts use managed binary selection (or OPENCLAW_CODEX_APP_SERVER_BIN when set).",
+    );
+  }
+
   const nextCyberFailover = asNullableRecord(nextAppServer?.cyberFailover);
   if (nextCyberFailover && hasRetiredCyberFailoverModel(nextCyberFailover)) {
     delete nextCyberFailover.model;
