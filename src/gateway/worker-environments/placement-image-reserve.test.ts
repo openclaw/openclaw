@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
@@ -23,8 +24,11 @@ import { createHarness } from "./placement-dispatch-test-harness.js";
 import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { nodeArtifacts, pendingNodeEnrollment } from "./provider-lifecycle.test-support.js";
-import { assertNoCredentialFiles } from "./repository-git-pack.test-support.js";
-import { createRepositoryNodeFixture } from "./repository-policy-node.test-support.js";
+import { assertNoCredentialFiles, TOKEN } from "./repository-git-pack.test-support.js";
+import {
+  createManagedRepositoryProfile,
+  createRepositoryNodeFixture,
+} from "./repository-policy-node.test-support.js";
 import * as repositoryAdmission from "./repository-project-admission.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
@@ -40,15 +44,32 @@ describe("runtime image reserve repository dispatch", () => {
   });
   afterEach(() => {
     resetPluginRuntimeStateForTest();
+    clearGitHubCredentialVerificationCache();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
 
-  async function fixture(reserve: boolean) {
+  async function fixture(
+    reserve: boolean,
+    kind: "app-installation" | "pat" | "oauth" = "app-installation",
+  ) {
     vi.stubEnv("OPENCLAW_STATE_DIR", support.testState.root);
     const effects = await imageReserveEffectsFixture();
-    support.testState.config.tools = { github: effects.selection };
+    if (kind !== "app-installation") {
+      await createManagedRepositoryProfile({
+        agentId: REQUEST.agentId,
+        profileId: effects.selection.profileId,
+        stateDir: support.testState.root,
+        token: TOKEN,
+      });
+    }
+    support.testState.config.tools = {
+      github:
+        kind === "app-installation"
+          ? effects.selection
+          : { profileId: effects.selection.profileId, ...(kind === "oauth" ? { kind } : {}) },
+    };
     setRuntimeConfigSnapshot(support.testState.config);
     const owner = ensureProfileForEmail("image-owner@example.invalid");
     const other = ensureProfileForEmail("image-other@example.invalid");
@@ -75,6 +96,7 @@ describe("runtime image reserve repository dispatch", () => {
     let policyCurrent = true;
     const admissions: string[] = [];
     const hooks: { beforeCommand?: () => void } = {};
+    const nativeRead = vi.fn();
     const registry = createTestPluginRegistry();
     const record = createPluginRecord({
       id: "image-policy",
@@ -106,6 +128,10 @@ describe("runtime image reserve repository dispatch", () => {
           env: context.env,
           assertCurrent,
           readNativeCredential: async (_env, admission) => {
+            nativeRead();
+            if (kind !== "app-installation") {
+              throw new Error("Managed bearer lookup must remain with the native profile owner");
+            }
             assertCurrent();
             expect(admission?.selection.app).not.toHaveProperty("privateKey");
             expect(
@@ -316,6 +342,7 @@ describe("runtime image reserve repository dispatch", () => {
       bind,
       source,
       effects,
+      nativeRead,
       admissions,
       hooks,
       client,
@@ -431,10 +458,71 @@ describe("runtime image reserve repository dispatch", () => {
     }
   });
 
-  it.each([true, false])(
-    "recovers image checkout with a fresh repository caller (allowed=%s)",
-    async (allowed) => {
-      const f = await fixture(true);
+  it.each([
+    ["pat", "claim"],
+    ["oauth", "cold"],
+    ["pat", "denied"],
+    ["oauth", "denied"],
+    ["pat", "retired"],
+  ] as const)("preserves managed %s image admission through %s", async (kind, scenario) => {
+    const f = await fixture(scenario !== "cold", kind);
+    if (scenario === "denied") {
+      f.revoke();
+    }
+    let retired = false;
+    if (scenario === "retired") {
+      f.hooks.beforeCommand = () => {
+        retired = true;
+        f.client.invalidated = true;
+      };
+    }
+    const reader = repositoryDispatchCredentialReader({
+      ...REQUEST,
+      client: f.client,
+      requestDigest: "managed-image",
+      assertCurrent() {},
+    });
+    const dispatch = f.harness.service.dispatch({
+      ...REQUEST,
+      idempotencyKey: "image-dispatch",
+      devicePlacement: requirement,
+      readNativeCredential: reader,
+    });
+    if (scenario === "claim" || scenario === "cold") {
+      const active = await dispatch;
+      expect(await fs.readFile(path.join(active.remoteWorkspaceDir!, "input.txt"), "utf8")).toBe(
+        "pinned private content\n",
+      );
+      expect(await fs.readFile(path.join(active.remoteWorkspaceDir!, "session.txt"), "utf8")).toBe(
+        "accepted image claim change\n",
+      );
+      expect(f.effects.git.requests.length).toBeGreaterThan(0);
+      expect(f.effects.counts.verified).toBe(1);
+      for (const home of f.nodeHomes) {
+        await assertNoCredentialFiles(home);
+      }
+    } else {
+      await expect(dispatch).rejects.toThrow(/policy|authority|identity/i);
+      expect(f.commands()).toBe(0);
+      expect(f.effects.git.requests).toEqual([]);
+      expect(f.effects.counts.verified).toBe(scenario === "retired" ? 1 : 0);
+      expect(retired).toBe(scenario === "retired");
+    }
+    expect(f.admissions).toEqual([f.owner.id]);
+    expect(f.nativeRead).not.toHaveBeenCalled();
+    expect(f.effects.counts.issued).toBe(0);
+    expect(f.source).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["app-installation", true],
+    ["app-installation", false],
+    ["oauth", true],
+    ["oauth", false],
+  ] as const)(
+    "recovers image checkout with a fresh %s repository caller (allowed=%s)",
+    async (kind, allowed) => {
+      const f = await fixture(true, kind);
       const reader = repositoryDispatchCredentialReader({
         ...REQUEST,
         client: f.client,
@@ -492,13 +580,19 @@ describe("runtime image reserve repository dispatch", () => {
         await expect(
           fs.access(path.join(active.remoteWorkspaceDir!, "unaccepted.txt")),
         ).rejects.toMatchObject({ code: "ENOENT" });
-        expect(f.effects.counts).toMatchObject({ issued: 2, revoked: 2 });
+        expect(f.effects.counts).toMatchObject(
+          kind === "app-installation" ? { issued: 2, revoked: 2 } : { issued: 0, revoked: 0 },
+        );
         expect(f.effects.git.requests.length).toBeGreaterThan(beforeRequests);
       } else {
         await expect(recovery).rejects.toThrow(/policy|identity/i);
-        expect(f.effects.counts.issued).toBe(1);
+        expect(f.effects.counts.issued).toBe(kind === "app-installation" ? 1 : 0);
         expect(f.effects.git.requests).toHaveLength(beforeRequests);
         expect(f.admissions.at(-1)).toBe(f.other.id);
+      }
+      if (kind === "oauth") {
+        expect(f.nativeRead).not.toHaveBeenCalled();
+        expect(f.admissions).toEqual([f.owner.id, allowed ? f.owner.id : f.other.id]);
       }
     },
   );
