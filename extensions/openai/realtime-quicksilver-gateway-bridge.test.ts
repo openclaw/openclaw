@@ -3,7 +3,6 @@ import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 import { createBridgeCallbacks } from "./realtime-quicksilver-bridge.test-support.js";
 import { delegation } from "./realtime-quicksilver-events.test-support.js";
-import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import { createGatewayHarness } from "./realtime-quicksilver-gateway.test-support.js";
 import type {
   OpenAIQuicksilverAudioPeerCallbacks,
@@ -30,8 +29,8 @@ function delegate(socket: FakeSocket, id: string, text: string) {
   emitSideband(socket, delegation(id, text));
 }
 
-type BridgeConfig = ConstructorParameters<typeof OpenAIQuicksilverGatewayBridge>[0];
-function createBridge(overrides: Partial<BridgeConfig> = {}) {
+type BridgeOverrides = NonNullable<Parameters<typeof createGatewayHarness>[0]>;
+function createBridge(overrides: BridgeOverrides = {}) {
   const observed = createBridgeCallbacks();
   const peer = createPeer();
   const createSocket = vi.fn(() => new FakeSocket());
@@ -128,6 +127,35 @@ describe("GPT-Live gateway relay bridge", () => {
     harness.triggerPeerError(new Error("terminal connection failure"));
     expect(harness.onClose).toHaveBeenCalledExactlyOnceWith("error");
     expect(harness.peer.close).toHaveBeenCalledOnce();
+  });
+
+  it("sends the greeting context before releasing caller audio to the model", async () => {
+    const events: string[] = [];
+    const { bridge, peer, createSocket } = createBridge({
+      onSend: (event) => events.push(`sideband:${event.type}`),
+      onReady: () => bridge.triggerGreeting("Say the opening line."),
+    });
+    peer.adoptPendingAudio.mockImplementation((pending: OpenAIQuicksilverPendingAudio) => {
+      const audio = Buffer.alloc(pending.length);
+      pending.readInto(audio);
+      events.push(`audio:${audio.toString("hex")}`);
+    });
+    peer.sendAudio.mockImplementation((audio: Buffer) =>
+      events.push(`audio:${audio.toString("hex")}`),
+    );
+    onTestFinished(() => bridge.close());
+
+    const connection = bridge.connect();
+    bridge.sendAudio(Buffer.from([0x01, 0x02]));
+    await connection;
+    bridge.sendAudio(Buffer.from([0x03, 0x04]));
+    expect(events).toEqual([]);
+
+    const socket = createSocket.mock.results[0]!.value;
+    emitSideband(socket, { type: "session.started", session: { id: "rtc_opening" } });
+    bridge.sendAudio(Buffer.from([0x05, 0x06]));
+
+    expect(events).toEqual(["sideband:session.context.append", "audio:01020304", "audio:0506"]);
   });
 
   it("discards queued microphone audio when media peer creation fails", async () => {

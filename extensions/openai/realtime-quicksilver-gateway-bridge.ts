@@ -153,7 +153,8 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       this.directSocket.sendAudio(audio);
     } else if (this.transport === "webrtc") {
       const pcm = this.audio.decodeInput(audio);
-      if (this.peer) {
+      if (this.peer && this.ready) {
+        this.releasePendingAudioToPeer();
         this.peer.sendAudio(pcm);
       } else {
         this.pendingAudio.append(pcm);
@@ -313,13 +314,6 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       () => undefined,
     );
     this.peer = await waitForOpenAIQuicksilverConnectStep(peerPromise, connectSignal);
-    if (this.pendingAudio.length > 0) {
-      const pendingAudio = this.pendingAudio;
-      // Detach synchronously before adoption so bridge teardown can only clear
-      // the new owner and no capture can interleave with the transfer.
-      this.pendingAudio = new OpenAIQuicksilverPendingAudio();
-      this.peer.adoptPendingAudio(pendingAudio);
-    }
     const offerSdp = await waitForOpenAIQuicksilverConnectStep(
       this.peer.createOffer(),
       connectSignal,
@@ -442,6 +436,17 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     }
   }
 
+  private releasePendingAudioToPeer(): void {
+    if (!this.peer || this.closed || this.pendingAudio.length === 0) {
+      return;
+    }
+    const pendingAudio = this.pendingAudio;
+    // Detach synchronously before adoption so bridge teardown can only clear
+    // the new owner and no capture can interleave with the transfer.
+    this.pendingAudio = new OpenAIQuicksilverPendingAudio();
+    this.peer.adoptPendingAudio(pendingAudio);
+  }
+
   private createDelegationController(params?: {
     onSessionStarted?: () => void;
   }): OpenAIQuicksilverDelegationController {
@@ -481,6 +486,9 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
               return;
             }
             this.config.onReady?.();
+            // Caller audio waits for the opening context; otherwise the model
+            // answers the callee before it knows why it is calling.
+            this.releasePendingAudioToPeer();
           }
           params?.onSessionStarted?.();
         },
