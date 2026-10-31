@@ -206,34 +206,38 @@ async function patchSessionEntryInScope(
     return (await memory).entry;
   }
   const storePath = resolveSessionStorePathForScope(scope);
-  return withPreparedSqliteWriteScope(scope, (resolved, sharedWriteReserved) => {
-    if (databaseAgentId) {
-      resolved.databaseAgentId = databaseAgentId;
-    }
-    assertCanonicalSessionKeyWrite(resolved.sessionKey, resolved.agentId);
-    return patchSqliteSessionEntrySnapshot({
-      operationLabel: "session-entry.patch",
-      validateCanonicalKeys: options.replaceEntry !== true,
-      options,
-      selection: {
-        kind: "entry",
+  return withPreparedSqliteWriteScope(
+    scope,
+    (resolved, sharedWriteReserved) => {
+      if (databaseAgentId) {
+        resolved.databaseAgentId = databaseAgentId;
+      }
+      assertCanonicalSessionKeyWrite(resolved.sessionKey, resolved.agentId);
+      return patchSqliteSessionEntrySnapshot({
+        operationLabel: "session-entry.patch",
+        validateCanonicalKeys: options.replaceEntry !== true,
+        options,
+        selection: {
+          kind: "entry",
+          sessionKey: resolved.sessionKey,
+          exact: options.replaceEntry === true,
+        },
+        readSnapshot: (database, includeWindowFacts) =>
+          readSessionEntrySelectionSnapshot(
+            database,
+            resolved.sessionKey,
+            options.replaceEntry === true,
+            includeWindowFacts,
+          ),
+        resolved,
         sessionKey: resolved.sessionKey,
-        exact: options.replaceEntry === true,
-      },
-      readSnapshot: (database, includeWindowFacts) =>
-        readSessionEntrySelectionSnapshot(
-          database,
-          resolved.sessionKey,
-          options.replaceEntry === true,
-          includeWindowFacts,
-        ),
-      resolved,
-      sessionKey: resolved.sessionKey,
-      storePath,
-      sharedWriteReserved,
-      update,
-    });
-  });
+        storePath,
+        sharedWriteReserved,
+        update,
+      });
+    },
+    options.signal,
+  );
 }
 
 /** Patches one logical entry after validating its canonical lifecycle target. */
@@ -313,7 +317,7 @@ async function patchSessionEntryTargetInScope(
         ownerStorePath: source.path,
         sessionKey: "",
       })
-    : withPreparedSqliteWriteScope(target, patch);
+    : withPreparedSqliteWriteScope(target, patch, options.signal);
 }
 
 /** Callback and fixed-operation patches share source custody, FIFO, and commit publication. */
@@ -586,6 +590,7 @@ async function patchSqliteSessionEntrySnapshot(
     params.sharedWriteReserved || options.retainedExecution || (useWorker && !sourceAssertion)
       ? "foreground-reentrant"
       : "foreground",
+    options.signal,
   );
   let committed: SessionEntry | null;
   try {
