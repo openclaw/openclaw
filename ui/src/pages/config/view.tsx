@@ -6,7 +6,6 @@ import {
   Errored,
   For,
   isPending,
-  lazy,
   latest,
   Loading,
   Show,
@@ -27,7 +26,7 @@ import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
 import { AppearanceSection } from "./view-appearance.tsx";
 import { computeRawDiff, formatConfigDiffPath, renderRawDiffValue } from "./view-diff.ts";
-import { ConfigForm, NotificationsSection, SetupSection } from "./view-lazy.ts";
+import { ConfigForm, HighlightedJson, NotificationsSection, SetupSection } from "./view-lazy.ts";
 import {
   CATEGORISED_KEYS,
   ConfigAccordionNav,
@@ -53,10 +52,6 @@ import type { ConfigProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 export type { ConfigProps } from "./view-types.ts";
-const HighlightedJson = lazy(() => import("../../components/solid/highlighted-json.tsx"), {
-  export: "HighlightedJson",
-});
-
 export function Config(props: ConfigProps) {
   const plainIssues = () => <pre class="code-block">{JSON.stringify(props.issues, null, 2)}</pre>;
   let content: HTMLDivElement | undefined;
@@ -453,6 +448,7 @@ export function Config(props: ConfigProps) {
     const editor = (
       <ConfigForm
         schema={state().editorSchema}
+        progressive={props.progressive}
         uiHints={props.uiHints}
         value={props.formValue}
         embedded={props.embeddedEditor === true || state().showSetup}

@@ -94,7 +94,7 @@ export type SessionDiffScope =
 
 type SessionDiffLoader = (
   params: SessionDiffScope,
-  options?: { refresh?: boolean },
+  options?: { refresh?: boolean; summaryOnly?: boolean },
 ) => Promise<SessionsDiffResult>;
 
 type SessionDiffFileTextLoader = (path: string) => Promise<string | null>;

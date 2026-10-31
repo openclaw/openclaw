@@ -402,6 +402,52 @@ suite.define(() => {
     });
   });
 
+  it("keeps the open panel and Details page on screen while the sheet slides out", async () => {
+    await suite.withPage(mobile, async ({ page }) => {
+      await openSession(page);
+      await openPanels(page);
+      const shell = page.locator(".chat-mobile-host");
+      // Detail pages lead with Back; Close is the labelled control on every page.
+      const close = shell
+        .locator(".chat-mobile-host__header")
+        .getByRole("button", { name: "Close", exact: true });
+      await shell.getByRole("button", { name: "Files", exact: true }).click();
+      const files = page.locator('[data-panel-slot="workspace"]');
+      await files.waitFor();
+      await settle(page);
+
+      await close.click();
+      await page.waitForTimeout(60);
+      expect((await shellState(page)).hidden).toBe(true);
+      // Closed for focus and accessibility, but the panel slides out with the sheet.
+      expect(await files.isVisible()).toBe(true);
+      await settle(page);
+      expect(await files.isVisible()).toBe(false);
+
+      await openPanels(page);
+      await shell.getByRole("button", { name: "Details", exact: true }).click();
+      await shell.getByRole("button", { name: /^Outputs/ }).click();
+      const outputs = shell.locator('.chat-mobile-details-page[data-details-page="outputs"]');
+      await outputs.waitFor();
+      await settle(page);
+      await close.click();
+      await page.waitForTimeout(60);
+      expect(await outputs.isVisible()).toBe(true);
+      await settle(page);
+      expect(await outputs.isVisible()).toBe(false);
+
+      // Reopening mid-exit cancels the pending close instead of hiding the page later.
+      await page.getByRole("button", { name: "Panels", exact: true }).first().click();
+      await outputs.waitFor();
+      await close.click();
+      await page.waitForTimeout(60);
+      await page.getByRole("button", { name: "Panels", exact: true }).first().click();
+      await settle(page);
+      expect((await shellState(page)).hidden).toBe(false);
+      expect(await outputs.isVisible()).toBe(true);
+    });
+  });
+
   it("switches instantly when the person prefers reduced motion", async () => {
     await suite.withPage({ ...mobile, reducedMotion: "reduce" }, async ({ page }) => {
       await openSession(page);

@@ -109,6 +109,7 @@ packages/model-catalog-core/package.json
 packages/model-catalog-core/src/canonical-model-key.ts
 packages/model-catalog-core/src/configured-model-refs.ts
 packages/model-catalog-core/src/decision-answer-capabilities.ts
+packages/model-catalog-core/src/decision-route-capabilities.ts
 packages/model-catalog-core/src/index.ts
 packages/model-catalog-core/src/model-catalog-normalize.ts
 packages/model-catalog-core/src/model-catalog-pricing.ts
@@ -434,6 +435,7 @@ src/infra/database-engine/sqlite-vector-types.ts
 src/infra/database-engine/sqlite-vector.ts
 src/infra/database-engine/text-bytes.ts
 src/infra/database-engine/vector-contract.ts
+src/infra/gateway-shutdown-budget.ts
 src/infra/postgres-sync/bridge-prestart.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/idle-bridges.ts
@@ -443,6 +445,7 @@ src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
 src/infra/sql-connection.ts
 src/infra/sql-query-compiler.ts
+src/process/supervisor/cleanup-budget.ts
 src/sessions/communication-admission.ts
 src/sessions/communication-policy.ts
 src/config/sessions/session-actor-command.ts
@@ -2818,6 +2821,7 @@ src/plugins/setup-registry.ts
 src/shared/map-nested-strings.ts
 src/shared/owned-buffer.ts
 src/shared/state-lease-loss.ts
+src/shared/weak-owner-map.ts
 src/status/utility-model-warnings.ts
 src/infra/sqlite-integrity.worker.ts
 src/infra/sqlite-readonly-inspection.ts

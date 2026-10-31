@@ -415,11 +415,6 @@
 .usage-export-menu > .oc-menu {
   min-width: 220px;
   max-width: min(320px, calc(100vw - 48px));
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 .usage-filter-option {

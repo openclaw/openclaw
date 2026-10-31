@@ -56,7 +56,6 @@
   display: flex;
   align-items: center;
   gap: var(--mobile-list-gap);
-  box-sizing: border-box;
   width: 100%;
   min-width: 44px;
   min-height: 44px;
@@ -176,7 +175,7 @@
   font: 400 12px/20px var(--mono);
 }
 
-/* The root group owns its inset divider; the collection page keeps its own divider. */
+/* Root rows have no inner divider; the collection page keeps its own divider. */
 .chat-details-mobile-root__group > .chat-pr-mobile__row + .chat-pr-mobile__row {
   border-top: 0;
 }
@@ -199,7 +198,6 @@
 .chat-details-mobile-root__people-overflow {
   display: inline-grid;
   place-items: center;
-  box-sizing: border-box;
   width: auto;
   min-width: 22px;
   padding-inline: 3px;
@@ -301,7 +299,6 @@
     .chat-details-subagents__row,
     .chat-environment-mobile__row
   ) {
-  box-sizing: border-box;
   min-height: 44px;
   padding: 8px var(--mobile-list-inset);
   gap: var(--mobile-list-gap);
@@ -422,27 +419,16 @@
   font-variant-numeric: tabular-nums;
 }
 
-.chat-details-mobile-processes .chat-details__process-icon {
+.chat-details-mobile-processes .chat-details-processes__icon {
   width: var(--mobile-list-lead);
   height: var(--mobile-list-lead);
-  background: transparent;
 }
 
-.chat-details-mobile-processes .chat-details__process-icon > svg {
+.chat-details-mobile-processes .chat-details-processes__icon > svg {
   width: var(--mobile-list-icon);
   height: var(--mobile-list-icon);
 }
 
-/* The dot clears the glyph now that the tile behind it is gone. */
-.chat-details-mobile-processes .chat-details__process-icon::after {
-  inset-block: 1px auto;
-  inset-inline-end: -2px;
-  width: 6px;
-  height: 6px;
-  border: 0;
-}
-
-.chat-details-mobile-processes .chat-details__process-tail,
 .chat-details-mobile-processes .chat-details__process-elapsed {
   color: var(--muted);
   font: 400 12px/18px var(--font-body);

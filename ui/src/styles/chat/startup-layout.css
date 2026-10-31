@@ -603,39 +603,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     }
 
     > .oc-menu {
-      --menu-padding: 8px;
-      --menu-radius: 12px;
-      --menu-item-radius: 5px;
-
       min-width: 180px;
-      padding: var(--menu-padding);
-      font-size: calc(12px * var(--control-ui-text-scale));
-      line-height: calc(18px * var(--control-ui-text-scale));
-    }
-
-    .oc-menu-item {
-      min-height: 32px;
-      padding: 4px 8px;
-      line-height: inherit;
-    }
-
-    .oc-menu-item__icon {
-      margin-inline-end: 10px;
-    }
-
-    .session-menu__separator {
-      margin: 6px 0;
-      border-color: color-mix(in srgb, var(--border-strong) 70%, var(--border));
-    }
-
-    .session-menu__icon,
-    .session-menu__icon svg {
-      width: 16px;
-      height: 16px;
-    }
-
-    .session-menu__icon svg {
-      stroke-width: 1.5;
     }
   }
 
@@ -746,7 +714,6 @@ div.chat-thread:where(.chat-thread--annotations) {
   /* Symmetric gutters keep the pill centered on the chat column while leaving
      room for it to grow rightward when hover reveals settings. */
   padding-inline: 32px;
-  box-sizing: border-box;
 }
 
 .chat-pane__header--agent > .chat-pane__header-leading {
@@ -773,7 +740,6 @@ div.chat-thread:where(.chat-thread--annotations) {
   min-width: 0;
   max-width: 100%;
   min-height: 36px;
-  box-sizing: border-box;
   padding: 3px 12px 3px 3px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -913,7 +879,6 @@ div.chat-thread:where(.chat-thread--annotations) {
     var(--oc-overlay-max-height, 420px),
     calc(100dvh - 80px - env(safe-area-inset-bottom))
   );
-  box-sizing: border-box;
   overflow-y: auto;
   border-radius: 16px;
 }

@@ -55,6 +55,7 @@ export function findTranscriptEventMatchingInDatabase(
       match.kind === "latest"
         ? undefined
         : (event) => matchesTranscriptEvent(event, match, "navigation"),
+      { diagnostics: request.diagnostics },
     );
   };
   if (match.kind !== "canvas-widget") {

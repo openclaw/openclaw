@@ -432,13 +432,15 @@ describe("native declaration preparation", () => {
         };
         const producer = setup();
         const consumer = setup();
+        const outputPath = ".artifacts/sdk-command.outputs";
         const cli = (f: typeof producer, operation: string, ...args: string[]) => {
           signal.throwIfAborted();
+          fs.rmSync(path.join(f.root, outputPath), { force: true });
           return command(
             f.root,
             process.execPath,
             ["scripts/ci-sdk-declarations.mts", operation, ...args],
-            { ...process.env, GITHUB_OUTPUT: undefined },
+            { ...process.env, GITHUB_OUTPUT: path.join(f.root, outputPath) },
           );
         };
         const success = (f: typeof producer, operation: string, ...args: string[]) => {
@@ -456,9 +458,12 @@ describe("native declaration preparation", () => {
         const narrowPack = cli(producer, "pack");
         expect(narrowPack.status, narrowPack.stdout + narrowPack.stderr).toBe(1);
         expect(narrowPack.stderr).toContain("Only a current full SDK receipt");
+        expect(producer.has(outputPath)).toBe(false);
         await producer.run();
         success(producer, "pack");
+        const packedOutput = producer.read(outputPath);
         const published = identity(producer);
+        expect(packedOutput).toBe(`cache-key=${published["cache-key"]}\n`);
         const empty = identity(consumer);
         expect(published.fresh).toBe("true");
         expect(empty.fresh).toBe("false");
@@ -469,6 +474,7 @@ describe("native declaration preparation", () => {
         fs.mkdirSync(path.dirname(targetArchive), { recursive: true });
         fs.writeFileSync(targetArchive, archive);
         success(consumer, "restore", "--required");
+        expect(consumer.read(outputPath)).toBe(packedOutput);
         success(consumer, "validate");
         const restored = consumer.snapshot(consumer.recordPath);
         await consumer.selected({ OPENCLAW_CI_SHARED_SDK: "1" });
@@ -501,6 +507,7 @@ describe("native declaration preparation", () => {
           const rejected = cli(consumer, "restore", "--required");
           expect(rejected.status, rejected.stdout + rejected.stderr).toBe(1);
           expect(rejected.stderr).toMatch(/SDK (?:archive|receipt)/u);
+          expect(consumer.has(outputPath)).toBe(false);
           expect(consumer.has(consumer.recordPath)).toBe(false);
         }
 
@@ -512,7 +519,9 @@ describe("native declaration preparation", () => {
         const stale = cli(consumer, "restore", "--required");
         expect(stale.status, stale.stdout + stale.stderr).toBe(1);
         expect(stale.stderr).toContain("different source or toolchain inputs");
+        expect(consumer.has(outputPath)).toBe(false);
         expect(success(consumer, "restore").stdout).toContain("native preparation will run");
+        expect(consumer.has(outputPath)).toBe(false);
         expect(consumer.has(consumer.recordPath)).toBe(false);
         await consumer.run();
         success(consumer, "validate");
