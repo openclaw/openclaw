@@ -1581,7 +1581,8 @@ async function prepareCron(page: Page) {
   await page.locator(".cron-table__row").first().waitFor();
   const more = page.getByRole("button", { name: "Load more", exact: true });
   for (let count = 100; count <= 500; count += 50) {
-    await more.click();
+    // Measured rows can move the footer between pointer down and pointer up.
+    await more.press("Enter");
     await page.waitForFunction((expected) => {
       const row = document.querySelector(".cron-table__row");
       const size = row?.getAttribute("aria-setsize");
