@@ -1,6 +1,5 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { createEffect, createMemo, createSignal, createStore, onSettled } from "solid-js";
-import type * as Push from "../../../../packages/gateway-protocol/src/schema/push.js";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
@@ -31,6 +30,7 @@ import {
 import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
@@ -49,6 +49,7 @@ import {
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
+import { notificationProps } from "./notification-props.ts";
 import { createMediaDevicePreferences } from "./media-device-discovery.ts";
 import { canonicalMemoryRouteLocation } from "./memory-schema.ts";
 import {
@@ -86,6 +87,9 @@ export function createConfigPage(
   const webPush = projectOwner(context.webPush, (owner) => owner.snapshot);
   const notifications = context.nativeNotifications
     ? projectOwner(context.nativeNotifications, (owner) => owner.snapshot)
+    : null;
+  const deviceSettings = context.nativeDeviceSettings
+    ? projectNativeDeviceSettings(context.nativeDeviceSettings)
     : null;
   // Imperative owner notifications can arrive while a descendant is rendering.
   const [revision, publish] = createSignal(0, { ownedWrite: true });
@@ -633,19 +637,12 @@ export function createConfigPage(
       excludeSections: renderPageId === "advanced" ? ADVANCED_EXCLUDED_SECTIONS : undefined,
       includeVirtualSections: renderPageId === "appearance" || renderPageId === "notifications",
       settingsLayout: renderPageId === "advanced" ? ("accordion" as const) : undefined,
-      nativeNotifications: notifications?.read(),
-      onNativeNotificationsRequestPermission: () =>
-        context.nativeNotifications?.requestPermission(),
-      onNativeNotificationsSendTest: () => context.nativeNotifications?.sendTest(),
       // Downstream equality checks need a new value for the mutable owner snapshot.
-      webPush: { ...webPush.read() },
-      onWebPushSubscribe: () => context.webPush.run({ kind: "enable" }),
-      onWebPushUnsubscribe: () => context.webPush.run({ kind: "disable" }),
-      onWebPushTest: () => context.webPush.run({ kind: "test" }),
-      onWebPushSetUserPreferences: (nextPreferences: Push.WebPushNotificationPreferences) =>
-        context.webPush.run({ kind: "set", scope: "user", preferences: nextPreferences }),
-      onWebPushSetDevicePreferences: (nextPreferences: Push.WebPushDevicePreferences) =>
-        context.webPush.run({ kind: "set", scope: "device", preferences: nextPreferences }),
+      ...notificationProps(context, {
+        nativeNotifications: notifications?.read(),
+        nativeDeviceSettings: deviceSettings ? deviceSettings.read() : undefined,
+        webPush: { ...webPush.read() },
+      }),
     };
   }
   const refresh = () => {
