@@ -424,7 +424,35 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   devices: {
     ready: "openclaw-devices-page .device-entry",
-    action: disclosure(".device-entry__details"),
+    action: {
+      label: "Open the first device action menu and focus its enabled Copy item",
+      run: async (page) => {
+        const trigger = page.locator("openclaw-devices-page .device-entry__menu-trigger").first();
+        assert.equal(await trigger.getAttribute("aria-expanded"), "false");
+        const menuId = await trigger.getAttribute("aria-controls");
+        assert(menuId, "The device action trigger must identify its own menu");
+        const menu = page.locator(`[role="menu"][id=${JSON.stringify(menuId)}]`);
+        await trigger.click();
+        await menu.waitFor({ state: "visible" });
+        await page.waitForFunction((id) => {
+          const surface = document.getElementById(id);
+          return (
+            surface?.matches(":popover-open") &&
+            surface.querySelector('[role="menuitem"][data-value="copy"]') === document.activeElement
+          );
+        }, menuId);
+        assert.equal(await trigger.getAttribute("aria-expanded"), "true");
+        assert.equal(await menu.locator('[role="menuitem"][data-value="copy"]').isEnabled(), true);
+        assert.equal(
+          await menu.locator('[role="menuitem"][data-value="remove"]').isEnabled(),
+          true,
+        );
+        const menuItems = await menu.locator('[role="menuitem"]').count();
+        assert.equal(menuItems, 2);
+        await frames(page);
+        return { firstMenuOpened: true, copyFocused: true, menuItems };
+      },
+    },
   },
   labs: {
     ready: 'openclaw-labs-page input[role="switch"]:enabled',
