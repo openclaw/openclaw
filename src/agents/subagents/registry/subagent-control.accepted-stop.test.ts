@@ -367,6 +367,7 @@ it.each([
         : undefined;
     let termination: ReturnType<typeof markSubagentRunTerminated> | undefined;
     let pending: ReturnType<typeof killSubagentRunAdmin> | undefined;
+    let replacement: ReturnType<typeof registerAbort> | undefined;
     let callerAuthorized = true;
     const onResult = callback ? undefined : vi.fn(() => undefined);
     try {
@@ -414,30 +415,31 @@ it.each([
       callerAuthorized = false;
       if (mode === "replacement") {
         rpcSourceTesting.deleteExpected(runId, owner);
-        registerAbort(target);
+        replacement = registerAbort(target);
       }
       releaseTail.resolve();
+      if (replacement) {
+        // This unstarted replacement has no execution to retire it after the original cleanup.
+        await execution;
+        replacement.cleanup();
+        await replacement.entry!.input.settlement.promise;
+      }
       await expect(pending).rejects.toThrow("Caller control revoked");
       expect(settlement.status).toBe("fulfilled");
       expect(subagentRuns.get(runId)?.execution.status).toBe("terminal");
       expect(subagentRuns.get(runId)?.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
       expect(onResult).not.toHaveBeenCalled();
       if (mode === "replacement") {
-        expect(getRpcSource(runId)?.input.abortSignal.aborted).toBe(false);
+        expect(replacement?.controller.signal.aborted).toBe(false);
       } else if (mode === "already terminal") {
         expect(owner.input.abortSignal.aborted).toBe(false);
       }
     } finally {
       releaseTail.resolve();
       admission?.release();
+      replacement?.cleanup();
       await Promise.allSettled([termination, pending, execution]);
       registration.cleanup();
-      if (mode === "replacement") {
-        const replacement = getRpcSource(runId);
-        if (replacement) {
-          retireSessionControllerInput(replacement.input);
-        }
-      }
       expectIdle();
     }
   },
