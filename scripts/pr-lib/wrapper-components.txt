@@ -1240,6 +1240,7 @@ src/infra/sqlite-readonly-location.ts
 src/infra/sqlite-readonly-location.worker.ts
 src/infra/sqlite-readonly-native-resource.client.ts
 src/infra/sqlite-readonly-native-resource.types.ts
+src/infra/sqlite-readonly-operation-lifecycle.ts
 src/infra/sqlite-readonly-operation-registry.ts
 src/infra/sqlite-readonly-worker-context.ts
 src/infra/sqlite-readonly-worker-pool.ts
