@@ -1757,8 +1757,7 @@ openclaw-session-diff:has(> .session-diff--desktop) {
     transition: none;
   }
 }
-.session-diff__tree-sidebar input,
-.session-diff-menu__search {
+.session-diff__tree-sidebar input {
   width: 100%;
   min-width: 0;
 }

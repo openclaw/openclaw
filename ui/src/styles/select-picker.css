@@ -243,14 +243,6 @@ openclaw-select-picker {
   display: none;
 }
 
-.picker-select__search {
-  text-align: start;
-  flex: 0 0 auto;
-  width: 100%;
-  min-width: 0;
-  margin-bottom: 6px;
-}
-
 .picker-select__options {
   min-height: 0;
   overflow: auto;
@@ -388,6 +380,10 @@ openclaw-select-picker {
   overscroll-behavior: contain;
 }
 
+.picker-select--sheet .picker-select__options:has(+ .picker-select__empty:not([hidden])) {
+  flex: none;
+}
+
 .picker-select__page-header {
   display: flex;
   flex: none;
@@ -463,4 +459,8 @@ openclaw-select-picker {
   position: absolute;
   inset-inline: 0;
   top: 0;
+}
+
+.picker-select__menu > .header-search:has(> .picker-select__back) {
+  padding-inline-start: 0;
 }

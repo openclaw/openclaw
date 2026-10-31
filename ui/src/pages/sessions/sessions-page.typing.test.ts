@@ -16,6 +16,7 @@ import {
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   createLiveSessionContext,
   createContext,
@@ -57,7 +58,7 @@ function listRequest<P>(list: (params?: P) => unknown, methods: Record<string, (
   return mockSessionRequests({ "sessions.list": list, ...methods });
 }
 const subscribed = () => ({ subscribed: true });
-function escape(input: HTMLInputElement) {
+function escape(input: HTMLElement) {
   const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
   input.dispatchEvent(event);
   expect(event.defaultPrevented).toBe(true);
@@ -86,8 +87,14 @@ function editInput(input: HTMLInputElement, value: string, event = "input") {
   input.dispatchEvent(new Event(event, { bubbles: true }));
 }
 
-const searchInput = (page: ParentNode) =>
-  page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
+const searchInput = (page: ParentNode) => {
+  const find = () => page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input");
+  if (!find()) {
+    page.querySelector<HTMLButtonElement>(".sessions-filter-popover__search button")?.click();
+    flush();
+  }
+  return find()!;
+};
 
 async function mountTypingPage(
   initialResult = result("agent:main:initial"),
@@ -280,8 +287,8 @@ describe("Sessions page typing and detail ownership", () => {
         escape(input());
       }
       await page.updateComplete;
-      expect(document.activeElement).toBe(input());
-      expect(clear).toMatchObject({ hidden: true, disabled: true });
+      expect(document.activeElement).toBe(clear);
+      expect(page.querySelector(".sessions-filter-popover__search input")).toBeNull();
       expect([input().value, page.selectedSessions.size, page.result]).toEqual(["", 0, null]);
       const count = requests.length;
       await advance(200);
@@ -301,6 +308,8 @@ describe("Sessions page typing and detail ownership", () => {
         true,
       ]);
       escape(input());
+      flush();
+      escape(clear);
       expect(page.querySelector(".sessions-filter-popover")?.matches(":popover-open")).toBe(false);
       expect(requests).toHaveLength(count + 1);
     },

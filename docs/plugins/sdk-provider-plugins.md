@@ -850,6 +850,35 @@ resolve here.
 - [Building channel plugins](/plugins/sdk-channel-plugins)
 - [Model providers](/concepts/model-providers)
 
+## Worker resource receipts
+
+A worker provider may advertise `supportsResourceReceipts: true` on its existing
+`WorkerProvider` registration. This promises exact-resource handling in
+provision replay, inspection, and destruction; it does not advertise disk retention.
+
+`WorkerResourceReceipt` has version `1`, the exact `leaseId`, and an `identity`
+map containing bounded, nonsecret immutable provider fields. The provider owns
+those fields; core validates their representation and preserves their equality,
+without interpreting vendor resource names. Use 1–16 ASCII identifier keys
+(up to 64 characters), with nonempty trimmed string values up to 2,048 characters
+and no control characters. Never include credentials or bearer URLs.
+
+During provisioning, await `options.recordResourceReceipt(receipt)` as soon as the
+allocated resource can be qualified, before setup, enrollment, or compensating
+cleanup affects that resource. Return the same receipt with the lease. The host
+commits it against the environment's original provision operation. Subsequent
+calls carry `resourceReceipt`: verify it against provider-owned facts, never
+replace it or allocate a successor. Inspection returns the same qualified receipt
+alongside status; an unavailable or mismatched observation throws. Even a
+`destroyed` observation cannot settle receipt-bound custody without that identity.
+
+Destruction checks `assertCurrent` after preparation and immediately before each
+provider effect, and resolves only after exact-resource deletion is confirmed.
+A rejected or lost deletion reply retains cleanup custody. The host can retry
+that exact deletion after restart even when live inspection labels are gone.
+Legacy providers and persisted rows with no receipt keep their existing contract;
+receipt-bearing rows refuse providers that no longer advertise this capability.
+
 ## Optional native PDF analysis
 
 A media-understanding provider can implement `analyzePdf(request)` using the `PdfAnalysisRequest` and `PdfAnalysisResult` types from `openclaw/plugin-sdk/media-understanding`. The caller owns full-document consent, document access and page constraints; the provider owns supported API/endpoint and upload-size checks. Return `undefined` only when rejecting eligibility before upload, so the caller can keep extraction. After submission, failures must throw rather than silently select a second request. Keep request headers, cancellation and provider HTTP guards through `openclaw/plugin-sdk/provider-http`. This hook does not change native capability metadata or automatic provider ranking. Existing Anthropic and Google PDF dispatch is unchanged.

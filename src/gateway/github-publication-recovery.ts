@@ -20,6 +20,7 @@ import {
 import {
   assertSafeGitPublicationWorkspace,
   createGitHubPublicationCommandRunner,
+  githubPublicationRemoteHeadArgs,
   runPublicationCommand,
 } from "./github-publication-git-transport.js";
 import { reconcileGitHubPublicationPullRequest } from "./github-publication-pull-requests.js";
@@ -244,6 +245,35 @@ type GitHubPublicationObservation<Row extends GitHubPublicationExecutionRow> = {
   pushOnly?: "observed" | "dispatched";
   beforeRetry?: boolean;
 };
+
+export async function observeGitHubPublicationRemoteHead(
+  run: ReturnType<typeof createGitHubPublicationCommandRunner>["run"],
+  remote: string,
+  branch: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  const result = await run(githubPublicationRemoteHeadArgs(remote, branch), {
+    cwd,
+    env,
+  });
+  if (result.code !== 0) {
+    throw new Error("GitHub publication remote branch could not be verified.");
+  }
+  const observed = result.stdout.toString("utf8").trim();
+  if (!observed) {
+    return "";
+  }
+  const fields = observed.split(/\s+/u);
+  if (
+    fields.length !== 2 ||
+    fields[1] !== `refs/heads/${branch}` ||
+    !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/iu.test(fields[0]!)
+  ) {
+    throw new Error("GitHub publication remote branch could not be verified.");
+  }
+  return fields[0]!;
+}
 
 /** Observe a recorded update independently of fresh branch, base and workspace eligibility. */
 export async function observeGitHubPublication<Row extends GitHubPublicationExecutionRow>(

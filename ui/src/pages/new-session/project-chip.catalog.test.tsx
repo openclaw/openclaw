@@ -5,6 +5,15 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { mountProjectChip } from "./project-chip.test-support.tsx";
 
+async function openProjectSearch(container: ParentNode) {
+  await waitForSolid(() => expect(container.querySelector(".header-search")).not.toBeNull());
+  if (!container.querySelector('input[type="search"]')) {
+    container.querySelector<HTMLButtonElement>(".header-search__toggle")?.click();
+    flush();
+  }
+  await waitForSolid(() => expect(container.querySelector('input[type="search"]')).not.toBeNull());
+}
+
 it("keeps project search live through catalog reads and retires invalidated rows", async () => {
   const fixture = createRepositoryFixture();
   const { browser, state: place, context, gateway, changed, request } = fixture;
@@ -51,9 +60,7 @@ it("keeps project search live through catalog reads and retires invalidated rows
   expect(view.container.querySelector('input[type="search"]')).toBeNull();
   popoverOpen.mockReturnValue(true);
   changed();
-  await waitForSolid(() =>
-    expect(view.container.querySelector('input[type="search"]')).not.toBeNull(),
-  );
+  await openProjectSearch(view.container);
   let input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
   const rows = () => Array.from(view.container.querySelectorAll('[data-value^="project:"]'));
   const type = (value: string) => {
@@ -133,9 +140,7 @@ it("keeps project search live through catalog reads and retires invalidated rows
   expect(document.activeElement).toBe(input);
   view.unmount();
   view = mountPicker();
-  await waitForSolid(() =>
-    expect(view.container.querySelector('input[type="search"]')).not.toBeNull(),
-  );
+  await openProjectSearch(view.container);
   input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
   input.focus();
   await waitForSolid(() => expect(rows()[0]?.textContent).toContain("Alpha project"));
@@ -204,9 +209,7 @@ it("matches canonically equivalent Unicode in local project search", async () =>
     }),
     () => false,
   );
-  await waitForSolid(() =>
-    expect(view.container.querySelector('input[type="search"]')).not.toBeNull(),
-  );
+  await openProjectSearch(view.container);
   const input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
   const rows = () => Array.from(view.container.querySelectorAll('[data-value^="project:"]'));
   const type = (value: string) => {

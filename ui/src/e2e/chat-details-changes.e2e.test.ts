@@ -138,7 +138,7 @@ suite.define(() => {
     },
   );
 
-  it("shares read-only Uncommitted demand between Environment and Review and recovers retained counts", async () => {
+  it("loads read-only Environment totals separately from Review patches and recovers retained counts", async () => {
     await suite.withPage({ viewport: { width: 1180, height: 800 } }, async ({ page }) => {
       await page.clock.install();
       const result = (additions: number, deletions: number) => ({
@@ -178,13 +178,16 @@ suite.define(() => {
       await readCount().toBe(1);
       await expect.poll(() => action.textContent()).toContain("+248");
       expect(await action.textContent()).toContain("−61");
-      expect((await reads())[0]?.params).toMatchObject({ scope: "uncommitted" });
+      expect((await reads())[0]?.params).toMatchObject({
+        scope: "uncommitted",
+        summaryOnly: true,
+      });
       expect(await page.locator(".session-diff").count()).toBe(0);
 
       await closeChatDetails(page);
       await pauseVirtualClock(page);
       await page.clock.fastForward(60_000);
-      await gateway.deferNext("sessions.diff", { scope: "uncommitted" });
+      await gateway.deferNext("sessions.diff", { scope: "uncommitted", summaryOnly: true });
       await page.clock.resume();
       await openChatDetails(page);
       await readCount().toBe(2);
@@ -198,17 +201,29 @@ suite.define(() => {
       await closeChatDetails(page);
       await pauseVirtualClock(page);
       await page.clock.fastForward(60_000);
-      await gateway.setMethodResponse("sessions.diff", { ...result(12480, 1030), truncated: true });
-      await gateway.deferNext("sessions.diff", { scope: "uncommitted" });
+      const recovered = { ...result(12480, 1030), truncated: true };
+      await gateway.deferNext("sessions.diff", { scope: "uncommitted", summaryOnly: true });
       await page.clock.resume();
       await openChatDetails(page);
       await readCount().toBe(3);
-      // Review must join the Environment read, not issue a competing request.
+      // Review needs patches, so a pending totals read cannot satisfy it.
+      await gateway.deferNext("sessions.diff", { scope: "uncommitted" });
       await action.click();
       const review = page.locator(".session-diff");
+      await readCount().toBe(4);
+      expect((await reads())[3]?.params).not.toHaveProperty("summaryOnly");
       await expect.poll(() => review.getAttribute("aria-busy")).toBe("true");
-      expect(await reads()).toHaveLength(3);
-      await gateway.resolveDeferred("sessions.diff");
+      await gateway.resolveDeferred("sessions.diff", recovered, { match: { summaryOnly: true } });
+      expect(await review.getAttribute("aria-busy")).toBe("true");
+      expect(await action.textContent()).toContain("+248");
+      await gateway.resolveDeferred("sessions.diff", {
+        ...recovered,
+        files: recovered.files.map((file) =>
+          Object.assign({}, file, {
+            patch: "@@ -1 +1 @@\n-old navigation\n+recovered navigation\n",
+          }),
+        ),
+      });
       await expect.poll(() => review.getAttribute("aria-busy")).toBe("false");
       await expect.poll(() => action.textContent()).toContain("+12,480");
       expect(await action.textContent()).toContain("−1,030");
@@ -221,10 +236,13 @@ suite.define(() => {
           .textContent(),
       ).toBe("Uncommitted");
       expect(await review.locator(".session-diff__filename").allTextContents()).toEqual(["app.ts"]);
-      expect(await reads()).toHaveLength(3);
-      for (const params of [{ scope: "all" }, { summaryOnly: true }]) {
-        expect(await gateway.getRequests("sessions.diff", params)).toHaveLength(0);
-      }
+      await review.locator(".session-diff__file-toggle").click();
+      await expect
+        .poll(() => review.locator(".chat-diff__row--add").textContent())
+        .toContain("recovered navigation");
+      expect(await reads()).toHaveLength(4);
+      expect(await gateway.getRequests("sessions.diff", { summaryOnly: true })).toHaveLength(3);
+      expect(await gateway.getRequests("sessions.diff", { scope: "all" })).toHaveLength(0);
       for (const method of [
         "sessions.files.list",
         "sessions.files.get",

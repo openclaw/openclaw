@@ -102,9 +102,7 @@ suite.define(() => {
     const checkoutTrigger = page.locator("#new-session-checkout-trigger");
     await expectLabel(projectTrigger, "openclaw");
     await projectTrigger.click();
-    await pollLocatorText(projectSelect.locator(".new-session-page__menu-title").first()).toBe(
-      "Projects",
-    );
+    await pollLocatorText(projectSelect.locator(".header-search__title").first()).toBe("Projects");
     await button(projectSelect, "Browse folders").click();
     await page.locator(".new-session-page__browser-entry", { hasText: "packages" }).click();
     await expectValue(page.locator("input.new-session-page__browser-path"), PICKED);

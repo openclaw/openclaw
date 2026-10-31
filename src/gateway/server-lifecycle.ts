@@ -465,21 +465,24 @@ export async function prepareGatewayLifecycle(params: {
   let exitAfterClose = false;
   const runClosePrelude = async () => {
     await beginClosePrelude();
-    await step("talk-persistence", () => talkClose.drain());
-    stopNodeConnectionNotifications();
-    await watchNodeHttpRuntime.close();
-    await shutdownRuntime.runGatewayClosePrelude({
-      stopDiagnostics: stopGatewayDiagnosticHeartbeat,
-      skillsChangeUnsub: () => runtimeState.skillsChangeUnsub({ exitAfterClose }),
-      disposeNodeReapproval: () => nodeReapprovalCoordinator.dispose(),
-      stopChannelHealthMonitor: async () => {
-        const monitor = runtimeState?.channelHealthMonitor;
-        monitor?.shutdown();
-        await monitor?.waitForIdle();
-      },
-      stopReadinessEventLoopHealth: readinessEventLoopHealth.stop,
-      closeMcpServer: shutdownRuntime.closeMcpLoopbackServer,
-    });
+    try {
+      await step("talk-persistence", () => talkClose.drain());
+    } finally {
+      stopNodeConnectionNotifications();
+      await watchNodeHttpRuntime.close();
+      await shutdownRuntime.runGatewayClosePrelude({
+        stopDiagnostics: stopGatewayDiagnosticHeartbeat,
+        skillsChangeUnsub: () => runtimeState.skillsChangeUnsub({ exitAfterClose }),
+        disposeNodeReapproval: () => nodeReapprovalCoordinator.dispose(),
+        stopChannelHealthMonitor: async () => {
+          const monitor = runtimeState?.channelHealthMonitor;
+          monitor?.shutdown();
+          await monitor?.waitForIdle();
+        },
+        stopReadinessEventLoopHealth: readinessEventLoopHealth.stop,
+        closeMcpServer: shutdownRuntime.closeMcpLoopbackServer,
+      });
+    }
   };
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;

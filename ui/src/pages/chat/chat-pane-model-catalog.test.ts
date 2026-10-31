@@ -466,7 +466,10 @@ describe("chat pane composer controls", () => {
       client,
       undefined,
       undefined,
-      modelCatalogEventInvalidation({ event: "config.changed" }),
+      modelCatalogEventInvalidation({
+        event: "chat.metadata.changed",
+        payload: { modelCatalogChanged: true, authChanged: true },
+      }),
     );
     const refresh = refreshPageChat(host, {
       awaitHistory: true,

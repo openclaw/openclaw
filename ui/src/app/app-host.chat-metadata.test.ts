@@ -73,7 +73,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("retains metadata-only reads and retires them on config changes and close", async () => {
+it("retains metadata through UI config changes and refreshes on catalog changes or close", async () => {
   vi.useFakeTimers();
   const { gateway, current, client, emit } = connectedGateway();
   const request = current().request.mockImplementation(async (method) =>
@@ -128,12 +128,14 @@ it("retains metadata-only reads and retires them on config changes and close", a
     expect(metadataCalls(request, "models.authStatus")).toHaveLength(
       event === "chat.metadata.changed" ? 1 : 0,
     );
-    expect(metadataCalls(request, "models.list")).toHaveLength(1);
-    expect(changed).toHaveBeenCalledOnce();
+    expect(metadataCalls(request, "models.list")).toHaveLength(
+      event === "chat.metadata.changed" ? 1 : 0,
+    );
+    expect(changed).toHaveBeenCalledTimes(event === "chat.metadata.changed" ? 1 : 0);
   }
   beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [], models: [] });
   emit("config.changed");
-  expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
+  expect(peekChatMetadata(client, { agentId: "main" })).toEqual({ commands: [] });
   beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [], models: [] });
   current().testOptions.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
   expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
@@ -332,7 +334,7 @@ it("updates service-tier hints without rereading unchanged session facts", async
 });
 
 it.each([
-  { event: "config.changed", payload: {}, clearsChoices: false },
+  { event: "chat.metadata.changed", payload: { modelCatalogChanged: true }, clearsChoices: false },
   { event: "chat.metadata.changed", payload: { modelSelectionChanged: true }, clearsChoices: true },
 ])(
   "refreshes the retained pane without changing conversation state ($event, clears: $clearsChoices)",

@@ -219,7 +219,7 @@
   grid-template-columns: var(--cron-table-columns);
   gap: var(--space-3);
   align-items: center;
-  padding: var(--space-2) var(--space-4);
+  padding: var(--list-row-padding);
 }
 
 .cron-table__head {
@@ -236,10 +236,6 @@
   contain: layout paint;
   cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
-}
-
-.cron-table__row + .cron-table__row {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .cron-table__row:hover,
@@ -261,8 +257,8 @@
   border: 0;
   color: var(--text-strong);
   background: transparent;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--control-ui-text-md);
+  font-weight: var(--list-row-title-weight);
   text-align: left;
 }
 
@@ -271,8 +267,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
   margin-top: 2px;
   color: var(--muted);
 }
@@ -284,6 +280,11 @@
   height: 13px;
   stroke: currentColor;
   fill: none;
+}
+
+.cron-table__state svg {
+  width: 100%;
+  height: 100%;
 }
 
 .cron-table__state-dot {
@@ -337,7 +338,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--control-ui-text-sm);
   font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -362,7 +363,7 @@
 
 .cron-table__cell {
   color: var(--text);
-  font-size: 12.5px;
+  font-size: var(--control-ui-text-sm);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1057,8 +1058,6 @@
   .cron-table__row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-2) var(--space-3);
-    padding-top: var(--space-3);
-    padding-bottom: var(--space-3);
   }
 
   .cron-table__name {
