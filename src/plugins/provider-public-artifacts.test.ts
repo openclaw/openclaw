@@ -21,6 +21,7 @@ import { listTrustedExternalProviderPolicyOwners } from "./provider-policy-owner
 import { resolveDirectBundledProviderPolicySurface } from "./provider-policy-surface.js";
 import {
   loadProviderPolicyArtifacts,
+  loadProviderPolicyArtifactsAsync,
   resolveBundledProviderPolicySurface,
   resolveProviderPolicySurface,
 } from "./provider-public-artifacts.js";
@@ -437,6 +438,85 @@ describe("provider public artifacts", () => {
       }
     },
   );
+
+  it("prepares independent cold policy callbacks without activating the runtime", async () => {
+    const rootDir = writeExternalPolicyFixture();
+    const source = path.join(rootDir, "index.cjs");
+    const activation = path.join(rootDir, "runtime-activated");
+    fs.writeFileSync(
+      source,
+      `require('node:fs').writeFileSync(${JSON.stringify(activation)}, 'bad');`,
+    );
+    fs.writeFileSync(
+      path.join(rootDir, "provider-policy-api.js"),
+      "let calls = 0; export function resolveThinkingProfile() { return { defaultLevel: String(++calls), levels: [{ id: 'off' }] }; }",
+    );
+    const owner = createPluginManifestRecordFixture({
+      ...externalPolicyOwner(rootDir),
+      source,
+    });
+    const first = createPluginCache();
+    const second = createPluginCache();
+    try {
+      const read = (cache: typeof first) =>
+        withPluginCache(cache, () => loadProviderPolicyArtifactsAsync([owner]));
+      const a = (await read(first))?.surface?.resolveThinkingProfile;
+      const b = (await read(second))?.surface?.resolveThinkingProfile;
+      expect(a).toBeTypeOf("function");
+      expect(b).toBeTypeOf("function");
+      const context = { provider: owner.id, modelId: "fixture" };
+      expect(a?.(context)?.defaultLevel).toBe("1");
+      expect(a?.(context)?.defaultLevel).toBe("2");
+      expect(b?.(context)?.defaultLevel).toBe("1");
+      expect(fs.existsSync(activation)).toBe(false);
+      await retirePluginCache(first);
+      expect(() => a?.(context)).toThrow();
+      expect(b?.(context)?.defaultLevel).toBe("2");
+    } finally {
+      await retirePluginCache(first);
+      await retirePluginCache(second);
+    }
+  });
+
+  it("does not try another policy owner after cold evaluation failure", async () => {
+    const broken = writeExternalPolicyFixture();
+    const fallback = writeExternalPolicyFixture();
+    fs.writeFileSync(
+      path.join(broken, "provider-policy-api.js"),
+      "throw new Error('policy failed');",
+    );
+    const cache = createPluginCache();
+    try {
+      await expect(
+        withPluginCache(cache, () =>
+          loadProviderPolicyArtifactsAsync([
+            externalPolicyOwner(broken),
+            externalPolicyOwner(fallback),
+          ]),
+        ),
+      ).rejects.toThrow("policy failed");
+      expect(cache.setupModules.size).toBe(0);
+    } finally {
+      await retirePluginCache(cache);
+    }
+  });
+
+  it("does not bind a cold policy after preparation loses its authority", async () => {
+    const { AsyncWorkScope } = await import("../shared/async-work-scope.js");
+    const rootDir = writeExternalPolicyFixture();
+    const owner = externalPolicyOwner(rootDir);
+    const cache = createPluginCache();
+    const work = new AsyncWorkScope();
+    const operation = withPluginCache(cache, () =>
+      work.track(() => loadProviderPolicyArtifactsAsync([owner])),
+    );
+    const rejected = expect(operation).rejects.toThrow();
+    work.beginClose();
+    await rejected;
+    expect(cache.setupModules.size).toBe(0);
+    await work.drain();
+    await retirePluginCache(cache);
+  });
 
   it("retains a trusted installed provider owner without a policy artifact", () => {
     const pluginRoot = tempDirs.make("openclaw-provider-owner-");

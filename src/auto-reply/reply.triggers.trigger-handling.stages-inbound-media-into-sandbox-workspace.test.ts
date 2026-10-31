@@ -4,10 +4,10 @@ import { pathToFileURL } from "node:url";
 import { readCloneFileMetadata } from "@openclaw/fs-safe/copy";
 import { afterEach, beforeEach, describe, expect, it as baseTest, vi } from "vitest";
 import { slugifySessionKey } from "../agents/sandbox/shared.js";
-import { resolveStagedInputMediaPaths } from "../media/staged-inputs.js";
+import { resolveStagedInputMediaPaths, STAGED_INPUT_MAX_BYTES } from "../media/staged-inputs.js";
 import { MEDIA_MAX_BYTES } from "../media/store.js";
 import { CONFIG_DIR } from "../utils.js";
-import { SANDBOX_MEDIA_MAX_BYTES, stageSandboxMedia } from "./reply/stage-sandbox-media.js";
+import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
 import {
   createSandboxMediaContexts,
   createSandboxWorkspacePreparation,
@@ -331,7 +331,7 @@ describe("stageSandboxMedia", () => {
     ]
   >([
     ["above generic store limit", MEDIA_MAX_BYTES + 1, true],
-    ["above sandbox limit", SANDBOX_MEDIA_MAX_BYTES + 1, false],
+    ["above sandbox limit", STAGED_INPUT_MAX_BYTES + 1, false],
     ["agent limit", 50 * 1024 * 1024 + 1, true, { agent: 51 }],
     ["channel limit", 50 * 1024 * 1024 + 1, true, { channel: 51 }],
     ["account overrides channel", 50 * 1024 * 1024 + 1, true, { channel: 50, account: 51 }],
@@ -367,7 +367,7 @@ describe("stageSandboxMedia", () => {
       await expectPathMissing(join(sandboxDir, "media", "inbound"));
       if (!limits) {
         expect(warn).toHaveBeenCalledWith(
-          `Inbound media staging skipped for input-large.bin: file exceeds limit of ${SANDBOX_MEDIA_MAX_BYTES} bytes (got ${size})`,
+          `Inbound media staging skipped for input-large.bin: file exceeds limit of ${STAGED_INPUT_MAX_BYTES} bytes (got ${size})`,
         );
       }
     }

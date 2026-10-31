@@ -188,6 +188,13 @@ describe("provider operation deadlines", () => {
     expect(resolveTimeoutMs).toHaveBeenCalledTimes(1);
   });
 
+  it("normalizes fractional remaining budgets before passing them to Node timers", () => {
+    const deadline = makeDeadline(5_000);
+    vi.advanceTimersByTime(1.25);
+
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(4_998);
+  });
+
   it.each([
     ["remaining deadline", 1_000, 10_000, 1_000],
     ["timer maximum", undefined, MAX_TIMER_TIMEOUT_MS + 1_000_000, MAX_TIMER_TIMEOUT_MS],

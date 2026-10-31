@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/infra/state-migrations.plugin-doctor-context.postgres.test.ts",
   "src/gateway/server-methods.workshop-contract.test.ts",
   "src/cli/skills-cli.workshop-contract.test.ts",
   "src/auto-reply/reply/commands.workshop-contract.test.ts",

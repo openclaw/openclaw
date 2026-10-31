@@ -4,7 +4,6 @@ import path from "node:path";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
-import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -12,6 +11,13 @@ import {
   initializeLocalWorkspaceProjection,
   localWorkspaceProjectionPath,
 } from "./local-workspace-checkout.js";
+import {
+  pendingLocalWorkspaceDirection as pendingDirection,
+  prepareLocalWorkspaceCheckpoint,
+  selectLocalWorkspaceCheckpoint,
+  stageLocalWorkspaceCheckpoint,
+  type LocalWorkspaceSyncTarget as Direction,
+} from "./local-workspace-checkpoint.js";
 import {
   admitLocalWorkspaceSourcePaths,
   captureLocalWorkspaceArchiveBaseline,
@@ -51,11 +57,7 @@ import {
   readStagedWorkerWorkspaceResult,
 } from "./workspace-result-staging.js";
 
-type Direction = "canonical" | "projection";
 const log = createSubsystemLogger("agents/worktrees");
-function pendingDirection(value: string | null): Direction | undefined {
-  return value === "canonical" || value === "projection" ? value : undefined;
-}
 
 export function projectionOperations(
   owner: LocalWorkspaceOwner,
@@ -289,11 +291,7 @@ export function projectionOperations(
     if (!selected.pending_ref) {
       return;
     }
-    if (!selected.baseline_ref || !pendingDirection(selected.pending_target)) {
-      throw new Error("Local workspace result has no accepted baseline");
-    }
-    const target = pendingDirection(selected.pending_target)!;
-    const refresh = isLocalWorkspaceBaseRefreshRef(selected.pending_ref);
+    const { target, refresh } = selectLocalWorkspaceCheckpoint(selected, selected.pending_ref);
     // Reservation precedes staging. A crash before its Git effect leaves the
     // source bytes untouched and resumes capture into this exact reserved ref.
     if (
@@ -340,17 +338,20 @@ export function projectionOperations(
               assertCurrent,
             })
           : baseline;
-      await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
-        root: owner.worktree.path,
-        stagingRoot: sourcePath(target),
-        stagedResultRef: selected.pending_ref,
-        baseManifestRef: snapshot?.baseManifestRef ?? stagingBase!.manifestRef,
-        currentManifestRef: snapshot?.currentManifestRef ?? legacy!.manifestRef,
-        baseManifestRaw: snapshot?.baseManifestRaw ?? stagingBase!.rawManifest,
-        currentManifestRaw: snapshot?.currentManifestRaw ?? legacy!.rawManifest,
-        buildCacheInputs: snapshot?.buildCacheInputs ?? (await buildCacheInputs()),
-        assertCurrent,
-      });
+      await stageLocalWorkspaceCheckpoint(
+        {
+          root: owner.worktree.path,
+          stagingRoot: sourcePath(target),
+          stagedResultRef: selected.pending_ref,
+          baseManifestRef: snapshot?.baseManifestRef ?? stagingBase!.manifestRef,
+          currentManifestRef: snapshot?.currentManifestRef ?? legacy!.manifestRef,
+          baseManifestRaw: snapshot?.baseManifestRaw ?? stagingBase!.rawManifest,
+          currentManifestRaw: snapshot?.currentManifestRaw ?? legacy!.rawManifest,
+          buildCacheInputs: snapshot?.buildCacheInputs ?? (await buildCacheInputs()),
+          assertCurrent,
+        },
+        { target, refresh, snapshot, current, signal },
+      );
       current();
     }
     const checkpoint = current().checkpoint_json
@@ -530,12 +531,12 @@ export function projectionOperations(
       });
       await replaceBaseline(initial.rawManifest, initial.manifestRef);
     }
-    await assertLocalWorkspaceDirectory(current().projection_path);
-    if (selected.baseline_ref) {
-      await timeWorktreePreparationPhase("synchronizeCanonical", () => synchronize("canonical"));
-    }
-    await timeWorktreePreparationPhase("synchronizeProjection", () => synchronize("projection"));
-    return current().projection_path;
+    return await prepareLocalWorkspaceCheckpoint({
+      baselineRef: selected.baseline_ref,
+      synchronize,
+      current,
+      signal,
+    });
   };
   return {
     current,

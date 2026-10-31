@@ -552,8 +552,13 @@ suite.define(() => {
             .toBe(true);
         }
         await page.setViewportSize({ width: 393, height: 852 });
-        await composer.locator("textarea").click();
         await page.emulateMedia({ reducedMotion: "no-preference" });
+        await composer.locator("textarea").click();
+        // Re-entering mobile editing animates the toolbar before it can be clicked.
+        await expect.poll(() => composer.getAttribute("data-composer-layout")).toBeNull();
+        await composer.evaluate(async (input) => {
+          await Promise.all(input.getAnimations().map((animation) => animation.finished));
+        });
         const needle = effort.locator(".chat-controls__effort-gauge-needle");
         const needleAngle = () =>
           needle.evaluate((node) => {

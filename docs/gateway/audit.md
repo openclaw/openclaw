@@ -492,8 +492,9 @@ what was recorded, not as proof of what happened:
   settles, a partial batch of at least two items can wait one fixed 5 ms window before submitting
   up to 32 queued items in one transaction, preserving FIFO order. Later arrivals do
   not extend that window. A full batch, maintenance, or shutdown flushes it immediately.
-  Per-item savepoints isolate rejected records; successful items are
-  acknowledged to the queue only after the shared commit. Queue acceptance itself
+  Per-item savepoints isolate rejected records, except for prevalidated single-statement
+  inserts in plain SQLite event batches, where statement atomicity provides isolation.
+  Successful items are acknowledged to the queue only after the shared commit. Queue acceptance itself
   still does not acknowledge persistence. Lock contention retains the unprocessed suffix;
   a failed batch commit retains the whole batch for a contention retry;
   an unknown worker outcome replays the unacknowledged batch with its original

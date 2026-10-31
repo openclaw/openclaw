@@ -141,6 +141,11 @@ loop, or visible subagent turn in the same authorized session, even when collabo
 steering is disabled. The incoming message keeps the owner's provenance and live
 authorization; the running turn keeps its existing permissions and tool bindings.
 This guidance does not answer pending questions under the automation's authority.
+The owner-guidance exception does not apply to system-authored direct commands in
+a parent conversation, including subagent completion reports. Those commands keep
+normal requester-compatibility checks, so a browser correction to a system-owned
+direct command stays a followup. A child's active execution is distinct from its
+completion report to the parent.
 
 Configured permissions are resolved when each new execution is admitted and remain stable for that execution. Human messages waiting for admission use current policy. Already admitted native work retains its prepared policy while waiting to run. A new delegation resolves current destination policy for the original requester, or for an explicitly selected authenticated participant on a tool that supports `user`. Native delegation retains the original requester. A delegation may intentionally use a more capable agent; selecting a participant does not establish that person’s intent or approval. Cancellation and current-owner checks still apply, and accepted asynchronous work survives normal source-turn completion.
 

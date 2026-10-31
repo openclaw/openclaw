@@ -6,6 +6,7 @@ import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer
 import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatGuardianNotice, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
+import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { CompactionStatus, RunOutputUsage } from "./tool-stream-contract.ts";
 
 registerChatMessageMetadataEnglish();
@@ -36,6 +37,8 @@ export function matchesCompactionOperation(message: unknown, status: CompactionS
   );
 }
 
+// Retain presentation timing only within the transcript cache's session window.
+// Evicted sessions reconstruct timing from available activity and observe idle anew.
 const workingProgressBySession = new Map<string, WorkingProgress>();
 const idleObservedAtBySession = new Map<string, number>();
 let anonymousWorkingProgressId = 0;
@@ -195,7 +198,9 @@ export function resolveWorkingProgress(
     pendingSends.find((item) => item.sendState === "submitting" || item.sendState === "sending") ??
     pendingSends[0];
   const queuedRunId = queuedProgress?.sendRunId ?? queuedProgress?.pendingRunId;
-  const idleObservedAt = runId ? undefined : idleObservedAtBySession.get(sessionKey);
+  const idleObservedAt = runId
+    ? undefined
+    : getSessionCacheValue(idleObservedAtBySession, sessionKey);
   const observedSinceIdle = (at: unknown) =>
     idleObservedAt === undefined || (typeof at === "number" && at > idleObservedAt);
   const currentSegments = streamSegments.filter((segment) => observedSinceIdle(segment.ts));
@@ -248,7 +253,7 @@ export function resolveWorkingProgress(
       sessionKey,
       explicitRunId ?? `anonymous-${++anonymousWorkingProgressId}`,
     ])}`;
-  workingProgressBySession.set(sessionKey, {
+  setSessionCacheValue(workingProgressBySession, sessionKey, {
     key,
     runId: explicitRunId ?? compatibleCached?.runId ?? null,
     startedAt,
@@ -258,7 +263,7 @@ export function resolveWorkingProgress(
 
 export function clearWorkingProgress(sessionKey: string): void {
   workingProgressBySession.delete(sessionKey);
-  idleObservedAtBySession.set(sessionKey, Date.now());
+  setSessionCacheValue(idleObservedAtBySession, sessionKey, Date.now());
 }
 
 export function resetWorkingProgress(): void {

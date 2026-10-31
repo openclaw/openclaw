@@ -567,6 +567,13 @@
           .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content) {
           padding-bottom: 6px;
         }
+
+        /* Merged web chrome uses the mobile composer; native shells retain its base gap. */
+        html:not(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome)
+          :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+          .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content) {
+          padding-bottom: 10px;
+        }
       }
 
       @media (max-width: 768px) {

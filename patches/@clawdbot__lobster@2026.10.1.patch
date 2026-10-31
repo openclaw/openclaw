@@ -1,5 +1,5 @@
 diff --git a/dist/src/commands/stdlib/llm_invoke.js b/dist/src/commands/stdlib/llm_invoke.js
-index bcc07ae73292ac4a7940b002961d770de772ffee..ec97446d42c1c6bb881d813433e358b2c07de1db 100644
+index ef3f3b441a8eb47fc797b120e0a0984f5e24eb15..c7cf326b867b5362893f780f41d2ace25e0baa22 100644
 --- a/dist/src/commands/stdlib/llm_invoke.js
 +++ b/dist/src/commands/stdlib/llm_invoke.js
 @@ -6,89 +6,9 @@ import { Ajv } from "ajv";
@@ -93,7 +93,7 @@ index bcc07ae73292ac4a7940b002961d770de772ffee..ec97446d42c1c6bb881d813433e358b2
  const DEFAULT_MAX_VALIDATION_RETRIES = 1;
  const STATE_VERSION = 1;
  // Identity version of the response cache key. See computeCacheKey.
-@@ -957,4 +877,3 @@ async function* streamOf(items) {
+@@ -981,4 +901,3 @@ async function* streamOf(items) {
      for (const item of items)
          yield item;
  }
@@ -1230,7 +1230,7 @@ index 4371a41ea77957c0499ecace6728b7bf3820b3ca..d600546d06fa0055d689d26e58794520
  /**
   * Build a memoized `compile()` for a given Ajv instance.
   *
-@@ -22,12 +28,28 @@ export const sharedAjv = new Ajv({
+@@ -22,17 +28,32 @@ export const sharedAjv = new Ajv({
   * interchangeable across different Ajv configurations.
   */
  export function createCompileCached(ajv) {
@@ -1261,9 +1261,11 @@ index 4371a41ea77957c0499ecace6728b7bf3820b3ca..d600546d06fa0055d689d26e58794520
              cache.set(key, validator);
          }
          return validator;
-@@ -35,4 +57,3 @@ export function createCompileCached(ajv) {
+     };
  }
  /** Memoized compile bound to the module-level `sharedAjv` instance. */
- export const compileCached = createCompileCached(sharedAjv);
-\ No newline at end of file
+-export const compileCached = createCompileCached(sharedAjv);
 -//# sourceMappingURL=validation.js.map
+\ No newline at end of file
++export const compileCached = createCompileCached(sharedAjv);
+\ No newline at end of file

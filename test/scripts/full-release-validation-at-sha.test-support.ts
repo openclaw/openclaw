@@ -177,6 +177,32 @@ import fs from "node:fs";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { basename, dirname, join } from "node:path";
+// Record CLI Git calls here so ordinary native Git work needs no Node forwarding process.
+// The fake GitHub transport uses MOCK_REAL_PATH for its own unrecorded repository reads.
+for (const method of ["execFileSync", "spawnSync"]) {
+  const executeGit = childProcess[method];
+  childProcess[method] = (file, args, options) => {
+    if (file !== "git" || options?.env?.PATH === process.env.MOCK_REAL_PATH) {
+      return executeGit(file, args, options);
+    }
+    appendFileSync(process.env.MOCK_GIT_CALLS, JSON.stringify(args) + "\\n");
+    let failure = "";
+    if (args[0] === "fetch" && args.includes("refs/heads/main:refs/remotes/origin/main") && ${JSON.stringify(options.toolingLagFetchFailure ?? false)}) {
+      const mainFetches = fs.readFileSync(process.env.MOCK_GIT_CALLS, "utf8").trim().split("\\n")
+        .filter((line) => line.includes("refs/heads/main:refs/remotes/origin/main"));
+      if (mainFetches.length > 1) failure = "fixture origin/main fetch failed";
+    }
+    const bareFetch = args.includes("https://github.com/openclaw/openclaw.git");
+    if (bareFetch && ${JSON.stringify(options.bareShaFetchFailure ?? false)}) {
+      failure = "fatal: remote error: upload-pack: not our ref " + args.at(-1);
+    }
+    if (bareFetch || failure) {
+      return executeGit(process.execPath, ["-e", failure
+        ? "console.error(" + JSON.stringify(failure) + ");process.exit(1)" : ""], options);
+    }
+    return executeGit(file, args, options);
+  };
+}
 const payloadEvent = (stage, path, extra = {}) => appendFileSync(
   ${JSON.stringify(payloadEventsPath)}, JSON.stringify({ stage, path, ...extra }) + "\\n",
 );
@@ -311,38 +337,6 @@ module.exports = async () => {
 };
 `,
   );
-  const gitPath = join(binDir, "git");
-  writeFileSync(
-    gitPath,
-    `#!${testNodeExecPath}
-const fs = require("node:fs");
-const { spawnSync } = require("node:child_process");
-const args = process.argv.slice(2);
-fs.appendFileSync(process.env.MOCK_GIT_CALLS, JSON.stringify(args) + "\\n");
-if (args[0] === "fetch" && args.includes("refs/heads/main:refs/remotes/origin/main") && ${JSON.stringify(options.toolingLagFetchFailure ?? false)}) {
-  const mainFetches = fs.readFileSync(process.env.MOCK_GIT_CALLS, "utf8").trim().split("\\n")
-    .filter((line) => line.includes("refs/heads/main:refs/remotes/origin/main"));
-  if (mainFetches.length > 1) {
-    console.error("fixture origin/main fetch failed");
-    process.exit(1);
-  }
-}
-if (args.includes("https://github.com/openclaw/openclaw.git")) {
-  if (${JSON.stringify(options.bareShaFetchFailure ?? false)}) {
-    console.error("fatal: remote error: upload-pack: not our ref " + args.at(-1));
-    process.exit(1);
-  }
-  process.exit(0);
-}
-const result = spawnSync("git", args, {
-  env: { ...process.env, PATH: process.env.MOCK_REAL_PATH },
-  stdio: "inherit",
-});
-process.exit(result.status ?? 1);
-`,
-  );
-  chmodSync(gitPath, 0o755);
-
   const ghPath = join(binDir, "gh");
   writeFileSync(
     ghPath,

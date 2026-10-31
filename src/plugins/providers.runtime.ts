@@ -3,4 +3,6 @@ export const {
   isPluginProvidersLoadInFlight,
   resolvePluginProviderRegistryCore,
   resolvePluginProvidersCore,
+  withPluginProviderRegistry,
+  withPluginProviders,
 } = nativePluginBindings.providerRegistry;

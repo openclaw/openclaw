@@ -114,7 +114,7 @@ export async function executeUsageCostWorker(
   });
   if (operation.kind === "inventory") {
     const selected = operation.sessionFiles;
-    if (!selected && operation.statistics === false) {
+    if (!selected) {
       const files = await listUsageCountedTranscriptSources(location.agentId, {
         ...access,
         storePath: location.storePath,
@@ -131,15 +131,9 @@ export async function executeUsageCostWorker(
         })),
       };
     }
-    const files = selected
-      ? (await resolveUsageCostTranscriptSources(selected, access)).filter(
-          (file) => file !== undefined,
-        )
-      : await listUsageCountedTranscriptSources(location.agentId, {
-          ...access,
-          storePath: location.storePath,
-          minMtimeMs: operation.minMtimeMs,
-        });
+    const files = (await resolveUsageCostTranscriptSources(selected, access)).filter(
+      (file) => file !== undefined,
+    );
     return {
       kind: "inventory",
       files: files.map((file) => ({
@@ -147,7 +141,6 @@ export async function executeUsageCostWorker(
         sourcePath: file.sourcePath,
         sessionId: file.sessionId,
         mtimeMs: file.mtimeMs,
-        transcriptFile: file.kind === "sqlite" ? file : undefined,
       })),
     };
   }
@@ -345,6 +338,7 @@ export async function executeUsageCostWorker(
       operation,
       sessionPaths: sessionPaths ?? [],
       access,
+      readFreshness,
       readCache: readCacheOrEmpty,
       scan: {
         pricingFingerprint: operation.pricingFingerprint,

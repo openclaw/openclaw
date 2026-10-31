@@ -156,8 +156,7 @@ describe("session-share source publication filters", () => {
     "refuses a shared list when an earlier store revokes its group during a later read (%s)",
     async (writer) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const fixture = commandFixture();
-        fixture.config.agents = { entries: { main: {}, other: {} } };
+        const fixture = commandFixture(["Team"], { entries: { main: {}, other: {} } });
         const first = { agentId: "main", sessionKey: "agent:main:shared" };
         const entry = { sessionId: "first-shared", updatedAt: 1, category: "Team" };
         await replaceSessionEntry(first, entry);

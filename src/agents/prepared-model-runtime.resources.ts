@@ -1,4 +1,9 @@
 import { throwSettledAggregate } from "../infra/error-graph-internal.js";
+import { pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
+import {
+  collectRegistryInvocationInstances,
+  PluginInvocationScope,
+} from "../plugins/plugin-invocation-scope.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   aggregatePluginRuntimeCloseErrors,
@@ -209,6 +214,53 @@ export function retainPreparedModelRuntimeSnapshotResources(
   }
   const claim = resources.retain();
   return { release: claim.release, assertOpen: () => resources.assertOpen() };
+}
+
+/** Executable borrowers retain their own callable authority until their operation settles. */
+export function acquirePreparedModelRuntimeSnapshotInvocation(
+  snapshot: Pick<PreparedModelRuntimeSnapshot, "pluginRegistry">,
+) {
+  const registry = snapshot.pluginRegistry;
+  // The snapshot owner fences new work before any of its plugin instances are acquired.
+  if (registry) {
+    state.registries.get(registry)?.assertOpen();
+  }
+  const overlapInstances = registry && collectRegistryInvocationInstances(registry, true);
+  const scope =
+    registry && overlapInstances?.size
+      ? new PluginInvocationScope(registry, overlapInstances, {
+          retained: true,
+          parent: pluginInvocationContext.getStore(),
+        })
+      : undefined;
+  let claim: ReturnType<typeof retainPreparedModelRuntimeSnapshotResources>;
+  try {
+    claim = retainPreparedModelRuntimeSnapshotResources(snapshot);
+  } catch (error) {
+    scope?.release();
+    throw error;
+  }
+  let release: Promise<void> | undefined;
+  const assertOpen = () => {
+    if (release) {
+      throw new Error("Prepared snapshot invocation has been released");
+    }
+    claim?.assertOpen();
+  };
+  return {
+    assertOpen,
+    run<T>(run: () => T): T {
+      assertOpen();
+      return scope ? scope.run(run) : run();
+    },
+    release() {
+      if (!release) {
+        scope?.release();
+        release = claim?.release() ?? Promise.resolve();
+      }
+      return release;
+    },
+  };
 }
 
 /** Fence owned views before joining builds or the callers that still hold physical claims. */

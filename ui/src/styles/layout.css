@@ -652,12 +652,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   white-space: nowrap;
 }
 
-.topbar .nav-collapse-toggle__icon,
-.topbar .nav-collapse-toggle__icon svg {
-  width: 20px;
-  height: 20px;
-}
-
 .topbar-search {
   display: none;
   align-items: center;
@@ -3347,8 +3341,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-identity-anchor,
-.topbar-nav-toggle,
-.chat-pane__nav-toggle {
+.mobile-nav-toggle {
   position: relative;
 }
 
@@ -3471,6 +3464,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 .settings-sidebar__subitem:focus-visible,
 .topbar-search:focus-visible,
 .topbar-icon-btn:focus-visible,
+.mobile-nav-toggle:focus-visible,
 .sidebar-brand__icon:focus-visible,
 .sidebar-online__retry:focus-visible,
 .sidebar-issues-button:focus-visible,

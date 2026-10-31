@@ -15,6 +15,7 @@ import { retainPreparedSessionEntryPredicate } from "../../config/sessions/sessi
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
@@ -279,6 +280,68 @@ export async function withSettledLocalWorkspacePath<T>(
         operation,
       )
     : await operation();
+}
+
+/** An unchanged turn needs no filesystem effects and can leave its runtimes running. */
+export function reuseLocalWorkspaceProjection(owner: LocalWorkspaceOwner, signal?: AbortSignal) {
+  return withLocalWorkspaceStore(
+    { ...owner, worktreeId: owner.worktree.id, signal },
+    async (store) => {
+      using phases = observeDiagnosticsTimelinePhases(
+        "attempt.setup.sandbox.workspace_selection.reuse.reconcile",
+      );
+      try {
+        let row = store.get();
+        if (
+          row?.baseline_ref &&
+          row.tree_root_digest &&
+          row.lifecycle_revision === owner.lifecycleRevision &&
+          !row.pending_ref &&
+          !row.journal_json &&
+          !row.paused_runtimes_json
+        ) {
+          // Bind this row to the session before probing. The lease and observation
+          // receipts preserve that binding; every store call rechecks live authority.
+          projectionOperations(owner, store, row).current();
+          for (const target of ["canonical", "projection"] as const) {
+            const selected = row;
+            const snapshot = await timeWorktreePreparationPhase(
+              target === "canonical" ? "synchronizeCanonical" : "synchronizeProjection",
+              async () => {
+                try {
+                  // A probe never prepares changed packs or repairs a baseline.
+                  // Live writers can interrupt discovery; retry after pausing.
+                  return await store.manifest(selected, {
+                    kind: "probe",
+                    target,
+                    canonicalRoot: owner.worktree.path,
+                  });
+                } catch {
+                  store.signal.throwIfAborted();
+                  store.assertCurrent();
+                  return undefined;
+                }
+              },
+            );
+            store.assertCurrent();
+            if (snapshot?.kind !== "scan" || snapshot.resultingRoot !== snapshot.previousRoot) {
+              break;
+            }
+            // Acceptance failures must propagate, never retry an uncertain write.
+            if (snapshot.observation) {
+              row = await store.accept(snapshot.observation, owner.workerAuthority);
+            }
+            if (target === "projection") {
+              return row.projection_path;
+            }
+          }
+        }
+        return await runLocalWorkspaceProjection(owner, store, (state) => state.reuse());
+      } finally {
+        phases.mark("attempt.setup.sandbox.workspace_selection.reuse.release");
+      }
+    },
+  );
 }
 
 /** Every operation owns the same renewable, cross-process reconciliation lease. */

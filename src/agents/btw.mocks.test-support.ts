@@ -84,6 +84,7 @@ vi.mock("./sessions/model-registry-runtime.js", () => ({
   getModelRegistryRuntime: (...args: unknown[]) => getModelRegistryRuntimeMock(...args),
 }));
 
+// mock-isolation: BTW fixtures supply model/auth snapshots and release tracking without published-runtime owners.
 vi.mock("./prepared-model-runtime.js", () => {
   const loadSnapshot = async (params: {
     agentId?: string;
@@ -127,6 +128,7 @@ vi.mock("./prepared-model-runtime.js", () => {
       const snapshot = await loadSnapshot(params);
       return {
         snapshot,
+        run: <T>(run: () => T): T => run(),
         [Symbol.asyncDispose]: snapshotResources.acquire?.().release ?? (async () => {}),
       };
     },

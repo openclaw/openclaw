@@ -48,6 +48,15 @@ decoded rows even when a caller retains the inactive handle. Predicate compariso
 baselines last only until release; a late acknowledgement cannot restore them.
 Active authorities retain their existing publication and final-effect checks.
 
+Host file writes prepare retained session-generation authority at their final
+effect boundary, after overwrite rollback capture. The existing session worker
+validates physical sources and refreshes facts after committed native mutations;
+the final host assertion checks the retained generation, native handle and revision,
+and live owner. Lifecycle adapters preserve that preparation through indirect
+settings reads. Ordinary synchronous assertions, opaque callback sources, and
+uncommitted native transactions retain their existing checks; an async wrapper
+alone does not move those callbacks off the main thread.
+
 Finished worker admissions release publication observers and request callbacks.
 Committed facts remain available for lost-reply recovery, which runs
 after transport cleanup. Workspace mutations release their payload and previous

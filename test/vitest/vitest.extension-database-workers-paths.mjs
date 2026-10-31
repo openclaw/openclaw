@@ -189,6 +189,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/buzz/src/buzz-bus.socket.test.ts",
   "extensions/buzz/src/buzz-bus.lifecycle.test.ts",
   "extensions/buzz/src/gateway.cold-start-recovery.test.ts",
+  "extensions/clickclack/src/discussions/revoked-channel-store.postgres.test.ts",
   "extensions/clickclack/src/discussions/service-state-persistence.test.ts",
   "extensions/clickclack/src/sender-authority.test.ts",
   // Runtime auth health reads admit the host-owned shared-state broker.

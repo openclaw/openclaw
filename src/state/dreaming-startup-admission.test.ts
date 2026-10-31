@@ -125,7 +125,7 @@ function dreamingFixture(state: OpenClawTestState, config: OpenClawConfig) {
   const hook = owner.registry.typedHooks.find(
     (entry) => entry.hookName === "gateway_start",
   )?.handler;
-  assert(service && service.apiVersion !== 2 && hook, "Missing Memory Core startup lifecycle");
+  assert(service && service.apiVersion === 2 && hook, "Missing Memory Core startup lifecycle");
   const scheduler = createTestPluginServiceScheduler();
   const context = {
     config,

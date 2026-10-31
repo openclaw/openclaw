@@ -2,18 +2,22 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { GatewayChatEvents } from "../../ui/src/api/gateway-chat-events.ts";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as modelPresentation from "./operator-model-presentation.js";
+import { createSessionLifecyclePublisher } from "./server-chat-lifecycle-publication.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import {
   initializeSessionReadContext,
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
+import { drainSessionEventPublications } from "./session-event-prepared-row.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -121,11 +125,12 @@ it("preserves shared ancestor references across staggered roster reads and first
   });
 });
 
-it("shares producer envelopes across matching authority and divergent baselines", async () => {
+it.each(["direct", "lifecycle", "agent"])("shares %s envelopes", async (producer) => {
   using _ = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = rolePolicyConfig();
     cfg.agents = { entries: { main: {} } };
+    setRuntimeConfigSnapshot(cfg);
     const owner = ensureProfileForEmail("row-delta-owner@example.test");
     const viewer = ensureProfileForEmail("row-delta-viewer@example.test");
     setUserProfileRole(owner.id, "view");
@@ -174,23 +179,53 @@ it("shares producer envelopes across matching authority and divergent baselines"
         ),
       ),
     );
-    const publish = (ids: string[]) =>
-      connection.broadcastToConnIds(
-        "sessions.changed",
-        {
+    const publish = async (ids: string[]) => {
+      if (producer === "lifecycle") {
+        await createLifecycleEventBroadcastHandler({
+          broadcastToConnIds: connection.broadcastToConnIds,
+          sessionEventSubscribers: { getAll: () => new Set(ids) },
+          getSessionRowProjection: () => projection,
+        })({ sessionKey: key, agentId: "main", reason: "rename" });
+      } else if (producer === "agent") {
+        createSessionLifecyclePublisher({
+          broadcastToConnIds: (event, payload, _ids, options) =>
+            connection.broadcastToConnIds(event, payload, new Set(ids), options),
+          sessionEventSubscribers: connection.sessionEventSubscribers,
+          getSessionRowProjection: () => projection,
+          persistGatewaySessionLifecycleEventForEvent: async () => {},
+          loadGatewaySessionLifecycleSnapshotForEvent: (_key, options) => {
+            const read = options!.sessionRows!;
+            const record = read.describe({ key, agentId: "main" })!;
+            return { row: read.present(record) };
+          },
+        }).publish({
+          phase: "model",
           sessionKey: key,
           agentId: "main",
-          reason: "rename",
-          ["__proto__"]: { fixture: "own-data-property" },
-        },
-        new Set(ids),
-        {
-          prepareSessionProjection: prepareSessionEventProjection(projection, undefined, {
-            ancestors: [],
-            reuseEnvelope: true,
-          }),
-        },
-      );
+          clientRunId: "run",
+          event: { runId: "run", stream: "lifecycle", seq: 1, ts: Date.now(), data: {} },
+          runContext: undefined,
+        });
+        await drainSessionEventPublications(projection);
+      } else {
+        connection.broadcastToConnIds(
+          "sessions.changed",
+          {
+            sessionKey: key,
+            agentId: "main",
+            reason: "rename",
+            ["__proto__"]: { fixture: "own-data-property" },
+          },
+          new Set(ids),
+          {
+            prepareSessionProjection: prepareSessionEventProjection(projection, undefined, {
+              ancestors: [],
+              reuseEnvelope: true,
+            }),
+          },
+        );
+      }
+    };
     const decodeLast = (peer: (typeof peers)[number]) => {
       const frame = JSON.parse(peer.send.mock.lastCall![0]) as EventFrame;
       let decoded: EventFrame | undefined;
@@ -199,9 +234,9 @@ it("shares producer envelopes across matching authority and divergent baselines"
       });
       return decoded?.payload;
     };
-    const prime = (selected: typeof peers, label: string) => {
+    const prime = async (selected: typeof peers, label: string) => {
       const previousSends = selected.map((peer) => peer.send.mock.calls.length);
-      publish(selected.map((peer) => peer.client.connId));
+      await publish(selected.map((peer) => peer.client.connId));
       for (const [index, peer] of selected.entries()) {
         expect(peer.send).toHaveBeenCalledTimes(previousSends[index]! + 1);
         expect(decodeLast(peer)).toMatchObject({
@@ -210,7 +245,7 @@ it("shares producer envelopes across matching authority and divergent baselines"
       }
     };
     try {
-      prime(
+      await prime(
         peers.filter((peer) =>
           peer.capability === "legacy" ? peer.copy === 0 : peer.baseline === "stale",
         ),
@@ -218,7 +253,7 @@ it("shares producer envelopes across matching authority and divergent baselines"
       );
       write("After");
       await projection.ensureMaterialized();
-      prime(
+      await prime(
         peers.filter((peer) => peer.capability !== "legacy" && peer.baseline === "current"),
         "After",
       );
@@ -314,7 +349,7 @@ it("shares producer envelopes across matching authority and divergent baselines"
         return stringify(...args);
       });
       try {
-        publish(peers.map((peer) => peer.client.connId));
+        await publish(peers.map((peer) => peer.client.connId));
       } finally {
         globalThis.Map = MapConstructor;
         encoding.mockRestore();
@@ -339,9 +374,11 @@ it("shares producer envelopes across matching authority and divergent baselines"
           },
         });
         const payload = JSON.parse(peer.send.mock.lastCall![0]).payload;
-        expect(Object.getOwnPropertyDescriptor(payload, "__proto__")?.value).toEqual({
-          fixture: "own-data-property",
-        });
+        if (producer === "direct") {
+          expect(Object.getOwnPropertyDescriptor(payload, "__proto__")?.value).toEqual({
+            fixture: "own-data-property",
+          });
+        }
         if (peer.capability === "refs") {
           expect(payload.sessionFieldRefs).toEqual(expect.any(Array));
           expect(payload).not.toHaveProperty("label");
@@ -364,7 +401,7 @@ it("shares producer envelopes across matching authority and divergent baselines"
           }
         }
       });
-      publish(peers.map((peer) => peer.client.connId));
+      await publish(peers.map((peer) => peer.client.connId));
       for (const [index, peer] of peers.entries()) {
         const visible = peer.profile === owner;
         expect(peer.send).toHaveBeenCalledTimes(beforeRevocation[index]! + Number(visible));

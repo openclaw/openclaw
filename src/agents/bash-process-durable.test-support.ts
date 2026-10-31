@@ -13,6 +13,12 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { shutdownProcessSupervisor } from "../process/supervisor/index.js";
+import type { SecretEgressProxyHandle } from "../secrets/egress-proxy/proxy-server.js";
+import {
+  clearSecretEgressProxy,
+  publishSecretEgressProxy,
+} from "../secrets/egress-proxy/registry.js";
+import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -55,7 +61,9 @@ else if (args.some(arg => arg.startsWith('--unit='))) {
   }));
   const unit = args.find(arg => arg.startsWith('--unit=')).slice(7);
   const value = { unit, properties, envNames: args.filter(arg => arg.startsWith('--setenv=')),
-    state: 'running', credentialInjected: process.env.GH_TOKEN === 'synthetic-env-secret' };
+    state: 'running', credentialInjected: process.env.GH_TOKEN === 'synthetic-env-secret',
+    secretEgressInjected: Object.keys(process.env).some(key =>
+      /^(SERVICE_API_KEY|HTTPS?_PROXY|https?_proxy|NODE_USE_ENV_PROXY|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|CURL_CA_BUNDLE|REQUESTS_CA_BUNDLE|GIT_SSL_CAINFO)$/.test(key)) };
   save(value);
   fs.appendFileSync(properties.StandardOutput.slice(7), 'worker ready\\n');
 } else if (args.includes('stop') || args.includes('reset-failed')) save(null);
@@ -79,6 +87,8 @@ type ManagerRecord = {
   state: string;
   properties: Record<string, string>;
   credentialInjected: boolean;
+  secretEgressInjected: boolean;
+  envNames: string[];
   exitCode?: number;
 };
 
@@ -103,6 +113,14 @@ async function scenario(run: (state: OpenClawTestState, managerFile: string) => 
       async () => {
         const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
         Object.defineProperty(process, "platform", { value: "linux" });
+        const proxy: SecretEgressProxyHandle = {
+          caCertPath: "unused",
+          proxyOrigin: "http://127.0.0.1:19090",
+          getCertificateStatus: () => assert.fail("Durable exec must not use the proxy"),
+          registerProcess: () => assert.fail("Durable exec must not create a proxy grant"),
+          stop: async () => {},
+        };
+        publishSecretEgressProxy(proxy);
         try {
           setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
           openOpenClawStateDatabase({ env: state.env });
@@ -110,6 +128,7 @@ async function scenario(run: (state: OpenClawTestState, managerFile: string) => 
           writeSessionEntry(agent, sessionKey, { sessionId, updatedAt: Date.now() });
           await run(state, managerFile);
         } finally {
+          clearSecretEgressProxy(proxy);
           await disposeDurableProcesses();
           resetProcessRegistryForTests();
           resetGatewayWorkAdmission();
@@ -140,7 +159,6 @@ async function launch(state: OpenClawTestState, notifyOnExit: boolean) {
       excludedStoreNames: ["GH_TOKEN", "GH_HOST"],
       managedLocalIdentity: true,
     },
-    preparedStoreEnvironment: {},
     preparedSubagentExecution: false,
   });
   const result = await tool.execute("durable-launch", {
@@ -151,13 +169,22 @@ async function launch(state: OpenClawTestState, notifyOnExit: boolean) {
   });
   assert.ok(result.details?.status === "running", JSON.stringify(result));
   assert.ok(result.details.sessionId);
-  return result.details.sessionId;
+  return { id: result.details.sessionId, content: result.content };
 }
 
 void it("re-adopts persisted work with scoped list/log/poll/kill and restart admission", async () => {
   await scenario(async (state, managerFile) => {
+    await writeSecretStoreEntry({
+      scope: { kind: "team" },
+      kind: "secret",
+      name: "SERVICE_API_KEY",
+      value: "synthetic-store-secret",
+      allowedHosts: ["api.example.com"],
+      updatedBy: "test",
+    });
     await initializeDurableProcesses();
-    const id = await launch(state, false);
+    const { id, content } = await launch(state, false);
+    assert.match(JSON.stringify(content), /without 1 secret-store credential/);
     const store = createDurableProcessStore();
     const [record] = await store.list();
     assert.equal(record?.id, id);
@@ -166,6 +193,8 @@ void it("re-adopts persisted work with scoped list/log/poll/kill and restart adm
     assert.equal(getActiveBackgroundExecSessionCount(), 0);
     const manager: ManagerRecord = JSON.parse(await fs.readFile(managerFile, "utf8"));
     assert.equal(manager.credentialInjected, true);
+    assert.equal(manager.secretEgressInjected, false);
+    assert.ok(!manager.envNames.includes("--setenv=SERVICE_API_KEY"));
     assert.equal(manager.properties.KillMode, "control-group");
     assert.equal(manager.properties.RuntimeMaxSec, "60s");
     assert.equal(manager.properties.UnsetEnvironment, "UNRELATED_TOKEN");
@@ -181,6 +210,7 @@ void it("re-adopts persisted work with scoped list/log/poll/kill and restart adm
     const log = await tool.execute("log", { action: "log", sessionId: id });
     assert.match(JSON.stringify(log), /worker ready/);
     assert.doesNotMatch(JSON.stringify(log), /synthetic-env-secret/);
+    assert.doesNotMatch(JSON.stringify(log), /synthetic-store-secret|oc-sent-v2\./);
     const write = await tool.execute("write", { action: "write", sessionId: id, data: "input" });
     assert.match(JSON.stringify(write), /no interactive input/);
     const adopted = getSession(id)!;
@@ -202,7 +232,8 @@ void it("re-adopts persisted work with scoped list/log/poll/kill and restart adm
 void it("records a downtime exit and queues one unattributed session completion", async () => {
   await scenario(async (state, managerFile) => {
     await initializeDurableProcesses();
-    const id = await launch(state, true);
+    const { id, content } = await launch(state, true);
+    assert.doesNotMatch(JSON.stringify(content), /secret-store credential/);
     await disposeDurableProcesses();
     resetProcessRegistryForTests();
     const manager: ManagerRecord = JSON.parse(await fs.readFile(managerFile, "utf8"));

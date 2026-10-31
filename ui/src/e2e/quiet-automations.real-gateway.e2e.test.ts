@@ -95,6 +95,7 @@ const suite = createControlUiE2eSuite({
     try {
       instance = await createOpenClawTestInstance({
         name: "quiet-automations",
+        entrypoint: ["dist/index.js"],
         ...(baselineRoot ? { cwd: baselineRoot } : {}),
         env: {
           OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,

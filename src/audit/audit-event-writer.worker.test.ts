@@ -7,10 +7,7 @@ import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js"
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { SqliteWorkerRequest } from "../infra/sqlite-worker-contract.js";
-import {
-  withSqliteWorkerReservationObservation,
-  type SqliteWorkerReservationObservation,
-} from "../infra/worker-request-diagnostics.js";
+import { withSqliteWorkerReservationObservation } from "../infra/worker-request-diagnostics.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -91,8 +88,7 @@ function writerFixture(
   stateDir = tempDirs.make("openclaw-audit-writer-"),
   onError?: (count: number) => void,
 ) {
-  const errors = vi.fn<(error: string) => void>();
-  errors.mockImplementation(() => onError?.(errors.mock.calls.length));
+  const errors = vi.fn<(error: string) => void>(() => onError?.(errors.mock.calls.length));
   const writer = createAuditEventWriter({
     scheduler: createTestGatewayScheduler(),
     stateDir,
@@ -103,10 +99,6 @@ function writerFixture(
 
 function rowCounts(db: OpenClawStateDatabase["db"], tables: string[]) {
   return tables.map((table) => db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()?.count);
-}
-
-function rows(db: OpenClawStateDatabase["db"], sql: string) {
-  return db.prepare(sql).all();
 }
 
 function loseFirstAuditBatchReply() {
@@ -156,51 +148,59 @@ function loseFirstAuditBatchReply() {
     expect(stopped).toBeDefined();
   };
 }
-
 describe("audit writer shared worker", () => {
-  it("commits 32 queued items once, isolates a rejected item, and replays without duplicate rows", async () => {
-    const database = databaseFixture();
-    // Admit the shared database before counting only the audit command's transactions.
-    await listAuditEvents({ database, limit: 1 });
-    const requests: AuditWriterRequest[] = Array.from({ length: 32 }, (_, index) => ({
-      type: "record-event",
-      eventId: `batch-event-${index}`,
-      input: {
-        ...messageEvent("message.outbound.finished"),
-        sourceId: `batch-source-${index}`,
-        sourceSequence: index === 15 ? 0 : index + 1,
-      },
-    }));
-    const observation: SqliteWorkerReservationObservation = { operations: new Set() };
-    const execute = () =>
-      executeOpenClawStateWorker(captureOpenClawStateWorkerContext(database), {
-        type: "audit.writer.process",
-        input: requests,
+  it.each([[2], [10], [32], [10, "ABORT"], [10, "ROLLBACK"], [32, "message"]] as const)(
+    "commits %i items with statement isolation (%s)",
+    async (size, failure?: "ABORT" | "ROLLBACK" | "message") => {
+      const database = databaseFixture();
+      const opened = openOpenClawStateDatabase(database);
+      const message = failure === "message";
+      recordAuditEventInDatabase(input(), { ...database, database: opened }, "seed");
+      if (failure && !message) {
+        opened.db.exec(`CREATE TEMP TRIGGER reject_middle BEFORE INSERT ON audit_events
+          WHEN NEW.source_sequence = 2 BEGIN SELECT RAISE(${failure}, 'synthetic insert failure'); END`);
+      }
+      const requests = Array.from({ length: size }, (_, index) => ({
+        type: "record-event" as const,
+        eventId: `batch-${index}`,
+        input: {
+          ...(message ? messageEvent("message.outbound.finished") : input()),
+          sourceId: `batch-${index}`,
+          sourceSequence: message && index === 1 ? 0 : index + 1,
+        },
+      }));
+      const ctx = { open: () => opened, stateOptions: () => ({ ...database, path: opened.path }) };
+      const execute = () =>
+        message
+          ? executeOpenClawStateWorker(captureOpenClawStateWorkerContext(database), {
+              type: "audit.writer.process",
+              input: requests,
+            })
+          : auditOperations["audit.writer.process"](requests, ctx);
+      const sql = observeMainThreadSql({
+        onStatement: () => expect(opened.db.isTransaction).toBe(true),
       });
-    const results = await withSqliteWorkerReservationObservation(observation, execute);
-    expect(observation.transactionCount).toBe(1);
-    const expectedResults = requests.map((_, index) =>
-      index === 15 ? { status: "settled", error: expect.any(String) } : { status: "settled" },
-    );
-    expect(results).toEqual(expectedResults);
-    expect(await execute()).toEqual(expectedResults);
-    await closeOpenClawStateDatabaseAsync();
-    const owner = openOpenClawStateDatabase(database).db;
-    expect(
-      rows(
-        owner,
-        "SELECT event_id, source_id, source_sequence FROM audit_events ORDER BY sequence",
-      ),
-    ).toEqual(
-      Array.from({ length: 32 }, (_, index) => index)
-        .filter((index) => index !== 15)
-        .map((index) => ({
-          event_id: `batch-event-${index}`,
-          source_id: `batch-source-${index}`,
-          source_sequence: index + 1,
-        })),
-    );
-  });
+      const expected = requests.map((_, index) => ({
+        status: "settled",
+        error: failure && (failure === "ROLLBACK" || index === 1) ? expect.any(String) : undefined,
+      }));
+      const observation = { operations: new Set<string>(), transactionCount: 0 };
+      expect(await withSqliteWorkerReservationObservation(observation, execute)).toEqual(expected);
+      if (message) {
+        expect(observation.transactionCount).toBe(1);
+      } else if (!failure) {
+        expect(sql.calls.at(1)?.mock.calls).toEqual([["BEGIN IMMEDIATE"], ["COMMIT"]]);
+        expect(sql.calls.slice(1).reduce((n, c) => n + c.mock.calls.length, 0)).toBe(size + 2);
+      }
+      sql.restore();
+      expect(await execute()).toEqual(expected);
+      expect(opened.db.isTransaction).toBe(false);
+      const persisted = requests.filter((_, i) => failure !== "ROLLBACK" && (!failure || i !== 1));
+      expect(
+        opened.db.prepare("SELECT event_id FROM audit_events ORDER BY sequence").all(),
+      ).toEqual([{ event_id: "seed" }, ...persisted.map(({ eventId }) => ({ event_id: eventId }))]);
+    },
+  );
 
   it("retries a failed batch commit on the same handle without retaining rolled-back facts", () => {
     const database = databaseFixture();
@@ -266,7 +266,7 @@ describe("audit writer shared worker", () => {
     expect(rowCounts(opened.db, ["audit_events", "audit_identity_keys", ...companions])).toEqual([
       1, 1, 1, 1, 1, 1,
     ]);
-    expect(rows(opened.db, "SELECT event_id FROM audit_events")).toEqual([
+    expect(opened.db.prepare("SELECT event_id FROM audit_events").all()).toEqual([
       { event_id: "rollback-terminal" },
     ]);
   });
@@ -338,7 +338,6 @@ describe("audit writer shared worker", () => {
       counters.expectIdle();
     }
 
-    const replayed = mode.startsWith("worker death");
     const owner = openOpenClawStateDatabase(database).db;
     expect(
       rowCounts(owner, [
@@ -348,14 +347,15 @@ describe("audit writer shared worker", () => {
         "audit_events WHERE kind = 'message'",
       ]),
     ).toEqual([3, 1, 1, 1]);
-    expect(JSON.stringify(rows(owner, "SELECT * FROM outbound_message_progress"))).not.toMatch(
-      /raw-account|raw-conversation|raw-target/,
-    );
-    expect(errors).toHaveBeenCalledTimes(replayed ? 1 : 0);
     expect(
-      rows(owner, "SELECT action FROM audit_events WHERE kind = 'agent_run' ORDER BY sequence").map(
-        ({ action }) => action,
-      ),
+      JSON.stringify(owner.prepare("SELECT * FROM outbound_message_progress").all()),
+    ).not.toMatch(/raw-account|raw-conversation|raw-target/);
+    expect(errors).toHaveBeenCalledTimes(mode.startsWith("worker death") ? 1 : 0);
+    expect(
+      owner
+        .prepare("SELECT action FROM audit_events WHERE kind = 'agent_run' ORDER BY sequence")
+        .all()
+        .map(({ action }) => action),
     ).toEqual(["agent.run.started", "agent.run.finished"]);
     const decisions = pageExecutionDecisionFactsForContextInDatabase(owner, {
       context: token,
