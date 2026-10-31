@@ -25,6 +25,10 @@ import { createGatewayCronAgentDeps } from "../../gateway/server-cron-agent-run.
 import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
 import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { waitForPluginCacheRetirement } from "../../plugins/plugin-cache.js";
 import { getPluginInstanceIncarnation } from "../../plugins/plugin-instance-scope.js";
@@ -102,7 +106,10 @@ export async function withCommandPlugin(
     bundled?: boolean;
   } = {},
 ) {
-  await withAdminIngress(async ({ cfg, state, admins, context, gateway }) => {
+  await withAdminIngress(async (ingress) => {
+    const { cfg, state, admins, context, gateway, resolveGatewayContext } = ingress;
+    const sdkResources = new LegacyPluginSdkResourceHost();
+    bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkResources);
     // The test state restores both bundled-plugin variables when it ends.
     const bundledDist = options.bundled ? state.path("openclaw-package", "dist") : undefined;
     if (bundledDist) {
@@ -195,15 +202,12 @@ export async function withCommandPlugin(
     const scheduledResults: Fixture["scheduledResults"] = [];
     const sessionEventPrompts: string[] = [];
     let fixtureRef: Fixture | undefined;
-    const runSchedulerOwned = createScheduledGatewayRunner(
-      () => gateway,
-      () => registry,
-    );
+    const runSchedulerOwned = createScheduledGatewayRunner(resolveGatewayContext, () => registry);
     const gatewayCronAgentDeps = createGatewayCronAgentDeps({
       deps: {},
       storePath: cronStorePath,
       resolveCronAgent: () => ({ agentId: "main", cfg }),
-      resolveGatewayContext: () => gateway,
+      resolveGatewayContext,
       resolvePluginRegistry: () => registry,
     });
     const createCron = () =>
@@ -244,7 +248,7 @@ export async function withCommandPlugin(
           cron,
           cronStorePath,
           getRuntimeConfig: () => cfg,
-          resolveGatewayContext: () => gateway,
+          resolveGatewayContext,
           validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
           getGatewayMethodRegistry: () => createRequestGatewayMethodRegistry(),
           trackExecution: trackAsyncWork,
@@ -361,7 +365,7 @@ export async function withCommandPlugin(
       await withPluginRuntimeGatewayRequestScope(
         {
           context: gateway,
-          resolveGatewayContext: () => gateway,
+          resolveGatewayContext,
           pluginRegistry: loadedRegistry,
           isWebchatConnect: () => false,
         },
@@ -379,6 +383,7 @@ export async function withCommandPlugin(
         await disposePlugin();
       }
       await expect(waitForPluginCacheRetirement()).resolves.toMatchObject({ failures: [] });
+      await sdkResources.close();
     }
   });
 }
