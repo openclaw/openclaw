@@ -1,3 +1,0 @@
-# Credential-safe remote resume and local profile/container/port regression cases.
-# Exact net LF growth against the observed CI comparison base; no inherited debt.
-31
