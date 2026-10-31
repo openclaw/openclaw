@@ -2003,7 +2003,7 @@ describe("runCliAgent reliability", () => {
       expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "native-session" });
       expect(context.systemPrompt).toBe("");
       expect(context.contextEngine).toBeUndefined();
-      expect(context.claudeSkillsPluginArgs).toEqual([]);
+      expect(context.claudeSkillsPlugin.args).toEqual([]);
     } finally {
       admission.close();
     }

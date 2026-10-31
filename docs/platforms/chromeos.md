@@ -66,7 +66,7 @@ filesystem directly, so a Docker image rebuild cannot wipe it.
 ## Node version
 
 The Node version available in a Crostini container may be below OpenClaw's
-minimum. OpenClaw requires Node 24.16+ or Node 26.1+; Node 26
+minimum. OpenClaw accepts Node 24.16.0+ on 24.x or Node 26.1.0+ (24.22.1+/26.12.1+ strongly recommended for security); Node 26
 is the recommended default. The installer script detects a missing or
 unsupported Node version and provisions a supported release automatically.
 

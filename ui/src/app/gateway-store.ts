@@ -12,6 +12,7 @@ import {
   GatewayBrowserClient,
   resolveGatewayErrorDetailCode,
   type GatewayEventListener,
+  type GatewayBrowserClientOptions,
   type GatewayHelloOk,
 } from "../api/gateway.ts";
 import { CONTROL_UI_BUILD_INFO, controlUiBuildDiffersFrom } from "../build-info.ts";
@@ -23,6 +24,7 @@ import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { resolveSessionKey } from "../lib/sessions/navigation.ts";
 import { readSessionDefaults } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
+import type { EarlyApplicationGateway } from "./early-gateway.ts";
 import { createGatewayCanvasSurfaceLease } from "./gateway-canvas-surface.ts";
 import {
   createGatewayControlUiReloadOptions,
@@ -65,7 +67,7 @@ export function createApplicationGateway(
   initialSettings: ReturnType<typeof loadSettings>,
   initialPassword = "",
   initialBootstrapToken = "",
-  options: ApplicationGatewayOptions = {},
+  options: ApplicationGatewayOptions & { earlyGateway?: EarlyApplicationGateway } = {},
 ): ApplicationGateway {
   let settings = initialSettings;
   let persistConnectionSettings = options.persistDefaultConnectionSettings !== false;
@@ -77,7 +79,9 @@ export function createApplicationGateway(
     password: initialPassword,
   };
   let connectionRevision = 0;
-  const credentials = createGatewayCredentials(options.ownsWarmBoot !== false);
+  const early = options.earlyGateway;
+  const credentials =
+    early?.credentials ?? createGatewayCredentials(options.ownsWarmBoot !== false);
   let snapshot: ApplicationGatewaySnapshot = {
     client: null,
     phase: "stopped",
@@ -394,7 +398,7 @@ export function createApplicationGateway(
         ),
       });
     };
-    const nextClient = new GatewayBrowserClient({
+    const clientOptions: GatewayBrowserClientOptions = {
       ...credentials.prepare(nextConnection, credentialsChanged, client),
       clientName: options.clientOptions?.clientName ?? "openclaw-control-ui",
       clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",
@@ -402,7 +406,8 @@ export function createApplicationGateway(
       platform: options.clientOptions?.platform,
       deviceFamily: options.clientOptions?.deviceFamily,
       mode: options.clientOptions?.mode ?? "webchat",
-      instanceId: options.clientOptions?.instanceId ?? generateUUID(),
+      instanceId:
+        options.clientOptions?.instanceId ?? early?.transport.client.instanceId ?? generateUUID(),
       scopes: options.clientOptions?.scopes,
       nativeConnectAuth: options.clientOptions?.nativeConnectAuth,
       get includeSessionMessageBodies() {
@@ -509,11 +514,8 @@ export function createApplicationGateway(
         setSnapshot({});
       },
       onConnecting: () => client === nextClient && setSnapshot({ reconnectAt: undefined }),
-      onReconnectScheduled: (delayMs) => {
-        if (client === nextClient) {
-          setSnapshot({ reconnectAt: Date.now() + delayMs });
-        }
-      },
+      onReconnectScheduled: (delayMs) =>
+        client === nextClient && setSnapshot({ reconnectAt: Date.now() + delayMs }),
       onClose: ({ code, reason, error, willRetry, busy }) => {
         if (client !== nextClient) {
           return;
@@ -614,7 +616,9 @@ export function createApplicationGateway(
         record: recordGatewayEvent,
         listeners: eventListeners,
       }),
-    });
+    };
+    const adopted = early?.transport.adopt(clientOptions);
+    const nextClient = adopted ?? new GatewayBrowserClient(clientOptions);
     client = nextClient;
     updateAvatarContext();
     setConnectionSnapshot({
@@ -636,7 +640,7 @@ export function createApplicationGateway(
     if (retiredEventLog) {
       publishEventLogRetirement(retiredEventLog);
     }
-    if (isCurrentClient(nextClient)) {
+    if (isCurrentClient(nextClient) && !adopted) {
       nextClient.start();
     }
   };
@@ -645,6 +649,7 @@ export function createApplicationGateway(
     get snapshot() {
       return snapshot;
     },
+    readPresence: presenceObserver.read,
     get connection() {
       return connection;
     },

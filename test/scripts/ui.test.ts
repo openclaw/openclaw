@@ -68,6 +68,7 @@ function copyUiFixture(root: string, extra: string[] = []): void {
     "scripts/run-node-package-bin.mts",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib/build-identity.mts",
+    "scripts/lib/control-ui-build-inputs.mts",
     "scripts/lib/output-root-guard.mjs",
     "scripts/lib/record-shared.mjs",
     "scripts/lib/prepare-control-ui-settings.mts",
@@ -718,7 +719,7 @@ require("node:module").syncBuiltinESMExports();
       ].join("\n");
       const childOutcome = childSignal
         ? `process.kill(process.pid, '${childSignal}');`
-        : "setTimeout(() => process.exit(0), 25);";
+        : "setTimeout(() => process.exit(0), 500);";
       const handlerLines = descendant
         ? ["process.on('SIGTERM', () => process.exit(0));"]
         : ["SIGTERM", "SIGHUP"].flatMap((handledSignal) => [

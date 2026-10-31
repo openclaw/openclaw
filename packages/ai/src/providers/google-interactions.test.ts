@@ -187,6 +187,7 @@ describe("google-interactions provider", () => {
           : streamGoogleInteractions(makeInteractionsModel(provider), basicContext, {})
       ).result();
       expect(capturedHeaders).toBeDefined();
+      expect(new Headers(capturedHeaders).get("x-goog-api-client")).toMatch(/^openclaw\//u);
       expect(new Headers(capturedHeaders).get("x-goog-api-key")).toBe(
         geminiKey || "google-fallback-key",
       );

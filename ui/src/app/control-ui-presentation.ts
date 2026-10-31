@@ -1,3 +1,10 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
+import {
+  hexToOklch,
+  prepareParticipantPalette,
+  prepareThemeLinks,
+} from "../lib/chat/participant-colors.ts";
+import { resolveThemeColor, resolveThemeColors } from "../lib/theme-color.ts";
 import { controlUiAccentInk } from "./accent-contrast.ts";
 import { controlUiDocumentHead } from "./control-ui-document-head.ts";
 import { controlUiPaletteStyle } from "./control-ui-palette-style.ts";
@@ -18,9 +25,46 @@ const ACCENT_CSS_VARIABLES = [
   "--focus-glow",
 ] as const;
 
+const LINK_SURFACES = [
+  "--bg",
+  "--bg-muted",
+  "--bg-elevated",
+  "--card",
+  "--panel",
+  "--popover",
+] as const;
+const LINK_OVERLAYS = [
+  "--inline-code-bg",
+  "--accent-subtle",
+  "--person-reference-bg",
+  "--person-reference-hover-bg",
+] as const;
+
+let participantPaletteValue: ReturnType<typeof prepareParticipantPalette> | undefined;
+let participantPaletteKey = "";
+let themeLinksKey = "";
+let themeLinksValue: ReturnType<typeof prepareThemeLinks> | undefined;
+const participantPaletteListeners = createChangeListeners();
+
+export const controlUiParticipantPalette = {
+  get current() {
+    return participantPaletteValue;
+  },
+  subscribe: participantPaletteListeners.subscribe,
+};
+
 let operatorSeamColor: string | undefined;
 let userAccentOverride: string | undefined;
-const systemChromeRevisions = new WeakMap<HTMLElement, { source: string; palette: string }>();
+const systemChromeRevisions = new WeakMap<
+  HTMLElement,
+  {
+    source: string;
+    palette: string;
+    narrowChat: boolean;
+    pageBackground: string;
+    chatBackground: string;
+  }
+>();
 
 // Project the independently rendered shell into the static document's chrome and head metadata.
 export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: boolean): void {
@@ -35,34 +79,106 @@ export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: bo
   const narrow = globalThis.matchMedia?.(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
   ).matches;
+  const narrowChat = narrow && hasChatShell;
   const revision = (style: string | null) =>
-    JSON.stringify([root.dataset.theme, root.dataset.themeMode, style, narrow && hasChatShell]);
+    JSON.stringify([root.dataset.theme, root.dataset.themeMode, style, narrowChat]);
   const source = revision(root.getAttribute("style"));
   const previous = systemChromeRevisions.get(root);
   // Most shell commits do not touch styles. Keep that path free of declaration scans.
   if (!paletteChanged && previous?.source === source) {
     return;
   }
-  const palette = revision(controlUiPaletteStyle(root));
+  const palette = JSON.stringify([
+    root.dataset.theme,
+    root.dataset.themeMode,
+    controlUiPaletteStyle(root),
+  ]);
+  const publishBackground = (pageBackground: string, chatBackground: string) => {
+    const background = narrowChat ? chatBackground || pageBackground : pageBackground;
+    if (!background) {
+      return;
+    }
+    root.style.setProperty("--control-ui-system-chrome-background", background);
+    for (const meta of controlUiDocumentHead().themeColors) {
+      meta.content = background;
+      meta.removeAttribute("media");
+    }
+    systemChromeRevisions.set(root, {
+      source: revision(root.getAttribute("style")),
+      palette,
+      narrowChat,
+      pageBackground,
+      chatBackground,
+    });
+  };
   if (!paletteChanged && previous?.palette === palette) {
-    systemChromeRevisions.set(root, { source, palette });
+    // Routes and breakpoints select a prepared surface; they do not change its palette.
+    if (previous.narrowChat === narrowChat) {
+      systemChromeRevisions.set(root, { ...previous, source });
+    } else {
+      publishBackground(previous.pageBackground, previous.chatBackground);
+    }
     return;
   }
+  // Derived ink must not survive a reset or become the next palette's input.
+  root.style.removeProperty("--link");
+  root.style.removeProperty("--link-on-tint");
   const computedStyle = getComputedStyle(root);
+  const canvas = resolveThemeColor(computedStyle, "--bg-content");
+  const accent = resolveThemeColor(computedStyle, "--accent");
+  const mode = root.dataset.themeMode === "light" ? "light" : "dark";
+  const viewerTone =
+    mode === "dark" && ["dark", "beacon", "rose", "miami"].includes(root.dataset.theme ?? "")
+      ? { l: 0.34, c: 0.07 }
+      : undefined;
+  const nextParticipantKey = JSON.stringify([canvas, accent, mode, viewerTone]);
+  if (/^#[\da-f]{6}$/iu.test(canvas) && /^#[\da-f]{6}$/iu.test(accent)) {
+    const participantColors = {
+      mode,
+      background: hexToOklch(canvas),
+      accent: hexToOklch(accent),
+      viewerTone,
+    } as const;
+    if (nextParticipantKey !== participantPaletteKey) {
+      participantPaletteKey = nextParticipantKey;
+      participantPaletteValue = prepareParticipantPalette(participantColors);
+      participantPaletteListeners.publish();
+    }
+    const custom =
+      root.style.getPropertyValue("--accent") !== "" ||
+      root.dataset.theme === "custom" ||
+      root.dataset.theme === "custom-light";
+    if (custom) {
+      const values = (properties: readonly string[]) =>
+        properties
+          .map((property) => computedStyle.getPropertyValue(property).trim())
+          .filter(Boolean);
+      const surfaces = values(LINK_SURFACES);
+      const overlays = values(LINK_OVERLAYS);
+      const nextLinksKey = JSON.stringify([nextParticipantKey, surfaces, overlays]);
+      if (nextLinksKey !== themeLinksKey) {
+        const colors = resolveThemeColors([...surfaces, ...overlays]);
+        themeLinksValue = undefined;
+        if (colors) {
+          themeLinksValue = prepareThemeLinks(
+            participantColors,
+            colors.slice(0, surfaces.length),
+            colors.slice(surfaces.length),
+          );
+          themeLinksKey = nextLinksKey;
+        }
+      }
+      if (themeLinksValue) {
+        root.style.setProperty("--link", themeLinksValue.normal);
+        root.style.setProperty("--link-on-tint", themeLinksValue.tint);
+      }
+    } else {
+      themeLinksKey = "";
+      themeLinksValue = undefined;
+    }
+  }
   const pageBackground = computedStyle.getPropertyValue("--bg").trim();
-  const background =
-    narrow && hasChatShell
-      ? computedStyle.getPropertyValue("--bg-content").trim() || pageBackground
-      : pageBackground;
-  if (!background) {
-    return;
-  }
-  root.style.setProperty("--control-ui-system-chrome-background", background);
-  for (const meta of controlUiDocumentHead().themeColors) {
-    meta.content = background;
-    meta.removeAttribute("media");
-  }
-  systemChromeRevisions.set(root, { source: revision(root.getAttribute("style")), palette });
+  publishBackground(pageBackground, computedStyle.getPropertyValue("--bg-content").trim());
 }
 
 export function applyControlUiAccent(userAccent?: string): void {

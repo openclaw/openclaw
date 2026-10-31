@@ -11,7 +11,6 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { prepareSessionPendingInputDedupeRecovery } from "../../config/sessions/session-accessor.pending-inputs.js";
-import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { UserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -21,9 +20,9 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx, createRoutedTestCtx } from "./test-ctx.js";
 
 type Recorder = ReturnType<typeof createUserTurnTranscriptRecorder>;
-async function interrupt(...recorders: (Recorder | undefined)[]) {
+async function cancel(...recorders: (Recorder | undefined)[]) {
   for (const recorder of recorders) {
-    recorder?.finishPendingInput?.("interrupted");
+    recorder?.finishPendingInput?.("cancelled");
   }
   for (const recorder of recorders) {
     await recorder?.waitForPendingInputSettlement?.();
@@ -45,8 +44,8 @@ async function seedSource(
     });
 }
 
-it("dispatches freshly reclaimed pending input despite its pre-restart inbound dedupe receipt", async () => {
-  await withOpenClawTestState({ label: "pending-input-in-process-restart" }, async (state) => {
+it("dispatches an explicitly retried input despite its prior inbound dedupe receipt", async () => {
+  await withOpenClawTestState({ label: "pending-input-live-retry" }, async (state) => {
     const cfg = {
       agents: {
         ownership: "explicit" as const,
@@ -86,10 +85,11 @@ it("dispatches freshly reclaimed pending input despite its pre-restart inbound d
       const claim = claimInboundDedupe(ctx);
       assert(claim.status === "claimed", "Original input did not acquire inbound dedupe");
       claim.commit();
-      await interrupt(source);
-      rotateAgentEventLifecycleGeneration();
+      await cancel(source);
       resumed = createRecorder();
-      expect(await resumed.stageApproved?.({ runId, assertCurrent: () => {} })).toBe(true);
+      expect(
+        await resumed.stageApproved?.({ runId, retryCancelled: true, assertCurrent: () => {} }),
+      ).toBe(true);
       expect((await listSessionPendingInputs(target)).items).toEqual([
         { ...original, state: "queued" },
       ]);
@@ -121,7 +121,7 @@ it("dispatches freshly reclaimed pending input despite its pre-restart inbound d
         { message: { content: message, idempotencyKey: `${runId}:user` } },
       ]);
     } finally {
-      await interrupt(resumed, source);
+      await cancel(resumed, source);
       dispatcher.markComplete();
       await dispatcher.waitForIdle();
       resetInboundDedupe();
@@ -139,7 +139,7 @@ it.each([
   "revoked",
   "revoked-after-read",
 ] as const)(
-  "keeps completed inbound receipts bound to one exact recovered source (%s)",
+  "keeps completed inbound receipts bound to one exact live retry source (%s)",
   async (control) => {
     await withOpenClawTestState({ label: "pending-input-dedupe-controls" }, async () => {
       setRuntimeConfigSnapshot({});
@@ -172,10 +172,11 @@ it.each([
         assert(first.status === "claimed", "Original input did not acquire inbound dedupe");
         first.commit();
         if (control !== "initial") {
-          await interrupt(original);
-          rotateAgentEventLifecycleGeneration();
+          await cancel(original);
           recorder = createRecorder();
-          expect(await recorder.stageApproved?.({ runId, assertCurrent })).toBe(true);
+          expect(
+            await recorder.stageApproved?.({ runId, retryCancelled: true, assertCurrent }),
+          ).toBe(true);
         }
         const claim = async (scope = target, sourceRunId = runId) =>
           claimInboundDedupe(ctx, {
@@ -235,7 +236,7 @@ it.each([
         activeClaim?.release?.();
         const recovered =
           control === "cache-miss" ? result : await recorder.withPendingInput?.(() => claim());
-        assert(recovered?.status === "claimed", "Recovered input did not acquire inbound dedupe");
+        assert(recovered?.status === "claimed", "Retried input did not acquire inbound dedupe");
         recovered.commit();
         // Old finalizers cannot erase or recommit the replacement's receipt.
         first.release();
@@ -245,7 +246,7 @@ it.each([
         restoreClock?.();
         resetInboundDedupe();
         current = true;
-        await interrupt(recorder, original);
+        await cancel(recorder, original);
       }
     });
   },

@@ -336,7 +336,9 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
           modelFallbackLog.warn("Model restoration transcript notice was not persisted.");
         }
       }
-      if (!recorded) {
+      if (recorded) {
+        runResult.meta.modelFallbackTranscriptToModel = toModel;
+      } else {
         fallbackTransition.fallbackCleared = false;
         fallbackTransition.stateChanged = false;
       }

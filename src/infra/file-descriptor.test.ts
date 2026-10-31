@@ -99,7 +99,7 @@ describe("pinned file descriptors", () => {
     });
     const remaining = Buffer.alloc(bytes.length);
     const count = readSync(source.fd, remaining);
-    expect(remaining.subarray(0, count)).toEqual(bytes.subarray(2));
+    expect(remaining.subarray(0, count).equals(bytes.subarray(2)), "source cursor").toBe(true);
     const targetPath = path.join(directory, "target");
     await using target = await fs.open(targetPath, "wx+");
     await target.writeFile("seed");
@@ -111,8 +111,8 @@ describe("pinned file descriptors", () => {
     });
     expect(copied).toBe(bytes.length);
     expect(observed.digest("hex")).toBe(expectedHash);
-    expect(await fs.readFile(targetPath)).toEqual(bytes);
+    expect((await fs.readFile(targetPath)).equals(bytes), "target bytes").toBe(true);
     expect(await source.readFile()).toHaveLength(0);
-    expect(await target.readFile()).toEqual(bytes.subarray(4));
+    expect((await target.readFile()).equals(bytes.subarray(4)), "target cursor").toBe(true);
   });
 });

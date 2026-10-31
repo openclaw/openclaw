@@ -14,10 +14,7 @@ import { serveOwnedWorkerTasks } from "../../infra/worker-task-server.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
 import { isSessionHistoryReadOperation } from "./session-history-read-operation-kind.js";
-import {
-  encodeSessionTranscriptWorkerError,
-  encodeSessionTranscriptRequestError,
-} from "./session-history-worker-errors.js";
+import { encodeSessionTranscriptRequestError } from "./session-history-worker-errors.js";
 import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import {
   withHistoryDatabase,
@@ -234,7 +231,7 @@ serveOwnedWorkerTasks(
       }
       if (request.kind === "transcript-stats-batch") {
         const { readTranscriptStatsBatchReadOnlySync } =
-          await import("./session-accessor.sqlite-read.js");
+          await import("./session-accessor.sqlite-transcript-stats-read.js");
         return {
           kind: request.kind,
           stats: readTranscriptStatsBatchReadOnlySync(
@@ -325,19 +322,10 @@ serveOwnedWorkerTasks(
             }
           : { kind: request.kind, ...cold.readSessionColdStorageInventoryInWorker(options) };
       }
-      if (request.kind === "session-store-target") {
-        const { readSessionStoreTargetResult } =
-          await import("./session-store-target-inventory.js");
-        request.request.env = cloneEnvWithPlatformSemantics(request.request.env);
-        const read = readSessionStoreTargetResult(request.request);
-        if (!read.ok) {
-          const readError = encodeSessionTranscriptWorkerError(read.error);
-          if (!readError) {
-            throw read.error;
-          }
-          return { kind: "session-store-target", readError };
-        }
-        return read.value;
+      if (request.kind === "session-target-prepare" || request.kind === "session-store-target") {
+        const { readSessionStoreTargetWorkerRequest } =
+          await import("./session-store-target.worker.js");
+        return readSessionStoreTargetWorkerRequest(request);
       }
       if (request.kind === "session-retirement-read") {
         const { readSessionRetirementInWorker } =
@@ -556,8 +544,9 @@ serveOwnedWorkerTasks(
       if (request.kind === "goal-operation-receipt") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { readSessionGoalOperationInDatabase, SessionGoalOperationError } =
-          await import("./goals-operations.js");
+        const { readSessionGoalOperationInDatabase } =
+          await import("./goals-operation-receipts.js");
+        const { SessionGoalOperationError } = await import("./goals-operations.types.js");
         const { assertSessionGoalOperationTime } = await import("./goals-operation-policy.js");
         try {
           assertSessionGoalOperationTime(request.operation, Date.now());
@@ -690,7 +679,10 @@ serveOwnedWorkerTasks(
             ? value.result.response?.body
             : undefined;
       const deflated = value.kind === "rpc" ? value.page.encodedMessagesDeflate : undefined;
-      return [...(body ? [body.buffer] : []), ...(deflated ? [deflated.buffer] : [])];
+      const activity = value.kind === "rpc" ? value.page.encodedResponse?.activity : undefined;
+      return [body?.buffer, deflated?.buffer, activity?.buffer].filter(
+        (buffer) => buffer !== undefined,
+      );
     },
     closeResource: (key) => {
       const request = decodeAgentDatabaseReaderRequest(key);

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import {
@@ -215,6 +216,7 @@ function retainGitHubCooldown(
   const previous = activeGitHubCooldown(cooldowns, key);
   const retained =
     previous && (previous.retryAfterMs ?? 0) > (error.retryAfterMs ?? 0) ? previous : error;
+  materializeErrorStack(retained);
   cooldowns.set(key, retained);
   pruneMapToMaxSize(cooldowns, GITHUB_QUOTA_CACHE_LIMIT);
   return retained;

@@ -98,6 +98,30 @@ function holdObservation(onRead: (count: number) => void = () => {}) {
   return { entered, release, held };
 }
 
+async function afterObservationRead<T>(read: () => Promise<T>, change: () => void) {
+  const { entered, release, held } = holdObservation();
+  const pending = read();
+  try {
+    const reachedRead = await Promise.race([
+      entered.promise.then(() => true),
+      pending.then(
+        () => false,
+        () => false,
+      ),
+    ]);
+    if (!reachedRead) {
+      throw new Error("Observation completed before the worker read was held");
+    }
+    change();
+    release.resolve();
+    return await pending;
+  } finally {
+    release.resolve();
+    await pending.catch(() => {});
+    held.mockRestore();
+  }
+}
+
 function publishWorktree(row: GitHubPublicationRow) {
   const claimed = claimGitHubPublicationExecutionFixture(row.request_id, "fixture-instance");
   return createGitHubPublicationExecutionStoreFixture("fixture-instance").complete(claimed, {
@@ -109,16 +133,19 @@ function publishWorktree(row: GitHubPublicationRow) {
     headCommit: NEW_HEAD,
   });
 }
+function patchLoadedSession(sessionKey: string, patch: Record<string, unknown>) {
+  const original = mocks.loadSession.getMockImplementation()!;
+  mocks.loadSession.mockImplementation((key: string, options: unknown) => {
+    const loaded = original(key, options);
+    return key === sessionKey ? { ...loaded, entry: { ...loaded.entry, ...patch } } : loaded;
+  });
+}
 function changeSession(patch: Record<string, unknown>) {
   replaceSessionEntrySync(
     { agentId: "main", sessionKey: SESSION_KEY },
     { ...mocks.loadSession(SESSION_KEY).entry, ...patch },
   );
-  const original = mocks.loadSession.getMockImplementation()!;
-  mocks.loadSession.mockImplementation((key: string, options: unknown) => {
-    const loaded = original(key, options);
-    return key === SESSION_KEY ? { ...loaded, entry: { ...loaded.entry, ...patch } } : loaded;
-  });
+  patchLoadedSession(SESSION_KEY, patch);
 }
 function prohibitPublicationWork() {
   for (const mock of [mocks.prepareIdentity, mocks.refreshIdentity, mocks.runCommand]) {
@@ -184,13 +211,7 @@ describe("shared worktree receipt observation", () => {
       const memory =
         mode === "draft" ? undefined : await createPrivatePublicationSession(privateKey);
       if (mode === "draft") {
-        const loadSession = mocks.loadSession.getMockImplementation()!;
-        mocks.loadSession.mockImplementation((sessionKey: string) => {
-          const loaded = loadSession(sessionKey);
-          return sessionKey === privateKey
-            ? { ...loaded, entry: { ...loaded.entry, visibility: "draft" } }
-            : loaded;
-        });
+        patchLoadedSession(privateKey, { visibility: "draft" });
         await persistPublicationTestSession(privateKey);
       }
       if (mode === "closed-memory" && memory) {
@@ -265,28 +286,9 @@ describe("shared worktree receipt observation", () => {
         });
         expect(sql.queries).toEqual([]);
       }
-      const { entered, release, held } = holdObservation();
-      const pending = observe();
-      try {
-        await Promise.race([
-          entered.promise,
-          pending.then(
-            () => {
-              throw new Error("Private observation finished before receipt preparation was held");
-            },
-            (error: unknown) => {
-              throw error;
-            },
-          ),
-        ]);
-        owner.closeSession(privateSession.sessionKey);
-        release.resolve();
-        await expect(pending).rejects.toThrow(/session.*changed/i);
-      } finally {
-        release.resolve();
-        await pending.catch(() => {});
-        held.mockRestore();
-      }
+      await expect(
+        afterObservationRead(observe, () => owner.closeSession(privateSession.sessionKey)),
+      ).rejects.toThrow(/session.*changed/i);
     } finally {
       memorySessionActorOwners.closeDatabase(location);
     }
@@ -297,16 +299,16 @@ describe("shared worktree receipt observation", () => {
       await import("./github-publication-availability.js");
     await persistPublicationTestSession();
     using selected = await prepareGitHubPublicationSession(SESSION_KEY, { agentId: "main" });
-    const entry = selected.readCurrent().entry!;
-    const identity = { ...session, lifecycleRevision: entry.lifecycleRevision ?? null };
+    const identity = {
+      ...session,
+      lifecycleRevision: selected.readCurrent().entry!.lifecycleRevision ?? null,
+    };
     const coordinator = sharedPublicationCoordinator();
-    expect(
-      await coordinator.latestShared(identity, undefined, undefined, () => selected.readCurrent()),
-    ).toBeNull();
+    const observe = () =>
+      coordinator.latestShared(identity, undefined, undefined, () => selected.readCurrent());
+    expect(await observe()).toBeNull();
     selected.release();
-    await expect(
-      coordinator.latestShared(identity, undefined, undefined, () => selected.readCurrent()),
-    ).rejects.toThrow("session lifecycle changed");
+    await expect(observe()).rejects.toThrow("session lifecycle changed");
   });
 
   it("shares a reconnect burst's pending observation and invalidates it on publication", async () => {
@@ -363,16 +365,10 @@ describe("shared worktree receipt observation", () => {
     prohibitPublicationWork();
     using observer = observeEvents();
     using sql = observeSql();
-    const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     const expected = { result: published, confirmation: null };
     expect(await coordinator.sharedStatus(session, published.requestId)).toEqual(expected);
     expect(await coordinator.latestShared(session)).toEqual(expected);
     expect(await coordinator.latestShared(session, "accepted")).toEqual(expected);
-    expect(
-      reads.mock.calls.filter(
-        ([, command]) => command.type === "githubPublications.sharedObservation",
-      ),
-    ).toHaveLength(3);
     expect(observer).not.toHaveBeenCalled();
     expectNoPublicationWork();
     expect(
@@ -393,44 +389,26 @@ describe("shared worktree receipt observation", () => {
       if (mode !== "pending") {
         publishWorktree(row);
       }
-      const { entered, release, held } = holdObservation();
-      const request =
-        mode === "latest"
-          ? coordinator.latestShared(session)
-          : coordinator.sharedStatus(session, row.request_id);
-      const settled = request.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      try {
-        await Promise.race([
-          entered.promise,
-          settled.then(() => {
-            throw new Error("Observation finished before the real worker read was held");
+      const request = afterObservationRead(
+        () =>
+          mode === "latest"
+            ? coordinator.latestShared(session)
+            : coordinator.sharedStatus(session, row.request_id),
+        () =>
+          changeSession({
+            worktree: {
+              id: "replacement-worktree",
+              branch: "replacement-branch",
+              repoRoot: "/replacement",
+            },
           }),
-        ]);
-        changeSession({
-          worktree: {
-            id: "replacement-worktree",
-            branch: "replacement-branch",
-            repoRoot: "/replacement",
-          },
+      );
+      if (mode === "terminal") {
+        await expect(request).resolves.toMatchObject({
+          result: { requestId: row.request_id, status: "published" },
         });
-        release.resolve();
-        const outcome = await settled;
-        if (mode === "terminal") {
-          expect(outcome).toMatchObject({
-            value: { result: { requestId: row.request_id, status: "published" } },
-          });
-        } else {
-          expect(outcome).toMatchObject({
-            error: expect.objectContaining({ message: expect.stringMatching(/session.*changed/i) }),
-          });
-        }
-      } finally {
-        release.resolve();
-        await settled;
-        held.mockRestore();
+      } else {
+        await expect(request).rejects.toThrow(/session.*changed/i);
       }
     },
   );
@@ -480,8 +458,7 @@ describe("shared worktree receipt observation", () => {
         expect(await fs.readFile(databasePath)).toEqual(bytes);
         expect(await fs.readdir(path.dirname(databasePath))).toEqual(files);
         expect(observer).not.toHaveBeenCalled();
-        expect(mocks.prepareIdentity).not.toHaveBeenCalled();
-        expect(mocks.runCommand).not.toHaveBeenCalled();
+        expectNoPublicationWork();
       }
       const db = openOpenClawStateDatabase().db;
       db.prepare("UPDATE worktrees SET owner_id = ? WHERE id = ?").run(

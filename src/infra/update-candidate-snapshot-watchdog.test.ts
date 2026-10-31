@@ -175,6 +175,7 @@ it.each([
         });
       }
       const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 400_000);
+      const perfClock = vi.spyOn(performance, "now").mockReturnValue(Date.now() + 400_000);
       if (settled) {
         controller.abort(new Error("Update validation deadline expired during progress recording"));
       } else {
@@ -183,6 +184,7 @@ it.each([
       pendingReceipt.resolve();
       const result = await operation;
       clock.mockRestore();
+      perfClock.mockRestore();
       expect(result).toMatchObject({
         status: "error",
         phase: "snapshot",

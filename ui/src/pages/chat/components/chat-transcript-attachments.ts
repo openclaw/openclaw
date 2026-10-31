@@ -42,6 +42,13 @@ export function projectTranscriptAttachments(
         ...options,
         sessionKey: source.sessionKey,
         connectionEpoch: source.connectionEpoch,
+        onFindWorkspaceFile:
+          normalized.senderSession &&
+          (normalized.senderSession.sessionKey !== source.sessionKey ||
+            (normalized.senderSession.agentId &&
+              normalized.senderSession.agentId !== options.agentId))
+            ? undefined
+            : options.onFindWorkspaceFile,
       },
       media,
     );
@@ -94,7 +101,10 @@ export function projectTranscriptAttachments(
 }
 
 export function transcriptAttachmentMatches(entry: TranscriptAttachmentEntry, query: string) {
-  return entry.label.toLowerCase().includes(query.trim().toLowerCase());
+  return entry.label
+    .toLowerCase()
+    .normalize("NFC")
+    .includes(query.trim().toLowerCase().normalize("NFC"));
 }
 
 export function hasTranscriptAttachments(source: TranscriptAttachments | undefined, query = "") {

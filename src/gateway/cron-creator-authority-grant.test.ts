@@ -1,3 +1,5 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
@@ -84,6 +86,29 @@ function createManagementFixture(controlUiAdmin = true) {
 }
 
 describe("cron creator authority grants", () => {
+  it("retains the expired reason without retaining the revoking caller", async () => {
+    const formatter = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+    Reflect.deleteProperty(Error, "prepareStackTrace");
+    onTestFinished(() => {
+      if (formatter) {
+        Object.defineProperty(Error, "prepareStackTrace", formatter);
+      }
+    });
+    class RevokingCaller {
+      revoke() {
+        const scope = createCronCreatorAuthorityRunScope("expired-stack");
+        revokeScope(scope);
+        return scope.signal;
+      }
+    }
+    const signal = new RevokingCaller().revoke();
+    await nextTurn();
+    expect(queryObjects(RevokingCaller)).toBe(0);
+    expect(signal.reason).toBeInstanceOf(TypeError);
+    expect(signal.reason).toMatchObject({ name: "CronCreatorAuthorityExpiredError", status: 403 });
+    expect(() => signal.throwIfAborted()).toThrow(signal.reason);
+  });
+
   it("preserves the Control UI admin SDK projection without granting creator authority", () => {
     const scope = createScope("sdk-compat", { kind: "unknown" }, { source: "control-ui-admin" });
     const legacy: Pick<EmbeddedRunAttemptParams, "cronCreatorAuthorityCapability"> = {

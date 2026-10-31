@@ -6,6 +6,7 @@ import { retireQuestionChannelGateway } from "../infra/question-channel-runtime.
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { bindLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeGatewayDeviceRevocation } from "./device-revocation.js";
 import { shouldUseGatewayOwnerProfile } from "./gateway-owner-profile.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
@@ -83,6 +84,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   let requestRuntimeReady: Promise<void> | undefined;
   const projectionLifetime: { closing: boolean; detach?: () => void } = { closing: false };
   runtime.registerGatewayLifetimeSidecars({
+    name: "request-runtime",
     stop: async () => {
       projectionLifetime.closing = true;
       // Received mutations and their finalizers join before lifetime sidecars stop.
@@ -135,6 +137,30 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       if (projectionLifetime.closing) {
         throw new Error("Gateway closed during session projection startup");
       }
+      // Facts are ready, but display rows remain lazy. Warm the recent page while sidecars start.
+      void runtime.connectionWork
+        .track(() =>
+          runWithGatewayIndependentRootWorkAdmission(
+            async () => {
+              const { listProjectedSessions } = await import("./session-utils-list.js");
+              runtime.connectionWork.signal.throwIfAborted();
+              await startupTrace.measure("sessions.first-page", () =>
+                listProjectedSessions({
+                  projection,
+                  opts: { limit: 100, archived: false, rowMode: "sidebar" },
+                  acceptsSerializedJson: true,
+                }),
+              );
+            },
+            "startup:session-row-prewarm",
+            runtime.connectionWork.signal,
+          ),
+        )
+        .catch((error: unknown) => {
+          if (!runtime.connectionWork.signal.aborted) {
+            log.warn(`Session first-page preparation failed: ${formatErrorMessage(error)}`);
+          }
+        });
     }
     if (!runtime.opts.updateCanary) {
       await startupTrace.measure("gateway.lifetime-sidecars", () =>
@@ -175,7 +201,6 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     // stay current until run shutdown records recovery and cancels execution.
     isDispatchAvailable: () => startupState.dispatchReady,
     logError: (message) => log.error(message),
-    prepareRestartRecovery: runtime.channelManager.recoverAutostartSuppression,
   });
   gatewayInstanceRuntimeRef.current = gatewayInstanceRuntime;
   gatewayRequestContext.resolveGatewayContext = () =>
@@ -212,9 +237,9 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     };
   }
   gatewayRequestContext.approvalEvents = gatewayInstanceRuntime.approvalEvents;
-  gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntime.recovery;
+  gatewayRequestContext.lifecycleRuntime = gatewayInstanceRuntime.lifecycle;
   bindGatewayContextResolver(
-    gatewayInstanceRuntime.recovery,
+    gatewayInstanceRuntime.lifecycle,
     gatewayRequestContext.resolveGatewayContext,
   );
   gatewayRequestContext.createAgentTurnFacade = gatewayInstanceRuntime.createAgentTurnFacade;

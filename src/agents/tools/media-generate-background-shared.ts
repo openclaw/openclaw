@@ -24,11 +24,14 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { captureGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
@@ -51,7 +54,10 @@ import {
 import { tryResolveSubagentRequesterAgentId } from "../subagents/announce/subagent-announce-delivery.runtime.js";
 import { resolveAnnounceOrigin } from "../subagents/announce/subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "../subagents/announce/subagent-requester-store-key.js";
-import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
+import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 import {
   retainBlockedMediaCompletion,
   wakeMediaGenerationTaskCompletion,
@@ -110,6 +116,8 @@ type CreateMediaGenerationTaskRunParams = {
 type RecordMediaGenerationTaskProgressParams = {
   handle: MediaGenerationTaskHandle | null;
   progressSummary: string;
+  provider?: string;
+  model?: string;
 };
 
 type CompleteMediaGenerationTaskRunParams = {
@@ -132,7 +140,7 @@ async function wakeMediaGenerationTaskCompletionWithRetry(params: {
   wake: () => Promise<MediaGenerationCompletionWakeOutcome>;
   beforeRetry?: () => void;
 }): Promise<MediaGenerationCompletionWakeOutcome> {
-  const deadline = Date.now() + MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS;
+  const deadline = monotonicNow() + MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS;
   let outcome = await params.wake();
   let retryIndex = 0;
   let queueOwnsCompletion = false;
@@ -141,7 +149,7 @@ async function wakeMediaGenerationTaskCompletionWithRetry(params: {
       queueOwnsCompletion = true;
       updateMediaGenerationOperation(params.handle.runId, { completionDelivery: "queued" });
     }
-    const remainingMs = deadline - Date.now();
+    const remainingMs = deadline - monotonicNow();
     if (!queueOwnsCompletion && remainingMs <= 0) {
       throw new Error("media completion did not settle before the handoff deadline");
     }
@@ -214,6 +222,13 @@ async function createMediaGenerationTaskRun(
   }
   const requesterRunSessionKey = params.requesterRunSessionKey?.trim() || sessionKey;
   const runId = `tool:${params.toolName}:${crypto.randomUUID()}`;
+  // Detached completion retains its Gateway instance, never the originating request.
+  const gatewayScope = getPluginRuntimeGatewayRequestScope();
+  const resolveGatewayContext = captureGatewayContextResolver(
+    getGatewayToolCallerIdentity()?.gatewayContextResolver ??
+      gatewayScope?.resolveGatewayContext ??
+      gatewayScope?.context?.resolveGatewayContext,
+  );
   const assertCurrent = captureMediaGenerationAdmission(params.assertCurrent);
   const env = captureSessionTranscriptStorageEnvironment(process.env);
   assertCurrent();
@@ -300,6 +315,7 @@ async function createMediaGenerationTaskRun(
       requesterOrigin,
       detach: Boolean(requesterTranscript) && shouldDetachMediaGenerationTask(sessionKey, entry),
       requesterTranscript,
+      resolveGatewayContext,
       taskLabel: params.prompt,
     };
     touchMediaGenerationTaskRunContext(handle);
@@ -324,6 +340,8 @@ function recordMediaGenerationTaskProgress(params: RecordMediaGenerationTaskProg
   touchMediaGenerationTaskRunContext(params.handle);
   updateMediaGenerationOperation(params.handle.runId, {
     progressSummary: params.progressSummary,
+    ...(params.provider ? { provider: params.provider } : {}),
+    ...(params.model ? { model: params.model } : {}),
   });
 }
 

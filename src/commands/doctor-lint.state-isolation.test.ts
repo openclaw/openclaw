@@ -31,8 +31,10 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
-import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { maybeMigrateHeartbeatFilesToScratch } from "./doctor-heartbeat-scratch-migration.js";
+import { assertHeartbeatScratchMigrationUnambiguous } from "./doctor-heartbeat-scratch-preflight.js";
 import { runDoctorLintCliInProcess } from "./doctor-lint-runner.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { verifyDoctorLintOAuthStateIsolation } from "./doctor-lint.oauth-isolation.test-support.js";
@@ -45,7 +47,8 @@ const mocks = vi.hoisted(() => ({
   sqliteOpen: vi.fn<(filename: string, readOnly: boolean, database: DatabaseSync) => void>(),
 }));
 
-vi.mock("../flows/doctor-health-contributions.js", () => ({
+vi.mock("../flows/doctor-health-contributions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/doctor-health-contributions.js")>()),
   resolveDoctorContributionHealthChecks: mocks.resolveDoctorContributionHealthChecks,
 }));
 vi.mock("../infra/node-sqlite.js", async (importOriginal) => {
@@ -74,17 +77,14 @@ function captureStdout() {
   return Object.assign(stdout, { [Symbol.dispose]: () => stdout.mockRestore() });
 }
 
-async function realHealthCheck(id: string) {
+async function realHealthChecks() {
   const actual = await vi.importActual<typeof import("../flows/doctor-health-contributions.js")>(
     "../flows/doctor-health-contributions.js",
   );
-  const check = (await actual.resolveDoctorContributionHealthChecks()).find(
-    (entry) => entry.id === id,
-  );
-  if (!check) {
-    throw new Error("Missing health check: " + id);
-  }
-  return check;
+  return actual.resolveDoctorContributionHealthChecks();
+}
+async function realHealthCheck(id: string) {
+  return (await realHealthChecks()).find((entry) => entry.id === id)!;
 }
 const handoffDirs = useAutoCleanupTempDirTracker(afterEach);
 let handoffResolver: MockInstance<typeof temporaryState.resolvePreferredOpenClawTmpDir> | undefined;
@@ -175,8 +175,7 @@ describe("doctor lint state isolation", () => {
           ),
         ).toBe(true);
         expect(fs.readFileSync(sourcePath, "utf8")).toBe("legacy-file-marker");
-        const after = snapshotDoctorLintSqliteFamily(databasePath);
-        expect(after).toEqual(before);
+        expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
         expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
         expect(process.env.OPENCLAW_PROFILE).toBeUndefined();
       },
@@ -190,64 +189,77 @@ describe("doctor lint state isolation", () => {
         const config: OpenClawConfig = {
           agents: {
             ownership: "explicit",
-            defaults: { heartbeat: { every: "15m" } },
-            entries: { main: {} },
+            defaults: { systemAgent: { agentId: "main" } },
+            entries: { main: {}, ops: { heartbeat: { every: "30m", target: "none" } } },
           },
           plugins: { enabled: false },
           memory: { search: { enabled: false } },
         };
         await state.writeConfig(config);
+        const outside = state.path("notes.md");
+        fs.writeFileSync(outside, "Keep these original instructions.");
+        for (const workspace of ["workspace-main", "workspace-ops"]) {
+          fs.mkdirSync(state.statePath(workspace), { recursive: true });
+          fs.symlinkSync(outside, state.statePath(workspace, "HEARTBEAT.md"));
+        }
         const storePath = resolveCronJobsStorePathFromConfig(config, state.env);
         writeConfigMachineState("doctorLint.source", "unchanged");
         await closeOpenClawStateDatabaseAsync();
         const sourcePath = resolveOpenClawStateSqlitePath(state.env);
         const before = snapshotDoctorLintSqliteFamily(sourcePath);
-        const heartbeat = await realHealthCheck("core/doctor/heartbeat-cadence-migration");
-        let privateDatabase: ReturnType<typeof openOpenClawStateDatabase> | undefined;
+        const cadence = await realHealthCheck("core/doctor/heartbeat-cadence-migration");
+        const scratch = await realHealthCheck("core/doctor/heartbeat-scratch-migration");
         mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
-          heartbeat,
+          cadence,
+          scratch,
           healthCheck("project-clone-shape", async (ctx) => {
-            expect(ctx.cfg.agents?.defaults).not.toHaveProperty("heartbeat");
+            expect(ctx.cfg.agents?.entries?.ops).not.toHaveProperty("heartbeat");
             expect(process.env.OPENCLAW_STATE_DIR).not.toBe(state.stateDir);
             writeConfigMachineState("doctorLint.private", "private only");
-            privateDatabase = openOpenClawStateDatabase();
             return [];
           }),
         ]);
         using stdout = captureStdout();
-        await withEnvAsync(
-          { OPENCLAW_CONFIG_PATH: mode === "rehearsal-worker" ? state.configPath : undefined },
-          async () => {
-            // Default selection keeps the outer source snapshot eager; --only hides this overlap.
-            const exitCode =
-              mode === "rehearsal-worker"
-                ? await runDoctorLintCliInProcess(
-                    runtime,
-                    { json: true },
-                    { commandStartedAtMs: Date.now() },
-                  )
-                : await runDoctorLintCli(runtime, { json: true });
-            const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-            expect(report.findings).toEqual([
-              expect.objectContaining({
-                checkId: heartbeat.id,
-                severity: "warning",
-                requirement: "heartbeat-retirement",
-                path: storePath,
-                fixHint: expect.stringContaining("openclaw doctor --fix"),
-              }),
-            ]);
-            expect(exitCode).toBe(1);
-            expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
-            expect(process.env.OPENCLAW_CONFIG_PATH).toBe(
-              mode === "rehearsal-worker" ? state.configPath : undefined,
-            );
-          },
-        );
-        expect(privateDatabase).toBeDefined();
-        expect(privateDatabase?.db.isOpen).toBe(false);
-        expect(fs.existsSync(privateDatabase!.path)).toBe(false);
+        const opts = { json: true, includeAllChecks: mode === "rehearsal-worker" };
+        const exitCode =
+          mode === "rehearsal-worker"
+            ? await runDoctorLintCliInProcess(runtime, opts, { commandStartedAtMs: Date.now() })
+            : await runDoctorLintCli(runtime, opts);
+        const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+        const blocked =
+          'Agent "ops" HEARTBEAT.md cannot be migrated: HEARTBEAT.md symlink target escapes the agent workspace';
+        expect(report.findings).toEqual([
+          expect.objectContaining({
+            checkId: scratch.id,
+            severity: "error",
+            target: "ops",
+            requirement: "heartbeat-file-migration-blocked",
+            message: blocked,
+            path: state.statePath("workspace-ops", "HEARTBEAT.md"),
+          }),
+          expect.objectContaining({
+            checkId: cadence.id,
+            severity: "warning",
+            requirement: "heartbeat-retirement",
+            path: storePath,
+            fixHint: expect.stringContaining("openclaw doctor --fix"),
+          }),
+        ]);
+        expect(exitCode).toBe(1);
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBe(state.configPath);
         expect(snapshotDoctorLintSqliteFamily(sourcePath)).toEqual(before);
+        await expect(assertHeartbeatScratchMigrationUnambiguous(config, state.env)).rejects.toThrow(
+          blocked,
+        );
+        const repair = await maybeMigrateHeartbeatFilesToScratch({
+          cfg: config,
+          env: state.env,
+          shouldRepair: true,
+        });
+        const repairMessage = blocked.replace("cannot be migrated", "was not migrated");
+        expect(repair.warnings).toEqual([repairMessage]);
+        expect(fs.readFileSync(outside, "utf8")).toBe("Keep these original instructions.");
       });
     },
   );
@@ -308,19 +320,14 @@ describe("doctor lint state isolation", () => {
       });
       writeConfigMachineState("auth.sharedStore", { location: "legacy-main" });
       noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
-      writePersistedAuthProfileStoreRaw(
-        store("diagnostic-provider:shared"),
-        state.agentDir("main"),
-      );
-      writePersistedAuthProfileStoreRaw(
-        store("diagnostic-provider:alpha"),
-        state.agentDir("alpha"),
-      );
-      writePersistedAuthProfileStoreRaw(store("diagnostic-provider:custom"), customDir);
-      writePersistedAuthProfileStoreRaw(
-        store("diagnostic-provider:healthy", false),
-        state.agentDir("healthy"),
-      );
+      for (const [profileId, dir, expired] of [
+        ["shared", state.agentDir("main"), true],
+        ["alpha", state.agentDir("alpha"), true],
+        ["custom", customDir, true],
+        ["healthy", state.agentDir("healthy"), false],
+      ] as const) {
+        writePersistedAuthProfileStoreRaw(store(`diagnostic-provider:${profileId}`, expired), dir);
+      }
       const ownerDirs = [undefined, state.agentDir("alpha"), customDir, state.agentDir("healthy")];
       const before = ownerDirs.map((dir) => inspectPersistedAuthProfileStoreRaw(dir));
       const expected = [
@@ -328,10 +335,7 @@ describe("doctor lint state isolation", () => {
         ["diagnostic-provider:custom", path.join(customDir, "openclaw-agent.sqlite")],
         ["diagnostic-provider:shared", resolveSharedAuthStorePath()],
       ];
-      const actual = await vi.importActual<
-        typeof import("../flows/doctor-health-contributions.js")
-      >("../flows/doctor-health-contributions.js");
-      const checks = await actual.resolveDoctorContributionHealthChecks();
+      const checks = await realHealthChecks();
       const sourceDatabase = openOpenClawStateDatabase();
       let privateDatabase: ReturnType<typeof openOpenClawStateDatabase> | undefined;
       const privateInspection = vi.fn(async () => {
@@ -628,12 +632,8 @@ describe("doctor lint state isolation", () => {
         }),
       ]);
       using stdout = captureStdout();
-      expect(
-        await runDoctorLintCli(runtime, {
-          json: true,
-          onlyIds: ["core/doctor/runtime-tool-schemas"],
-        }),
-      ).toBe(0);
+      const onlyIds = ["core/doctor/runtime-tool-schemas"];
+      expect(await runDoctorLintCli(runtime, { json: true, onlyIds })).toBe(0);
       expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
         findings: [],
         warnings: [

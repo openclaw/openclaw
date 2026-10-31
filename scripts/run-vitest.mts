@@ -1034,7 +1034,7 @@ export async function runVitest(
     }
     return;
   }
-  if (argv.some((arg) => arg === "--isolated-image" || arg.startsWith("--isolated-image="))) {
+  if (argv.some((arg) => /^--isolated-(?:image|runtime)(?:=|$)/u.test(arg))) {
     const { parseIsolatedVitestArgs, runIsolatedVitest } =
       await import("./lib/vitest-isolated.mts");
     const isolated = parseIsolatedVitestArgs(argv);
@@ -1044,6 +1044,7 @@ export async function runVitest(
         isolated.image,
         isolated.args,
         env,
+        isolated.runtime,
       );
       return;
     }

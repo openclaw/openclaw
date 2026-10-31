@@ -11,7 +11,7 @@ import {
 } from "./clawhub-client.js";
 import { reportClawHubInstallTelemetry } from "./clawhub-telemetry.js";
 
-export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin" | "claw";
+export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin" | "template";
 export type ClawHubPackageChannel = "official" | "community" | "private";
 export type ClawHubPackageCompatibility = ExternalPluginCompatibility;
 type ClawHubPackageHostTarget = {
@@ -150,7 +150,7 @@ export type ClawHubPackageClawPackSummary = {
   environment?: ClawHubPackageEnvironmentSummary | null;
   runtimeBundles?: unknown[];
 };
-type ClawHubClawManifestSummary = {
+type ClawHubTemplateManifestSummary = {
   schemaVersion: 1;
   agent: { id: string; name?: string; description?: string };
   workspace: { bootstrapFiles: string[]; fileCount: number };
@@ -221,7 +221,7 @@ export type ClawHubPackageDetail = {
           scanStatus?: string;
         } | null;
         scanStatus?: string | null;
-        clawManifestSummary?: ClawHubClawManifestSummary | null;
+        templateManifestSummary?: ClawHubTemplateManifestSummary | null;
       })
     | null;
   owner?: {
@@ -256,7 +256,7 @@ export type ClawHubPackageVersion = {
     verification?: NonNullable<ClawHubPackageDetail["package"]>["verification"];
     artifact?: ClawHubPackageArtifactSummary | null;
     clawpack?: ClawHubPackageClawPackSummary;
-    clawManifestSummary?: ClawHubClawManifestSummary | null;
+    templateManifestSummary?: ClawHubTemplateManifestSummary | null;
   } | null;
 };
 

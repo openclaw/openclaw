@@ -5,29 +5,32 @@ import * as channelCatalog from "../plugins/channel-catalog-registry.js";
 import * as externalCatalog from "../plugins/official-external-plugin-catalog.js";
 import { isChannelConfigMetadataKey } from "./config-metadata.js";
 import {
-  hasMeaningfulChannelConfig,
   listExplicitlyDisabledChannelIdsForConfig,
-  listPotentialConfiguredChannelPresenceSignals,
-  listPotentialConfiguredChannelPresenceSignalsAsync,
-  listPotentialConfiguredChannelIds,
+  listPotentialConfiguredChannelPresenceSignals as presence,
+  listPotentialConfiguredChannelPresenceSignalsAsync as presenceAsync,
+  listPotentialConfiguredChannelIds as channelIds,
 } from "./config-presence.js";
-import * as packageState from "./plugins/package-state-probes.js";
+import * as state from "./plugins/package-state-probes.js";
 
 const tempDirs: string[] = [];
-
 const configAndEnvOnly = { includePersistedAuthState: false };
+const configured = (channels: Record<string, unknown>) => ({ channels }) as OpenClawConfig;
+const persistedEnv = () => ({
+  OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "persisted-matrix-"),
+  MATTERMOST_BOT_TOKEN: "test-token",
+});
 
 beforeEach(() => {
-  vi.spyOn(packageState, "listBundledChannelIdsForPackageState").mockImplementation(
-    (metadataKey) => (metadataKey === "persistedAuthState" ? ["matrix"] : []),
+  vi.spyOn(state, "listBundledChannelIdsForPackageState").mockImplementation((metadataKey) =>
+    metadataKey === "persistedAuthState" ? ["matrix"] : [],
   );
-  const hasState: typeof packageState.hasBundledChannelPackageState = (params) =>
+  const hasState: typeof state.hasBundledChannelPackageState = (params) =>
     params.metadataKey === "persistedAuthState" &&
     params.channelId === "matrix" &&
     Boolean(params.env?.OPENCLAW_STATE_DIR?.includes("persisted-matrix"));
-  vi.spyOn(packageState, "hasBundledChannelPackageState").mockImplementation(hasState);
-  vi.spyOn(packageState, "hasBundledChannelPackageStateAsync").mockImplementation(async (params) =>
-    hasState(params),
+  vi.spyOn(state, "hasBundledChannelPackageState").mockImplementation(hasState);
+  vi.spyOn(state, "hasBundledChannelPackageStateAsync").mockImplementation(async (p) =>
+    hasState(p),
   );
 });
 
@@ -36,90 +39,68 @@ afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
 
-it("treats enabled-only channel sections as not meaningfully configured", () => {
-  expect(hasMeaningfulChannelConfig({ enabled: false })).toBe(false);
-  expect(hasMeaningfulChannelConfig({ enabled: true })).toBe(false);
-  expect(hasMeaningfulChannelConfig({})).toBe(false);
-  expect(hasMeaningfulChannelConfig({ homeserver: "https://matrix.example.org" })).toBe(true);
-});
-
 it("excludes metadata and blank keys while trimming configured channel ids", () => {
-  const cfg = {
-    channels: {
-      defaults: { token: "test-token" },
-      modelByChannel: { discord: "openai/gpt-5.6-luna" },
-      "  ": { token: "dummy" },
-      " matrix ": { homeserver: "https://matrix.example.org" },
-    },
-  } as unknown as OpenClawConfig;
-
+  const cfg = configured({
+    defaults: { token: "test-token" },
+    modelByChannel: { discord: "openai/gpt-5.6-luna" },
+    "  ": { token: "dummy" },
+    " matrix ": { homeserver: "https://matrix.example.org" },
+    disabled: { enabled: false },
+    enabled: { enabled: true },
+    empty: {},
+  });
   expect(isChannelConfigMetadataKey(" modelByChannel ")).toBe(true);
-  expect(listPotentialConfiguredChannelIds(cfg, {}, configAndEnvOnly)).toEqual(["matrix"]);
+  expect(channelIds(cfg, {}, configAndEnvOnly)).toEqual(["matrix"]);
 });
 
 it("lists explicitly disabled channel ids case-insensitively", () => {
-  const cfg = {
-    channels: {
-      Matrix: { enabled: false },
-      telegram: { enabled: true },
-      slack: { botToken: "token" },
-      discord: false,
-      modelByChannel: { enabled: false },
-      " ": { enabled: false },
-    },
-  } as unknown as OpenClawConfig;
-
+  const cfg = configured({
+    Matrix: { enabled: false },
+    telegram: { enabled: true },
+    slack: { botToken: "token" },
+    discord: false,
+    modelByChannel: { enabled: false },
+    " ": { enabled: false },
+  });
   expect(listExplicitlyDisabledChannelIdsForConfig(cfg)).toEqual(["matrix"]);
 });
 
 it("detects official external channel env vars", () => {
-  const env = {
-    MATTERMOST_URL: "https://mattermost.example.test",
-    MATTERMOST_BOT_TOKEN: "token",
-  };
+  const env = { MATTERMOST_URL: "https://mattermost.example.test", MATTERMOST_BOT_TOKEN: "token" };
 
-  expect(listPotentialConfiguredChannelIds({}, env, configAndEnvOnly)).toEqual(["mattermost"]);
-  expect(listPotentialConfiguredChannelPresenceSignals({}, env, configAndEnvOnly)).toEqual([
-    { channelId: "mattermost", source: "env" },
-  ]);
+  expect(channelIds({}, env, configAndEnvOnly)).toEqual(["mattermost"]);
+  expect(presence({}, env, configAndEnvOnly)).toEqual([{ channelId: "mattermost", source: "env" }]);
 });
 
-it.each([false, true])(
-  "suppressed ambient signals skip channel catalog work (persisted auth: %s)",
-  async (includePersistedAuthState) => {
-    const catalog = vi.spyOn(channelCatalog, "listChannelCatalogEntries");
-    const externalEnv = vi.spyOn(externalCatalog, "listOfficialExternalChannelEnvVars");
-    const stateDir = makeTempDir(tempDirs, "persisted-matrix-");
-    const cfg = { channels: { slack: { botToken: "synthetic-token" } } };
-    const env = { OPENCLAW_STATE_DIR: stateDir, MATTERMOST_BOT_TOKEN: "synthetic-token" };
-    const options = { ambientEnvTriggers: "suppress" as const, includePersistedAuthState };
-    const expected = [
-      { channelId: "slack", source: "config" },
-      ...(includePersistedAuthState ? [{ channelId: "matrix", source: "persisted-auth" }] : []),
-    ];
+it.each([false, true])("suppresses ambient discovery (auth: %s)", async (includeAuth) => {
+  const catalog = vi.spyOn(channelCatalog, "listChannelCatalogEntries");
+  const externalEnv = vi.spyOn(externalCatalog, "listOfficialExternalChannelEnvVars");
+  const cfg = { channels: { slack: { botToken: "synthetic-token" } } };
+  const env = persistedEnv();
+  const options = {
+    ambientEnvTriggers: "suppress" as const,
+    includePersistedAuthState: includeAuth,
+  };
+  const expected = [
+    { channelId: "slack", source: "config" },
+    ...(includeAuth ? [{ channelId: "matrix", source: "persisted-auth" }] : []),
+  ];
 
-    expect(listPotentialConfiguredChannelPresenceSignals(cfg, env, options)).toEqual(expected);
-    expect(await listPotentialConfiguredChannelPresenceSignalsAsync(cfg, env, options)).toEqual(
-      expected,
-    );
-    expect(catalog).not.toHaveBeenCalled();
-    expect(externalEnv).not.toHaveBeenCalled();
-  },
-);
+  expect(presence(cfg, env, options)).toEqual(expected);
+  expect(await presenceAsync(cfg, env, options)).toEqual(expected);
+  expect(catalog).not.toHaveBeenCalled();
+  expect(externalEnv).not.toHaveBeenCalled();
+});
 
-it.each([{ channelIds: ["matrix"] }, { channelIds: [] }])(
-  "scopes persisted credentials without hiding env signals: $channelIds",
-  async ({ channelIds }) => {
-    const stateDir = makeTempDir(tempDirs, "persisted-matrix-");
-    const env = { OPENCLAW_STATE_DIR: stateDir, MATTERMOST_BOT_TOKEN: "test-token" };
-    const options = { persistedAuthChannelIds: new Set(channelIds) };
-    const expected = ["mattermost", ...channelIds];
+it.each([{ ids: ["matrix"] }, { ids: [] }])("scopes auth: $ids", async ({ ids }) => {
+  const env = persistedEnv();
+  const options = { persistedAuthChannelIds: new Set(ids) };
+  const expected = ["mattermost", ...ids];
 
-    expect(listPotentialConfiguredChannelIds({}, env, options)).toEqual(expected);
-    vi.mocked(packageState.hasBundledChannelPackageState).mockImplementation(() => {
-      throw new Error("runtime discovery must not invoke the synchronous checker");
-    });
-    const signals = await listPotentialConfiguredChannelPresenceSignalsAsync({}, env, options);
-    expect(signals.map((signal) => signal.channelId)).toEqual(expected);
-  },
-);
+  expect(channelIds({}, env, options)).toEqual(expected);
+  vi.mocked(state.hasBundledChannelPackageState).mockImplementation(() => {
+    throw new Error("runtime discovery must not invoke the synchronous checker");
+  });
+  const signals = await presenceAsync({}, env, options);
+  expect(signals.map((signal) => signal.channelId)).toEqual(expected);
+});

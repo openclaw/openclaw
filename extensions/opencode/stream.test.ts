@@ -5,8 +5,8 @@ import {
   type AssistantMessageEvent,
 } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it } from "vitest";
+import { makeAgentAssistantMessage, withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 function toolCallMessage(
@@ -70,7 +70,7 @@ function streamFixture(
     queueMicrotask(() => emit(source));
     return source;
   };
-  return { base, payload: () => payload };
+  return { base, source, payload: () => payload };
 }
 
 async function runFixture(
@@ -117,7 +117,14 @@ const recordTool = (name: string, field: string, valueSchema: Record<string, unk
   tool(name, field, { type: "object", patternProperties: { "^.*$": valueSchema } });
 
 describe("OpenCode stream adapter", () => {
-  it("aliases the reserved web_search function across OpenCode Responses requests", async () => {
+  let cleanupHeldStream: (() => Promise<void>) | undefined;
+  afterEach(async () => {
+    // Timeout teardown can start before the suspended body finishes its finally block.
+    await cleanupHeldStream?.();
+    cleanupHeldStream = undefined;
+  });
+
+  it("aliases the reserved web_search function across OpenCode Responses requests", async (context) => {
     const existingAlias = "openclaw_web_search";
     const wireAlias = "openclaw_web_search_2";
     const wireArguments = { options: [{ key: "region", value: "us" }] };
@@ -126,13 +133,8 @@ describe("OpenCode stream adapter", () => {
     const restoredContent = callContent("web_search", restoredArguments);
     const producerPartial = toolCallMessage(wireAlias, wireArguments);
     const producerTerminal = toolCallMessage(wireAlias, wireArguments);
-    const { promise: allowTerminal, resolve: releaseTerminal } = Promise.withResolvers<void>();
     const fixture = streamFixture((stream) => {
       stream.push({ type: "toolcall_start", contentIndex: 0, partial: producerPartial });
-      void allowTerminal.then(() => {
-        stream.push(endToolCall(producerPartial));
-        stream.push(done(producerTerminal));
-      });
     });
 
     const stream = await runFixture(fixture, {
@@ -144,36 +146,56 @@ describe("OpenCode stream adapter", () => {
       tool_choice: allowedTools("web_search", existingAlias),
     });
     const iterator = stream[Symbol.asyncIterator]();
-    const first = await iterator.next();
-    if (first.done) {
-      throw new Error("expected staged tool-call event");
-    }
-    const events = [first.value];
-    expect(first.value).toMatchObject({
-      type: "toolcall_start",
-      partial: restoredContent,
-    });
-    expect([producerPartial, producerTerminal]).toMatchObject([producerContent, producerContent]);
-    releaseTerminal();
-    for (let next = await iterator.next(); !next.done; next = await iterator.next()) {
-      events.push(next.value);
-    }
-
-    expect(fixture.payload()).toMatchObject({
-      tools: functions(wireAlias, existingAlias, "read"),
-      input: [{ type: "function_call", name: wireAlias, call_id: "call_0" }],
-      tool_choice: allowedTools(wireAlias, existingAlias),
-    });
-    expect(events.slice(1)).toMatchObject([
-      {
-        type: "toolcall_end",
-        toolCall: { name: "web_search", arguments: restoredArguments },
+    const result = stream.result();
+    const settledResult = Promise.allSettled([result]);
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        // Wake any pending next() before returning the iterator after failure or timeout.
+        fixture.source.end(producerTerminal);
+        await iterator.return?.();
+        await settledResult;
+      })());
+    cleanupHeldStream = cleanup;
+    try {
+      const first = await withinTest(iterator.next(), context.signal);
+      if (first.done) {
+        throw new Error("expected staged tool-call event");
+      }
+      const events = [first.value];
+      expect(first.value).toMatchObject({
+        type: "toolcall_start",
         partial: restoredContent,
-      },
-      { type: "done", message: messageContent({ name: "web_search" }) },
-    ]);
-    await expect(stream.result()).resolves.toMatchObject(restoredContent);
-    expect([producerPartial, producerTerminal]).toMatchObject([producerContent, producerContent]);
+      });
+      expect([producerPartial, producerTerminal]).toMatchObject([producerContent, producerContent]);
+      fixture.source.push(endToolCall(producerPartial));
+      fixture.source.push(done(producerTerminal));
+      for (
+        let next = await withinTest(iterator.next(), context.signal);
+        !next.done;
+        next = await withinTest(iterator.next(), context.signal)
+      ) {
+        events.push(next.value);
+      }
+
+      expect(fixture.payload()).toMatchObject({
+        tools: functions(wireAlias, existingAlias, "read"),
+        input: [{ type: "function_call", name: wireAlias, call_id: "call_0" }],
+        tool_choice: allowedTools(wireAlias, existingAlias),
+      });
+      expect(events.slice(1)).toMatchObject([
+        {
+          type: "toolcall_end",
+          toolCall: { name: "web_search", arguments: restoredArguments },
+          partial: restoredContent,
+        },
+        { type: "done", message: messageContent({ name: "web_search" }) },
+      ]);
+      await expect(withinTest(result, context.signal)).resolves.toMatchObject(restoredContent);
+      expect([producerPartial, producerTerminal]).toMatchObject([producerContent, producerContent]);
+    } finally {
+      await cleanup();
+    }
   });
 
   it("does not restore an unaliased OpenCode Responses function name", async () => {

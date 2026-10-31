@@ -6,9 +6,10 @@
  * checkouts. --owner accepts an alternate completions transport module in the same
  * source tree. Allocation profiles retain dependency frames; no provider credentials.
  * Requests and events are hashed outside measurement (only timestamps normalized).
+ * Add --api responses --text-only for 200 reasoning/text deltas without a tool call.
  * For network-free replay, pass --api responses --fixture <recorded.sse>.
  * Each run records its synthetic wire fixture at <output>.sse for later replay.
- * The recording must use this script's text/reasoning/lookup fixture contract;
+ * The recording must match this script's fixture and the selected --text-only mode;
  * replay splits its bytes into 1 KiB chunks before starting measurement.
  */
 import assert from "node:assert/strict";
@@ -35,9 +36,12 @@ const { values } = parseArgs({
     owner: { type: "string" },
     output: { type: "string" },
     fixture: { type: "string" },
+    "text-only": { type: "boolean", default: false },
   },
 });
 assert(values.api === "completions" || values.api === "responses");
+const textOnly = values["text-only"];
+assert(!textOnly || values.api === "responses", "--text-only requires --api responses");
 assert(values.mode === "timing" || values.mode === "allocation");
 assert(values.output, "--output is required");
 const turns = Number(values.turns);
@@ -53,6 +57,7 @@ const {
 );
 const delta = "A synthetic streaming delta café 🦞. ";
 const count = 100;
+const deltasPerTurn = count * (textOnly ? 2 : 3);
 const text = delta.repeat(count);
 const argsParts = ['{"query":"', ...Array.from({ length: count - 2 }, () => "synthetic "), '"}'];
 const args = argsParts.join("");
@@ -119,23 +124,25 @@ if (values.api === "responses") {
     content: [{ type: "output_text", text, annotations: [] }],
   };
   done(finalMessage, 1);
-  add(tool, 2);
-  for (const argumentDelta of argsParts) {
-    events.push({
-      type: "response.function_call_arguments.delta",
-      item_id: tool.id,
-      output_index: 2,
-      delta: argumentDelta,
-    });
-  }
   const finalTool = { ...tool, arguments: args, status: "completed" };
-  done(finalTool, 2);
+  if (!textOnly) {
+    add(tool, 2);
+    for (const argumentDelta of argsParts) {
+      events.push({
+        type: "response.function_call_arguments.delta",
+        item_id: tool.id,
+        output_index: 2,
+        delta: argumentDelta,
+      });
+    }
+    done(finalTool, 2);
+  }
   events.push({
     type: "response.completed",
     response: {
       id: "resp_fixture",
       status: "completed",
-      output: [finalReasoning, finalMessage, finalTool],
+      output: textOnly ? [finalReasoning, finalMessage] : [finalReasoning, finalMessage, finalTool],
       usage: { input_tokens: 100, output_tokens: 300, total_tokens: 400 },
     },
   });
@@ -295,10 +302,12 @@ const run = async (hash?: ReturnType<typeof createHash>) => {
     }
     if (event.type === "done") {
       terminal = true;
-      assert.equal(event.message.stopReason, "toolUse");
-      const tool = event.message.content.find((part) => part.type === "toolCall");
-      assert(tool?.type === "toolCall");
-      assert.deepEqual(tool.arguments, JSON.parse(args));
+      assert.equal(event.message.stopReason, textOnly ? "stop" : "toolUse");
+      if (!textOnly) {
+        const tool = event.message.content.find((part) => part.type === "toolCall");
+        assert(tool?.type === "toolCall");
+        assert.deepEqual(tool.arguments, JSON.parse(args));
+      }
     }
   }
   assert(terminal);
@@ -342,21 +351,22 @@ try {
   }
   const result = {
     api: values.api,
+    textOnly,
     mode: values.mode,
     turns,
     warmup,
-    deltas: turns * count * 3,
+    deltas: turns * deltasPerTurn,
     requests,
     eventCount,
     requestHash,
     eventHash,
     elapsedMs,
     cpuMs: (cpu.user + cpu.system) / 1000,
-    cpuMsPer1000Deltas: (cpu.user + cpu.system) / (turns * count * 3),
-    mainThreadCpuMsPer1000Deltas: (thread.user + thread.system) / (turns * count * 3),
+    cpuMsPer1000Deltas: (cpu.user + cpu.system) / (turns * deltasPerTurn),
+    mainThreadCpuMsPer1000Deltas: (thread.user + thread.system) / (turns * deltasPerTurn),
     sampledBytes,
     sampledBytesPer1000Deltas:
-      sampledBytes === undefined ? undefined : (sampledBytes * 1000) / (turns * count * 3),
+      sampledBytes === undefined ? undefined : (sampledBytes * 1000) / (turns * deltasPerTurn),
     hostLoad,
     memory: process.memoryUsage(),
   };

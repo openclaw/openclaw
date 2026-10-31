@@ -286,7 +286,10 @@ export async function prepareUpdateCandidateRehearsal(params: {
     const port = await tryListenOnPort({
       port: 0,
       host: "127.0.0.1",
-      signal: params.signal ?? AbortSignal.timeout(params.timeoutMs ?? 300_000),
+      signal: AbortSignal.any([
+        AbortSignal.timeout(params.timeoutMs ?? 300_000),
+        ...(params.signal ? [params.signal] : []),
+      ]),
     });
     const serialized = JSON.stringify(
       isolatedConfig(

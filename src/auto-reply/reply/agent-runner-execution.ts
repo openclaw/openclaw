@@ -182,7 +182,6 @@ async function executeAgentTurnInternalLoop(
   let currentTurnImages: CurrentTurnImages;
   let modelPatch: Awaited<ReturnType<typeof createAgentPatchedSessionModelRunGuard>>;
   try {
-    await prepareReplySubagentContinuation(params, runId, runtimeConfig, preparedRunAdmission);
     replyMediaContext =
       params.replyMediaContext ??
       agentTurnTiming.measureSync("reply_media_context", () =>
@@ -317,6 +316,10 @@ async function executeAgentTurnInternalLoop(
       ) {
         params.mcpAppContextLease?.commit();
       }
+      if (info.phase === "before_agent_reply") {
+        // A dispatched hook can accept external work even when it declines the reply.
+        params.followupRun.run.internalEventExecution?.onStarted(runId);
+      }
       const isUserVisibleExecutionActivity =
         info.phase === "turn_accepted" ||
         info.phase === "process_spawned" ||
@@ -379,8 +382,13 @@ async function executeAgentTurnInternalLoop(
       storePath: params.storePath,
     });
 
+  let subagentContinuationPrepared = false;
   while (true) {
     try {
+      if (!subagentContinuationPrepared) {
+        await prepareReplySubagentContinuation(params, runId, runtimeConfig, preparedRunAdmission);
+        subagentContinuationPrepared = true;
+      }
       const presentation = createAgentTurnPresentation({
         turn: params,
         replyMediaContext,

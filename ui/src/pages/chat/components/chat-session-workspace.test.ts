@@ -16,6 +16,8 @@ import {
 import {
   loadedSidebarContent,
   createSidebarContentRecorder,
+  textFile,
+  workspaceFile,
 } from "./chat-session-workspace.test-support.ts";
 import {
   createSessionWorkspaceProps as workspaceProps,
@@ -26,26 +28,6 @@ import {
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-
-function workspaceFile(
-  path: string,
-  overrides: Partial<SessionWorkspaceGetResult["file"]> = {},
-): SessionWorkspaceGetResult["file"] {
-  return { path, name: path.split(/[\\/]/).at(-1)!, kind: "read", missing: false, ...overrides };
-}
-
-function textFile(
-  path: string,
-  content: string,
-  overrides: Partial<SessionWorkspaceGetResult["file"]> = {},
-) {
-  return workspaceFile(path, {
-    previewKind: "text",
-    contentEncoding: "utf8",
-    content,
-    ...overrides,
-  });
-}
 
 function imageFile(mimeType: string) {
   return workspaceFile("screenshots/result.png", {
@@ -187,6 +169,80 @@ describe("session workspace state", () => {
 
     state.sessionKey = "agent:main:next";
     expect(workspaceProps(state).filter).toBe("all");
+  });
+
+  it("searches a filename once while retaining open previews and draft scope", async () => {
+    useFakeClock();
+    const listFiles = vi.fn().mockResolvedValue(workspaceList("/workspace"));
+    const getFile = vi.fn();
+    const state = createLoadingHost({ listFiles, getFile });
+    const props = workspaceProps(state, { draftScope: "orders-pane" });
+    const workspace = getSessionWorkspace(state);
+    const preview = {
+      id: "notes",
+      label: "notes.md",
+      pinned: true,
+      content: { kind: "file" as const, path: "notes.md", name: "notes.md", content: "notes" },
+    };
+    workspace.previews = [preview];
+    workspace.activePreviewId = preview.id;
+    workspace.browserPath = "nested";
+    workspace.browserSearch = "old query";
+    workspace.filter = "read";
+    workspace.catalogNavigation = {
+      ...props.navigation,
+      browserPath: "nested",
+      browserSearch: "old query",
+      filter: "read",
+    };
+    expect(
+      props.onFindWorkspaceFile({
+        name: "orders-large.zip",
+        sessionKey: state.sessionKey,
+        agentId: "main",
+      }),
+    ).toBe(true);
+    expect(workspace.activePreviewId).toBeNull();
+    expect(workspace.previews[0]).toBe(preview);
+    expect(state.sessionWorkspaceDraftScope).toBe("orders-pane");
+    expect(workspace).toMatchObject({
+      browserPath: "",
+      browserSearch: "orders-large.zip",
+      filter: "all",
+    });
+    expect(listFiles).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(160);
+    expect(listFiles).toHaveBeenCalledExactlyOnceWith(state.sessionKey, {
+      path: "",
+      search: "orders-large.zip",
+      agentId: "main",
+    });
+    expect(getFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { sessionKey: "agent:main:other", agentId: "main" },
+    { sessionKey: "agent:main:current", agentId: "other" },
+  ])("refuses a filename search for another owner %j", (target) => {
+    const listFiles = vi.fn();
+    const state = createLoadingHost({ listFiles });
+    const props = workspaceProps(state);
+    expect(props.onFindWorkspaceFile({ name: "orders-large.zip", ...target })).toBe(false);
+    expect(getSessionWorkspace(state).browserSearch).toBe("");
+    expect(listFiles).not.toHaveBeenCalled();
+  });
+
+  it("retires filename searches with their connection and session", async () => {
+    useFakeClock();
+    const listFiles = vi.fn();
+    const state = createLoadingHost({ listFiles });
+    const retired = workspaceProps(state).onFindWorkspaceFile;
+    state.connectionEpoch += 1;
+    expect(retired({ name: "orders-large.zip" })).toBe(false);
+    expect(workspaceProps(state).onFindWorkspaceFile({ name: "orders-large.zip" })).toBe(true);
+    state.sessionKey = "agent:main:replacement";
+    await vi.advanceTimersByTimeAsync(160);
+    expect(listFiles).not.toHaveBeenCalled();
   });
 
   it("keeps Files loading until files and artifacts both settle", async () => {
@@ -464,11 +520,15 @@ describe("openSessionWorkspaceFile", () => {
     const workspace = state.sessionWorkspaceState;
     expect(getFile).toHaveBeenCalledExactlyOnceWith(owner, path, { agentId: "research" });
     expect(workspace?.sessionKey).toBe(state.sessionKey);
-    expect(file.sessionFileSource).toEqual({ sessionKey: owner, agentId: "research", path });
+    expect(file.sessionFileSource).toEqual({
+      sessionKey: owner,
+      agentId: "research",
+      path: "/shared/index.html",
+    });
     await file.edit.fetchLatest();
-    expect(getFile).toHaveBeenLastCalledWith(owner, path, { agentId: "research" });
+    expect(getFile).toHaveBeenLastCalledWith(owner, "/shared/index.html", { agentId: "research" });
     await file.edit.save({ content: "changed", expectedHash: "old" });
-    expect(setFile).toHaveBeenCalledExactlyOnceWith(owner, path, "changed", {
+    expect(setFile).toHaveBeenCalledExactlyOnceWith(owner, "/shared/index.html", "changed", {
       agentId: "research",
       expectedHash: "old",
     });

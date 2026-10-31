@@ -47,7 +47,6 @@ const TRAJECTORY_PAYLOAD_PROJECTION = {
   maxNodes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES / 2,
   maxKeys: TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS + 2,
   redactCredentials: false,
-  omitField: (key) => key === "providerReplay",
   propertyScope: "enumerable",
   projectBinary: (binary) => ({
     redacted: "<redacted>",
@@ -238,7 +237,13 @@ function limitTrajectoryPayloadValue(
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
   const limited: Record<string, unknown> = {};
-  for (const key of keys.slice(0, TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS)) {
+  const count = Math.min(keys.length, TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS);
+  for (let index = 0; index < count; index++) {
+    const key = keys[index]!;
+    // Replay is transcript-owned and omitted from capture; never copy its contents.
+    if (key === "providerReplay") {
+      continue;
+    }
     limited[key] = limitTrajectoryPayloadValue(record[key], depth + 1, seen, serialization);
     if (serialization?.jsonCacheable && key === "__proto__") {
       serialization.jsonCacheable = false;
@@ -260,15 +265,16 @@ function sanitizeTrajectoryPayload(
 ): Record<string, unknown> {
   const finalPromptText = data.finalPromptText;
   let boundedData = data;
-  if (typeof finalPromptText === "string") {
+  if (
+    typeof finalPromptText === "string" &&
+    Buffer.byteLength(finalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES
+  ) {
     boundedData = { ...data };
-    if (Buffer.byteLength(finalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES) {
-      boundedData.finalPromptText = truncateUtf8Prefix(
-        finalPromptText,
-        TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES,
-      );
-      boundedData.finalPromptTextOriginalLength = finalPromptText.length;
-    }
+    boundedData.finalPromptText = truncateUtf8Prefix(
+      finalPromptText,
+      TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES,
+    );
+    boundedData.finalPromptTextOriginalLength = finalPromptText.length;
   }
   return projectPreparedDiagnosticValue(
     limitTrajectoryPayloadValue(boundedData, 0, new WeakSet(), serialization),

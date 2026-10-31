@@ -72,6 +72,7 @@ type FixtureMocks = {
   readServiceState: Mock;
   revalidateService: Mock<typeof revalidation.revalidateManagedGatewayServiceAfterUpdate>;
 };
+type PostUpdateFixture<M> = { tempDirs: { make(prefix: string): string }; mocks: M };
 const resolveInstallKind = updateCheck.resolveUpdateInstallKind;
 
 export function recordVerifiedGatewayRun(
@@ -215,10 +216,7 @@ export const successfulPluginUpdate = createPostCorePluginUpdateResult({
 export function registerForegroundFinalizationTests({
   tempDirs,
   mocks,
-}: {
-  tempDirs: { make(prefix: string): string };
-  mocks: Omit<FixtureMocks, "readServiceState" | "revalidateService">;
-}): void {
+}: PostUpdateFixture<Omit<FixtureMocks, "readServiceState" | "revalidateService">>): void {
   it.each([
     ...(["noop", "runtime", "plugins", "park-failed"] as const).flatMap((outcome) =>
       [false, true].map((candidateRuntime) => ({ outcome, candidateRuntime })),
@@ -333,10 +331,7 @@ export function registerForegroundFinalizationTests({
 export function registerManagedInstallEnvironmentTest({
   tempDirs,
   mocks,
-}: {
-  tempDirs: { make(prefix: string): string };
-  mocks: Pick<FixtureMocks, "readServiceState" | "restartService">;
-}): void {
+}: PostUpdateFixture<Pick<FixtureMocks, "readServiceState" | "restartService">>): void {
   it("removes operator overrides and process identity from the managed install environment", async () => {
     const packageRoot = tempDirs.make("openclaw-post-update-package-");
     await fs.writeFile(
@@ -552,10 +547,7 @@ export function registerServiceInstallationConvergenceTests(
 export function registerVerifiedActivationFailureTests({
   tempDirs,
   mocks,
-}: {
-  tempDirs: { make(prefix: string): string };
-  mocks: Pick<FixtureMocks, "restartService" | "printResult">;
-}) {
+}: PostUpdateFixture<Pick<FixtureMocks, "restartService" | "printResult">>) {
   it.each([
     "restart-health",
     "reported-failure",

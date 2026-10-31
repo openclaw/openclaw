@@ -3,6 +3,7 @@ import "./attempt-spawn-workspace.tools-mock.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { vi } from "vitest";
 import type {
@@ -10,7 +11,6 @@ import type {
   ContextEngineInfo,
   ContextEngineMaintenanceResult,
 } from "../../../context-engine/types.js";
-import { formatErrorMessage } from "../../../infra/errors.js";
 import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 // Shared harness and mocks for embedded attempt spawn-workspace tests.
 // Preserve snapshot-reader and lifecycle registration before the attempt graph loads.
@@ -316,28 +316,20 @@ vi.mock("../../../tts/tts-settings.js", () => ({
   setTtsMachinePrefsPathResolver: () => undefined,
 }));
 
-vi.mock("../../bootstrap-files.js", async () => {
-  const actual = await vi.importActual<typeof import("../../bootstrap-files.js")>(
-    "../../bootstrap-files.js",
-  );
-  return {
-    ...actual,
-    makeBootstrapWarn: () => () => {},
-    isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
-    resolveBootstrapFilesForRun: hoisted.resolveBootstrapFilesForRunMock,
-    resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
-    resolveContextInjectionMode: hoisted.resolveContextInjectionModeMock,
-    hasCompletedBootstrapTurn: hoisted.hasCompletedBootstrapTurnMock,
-  };
-});
+vi.mock("../../bootstrap-files.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../bootstrap-files.js")>()),
+  makeBootstrapWarn: () => () => {},
+  isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
+  resolveBootstrapFilesForRun: hoisted.resolveBootstrapFilesForRunMock,
+  resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
+  resolveContextInjectionMode: hoisted.resolveContextInjectionModeMock,
+  hasCompletedBootstrapTurn: hoisted.hasCompletedBootstrapTurnMock,
+}));
 
-vi.mock("../../workspace.js", async () => {
-  const actual = await vi.importActual<typeof import("../../workspace.js")>("../../workspace.js");
-  return {
-    ...actual,
-    isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
-  };
-});
+vi.mock("../../workspace.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace.js")>()),
+  isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
+}));
 
 // mock-isolation: Observe maintenance admission without running background engine work.
 vi.mock("../context-engine-maintenance.js", () => ({
@@ -383,21 +375,11 @@ vi.mock("../tool-schema-runtime.js", () => ({
   normalizeProviderToolSchemas: ({ tools }: { tools: unknown[] }) => tools,
 }));
 
-vi.mock("../tool-result-context-guard.js", async () => {
-  const actual = await vi.importActual<typeof import("../tool-result-context-guard.js")>(
-    "../tool-result-context-guard.js",
-  );
-  return {
-    ...actual,
-    formatContextLimitTruncationNotice: (truncatedChars: number) =>
-      `[... ${Math.max(
-        1,
-        Math.floor(truncatedChars),
-      )} more characters truncated; rerun with narrower args if needed]`,
-    installToolResultContextGuard: hoisted.installToolResultContextGuardMock,
-    installContextEngineLoopHook: hoisted.installContextEngineLoopHookMock,
-  };
-});
+vi.mock("../tool-result-context-guard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tool-result-context-guard.js")>()),
+  installToolResultContextGuard: hoisted.installToolResultContextGuardMock,
+  installContextEngineLoopHook: hoisted.installContextEngineLoopHookMock,
+}));
 
 // mock-isolation: The fixture controls pending tool results instead of waiting on a real stream.
 vi.mock("../wait-for-idle-before-flush.js", () => ({
@@ -417,16 +399,13 @@ vi.mock("../../system-prompt-params.js", () => ({
   }),
 }));
 
-vi.mock("../../system-prompt-config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../system-prompt-config.js")>();
-  return {
-    ...actual,
-    buildConfiguredAgentSystemPrompt: (params: unknown) => {
-      hoisted.embeddedSystemPromptInputs.push(params);
-      return "system prompt";
-    },
-  };
-});
+vi.mock("../../system-prompt-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../system-prompt-config.js")>()),
+  buildConfiguredAgentSystemPrompt: (params: unknown) => {
+    hoisted.embeddedSystemPromptInputs.push(params);
+    return "system prompt";
+  },
+}));
 
 vi.mock("../extra-params.js", async () => {
   const actual = await vi.importActual<typeof import("../extra-params.js")>("../extra-params.js");
@@ -489,19 +468,9 @@ vi.mock("../../../image-generation/runtime.js", () => ({
   listRuntimeImageGenerationProviders: () => [],
 }));
 
+// mock-isolation: Workspace attempts pin synthetic models without loading the provider registry.
 vi.mock("../../model-selection.js", () => ({
-  findNormalizedProviderValue: <T>(entries: Record<string, T> | undefined, provider: string) => {
-    if (!entries) {
-      return undefined;
-    }
-    const providerKey = normalizeMockProviderId(provider);
-    for (const [key, value] of Object.entries(entries)) {
-      if (normalizeMockProviderId(key) === providerKey) {
-        return value;
-      }
-    }
-    return undefined;
-  },
+  findNormalizedProviderValue,
   normalizeProviderId: normalizeMockProviderId,
   resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-test" }),
 }));
@@ -595,22 +564,11 @@ vi.mock("../sandbox-info.js", () => ({
   resolveEmbeddedSandboxInfoExecPolicy: () => ({}),
 }));
 
-vi.mock("../thinking.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../thinking.js")>();
-  return {
-    ...actual,
-    dropReasoningFromHistory: <T>(messages: T) => messages,
-    dropThinkingBlocks: <T>(messages: T) => messages,
-  };
-});
-
-vi.mock("../utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
-  return {
-    ...actual,
-    describeUnknownError: (error: unknown) => formatErrorMessage(error),
-  };
-});
+vi.mock("../thinking.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../thinking.js")>()),
+  dropReasoningFromHistory: <T>(messages: T) => messages,
+  dropThinkingBlocks: <T>(messages: T) => messages,
+}));
 
 vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
   hasActiveCompactionRetryWork: ({
@@ -654,12 +612,8 @@ type SessionPromptOverride = (
 
 function createCompletedAssistantStream() {
   return {
-    async result() {
-      return { role: "assistant", content: "done" };
-    },
-    [Symbol.asyncIterator]() {
-      return (async function* () {})();
-    },
+    result: async () => ({ role: "assistant", content: "done" }),
+    [Symbol.asyncIterator]: () => (async function* () {})(),
   };
 }
 const ATTEMPT_SPAWN_WORKSPACE_TEST_SPECIFIER = "./attempt.ts?spawn-workspace-test";
@@ -787,6 +741,9 @@ export function createDefaultEmbeddedSession(params?: {
         options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void };
       }
     | undefined;
+  const appendDone = () => {
+    session.messages = [...session.messages, { role: "assistant", content: "done", timestamp: 2 }];
+  };
   const session: MutableSession = {
     sessionId: "embedded-session",
     messages: [...(params?.initialMessages ?? [])],
@@ -857,18 +814,12 @@ export function createDefaultEmbeddedSession(params?: {
       if (params?.prompt) {
         return;
       }
-      session.messages = [
-        ...session.messages,
-        { role: "assistant", content: "done", timestamp: 2 },
-      ];
+      appendDone();
     },
     sendCustomMessage: async (message, options) => {
       session.messages = [...session.messages, { role: "custom", timestamp: 1, ...message }];
       if (options?.deliverAs !== "nextTurn" && options?.triggerTurn) {
-        session.messages = [
-          ...session.messages,
-          { role: "assistant", content: "done", timestamp: 2 },
-        ];
+        appendDone();
       }
     },
     abort: async () => {},

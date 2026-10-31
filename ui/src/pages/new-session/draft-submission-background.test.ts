@@ -148,7 +148,16 @@ it.each([
     const action = showToast.mock.calls[0]?.[0].onAction;
     expect(action).toBeTypeOf("function");
     changeAuthority();
-    action?.();
+    for (const event of [
+      new MouseEvent("auxclick", { button: 1, cancelable: true }),
+      new MouseEvent("click", { metaKey: true, cancelable: true }),
+      new MouseEvent("contextmenu", { cancelable: true }),
+    ]) {
+      action?.(event);
+      expect(event.defaultPrevented).toBe(scenario !== "same-owner reconnect");
+      expect(navigate).not.toHaveBeenCalled();
+    }
+    action?.(new MouseEvent("click", { cancelable: true }));
     for (const effect of [context.gateway.setSessionKey, context.agentSelection.set, navigate]) {
       expect(effect).toHaveBeenCalledTimes(scenario === "same-owner reconnect" ? 1 : 0);
     }

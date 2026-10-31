@@ -149,8 +149,6 @@ export class NewSessionDraft {
       () => ({
         ...read(),
         isAdmin: this.place?.isAdmin() ?? false,
-        canStartAsDraft: this.submission?.capabilities.canStartAsDraft(read().context) ?? false,
-        visibility: this.submission?.visibility ?? "normal",
         cloudProfileId: this.place?.cloudProfileId ?? "",
         pendingPlacement: this.submission?.pendingPlacement ?? {
           sessionKey: "",
@@ -170,7 +168,6 @@ export class NewSessionDraft {
           this.invalidate(reset, outcome);
           callbacks.onInvalidate();
         },
-        onVisibilityRetired: () => this.submission.setVisibility("normal"),
         onCloudProfileCleared: () => this.place.clearCloudProfile(),
         onCloudState: (error) => this.submission.setError(error),
         onPendingPlacementReset: () => this.submission.releasePendingPlacementOwner(),
@@ -231,7 +228,7 @@ export class NewSessionDraft {
     };
     this.place.modelControl.onDraftSelectionChange = () => {
       if (this.place.modelControl.modelDefaultsPolicy === "configured") {
-        this.submission.draftPersistence.noteModelSelectionMutation();
+        this.submission.draftPersistence.noteSelectionMutation("model");
       }
     };
   }
@@ -329,7 +326,7 @@ export class NewSessionDraft {
       !this.submission.submitting &&
       this.place.modelControl.draftSelection(this.place.agentId)
     ) {
-      this.submission.draftPersistence.noteModelSelectionMutation();
+      this.submission.draftPersistence.noteSelectionMutation("model");
     }
     this.modelDefaultsPolicy = this.place.modelControl.modelDefaultsPolicy;
     this.place.restorePreferenceSelections();

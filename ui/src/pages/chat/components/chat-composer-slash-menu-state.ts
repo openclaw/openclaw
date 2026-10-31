@@ -40,14 +40,6 @@ export function getSlashArgOptionId(paneId: string, commandName: string, arg: st
   );
 }
 
-function getSlashCommandOptionLabel(cmd: SlashCommandDef | undefined): string {
-  if (!cmd) {
-    return "";
-  }
-  const command = `/${cmd.name}${cmd.args ? ` ${cmd.args}` : ""}`;
-  return `${command} ${getSlashCommandDescription(cmd)}`;
-}
-
 export type SlashMenuState = {
   slashMenuOpen: boolean;
   slashMenuItems: SlashCommandDef[];
@@ -98,7 +90,12 @@ export function getActiveSlashMenuOptionLabel(state: SlashMenuState): string {
     const arg = state.slashMenuArgItems[state.slashMenuIndex];
     return commandName && arg ? `/${commandName} ${arg}` : "";
   }
-  return getSlashCommandOptionLabel(state.slashMenuItems[state.slashMenuIndex]);
+  const cmd = state.slashMenuItems[state.slashMenuIndex];
+  if (!cmd) {
+    return "";
+  }
+  const command = `/${cmd.name}${cmd.args ? ` ${cmd.args}` : ""}`;
+  return `${command} ${getSlashCommandDescription(cmd)}`;
 }
 
 export function createSlashMenu() {
@@ -261,36 +258,6 @@ export function createSlashMenu() {
     state.slashMenuArgItems = [];
   }
 
-  function beginInlineSlashArguments(
-    cmd: SlashCommandDef,
-    state: SlashMenuState,
-    host: SlashMenuHost,
-  ): boolean {
-    if (
-      !state.slashMenuCompletion?.inline ||
-      cmd.source === "skill" ||
-      !cmd.args ||
-      !host.canRun(true, cmd) ||
-      !host.runInlineCommand
-    ) {
-      return false;
-    }
-    state.slashMenuCommand = cmd;
-    state.slashMenuIndex = 0;
-    state.slashMenuItems = [];
-    const argOptions = host.resolveArgOptions(cmd);
-    if (argOptions.length > 0) {
-      state.slashMenuMode = "args";
-      state.slashMenuArgItems = argOptions;
-      state.slashMenuOpen = true;
-      return true;
-    }
-    state.slashMenuMode = "freeform-args";
-    state.slashMenuArgItems = [];
-    state.slashMenuOpen = false;
-    return beginInlineFreeformSlashArguments(cmd.name, state, host);
-  }
-
   function selectSlashCommand(
     cmd: SlashCommandDef,
     state: SlashMenuState,
@@ -310,8 +277,29 @@ export function createSlashMenu() {
       return;
     }
     const inlineReplacement = cmd.source === "skill" ? `$${cmd.name}` : `/${cmd.name}`;
-    if (beginInlineSlashArguments(cmd, state, host)) {
-      return;
+    if (
+      state.slashMenuCompletion?.inline &&
+      cmd.source !== "skill" &&
+      cmd.args &&
+      host.canRun(true, cmd) &&
+      host.runInlineCommand
+    ) {
+      state.slashMenuCommand = cmd;
+      state.slashMenuIndex = 0;
+      state.slashMenuItems = [];
+      const argOptions = host.resolveArgOptions(cmd);
+      if (argOptions.length > 0) {
+        state.slashMenuMode = "args";
+        state.slashMenuArgItems = argOptions;
+        state.slashMenuOpen = true;
+        return;
+      }
+      state.slashMenuMode = "freeform-args";
+      state.slashMenuArgItems = [];
+      state.slashMenuOpen = false;
+      if (beginInlineFreeformSlashArguments(cmd.name, state, host)) {
+        return;
+      }
     }
     if (
       !completeOnly &&
@@ -467,42 +455,6 @@ export function createSlashMenu() {
     return true;
   }
 
-  function handleSlashMenuKeydown(
-    event: KeyboardEvent,
-    state: SlashMenuState,
-    host: SlashMenuHost,
-  ): boolean {
-    if (!state.slashMenuOpen) {
-      return false;
-    }
-    const items = state.slashMenuMode === "args" ? state.slashMenuArgItems : state.slashMenuItems;
-    return handleComposerMenuKeydown(event, {
-      count: items.length,
-      index: state.slashMenuIndex,
-      consumeEmpty: false,
-      close: () => {
-        resetSlashMenuState(state);
-      },
-      move: (index) => {
-        state.slashMenuIndex = index;
-        return getActiveSlashMenuOptionId(state, host.paneId);
-      },
-      select: (key) => {
-        if (state.slashMenuMode === "args") {
-          const arg = state.slashMenuArgItems[state.slashMenuIndex];
-          if (arg !== undefined) {
-            selectSlashArg(arg, state, host, key === "Enter");
-          }
-        } else {
-          const command = state.slashMenuItems[state.slashMenuIndex];
-          if (command) {
-            selectSlashCommand(command, state, host, key === "Tab");
-          }
-        }
-      },
-    });
-  }
-
   return {
     state: presentation,
     update(value: string, host: SlashMenuHost) {
@@ -523,9 +475,38 @@ export function createSlashMenu() {
       // Inline detection can change mode before normal menu handling in this keypress.
       setState((draft) => {
         handled =
-          (sendShortcut !== undefined &&
-            handleInlineSlashArgKeydown(event, draft, host, sendShortcut)) ||
-          handleSlashMenuKeydown(event, draft, host);
+          sendShortcut !== undefined &&
+          handleInlineSlashArgKeydown(event, draft, host, sendShortcut);
+        if (handled || !draft.slashMenuOpen) {
+          return;
+        }
+        const items =
+          draft.slashMenuMode === "args" ? draft.slashMenuArgItems : draft.slashMenuItems;
+        handled = handleComposerMenuKeydown(event, {
+          count: items.length,
+          index: draft.slashMenuIndex,
+          consumeEmpty: false,
+          close: () => {
+            resetSlashMenuState(draft);
+          },
+          move: (index) => {
+            draft.slashMenuIndex = index;
+            return getActiveSlashMenuOptionId(draft, host.paneId);
+          },
+          select: (key) => {
+            if (draft.slashMenuMode === "args") {
+              const arg = draft.slashMenuArgItems[draft.slashMenuIndex];
+              if (arg !== undefined) {
+                selectSlashArg(arg, draft, host, key === "Enter");
+              }
+            } else {
+              const command = draft.slashMenuItems[draft.slashMenuIndex];
+              if (command) {
+                selectSlashCommand(command, draft, host, key === "Tab");
+              }
+            }
+          },
+        });
       });
       return handled;
     },

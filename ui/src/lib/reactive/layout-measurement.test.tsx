@@ -94,7 +94,7 @@ it("stops retired layout targets while the replacement keeps measuring", () => {
           reads.push(element);
         }
       },
-      { targets: () => [target()], changeTiming: "sync" },
+      { targets: (element) => (element ? [element] : []), changeTiming: "sync" },
     );
     return <>{[first, second]}</>;
   });

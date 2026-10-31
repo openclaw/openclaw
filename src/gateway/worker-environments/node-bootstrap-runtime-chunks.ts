@@ -71,16 +71,13 @@ export async function resolveNodeBootstrapRuntimeChunks(
       continue;
     }
     const source = (await read(file)).toString("utf8");
-    // Dist inspection skips nested dependencies; absence of a callback there is not a fact.
-    let hasNodeLoader = /(?:^|\/)node_modules\//u.test(file);
+    const literalCalls = new Set<string>();
     const staticImports: string[] = [];
     const fileImports = collectPackageDistImports({
       files: [file],
       includeTypeScript,
       readText: () => source,
-      onNodeLoaderReference: () => {
-        hasNodeLoader = true;
-      },
+      onLiteralCall: (specifier) => literalCalls.add(specifier),
       onStaticImport: (specifier) => {
         staticImports.push(specifier);
       },
@@ -88,9 +85,12 @@ export async function resolveNodeBootstrapRuntimeChunks(
     sourceFacts.set(file, { imports: fileImports });
     const dependencies = new Set(fileImports.map(({ importedPath }) => importedPath));
     const resolveImport = createRequire(path.join(packageRoot, file)).resolve;
-    const rootImports = hasNodeLoader
+    // Dist inspection deliberately skips nested dependencies; keep their existing
+    // scope-aware fallback. Root bundles use the bounded statement scan instead.
+    const rootImports = /(?:^|\/)node_modules\//u.test(file)
       ? collectPackageRootImports(preparePackageDistJavaScript(file, source))
-      : staticImports;
+      : new Set([...staticImports, ...literalCalls]);
+    // False positives only retain extra chunks; required-import validation stays exact.
     for (const specifier of rootImports) {
       if (!specifier.startsWith(".")) {
         continue;

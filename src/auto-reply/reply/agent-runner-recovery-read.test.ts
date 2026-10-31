@@ -4,6 +4,7 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { reserveSessionControllerSource } from "../../sessions/session-controller.mailbox.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   rootDir,
   runEmbeddedAgentMock,
@@ -21,13 +22,13 @@ import { setChannelSourceTurnId } from "./source-turn-id.js";
 setupAgentRunnerTestHooks();
 afterEach(() => vi.restoreAllMocks());
 
-it("queues non-steering input while recovery metadata is unavailable", async () => {
+it("queues non-steering input while session metadata is unavailable", async () => {
   const sessionEntry = { sessionId: "session", updatedAt: 1 };
   const storePath = path.join(rootDir, "sessions.json");
   await replaceSessionEntry({ storePath, sessionKey: "main" }, sessionEntry);
   const read = vi
     .spyOn(entryReads, "readSessionEntryInWorker")
-    .mockRejectedValueOnce(new Error("Recovery metadata is unavailable"));
+    .mockRejectedValueOnce(new Error("Session metadata is unavailable"));
   vi.mocked(enqueueFollowupRun).mockReturnValueOnce(true);
   const state: ReplyOperationRunState = {};
   const { run, resolvedQueue } = createBaseRun({
@@ -52,18 +53,31 @@ it("queues non-steering input while recovery metadata is unavailable", async () 
 });
 
 it.each(["source", "steer"] as const)(
-  "retires the captured source and typing when the %s recovery read fails",
+  "retires the captured source and typing when the %s input target resolution fails",
   async (reason) => {
-    const failure = new Error("synthetic recovery read failure");
-    const read = vi.spyOn(entryReads, "readSessionEntryInWorker").mockRejectedValueOnce(failure);
+    const failure = new Error("synthetic input target resolution failure");
     const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry = { sessionId: "session", updatedAt: 1 };
+    const target = { agentId: "main", sessionKey: "main", storePath };
+    const sourceTurnId = `channel-user:${reason}-input-failure`;
+    await replaceSessionEntry(target, sessionEntry);
+    const resolveTarget = vi.fn(async () => {
+      throw failure;
+    });
     const input = reserveSessionControllerSource("main", {
       target: captureSessionTarget({ storeScope: storePath, sessionKey: "main", agentId: "main" }),
       policy: { mode: "interrupt" },
     });
     const { run, typing, sessionCtx } = createBaseRun({
+      followup: {
+        userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+          input: { text: "hello", idempotencyKey: sourceTurnId },
+          target: resolveTarget,
+        }),
+      },
       reply: {
         sessionKey: "main",
+        sessionEntry,
         opts: bindReplySourceInput({ abortSignal: input.abortSignal }, input),
         storePath,
         shouldSteer: reason === "steer",
@@ -71,7 +85,7 @@ it.each(["source", "steer"] as const)(
       },
     });
     if (reason === "source") {
-      setChannelSourceTurnId(sessionCtx, "channel-user:recovery-source");
+      setChannelSourceTurnId(sessionCtx, sourceTurnId);
     }
 
     await expect(run()).rejects.toBe(failure);
@@ -79,7 +93,7 @@ it.each(["source", "steer"] as const)(
     await input.settlement.promise;
     expect(input.phase).toBe("consumed");
     expect(input.mailbox.entries).not.toContain(input);
-    expect(read).toHaveBeenCalledOnce();
+    expect(resolveTarget).toHaveBeenCalledOnce();
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   },

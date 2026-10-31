@@ -137,7 +137,7 @@ suite.define(() => {
       await expect.poll(() => indicator.count()).toBe(0);
       await page
         .locator(".chat-working-indicator__status")
-        .getByText("Waiting for turn to start…", { exact: true })
+        .getByText("Working…", { exact: true })
         .waitFor();
     });
   });

@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { ProviderPrepareRuntimeAuthContext } from "openclaw/plugin-sdk/core";
+import type {
+  ProviderPrepareRuntimeAuthContext,
+  ProviderPrepareRuntimeAuthContextV2,
+} from "openclaw/plugin-sdk/core";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
@@ -67,8 +70,8 @@ function registerProvider() {
 }
 
 function prepareAuth(provider = registerProvider()) {
-  const prepare = expectDefined(provider.prepareRuntimeAuth, "Foundry runtime auth hook");
-  return async (overrides: Partial<ProviderPrepareRuntimeAuthContext> = {}) =>
+  const prepare = expectDefined(provider.prepareRuntimeAuthV2, "Foundry runtime auth hook");
+  return async (overrides: Partial<ProviderPrepareRuntimeAuthContextV2> = {}) =>
     expectDefined(await prepare(authContext(overrides)), "Foundry runtime auth result");
 }
 
@@ -166,9 +169,10 @@ function entraStore(
   };
 }
 
-function authContext(overrides: Partial<ProviderPrepareRuntimeAuthContext> = {}) {
+function authContext(overrides: Partial<ProviderPrepareRuntimeAuthContextV2> = {}) {
   const modelId = overrides.modelId ?? "custom-deployment";
   return {
+    capability: "chat" as const,
     provider: providerId,
     modelId,
     model: makeModel({ id: modelId }),
@@ -221,7 +225,7 @@ function buildAuthResult(params: Pick<FoundryAuthParams, "modelId"> & Partial<Fo
 }
 
 function builtModel(params: Pick<FoundryAuthParams, "modelId"> & Partial<FoundryAuthParams>) {
-  return providerPatch(buildAuthResult(params)).models[0];
+  return providerPatch(buildAuthResult(params)).models?.[0];
 }
 
 function wrapStream(streamFn: StreamFn, model = makeModel()) {
@@ -660,7 +664,7 @@ describe("microsoft-foundry plugin", () => {
     });
     expect(result.configPatch?.agents?.defaults).not.toHaveProperty("imageGenerationModel");
     expect(result.defaultModel).toBeUndefined();
-    expect(providerPatch(result).models[0]?.name).toBe("MAI-Image-2.5");
+    expect(providerPatch(result).models?.[0]?.name).toBe("MAI-Image-2.5");
   });
 
   it("does not reuse stale API-key model metadata when selecting a different deployment", async () => {
@@ -681,7 +685,7 @@ describe("microsoft-foundry plugin", () => {
       opts: { azureOpenaiApiKey: "test-api-key" },
       secretInputMode: "plaintext",
     } as never);
-    const model = result?.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0];
+    const model = result?.configPatch?.models?.providers?.["microsoft-foundry"]?.models?.[0];
     expect(model).toMatchObject({
       id: "prod-gpt",
       name: "prod-gpt",
@@ -800,13 +804,13 @@ describe("microsoft-foundry plugin", () => {
       expect(provider[key]).toBeUndefined();
       expect(Object.hasOwn(provider, key)).toBe(true);
     }
-    expect(provider?.models.map((model) => [model.id, model.baseUrl])).toEqual([
+    expect(provider?.models?.map((model) => [model.id, model.baseUrl])).toEqual([
       ["deployment-gpt5", baseUrl],
       ["deployment-gpt4o", baseUrl],
       ["deployment-fable", `${endpoint}/anthropic`],
     ]);
     expect(result.defaultModel).toBe("microsoft-foundry/deployment-gpt5");
-    expect(provider.models[0]).toMatchObject({
+    expect(provider.models?.[0]).toMatchObject({
       input: ["text", "image"],
       compat: { supportsStore: false, maxTokensField: "max_completion_tokens" },
     });

@@ -8,6 +8,7 @@ import { requireDirectorySync, syncDirectory } from "../infra/directory-durabili
 import { sameFileMutationFingerprint } from "../infra/file-descriptor.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
 import { hasSymbolicLinkInDirectoryPath } from "../infra/session-sqlite-migration-manifest.js";
 import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
 import { resolveSqliteDatabaseFilePaths, SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
@@ -21,7 +22,7 @@ import {
 import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 
 type Inventory = ReturnType<typeof collectUpdateCleanupInventory>;
-type SelectionIdentity = Map<string, fs.BigIntStats>;
+type SelectionIdentity = Map<string, { stat: fs.BigIntStats; sha256?: string }>;
 export type UnmanifestedSelection = Map<string, SelectionIdentity>;
 
 function overlaps(left: string, right: string): boolean {
@@ -100,7 +101,7 @@ function assertNotDatabase(file: string, livePaths: readonly string[]): void {
   }
 }
 
-/** Metadata only, but complete: no following links and no recursive rm over uninspected files. */
+/** No following links and no recursive rm over uninspected files. */
 function inspectSelection(
   item: RecoveryCleanupArtifact,
   livePaths: readonly string[],
@@ -118,7 +119,7 @@ function inspectSelection(
     const stat = fs.lstatSync(file, { bigint: true });
     assertNotDatabase(file, livePaths);
     if (stat.isDirectory() && item.kind === "update-capture") {
-      identities.set(file, stat);
+      identities.set(file, { stat });
       for (const name of fs.readdirSync(file).toSorted().toReversed()) {
         pending.push(path.join(file, name));
       }
@@ -128,7 +129,8 @@ function inspectSelection(
       if (item.kind !== "update-capture" && /\.(?:sqlite(?:3)?|db)$/iu.test(file)) {
         throw new Error("Live database filename is not an unmanifested recovery original.");
       }
-      identities.set(file, stat);
+      // Always hash: a same-size rewrite can retain every timestamp at runtime precision.
+      identities.set(file, { stat, sha256: readMigrationArtifactIdentity(file).sha256 });
     } else {
       throw new Error("Recovery selection contains a symlink, hardlink, or nonregular file.");
     }
@@ -200,11 +202,11 @@ export function selectUnmanifestedRecovery(params: {
   );
   for (const [file, identities] of selected) {
     const item = inventory.report.artifacts.find((artifact) => artifact.path === file)!;
-    const stat = identities.get(file)!;
+    const { stat } = identities.get(file)!;
     item.outcome = "candidate";
     item.reason = "explicit-unmanifested-selection";
     item.bytes = [...identities.values()].reduce(
-      (bytes, entry) => bytes + (entry.isFile() ? Number(entry.size) : 0),
+      (bytes, { stat: entry }) => bytes + (entry.isFile() ? Number(entry.size) : 0),
       0,
     );
     item.modifiedAt = new Date(Number(stat.mtimeMs)).toISOString();
@@ -233,9 +235,9 @@ export function assertUnmanifestedSelectionCurrent(
     if (
       !actual ||
       files.size !== actual.size ||
-      [...files].some(([file, stat]) => {
+      [...files].some(([file, { stat, sha256 }]) => {
         const next = actual.get(file);
-        return !next || !sameFileMutationFingerprint(stat, next);
+        return !next || !sameFileMutationFingerprint(stat, next.stat) || sha256 !== next.sha256;
       })
     ) {
       throw new Error(`Explicit recovery selection changed: ${root}; preview cleanup again.`);
@@ -264,7 +266,7 @@ export async function retireUnmanifestedRecovery(params: {
         new Map([[item.path, current]]),
       );
       // Reverse traversal removes children first. No awaited I/O between identity and unlink.
-      for (const [file, stat] of [...expected].toReversed()) {
+      for (const [file, { stat, sha256 }] of [...expected].toReversed()) {
         params.assertCurrent();
         if (hasSymbolicLinkInDirectoryPath(path.dirname(file))) {
           throw new Error("Recovery directory changed before removal.");
@@ -279,7 +281,8 @@ export async function retireUnmanifestedRecovery(params: {
           if (
             !actual.isFile() ||
             actual.nlink !== 1n ||
-            !sameFileMutationFingerprint(stat, actual)
+            !sameFileMutationFingerprint(stat, actual) ||
+            readMigrationArtifactIdentity(file).sha256 !== sha256
           ) {
             throw new Error("Recovery original changed before removal.");
           }

@@ -238,6 +238,7 @@ export function openEngineStore(ref: {
                   ...source,
                   postgresVectorDecoderVersion: source.postgresVectorDecoderVersion,
                   postgresVectorSearchVersion: source.postgresVectorSearchVersion,
+                  postgresTextSearchVersion: source.postgresTextSearchVersion,
                   version: Number(meta.version),
                 };
               } else {

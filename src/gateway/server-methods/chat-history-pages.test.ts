@@ -1,5 +1,65 @@
 import { expect, it } from "vitest";
-import { prepareChatHistoryResponsePage } from "../chat-history-response-page.js";
+import type { ChatHistoryPageParams } from "../../config/sessions/session-history-types.js";
+import {
+  encodeChatHistoryResponsePage,
+  prepareChatHistoryResponsePage,
+} from "../chat-history-response-page.js";
+
+it("serializes message content once for budgeting and encoding, fresh on each request", () => {
+  let reads = 0;
+  let text = "tool output 漢字🦞";
+  const message = {
+    role: "toolResult",
+    get content() {
+      reads++;
+      return text;
+    },
+    __openclaw: { id: "result", seq: 1 },
+  };
+  const params: ChatHistoryPageParams = {
+    encodeResponse: true,
+    entry: undefined,
+    provider: undefined,
+    sessionId: "session",
+    storePath: undefined,
+    sessionAgentId: "main",
+    canonicalKey: "agent:main:session",
+    max: 100,
+    maxHistoryBytes: 512 * 1024,
+    effectiveMaxChars: 8000,
+    offset: undefined,
+    messageId: undefined,
+  };
+  for (const content of [text, "updated tool output"]) {
+    text = content;
+    reads = 0;
+    const response = encodeChatHistoryResponsePage(
+      { messages: [message] },
+      params,
+    ).encodedResponse!;
+    expect(reads).toBe(1);
+    expect(Buffer.from(response.messages).toString()).toBe(
+      JSON.stringify([{ role: "toolResult", content, __openclaw: { id: "result", seq: 1 } }]),
+    );
+    expect(response.messagesBytes).toBe(response.messages.byteLength);
+  }
+});
+
+it("reuses a history page when budgeting does not replace or omit messages", () => {
+  const messages = [
+    { role: "assistant", content: "Calling read", __openclaw: { id: "call", seq: 1 } },
+    { role: "toolResult", content: "File contents", __openclaw: { id: "result", seq: 2 } },
+  ];
+  Object.freeze(messages);
+  const page = prepareChatHistoryResponsePage(
+    { messages, pagination: { offset: 0, totalMessages: 2, rawPageMessages: 2 } },
+    { entry: undefined, maxHistoryBytes: 512 * 1024, messageId: undefined },
+  );
+  expect(page.messages).toBe(messages);
+  expect(page.messagesBytes).toBe(Buffer.byteLength(JSON.stringify(messages)));
+  expect(page.omission).toBeUndefined();
+  expect(page.hasMore).toBe(false);
+});
 
 it("keeps oversized cursor identities inside the response byte limit", () => {
   const messageId = "x".repeat(1_000_000);

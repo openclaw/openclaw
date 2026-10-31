@@ -71,12 +71,12 @@ async function startDiscovery(
 
 const makeDiscoveryService = (
   id: string,
-  params: { pluginId?: string; stop?: () => void | Promise<void>; advertise?: Advertise } = {},
+  params: { stop?: () => void | Promise<void>; advertise?: Advertise } = {},
 ) => {
   const advertise = params.advertise ?? vi.fn(async () => ({ stop: params.stop }));
   return {
-    pluginId: params.pluginId ?? id,
-    pluginName: params.pluginId ?? id,
+    pluginId: id,
+    pluginName: id,
     source: "test",
     id: id.trim(),
     service: { id, advertise },
@@ -98,19 +98,11 @@ function expectCalls(...calls: [unknown, number][]) {
   }
 }
 
-function useDevelopmentDiscoveryEnv() {
-  process.env.NODE_ENV = "development";
-  delete process.env.VITEST;
-}
-
 function deferredAdvertisement(id: string, phase: "pending" | "ready" = "pending") {
   const result = createDeferredCore<{ stop: () => void }>();
-  const started = createDeferredCore();
   const stop = vi.fn();
-  const acquire: Advertise = () => {
-    started.resolve();
-    return phase === "pending" ? result.promise : Promise.resolve({ stop });
-  };
+  const acquire: Advertise = () =>
+    phase === "pending" ? result.promise : Promise.resolve({ stop });
   const advertise = vi.fn<Advertise>(acquire);
   releases.push(() => result.resolve({ stop }));
   return {
@@ -118,7 +110,6 @@ function deferredAdvertisement(id: string, phase: "pending" | "ready" = "pending
     advertise,
     acquire,
     stop,
-    started: started.promise,
     resolve: () => result.resolve({ stop }),
   };
 }
@@ -137,7 +128,8 @@ async function startTimedDiscovery(
 describe("startGatewayDiscovery", () => {
   const envSnapshot = captureFullEnv();
   beforeEach(() => {
-    useDevelopmentDiscoveryEnv();
+    process.env.NODE_ENV = "development";
+    delete process.env.VITEST;
     process.env.OPENCLAW_CLI_PATH = "/usr/local/bin/openclaw";
     delete process.env.OPENCLAW_TAILNET_DNS;
     logs = makeLogs();
@@ -236,42 +228,6 @@ describe("startGatewayDiscovery", () => {
     expect(calls.every((call) => call.runtime === runtime)).toBe(true);
   });
 
-  it("starts registered local discovery services with gateway advertisement context", async () => {
-    process.env.OPENCLAW_SSH_PORT = "2222";
-
-    const stopped: string[] = [];
-    const service = (id: string) =>
-      makeDiscoveryService(id, {
-        stop: () => {
-          stopped.push(id);
-        },
-      });
-    const bonjour = service("bonjour");
-    const peer = service("peer");
-    const result = await startDiscovery([bonjour, peer], {
-      discovery: { mdns: { mode: "full" } },
-      gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
-      gatewayDirectReachable: true,
-    });
-
-    expect(bonjour.advertise).toHaveBeenCalledWith({
-      machineDisplayName: "Lab Mac",
-      gatewayPort: 18789,
-      gatewayTlsEnabled: true,
-      gatewayTlsFingerprintSha256: "abc123",
-      gatewayDirectReachable: true,
-      sshPort: 2222,
-      tailnetDns: "gateway.tailnet.example.ts.net",
-      cliPath: "/usr/local/bin/openclaw",
-      minimal: false,
-    });
-    expect(peer.advertise).toHaveBeenCalledTimes(1);
-    expect(logs.warn).not.toHaveBeenCalled();
-
-    await result.stop();
-    expect(stopped).toEqual(["peer", "bonjour"]);
-  });
-
   it("omits invalid SSH discovery ports", async () => {
     process.env.OPENCLAW_SSH_PORT = "2222abc";
     const service = makeDiscoveryService("bonjour");
@@ -287,7 +243,7 @@ describe("startGatewayDiscovery", () => {
     const stuck = makeDiscoveryService("stuck-discovery", {
       advertise: vi.fn(() => new Promise<void>(() => {})),
     });
-    const resultPromise = startDiscovery([stuck], { discovery: { mdns: { mode: "full" } } });
+    const resultPromise = startDiscovery([stuck]);
     await vi.advanceTimersByTimeAsync(10);
     expect(logs.warn).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(4_990);
@@ -310,9 +266,7 @@ describe("startGatewayDiscovery", () => {
       }),
     });
     const startedAt = Date.now();
-    const result = await startDiscovery([service], {
-      discovery: { mdns: { mode: "full" } },
-    });
+    const result = await startDiscovery([service]);
     const elapsedMs = Date.now() - startedAt;
 
     await result.stop();
@@ -326,9 +280,7 @@ describe("startGatewayDiscovery", () => {
     process.env.OPENCLAW_DISABLE_BONJOUR = "yes";
 
     const service = makeDiscoveryService("bonjour");
-    await startDiscovery([service], {
-      discovery: { mdns: { mode: "full" } },
-    });
+    await startDiscovery([service]);
 
     expect(service.advertise).not.toHaveBeenCalled();
   });
@@ -354,16 +306,39 @@ describe("startGatewayDiscovery", () => {
 
   it("replaces advertisements and wide-area metadata across live mode and registry changes", async () => {
     process.env.OPENCLAW_SSH_PORT = "2222";
-    const stop = vi.fn();
+    const stopped: string[] = [];
+    const stop = vi.fn(() => {
+      stopped.push("bonjour");
+    });
     const service = makeDiscoveryService("bonjour", { stop });
-    const discovery = await startDiscovery([service], {
+    const peer = makeDiscoveryService("peer", {
+      stop: () => {
+        stopped.push("peer");
+      },
+    });
+    const discovery = await startDiscovery([service, peer], {
       discovery: { mdns: { mode: "full" }, wideArea: { domain: "openclaw.internal." } },
       gatewayTls: { enabled: true, fingerprintSha256: "fingerprint" },
       gatewayDirectReachable: true,
     });
-
-    for (const mode of ["minimal", "full", "minimal", "off"] as const) {
+    expect(service.advertise).toHaveBeenCalledWith({
+      machineDisplayName: "Lab Mac",
+      gatewayPort: 18789,
+      gatewayTlsEnabled: true,
+      gatewayTlsFingerprintSha256: "fingerprint",
+      gatewayDirectReachable: true,
+      sshPort: 2222,
+      tailnetDns: "gateway.tailnet.example.ts.net",
+      cliPath: "/usr/local/bin/openclaw",
+      minimal: false,
+    });
+    expect(peer.advertise).toHaveBeenCalledOnce();
+    expect(logs.warn).not.toHaveBeenCalled();
+    for (const [index, mode] of (["minimal", "full", "minimal", "off"] as const).entries()) {
       await discovery.update({ mdnsMode: mode });
+      if (index === 0) {
+        expect(stopped).toEqual(["peer", "bonjour"]);
+      }
       const full = mode === "full";
       expect(latestZoneParams()).toMatchObject({
         domain: "openclaw.internal.",

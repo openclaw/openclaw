@@ -104,6 +104,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       turnId: this.turnId,
       upstreamUserText: this.options.upstreamUserText,
       completedItemIds: this.completedItemIds,
+      reasoningMessages: this.reasoningProjection.collectMessages(true),
       assistantProjection: this.assistantProjection,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
     });
@@ -415,6 +416,12 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
 
   private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
+    await this.settlement.project("media_projection", () =>
+      this.generatedMediaProjection.recordItemIdentity(item),
+    );
+    if (this.projectionClosed) {
+      return;
+    }
     if (item?.type === "agentMessage" && item.text) {
       this.eventProjection.markSafetyBufferingAssistantStarted();
     }
@@ -434,6 +441,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       this.activeCompactionItemIds.add(itemId);
       this.usageProjection.beginCompaction();
     }
+    await this.reasoningProjection.recordItemStarted(item);
     await this.assistantProjection.recordItemStarted(item, itemId);
     if (
       this.projectionClosed ||

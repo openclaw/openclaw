@@ -34,7 +34,10 @@ import {
   type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
-import type { SessionEntryReplacementCandidate } from "./session-accessor.sqlite-replacement-types.js";
+import type {
+  SessionEntryWorkerLifecycle,
+  SessionEntryReplacementCandidate,
+} from "./session-accessor.sqlite-replacement-types.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 import { withSessionEntryWriterReads } from "./session-entry-read-facts.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
@@ -446,13 +449,7 @@ export async function runSessionEntryWorkerMutation<T>(
   databaseIdentity: string | undefined,
   assertCurrent: () => void,
   run: (worker: AgentDatabaseExecutionScope) => Promise<SessionEntryWorkerMutationResult<T>>,
-  lifecycle: {
-    identityAgentId: string;
-    onResult?: (value: T | undefined) => void;
-    beforeCommit?: (publication: SessionEntryReplacementPublication) => void;
-    afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
-    onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
-  },
+  lifecycle: SessionEntryWorkerLifecycle<T>,
   executionOptions: {
     retainedExecution?: OpenClawAgentDatabaseExecution;
     signal?: AbortSignal;
@@ -499,6 +496,9 @@ export async function runSessionEntryWorkerMutation<T>(
       try {
         if (receipt) {
           lifecycle.onResult?.(completed?.value);
+          if (!unknown) {
+            lifecycle.onCommittedEntries?.(receipt.current, receipt.patchDiffBaselines);
+          }
           lifecycle.onLifecycleCommitted?.(receipt.pendingArchiveRecovery);
         }
       } finally {
@@ -582,7 +582,7 @@ export async function runSessionEntryWorkerMutation<T>(
       }
       // SAFETY: This command's native kernel supplies the typed publication, not external input.
       const committed = facts.publication as SessionEntryReplacementPublication;
-      lifecycle.beforeCommit?.(committed);
+      lifecycle.beforeCommit?.(committed, retained);
       admitted = { admission, retained };
       publication.begin(
         committed.changedKeys,
@@ -611,11 +611,7 @@ export async function commitSessionEntryReplacementsInWorker(
   databaseIdentity: string,
   input: AgentDatabaseOperations["session.entries.replace"]["input"],
   assertCurrent: SessionSourceAssertion,
-  lifecycle: {
-    identityAgentId: string;
-    afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
-    onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
-  },
+  lifecycle: Omit<SessionEntryWorkerLifecycle, "onResult">,
   retainedExecution?: OpenClawAgentDatabaseExecution,
   nativeDeletion?: ReturnType<typeof captureNativeSessionWorkerDeletion>,
 ): Promise<SessionEntryReplacementCandidate["result"]> {
@@ -661,8 +657,14 @@ export async function commitSessionEntryReplacementsInWorker(
             input: { ...guardedInput, nativeBindings },
           }),
         onTransactionFacts: acceptValidation,
+        assertCandidate: (candidate, operation) =>
+          lifecycle.beforeCommit?.(candidate.publication, operation),
         async onCommitted(candidate, published, identity, context) {
           try {
+            lifecycle.onCommittedEntries?.(
+              candidate.publication.current,
+              candidate.publication.patchDiffBaselines,
+            );
             lifecycle.onLifecycleCommitted?.(candidate.publication.pendingArchiveRecovery);
           } finally {
             if (published) {

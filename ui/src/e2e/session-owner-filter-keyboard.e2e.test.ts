@@ -78,7 +78,7 @@ suite.define(() => {
       );
       await waitForSessionRosterHydration(page);
       await selectAllSidebarSessions(page);
-      const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
+      const trigger = page.getByRole("button", { name: /^Filter & sort · /, exact: true });
       const owners = page.locator("#sidebar-session-owner-title");
       const picker = page.locator(".sidebar-session-owner-filter");
       await owners.focus();
@@ -132,7 +132,7 @@ suite.define(() => {
         if (name === "compact") {
           await page.getByRole("button", { name: "Expand sidebar" }).click();
         }
-        await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+        await page.getByRole("button", { name: /^Filter & sort · /, exact: true }).click();
         await openSidebarMenu(page);
         const menu = page.locator(".sidebar-session-sort-menu");
         await expectContained(menu.locator(".sidebar-session-filter-panel"), viewport);
@@ -167,7 +167,7 @@ suite.define(() => {
       );
       await page.locator("html").evaluate((element) => element.setAttribute("dir", "rtl"));
       await page.getByRole("button", { name: "Expand sidebar" }).click();
-      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+      await page.getByRole("button", { name: /^Filter & sort · /, exact: true }).click();
       await openSidebarMenu(page);
       const menu = page.locator(".sidebar-session-sort-menu");
       const owners = page.locator("#sidebar-session-owner-title");
@@ -187,7 +187,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await expectBrowser(menu).toHaveCount(0);
       await expectBrowser(
-        page.getByRole("button", { name: "Filter & sort", exact: true }),
+        page.getByRole("button", { name: /^Filter & sort · /, exact: true }),
       ).toBeFocused();
     }));
 });

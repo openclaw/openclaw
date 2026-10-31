@@ -187,9 +187,9 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     OpenClaw records a temporary observation for that credential, model, and route.
     Ultrafast stays selectable, and the composer's Speed tooltip shows the requested
     and served tiers. Later calls keep requesting the selected tier unless repeated explicit rejections
-    trigger the run-local cooldown below. A response
-    honoring it clears the hint immediately; otherwise the observation expires
-    five minutes after its latest occurrence.
+    trigger the run-local cooldown below. The hint clears one minute after the
+    latest downgrade. Responses honoring the requested tier do not clear it early,
+    so intermittent capacity changes do not repeatedly refresh the model catalog.
 
     If the native OpenAI API explicitly rejects `service_tier` before output,
     tool activity, or active-response steering, OpenClaw automatically retries

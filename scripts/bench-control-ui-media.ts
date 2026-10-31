@@ -4,7 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { chromium, type CDPSession, type Page } from "playwright";
+import { chromium, webkit, type CDPSession, type Page } from "playwright";
 import { encodePngRgb } from "../src/media/png-encode.js";
 import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -23,6 +23,9 @@ const { values } = parseArgs({
     pairs: { type: "string", default: "10" },
     profiles: { type: "string", default: "local,remote" },
     trace: { type: "boolean", default: false },
+    engine: { type: "string", default: "chromium" },
+    geometry: { type: "boolean", default: false },
+    dimensions: { type: "string", default: "missing" },
   },
 });
 const pairs = Number(values.pairs);
@@ -34,6 +37,16 @@ if (
 ) {
   throw new Error("Use positive --pairs and --profiles local,remote");
 }
+if (values.engine !== "chromium" && values.engine !== "webkit") {
+  throw new Error("Use --engine chromium|webkit");
+}
+if (values.trace && values.engine !== "chromium") {
+  throw new Error("--trace uses Chromium CDP; WebKit reports wall timings without CPU metrics");
+}
+if (values.dimensions !== "missing" && values.dimensions !== "canonical") {
+  throw new Error("Use --dimensions missing|canonical");
+}
+const engine = values.engine;
 const artifactDir = createControlUiE2eArtifactDir("media", values.output);
 const directories = [values["bundle-dir"], values["compare-bundle-dir"]].filter(
   (value): value is string => Boolean(value),
@@ -61,7 +74,10 @@ async function frames(page: Page) {
       }),
   );
 }
-async function metrics(cdp: CDPSession) {
+async function metrics(cdp: CDPSession | undefined) {
+  if (!cdp) {
+    return undefined;
+  }
   const result: { metrics: Array<{ name: string; value: number }> } =
     await cdp.send("Performance.getMetrics");
   return Object.fromEntries(result.metrics.map(({ name, value }) => [name, value]));
@@ -76,10 +92,13 @@ function distribution(numbers: number[]) {
     max: sorted.at(-1)!,
   };
 }
-const browser = await chromium.launch({
-  executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
-  headless: true,
-});
+const browser =
+  engine === "webkit"
+    ? await webkit.launch({ headless: true })
+    : await chromium.launch({
+        executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+        headless: true,
+      });
 const servers: Array<{
   directory: string;
   build: { buildId: string; version: string };
@@ -88,16 +107,57 @@ const servers: Array<{
 }> = [];
 type MediaSnapshot = {
   nonce: string;
-  cls: number;
-  mediaCls: number;
+  nativeLayoutShiftSupported: boolean;
+  cls: number | null;
+  mediaCls: number | null;
   shifts: Array<{
+    timestamp: number;
     value: number;
     sources: Array<{ node: string; media: boolean; previous: number[]; current: number[] }>;
   }>;
   blobs: Array<{ source: string; revoked: boolean; live: boolean; attached: boolean }>;
 };
+type MediaFetchAttempt = {
+  url: string;
+  method: string;
+  cache: RequestCache;
+  mode: RequestMode;
+  credentials: RequestCredentials;
+  authorizationContext: number;
+  outcome: "pending" | "fulfilled" | "rejected";
+  status?: number;
+};
+type GeometryNode = {
+  id: number;
+  node: string;
+  rowKey: string | null;
+  rect: number[];
+  visible: boolean;
+  scroll: number[];
+  image?: { complete: boolean; naturalWidth: number; naturalHeight: number };
+};
+type GeometryCapture = {
+  timestamp: number;
+  viewport: number[];
+  nodes: GeometryNode[];
+};
+type GeometryReport = {
+  before: GeometryCapture;
+  after: GeometryCapture;
+  frames: number;
+  changes: Array<{
+    timestamp: number;
+    id: number;
+    node: string;
+    rowKey: string | null;
+    previous: number[] | null;
+    current: number[] | null;
+  }>;
+};
 type Metrics = Record<string, number>;
 type Result = {
+  engine: string;
+  geometry?: GeometryReport;
   profile: string;
   pair: number;
   variant: number;
@@ -115,6 +175,16 @@ type Result = {
   steadyRequests?: Record<string, number>;
   bootDuplicates?: Array<[string, number]>;
   duplicates?: Array<[string, number]>;
+  cacheProbe?: {
+    transport: "synthetic-route";
+    browserHttpCache: "disabled-by-playwright-routing";
+    routeFulfillments: Record<string, number>;
+    fetchAttempts: {
+      cacheOnly: MediaFetchAttempt[];
+      networkEligible: MediaFetchAttempt[];
+    } | null;
+    networkDownloads: null;
+  };
   before?: Metrics;
   loaded?: Metrics;
   beforeScroll?: Metrics;
@@ -154,8 +224,9 @@ try {
         });
         const page = await context.newPage();
         page.setDefaultTimeout(30_000);
-        const cdp = await context.newCDPSession(page);
+        const cdp = engine === "chromium" ? await context.newCDPSession(page) : undefined;
         const requests = new Map<string, number>();
+        const routeFulfillments = new Map<string, number>();
         const authContexts = new Map<string, number>();
         let pendingMedia = 0;
         let mediaTransferAt = 0;
@@ -178,6 +249,7 @@ try {
           releaseMedia = resolve;
         });
         const result: Result = {
+          engine,
           profile,
           pair: pair + 1,
           variant,
@@ -189,9 +261,48 @@ try {
           await page.addInitScript(() => {
             const sources = new WeakMap<Blob, string>();
             const blobs = new Map<string, { source: string; revoked: boolean }>();
+            const fetchAttempts: MediaFetchAttempt[] = [];
+            const authorizationContexts = new Map<string, number>();
             const fetch = window.fetch;
             window.fetch = async (...args) => {
-              const response = await fetch(...args);
+              const [input, init] = args;
+              const request = input instanceof Request ? input : undefined;
+              const url = new URL(input instanceof Request ? input.url : input, location.href);
+              let attempt: MediaFetchAttempt | undefined;
+              if (
+                /\/(?:__openclaw__\/(?:assistant-media|link-favicon)|api\/users\/[^/]+\/avatar)/u.test(
+                  url.pathname,
+                )
+              ) {
+                const authorization =
+                  new Headers(init?.headers ?? request?.headers).get("authorization") ?? "";
+                if (!authorizationContexts.has(authorization)) {
+                  authorizationContexts.set(authorization, authorizationContexts.size + 1);
+                }
+                attempt = {
+                  url: url.href,
+                  method: init?.method ?? request?.method ?? "GET",
+                  cache: init?.cache ?? request?.cache ?? "default",
+                  mode: init?.mode ?? request?.mode ?? "cors",
+                  credentials: init?.credentials ?? request?.credentials ?? "same-origin",
+                  authorizationContext: authorizationContexts.get(authorization)!,
+                  outcome: "pending",
+                };
+                fetchAttempts.push(attempt);
+              }
+              let response: Response;
+              try {
+                response = await fetch(...args);
+              } catch (error) {
+                if (attempt) {
+                  attempt.outcome = "rejected";
+                }
+                throw error;
+              }
+              if (attempt) {
+                attempt.outcome = "fulfilled";
+                attempt.status = response.status;
+              }
               const readBlob = response.blob.bind(response);
               response.blob = async () => {
                 const blob = await readBlob();
@@ -220,8 +331,11 @@ try {
             };
             let shifts: MediaSnapshot["shifts"] = [];
             const nonce = crypto.randomUUID();
-            const observer = new PerformanceObserver((list) => {
-              for (const entry of list.getEntries()) {
+            const nativeLayoutShiftSupported =
+              typeof PerformanceObserver !== "undefined" &&
+              PerformanceObserver.supportedEntryTypes.includes("layout-shift");
+            const recordShifts = (entries: PerformanceEntry[]) => {
+              for (const entry of entries) {
                 const shift = entry as PerformanceEntry & {
                   hadRecentInput: boolean;
                   value: number;
@@ -233,6 +347,7 @@ try {
                 };
                 if (!shift.hadRecentInput) {
                   shifts.push({
+                    timestamp: shift.startTime,
                     value: shift.value,
                     sources: shift.sources.map(({ node, previousRect, currentRect }) => ({
                       node:
@@ -257,27 +372,164 @@ try {
                   });
                 }
               }
+            };
+            const observer = nativeLayoutShiftSupported
+              ? new PerformanceObserver((list) => recordShifts(list.getEntries()))
+              : undefined;
+            observer?.observe({ type: "layout-shift", buffered: true });
+            let geometryFrame = 0;
+            let frameCount = 0;
+            let nextNodeId = 0;
+            const nodeIds = new WeakMap<Element, number>();
+            let previousGeometry = new Map<number, GeometryNode>();
+            let geometryChanges: GeometryReport["changes"] = [];
+            let beforeGeometry: GeometryCapture | undefined;
+            const describe = (element: Element): GeometryNode => {
+              let id = nodeIds.get(element);
+              if (id === undefined) {
+                id = ++nextNodeId;
+                nodeIds.set(element, id);
+              }
+              const bounds = element.getBoundingClientRect();
+              const rect = [bounds.x, bounds.y, bounds.width, bounds.height];
+              let top = Math.max(0, bounds.top);
+              let bottom = Math.min(innerHeight, bounds.bottom);
+              let left = Math.max(0, bounds.left);
+              let right = Math.min(innerWidth, bounds.right);
+              for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+                const style = getComputedStyle(parent);
+                if (style.overflowX === "visible" && style.overflowY === "visible") {
+                  continue;
+                }
+                const clip = parent.getBoundingClientRect();
+                if (style.overflowY !== "visible") {
+                  top = Math.max(top, clip.top + parent.clientTop);
+                  bottom = Math.min(bottom, clip.top + parent.clientTop + parent.clientHeight);
+                }
+                if (style.overflowX !== "visible") {
+                  left = Math.max(left, clip.left + parent.clientLeft);
+                  right = Math.min(right, clip.left + parent.clientLeft + parent.clientWidth);
+                }
+              }
+              return {
+                id,
+                node: `${element.tagName}.${element.getAttribute("class") ?? ""}`,
+                rowKey:
+                  element.closest("[data-chat-row-key]")?.getAttribute("data-chat-row-key") ?? null,
+                rect,
+                visible: bottom > top && right > left && !element.closest("[inert]"),
+                scroll: [
+                  element.scrollLeft,
+                  element.scrollTop,
+                  element.scrollWidth,
+                  element.scrollHeight,
+                ],
+                ...(element instanceof HTMLImageElement
+                  ? {
+                      image: {
+                        complete: element.complete,
+                        naturalWidth: element.naturalWidth,
+                        naturalHeight: element.naturalHeight,
+                      },
+                    }
+                  : {}),
+              };
+            };
+            const capture = (): GeometryCapture => ({
+              timestamp: performance.now(),
+              viewport: [innerWidth, innerHeight, scrollX, scrollY],
+              nodes: [...document.querySelectorAll("*")].map(describe),
             });
-            observer.observe({ type: "layout-shift", buffered: true });
+            const sampleGeometry = () => {
+              const timestamp = performance.now();
+              const current = new Map<number, GeometryNode>();
+              for (const element of document.querySelectorAll(
+                ".chat-thread [data-chat-row-key], .chat-thread .chat-group, .chat-thread img, .chat-thread .chat-image-frame, .chat-thread .chat-group-footer, .chat-thread .chat-group-footer *",
+              )) {
+                const node = describe(element);
+                const previous = previousGeometry.get(node.id);
+                current.set(node.id, node);
+                if (
+                  (node.visible || previous?.visible) &&
+                  (!previous || node.rect.some((value, index) => value !== previous.rect[index]))
+                ) {
+                  geometryChanges.push({
+                    timestamp,
+                    id: node.id,
+                    node: node.node,
+                    rowKey: node.rowKey,
+                    previous: previous?.rect ?? null,
+                    current: node.rect,
+                  });
+                }
+              }
+              for (const [id, previous] of previousGeometry) {
+                if (previous.visible && !current.has(id)) {
+                  geometryChanges.push({
+                    timestamp,
+                    id,
+                    node: previous.node,
+                    rowKey: previous.rowKey,
+                    previous: previous.rect,
+                    current: null,
+                  });
+                }
+              }
+              previousGeometry = current;
+              frameCount += 1;
+            };
+            const sampleFrame = () => {
+              sampleGeometry();
+              geometryFrame = requestAnimationFrame(sampleFrame);
+            };
             Reflect.set(window, "__mediaBench", {
+              readFetches: () => fetchAttempts,
               reset: () => {
-                observer.takeRecords();
+                observer?.takeRecords();
                 shifts = [];
               },
-              read: () => ({
-                nonce,
-                shifts,
-                cls: shifts.reduce((sum, item) => sum + item.value, 0),
-                mediaCls: shifts
-                  .filter((item) => item.sources.some((source) => source.media))
-                  .reduce((sum, item) => sum + item.value, 0),
-                blobs: [...blobs].map(([url, entry]) =>
-                  Object.assign({}, entry, {
-                    live: !entry.revoked,
-                    attached: [...document.images].some((image) => image.src === url),
-                  }),
-                ),
-              }),
+              startGeometry: () => {
+                beforeGeometry = capture();
+                sampleGeometry();
+                // Initial geometry establishes the baseline; it is not a change.
+                geometryChanges = [];
+                frameCount = 0;
+                geometryFrame = requestAnimationFrame(sampleFrame);
+              },
+              stopGeometry: (): GeometryReport => {
+                cancelAnimationFrame(geometryFrame);
+                sampleGeometry();
+                return {
+                  before: beforeGeometry!,
+                  after: capture(),
+                  frames: frameCount,
+                  changes: geometryChanges,
+                };
+              },
+              read: () => {
+                if (observer) {
+                  recordShifts(observer.takeRecords());
+                }
+                return {
+                  nonce,
+                  nativeLayoutShiftSupported,
+                  shifts,
+                  cls: nativeLayoutShiftSupported
+                    ? shifts.reduce((sum, item) => sum + item.value, 0)
+                    : null,
+                  mediaCls: nativeLayoutShiftSupported
+                    ? shifts
+                        .filter((item) => item.sources.some((source) => source.media))
+                        .reduce((sum, item) => sum + item.value, 0)
+                    : null,
+                  blobs: [...blobs].map(([url, entry]) =>
+                    Object.assign({}, entry, {
+                      live: !entry.revoked,
+                      attached: [...document.images].some((image) => image.src === url),
+                    }),
+                  ),
+                };
+              },
             });
           });
           const fixture = createControlUiTeamScaleFixture({
@@ -301,7 +553,23 @@ try {
           const messages = Array.from({ length: 96 }, (_, index) => ({
             role: index % 2 ? "assistant" : "user",
             timestamp: 1_800_000_000_000 + index,
-            __openclaw: { id: `media-${index}`, seq: index + 1 },
+            __openclaw: {
+              id: `media-${index}`,
+              seq: index + 1,
+              ...(values.dimensions === "canonical"
+                ? {
+                    media: [
+                      {
+                        path: `media://inbound/media-${index % 16}.png`,
+                        contentType: "image/png",
+                        width: 1600,
+                        height: 900,
+                      },
+                    ],
+                    mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
+                  }
+                : {}),
+            },
             content: [
               {
                 type: "text",
@@ -314,8 +582,13 @@ try {
               },
             ],
           }));
+          // Let the mock's transcript owner serve this benchmark's media messages.
+          const methodResponses = { ...fixture.scenario.methodResponses };
+          delete methodResponses["chat.startup"];
+          delete methodResponses["chat.history"];
           await installMockGateway(page, {
             ...fixture.scenario,
+            methodResponses,
             serverBuildId: slot.build.buildId,
             serverVersion: slot.build.version,
             automaticallyFetchFavicons: true,
@@ -370,14 +643,16 @@ try {
                         headers: { "Cache-Control": "public, max-age=3600" },
                       },
                 );
+                const fulfillment = `${route.request().resourceType()}:${resource}`;
+                routeFulfillments.set(fulfillment, (routeFulfillments.get(fulfillment) ?? 0) + 1);
               } finally {
                 pendingMedia -= 1;
               }
             },
           );
-          await cdp.send("Performance.enable", { timeDomain: "threadTicks" });
-          await cdp.send("Network.enable");
-          if (profile === "remote") {
+          await cdp?.send("Performance.enable", { timeDomain: "threadTicks" });
+          await cdp?.send("Network.enable");
+          if (cdp && profile === "remote") {
             await cdp.send("Network.emulateNetworkConditions", {
               offline: false,
               latency: 100,
@@ -399,9 +674,9 @@ try {
           if (pair === 0) {
             await page.screenshot({ path: path.join(artifactDir, `${prefix}-pending.png`) });
           }
-          await cdp.send("HeapProfiler.collectGarbage");
+          await cdp?.send("HeapProfiler.collectGarbage");
           const before = await metrics(cdp);
-          if (values.trace) {
+          if (values.trace && cdp) {
             cdp.on("Tracing.dataCollected", ({ value }) => {
               events.push(...value);
             });
@@ -416,6 +691,9 @@ try {
           const bootRequests = Object.fromEntries(requests);
           result.before = before;
           result.requestSnapshots = { before: bootRequests };
+          if (values.geometry) {
+            await page.evaluate(() => Reflect.get(window, "__mediaBench").startGeometry());
+          }
           const started = performance.now();
           releaseMedia();
           const settleMedia = async () => {
@@ -496,6 +774,11 @@ try {
               ),
           );
           await settleMedia();
+          if (values.geometry) {
+            result.geometry = await page.evaluate<GeometryReport>(() =>
+              Reflect.get(window, "__mediaBench").stopGeometry(),
+            );
+          }
           const stable = await page.evaluate<MediaSnapshot>(() =>
             Reflect.get(window, "__mediaBench").read(),
           );
@@ -530,7 +813,7 @@ try {
           result.scrolled = scrolled;
           result.scrollMs = scrollMs;
           result.requestSnapshots.scroll = scrollRequests;
-          if (tracing) {
+          if (tracing && cdp) {
             const complete = new Promise<void>((resolve) => {
               cdp.once("Tracing.tracingComplete", () => resolve());
             });
@@ -557,12 +840,12 @@ try {
           }
           // Retire the native app host, preserving the document for lifetime measurement.
           // Settings intentionally parks the transcript and cannot prove disposal.
-          await cdp.send("HeapProfiler.collectGarbage");
+          await cdp?.send("HeapProfiler.collectGarbage");
           const beforeDisconnect = await metrics(cdp);
           await page.locator("openclaw-app").evaluate((element) => element.remove());
           await page.locator(".chat-thread").waitFor({ state: "detached" });
           await frames(page);
-          await cdp.send("HeapProfiler.collectGarbage");
+          await cdp?.send("HeapProfiler.collectGarbage");
           const disposed = await page.evaluate<MediaSnapshot>(() =>
             Reflect.get(window, "__mediaBench").read(),
           );
@@ -605,14 +888,21 @@ try {
               (blob) =>
                 blob.live && !blob.attached && blob.source.includes("/__openclaw__/link-favicon/"),
             ),
-            milliseconds: Object.fromEntries(
-              ["TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration"].map(
-                (name) => [
-                  name,
-                  1000 * (loaded[name]! - before[name]! + afterScroll[name]! - beforeScroll[name]!),
-                ],
-              ),
-            ),
+            milliseconds:
+              before && loaded && beforeScroll && afterScroll
+                ? Object.fromEntries(
+                    ["TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration"].map(
+                      (name) => [
+                        name,
+                        1000 *
+                          (loaded[name]! -
+                            before[name]! +
+                            afterScroll[name]! -
+                            beforeScroll[name]!),
+                      ],
+                    ),
+                  )
+                : undefined,
           });
         } catch (error) {
           result.error = `${String(error)} (page: ${page.url()})`;
@@ -622,19 +912,40 @@ try {
             .catch(() => undefined);
         } finally {
           releaseMedia();
-          if (tracing) {
+          if (tracing && cdp) {
             await cdp.send("Tracing.end").catch(() => undefined);
           }
+          const fetchAttempts = await page
+            .evaluate<MediaFetchAttempt[] | null>(
+              () => Reflect.get(window, "__mediaBench")?.readFetches() ?? null,
+            )
+            .catch(() => null);
+          result.cacheProbe = {
+            transport: "synthetic-route",
+            browserHttpCache: "disabled-by-playwright-routing",
+            routeFulfillments: Object.fromEntries(routeFulfillments),
+            fetchAttempts: fetchAttempts
+              ? {
+                  cacheOnly: fetchAttempts.filter((attempt) => attempt.cache === "only-if-cached"),
+                  networkEligible: fetchAttempts.filter(
+                    (attempt) => attempt.cache !== "only-if-cached",
+                  ),
+                }
+              : null,
+            // Every media response is fulfilled in-process; this run does not measure downloads.
+            networkDownloads: null,
+          };
           results.push(result);
           await writeFile(
             path.join(artifactDir, `${prefix}.json`),
             JSON.stringify(result, null, 2),
           );
-          await cdp.detach();
+          await cdp?.detach();
           await context.close();
         }
         console.log(
           JSON.stringify({
+            engine,
             profile,
             pair: pair + 1,
             variant,
@@ -672,21 +983,26 @@ try {
     JSON.stringify(
       {
         browser: browser.version(),
-        durationClock: "threadTicks",
+        engine,
+        durationClock: engine === "chromium" ? "threadTicks" : "wall-only",
+        geometrySampling: values.geometry
+          ? "rAF during held-media release only; forced geometry reads add overhead"
+          : "disabled",
         bundles: servers.map(({ server: _server, ...item }) => item),
         fixture: {
           messages: 96,
           uniqueImages: 16,
           imageSize: [1600, 900],
+          dimensions: values.dimensions,
           uniqueHosts: 8,
           avatars: 120,
         },
         timing,
         results,
         acceptance:
-          "Zero stable-viewport media CLS; <=1 request per unique media resource and kind; inspect live blobs after native app-host disconnection without document reload. >=10 AB/BA pairs: median <=5% regression and p95 not worse; noisy hosts require a separate A/A control and 20 pairs judged by CDP CPU plus structural counters.",
+          "Zero stable-viewport media CLS; inspect repeated route admissions alongside cache-only fetch attempts before attributing application reuse; inspect live blobs after native app-host disconnection without document reload. Route admissions and fulfillments are not network downloads or browser-cache hits. >=10 AB/BA pairs: median <=5% regression and p95 not worse; noisy hosts require a separate A/A control and 20 pairs judged by CDP CPU plus structural counters.",
         limitations:
-          "Synthetic Gateway RPC has no RTT. Static HTTP uses CDP 100ms/10Mbps throttling; routed media uses equivalent explicit delay because Playwright fulfillment bypasses network emulation. Playwright routing disables HTTP cache; duplicate fetch counters test application ownership. CDP durations include media load and scroll, not navigation or disposal; heap metrics are JS heap only, not native decoded-image memory. No total decoded-memory claim.",
+          "Synthetic Gateway RPC has no RTT. Chromium static HTTP uses CDP 100ms/10Mbps throttling; WebKit static HTTP is unthrottled. Both engines use equivalent explicit routed-media delay because Playwright fulfillment bypasses network emulation. WebKit has no CDP CPU/heap/trace metrics. Unsupported native Layout Instability is reported as null, not zero; geometry changes are diagnostic rectangles, not CLS. Playwright routing disables HTTP cache; duplicate route-admission counters test application ownership. Fulfillments are synthetic responses, not network downloads; browser cache effectiveness and real download counts are unmeasured. CDP durations include media load and scroll, not navigation or disposal; heap metrics are JS heap only, not native decoded-image memory. No total decoded-memory claim.",
       },
       null,
       2,

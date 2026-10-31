@@ -444,14 +444,17 @@ export function formatWikiLink(params: {
   sourceRelativeTo?: string;
   title: string;
 }): string {
-  const withoutExtension = params.relativePath.replace(/\.md$/i, "");
   if (params.renderMode === "obsidian") {
-    return `[[${withoutExtension}|${params.title}]]`;
+    return `[[${params.relativePath.replace(/\.md$/i, "")}|${params.title}]]`;
   }
   const linkTarget = params.sourceRelativeTo
     ? path.posix.relative(path.posix.dirname(params.sourceRelativeTo), params.relativePath)
     : params.relativePath;
-  return `[${params.title}](${linkTarget})`;
+  // Angle brackets keep spaces and parentheses inside the link destination.
+  const destination = /[\s()<>]/.test(linkTarget)
+    ? `<${linkTarget.replace(/[<>]/g, "\\$&")}>`
+    : linkTarget;
+  return `[${params.title}](${destination})`;
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {

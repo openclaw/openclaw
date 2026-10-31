@@ -38,7 +38,7 @@ it("builds raw inventories and refreshes cached identity without changing compre
     "assets/de-AbCd1234.js",
     "assets/locale-config-hints-zh-CN-AbCd1234.js",
     "assets/locale-namespace-fr-settings-AbCd1234.js",
-    "assets/mermaid.min-AbCd1234.js",
+    "assets/pele.min-AbCd1234.js",
     "assets/unhashed.js",
     "assets/session-actions-AbCd1234.js.map",
     "plugins/example/assets/plugin-AbCd1234.js",

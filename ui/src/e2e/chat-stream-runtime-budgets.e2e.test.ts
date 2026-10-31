@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
+import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import type { notifyRenderLifecycleForTest } from "../pages/chat/render-lifecycle.ts";
 import {
   evaluateControlUiContext,
@@ -12,7 +13,10 @@ import {
   requireString,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
-import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft, waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -503,16 +507,21 @@ function buildLongTranscriptFixture(messageCount: number): Array<Record<string, 
 suite.define(() => {
   it("commits a streamed delta burst in frame-bound transcript batches", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const heldMenu = await holdModuleResponse(
+        page,
+        /\/board-widget-menu[^/]*\.(?:js|tsx)(?:\?.*)?$/u,
+      );
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["sessions.describe", "models.list"],
+        deferredMethods: ["models.list"],
+        heldMethods: ["sessions.describe"],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("sessions.messages.subscribe");
       await settleInitialModelCatalog(page, gateway);
       const runId = await openStreamingTurn(page, gateway, "burst coalescing probe");
 
-      // Release the startup fact read after Send so it observes the running turn,
-      // then join its publication before measuring stream invalidations.
+      // Keep every startup fact read parked until Send, then release them together
+      // so the latest observation publishes the running turn before measurement.
       await gateway.waitForRequest("sessions.describe");
       await gateway.resolveDeferred("sessions.describe");
       const applicationHandle = await getControlUiContextHandle(page);
@@ -548,6 +557,37 @@ suite.define(() => {
           ),
         )
         .toBe(true);
+      // Idle-warmed menus register English catalogs even while closed. First
+      // observe both fetched entry files, then join their dependency evaluation.
+      const fetchedMenus = await page.waitForFunction(
+        (names) => {
+          const urls = names.map(
+            (name) =>
+              performance.getEntriesByType("resource").find((entry) => entry.name.includes(name))
+                ?.name,
+          );
+          return urls.every(Boolean) ? urls : null;
+        },
+        ["chat-header-session-menu-content", "chat-composer-plus-menu-content"],
+      );
+      const menuUrls = await fetchedMenus.jsonValue();
+      await fetchedMenus.dispose();
+      let catalogsJoined = false;
+      const catalogs = page
+        .evaluate(
+          `Promise.all(${JSON.stringify(menuUrls)}.map(url => import(url))).then(() => undefined)`,
+        )
+        .then(() => {
+          catalogsJoined = true;
+        });
+      await heldMenu.request;
+      await page.evaluate(() => undefined);
+      expect(catalogsJoined).toBe(false);
+      heldMenu.release();
+      await catalogs;
+      await page
+        .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
+        .evaluate((pane: ChatPaneElement) => pane.updateComplete);
       await waitForChatScrollIdle(page);
       await installRenderProbe(page);
       await resetRenderProbe(page);

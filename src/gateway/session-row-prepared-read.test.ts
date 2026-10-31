@@ -121,12 +121,7 @@ async function withPendingStartupInspection(
       migrateAgent: async () => {},
       publishAgent: async () => {},
     });
-    fixture.context.agentDatabaseStartup = {
-      get hasPendingAgents() {
-        return admission.hasPendingAgents;
-      },
-      waitForAgentPreparation: admission.waitForAgentPreparation.bind(admission),
-    };
+    fixture.context.agentDatabaseStartup = admission.observation;
     try {
       await runInDetachedAsyncContext(() => {
         expect(getAgentDatabaseStartupAdmission()).toBeUndefined();

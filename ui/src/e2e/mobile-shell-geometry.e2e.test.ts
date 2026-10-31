@@ -425,7 +425,7 @@ suite.define(() => {
           await navigationDrawerToggle(page).click();
           await expect(page.locator(".shell--nav-drawer-open")).toBeVisible();
           await readSurface(".shell-nav", "drawer");
-          await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+          await page.getByRole("button", { name: /^Filter & sort · /, exact: true }).click();
           await expect(page.locator(".sidebar-session-filter-panel")).toBeVisible();
           await readSurface(".sidebar-session-filter-panel", "filter-sheet");
           await page.keyboard.press("Escape");
@@ -448,8 +448,13 @@ suite.define(() => {
           }
           expect(generating.composer.left).toBeCloseTo(chat.composer.left, 0);
           expect(generating.composer.right).toBeCloseTo(chat.composer.right, 0);
-          expect(chat.thread!.left).toBeCloseTo(chat.composer.left, 0);
-          expect(chat.thread!.right).toBeCloseTo(chat.composer.right, 0);
+          // Comment pins may need more room than the composer; both share the usable center.
+          expect(chat.thread!.left).toBeGreaterThanOrEqual(chat.composer.left);
+          expect(chat.thread!.right).toBeLessThanOrEqual(chat.composer.right);
+          expect(chat.thread!.left + chat.thread!.right).toBeCloseTo(
+            chat.composer.left + chat.composer.right,
+            0,
+          );
         }
       },
     );

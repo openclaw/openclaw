@@ -580,6 +580,7 @@ it.each(["ltr", "rtl"] as const)(
       expect(menu.getAttribute("data-phase")).toBe("open");
       // The opening transition scales DOM bounds; measure its final geometry.
       expect(getComputedStyle(menu).scale).toBe("1");
+      expect(menu.querySelectorAll(".shortcut-kbd")).toHaveLength(4);
     });
     await Promise.all(menu.getAnimations().map((animation) => animation.finished));
     const hints = [...menu.querySelectorAll<HTMLElement>(".shortcut-kbd")];

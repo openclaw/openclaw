@@ -519,7 +519,6 @@ suite.define(() => {
             await page
               .getByRole("button", { name: "Send message", exact: true })
               .waitFor({ state: "visible" });
-            await page.screenshot({ path: path.join(artifactDir, "03-send-restored.png") });
             expect(
               await page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase),
             ).toBe("connected");
@@ -527,6 +526,7 @@ suite.define(() => {
             expect(sent.filter((frame) => frame.method === "connect")).toHaveLength(1);
             expect(sent.filter((frame) => frame.method === "chat.abort")).toHaveLength(1);
             expect(await composer.inputValue()).toBe("Next draft");
+            await page.screenshot({ path: path.join(artifactDir, "03-send-restored.png") });
           },
         );
       },

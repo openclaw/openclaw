@@ -129,7 +129,9 @@ export class UiE2eSequencer extends BaseSequencer {
   override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
     // eslint-disable-next-line unicorn/no-array-sort -- BaseSequencer.sort is Vitest's ordering API.
     const ordered = await super.sort(files);
-    const parallel = ordered.filter((file) => file.project.config.sequence.groupOrder === 0);
+    const parallel = ordered.filter((file) =>
+      [0, 2].includes(file.project.config.sequence.groupOrder),
+    );
     if (parallel.some((file) => this.ctx.cache.getTestSpecificationResult(file))) {
       // Keep native failed-first and observed-duration ordering on warm reruns.
       return ordered;
@@ -138,10 +140,10 @@ export class UiE2eSequencer extends BaseSequencer {
     return ordered.toSorted((left, right) => {
       const groupOrder =
         left.project.config.sequence.groupOrder - right.project.config.sequence.groupOrder;
-      if (groupOrder || left.project.config.sequence.groupOrder !== 0) {
+      if (groupOrder || !seconds.has(left)) {
         return groupOrder;
       }
-      // Bundled and private fixtures share this worker pool; do not queue builds last.
+      // Start expensive fixtures first within each parallel phase, including real Gateways.
       return (
         seconds.get(right)! - seconds.get(left)! ||
         left.moduleId.localeCompare(right.moduleId) ||

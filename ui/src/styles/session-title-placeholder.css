@@ -1,18 +1,21 @@
 .session-title-placeholder {
-  --skeleton-base: var(--border-strong);
+  --skeleton-base: color-mix(in srgb, var(--text) 9%, transparent);
+  --skeleton-highlight: color-mix(in srgb, var(--text) 10%, transparent);
 
   display: inline-flex;
   align-items: center;
-  width: 6.5em;
-  height: 1.2em;
+  width: 9.5em;
+  height: 20px;
   vertical-align: middle;
 }
 
+/* A thin bar at x-height that fades out, not a block standing in for the title. */
 .session-title-placeholder > span {
   display: block;
   width: 100%;
-  height: 0.55em;
-  border-radius: 3px;
+  height: 7px;
+  border-radius: 3.5px;
+  mask-image: linear-gradient(90deg, black 70%, transparent);
 }
 
 .sidebar-recent-session--creating .sidebar-recent-session__link {

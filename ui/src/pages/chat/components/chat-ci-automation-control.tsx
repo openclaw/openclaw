@@ -11,6 +11,7 @@ import {
 } from "solid-js";
 import type { CronStatus } from "../../../api/types.ts";
 import type { MenuControls } from "../../../components/solid/menu.tsx";
+import { isCronInventoryInvalidation } from "../../../lib/cron/inventory-connection.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
@@ -118,7 +119,7 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
         })
       : undefined;
     stopEvents = source?.subscribeEvents((event) => {
-      if (event.event === "cron" || event.event === "config.changed") {
+      if (isCronInventoryInvalidation(event, source.snapshot)) {
         invalidate();
       }
     });

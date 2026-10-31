@@ -1,11 +1,13 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { copyFileSync, existsSync, readFileSync, renameSync, unlinkSync } from "node:fs";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../../../test/helpers/promise.js";
+import * as workspace from "../../../agents/workspace.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { trackSessionControllerSourceWork } from "../../../sessions/session-controller.mailbox.js";
 import {
@@ -14,6 +16,7 @@ import {
   requestRpcSourceCancellation,
   retireRpcSource,
 } from "../../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
@@ -28,11 +31,15 @@ import {
 } from "../../../talk/client-voice-session-write.js";
 import * as voiceSessions from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-types.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "../../test-helpers.rpc-source.js";
+import type { GatewayControlOwner } from "../client-agent-consult.types.js";
+import * as toolAuthority from "../client-tool-authority.js";
 import { useRelayFixtures } from "./fixture.test-support.js";
+import { createIdleRelayProvider, makeRelayTransport } from "./index.test-support.js";
 import {
   cancelTalkRealtimeRelayProviderToolCall,
   closeRelaySession,
@@ -94,6 +101,71 @@ const createRegistrationFixture = async () => {
   const chat = await createControllerSource(relay, target.runId, "registration-session");
   return { relay, target, chat };
 };
+
+it.for([
+  { phase: "workspace", owned: true },
+  { phase: "tool context", owned: true },
+  { phase: "tool context", owned: false },
+] as const)(
+  "settles native relay startup failure ($phase, owned=$owned)",
+  async ({ phase, owned }, { signal }) => {
+    let providerScope: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
+    const createBridge = vi.fn((_request: RealtimeVoiceBridgeCreateRequest) => {
+      providerScope = AsyncLocalStorage.snapshot();
+      return makeRelayTransport();
+    });
+    const { relay } = await createRelay({
+      controlSource: "delegation",
+      provider: createIdleRelayProvider(createBridge),
+    });
+    const runner: GatewayControlOwner["runAgentConsult"] | undefined =
+      createBridge.mock.calls[0]?.[0].runAgentConsult;
+    if (!runner?.adoptCompletionClaims || !runner.claimFailureAppend || !providerScope) {
+      throw new Error("Expected the provider's lifecycle-bound relay consult");
+    }
+    if (owned) {
+      runner.adoptCompletionClaims();
+    }
+    const rpcBefore = [...rpcSourceTesting.entries()].map(([runId]) => runId);
+    let admittedRunIds: string[] = [];
+    const failure = new Error(`Synthetic relay ${phase} failure`);
+    const failPreparation = () => {
+      admittedRunIds = [...relay.activeAgentRuns.keys()];
+      throw failure;
+    };
+    // Fail at the actual preparation boundary; registration and its resource owners stay real.
+    const preparation =
+      phase === "workspace"
+        ? vi
+            .spyOn(workspace, "ensureAgentWorkspace")
+            .mockImplementationOnce(async () => failPreparation())
+        : vi
+            .spyOn(toolAuthority, "prepareTalkClientToolContext")
+            .mockImplementationOnce(failPreparation);
+    onTestFinished(() => {
+      preparation.mockRestore();
+      runner.claimFailureAppend?.();
+    });
+
+    await expect(
+      withinTest(
+        providerScope(() => runner({ prompt: "Prepare the delegated task" })),
+        signal,
+      ),
+    ).rejects.toBe(failure);
+    expect(preparation).toHaveBeenCalledOnce();
+    if (phase === "tool context") {
+      expect(admittedRunIds).toHaveLength(1);
+    }
+    const claims = owned ? [runner.claimFailureAppend(), runner.claimFailureAppend()] : [];
+    expectRegistrations(relay, 0, 0);
+    expect([...rpcSourceTesting.entries()].map(([runId]) => runId)).toEqual(rpcBefore);
+    for (const runId of admittedRunIds) {
+      expect(resolveBinding(runId)).toBeUndefined();
+    }
+    expect(claims).toEqual(owned ? [true, false] : []);
+  },
+);
 
 it.for(["release", "failure"] as const)(
   "preserves a newer registration with identical IDs after old %s",

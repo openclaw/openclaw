@@ -140,7 +140,7 @@ it("leaves ordinary turn history and the draft intact without delegated-work row
     observer.emitTarget(viewport, 800, 600);
   }
   const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-  textarea.focus();
+  container.querySelector<HTMLAnchorElement>(".chat-composer-skip-link")!.click();
   await vi.dynamicImportSettled();
   await waitForSolid(() => {
     expect(container.textContent).toContain("The release notes are ready.");

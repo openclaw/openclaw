@@ -9,14 +9,57 @@ import {
 import { getMediaDir } from "../media/store.js";
 import * as assistantDisplay from "../shared/assistant-display-content.js";
 import { readRunFailureNotice } from "../shared/run-failure-notice.js";
+import { extractTextFromMessage } from "../tui/tui-formatters.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
 import {
   projectChatDisplayMessage,
   projectChatDisplayMessages,
+  projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 
 const text = (value: string) => ({ type: "text", text: value });
+
+it("keeps size recovery in text fallback without adding prose to the rich card", () => {
+  const card = {
+    type: "attachment_error",
+    attachment: {
+      code: "file-too-large",
+      kind: "document",
+      label: "private-filename.zip",
+      mimeType: "application/zip",
+    },
+  };
+  const display = [text("Saved the import pack."), card];
+  const saved = {
+    role: "assistant",
+    content: [text("Original model text remains private to its own history.")],
+    openclawDisplayContent: display,
+  };
+  const before = structuredClone(saved);
+  const history = projectChatDisplayMessages([saved])[0]!;
+  const live = projectChatDisplayMessage({ role: "assistant", content: display })!;
+  for (const message of [history, live, projectChatDisplayMessage(history)!]) {
+    expect(message.content).toEqual(display);
+    expect(message.text).toBe(
+      "⚠️ file attachment: Too large to attach. Look for this file in Files.\nSaved the import pack.",
+    );
+    // This reader still recognizes only the shipped four attachment-error codes.
+    expect(extractTextFromMessage(message)).toBe(message.text);
+    expect(message.text).not.toContain("private-filename");
+    expect(message.text).not.toContain("Original model text");
+  }
+  expect(saved).toEqual(before);
+  const failureOnly = projectChatDisplayMessage({ role: "assistant", content: [card] })!;
+  expect(extractTextFromMessage(failureOnly)).toContain("Look for this file in Files");
+  const bounded = projectChatDisplayMessages(
+    [{ role: "assistant", content: [text("Long caption. ".repeat(100)), card] }],
+    { maxChars: 256 },
+  )[0]!;
+  expect(extractTextFromMessage(bounded)).toContain("Look for this file in Files");
+  const unrelated = { role: "assistant", content: [text("Ordinary reply.")] };
+  expect(projectChatDisplayMessage(unrelated)).not.toHaveProperty("text");
+});
 
 it("admits display content once before sanitizing a history page", () => {
   const messages = [
@@ -525,19 +568,18 @@ it.each([{ maxChars: 32 }, { maxChars: 8_000, toolResultMaxChars: 32 }])(
 );
 
 it("retains complete structured tool previews and tool arguments under a smaller text cap", () => {
-  const payload = JSON.stringify({
-    kind: "canvas",
-    view: { id: "preview", title: "x".repeat(3_000) },
-  });
+  const payload = JSON.stringify({ view: { title: "x".repeat(3_000) } });
   const call = { type: "toolCall", id: "structured", name: "exec", arguments: { input: payload } };
-  const result = { type: "toolResult", toolCallId: "structured", content: [text(payload)] };
+  const readText = vi.fn(() => payload);
+  const output = Object.defineProperty(text(payload), "text", { get: readText });
+  const result = { type: "toolResult", toolCallId: "structured", content: [output] };
   const messages = [
     { role: "toolResult", content: result.content },
     { role: "assistant", content: [call, result] },
   ];
-  expect(sanitizeChatHistoryMessages(messages, 8_000, { toolResultMaxChars: 2_000 })).toEqual(
-    messages,
-  );
+  const projected = sanitizeChatHistoryMessages(messages, 8_000, { toolResultMaxChars: 2_000 });
+  expect(readText).toHaveBeenCalledTimes(2);
+  expect(projected).toEqual(messages);
 });
 
 const user = userRow("hello", { seq: 1 });
@@ -560,6 +602,133 @@ const terminal = (runId = "run-a") => ({
 });
 const projectedIds = (messages: unknown[]) =>
   projectChatDisplayMessages(messages).map((message) => message["__openclaw"]);
+
+it.each(["length", "stop"])("hides empty %s attempts", (stopReason) => {
+  const empty = assistant([text("")], { stopReason, __openclaw: { runId: "run-empty" } });
+  const thinking = { ...empty, content: [text(""), { type: "thinking", thinking: "" }] };
+  const toolMessage = assistant([tool], { stopReason });
+  expect(projectStable([user, empty, thinking, toolMessage, answer])).toEqual([
+    user,
+    toolMessage,
+    answer,
+  ]);
+  expect(projectStable([empty], { assistantErrorPending: true })).toEqual([]);
+});
+
+it.each(["length", "stop"])("retains keyed commentary from a %s attempt", (stopReason) => {
+  const commentary = assistant([phasedText("Running it now.", "commentary")], { stopReason });
+  const options = { includeCommentaryFallbacks: true };
+  const projected = projectStable([user, commentary, terminal()], options);
+  expect(projected).toHaveLength(3);
+  expect(projected[1]).toMatchObject({
+    content: [text("Running it now.")],
+    openclawStreamFallback: { source: "segment", itemId: "commentary" },
+  });
+  expect(readRunFailureNotice(projected[2])).toEqual({
+    runId: "run-a",
+    summary: "Recovery exhausted.",
+  });
+  expect(projectStable([commentary])).toEqual([]);
+  expect(projectStable([{ ...commentary, display: false }], options)).toEqual([]);
+  expect(projectChatDisplayMessage({ ...commentary, display: false }, options)).toBeUndefined();
+  expect(
+    projectStable([assistant([phasedText("", "commentary")], { stopReason })], options),
+  ).toEqual([]);
+});
+
+it.each([
+  ["length", undefined],
+  ["length", false],
+  ["length", true],
+  ["stop", undefined],
+  ["stop", false],
+  ["stop", true],
+] as const)("honors source silence before %s commentary (display=%s)", (stopReason, display) => {
+  const progress = "Running it now.";
+  const final = phasedText("NO_REPLY", "final_answer");
+  const source = assistant([phasedText(progress, "commentary"), final], {
+    stopReason,
+    ...(display === undefined ? {} : { display }),
+  });
+  const expected =
+    display === true
+      ? [
+          {
+            role: "assistant",
+            content: [text(progress)],
+            openclawStreamFallback: {
+              source: "segment",
+              itemId: "commentary",
+              replacementText: progress,
+            },
+          },
+          { ...source, content: [final] },
+        ]
+      : [];
+  for (const assistantErrorPending of [false, true]) {
+    expect(
+      projectStable([source], { includeCommentaryFallbacks: true, assistantErrorPending }),
+    ).toEqual(expected);
+  }
+});
+
+it("drops invisible assistant attempts without pending recovery", () => {
+  const emptyAttempt = (id: string, stopReason: "length" | "stop") =>
+    assistant([text(""), { type: "thinking", thinking: "" }], {
+      stopReason,
+      __openclaw: { id, runId: "run-empty" },
+    });
+  expect(
+    projectStable([
+      user,
+      emptyAttempt("empty-primary", "length"),
+      emptyAttempt("empty-fallback", "stop"),
+      assistant([text("model-only")], { stopReason: "stop", openclawDisplayContent: [] }),
+    ]),
+  ).toEqual([user]);
+});
+
+it.each([false, true])(
+  "retains completed material without settling pending recovery (earlier page=%s)",
+  (assistantErrorPending) => {
+    const reasoning = assistant([{ type: "thinking", thinking: "Compare the evidence." }], {
+      stopReason: "stop",
+      __openclaw: { id: "reasoning", runId: "run-a" },
+    });
+    const progress = "Checking the evidence.";
+    const commentary = assistant([phasedText(progress, "commentary")], {
+      stopReason: "length",
+      __openclaw: { id: "commentary", runId: "run-a" },
+    });
+    const input = [
+      ...(assistantErrorPending ? [] : [failed]),
+      reasoning,
+      commentary,
+      ...["stop", "length"].map((stopReason) =>
+        assistant([text(" "), { type: "thinking", thinking: "" }], { stopReason }),
+      ),
+    ];
+    const original = structuredClone(input);
+    const projected = projectChatDisplayMessagesWithState(input, {
+      assistantErrorPending,
+      includeCommentaryFallbacks: true,
+    });
+    expect(projected).toMatchObject({
+      messages: [
+        reasoning,
+        {
+          content: [text(progress)],
+          __openclaw: commentary["__openclaw"],
+          openclawStreamFallback: { source: "segment", itemId: "commentary" },
+        },
+      ],
+      assistantErrorPending: true,
+      assistantErrorRecoveryObserved: false,
+    });
+    expect(projectChatDisplayMessages(projected.messages)).toEqual(projected.messages);
+    expect(input).toEqual(original);
+  },
+);
 
 const legacyGuidance = "The provider stopped this request as a safety precaution (misalignment).";
 it.each([

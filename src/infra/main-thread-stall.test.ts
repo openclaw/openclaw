@@ -25,6 +25,35 @@ function fixture() {
 }
 
 describe("main-thread stall attribution", () => {
+  it("copies the task context only on label changes and preserves nested timing segments", () => {
+    const { monitor, elapse } = fixture();
+    const enter = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");
+    const copyOnReturn = vi.spyOn(AsyncLocalStorage.prototype, "run");
+    try {
+      runWithMainThreadTask("worker:control-decode", () => {
+        elapse(200);
+        runWithMainThreadTask("worker:control-decode", () => elapse(100));
+        elapse(200);
+      });
+      const entries = enter.mock.calls.slice();
+      expect(getMainThreadTaskName()).toBeUndefined();
+      expect(monitor.drain().stalls).toEqual([
+        {
+          elapsedMs: 500,
+          task: "worker:control-decode",
+          taskMs: 200,
+          startedAt: 0,
+          endedAt: 500,
+        },
+      ]);
+      expect(copyOnReturn).not.toHaveBeenCalled();
+      expect(entries).toEqual([["worker:control-decode"]]);
+    } finally {
+      copyOnReturn.mockRestore();
+      enter.mockRestore();
+    }
+  });
+
   it("does not retain the request context that enables heartbeat sampling", async () => {
     const request = new AsyncLocalStorage<string>();
     const observed: (string | undefined)[] = [];

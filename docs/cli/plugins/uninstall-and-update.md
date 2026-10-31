@@ -41,8 +41,9 @@ If a matching load-path reference is added again while the runtime drains, unins
 
 `uninstall` prints a preview of what will be removed. Multi-entry packages name the package owner and every affected child before prompting. Pass `--force` to skip the confirmation prompt (useful for scripts and non-interactive runs); without it, uninstall requires an interactive TTY. `--dry-run` prints the same preview and exits without prompting or changing anything.
 
-Manifest display names in the preview escape line breaks and strip terminal
-control sequences. The stored manifest and plugin selection keep their original values.
+Manifest display names and plugin ids in the preview escape line breaks and
+strip terminal control sequences. The stored manifest and plugin selection keep
+their original values.
 
 When several IDs are supplied, uninstall resolves the whole selection before
 removing anything. Repeated IDs and children of the same package select that
@@ -203,6 +204,12 @@ disposed. Retry `openclaw plugins reload <id>` after that work finishes, or use
 New agent runs across the Gateway wait behind either reload until it finishes
 or rolls back; with `--wait`, admitted-work draining alone can delay scheduled
 work for ten minutes. Later cleanup and recovery have their own deadlines.
+
+Plugins that declare `reload.turnHandover` in their manifest don't hold the
+reload for whole turns: running turns stop at their next model step and continue
+on the new version, so the reload finishes in seconds. Reload status says which
+plugins' turns hand over and which plugins keep turns waiting. See
+[Reload-safe plugins](/plugins/sdk-runtime#reload-safe-plugins).
 
 `--wait` keeps new runs behind the same replacement gate. Press Ctrl+C to cancel
 the wait; disconnecting its Gateway request also cancels it. Before publication,

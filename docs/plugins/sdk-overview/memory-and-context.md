@@ -283,6 +283,9 @@ type MemoryAudience =
   `sessions_send`, cron, or the `agent` method resolve an audience. Children,
   forks, plugin-owned sessions, and incognito sessions do not take this stamp.
   The turn's owner status still selects `owner-private` or `conversation`.
+  `openclaw agent exec` records the same `direct` type on the root session it
+  creates and runs its turn as the owner, because local CLI access is Gateway
+  owner access, so its memory tools receive `owner-private` audience.
   `openclaw doctor --fix` records the same `direct` type on dashboard chats
   created before that stamp existed: operator-created rows with a generated
   `dashboard:` key, grouped under their agent's main session, and with no spawn,

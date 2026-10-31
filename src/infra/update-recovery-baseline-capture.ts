@@ -200,6 +200,7 @@ export function captureUpdateRecoveryBaseline(params: {
         stateDir,
         warnings,
         requireLocalResources: true,
+        signal: params.signal,
         ...(resolveDatabaseFamilyEngines(snapshot.sourceConfig).state === "postgres"
           ? {
               manifestRegistry: (
@@ -218,7 +219,7 @@ export function captureUpdateRecoveryBaseline(params: {
     const collectResources = () =>
       resolveDatabaseFamilyEngines(snapshot.sourceConfig).state === "postgres"
         ? collect()
-        : withOpenClawStateDatabaseReadSnapshot(collect, { env });
+        : withOpenClawStateDatabaseReadSnapshot(collect, { env, signal: params.signal });
     const declared = await collectResources();
     assertCurrent();
     for (const resource of declared) {

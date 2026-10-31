@@ -3,6 +3,7 @@ import {
   type TalkVoiceSelection,
   type TalkVoiceSetResult,
 } from "../../packages/gateway-protocol/src/schema/talk-voice.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { wrapCurrentPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
@@ -131,6 +132,7 @@ export function registerRealtimeVoiceSelection(
     unregister: () => {
       active = false;
       callAbort.abort(new Error("Voice call closed"));
+      materializeErrorStack(callAbort.signal.reason);
       for (const runId of bindings) {
         if (runs.get(runId)?.owner === boundOwner) {
           runs.delete(runId);

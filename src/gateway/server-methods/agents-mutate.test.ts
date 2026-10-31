@@ -348,7 +348,7 @@ vi.mock("../../state/agent-deletion-journal.js", () => ({
   readAgentDeletionJournalAsync: async () => mocks.readAgentDeletionJournal(),
   listPendingAgentDeletionJournalsAsync: async () => ({
     entries: mocks.listPendingAgentDeletionJournals(),
-    manualClawAgentIds: [],
+    manualTemplateAgentIds: [],
   }),
 }));
 

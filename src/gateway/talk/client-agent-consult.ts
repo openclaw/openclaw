@@ -159,7 +159,6 @@ export function createTalkClientAgentConsultRunner(params: {
     _source: TalkAgentConsultSource = "tool-call",
     sourceInput?: SessionControllerInput,
   ) => {
-    const config = getConfig();
     const parsedArgs = parseRealtimeVoiceAgentConsultArgs(args);
     const voiceSessionId = params.getVoiceSessionId();
     if (!voiceSessionId) {
@@ -170,35 +169,36 @@ export function createTalkClientAgentConsultRunner(params: {
     }
     await ready?.();
     signal?.throwIfAborted();
+    const config = getConfig();
     const physicalSource = params.getVoiceSessionSource?.();
     if (params.getVoiceSessionSource && !physicalSource) {
       throw new Error("Realtime browser voice session is not ready for agent consult");
     }
     let assertRunRegistrationCurrent: (() => void) | undefined;
     const assertConsultCurrent = () => {
+      params.sessionTarget.assertCurrent(getConfig());
       assertCurrent?.();
       physicalSource?.assertCurrent();
       assertRunRegistrationCurrent?.();
     };
-    // Readiness can outlive its physical browser owner. Recheck after that
-    // suspension and keep this path synchronous until backend admission.
-    assertConsultCurrent();
     // Relays own admission before their lazy record registration. Browser callbacks
     // must validate the durable call before accepting a new run.
     if (!params.registerRun) {
-      assertClientVoiceSessionOpen({ agentId, sessionKey, voiceSessionId }, physicalSource);
+      await assertClientVoiceSessionOpen({ agentId, sessionKey, voiceSessionId }, physicalSource);
+      signal?.throwIfAborted();
     }
+    // Readiness and the call read can outlive their physical browser owner. Recheck
+    // after those suspensions and keep this path synchronous until backend admission.
+    assertConsultCurrent();
     const runtime = owner
       ? createOwnedAgentRuntime(owner, assertConsultCurrent)
-      : assertCurrent || physicalSource || params.ownerConnId || params.registerRun
-        ? createTalkClientAgentRuntime({
-            config: getConfig(),
-            resolveGatewayContext: params.context.resolveGatewayContext,
-            runAuthority: params.runAuthority,
-            ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
-            assertCurrent: assertConsultCurrent,
-          })
-        : getAgentRuntime();
+      : createTalkClientAgentRuntime({
+          config,
+          resolveGatewayContext: params.context.resolveGatewayContext,
+          runAuthority: params.runAuthority,
+          ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
+          assertCurrent: assertConsultCurrent,
+        });
     const talkConfig = config.talk;
     // A voice turn outlives offer setup and must drain under its own root,
     // while new turns still respect suspension and restart admission.
@@ -379,7 +379,8 @@ export function createTalkClientAgentConsultRunner(params: {
                   (registeredRun?.isCurrent(phase) ?? true);
               }
               return {
-                cleanupBeforeRun: releaseVoice || undefined,
+                // Owned failures keep their registration until the existing failure claim settles.
+                cleanupBeforeRun: owner ? undefined : releaseVoice || undefined,
                 ...(registration
                   ? {
                       abortSignal: registration.controller.signal,

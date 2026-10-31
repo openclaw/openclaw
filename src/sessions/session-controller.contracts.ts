@@ -1,6 +1,9 @@
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import type {
+  AdmittedRunOperatorAuthority,
+  OperationalRunInstanceRef,
+} from "../agents/admitted-run-context.js";
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
 import type { LlmBoundaryOptions } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.types.js";
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
@@ -16,7 +19,6 @@ import type { SessionActor } from "../config/sessions/session-actor-contract.js"
 import type { SessionAdmissionDatabaseClaim } from "../config/sessions/session-admission-claim.types.js";
 import type { SessionAdmissionTransition } from "../config/sessions/session-admission-transition.types.js";
 import type { SessionEntryCohortReader } from "../config/sessions/session-entry-read-runtime.types.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-authority.types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
 import type { Context, Model } from "../llm/types.js";
@@ -298,6 +300,17 @@ export class ReplyRunAlreadyActiveError extends Error {
   }
 }
 
+/** A mutation or finishing owner fences admission without owning an active run. */
+export class ReplyRunLifecycleAdmissionBlockedError extends Error {
+  constructor(
+    sessionKey: string,
+    readonly databaseIncarnation?: string,
+  ) {
+    super(`Session "${sessionKey}" changed during turn admission. Retry.`);
+    this.name = "ReplyRunLifecycleAdmissionBlockedError";
+  }
+}
+
 export class ReplyRunFollowupAdmissionBlockedError extends Error {
   constructor(sessionKey: string) {
     super(`Reply follow-up admission is blocked for ${sessionKey}`);
@@ -364,11 +377,6 @@ export type ReplyOperationAdmission = {
   resolveSessionTarget?: () => SessionEntryTargetPatchScope | undefined;
   sessionActor?: SessionActor;
   acquireSessionActor?: () => Promise<SessionActor | undefined>;
-  /** Accepted input keeps its durable claim while capacity admission adopts the writer. */
-  adoptInput?: (writer?: {
-    runId: string;
-    assertCurrent?: () => void;
-  }) => Promise<InternalSessionEntry>;
   afterTransition?: (transition: SessionAdmissionTransition) => Promise<void>;
 };
 
@@ -428,6 +436,10 @@ export type SessionEffectRef = {
   run: <T>(run: () => Promise<T>) => Promise<T>;
 };
 export type Effect = {
+  admissionTransitions?: Map<
+    object,
+    (transition: SessionAdmissionTransition, isActive: SessionEffectRef["isActive"]) => void
+  >;
   diagnostic?: LifecycleDiagnosticOperation;
   sourceInput?: SessionControllerInput;
   agent?: AgentWorkAdmissionIdentity;
@@ -606,6 +618,8 @@ export type SessionControllerMailbox = {
 };
 
 export type SessionControllerSourceAdapter = {
+  /** Original personal ingress, bound at admission; identity evidence, not an execution grant. */
+  initiatingPersonalOperator?: AdmittedRunOperatorAuthority;
   readonly scope?: string;
   readonly authority?: { assertCurrent(): void; signal?: AbortSignal };
   readonly signal?: AbortSignal;
@@ -639,6 +653,8 @@ export type SessionControllerWithdrawalHold = (() => void) & {
 export const inputCancellation = Symbol.for("openclaw.sessionControllerInputCancellation");
 
 export type FollowupRun = FollowupRunPayload & {
+  /** @internal Host-only fallback eligibility; false preserves a caller without a profile grant. */
+  sessionPrincipalTurn?: boolean;
   run: FollowupRunPayload["run"] & {
     /** Observe admission without transferring the runner's settlement custody. */
     onOperationAdmitted?: (operation: ReplyOperation) => void;
@@ -656,7 +672,11 @@ type ReplyOperationAdmissionSnapshot =
   | {
       status: "accepted";
       mode: "steer" | "followup";
-      reason?: "requester-mismatch" | "steering-unavailable" | "explicit-followup";
+      reason?:
+        | "requester-mismatch"
+        | "steering-unavailable"
+        | "explicit-followup"
+        | "collaborative-steering-disabled";
     }
   | {
       status: "skipped";

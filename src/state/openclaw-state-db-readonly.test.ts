@@ -12,6 +12,7 @@ import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
 import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import * as sqliteReadOnly from "../infra/sqlite-snapshot-source.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -442,40 +443,60 @@ it("keeps missing and non-missing filesystem failures distinct for async reads",
   });
 });
 
-it("shares only one synchronous metadata snapshot and refreshes committed WAL next time", async () => {
-  await withTempDir("openclaw-metadata-snapshot-", async (root) => {
-    const { writer, read, artifacts } = createWalFixture(root);
-    const prepare = vi.spyOn(sqliteReadOnly, "prepareSqliteReadOnlyLocationSync");
-    try {
-      const before = artifacts();
-      snapshot(() => {
-        expect(read()).toBe("first");
-        expect(read()).toBe("first");
-      });
-      expect(prepare).toHaveBeenCalledTimes(1);
-      expect(artifacts()).toEqual(before);
-      snapshot(() => {
-        expect(read()).toBe("first");
-        writer.exec("UPDATE held SET value='second'");
-        expect(read()).toBe("first");
-      });
-      expect(prepare).toHaveBeenCalledTimes(2);
-      snapshot(() => expect(read()).toBe("second"));
-      expect(prepare).toHaveBeenCalledTimes(3);
-      expect(() =>
-        snapshot(() => {
-          read();
-          throw new Error("consumer failure");
-        }),
-      ).toThrow("consumer failure");
-      snapshot(() => expect(read()).toBe("second"));
-      expect(prepare).toHaveBeenCalledTimes(5);
-      expect(() => snapshot(() => Promise.resolve(1))).toThrow("must remain synchronous");
-    } finally {
-      writer.close();
-    }
-  });
-});
+it.each(["synchronous", "report"])(
+  "shares one %s snapshot reader and refreshes committed WAL next time",
+  async (mode) => {
+    await withTempDir("openclaw-metadata-snapshot-", async (root) => {
+      const { options, writer, read, artifacts } = createWalFixture(root);
+      const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+      const openedReaders = () =>
+        open.mock.calls.filter(
+          ([location, opts]) => location.includes("database.sqlite") && opts?.readOnly,
+        );
+      const run = (operation: () => unknown) =>
+        mode === "synchronous"
+          ? snapshot(operation)
+          : withArtifactPreservingStateReads(() =>
+              withOpenClawStateDatabaseReadSnapshot(async () => operation(), options),
+            );
+      try {
+        const before = artifacts();
+        await run(() => {
+          expect(read()).toBe("first");
+          expect(read()).toBe("first");
+        });
+        expect(openedReaders()).toHaveLength(1);
+        expect(artifacts()).toEqual(before);
+        await run(() => {
+          expect(read()).toBe("first");
+          writer.exec("UPDATE held SET value='second'");
+          expect(read()).toBe("first");
+        });
+        expect(openedReaders()).toHaveLength(2);
+        await run(() => expect(read()).toBe("second"));
+        expect(openedReaders()).toHaveLength(3);
+        await expect(
+          Promise.resolve().then(() =>
+            run(() => {
+              read();
+              throw new Error("consumer failure");
+            }),
+          ),
+        ).rejects.toThrow("consumer failure");
+        await run(() => expect(read()).toBe("second"));
+        expect(openedReaders()).toHaveLength(5);
+        expect(
+          open.mock.results.every((result) => result.type !== "return" || !result.value.isOpen),
+        ).toBe(true);
+        if (mode === "synchronous") {
+          expect(() => snapshot(() => Promise.resolve(1))).toThrow("must remain synchronous");
+        }
+      } finally {
+        writer.close();
+      }
+    });
+  },
+);
 
 it("keeps the original synchronous snapshot while retained current reads see later commits", async () => {
   await withTempDir("openclaw-retained-inherited-snapshot-", async (root) => {

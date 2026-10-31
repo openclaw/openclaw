@@ -186,6 +186,59 @@ it.each(["legacy", "current"] as const)(
   },
 );
 
+it.each(["foreign-key", "physical"] as const)(
+  "retains only relational findings in original recovery images (%s)",
+  async (damage) => {
+    const f = await fixture();
+    let fragmentOffset = 0;
+    {
+      using db = new DatabaseSync(f.shared);
+      if (damage === "foreign-key") {
+        db.exec(
+          "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(parent_id INTEGER REFERENCES parent(id)); PRAGMA foreign_keys=OFF; INSERT INTO child VALUES(99);",
+        );
+      } else {
+        const root = Number(
+          db.prepare("SELECT rootpage FROM sqlite_schema WHERE name='payload'").get()?.rootpage,
+        );
+        const pageSize = Number(db.prepare("PRAGMA page_size").get()?.page_size);
+        fragmentOffset = (root - 1) * pageSize + 7;
+      }
+    }
+    if (damage === "physical") {
+      // Keep rows readable while corrupting the page's free-byte accounting.
+      const bytes = await fs.readFile(f.shared);
+      bytes.writeUInt8(1, fragmentOffset);
+      await fs.writeFile(f.shared, bytes);
+    }
+    const original = await fs.readFile(f.shared);
+    const backup = f.capture({
+      preserveSourceArtifacts: true,
+      originalCaptureSourcePaths: [f.shared],
+      integrityCheck: "quick",
+    });
+    if (damage === "physical") {
+      await expect(backup).rejects.toThrow(/Fragmentation of 0 bytes reported as 1/u);
+    } else {
+      const result = await backup;
+      const entry = result.databases[0]!;
+      using image = new DatabaseSync(entry.snapshotPath, { readOnly: true });
+      expect(image.prepare("SELECT * FROM child").all()).toEqual([{ parent_id: 99 }]);
+      expect(image.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
+      expect(result.warnings).toContain(
+        `Original recovery image retains foreign-key violations: ${f.shared}`,
+      );
+      expect(result.sourceGenerations[f.shared]).toBeUndefined();
+      expect(
+        createHash("sha256")
+          .update(await fs.readFile(entry.snapshotPath))
+          .digest("hex"),
+      ).toBe(entry.sha256);
+    }
+    expect(await fs.readFile(f.shared)).toEqual(original);
+  },
+);
+
 it.each([undefined, "quick"] as const)(
   "checks manual captures with requested integrity %s and keeps generic backups full",
   async (integrityCheck) => {
@@ -214,12 +267,14 @@ it.each(["auto", "off"] as const)(
     const f = await fixture(true);
     const previous = getFsSafeNativeConfig();
     const audit = vi.spyOn(sqliteIntegrity, "assertSqliteIntegrity");
-    const generations = vi.spyOn(generationReads, "readUpdateDatabaseGenerations");
+    const generations = vi.spyOn(generationReads, "readUpdateDatabaseGeneration");
+    const engineImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
     try {
       configureFsSafeNative({ mode });
       const backup = await f.capture({ stopped: true });
       expect(audit).not.toHaveBeenCalled();
       expect(generations).not.toHaveBeenCalled();
+      expect(engineImages).not.toHaveBeenCalled();
       expect(backup.databases).toHaveLength(3);
       for (const entry of backup.databases) {
         const bytes = await fs.readFile(entry.snapshotPath);
@@ -269,6 +324,7 @@ it.each([
       }
     }
     const reader = activity.startsWith("reader");
+    const engineImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
     const capture = f.capture({
       stopped: true,
       onProgress: ({ phase, path: source }) => {
@@ -302,6 +358,7 @@ it.each([
       return;
     }
     const backup = await capture;
+    expect(engineImages).toHaveBeenCalledTimes(activity === "reader-empty-wal" ? 0 : 1);
     expect(await Promise.all(files.slice(0, 2).map((file) => fs.readFile(file)))).toEqual(
       before.slice(0, 2),
     );
@@ -330,7 +387,7 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
       "INSERT INTO payload VALUES ('checkpoint pending');",
     );
     const parentImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
-    const generations = vi.spyOn(generationReads, "readUpdateDatabaseGenerations");
+    const generations = vi.spyOn(generationReads, "readUpdateDatabaseGeneration");
     await using scope =
       mode === "ordinary" || mode === "maintenance" ? maintenanceScope() : undefined;
     const input = { ...f.input, preserveSourceArtifacts: true };
@@ -358,8 +415,8 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
       expect(parentImages.mock.calls.map(([file]) => file)).toEqual(
         mode === "original-custody" ? [f.shared] : [],
       );
-      expect(generations.mock.calls.flatMap(([paths]) => paths)).toEqual(
-        mode === "original-custody" ? [] : [f.shared, f.shared],
+      expect(generations.mock.calls.map(([file]) => file)).toEqual(
+        mode === "original-custody" ? [] : [f.shared],
       );
     }
     expect(await readFiles(files)).toEqual(family);

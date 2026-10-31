@@ -1,4 +1,10 @@
-// Owner-only probe: run on the benchmark host with --expose-gc and scripts/tsx.mjs.
+/**
+ * Owner-only probe: node --expose-gc --import ./scripts/tsx.mjs
+ * scripts/perf/finalized-tool-schemas-measure.ts --factory workboard --rounds 10
+ * --sessions 63 --samples 5 --output report.json --golden-output provider.json
+ * Workboard mixes the real plugin factory with stable synthetic MCP-shaped tools (60 total).
+ * Each round rebuilds execution bindings and settles the real descriptor finalizer.
+ */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -21,6 +27,7 @@ import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 const { values } = parseArgs({
   options: {
     factory: { type: "string", default: "message" },
+    rounds: { type: "string", default: "1" },
     sessions: { type: "string", default: "63" },
     samples: { type: "string", default: "5" },
     "sampling-interval": { type: "string", default: "1024" },
@@ -31,6 +38,8 @@ const { values } = parseArgs({
 const integer = (raw: string, label: string, min: number) =>
   parseStrictIntegerOption({ raw, label, min, fallback: min });
 const sessions = integer(values.sessions, "sessions", 1);
+const rounds = integer(values.rounds, "rounds", 1);
+const turns = sessions * rounds;
 const samples = integer(values.samples, "samples", 1);
 const samplingInterval = integer(values["sampling-interval"], "sampling-interval", 1);
 // Include the warm session within the finalizer's 64 retained snapshots.
@@ -42,6 +51,32 @@ const factories: Record<string, () => AnyAgentTool[]> = {
   message: () => [createMessageTool()],
   "message-configured": () => [createMessageTool({ config: configured })],
 };
+if (values.factory === "workboard") {
+  const { createWorkboardTools } = await import("../../extensions/workboard/src/tools.js");
+  const { WorkboardStore } = await import("../../extensions/workboard/src/store.js");
+  // No store operation runs; provider serialization supplies goldens outside measured samples.
+  const store = WorkboardStore.prototype;
+  const count = createWorkboardTools({ store }).length;
+  assert.ok(count < 60);
+  const mcpTools: AnyAgentTool[] = Array.from({ length: 60 - count }, (_, index) => ({
+    name: `mcp_catalog_${index}`,
+    label: "Synthetic MCP search",
+    description: "Search a synthetic remote collection.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        filters: { type: "array", items: { type: "string" } },
+      },
+      required: ["query"],
+    },
+    execute: async () => ({ content: [], details: {} }),
+  }));
+  factories.workboard = () => [
+    ...createWorkboardTools({ store, context: { agentId: "schema-probe" } }),
+    ...mcpTools,
+  ];
+}
 const assembly =
   values.factory === "assembly"
     ? (await import("../../src/agents/agent-tools.js")).createOpenClawCodingToolsInternalAsync
@@ -117,8 +152,10 @@ async function collectGarbage() {
 }
 
 async function workload() {
-  for (let index = 0; index < sessions; index++) {
-    await construct(`schema-probe-${index}`);
+  for (let round = 0; round < rounds; round++) {
+    for (let index = 0; index < sessions; index++) {
+      await construct(`schema-probe-${index}`, `round-${round}`);
+    }
   }
 }
 
@@ -245,7 +282,7 @@ async function workCounts(inspector: Session) {
     }
     await workload();
     const measured = functionCounts((await inspector.post("Profiler.takePreciseCoverage")).result);
-    return { sessions, warm: warm.counts, afterWarm: measured.counts };
+    return { turns, warm: warm.counts, afterWarm: measured.counts };
   } finally {
     await inspector.post("Profiler.stopPreciseCoverage");
     await inspector.post("Profiler.disable");
@@ -273,9 +310,9 @@ function sampledBytes(profile: HeapProfiler.SamplingHeapProfile) {
   visit(profile.head, new Set());
   return {
     sampledObjects: profile.samples.length,
-    totalBytesPerSession: total / sessions,
-    ownerBytesPerSession: Object.fromEntries(
-      Object.entries(owners).map(([name, bytes]) => [name, bytes / sessions]),
+    totalBytesPerTurn: total / turns,
+    ownerBytesPerTurn: Object.fromEntries(
+      Object.entries(owners).map(([name, bytes]) => [name, bytes / turns]),
     ),
   };
 }
@@ -296,7 +333,7 @@ async function sampleHeap(inspector: Session, survivors: boolean) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
   return {
     ...sampledBytes(profile),
-    ...(survivors ? { retainedHeapBytesPerSession: (heapAfter - heapBefore) / sessions } : {}),
+    ...(survivors ? { retainedHeapBytesPerTurn: (heapAfter - heapBefore) / turns } : {}),
   };
 }
 
@@ -308,8 +345,8 @@ async function sampleUntraced() {
   const wallMs = performance.now() - start;
   const used = process.cpuUsage(cpu);
   return {
-    wallMsPerSession: wallMs / sessions,
-    cpuMsPerSession: (used.user + used.system) / 1000 / sessions,
+    wallMsPerTurn: wallMs / turns,
+    cpuMsPerTurn: (used.user + used.system) / 1000 / turns,
   };
 }
 
@@ -354,6 +391,8 @@ const report = {
   node: process.version,
   factory: values.factory,
   sessionsPerSample: sessions,
+  roundsPerSample: rounds,
+  turnsPerSample: turns,
   samplesPerMode: samples,
   samplingInterval,
   attribution: attributionResult,

@@ -444,8 +444,7 @@ describe("plugin-sdk subpath exports", () => {
           "collectProviderApiKeys getShellEnvAppliedKeys maybeLoadShellEnvForGenerationProviders",
         "test-media-understanding": "createRequestCaptureJsonFetch installPinnedHostnameTestHooks",
         "test-media-generation": `
-        encodePngRgba parseProviderModelMap resolveConfiguredLiveMusicModels
-        resolveConfiguredLiveVideoModels
+        encodePngRgba parseProviderModelMap resolveConfiguredLiveProviderModels resolveLiveAuthStore
       `,
         "test-fixtures": `
         createCliRuntimeCapture importFreshModule bundledPluginRoot createSandboxTestContext
@@ -495,7 +494,7 @@ describe("plugin-sdk subpath exports", () => {
         ],
         "test-env": `
         collectProviderApiKeys createRequestCaptureJsonFetch isLiveTestEnabled
-        resolveConfiguredLiveVideoModels
+        resolveConfiguredLiveProviderModels
       `,
       },
       false,

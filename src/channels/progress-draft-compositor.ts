@@ -23,6 +23,7 @@ import {
   resolveCommentaryLineId,
   sanitizeProgressStatusText,
 } from "./progress-draft-status-text.js";
+import { createProgressDraftToolRuns } from "./progress-draft-tool-runs.js";
 import { projectChannelWorkStatus } from "./progress-draft-work-status.js";
 import { settleProgressVisibilityCallbackResult } from "./progress-visibility.js";
 import {
@@ -127,6 +128,14 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   });
   let preambleExpiryTimer: ReturnType<typeof setTimeout> | undefined;
   let lastStartRendered = false;
+  const mergeUncompactedLine = (
+    currentLines: ChannelProgressDraftCompositorLine[],
+    line: ChannelProgressDraftCompositorLine,
+  ) =>
+    mergeChannelProgressDraftLineForStreaming(currentLines, line, {
+      maxLines: resolveChannelProgressDraftMaxLines(params.entry),
+    });
+  const toolRuns = createProgressDraftToolRuns(params, quietProgress, mergeUncompactedLine);
 
   const clearPreambleExpiryTimer = () => {
     if (preambleExpiryTimer !== undefined) {
@@ -201,6 +210,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     transferredStatus = undefined;
     transferredDiffStat = undefined;
     lines = [];
+    toolRuns?.reset();
     lastRenderedText = "";
     lastRenderedStatusFormat = undefined;
     lastRenderedLines = lines;
@@ -356,7 +366,8 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   };
 
   const clearLine = async (lineId: string) => {
-    const nextLines = removeChannelProgressDraftLine(lines, lineId);
+    const nextLines =
+      toolRuns?.remove(lines, lineId) ?? removeChannelProgressDraftLine(lines, lineId);
     if (nextLines === lines) {
       return false;
     }
@@ -365,9 +376,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   };
 
   const mergeLine = (line: ChannelProgressDraftCompositorLine) =>
-    mergeChannelProgressDraftLineForStreaming(lines, line, {
-      maxLines: resolveChannelProgressDraftMaxLines(params.entry),
-    });
+    toolRuns ? toolRuns.merge(lines, line) : mergeUncompactedLine(lines, line);
 
   const noteProgress = async (
     line?: ChannelProgressDraftCompositorLine,
@@ -543,6 +552,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
           return false;
         }
         // Backend waits override the headline only; the prior work status stays intact.
+        toolRuns?.breakRun();
         modelWaitText = payload.phase === "end" ? "" : (payload.progressText ?? "");
         return modelWaitText
           ? await startAndRender({ flush: true })
@@ -585,6 +595,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       payload: Parameters<typeof progressEventHandlers.pushApprovalEvent>[0],
     ) {
       if (payload.phase === "resolved" && payload.approvalId) {
+        toolRuns?.breakRun();
         return await clearLine(`approval:${payload.approvalId}`);
       }
       return await progressEventHandlers.pushApprovalEvent(payload);
@@ -600,6 +611,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         return false;
       }
       transferredStatus = undefined;
+      toolRuns?.breakRun();
       planSteps = steps?.length ? steps : undefined;
       planExplanation = (options?.explanation ?? "").replace(/\s+/g, " ").trim();
       planExplanationFormat = options?.explanationFormat;
@@ -643,6 +655,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         return false;
       }
       transferredStatus = undefined;
+      toolRuns?.breakRun();
       preambleText = normalized;
       preambleAt = now();
       schedulePreambleExpiryRefresh();

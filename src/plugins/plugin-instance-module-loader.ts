@@ -20,6 +20,7 @@ import {
   capturePluginGenerationArtifact,
   type PluginGenerationArtifact,
 } from "./plugin-generation-artifact.js";
+import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import {
   registerPluginInstanceModuleResolver,
@@ -96,6 +97,10 @@ type RetainedNativeEsmTarget = Pick<
 > & { registry: PluginRegistry | undefined };
 
 function retainedNativeEsmLocation(target: RetainedNativeEsmTarget) {
+  // Bundled modules use the shared host loader; embedded entries may have no disk file.
+  if (target.origin === "bundled") {
+    return undefined;
+  }
   // Explicit recovery keeps its own source custody and must not join an installed entry.
   if (target.nativeRecovery || target.recoverySourceMap) {
     return undefined;
@@ -257,13 +262,16 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       rootDir: params.rootDir,
       cache,
       loader,
-      source: captureBundledPluginStateOperationModules({
-        rootDir: params.rootDir,
-        source: params.source,
-        devSourceRoot: params.devSourceRoot,
-        pluginSdkResolution: params.pluginSdkResolution,
-        preparedArtifact: params.preparedArtifact?.artifact,
-      }),
+      source:
+        params.stateOperations === false
+          ? undefined
+          : captureBundledPluginStateOperationModules({
+              rootDir: params.rootDir,
+              source: params.source,
+              devSourceRoot: params.devSourceRoot,
+              pluginSdkResolution: params.pluginSdkResolution,
+              preparedArtifact: params.preparedArtifact?.artifact,
+            }),
     });
     return;
   }
@@ -277,6 +285,10 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     retainedNativeEsmOwners.set(params.instance, retained);
   }
   const reusedArtifact = retained?.artifact;
+  const metrics = getPluginGenerationMetrics();
+  if (reusedArtifact && metrics) {
+    metrics.captureReuse++;
+  }
   let artifact: PluginGenerationArtifact;
   try {
     params.preparedArtifact?.attachModuleSource(moduleSource);

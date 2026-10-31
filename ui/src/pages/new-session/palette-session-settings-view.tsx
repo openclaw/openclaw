@@ -450,6 +450,7 @@ export function PaletteSessionSettingsView(properties: {
                 />
                 <span>
                   <ShortcutText
+                    fallback={t("commandPalette.rememberSettingsNoShortcut")}
                     text={t("commandPalette.rememberSettings", { shortcut: "{shortcut}" })}
                     shortcut={() => (
                       <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette} inline />

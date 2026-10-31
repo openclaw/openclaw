@@ -49,7 +49,9 @@ through your secret manager, then run:
 OPENCLAW_LIVE_TEST=1 node scripts/run-vitest.mjs --config test/vitest/vitest.live.config.ts extensions/typesafe/src/decisions.live.test.ts
 ```
 
-The test sends one synthetic Boolean/Choice/Score batch to hosted Jev and consumes
-the account's allowance. It skips without both the opt-in flag and key. It checks
+The test sends two synthetic Boolean/Choice/Score batches (text and a generated
+320 × 320 PNG) to hosted Jev and consumes the account's allowance. It skips without both the opt-in flag and key. It checks
 the registered V2 adapter and real transport with an isolated prepared credential;
-it does not test host credential discovery or change any model selection.
+it does not test host credential discovery or change any model selection. When
+HTTPS proxy environment settings are present, the test explicitly selects the
+shared environment-proxy transport (including protected-key egress).

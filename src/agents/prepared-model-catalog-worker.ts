@@ -1,16 +1,16 @@
-/** Runs complete model-catalog discovery outside the Gateway event loop. */
-import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import {
   getConfigResolutionFacts,
   serializeConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { captureRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { resolveCodexClientVersion } from "../plugin-sdk/codex-client-version-runtime.js";
+import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import {
   getPluginCacheRetirementSignal,
   getPluginMetadataSnapshotCache,
@@ -27,6 +27,8 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getActiveSkillEnvKeysCore } from "../skills/runtime/env-overrides.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { beginAuthProfileCredentialBatch } from "../state/user-model-account-authority.js";
+/** Runs complete model-catalog discovery outside the Gateway event loop. */
+import { captureTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
@@ -268,6 +270,10 @@ export function createPreparedModelCatalogWorkerInput(params: {
       configuredRuntimeModels: params.agentFacts.configuredRuntimeModels,
     },
     preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts === true,
+    // Receipt overlays do not change inventory identity; reuse the immutable owner's fact.
+    installedIndexFingerprint: resolveInstalledManifestRegistryIndexFingerprint(
+      pluginMetadataSnapshot.index,
+    ),
     pluginMetadataSnapshot: {
       ...pluginMetadataSnapshot,
       index,
@@ -349,6 +355,7 @@ export function createPreparedModelCatalogWorker(
   };
   let receiveResult = validate;
   const stop = async (error: Error) => {
+    materializeErrorStack(error);
     stoppedError ??= error;
     params.retirementSignal.removeEventListener("abort", retire);
     for (const controller of captures.keys()) {
@@ -501,7 +508,9 @@ export function createPreparedModelCatalogWorker(
           task.onRecovery = onRecovery;
           const workerRequest = {
             ...value,
-            clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: input.env }),
+            templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({
+              env: input.env,
+            }),
           };
           const publication = beginAuthProfileCredentialBatch(
             captureOpenClawStateWorkerContext({ env: input.env }),

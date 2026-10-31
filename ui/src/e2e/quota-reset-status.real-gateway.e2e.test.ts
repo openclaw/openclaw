@@ -284,38 +284,27 @@ describe("Running Gateway quota status", () => {
           if (catalogHold) {
             expect(beforeRecoveryReply, evidence()).toBeDefined();
             expect(beforeRecoveryReply?.blockedUntil, evidence()).toBeUndefined();
-            // A cleared persisted block precedes publication of the replacement catalog owner.
-            // Keep the old response held until a prepared-only read observes that replacement.
-            let published: ModelsListResult | undefined;
-            await expect
-              .poll(async () => {
-                published = await client.request<ModelsListResult>("models.list", {
-                  agentId: "main",
-                  view: "configured",
-                  preparedOnly: true,
-                });
-                return {
-                  pending: published.pendingProviders?.includes("openai") ?? false,
-                  available: published.models.some(
-                    (model) =>
-                      model.provider === "openai" && model.id === "gpt-5.5" && model.available,
-                  ),
-                };
-              })
-              .toEqual({ pending: false, available: true });
+            // Quota-only updates keep the catalog owner. Availability must recover while
+            // its refresh is pending and stay recovered after the held response arrives.
+            const readPublishedStatus = async () => {
+              const published = await client.request<ModelsListResult>("models.list", {
+                agentId: "main",
+                view: "configured",
+                preparedOnly: true,
+              });
+              return {
+                pending: published.pendingProviders?.includes("openai") ?? false,
+                available: published.models.some(
+                  (model) =>
+                    model.provider === "openai" && model.id === "gpt-5.5" && model.available,
+                ),
+              };
+            };
+            await expect.poll(readPublishedStatus).toEqual({ pending: true, available: true });
             catalogHold.release();
             const refreshed = await catalogRefresh;
-            // Recovery changes availability, so the held generation must not publish stale facts.
-            expect(refreshed, evidence()).toMatchObject({
-              ok: false,
-              error: {
-                name: "GatewayClientRequestError",
-                code: "UNAVAILABLE",
-                retryable: true,
-                retryAfterMs: 0,
-                message: expect.stringContaining("catalog generation was superseded"),
-              },
-            });
+            expect(refreshed, evidence()).toMatchObject({ ok: true });
+            await expect.poll(readPublishedStatus).toEqual({ pending: false, available: true });
             expect(provider.heldCatalogResponses[0]?.releaseReason, evidence()).toBe("explicit");
           }
           await captureFinalStatus(fixture, (profile) => {

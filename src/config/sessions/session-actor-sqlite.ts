@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
@@ -92,8 +93,6 @@ const executePhase: {
   appendTranscriptEvent: (scope, input) =>
     scope.execute({ type: "session.actor.appendTranscriptEvent", input }),
   completeTurn: (scope, input) => scope.execute({ type: "session.actor.completeTurn", input }),
-  deliveryPending: (scope, input) =>
-    scope.execute({ type: "session.actor.deliveryPending", input }),
   deliverySettled: (scope, input) =>
     scope.execute({ type: "session.actor.deliverySettled", input }),
   patch: (scope, input) => scope.execute({ type: "session.actor.patch", input }),
@@ -290,6 +289,7 @@ export function createSqliteSessionActorExecutor(
       outcome = await params.transport.run(
         (scope) => {
           running = (async (): Promise<Outcome> => {
+            using phase = observeDiagnosticsTimelinePhases("session.actor.command.commit");
             if (fenced) {
               return unknown(
                 new Error("Session actor requires reconciliation before another command", {
@@ -356,6 +356,7 @@ export function createSqliteSessionActorExecutor(
                   committed = { ...committed, failure: reply.value.failure };
                 }
                 result = committed;
+                phase.mark("session.actor.command.publication");
                 try {
                   conversation?.settle(committed.receipt.conversationPublication);
                   const metadata = committed.receipt.entryMetadata;
@@ -569,10 +570,13 @@ export function createSqliteSessionActorExecutor(
     }
     return outcome;
   };
-  const snapshot = (authority: SessionActorAuthority): SessionActorHotState | undefined => {
+  const snapshot = <State extends SessionActorAuthorityFacts>(
+    authority: SessionActorAuthority,
+    readFacts: () => State | undefined,
+  ): State | undefined => {
     params.assertReadable();
     authority.assertCurrent();
-    const installed = fenced ? undefined : params.replica.read();
+    const installed = fenced ? undefined : readFacts();
     if (installed) {
       authority.authorize("commit", installed);
       authority.assertCurrent();
@@ -581,7 +585,8 @@ export function createSqliteSessionActorExecutor(
     return installed;
   };
   return {
-    snapshot,
+    snapshot: (authority) => snapshot(authority, params.replica.read),
+    snapshotEntry: (authority) => snapshot(authority, params.replica.readEntry),
     read,
     command,
     retain: params.transport.retain?.bind(params.transport),

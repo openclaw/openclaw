@@ -126,6 +126,7 @@ export async function runAgentTurnWithOutcome(
       eventExecution.assertCurrent?.();
     }
     source.claim();
+    const adapter = params.followupRun.controllerInput?.sourceAdapter;
     const result = await withExecRequestTurn(
       {
         identity: {
@@ -133,6 +134,20 @@ export async function runAgentTurnWithOutcome(
           sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
           sessionId: params.followupRun.run.sessionId,
           agentId: params.followupRun.run.agentId,
+          // Unbound event wakes inherit custody; absent fields must not erase its original actor.
+          ...(adapter?.requester?.connectionId !== undefined
+            ? { ownerConnId: adapter.requester.connectionId }
+            : {}),
+          ...(adapter?.requester?.deviceId !== undefined
+            ? { ownerDeviceId: adapter.requester.deviceId }
+            : {}),
+          ...(adapter?.initiatingPersonalOperator
+            ? { initiatingPersonalOperator: adapter.initiatingPersonalOperator }
+            : {}),
+          ...(adapter?.controlUiVisible !== undefined
+            ? { controlUiVisible: adapter.controlUiVisible }
+            : {}),
+          ...(adapter?.turnKind ? { turnKind: adapter.turnKind } : {}),
         },
         owners: eventExecution?.execRequestOwners,
         abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,

@@ -14,9 +14,11 @@ import {
   unlink,
   lstat,
   copyFile,
+  mkdtemp,
+  rm,
 } from "node:fs/promises";
 import { createServer, connect, type Socket } from "node:net";
-import { loadavg } from "node:os";
+import { loadavg, tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { createInterface } from "node:readline";
@@ -48,16 +50,17 @@ const { values } = parseArgs({
     worker: { type: "boolean", default: false },
     "controlled-worker": { type: "boolean", default: false },
     screenshots: { type: "boolean", default: false },
+    "extended-flows": { type: "boolean", default: false },
   },
 });
 if (
   !values["bundle-dir"] ||
   !values.output ||
-  !["local", "remote"].includes(values.profile) ||
+  !["local", "remote", "mobile"].includes(values.profile) ||
   !["none", "token"].includes(values.auth)
 ) {
   throw new Error(
-    "Required: --bundle-dir <built UI> --output <directory> [--profile local|remote] [--auth none|token] [--pairs N] [--compare-source-dir <checkout>] [--compare-bundle-dir <base UI>]",
+    "Required: --bundle-dir <built UI> --output <directory> [--profile local|remote|mobile] [--auth none|token] [--pairs N] [--extended-flows] [--compare-source-dir <checkout>] [--compare-bundle-dir <base UI>]",
   );
 }
 if (values["compare-bundle-dir"] && !values["compare-source-dir"]) {
@@ -85,7 +88,13 @@ if (outputInsideRepository) {
   );
 }
 const bundle = path.resolve(values["bundle-dir"]);
-const remote = values.profile === "remote";
+const remote = values.profile !== "local";
+const networkProfile =
+  values.profile === "local"
+    ? { roundTripMs: 0, megabitsPerSecond: null, latencyMs: 0 }
+    : values.profile === "mobile"
+      ? { roundTripMs: 250, megabitsPerSecond: 3, latencyMs: 125 }
+      : { roundTripMs: 100, megabitsPerSecond: 10, latencyMs: 50 };
 const SYNTHETIC_GATEWAY_TOKEN = "synthetic-wire-benchmark-gateway-token";
 const sessionKeys = ["agent:main:wire-fixture-a", "agent:main:wire-fixture-b"];
 const workerMessagePrefix = "OPENCLAW_WIRE_WORKER ";
@@ -102,6 +111,7 @@ type WireFrame = {
   name?: string;
   requestId?: string;
   type?: string;
+  ok?: boolean;
   digest?: string;
 };
 
@@ -201,6 +211,7 @@ function frameReader(
               method?: string;
               type?: string;
               event?: string;
+              ok?: boolean;
             };
             if (value.id && value.method) {
               methods.set(value.id, value.method);
@@ -212,6 +223,7 @@ function frameReader(
               value.type;
             message.requestId = value.id;
             message.type = value.type;
+            message.ok = value.ok;
             message.decodedBytes = payload.length;
             message.digest = createHash("sha256").update(payload).digest("hex");
           }
@@ -227,10 +239,22 @@ function frameReader(
 async function startProxy(upstreamPort: number, listenPort: number) {
   const frames: WireFrame[] = [];
   const sockets = new Set<Socket>();
-  const links = { sent: createControlUiWireLink(), received: createControlUiWireLink() };
+  const linkOptions = {
+    latencyMs: networkProfile.latencyMs,
+    megabitsPerSecond: networkProfile.megabitsPerSecond ?? 10,
+  };
+  const links = {
+    sent: createControlUiWireLink(linkOptions),
+    received: createControlUiWireLink(linkOptions),
+  };
+  let offline = false;
   let connection = 0;
   const methods = new Map<string, string>();
   const server = createServer({ allowHalfOpen: true }, (client) => {
+    if (offline) {
+      client.destroy();
+      return;
+    }
     const upstream = connect({ port: upstreamPort, host: "127.0.0.1", allowHalfOpen: true });
     sockets.add(client);
     sockets.add(upstream);
@@ -267,6 +291,14 @@ async function startProxy(upstreamPort: number, listenPort: number) {
   return {
     frames,
     url: `http://127.0.0.1:${address.port}`,
+    setOffline(value: boolean) {
+      offline = value;
+      if (offline) {
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+      }
+    },
     async close() {
       links.sent.close();
       links.received.close();
@@ -280,30 +312,47 @@ async function startProxy(upstreamPort: number, listenPort: number) {
   };
 }
 
+type ReadinessKind = "chat" | "new-session" | "board" | "usage" | "settings" | "reconnect";
+
 function installReadiness() {
   type Readiness = {
     startMs: number;
     transcriptMs: number | null;
+    transcriptVisibleMs: number | null;
     composerMs: number | null;
     newSessionMs: number | null;
+    pageMs: number | null;
   };
-  const state: Readiness = { startMs: 0, transcriptMs: null, composerMs: null, newSessionMs: null };
+  const state: Readiness = {
+    startMs: 0,
+    transcriptMs: null,
+    transcriptVisibleMs: null,
+    composerMs: null,
+    newSessionMs: null,
+    pageMs: null,
+  };
   const visible = (selector: string) => {
     const element = document.querySelector<HTMLElement>(selector);
     return element?.checkVisibility() ? element : null;
   };
   let expectedKey: string | undefined = "agent:main:wire-fixture-a";
+  let kind: ReadinessKind = "chat";
   const sample = () => {
+    const snapshot =
+      kind === "chat" || kind === "new-session" ? undefined : window.openclawControlUi?.snapshot();
+    const recovered =
+      kind !== "reconnect" || (snapshot?.gatewayPhase === "connected" && snapshot.rosterReady);
     const pane = visible(".chat-pane-cache__pane--active");
     const correctPane = pane && (!expectedKey || Reflect.get(pane, "sessionKey") === expectedKey);
-    if (
-      correctPane &&
-      Reflect.get(pane, "transcriptReady") === true &&
-      visible(".chat-pane-cache__pane--active .chat-virtual-row")
-    ) {
+    const transcript = correctPane && visible(".chat-pane-cache__pane--active .chat-virtual-row");
+    if (transcript && transcript.textContent?.trim()) {
+      state.transcriptVisibleMs ??= performance.now() - state.startMs;
+    }
+    if (recovered && correctPane && Reflect.get(pane, "transcriptReady") === true && transcript) {
       state.transcriptMs ??= performance.now() - state.startMs;
     }
     const composer =
+      recovered &&
       correctPane &&
       visible(".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea");
     const model = Array.from(
@@ -317,16 +366,37 @@ function installReadiness() {
     if (newSession && modelReady && !newSession.matches(":disabled, [aria-disabled='true']")) {
       state.newSessionMs ??= performance.now() - state.startMs;
     }
+    const route = kind === "board" ? "dashboard" : kind === "settings" ? "appearance" : kind;
+    if (
+      snapshot?.routeReady &&
+      snapshot.route?.status === "success" &&
+      snapshot.route.matches[0]?.routeId === route
+    ) {
+      const control =
+        kind === "board"
+          ? visible('.board-session-surface .board-view[aria-busy="false"] .board-empty')
+          : kind === "usage"
+            ? visible('openclaw-usage-page button[aria-label="Refresh"]:not(:disabled)')
+            : kind === "settings"
+              ? visible(".settings-theme-grid [data-theme-id]:not(:disabled)")
+              : null;
+      if (control) {
+        state.pageMs ??= performance.now() - state.startMs;
+      }
+    }
     requestAnimationFrame(sample);
   };
   Reflect.set(window, "__wireReadiness", {
     state,
-    reset(key?: string) {
+    reset(key?: string, nextKind: ReadinessKind = "chat") {
       expectedKey = key;
+      kind = nextKind;
       state.startMs = performance.now();
       state.transcriptMs = null;
+      state.transcriptVisibleMs = null;
       state.composerMs = null;
       state.newSessionMs = null;
+      state.pageMs = null;
     },
   });
   requestAnimationFrame(sample);
@@ -377,6 +447,7 @@ async function runWorker() {
         "SYSTEMROOT",
         "LANG",
         "TMPDIR",
+        "XDG_CACHE_HOME",
       ].includes(name),
     ),
   );
@@ -507,10 +578,12 @@ async function runWorker() {
     { agentId: "main" },
   );
   await closeOpenClawAgentDatabasesAsync();
-  const [{ startGatewayServer }, { controlUiSessionPath }] = await Promise.all([
-    import("../src/gateway/server.js"),
-    import("../ui/src/test-helpers/control-ui-e2e-session-urls.ts"),
-  ]);
+  const [{ startGatewayServer }, { controlUiSessionPath, controlUiSessionUrl }] = await Promise.all(
+    [
+      import("../src/gateway/server.js"),
+      import("../ui/src/test-helpers/control-ui-e2e-session-urls.ts"),
+    ],
+  );
   const { ensureCanonicalGatewayOwnerProfile, setCanonicalUserProfileAvatar } =
     await import("../src/state/user-profile-writes.js");
   const owner = await ensureCanonicalGatewayOwnerProfile("Synthetic benchmark operator", {
@@ -670,6 +743,7 @@ async function runWorker() {
             bytes: number;
             status?: number;
             cached?: boolean;
+            fromServiceWorker?: boolean;
             failed?: boolean;
             headers?: Record<string, string>;
           };
@@ -736,11 +810,8 @@ async function runWorker() {
                 responseAtMs: performance.now(),
                 browserResponseAtMs: event.timestamp * 1000,
                 status: event.response.status,
-                cached:
-                  request.cached ||
-                  event.response.fromDiskCache ||
-                  event.response.fromServiceWorker ||
-                  false,
+                cached: request.cached || event.response.fromDiskCache || false,
+                fromServiceWorker: event.response.fromServiceWorker ?? false,
                 headers: Object.fromEntries(
                   Object.entries(event.response.headers).filter(([name]) =>
                     [
@@ -825,7 +896,8 @@ async function runWorker() {
           async function capture(
             name: string,
             action: () => Promise<Response | null | void>,
-            newSession = false,
+            kind: ReadinessKind = "chat",
+            details?: Record<string, unknown>,
           ) {
             // A fresh inspector agent owns counters for this action even when Chrome
             // keeps the renderer for a navigation; a retained agent accumulates them.
@@ -840,15 +912,17 @@ async function runWorker() {
                 throw new Error(`Navigation failed with HTTP ${result.status()}`);
               }
               await page.waitForFunction(
-                (isNew) => {
+                (readinessKind) => {
                   const state = Reflect.get(window, "__wireReadiness")?.state;
-                  return isNew
+                  return readinessKind === "new-session"
                     ? state?.newSessionMs !== null && state?.newSessionMs !== undefined
-                    : state?.transcriptMs !== null &&
+                    : ["board", "usage", "settings"].includes(readinessKind)
+                      ? state?.pageMs !== null && state?.pageMs !== undefined
+                      : state?.transcriptMs !== null &&
                         state?.composerMs !== null &&
                         state?.transcriptMs !== undefined;
                 },
-                newSession,
+                kind,
                 { timeout: 60_000 },
               );
               const driverReadyAtMs = performance.now();
@@ -858,16 +932,36 @@ async function runWorker() {
                 const state = Reflect.get(window, "__wireReadiness").state;
                 return { ...state };
               });
-              const readyElapsedMs = newSession
-                ? readiness.newSessionMs
-                : Math.max(readiness.transcriptMs, readiness.composerMs);
+              const readyElapsedMs =
+                kind === "new-session"
+                  ? readiness.newSessionMs
+                  : ["board", "usage", "settings"].includes(kind)
+                    ? readiness.pageMs
+                    : Math.max(readiness.transcriptMs, readiness.composerMs);
               const cpuAfter = (await performanceSession.send("Performance.getMetrics")).metrics;
+              const cpuMetrics = (metrics: typeof cpuAfter) =>
+                Object.fromEntries(
+                  metrics
+                    .filter((metric) =>
+                      [
+                        "TaskDuration",
+                        "ScriptDuration",
+                        "LayoutDuration",
+                        "RecalcStyleDuration",
+                      ].includes(metric.name),
+                    )
+                    .map((metric) => [metric.name, metric.value * 1000]),
+                );
               const navigationStart = cpuAfter.find((metric) => metric.name === "NavigationStart");
               if (!navigationStart) {
                 throw new Error("Chrome did not report the navigation clock");
               }
               const actionBrowserStartMs = navigationStart.value * 1000 + readiness.startMs;
               const readyBrowserTimestampMs = actionBrowserStartMs + readyElapsedMs;
+              const transcriptVisibleBrowserTimestampMs =
+                readiness.transcriptVisibleMs === null
+                  ? null
+                  : actionBrowserStartMs + readiness.transcriptVisibleMs;
               // Retain a bounded post-ready tail so queued bytes are not mistaken for delivery.
               await page.waitForTimeout(750);
               const httpSettled = await page
@@ -876,6 +970,8 @@ async function runWorker() {
                   () => true,
                   () => false,
                 );
+              const settledCpu = (await performanceSession.send("Performance.getMetrics")).metrics;
+              const settledElapsedMs = performance.now() - startedAtMs;
               const observed = decoded.slice(decodedStart);
               const arrivals = new Map<WireFrame, (typeof observed)[number]>();
               for (const event of observed) {
@@ -905,6 +1001,10 @@ async function runWorker() {
                     criticalBeforeReady: received
                       ? received.browserTimestampMs <= readyBrowserTimestampMs
                       : false,
+                    beforeTranscriptVisible:
+                      received && transcriptVisibleBrowserTimestampMs !== null
+                        ? received.browserTimestampMs <= transcriptVisibleBrowserTimestampMs
+                        : false,
                   });
                 });
               if (name === "cold-chat" || name === "session-switch") {
@@ -916,6 +1016,29 @@ async function runWorker() {
                   .waitFor({ state: "visible" });
               }
               const criticalFrames = frames.filter((frame) => frame.criticalBeforeReady);
+              if (kind === "reconnect") {
+                const connected = criticalFrames.find(
+                  (frame) => frame.direction === "received" && frame.name === "connect" && frame.ok,
+                );
+                const freshRoster = criticalFrames.find(
+                  (frame) =>
+                    frame.direction === "received" &&
+                    frame.name === "sessions.list" &&
+                    frame.ok &&
+                    frame.connection === connected?.connection,
+                );
+                if (
+                  !connected ||
+                  !freshRoster ||
+                  !negotiations.some(
+                    (upgrade) => upgrade.atMs >= startedAtMs && upgrade.status === 101,
+                  )
+                ) {
+                  throw new Error(
+                    "Reconnect did not deliver a new handshake and fresh session roster before readiness",
+                  );
+                }
+              }
               const http = [...requests.values()]
                 .filter((record) => record.startedAtMs >= startedAtMs)
                 .map((record) =>
@@ -947,6 +1070,7 @@ async function runWorker() {
                 );
               samples.push({
                 name,
+                ...details,
                 readiness,
                 driverElapsedMs: driverReadyAtMs - startedAtMs,
                 hostLoad: loadavg(),
@@ -998,6 +1122,8 @@ async function runWorker() {
                   httpWireRequests: http.filter((request) => request.bytes > 0).length,
                   httpCacheHits: http.filter((request) => request.cached && request.bytes === 0)
                     .length,
+                  serviceWorkerResponses: http.filter((request) => request.fromServiceWorker)
+                    .length,
                   httpFailedFetches: http.filter((request) => request.failed).length,
                   httpBytes: http.reduce((sum, record) => sum + record.bytes, 0),
                   wsWireBytes: criticalFrames.reduce((sum, frame) => sum + frame.wireBytes, 0),
@@ -1013,18 +1139,9 @@ async function runWorker() {
                 },
                 gatewayCpuMs: { user: gatewayCpu.user / 1000, system: gatewayCpu.system / 1000 },
                 gatewayRssBytes,
-                cpuMs: Object.fromEntries(
-                  cpuAfter
-                    .filter((m) =>
-                      [
-                        "TaskDuration",
-                        "ScriptDuration",
-                        "LayoutDuration",
-                        "RecalcStyleDuration",
-                      ].includes(m.name),
-                    )
-                    .map((m) => [m.name, m.value * 1000]),
-                ),
+                cpuMs: cpuMetrics(cpuAfter),
+                settledCpuMs: cpuMetrics(settledCpu),
+                settledElapsedMs,
               });
               console.log(`Completed ${name}: ${JSON.stringify(readiness)}`);
               if (values.screenshots && pair === 0) {
@@ -1128,7 +1245,7 @@ async function runWorker() {
                   window.openclawControlUi?.navigate("new-session");
                 });
               },
-              true,
+              "new-session",
             );
             // Return to the cached first pane before measuring a first visit to session B.
             await page.evaluate(
@@ -1148,18 +1265,91 @@ async function runWorker() {
                 { key: sessionKeys[1]!, pathname: controlUiSessionPath(sessionKeys[1]!) },
               );
             });
+            if (values["extended-flows"]) {
+              await capture(
+                "first-board",
+                async () => {
+                  await page.evaluate(
+                    (pathname) => {
+                      Reflect.get(window, "__wireReadiness").reset(undefined, "board");
+                      window.openclawControlUi?.navigate("dashboard", { pathname });
+                    },
+                    new URL(controlUiSessionUrl(proxy.url, sessionKeys[1]!, "dashboard")).pathname,
+                  );
+                },
+                "board",
+              );
+              await capture(
+                "first-usage",
+                async () => {
+                  await page.evaluate(() => {
+                    Reflect.get(window, "__wireReadiness").reset(undefined, "usage");
+                    window.openclawControlUi?.navigate("usage");
+                  });
+                },
+                "usage",
+              );
+              await capture(
+                "first-settings",
+                async () => {
+                  await page.evaluate(() => {
+                    Reflect.get(window, "__wireReadiness").reset(undefined, "settings");
+                    // Desktop /settings redirects to chat; Appearance is the default Settings page.
+                    window.openclawControlUi?.navigate("appearance");
+                  });
+                },
+                "settings",
+              );
+              await page.evaluate((pathname) => {
+                Reflect.get(window, "__wireReadiness").reset("agent:main:wire-fixture-b");
+                window.openclawControlUi?.navigate("chat", { pathname });
+              }, controlUiSessionPath(sessionKeys[1]!));
+              await page.waitForFunction(() => {
+                const state = Reflect.get(window, "__wireReadiness").state;
+                return state.transcriptMs !== null && state.composerMs !== null;
+              });
+              const outageStartedAtMs = performance.now();
+              proxy.setOffline(true);
+              try {
+                await page.waitForFunction(
+                  () => window.openclawControlUi?.snapshot().gatewayPhase === "reconnecting",
+                  undefined,
+                  { timeout: 30_000 },
+                );
+                await page.waitForTimeout(
+                  Math.max(0, 5_000 - (performance.now() - outageStartedAtMs)),
+                );
+                const reconnectDetails = { outageMs: 0 };
+                await capture(
+                  "reconnect",
+                  async () => {
+                    await page.evaluate((key) => {
+                      Reflect.get(window, "__wireReadiness").reset(key, "reconnect");
+                    }, sessionKeys[1]!);
+                    reconnectDetails.outageMs = performance.now() - outageStartedAtMs;
+                    proxy.setOffline(false);
+                  },
+                  "reconnect",
+                  reconnectDetails,
+                );
+              } finally {
+                proxy.setOffline(false);
+              }
+            }
             await writeFile(
               path.join(sampleOutput, "sample.json"),
               JSON.stringify(
                 {
                   format: "control-ui-real-wire-v1",
                   profile: values.profile,
+                  networkProfile,
+                  extendedFlows: values["extended-flows"],
                   revision,
                   dirty,
                   bundle,
                   fixture: { sessions: 2, messagesEach: 120, auth: values.auth },
                   measurement:
-                    "Real Gateway. Synthetic offline-owned state. TCP proxy measures RFC6455 headers/payloads before delivery. HTTP encodedDataLength includes headers. Remote: shared 10 Mbps link per direction, 50 ms one-way application-stream latency, no simulated packet loss/congestion or TCP handshake latency. Readiness is first animation frame with visible enabled selectors; screenshots outside timed interval.",
+                    "Real Gateway. Synthetic offline-owned state. TCP proxy measures RFC6455 headers/payloads before delivery. HTTP bytes and wire-request counts are page-observed lower bounds: encodedDataLength includes response headers, but underlying service-worker fetches are not captured. Service-worker delivery is recorded separately and does not itself prove a cache hit. Network profile describes shared bandwidth per direction and one-way application-stream latency; no simulated packet loss/congestion or TCP handshake latency. Readiness is first animation frame with visible enabled selectors; reconnect additionally requires a fresh handshake and roster. Reconnect timing starts at link restoration, excluding the separately reported outage. Board is the session Dashboard face with an empty Board; Settings is Appearance. Screenshots are outside the timed interval.",
                   samples,
                   negotiations,
                   errors,
@@ -1176,6 +1366,7 @@ async function runWorker() {
                 {
                   error: String(error),
                   url: page.url(),
+                  samples,
                   errors,
                   text: (await page.locator("body").textContent())?.slice(0, 6000),
                   websocket: decoded.map(({ name, bytes, direction }) => ({
@@ -1215,7 +1406,14 @@ async function runWorker() {
 }
 
 if (values.worker) {
-  await runWorker();
+  // Snapshot staging requires a private temp ancestor; proof/state can stay on an external disk.
+  const cacheRoot = await mkdtemp(path.join(tmpdir(), "openclaw-wire-cache-"));
+  process.env.XDG_CACHE_HOME = cacheRoot;
+  try {
+    await runWorker();
+  } finally {
+    await rm(cacheRoot, { recursive: true, force: true });
+  }
   process.exit(0);
 } else {
   const ownSource = await realpath(
@@ -1330,6 +1528,9 @@ if (values.worker) {
     }
     if (screenshots) {
       args.push("--screenshots");
+    }
+    if (values["extended-flows"]) {
+      args.push("--extended-flows");
     }
     const child = spawn(process.execPath, args, {
       cwd: source,

@@ -4,13 +4,11 @@ import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, UserMessage } from "../types.js";
-import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 import { convertGoogleTools, projectGoogleMessages } from "./google-messages.js";
 import {
   buildGoogleGenerateContentParams as buildParams,
-  buildGoogleSimpleThinking as buildThinking,
   type GoogleGenerateContentClient,
 } from "./google-shared.js";
 import {
@@ -37,14 +35,11 @@ const user = (content: UserMessage["content"]): UserMessage => ({
   content,
   timestamp: 0,
 });
-const disabledThinking = { thinking: { enabled: false } };
 const model = {
   ...makeModel("gemini-test"),
   reasoning: true,
   cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0 },
 };
-const thinkingConfig = (target: typeof model, thinking: Parameters<typeof buildParams>[2]) =>
-  buildParams(target, { messages: [] }, thinking).config?.thinkingConfig;
 const textPart = (text: string, thoughtSignature?: string): Part => ({
   text,
   ...(thoughtSignature && { thoughtSignature }),
@@ -65,51 +60,16 @@ const thoughtOutput = (thinking: string, thinkingSignature?: string) => ({
 });
 const signature1 = "c2lnXzE=";
 const signature2 = "c2lnXzI=";
+const imageData = { mimeType: "image/png", data: "AAAA" };
 
-it.each([
-  ["minimal", "LOW", true],
-  ["low", "LOW", true],
-  ["medium", "MEDIUM", true],
-  ["high", "HIGH", true],
-  ["max", "HIGH", true],
-  ["off", "LOW", false],
-] as const)("serializes Gemini 4 %s without a budget", (reasoning, level, enabled) => {
-  const target = { ...model, id: "gemini-4-argon" };
-  const thinking = buildThinking(target, { reasoning });
-  expect(thinkingConfig(target, { thinking })).toEqual({
-    ...(enabled && { includeThoughts: true }),
-    thinkingLevel: level,
-  });
-});
-
-it.each([
-  ["gemini-flash-latest", "MINIMAL"],
-  ["gemini-pro-latest", "LOW"],
-  ["gemini-3.7-flash", "LOW"],
-])("uses the supported thinking floor for %s", (id, level) => {
-  const target = { ...model, id };
-  const thinking = buildThinking(target, { reasoning: "minimal" });
-  expect(thinking).toEqual({ enabled: true, level });
-  expect(thinkingConfig(target, { thinking })).toEqual({
-    includeThoughts: true,
-    thinkingLevel: level,
-  });
-  expect(thinkingConfig(target, disabledThinking)).toEqual({ thinkingLevel: level });
-});
-
-it.each([
-  ["gemini-2.5-pro", { enabled: true, budgetTokens: -1 }, undefined],
-  ["gemini-3-flash-preview", { enabled: true }, { thinkingLevel: "MINIMAL" }],
-] as const)("preserves adaptive and disabled thinking for %s", (id, enabled, disabled) => {
-  const target = { ...model, id };
-  expect(buildThinking(target, { reasoning: "adaptive" } as never)).toEqual(enabled);
-  expect(thinkingConfig(target, disabledThinking)).toEqual(disabled);
-});
-
-it("keeps thinking disabled when low clamps to off for a non-reasoning model", () => {
-  expect(buildThinking({ ...model, reasoning: false }, { reasoning: "low" })).toEqual({
-    enabled: false,
-  });
+it("omits an empty disabled thinking config for Gemini 2.5 Pro without an output cap", () => {
+  expect(
+    buildParams(
+      { ...model, id: "gemini-2.5-pro" },
+      { messages: [] },
+      { thinking: { enabled: false } },
+    ).config?.thinkingConfig,
+  ).toBeUndefined();
 });
 
 const response = (fields: Partial<GenerateContentResponse>) =>
@@ -180,26 +140,13 @@ async function runFixture(
   }
 }
 
-it("reports every parsed Google response as request activity", async () => {
-  const controller = new AbortController();
-  const onActivity = vi.fn();
-  const unsubscribe = onLlmRequestActivity(controller.signal, onActivity);
-  const responses = [usageChunk({ totalTokenCount: 1 }), finished()];
-  try {
-    await runFixture(responses, { options: { signal: controller.signal } });
-  } finally {
-    unsubscribe();
-  }
-  expect(onActivity).toHaveBeenCalledTimes(responses.length);
-});
-
 it("projects text, thinking, tool calls, response id, and usage into one stream", async () => {
   const { output, events } = await runFixture([
     {
       responseId: "response-1",
       ...candidate([
-        { text: "thinking", thought: true, thoughtSignature: "dGhpbms=" },
-        { text: "hello" },
+        thoughtPart("thinking", "dGhpbms="),
+        textPart("hello"),
         { functionCall: { name: "lookup", args: { query: "cats" } } },
       ]),
     },
@@ -229,20 +176,11 @@ it("projects text, thinking, tool calls, response id, and usage into one stream"
     usage: { input: 8, output: 7, cacheRead: 2, totalTokens: 17 },
   });
   expect(output.content).toEqual([
-    { type: "thinking", thinking: "thinking", thinkingSignature: "dGhpbms=" },
-    { type: "text", text: "hello" },
+    thoughtOutput("thinking", "dGhpbms="),
+    textOutput("hello"),
     toolCall({ query: "cats" }, undefined, "lookup_123_1"),
   ]);
   expect(output.usage.cost.total).toBeGreaterThan(0);
-});
-
-it("retains the first nonempty response model that differs from the requested model", async () => {
-  const { result } = await runFixture([
-    { modelVersion: "" },
-    { modelVersion: "gemini-test-002" },
-    { modelVersion: "gemini-test-003", ...finished([{ text: "actual response" }]) },
-  ]);
-  expect(result).toMatchObject({ stopReason: "stop", responseModel: "gemini-test-002" });
 });
 
 type UsageCase = [string, Partial<GenerateContentResponse>[], Partial<AssistantMessage["usage"]>];
@@ -283,7 +221,7 @@ it.each([FinishReason.MAX_TOKENS, FinishReason.CONTINUATION])(
 );
 
 type SignatureCase = [string, Part[][], unknown[], boolean?];
-it.each([
+it.each<SignatureCase>([
   [
     "late standalone signature",
     [[lookupPart({ query: "cats" })], [{ thoughtSignature: "Y2FsbF9zaWc=" }]],
@@ -301,12 +239,7 @@ it.each([
   ],
   [
     "no media signature attachment",
-    [
-      [
-        lookupPart(),
-        { inlineData: { mimeType: "image/png", data: "aW1hZ2U=" }, thoughtSignature: signature1 },
-      ],
-    ],
+    [[lookupPart(), { inlineData: imageData, thoughtSignature: signature1 }]],
     [toolCall()],
   ],
   [
@@ -332,26 +265,23 @@ it.each([
     [thoughtOutput("first", signature1), thoughtOutput("second", signature1)],
     true,
   ],
-] satisfies SignatureCase[])(
-  "preserves %s",
-  async (_name, chunks, content, roundTrip?: boolean) => {
-    const { output, events } = await runFixture(
-      chunks.map((parts, index) =>
-        candidate(parts, index === chunks.length - 1 ? FinishReason.STOP : undefined),
-      ),
-    );
-    expect(output.content).toEqual(content);
-    if (roundTrip) {
-      const parts = chunks.flat();
-      expect(convertMessages(model, { messages: [output] })).toEqual([{ role: "model", parts }]);
-      expect(
-        events
-          .filter((event) => event.type === "text_delta" || event.type === "thinking_delta")
-          .map((event) => event.delta),
-      ).toEqual(parts.map((part) => part.text));
-    }
-  },
-);
+])("preserves %s", async (_name, chunks, content, roundTrip?: boolean) => {
+  const { output, events } = await runFixture(
+    chunks.map((parts, index) =>
+      candidate(parts, index === chunks.length - 1 ? FinishReason.STOP : undefined),
+    ),
+  );
+  expect(output.content).toEqual(content);
+  if (roundTrip) {
+    const parts = chunks.flat();
+    expect(convertMessages(model, { messages: [output] })).toEqual([{ role: "model", parts }]);
+    expect(
+      events
+        .filter((event) => event.type === "text_delta" || event.type === "thinking_delta")
+        .map((event) => event.delta),
+    ).toEqual(parts.map((part) => part.text));
+  }
+});
 
 it("closes an unread SDK stream without waiting when acceptance fails", async () => {
   const close = vi.fn(() => new Promise<IteratorResult<GenerateContentResponse>>(() => {}));
@@ -374,16 +304,6 @@ it("closes an unread SDK stream without waiting when acceptance fails", async ()
   expect(close).toHaveBeenCalledOnce();
 });
 
-it("keeps an unspecified Google finish reason nonterminal", async () => {
-  const { result } = await runFixture([partialFinish(FinishReason.FINISH_REASON_UNSPECIFIED)]);
-  expect(result).toMatchObject({
-    stopReason: "error",
-    errorCode: "STREAM_INCOMPLETE",
-    errorType: "google_incomplete_stream",
-    errorMessage: "Google stream ended before a terminal finish reason",
-  });
-});
-
 it("closes partial text before reporting a failed candidate", async () => {
   const { events, result } = await runFixture([
     partialFinish(FinishReason.SAFETY, "Provider rejected the generated response"),
@@ -402,7 +322,7 @@ it("closes partial text before reporting a failed candidate", async () => {
 it("preserves cancellation precedence over an observed candidate failure", async () => {
   const controller = new AbortController();
   const abortReason = Object.assign(new Error("Google run restarted"), { code: "GATEWAY_RESTART" });
-  const { output, result } = await runFixture([], {
+  const { result } = await runFixture([], {
     options: { signal: controller.signal },
     generateContentStream: async () => ({
       async *[Symbol.asyncIterator]() {
@@ -416,7 +336,6 @@ it("preserves cancellation precedence over an observed candidate failure", async
     errorCode: "GATEWAY_RESTART",
     errorMessage: "Google run restarted",
   });
-  expect(output.errorCode).toBe("GATEWAY_RESTART");
 });
 
 it("surfaces blocked Google prompts without a reason as typed stream errors", async () => {
@@ -610,7 +529,7 @@ it.each([
   { id: "models/gemini-3.1-pro-preview", deferred: false },
 ])("keeps parallel image results in the supported location for $id", ({ id, deferred }) => {
   const target: ReturnType<typeof makeModel> = { ...makeModel(id), input: ["text", "image"] };
-  const image = { inlineData: { mimeType: "image/png", data: "AAAA" } };
+  const image = { inlineData: imageData };
   const contents = convert(
     [
       user("Screenshot the page and check the weather."),

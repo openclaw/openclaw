@@ -33,23 +33,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function fixture(state: "absent" | "starting" | "stopping" | "stale" | "running") {
-  const owner = {};
+function fixture(state: "absent" | "unregistered" | "running") {
   const getCall = vi.fn(() => call);
   const streamSessionIssuer = vi.fn(() => session);
+  const ensureRuntime = vi.fn(async () => ({
+    manager: { getCall, streamSessionIssuer },
+    webhookUrl,
+  }));
   const respond = vi.fn();
   delete globals[coordinatorKey];
   if (state !== "absent") {
     globals[coordinatorKey] = {
-      current: { generation: owner },
-      slot:
-        state === "stale" || state === "running"
-          ? {
-              state: "running",
-              owner: state === "stale" ? {} : owner,
-              runtime: { manager: { getCall, streamSessionIssuer }, webhookUrl },
-            }
-          : { state, owner, promise: Promise.resolve() },
+      current: state === "running" ? { ensureRuntime } : undefined,
     };
   }
   let method: GatewayMethod | undefined;
@@ -71,6 +66,7 @@ function fixture(state: "absent" | "starting" | "stopping" | "stale" | "running"
   }
   const invoke = method;
   return {
+    ensureRuntime,
     getCall,
     streamSessionIssuer,
     respond,
@@ -78,7 +74,7 @@ function fixture(state: "absent" | "starting" | "stopping" | "stale" | "running"
   };
 }
 
-it.each(["absent", "starting", "stopping", "stale"] as const)(
+it.each(["absent", "unregistered"] as const)(
   "returns unavailable for %s runtime",
   async (state) => {
     const proof = fixture(state);
@@ -89,12 +85,14 @@ it.each(["absent", "starting", "stopping", "stale"] as const)(
     });
     expect(proof.getCall).not.toHaveBeenCalled();
     expect(proof.streamSessionIssuer).not.toHaveBeenCalled();
+    expect(proof.ensureRuntime).not.toHaveBeenCalled();
   },
 );
 
-it("issues a stream session from the current running generation", async () => {
+it("issues a stream session from the current runtime registration", async () => {
   const proof = fixture("running");
   await proof.run();
+  expect(proof.ensureRuntime).toHaveBeenCalledExactlyOnceWith();
   expect(proof.getCall).toHaveBeenCalledExactlyOnceWith(callId);
   const { providerCallId, ...callDetails } = call;
   expect(proof.streamSessionIssuer).toHaveBeenCalledExactlyOnceWith({

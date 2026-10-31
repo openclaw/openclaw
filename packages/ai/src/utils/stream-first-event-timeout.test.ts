@@ -1,3 +1,4 @@
+import { promiseHooks } from "node:v8";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -85,3 +86,49 @@ it("returns the original stream when disabled", () => {
   expect(withFirstStreamEventTimeout(stream, { timeoutMs: 0 })).toBe(stream);
   expect(withFirstStreamEventTimeout(stream, { timeoutMs: Number.NaN })).toBe(stream);
 });
+
+it.each(["throw", "reject"])(
+  "clears the deadline when the first read fails by %s",
+  async (mode) => {
+    const failure = new Error("source failed");
+    const source = createStream(() => {
+      if (mode === "throw") {
+        throw failure;
+      }
+      return Promise.reject(failure);
+    });
+    source.close.mockRejectedValueOnce(new Error("cleanup failed"));
+    const iterator = withFirstStreamEventTimeout(source, { timeoutMs: 5 })[Symbol.asyncIterator]();
+    await expect(iterator.next()).rejects.toBe(failure);
+    expect(source.close).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
+
+it.skipIf(Boolean(process.versions.bun))(
+  "clears first-event deadlines without settlement promises",
+  async () => {
+    let promises = 0;
+    let received = "";
+    const stop = promiseHooks.createHook({ init: () => promises++ });
+    try {
+      for (let index = 0; index < 100; index++) {
+        async function* source() {
+          yield "first";
+          yield "second";
+          yield "third";
+        }
+        for await (const event of withFirstStreamEventTimeout(source(), { timeoutMs: 5 })) {
+          received += event;
+        }
+      }
+    } finally {
+      stop();
+    }
+    expect(received).toBe("firstsecondthird".repeat(100));
+    expect(vi.getTimerCount()).toBe(0);
+    // Budget for source/consumer iteration and the first-event race, with fixed
+    // harness slack; Promise.finally adds four settlement promises per stream.
+    expect(promises).toBeLessThan(3_200);
+  },
+);

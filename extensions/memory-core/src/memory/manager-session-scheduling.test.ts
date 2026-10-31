@@ -27,7 +27,7 @@ describe("session index scheduling", () => {
     });
     await captureRuntimeConfigAsyncReader()();
     harness = await SessionStartupCatchupHarness.create([]);
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     harness.startTranscriptListener();
   });
 
@@ -67,32 +67,26 @@ describe("session index scheduling", () => {
     archiveFiles: [],
   });
 
-  it("waits for a fresh quiet period and includes every pending session in one pass", async () => {
-    const first = await append("first");
-    await vi.advanceTimersByTimeAsync(20_000);
-    const second = await append("second");
-    await append("first");
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(harness.syncCalls).toEqual([]);
-
-    await advanceSessionTime(1);
-    expect(harness.syncCalls).toEqual([delta(first, second)]);
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(harness.syncCalls).toHaveLength(1);
-  });
-
-  it("bounds continuous transcript deferral at five minutes", async () => {
-    const target = await append("continuous");
-    for (let elapsed = 0; elapsed < 280_000; elapsed += 20_000) {
-      await vi.advanceTimersByTimeAsync(20_000);
-      await append("continuous");
-    }
-    await vi.advanceTimersByTimeAsync(19_999);
-    expect(harness.syncCalls).toEqual([]);
-
-    await advanceSessionTime(1);
-    expect(harness.syncCalls).toEqual([delta(target)]);
-  });
+  it.each([1, 14])(
+    "coalesces %i activity intervals within quiet and maximum deadlines",
+    async (updates) => {
+      const first = await append("first");
+      let second = first;
+      for (let update = 0; update < updates; update++) {
+        await vi.advanceTimersByTimeAsync(20_000);
+        second = await append("second");
+        await append("first");
+      }
+      vi.setSystemTime(Date.now() + (updates === 14 ? 120_000 : 0));
+      await append("first");
+      await vi.advanceTimersByTimeAsync(updates === 14 ? 19_999 : 29_999);
+      expect(harness.syncCalls).toEqual([]);
+      await advanceSessionTime(1);
+      expect(harness.syncCalls).toEqual([delta(first, second)]);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(harness.syncCalls).toHaveLength(1);
+    },
+  );
 
   it("starts overdue work as soon as a long running turn settles", async () => {
     activity.listener?.(true);

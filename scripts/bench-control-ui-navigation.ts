@@ -179,8 +179,8 @@ const allScenarios: Scenario[] = [
     id: routeId,
     routeId,
     selector:
-      routeId === "claws"
-        ? ".claws-catalog-header"
+      routeId === "templates"
+        ? ".templates-catalog-header"
         : routeId === "activity"
           ? "openclaw-activity-page .content-header"
           : routeId === "dashboards"
@@ -322,11 +322,11 @@ function createFixture(buildId: string, version: string) {
   const fixture = createInteractionFixture(buildId, version);
   const config = {
     ...fixture.methodResponses["config.get"].config,
-    gateway: { controlUi: { experimental: { claws: true } } },
+    gateway: { controlUi: { experimental: { templates: true } } },
   };
   return {
     ...fixture,
-    featureMethods: [...defaultControlUiFeatureMethods, "claws.catalog.search"],
+    featureMethods: [...defaultControlUiFeatureMethods, "templates.catalog.search"],
     methodResponses: {
       ...fixture.methodResponses,
       "config.get": {
@@ -335,7 +335,7 @@ function createFixture(buildId: string, version: string) {
         sourceConfig: config,
         raw: JSON.stringify(config),
       },
-      "claws.catalog.search": { entries: [] },
+      "templates.catalog.search": { entries: [] },
       "sessions.usage": {
         updatedAt: 1_800_000_000_000,
         startDate: "2026-10-01",

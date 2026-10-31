@@ -1,18 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
+import { loadDeliveryQueueEntryInDatabase } from "../../../infra/delivery-queue-sqlite-bound.js";
 import {
-  bindDeliveryQueueEntry,
-  loadDeliveryQueueEntryInDatabase,
-  upsertBoundDeliveryQueueEntryInDatabase,
-} from "../../../infra/delivery-queue-sqlite-bound.js";
-import {
-  prepareClaimedSessionDelivery,
+  isProducedSessionDelivery,
   SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
 } from "../../../infra/session-delivery-queue.records.js";
-import { resolveEventSessionKey } from "../../../routing/session-key.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db-contract.js";
-import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAgentId,
@@ -50,22 +44,16 @@ import type {
   SubagentCompletionMutationResult,
   SubagentCompletionRecord,
 } from "./subagent-completion-mutation.types.js";
-import {
-  readSubagentCompletionQueueReceipt,
-  reconcileSubagentCompletionQueueReceipts,
-} from "./subagent-completion-queue-receipt.js";
 
 const SUSPENDED_RETENTION_MS = 7 * 24 * 60 * 60_000;
 type CompletionMutation = {
   subagent: SubagentRunRecord;
-  queued?: QueuedSessionDelivery;
   retire?: boolean;
 };
 const noMutation = (applied: boolean | null): SubagentCompletionMutationResult => ({
   applied,
   records: [],
   retiredRunIds: [],
-  queueIds: [],
 });
 
 /** Decode the committed row on the worker. */
@@ -100,8 +88,6 @@ export function retiredCancellationEndedAt(
     subagent.cleanupCompletedAt < endedAt ||
     subagent.pauseReason ||
     subagent.killIntent ||
-    subagent.terminalOwner ||
-    subagent.execution.restartRecovery ||
     subagent.suppressAnnounceReason === "steer-restart" ||
     subagent.expectsCompletionMessage !== true ||
     subagent.completion?.required !== true ||
@@ -141,7 +127,6 @@ function prepareBlockedSubagentCompletion(
   params: BlockSubagentCompletionRequest,
   now: number,
   subagent: SubagentRunRecord | null,
-  requesterOutcome?: SubagentAnnounceDeliveryResult,
 ): CompletionMutation | undefined {
   const generation = params.subagent.delivery?.generation ?? 1;
   if (
@@ -231,36 +216,7 @@ function prepareBlockedSubagentCompletion(
   } else {
     subagent.suppressCompletionDelivery = true;
   }
-  // A recovered requester already exhausted its turn. A system event would start
-  // another model turn just to report that failure; retain it on delivery instead.
-  const requesterRecoveryFailed =
-    (requesterOutcome?.reason === "visible_reply_missing" &&
-      requesterOutcome.disposition === "permanent_failure") ||
-    (subagent.delivery?.lastDropReason === "visible_reply_missing" &&
-      isCompletedRequesterDeliveryBlocked(subagent));
-  const text =
-    successful &&
-    !requesterRecoveryFailed &&
-    !params.storeReplaced &&
-    !params.operatorAuthorityUnavailable &&
-    requesterOutcome?.reason !== "operator_authority_unavailable"
-      ? `Subagent completion delivery is blocked: ${params.reason} (run ${subagent.runId})`
-      : null;
-  const queued = text
-    ? prepareClaimedSessionDelivery(
-        {
-          kind: "systemEvent",
-          sessionKey: resolveEventSessionKey(subagent.requesterSessionKey),
-          ...(subagent.requesterAgentId ? { agentId: subagent.requesterAgentId } : {}),
-          text,
-          ...(subagent.requesterOrigin ? { deliveryContext: subagent.requesterOrigin } : {}),
-          idempotencyKey: `subagent-completion-blocked:${subagent.runId}:generation:${generation}`,
-        },
-        0,
-        now,
-      )
-    : undefined;
-  return { subagent, queued };
+  return { subagent };
 }
 
 function commitCompletionMutations(
@@ -276,34 +232,17 @@ function commitCompletionMutations(
   const retiredRunIds = mutations
     .filter((mutation) => mutation.retire)
     .map(({ subagent }) => subagent.runId);
-  for (const { queued } of mutations) {
-    if (queued) {
-      upsertBoundDeliveryQueueEntryInDatabase(
-        bindDeliveryQueueEntry({
-          queueName: SESSION_DELIVERY_QUEUE_NAME,
-          entry: queued,
-          insertOnly: true,
-        }),
-        database,
-      );
-    }
-  }
   writeSubagentRunValuesInDatabase(
     database,
     rows.map(({ row }) => row),
     retiredRunIds,
   );
-  const queueIds = mutations.flatMap(({ queued }) => (queued ? [queued.id] : []));
   return {
     applied: true,
     records: rows.map(({ row, cleanupHandled }) =>
       decodeSubagentCompletionRecord(row, cleanupHandled),
     ),
     retiredRunIds,
-    queueIds,
-    ...(queueIds.length > 0
-      ? { queueReceipts: queueIds.map((id) => readSubagentCompletionQueueReceipt(database, id)) }
-      : {}),
   };
 }
 
@@ -431,7 +370,6 @@ function mutateRequesterBatch(
             },
             now,
             subagent,
-            params.outcome,
           );
           if (!blocked) {
             throw changedOwner();
@@ -451,11 +389,7 @@ function reconcileRequesterWake(
   params: Extract<SubagentCompletionMutation, { kind: "requesterWake" | "requesterBatch" }>,
 ): SubagentCompletionMutationResult {
   const committed = params.committed;
-  if (
-    !committed ||
-    committed.result.applied !== true ||
-    (params.kind === "requesterWake" && committed.result.queueIds.length !== 0)
-  ) {
+  if (!committed || committed.result.applied !== true) {
     throw new Error("Requester wake reconciliation requires its committed native receipt");
   }
   const result = noMutation(true);
@@ -517,17 +451,6 @@ function reconcileRequesterWake(
     // independent cleanup cannot be overwritten by the older acknowledgement.
     result.records.push(decodeSubagentCompletionRecord(row, expected.cleanupHandled));
   }
-  if (committed.result.queueIds.length > 0) {
-    const receipts = reconcileSubagentCompletionQueueReceipts(
-      database,
-      committed.result.queueIds,
-      committed.result.queueReceipts,
-    ).filter((receipt) => receipt.status === "pending");
-    result.queueIds = receipts.map(({ id }) => id);
-    if (receipts.length > 0) {
-      result.queueReceipts = receipts;
-    }
-  }
   return result;
 }
 
@@ -548,14 +471,17 @@ export function mutateSubagentCompletionInDatabase(
       const owner = queued?.kind === "agentTurn" ? queued.owner : undefined;
       const row = readSubagentRunRow(database, mutation.expected.runId);
       const current = row && rowToSubagentRunRecord(row);
+      const delivery = current?.delivery;
       if (
         !current ||
+        !delivery ||
         !queued ||
+        !isProducedSessionDelivery(queued) ||
         !owner ||
         owner.kind !== "subagent_completion" ||
         owner.runId !== current.runId ||
-        owner.generation !== current.delivery?.generation ||
-        owner.deadlineAt !== current.delivery.deadlineAt ||
+        owner.generation !== delivery.generation ||
+        owner.deadlineAt !== delivery.deadlineAt ||
         (queued.settlementOutcome ??
           (queued.acknowledgedAt !== undefined ? "recovered" : undefined)) !== "recovered" ||
         compareSubagentRunGeneration(current, mutation.expected) !== 0 ||
@@ -563,19 +489,20 @@ export function mutateSubagentCompletionInDatabase(
         current.requesterSessionKey !== mutation.expected.requesterSessionKey ||
         current.requesterStorePath !== mutation.expected.requesterStorePath
       ) {
-        throw new Error("Subagent completion recovery lost its queue or native owner");
+        throw new Error(
+          "Subagent completion settlement lost its produced delivery or native owner",
+        );
       }
-      if (current.delivery.status === "delivered" && current.delivery.queueId === undefined) {
+      if (delivery.status === "delivered" && delivery.queueId === undefined) {
         // A marked queue retains producer cleanup after a committed write. Reconcile
         // the current native row without replaying its write or terminal timestamps.
         return {
           applied: true,
           records: [decodeSubagentCompletionRecord(row, mutation.expected.cleanupHandled)],
           retiredRunIds: [],
-          queueIds: [],
         };
       }
-      if (current.delivery.queueId !== mutation.queueId) {
+      if (delivery.queueId !== mutation.queueId) {
         throw new Error("Subagent completion owner changed before settlement");
       }
       return commitCompletionMutations(database, [{ subagent: mutation.subagent }]);

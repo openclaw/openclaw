@@ -7,7 +7,6 @@ import {
   reconnectMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { cronJobsListResponse } from "../test-helpers/cron.ts";
-import { expectText } from "./activity-assertions.test-support.ts";
 import { captureUiProof } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -65,7 +64,7 @@ suite.define(() => {
       });
       await page.clock.resume();
       await reconnectMockGateway(page, gateway);
-      await expectText(page.locator(".agent-chat__welcome-identity h2")).toBe("Cedar");
+      await page.getByPlaceholder("Message Cedar", { exact: true }).waitFor();
       expect({ idle, afterDrain }).toEqual({ idle: connected, afterDrain: beforeDrain });
     });
   });

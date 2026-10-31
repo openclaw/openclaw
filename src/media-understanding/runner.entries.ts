@@ -10,6 +10,7 @@ import {
   estimateBase64Size,
   resolveVideoMaxBase64Bytes,
 } from "../../packages/media-understanding-common/src/video.js";
+import { resolveImageCompressionModelPolicy } from "../agents/image-compression-policy.js";
 import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -295,11 +296,13 @@ export async function runProviderEntry(params: {
         ...normalizedMedia,
         fileName: media.fileName,
         maxBytes,
-        cfg,
-        provider: requestProviderId,
-        model: modelId,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
+        modelPolicy: await resolveImageCompressionModelPolicy({
+          cfg,
+          provider: requestProviderId,
+          model: modelId,
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+        }),
       });
     } catch (error) {
       if (error instanceof ImageOptimizationLimitError) {

@@ -48,21 +48,40 @@ export function createServiceChildControlSender(params: {
         reject(new Error("service child control pipe is closed"));
         return;
       }
-      const launch = () =>
-        control.write(encodeServiceChildMessage(message), "utf8", (error) => {
+      let launched = false;
+      const launch = () => {
+        launched = true;
+        return control.write(encodeServiceChildMessage(message), "utf8", (error) => {
           if (error) {
             reject(error);
           } else {
             resolve();
           }
         });
-      if (initiate) {
-        initiate(launch, settlement);
-      } else {
+      };
+      if (!initiate) {
         launch();
+        return;
+      }
+      try {
+        initiate(launch, settlement);
+      } catch (error) {
+        if (launched) {
+          throw error;
+        }
+        // Without a written frame the anchor never received launch authority.
+        reject(new ServiceChildLaunchNotInitiatedError(error));
       }
     });
   };
+}
+
+/** A launch refusal that provably never wrote the frame granting the anchor spawn authority. */
+export class ServiceChildLaunchNotInitiatedError extends Error {
+  constructor(cause: unknown) {
+    super(String(cause), { cause });
+    this.name = "ServiceChildLaunchNotInitiatedError";
+  }
 }
 
 /** Admit the target command when its final frame enters native IPC, after any broker queue. */

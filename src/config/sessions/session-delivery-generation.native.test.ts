@@ -1,5 +1,12 @@
 import fs from "node:fs";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { writeHostFile } from "../../agents/host-file-write.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import {
+  bindCommandOwnerAuthority,
+  captureCommandOwnerAssertion,
+} from "../../auto-reply/command-owner-authority.js";
+import * as databaseIdentity from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   openOpenClawAgentDatabase,
@@ -7,8 +14,15 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as nativeEntries from "./session-accessor.sqlite-entry-read.js";
 import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { prepareSessionGenerationFacts } from "./session-delivery-generation.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
+} from "./session-source-authority.js";
+import * as storeCandidates from "./session-store-read-candidates.js";
+import * as workerResources from "./session-transcript-worker-resources.js";
 
 const original = {
   sessionId: "e1234567-1234-1234-1234-123456789abc",
@@ -32,6 +46,124 @@ async function fixture(initialSettings?: typeof settings) {
 }
 const generationError = (code = "UNAVAILABLE") =>
   expect.objectContaining({ code: `SESSION_DELIVERY_GENERATION_${code}` });
+
+it("writes under prepared generation and command-owner authority without synchronous probes or SQL", async () => {
+  const { database, scope, generation } = await fixture(settings);
+  const source = composeSessionSourceAssertion([generation.assertCurrent], (assertSources) => {
+    assertSources();
+    expect(generation.readSessionSettings()).toMatchObject(settings);
+  });
+  const warm = await prepareSessionSourceEffect(source);
+  warm.assertCurrent();
+  await warm.release?.();
+  const context = {};
+  bindCommandOwnerAuthority(context, {
+    sourceAssertion: source,
+    isCurrent() {
+      source();
+      return true;
+    },
+  });
+  const receiptAuthority = captureCommandOwnerAssertion(context);
+  expect(receiptAuthority).toBeDefined();
+  const file = `${database.path}.effect.txt`;
+  await fs.promises.writeFile(file, "original");
+  database.db
+    .prepare("UPDATE session_nodes SET updated_at = updated_at WHERE session_key = ?")
+    .run(scope.sessionKey);
+  const delay =
+    <Args extends unknown[], Value>(fn: (...args: Args) => Value) =>
+    (...args: Args) => {
+      const until = performance.now() + 25;
+      while (performance.now() < until) {
+        // A main-thread probe would reproduce its injected storage latency.
+      }
+      return fn(...args);
+    };
+  const assertIdentity = databaseIdentity.assertDatabasePathIdentity;
+  const checkCandidate = storeCandidates.isSessionStoreReadCandidateCurrent;
+  const readGeneration = nativeEntries.readSessionEntryGenerationInDatabase;
+  const identity = vi
+    .spyOn(databaseIdentity, "assertDatabasePathIdentity")
+    .mockImplementation(delay(assertIdentity));
+  const candidates = vi
+    .spyOn(storeCandidates, "isSessionStoreReadCandidateCurrent")
+    .mockImplementation(delay(checkCandidate));
+  const sql = vi.spyOn(database.db, "prepare");
+  const nativeReads = vi
+    .spyOn(nativeEntries, "readSessionEntryGenerationInDatabase")
+    .mockImplementation(delay(readGeneration));
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
+  await withGatewayToolCallerIdentity(
+    { agentId: scope.agentId, sessionKey: scope.sessionKey, receiptAuthority },
+    () => writeHostFile(file, "replacement"),
+  );
+  expect(await fs.promises.readFile(file, "utf8")).toBe("replacement");
+  expect({
+    identity: identity.mock.calls.length,
+    candidates: candidates.mock.calls.length,
+    nativeReads: nativeReads.mock.calls.length,
+    sqlPrepare: sql.mock.calls.length,
+  }).toEqual({ identity: 0, candidates: 0, nativeReads: 0, sqlPrepare: 0 });
+});
+
+it.each([
+  { field: "lifecycleRevision", value: "effect-successor", code: "REVOKED" },
+  { field: "permissionMode", value: "read-only", code: "UNAVAILABLE" },
+  { field: "current_session_id", value: "effect-successor", code: "UNAVAILABLE" },
+])(
+  "refuses a committed raw $field change during effect preparation",
+  async ({ field, value, code }) => {
+    const { database, scope, generation } = await fixture(settings);
+    const write = database.db.prepare(
+      "UPDATE session_nodes SET current_session_id = ?, entry_json = ? WHERE session_key = ?",
+    );
+    write.run(
+      field === "current_session_id" ? value : original.sessionId,
+      JSON.stringify(
+        field === "current_session_id"
+          ? { ...original, ...settings }
+          : { ...original, ...settings, [field]: value },
+      ),
+      scope.sessionKey,
+    );
+    await expect(prepareSessionSourceEffect(generation.assertCurrent)).rejects.toThrow(
+      generationError(code),
+    );
+    write.run(original.sessionId, JSON.stringify({ ...original, ...settings }), scope.sessionKey);
+    expect(generation.assertCurrent).toThrow(generationError(code));
+  },
+);
+
+it.each(["revision", "release"] as const)(
+  "refuses %s changes while the effect identity check is awaited",
+  async (change) => {
+    const { database, scope, generation } = await fixture();
+    const write = database.db.prepare(
+      "UPDATE session_nodes SET updated_at = updated_at WHERE session_key = ?",
+    );
+    const prepare = workerResources.prepareSessionStoreCandidatesInWorker;
+    vi.spyOn(workerResources, "prepareSessionStoreCandidatesInWorker").mockImplementation(
+      async (request) => {
+        const result = await prepare(request);
+        if (change === "release") {
+          generation.release();
+        } else {
+          write.run(scope.sessionKey);
+        }
+        return result;
+      },
+    );
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
+    await expect(prepareSessionSourceEffect(generation.assertCurrent)).rejects.toThrow(
+      generationError(),
+    );
+  },
+);
 
 it.each(["runtime", "automation"])(
   "retains generation facts across metadata but invalidates broad %s changes",

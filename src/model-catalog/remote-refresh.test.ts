@@ -214,44 +214,6 @@ describe("remote model catalog refresh", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(calls);
   });
 
-  it("stores configured v3 capabilities without changing either released client slot", async () => {
-    const legacyBundle = {
-      schemaVersion: 1,
-      generatedAt: bundle.generatedAt,
-      sourceCommit: bundle.sourceCommit,
-      providers: { anthropic: { models: [{ id: "claude-test" }] } },
-    };
-    const previous = storedCatalog(bundle, { min_version: null, checked_at: 1 });
-    const legacy = { ...previous, bundle_json: JSON.stringify(legacyBundle) };
-    const slots = [
-      [previousKey, previous],
-      [legacyKey, legacy],
-    ] as const;
-    for (const [key, record] of slots) {
-      machineState.writeConfigMachineState(key, record, databaseOptions);
-    }
-    const decision = {
-      protocol: "fixture.decisions",
-      input: ["text"],
-    };
-    const downloaded = {
-      ...bundle,
-      schemaVersion: 3,
-      models: [{ ...bundle.models[0], inference: { chat: false, decision } }],
-    };
-    const config = mirrorConfig("v3/");
-    mockDownload(downloaded);
-    await expectRefresh({ status: "updated", models: 1 }, config);
-    expect(JSON.parse(readCatalog(databaseOptions)?.bundle_json ?? "null")).toEqual(downloaded);
-    for (const [key, record] of slots) {
-      expect(readState(key, databaseOptions)).toEqual(record);
-    }
-    mockFetch(async () => {
-      throw new Error("fresh v3 must not fetch");
-    });
-    await expectRefresh({ status: "fresh", models: 1 }, config, false);
-  });
-
   it("keeps a configured v1 mirror's pricing-only rows and sanitizes transport", async () => {
     const legacy = {
       ...bundle,
@@ -307,6 +269,7 @@ describe("remote model catalog refresh", () => {
     ],
     ["invalid UTF-8", async () => new Response(Uint8Array.of(0xff))],
     ["invalid schema", async () => Response.json({ ...bundle, models: [] })],
+    ["unsupported schemaVersion", async () => Response.json({ ...bundle, schemaVersion: 3 })],
   ] satisfies Array<[string, typeof fetch]>)(
     "preserves the previous catalog without a fallback request after %s",
     async (_failure, fetch) => {

@@ -36,6 +36,24 @@ function findModuleResolver(url: string | undefined): Module.ResolveHookSync | u
   return undefined;
 }
 
+// The process-wide dispatcher must not capture its first workspace registration.
+const resolvePluginInstanceModule: Module.ResolveHookSync = (specifier, context, nextResolve) => {
+  const requested = pluginInstanceInvocation.getStore()?.instance;
+  const retained = requested && retainedNativeEsmOwners.get(requested);
+  if (requested && retained && !retained.owners.has(requested)) {
+    throw new Error("Plugin native ESM capture has no live workspace owner for this load");
+  }
+  const parent = findModuleResolver(context.parentURL);
+  if (parent) {
+    return parent(specifier, context, nextResolve);
+  }
+  const resolved = nextResolve(specifier, context);
+  // Entry loads start outside their capture. Resolve first, then let its owner
+  // admit/prepare that target without repeating native resolution.
+  const target = findModuleResolver(resolved.url);
+  return target ? target(specifier, context, () => resolved) : resolved;
+};
+
 export function registerPluginInstanceModuleResolver(
   boundaryUrl: string,
   owner: ModuleResolver,
@@ -47,22 +65,7 @@ export function registerPluginInstanceModuleResolver(
   }
   owners.push(owner);
   moduleResolvers.hooks ??= Module.registerHooks({
-    resolve(specifier, context, nextResolve) {
-      const requested = pluginInstanceInvocation.getStore()?.instance;
-      const retained = requested && retainedNativeEsmOwners.get(requested);
-      if (requested && retained && !retained.owners.has(requested)) {
-        throw new Error("Plugin native ESM capture has no live workspace owner for this load");
-      }
-      const parent = findModuleResolver(context.parentURL);
-      if (parent) {
-        return parent(specifier, context, nextResolve);
-      }
-      const resolved = nextResolve(specifier, context);
-      // Entry loads start outside their capture. Resolve first, then let its owner
-      // admit/prepare that target without repeating native resolution.
-      const target = findModuleResolver(resolved.url);
-      return target ? target(specifier, context, () => resolved) : resolved;
-    },
+    resolve: resolvePluginInstanceModule,
   });
   return () => {
     owners.splice(owners.indexOf(owner), 1);

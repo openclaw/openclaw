@@ -7,6 +7,10 @@
  * Repeat against candidate, counterbalancing order. Defaults: 10k finished windows,
  * two stores. --interval-ms 30000 measures cadence; default 0 isolates work counts.
  * Run --allocations separately: main Inspector sampling plus worker GCProfiler.
+ * --operation maintenance measures archive-bearing maintenance finalization instead
+ * of empty cold sweeps; each iteration removes one target from the seeded store.
+ * --entry <built archive worker> uses the same prebuilt worker in both arms; the
+ * owner overlay still selects the host call site. This avoids source-loader startup cost.
  * Worker first-result cost includes entry imports and one empty selection, excludes
  * the loader/preload prelude and native allocation. V8 estimate = heap delta + GC
  * reclaimed bytes, without forced GC. RSS is process-wide, never per-worker RSS.
@@ -24,7 +28,9 @@ import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import type { SessionLifecycleArchivedTranscript } from "../../src/config/sessions/session-accessor.sqlite-contract.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import type { OpenClawAgentDatabase } from "../../src/state/openclaw-agent-db.js";
 
 const { values } = parseArgs({
   options: {
@@ -35,6 +41,8 @@ const { values } = parseArgs({
     stores: { type: "string", default: "2" },
     "interval-ms": { type: "string", default: "0" },
     allocations: { type: "boolean", default: false },
+    operation: { type: "string", default: "cold" },
+    entry: { type: "string" },
   },
 });
 assert(values.output, "--output must name a new, task-owned directory");
@@ -50,6 +58,8 @@ const iterations = integer(values.iterations);
 const sessions = integer(values.sessions);
 const stores = integer(values.stores);
 const intervalMs = integer(values["interval-ms"], 0);
+assert(values.operation === "cold" || values.operation === "maintenance");
+assert(values.operation !== "maintenance" || (stores === 1 && sessions > iterations));
 assert(sessions >= stores);
 await mkdir(path.dirname(root), { recursive: true });
 await mkdir(root);
@@ -86,6 +96,9 @@ const coldState: typeof import("../../src/config/sessions/session-cold-storage-s
 const codec: typeof import("../../src/config/sessions/session-cold-storage-codec.js") = await load(
   "src/config/sessions/session-cold-storage-codec.ts",
 );
+const compression: typeof import("../../src/config/sessions/archive-compression.js") = await load(
+  "src/config/sessions/archive-compression.ts",
+);
 const workers: typeof import("../../src/infra/worker-cpu.js") =
   await load("src/infra/worker-cpu.ts");
 const lifecycle: typeof import("../../src/shared/global-singleton.js") = await load(
@@ -94,11 +107,20 @@ const lifecycle: typeof import("../../src/shared/global-singleton.js") = await l
 const role: typeof import("../../src/infra/database-engine/admission-scope.js") = await load(
   "src/infra/database-engine/admission-scope.ts",
 );
+const maintenance: typeof import("../../src/config/sessions/session-accessor.sqlite-maintenance.js") =
+  await load("src/config/sessions/session-accessor.sqlite-maintenance.ts");
+const snapshots: typeof import("../../src/config/sessions/session-accessor.sqlite-delete-snapshot.js") =
+  await load("src/config/sessions/session-accessor.sqlite-delete-snapshot.ts");
+const plans: typeof import("../../src/config/sessions/session-accessor.sqlite-maintenance-store.js") =
+  await load("src/config/sessions/session-accessor.sqlite-maintenance-store.ts");
+const scopes: typeof import("../../src/config/sessions/session-accessor.sqlite-scope.js") =
+  await load("src/config/sessions/session-accessor.sqlite-scope.ts");
 role.installDatabaseProcessRole("gateway");
 const agentIds = Array.from({ length: stores }, (_, index) =>
   index ? `fixture-${index}` : "main",
 );
 const config: OpenClawConfig = {
+  logging: { file: path.join(root, "gateway.log"), level: "debug", consoleLevel: "warn" },
   agents: { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) },
   session: { maintenance: { mode: "warn", coldStorage: { enabled: true, afterDays: 365000 } } },
 };
@@ -149,8 +171,10 @@ for (const [agentIndex, agentId] of agentIds.entries()) {
 await agentDb.closeOpenClawAgentDatabasesAsync();
 await stateDb.closeOpenClawStateDatabaseAsync();
 const seedMs = performance.now() - seededAt;
-if (values.allocations) {
-  process.env.OPENCLAW_ARCHIVE_CHURN_PROFILE_DIR = path.join(root, "worker-profiles");
+if (values.allocations || values.entry) {
+  if (values.allocations) {
+    process.env.OPENCLAW_ARCHIVE_CHURN_PROFILE_DIR = path.join(root, "worker-profiles");
+  }
   const preload = pathToFileURL(
     path.join(path.dirname(fileURLToPath(import.meta.url)), "archive-worker-churn-preload.mjs"),
   ).href;
@@ -161,10 +185,24 @@ if (values.allocations) {
   // Runtime workers choose explicit execArgv. Instrument only this benchmark process,
   // preserving the source loader and leaving untraced timing passes untouched.
   workerThreads.Worker = class extends NativeWorker {
-    constructor(filename: string | URL, options: import("node:worker_threads").WorkerOptions = {}) {
-      const target =
-        options.workerData?.type === "sqlite-transcript-archive-v2" &&
-        ["cold-prepare", "archive-session"].includes(options.workerData.operation);
+    constructor(
+      inputFilename: string | URL,
+      inputOptions: import("node:worker_threads").WorkerOptions = {},
+    ) {
+      const archive = inputOptions.workerData?.type === "sqlite-transcript-archive-v2";
+      const filename =
+        archive && values.entry ? pathToFileURL(path.resolve(values.entry)) : inputFilename;
+      const options =
+        archive && values.entry
+          ? {
+              ...inputOptions,
+              execArgv: [
+                "--import",
+                new URL("./team-shape-stress-loader.mjs", import.meta.url).href,
+              ],
+            }
+          : inputOptions;
+      const target = archive && values.allocations;
       super(
         filename,
         target
@@ -205,16 +243,76 @@ try {
   }
   loop.enable();
   for (let iteration = 0; iteration < iterations; iteration++) {
+    const database: OpenClawAgentDatabase | undefined =
+      values.operation === "maintenance"
+        ? agentDb.openOpenClawAgentDatabase({ agentId: "main", env: process.env })
+        : undefined;
+    const sessionId = `synthetic-${iteration + 1}`;
+    const sessionKey = `agent:main:subagent:${sessionId}`;
+    const plan = plans.emptySessionEntryMaintenancePlan();
+    if (database) {
+      const deletion = snapshots.planSessionStateDeleteIfUnreferenced({
+        database,
+        sessionId,
+        archiveDirectory: scopes.resolveSqliteTranscriptArchiveDirectory({
+          agentId: "main",
+          path: database.path,
+          env: process.env,
+        }),
+        referencedSessionIds: new Set(),
+      });
+      assert(deletion);
+      const row: Record<string, import("node:sqlite").SQLOutputValue> | undefined = database.db
+        .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+        .get(sessionKey);
+      assert(typeof row?.entry_json === "string");
+      plan.stateDeletePlans.push(deletion);
+      plan.entryRemovals.push({
+        sessionKey,
+        expectedEntry: JSON.parse(row.entry_json),
+        maintenanceReason: "pruned",
+      });
+    }
     const started = performance.now();
     const cpu = process.cpuUsage();
     const thread = process.threadCpuUsage();
     const startedWorkers = counts()?.started ?? 0;
-    const result = await cold.runSessionColdStorageMaintenance({ config });
+    const result:
+      | Awaited<
+          ReturnType<
+            typeof maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort
+          >
+        >
+      | Awaited<ReturnType<typeof cold.runSessionColdStorageMaintenance>> = database
+      ? await maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
+          { agentId: "main", env: process.env, path: database.path },
+          [plan],
+        )
+      : await cold.runSessionColdStorageMaintenance({ config });
+    const elapsedMs = performance.now() - started;
     const used = process.cpuUsage(cpu);
     const main = process.threadCpuUsage(thread);
-    assert.deepEqual(result, { archivedTranscripts: 0, externalizedTranscripts: 0 });
+    if (database) {
+      assert("pruned" in result && result.pruned === 1, JSON.stringify(result));
+      assert(Array.isArray(result.archivedTranscripts) && result.archivedTranscripts.length === 1);
+      const published: SessionLifecycleArchivedTranscript | undefined =
+        result.archivedTranscripts[0];
+      assert(published);
+      assert.equal(
+        compression.readSessionArchiveContentSync(published.archivedPath).trim(),
+        JSON.stringify({ type: "session", id: sessionId, version: 3 }),
+      );
+      assert.equal(
+        database.db
+          .prepare("SELECT COUNT(*) AS n FROM transcript_events WHERE session_id = ?")
+          .get(sessionId)?.n,
+        0,
+      );
+    } else {
+      assert.deepEqual(result, { archivedTranscripts: 0, externalizedTranscripts: 0 });
+    }
     measurements.push({
-      elapsedMs: performance.now() - started,
+      elapsedMs,
       processCpuMs: (used.user + used.system) / 1000,
       mainThreadCpuMs: (main.user + main.system) / 1000,
       archiveStarts: (counts()?.started ?? 0) - startedWorkers,
@@ -263,7 +361,7 @@ try {
     storePath: database.path,
     archive: { ...archive, archive_blob: null },
   });
-  const records = codec.decodeSessionColdRecords(bytes, archive);
+  const records = Array.from(codec.decodeSessionColdRecords(bytes, archive));
   assert.deepEqual(
     records
       .filter((record) => record.kind === "event")
@@ -293,6 +391,8 @@ try {
     iterations,
     sessions,
     stores,
+    operation: values.operation,
+    entry: values.entry ?? null,
     intervalMs,
     allocations: values.allocations,
     seedMs,
@@ -307,7 +407,7 @@ try {
     loop: { samples: loop.count, p99Ms: loop.percentile(99) / 1e6, maxMs: loop.max / 1e6 },
     workerProfiles,
     correctness: "one eligible archive and restored event bytes match",
-    gaps: "Owner workload only. Worker V8 allocation is estimated; RSS is process-wide. First-result profiles include module load plus one preparation. Profiling timings are not gates.",
+    gaps: "Owner workload only. Worker V8 allocation uses the native counter when available, plus a separate GC-based estimate; RSS is process-wide. First-result profiles include module load plus one operation. Profiling timings are not gates.",
   };
   await writeFile(path.join(root, "result.json"), JSON.stringify(summary, null, 2));
   console.log(JSON.stringify(summary));

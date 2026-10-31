@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import {
   materializeWindowsSpawnProgram,
@@ -6,6 +7,7 @@ import {
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
 import { signalPtySessionTree } from "./kill-tree.js";
+import { getAgentExecCgroup, type ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { resolvePtyTerminalName, setPtyTerminalName } from "./pty-terminal-name.js";
 import { prepareChildProcessSpawnRecorder } from "./spawn-diagnostics.js";
 import type { SpawnInitiation } from "./spawn-initiation.js";
@@ -47,6 +49,7 @@ function resolveTerminalNodeExecutable(env: NodeJS.ProcessEnv): string {
 }
 
 export type TerminalPtySpawnParams = {
+  executionIntent?: ProcessExecutionIntent;
   file: string;
   args: string[];
   cwd?: string;
@@ -78,9 +81,19 @@ export async function spawnTerminalPty(
       throw new Error("PTY construction aborted");
     }
   };
-  if (process.versions.bun && process.platform !== "win32" && !bunTerminalHasFlowControl()) {
+  assertCurrent();
+  const needsNodeFlowControl =
+    process.versions.bun && process.platform !== "win32" && !bunTerminalHasFlowControl();
+  const execCgroup = params.executionIntent === "agent-tool" ? getAgentExecCgroup() : undefined;
+  const canIsolate = execCgroup && (needsNodeFlowControl || resolveNodeRuntimeExecutable());
+  if (execCgroup && !canIsolate) {
+    process.emitWarning(
+      "Agent exec isolation is partial: Node is unavailable for the terminal helper; native PTY commands remain in the Gateway cgroup. Add node to PATH to isolate them.",
+    );
+  }
+  if (canIsolate || needsNodeFlowControl) {
     const recordSpawn = prepareChildProcessSpawnRecorder(params.file, params.args);
-    // Stock Bun lacks read backpressure; the fork shipping pause also fixes macOS wait4 deadlocks.
+    // A dedicated helper joins the exec cgroup before spawning. Stock Bun also needs Node backpressure.
     const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
     assertCurrent();
     const pty = await spawnNodeTerminalPty(params, assertCurrent, lifecycle?.initiateSpawn);

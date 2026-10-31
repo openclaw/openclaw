@@ -112,7 +112,7 @@ function describePendingInputPreview(message: unknown): string {
 function isDismissablePendingInput(input: ChatPendingInputsPage["items"][number]): boolean {
   return (
     !input.queued &&
-    (input.state === "interrupted" || input.state === "cancelled") &&
+    input.state === "cancelled" &&
     asNullableRecord(input.message)?.display !== false
   );
 }
@@ -129,8 +129,11 @@ export function buildPendingInputItems(
   // Custody records stay outside active-run ordering until the writer promotes them.
   const items: ChatItem[] = [];
   for (const input of inputs) {
-    let pendingStatus: PendingInputStatus =
-      input.state === "queued" || input.state === "cancelled" ? input.state : "interrupted";
+    // Legacy interrupted custody is retained in storage but has no presentation.
+    if (input.state !== "queued" && input.state !== "cancelled") {
+      continue;
+    }
+    let pendingStatus: PendingInputStatus = input.state;
     if (
       input.state === "queued" &&
       input.runId &&
@@ -141,7 +144,6 @@ export function buildPendingInputItems(
     const retired = isDismissablePendingInput(input)
       ? {
           id: input.id,
-          status: input.state === "interrupted" ? ("interrupted" as const) : ("cancelled" as const),
           preview: describePendingInputPreview(input.message),
         }
       : undefined;
@@ -398,15 +400,6 @@ async function requestPendingInputPage(
 
 export function loadChatPendingInputs(state: ChatState, before?: number): Promise<void> {
   return requestPendingInputPage(state, before, "navigation");
-}
-
-/** Retired inputs on the displayed page that are not already being dismissed. */
-export function listDismissablePendingInputs(
-  view: ChatPendingInputView,
-): ChatPendingInputsPage["items"] {
-  return view.page.items.filter(
-    (input) => isDismissablePendingInput(input) && !isPendingInputDismissHidden(view, input.id),
-  );
 }
 
 /** Hide the selected retired inputs at once, then keep or restore them by the Gateway outcome. */

@@ -24,9 +24,14 @@ import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-message-fixtures.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
+import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
+import { registerChatSessionSharingEnglish } from "../../ui/src/i18n/locales/en-chat-session-sharing.ts";
+import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
 import { registerNewSessionRuntimeEnglish } from "../../ui/src/i18n/locales/en-new-session-runtime.ts";
+import { registerSessionMenuEnglish } from "../../ui/src/i18n/locales/en-session-menu.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -299,9 +304,14 @@ describe("control-ui-i18n generated ownership", () => {
     const catalog: unknown = JSON.parse(result.stdout);
     const source = flattenCatalog(catalog, "en");
     for (const fragment of [
+      registerChatDetailsEnglish.catalog,
+      registerChatSessionEnglish.catalog,
+      registerChatSessionOptionalEnglish.catalog,
+      registerChatSessionSharingEnglish.catalog,
       registerCodeBlocksEnglish.catalog,
       registerLabsEnglish.catalog,
       registerNewSessionRuntimeEnglish.catalog,
+      registerSessionMenuEnglish.catalog,
       registerSettingsEnglish.catalog,
       registerTranscriptsEnglish.catalog,
     ]) {
@@ -310,6 +320,204 @@ describe("control-ui-i18n generated ownership", () => {
         expect(source.get(key), key).toBe(value);
       }
     }
+    const sessionKeys = [...source.keys()]
+      .filter((key) => key.startsWith("sessionsView."))
+      .map((key) => key.slice("sessionsView.".length));
+    expect(
+      sessionKeys.slice(
+        sessionKeys.indexOf("personalGroupAdd"),
+        sessionKeys.indexOf("personalGroupEdit") + 1,
+      ),
+    ).toEqual([
+      "personalGroupAdd",
+      "personalGroupReferenceAdded",
+      "personalGroups",
+      "personalGroupNew",
+      "personalGroupEdit",
+    ]);
+    expect(
+      sessionKeys.slice(sessionKeys.indexOf("assignToMe"), sessionKeys.indexOf("assignTo") + 1),
+    ).toEqual(["assignToMe", "searchPeople", "noPeopleMatch", "assignTo"]);
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.workspaceConflict."))
+        .map((key) => key.slice("chat.workspaceConflict.".length)),
+    ).toEqual([
+      "titleOne",
+      "titleMany",
+      "description",
+      "summary",
+      "showCommands",
+      "morePaths",
+      "stagedResult",
+      "copyStagedResult",
+      "inspectCloud",
+      "takeCloud",
+      "copyInspectCommand",
+      "copyTakeCommand",
+      "commandHelp",
+      "commandsUnavailable",
+      "dismiss",
+      "eventSender",
+      "eventTitleOne",
+      "eventTitleMany",
+      "eventDescription",
+    ]);
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.sessionSharing."))
+        .map((key) => key.slice(20)),
+    ).toEqual([
+      "sessionAccess",
+      "sharedDescription",
+      "readOnlyDescription",
+      "suggestDescription",
+      "draftDescription",
+      "linkSharing",
+      "anyoneWithLink",
+      "publicLinkDescription",
+      "publicDraftDescription",
+      "linkUnavailable",
+      "permissions",
+      "creator",
+      "canRead",
+      "canSuggest",
+      "canSend",
+      "searchPeople",
+      "closeSearch",
+      "noPeopleFound",
+      "tryAnotherName",
+      "sharingOptions",
+      "menu",
+      "share",
+      "current",
+      "visibility",
+      "shared",
+      "readOnly",
+      "suggest",
+      "draft",
+      "publishDraft",
+      "owner",
+      "noPeople",
+      "readOnlyNotice",
+      "scopeReadOnlyNotice",
+      "guestWelcomePending",
+      "guestWelcomeFailed",
+      "guestWelcomeRetry",
+      "publicAccess",
+      "publicIndicator",
+      "worldReadable",
+      "notPublic",
+      "enablePublicAccess",
+      "disablePublicAccess",
+      "copyPublicLink",
+      "publicConfirmTitle",
+      "publicConfirmMessage",
+      "publicConfirmEnable",
+      "publicEnabled",
+      "publicDisabled",
+      "publicUnavailable",
+    ]);
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.subagentsPanel."))
+        .map((key) => key.slice(20)),
+    ).toEqual([
+      "nativeTitle",
+      "nativeCoverage",
+      "nativeEmpty",
+      "nativeTruncated",
+      "nativeRetry",
+      "nativeStatus.running",
+      "nativeStatus.completed",
+      "nativeStatus.failed",
+      "nativeStatus.interrupted",
+      "title",
+      "desktopFilter.all",
+      "desktopFilter.active",
+      "desktopFilter.waiting",
+      "desktopFilter.done",
+      "desktopFilterLabel",
+      "desktopSearch",
+      "desktopCloseSearch",
+      "desktopWorking",
+      "workingFor",
+      "desktopWaiting",
+      "desktopFor",
+      "desktopShowMore",
+      "desktopNoResults",
+      "desktopNoResultsDescription",
+      "mobileFinished",
+      "stopConfirmTitle",
+      "stopConfirmMessage",
+      "stopConfirmAction",
+      "back",
+      "running",
+      "finished",
+      "callsOne",
+      "callsMany",
+      "callsAtLeast",
+      "empty",
+      "noRunning",
+      "refresh",
+      "stop",
+      "stopping",
+      "elapsed",
+      "duration",
+    ]);
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.sessionHeader.continueInTerminal."))
+        .map((key) => key.slice(38)),
+    ).toEqual([
+      "action",
+      "title",
+      "description",
+      "authNote",
+      "disconnected",
+      "queryRouted",
+      "unavailable",
+    ]);
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.sessionDetails.context"))
+        .map((key) => key.slice("chat.sessionDetails.".length)),
+    ).toEqual([
+      "context",
+      "contextMessages",
+      "contextFiles",
+      "contextTools",
+      "contextAgentWorkspace",
+      "contextProject",
+      "contextPersonal",
+      "contextOtherFiles",
+      "contextSystemTools",
+      "contextMcpTools",
+      "contextClientTools",
+      "contextAvailableOnDemand",
+      "contextDeferredEstimate",
+      "contextSkills",
+      "contextSystem",
+      "contextFree",
+      "contextUnverified",
+      "contextOpen",
+      "contextLoading",
+      "contextError",
+      "contextOffline",
+      "contextUnavailable",
+      "contextReserve",
+      "contextExactCount",
+      "contextFreeShort",
+      "contextReserveShort",
+      "contextInputShort",
+      "contextOutputShort",
+      "contextSearch",
+      "contextSearchCount",
+      "contextSearchSkills",
+      "contextSearchFiles",
+      "contextSearchTools",
+      "contextShowAll",
+    ]);
     expect(source.get("meetingCapture.title")).toBe("Meeting capture");
     expect(source.get("meetingCapture.sources")).toBe("Auto-start sources");
   });

@@ -228,61 +228,6 @@ export async function readSessionWorkerPlacementAsync(params: {
   return placements.get(params.sessionId);
 }
 
-/** Automatic recovery records a failed destination; explicit recovery owns retrying it. */
-export async function prepareFailedWorkerPlacement(params: {
-  context: SessionWorkerPlacementContext;
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  assertCurrent: () => void;
-}) {
-  const prepared = await params.context.workerSessionPlacementService?.prepareSessionPlacement?.(
-    params.sessionId,
-  );
-  if (!prepared) {
-    return undefined;
-  }
-  try {
-    params.assertCurrent();
-    const placement = prepared.current();
-    if (
-      placement?.state !== "failed" ||
-      placement.agentId !== params.agentId ||
-      placement.sessionKey !== params.sessionKey
-    ) {
-      prepared.release();
-      return undefined;
-    }
-    const nextStep = isFailedWorkerPlacementEnvironmentGone({
-      placement,
-      environmentService: params.context.workerEnvironmentService,
-    })
-      ? "Repair the worker setup error, then restart the worker and resume the session."
-      : "Use Stop cloud worker to finish cleanup, resolve the provider error, then resume the session.";
-    return {
-      reason: `Automatic restart recovery stopped because worker placement failed: ${placement.recoveryError} ${nextStep}`,
-      isCurrent: () => {
-        try {
-          params.assertCurrent();
-          const current = prepared.current();
-          return (
-            current?.state === "failed" &&
-            current.generation === placement.generation &&
-            current.agentId === params.agentId &&
-            current.sessionKey === params.sessionKey
-          );
-        } catch {
-          return false;
-        }
-      },
-      release: prepared.release,
-    };
-  } catch (error) {
-    prepared.release();
-    throw error;
-  }
-}
-
 function samePlacementOwner(
   expected: PlacementOwner | undefined,
   current: PlacementOwner | undefined,

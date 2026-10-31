@@ -1,14 +1,38 @@
 import type { WorkerExecutionMode } from "../../plugins/capability-provider.types.js";
 import { isBundledManifestOwner } from "../../plugins/manifest-owner-policy.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.types.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 
-/** Selects node runtime packages from the Gateway's already validated plugin generation. */
-export function resolveNodeBootstrapPlugins(params: {
-  registry: Pick<PluginRegistry, "plugins" | "agentHarnesses" | "nodeHostCommands">;
-  metadata: Pick<PluginMetadataSnapshot, "byPluginId">;
+export type NodeBootstrapPluginSelection = {
+  registry: {
+    plugins: Array<
+      Pick<
+        PluginRegistry["plugins"][number],
+        "id" | "enabled" | "status" | "rootDir" | "packageName" | "packageVersion"
+      >
+    >;
+    agentHarnesses: Array<{
+      pluginId: string;
+      harness: Pick<PluginRegistry["agentHarnesses"][number]["harness"], "cloudPlacement">;
+    }>;
+    nodeHostCommands: Array<{ pluginId: string; command: { command: string } }>;
+  };
+  metadata: {
+    byPluginId: ReadonlyMap<
+      string,
+      Pick<
+        PluginManifestRecord,
+        "origin" | "trustedOfficialInstall" | "rootDir" | "packageName" | "packageVersion"
+      >
+    >;
+  };
   executionMode?: WorkerExecutionMode;
-}): Array<{ id: string; root: string }> {
+};
+
+/** Selects node runtime packages from the Gateway's already validated plugin generation. */
+export function resolveNodeBootstrapPlugins(
+  params: NodeBootstrapPluginSelection,
+): Array<{ id: string; root: string }> {
   if (params.executionMode !== "remote-exec") {
     return [];
   }

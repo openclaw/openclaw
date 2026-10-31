@@ -5,7 +5,7 @@ import type { AgentsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
-import type { ChannelCapability } from "../lib/channels/index.ts";
+import type { ChannelCapability, createChannelCapability } from "../lib/channels/index.ts";
 import type {
   ChatAttachment,
   ChatComposerMemoryFallback,
@@ -14,6 +14,7 @@ import type {
 } from "../lib/chat/chat-types.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import type { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.tsx";
 import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ControlUiPluginCapability } from "../plugins/control-ui-capability.ts";
@@ -64,6 +65,7 @@ export type ApplicationNavigationPreferencesSnapshot = {
   navCollapsed: boolean;
   navWidth: number;
   sidebarEntries: readonly string[];
+  personalSessionGroups?: readonly PersonalSessionGroup[];
   pinnedAgentIds: readonly string[];
 };
 
@@ -138,7 +140,8 @@ export type ApplicationContext<TRouteId extends string = RouteId> = {
   readonly agentSelection: AgentSelectionCapability;
   /** Configured agent targeted by Settings, independent of chat/session selection. */
   readonly settingsAgentSelection: AgentSelectionCapability;
-  readonly channels: ChannelCapability;
+  /** Lazy routes provide the constructor; the application retains and disposes one owner. */
+  readonly acquireChannels: (create: typeof createChannelCapability) => ChannelCapability;
   readonly config: ApplicationConfigCapability;
   readonly scopeUpgrade: ScopeUpgradeCapability;
   readonly sidebarAttention: SidebarAttentionStore;

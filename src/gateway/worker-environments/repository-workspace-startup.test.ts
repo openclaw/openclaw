@@ -264,7 +264,6 @@ it("accepts the initial SQLite and bare Git checkpoint before sync can finish or
     "repositoryAcceptance",
     "repositoryCleanup",
   ]);
-  expect(prepareRepositoryGitHubIdentity).toHaveBeenCalledWith(session.agentId, f.assertCurrent);
   expect(f.syncWorkspace).toHaveBeenCalledWith({
     authorize: expect.any(Function),
     sessionId: session.sessionId,
@@ -328,14 +327,6 @@ it("refuses requested setup without fresh authority instead of saving an incompl
   expect(prepareRepositoryGitHubIdentity).not.toHaveBeenCalled();
   expect(f.syncWorkspace).not.toHaveBeenCalled();
   expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBeNull();
-});
-
-it("refuses interrupted setup recovery before credentials or worker commands are requested", async () => {
-  const f = await fixture(true);
-  await expect(f.start({ recovery: true, runSetupScript: true })).rejects.toThrow("administrator");
-  expect(prepareRepositoryGitHubIdentity).not.toHaveBeenCalled();
-  expect(f.syncWorkspace).not.toHaveBeenCalled();
-  expect(await f.store.get(f.repository.workspaceId)).toEqual(f.repository);
 });
 
 it("adopts completed setup, restores accepted repository edits, and retains the bound workspace on restart", async () => {
@@ -434,7 +425,7 @@ it("adopts completed setup, restores accepted repository edits, and retains the 
     preparedManifestRef: completed.manifestRef,
   };
   try {
-    const initial = await f.start({ recovery: true, preparedRepository });
+    const initial = await f.start({ preparedRepository });
     expect(initial.manifestRef).toBe(completed.manifestRef);
     expect(await requireWorkspaceResultGit(f.remote, ["config", "--local", "user.name"])).toBe(
       gitAuthor.name,
@@ -458,7 +449,7 @@ it("adopts completed setup, restores accepted repository edits, and retains the 
     await checkpoint.publish();
     const accepted = (await f.store.get(f.repository.workspaceId))!;
     await fs.writeFile(path.join(f.remote, "tracked.txt"), "unaccepted replacement bytes\n");
-    const restored = await f.start({ repository: accepted, recovery: true, preparedRepository });
+    const restored = await f.start({ repository: accepted, preparedRepository });
     expect(restored.manifestRef).toBe(edited.manifestRef);
     expect(await fs.readFile(path.join(f.remote, "tracked.txt"), "utf8")).toBe(
       "accepted session edit\n",
@@ -625,7 +616,7 @@ it.each(["base manifest", "accepted manifest"] as const)(
       ).toBe("setup complete\n");
       return restored;
     });
-    const pending = f.start({ repository: accepted, recovery: true, runSetupScript: true });
+    const pending = f.start({ repository: accepted, runSetupScript: true });
     await expect(pending).rejects.toThrow(
       change === "accepted manifest" ? "accepted checkpoint" : "pinned source baseline",
     );

@@ -20,7 +20,7 @@ import { openReefAuditStore } from "./audit-state.js";
 import { handleReefCommand } from "./commands.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefMessageFlow } from "./flow.js";
-import { reefKeys } from "./flow.test-helpers.js";
+import { allow, reefKeys } from "./flow.test-helpers.js";
 import { ReefFriendManager } from "./friends.js";
 import { REEF_REPLAY_TTL_MS, reefReplayStoreKey, type ReefReplayRecord } from "./replay-store.js";
 import { createReefRuntimeAuthority } from "./runtime.js";
@@ -85,11 +85,10 @@ function reviewRequest(id = receiptId, approvalDigest = "b".repeat(64)): ReviewR
     bodyHash: "a".repeat(64),
     approvalDigest,
     verdict: {
+      ...allow,
       decision: "review",
       category: "ambiguous",
       reason: "Owner review.",
-      model: "test-model",
-      policyVersion: "v1",
     },
   };
 }
@@ -556,9 +555,9 @@ describe("Reef SQLite state", () => {
         : store;
     };
 
-    await expect(
-      (await openStores(runtime, reefKeys())).delivered.confirm(receiptId),
-    ).rejects.toThrow("Failed persisting Reef delivered marker");
+    await expect(new ReefDeliveredStore(runtime).confirm(receiptId)).rejects.toThrow(
+      "Failed persisting Reef delivered marker",
+    );
   });
 
   it("deduplicates concurrent pending reviews and evicts only completed decisions at capacity", async () => {

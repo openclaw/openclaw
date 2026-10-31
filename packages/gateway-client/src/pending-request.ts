@@ -5,7 +5,7 @@ import {
   isGatewaySuspendUnavailableError,
 } from "@openclaw/gateway-protocol/restart-unavailable";
 import { isRetryableGatewayStartupUnavailableError } from "@openclaw/gateway-protocol/startup-unavailable";
-import { toStringifiedError } from "@openclaw/normalization-core";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
@@ -38,6 +38,7 @@ type GatewayPendingRequest = {
   retryStartup?: (retryAfterMs?: number) => void;
   prepareRetry: () => boolean;
   waitingForResume?: boolean;
+  afterHello?: () => void;
 };
 
 type GatewayPendingRequestsOptions = {
@@ -134,11 +135,23 @@ export class GatewayPendingRequests {
     return false;
   }
 
+  releaseHeldRequests(isCurrent: () => boolean): void {
+    for (const pending of this.pending.values()) {
+      if (!isCurrent()) {
+        return;
+      }
+      const send = pending.afterHello;
+      pending.afterHello = undefined;
+      send?.();
+    }
+  }
+
   request<T>(
     sender: { send: (data: string) => void },
     method: string,
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
+    deferUntilHello = false,
   ): Promise<T> {
     let id: string;
     try {
@@ -286,7 +299,11 @@ export class GatewayPendingRequests {
         ) {
           pending.resend = send;
         }
-        send();
+        if (deferUntilHello) {
+          pending.afterHello = send;
+        } else {
+          send();
+        }
       } catch (error) {
         if (retire("CLIENT_SEND_ERROR")) {
           reject(toStringifiedError(error));

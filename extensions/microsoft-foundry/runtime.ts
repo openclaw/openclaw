@@ -1,7 +1,7 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   ProviderPreparedRuntimeAuth,
-  ProviderPrepareRuntimeAuthContext,
+  ProviderPrepareRuntimeAuthContextV2,
 } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
@@ -55,7 +55,7 @@ async function refreshEntraToken(params?: {
 }
 
 export async function prepareFoundryRuntimeAuth(
-  ctx: ProviderPrepareRuntimeAuthContext,
+  ctx: Omit<ProviderPrepareRuntimeAuthContextV2, "capability">,
 ): Promise<ProviderPreparedRuntimeAuth> {
   if (ctx.apiKey !== "__entra_id_dynamic__") {
     return {

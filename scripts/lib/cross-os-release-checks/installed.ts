@@ -168,13 +168,18 @@ export async function runInstallerSmoke(params: {
   logPath: string;
 }) {
   const script = buildInstallerSmokeScript(params);
-  const runScript = process.platform === "win32" ? runPowerShellScript : runPosixShellScript;
-  await runScript(script, {
+  const options = {
     cwd: params.lane.homeDir,
     env: params.env,
     logPath: params.logPath,
     timeoutMs: installTimeoutMs(),
-  });
+  };
+  if (process.platform === "win32") {
+    await runPowerShellScript(script, options);
+  } else {
+    // Preserve the runner-provisioned Node PATH; fresh-login discovery is checked separately.
+    await runCommand("/bin/bash", ["-c", script], options);
+  }
 }
 
 function buildWindowsPathBootstrapScript() {

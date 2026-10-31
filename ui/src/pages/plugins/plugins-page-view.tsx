@@ -16,7 +16,10 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginCatalogDetail as PluginCatalogDetail } from "./catalog-detail.tsx";
 import { renderPluginCatalogResults as PluginCatalogResults } from "./catalog-results.tsx";
-import { renderPluginConsentDialog as PluginConsentDialog } from "./consent-dialog.tsx";
+import {
+  PluginArtTile,
+  renderPluginConsentDialog as PluginConsentDialog,
+} from "./consent-dialog.tsx";
 import "./custom-elements.ts";
 import { pluginDetailLocation, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import {
@@ -385,7 +388,23 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         )}
       </SettingsWorkspace>
       <PluginSkillPreview preview={page().skillPreview} state={page().skillPreview.state} />
-      <WizardLogin controller={props.page.mcpLogin.dialog} />
+      <WizardLogin
+        controller={props.page.mcpLogin.dialog}
+        signInIcon={
+          <Show when={detailPluginId()}>
+            {(pluginId) => (
+              <PluginArtTile
+                registerIcon={page().icons.register}
+                slug={pluginId()}
+                name={page().mcpLogin.dialog.state().authLabel ?? pluginId()}
+                iconUrl={page().state.iconUrls[pluginId()]}
+                loading={page().icons.installed.isLoading(pluginId())}
+                onIconError={() => page().icons.installed.handleError(pluginId())}
+              />
+            )}
+          </Show>
+        }
+      />
       <Show when={page().consent.read().consent}>
         {(consent) => {
           const icon = createMemo(() => {

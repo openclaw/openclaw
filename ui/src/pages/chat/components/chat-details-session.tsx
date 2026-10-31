@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, createStore, lazy } from "solid-js";
+import { For, Show, createMemo, createSignal, createStore, lazy, onSettled } from "solid-js";
 import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
@@ -100,6 +100,8 @@ function DetailsAutomations(props: Props) {
           : ""
       }
       presented={props.presented}
+      cached={props.desktop ? props.props?.cachedDetails?.automations : undefined}
+      onDetailsSnapshot={props.desktop ? props.props?.onDetailsSnapshot : undefined}
     />
   );
 }
@@ -316,12 +318,28 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
               compact: true,
             };
           });
+          const outputsCount = () => {
+            const data = outputs();
+            return data ? getChatOutputsCount(data) : null;
+          };
+          const displayedCount = () => outputsCount() ?? props.props?.cachedDetails?.outputs;
+          const outputReceipt = createMemo(() =>
+            outputsCount() !== null && props.props?.onDetailsSnapshot
+              ? { count: outputsCount()!, write: props.props.onDetailsSnapshot }
+              : undefined,
+          );
           return (
             <Show when={props.props}>
               <section
                 class="chat-details-session"
                 data-details-desktop={props.desktop ? "" : undefined}
               >
+                <Show when={outputReceipt()} keyed>
+                  {(value) => {
+                    onSettled(() => value.write({ outputs: value.count }));
+                    return null;
+                  }}
+                </Show>
                 <Show
                   when={desktopPresentation()}
                   fallback={
@@ -523,7 +541,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                 </Show>
                 <Show when={desktopPresentation() && outputs()}>
                   {(data) => (
-                    <Show when={hasChatDesktopOutputs(data())}>
+                    <Show when={hasChatDesktopOutputs(data()) || (displayedCount() ?? 0) > 0}>
                       <ChatDetailsDesktopSection
                         section="outputs"
                         title={desktopPresentation()!.outputsLabel}
@@ -531,7 +549,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                         presented={active()}
                         onExpandedChange={(expanded) => changeSection("outputs", expanded)}
                         metadata={
-                          <Show when={getChatOutputsCount(data()) !== null}>
+                          <Show when={displayedCount() !== undefined}>
                             <span class="chat-details-desktop-section__count">
                               <span
                                 class="chat-details-desktop-section__count-separator"
@@ -539,7 +557,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                               >
                                 ·
                               </span>
-                              {getChatOutputsCount(data())}
+                              {displayedCount()}
                             </span>
                           </Show>
                         }
@@ -612,8 +630,7 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
           {t("sessionProgressCard.widgetAccessDenied")}
         </div>
       </Show>
-      {/* Its separate inventory can arrive after the session. Append it so
-          loading automation rows never displaces the existing sections. */}
+      {/* Keep the automation slot after Progress while its inventory revalidates. */}
       <DetailsAutomations props={props.props} presented={props.presented} desktop />
     </ChatDetailsDesktopBody>
   );

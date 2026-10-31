@@ -64,6 +64,7 @@ const snapshots: RegistrySnapshot[] = [0, 1].map((offset) => {
     labels: {},
     reconciled: { section: JSON.stringify(section), revision: storesRevision(section) },
     pending: null,
+    grants: {},
   };
 });
 const target = "  discord:channel:1510164477642014999  ";

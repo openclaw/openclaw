@@ -34,3 +34,8 @@ const gatewayWorkerApprovalMethods = new Set<string>([
 export function isGatewayWorkerApprovalMethod(method: string): boolean {
   return gatewayWorkerApprovalMethods.has(method);
 }
+
+/** A write-scoped run may request plugin review and await its own verdict, never resolve one. */
+export function isHostPluginApprovalMethod(method: string): boolean {
+  return method === "plugin.approval.request" || method === "plugin.approval.waitDecision";
+}

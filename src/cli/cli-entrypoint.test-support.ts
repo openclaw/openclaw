@@ -53,6 +53,16 @@ export const cliMessageExitEntrypoints = {
   oneShotExit: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "one-shot-exit" }),
 } as const;
 
+export const oneShotExitProbeEntrypoints = {
+  argv: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "argv-invocation" }),
+  proxy: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "proxy-cli" }),
+} as const;
+
+export const logsConsoleEntrypoints = {
+  logs: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "logs-cli" }),
+  preaction: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "program/preaction" }),
+} as const;
+
 export const doctorOutputEntrypoints = {
   maintenance: legacy({
     currentModuleUrl: import.meta.url,
@@ -169,6 +179,10 @@ export const gatewayDirectStopEntrypoints = {
     sourceWorkerName: "../sessions/session-controller.queries",
   }),
   runLoop: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "gateway-cli/run-loop" }),
+  restartIntent: worker({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/restart-intent",
+  }),
   restartPolicy: worker({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../infra/restart",

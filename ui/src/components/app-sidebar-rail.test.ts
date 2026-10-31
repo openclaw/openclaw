@@ -26,6 +26,7 @@ import { createMediaQueryList } from "../test-helpers/media-query.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { AppSidebar, getAppSidebarOwner } from "./app-sidebar.tsx";
+import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import { dispatchMousePointer, settleTooltip } from "./tooltip.test-support.ts";
 
@@ -108,7 +109,7 @@ async function seed(sidebar: Sidebar, rows: Parameters<Sidebar["pinnedSessions"]
   await sidebar.updateComplete;
 }
 function cachedPin(key: string, label = "Saved title") {
-  return { key, label, pinned: true, isChild: false, children: [] };
+  return restoreSnapshotSession({ key, label, pinned: true, isChild: false, children: [] }, "");
 }
 async function pinLookup(key = "agent:other:unloaded", fallback = false) {
   const base = await fixture();
@@ -294,6 +295,19 @@ describe("personal navigation rail", () => {
       expect(artwork.text(".session-glyph__emoji")).toBe(icon);
     }
     expect(artwork.present("svg", ".session-owner-chip")).toEqual([false, false]);
+  });
+
+  it("keeps persistent child background work off a shortcut's leading ring", async () => {
+    const { sidebar, append } = await fixture({ sidebarEntries: ["session-rail:agent:main:mine"] });
+    append({
+      key: "agent:main:check",
+      parentSessionKey: "agent:main:mine",
+      backgroundProcessCount: 1,
+    });
+    await sidebar.updateComplete;
+    expect(
+      rail(sidebar, "session-rail:agent:main:mine")!.querySelector(".session-glyph__ring"),
+    ).toBeNull();
   });
 
   it("keeps a session shortcut's identity with only running and unread decorations", async () => {

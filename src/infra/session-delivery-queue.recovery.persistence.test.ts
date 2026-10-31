@@ -5,12 +5,12 @@ import {
   drainPendingSessionDelivery,
   recoverPendingSessionDeliveries,
 } from "./session-delivery-queue-recovery.js";
-import {
-  enqueueSessionDelivery,
-  loadPendingSessionDeliveries,
-} from "./session-delivery-queue-storage.js";
+import { loadPendingSessionDeliveries } from "./session-delivery-queue-storage.js";
 import { SessionDeliveryDeadLetteredError } from "./session-delivery-queue.records.js";
-import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
+import {
+  enqueueUnclaimedSessionDeliveryFixture as enqueueSessionDelivery,
+  withSessionDeliveryQueue,
+} from "./session-delivery-queue.test-helpers.js";
 
 it.each([
   { mode: "startup", phase: "retry" },
@@ -21,7 +21,12 @@ it.each([
   await withSessionDeliveryQueue(async (tempDir, queueContext) => {
     const terminal = phase === "settlement";
     const id = await enqueueSessionDelivery(
-      { kind: "systemEvent", sessionKey: "agent:main:main", text: "pending delivery" },
+      {
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        messageId: "produced-media-delivery",
+        expectedMediaUrls: ["https://example.invalid/produced-image.png"],
+      },
       queueContext,
     );
     const { db } = openOpenClawStateDatabase({

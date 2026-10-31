@@ -91,6 +91,9 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
     const replyFinished = createDeferred();
     const releaseFirstList = createDeferred();
     const firstListRead = createDeferred();
+    const releaseSecondList = createDeferred();
+    const secondListRead = createDeferred();
+    const lowListPublished = createDeferred();
     const order: string[] = [];
     const key = "agent:main:dashboard:created-thinking-proof";
     const identity = { agentId: "main", sessionKey: key };
@@ -129,6 +132,9 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         if (listCalls === 1) {
           firstListRead.resolve(undefined);
           await releaseFirstList.promise;
+        } else if (listCalls === 2 && mode === "delivered-event") {
+          secondListRead.resolve(undefined);
+          await releaseSecondList.promise;
         }
       }
       return payload;
@@ -138,6 +144,11 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
     const sessions = createTestSessionCapability(gateway);
     const refresh = () => sessions.refresh({ agentId: "main", rowMode: "compact", force: true });
     const row = () => sessions.state.result?.sessions.find((entry) => entry.key === key);
+    const unsubscribe = sessions.subscribe(() => {
+      if (row()?.thinkingLevel === "low") {
+        lowListPublished.resolve(undefined);
+      }
+    });
     try {
       await initializeSessionReadContext(context);
       // Thinking reconciliation needs compact detail facts, not the sidebar display projection.
@@ -191,9 +202,12 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         });
         expect(sessions.think(key, "main")).toBe("low");
         releaseFirstList.resolve(undefined);
-        await vi.waitFor(() => expect(row()?.thinkingLevel).toBe("high"));
-        // This real high read was issued before the low event replaced the unlisted claim.
+        await waitFor(secondListRead.promise, "successor low list");
+        // Hold canonical low until the older high response has faced the newer event claim.
+        expect(row()).toMatchObject(highEntry);
         expect(sessions.think(key, "main")).toBe("low");
+        releaseSecondList.resolve(undefined);
+        await waitFor(lowListPublished.promise, "canonical low publication");
       } else if (mode === "ui-patch") {
         const patched = sessions.patch(key, { thinkingLevel: "low" }, { agentId: "main" });
         // Observe the real PATCH acknowledgement, not a polling deadline before it settles.
@@ -202,7 +216,7 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         releaseFirstList.resolve(undefined);
         await patched;
       }
-      if (mode !== "ui-patch") {
+      if (mode === "later-read") {
         const refreshed = refresh();
         releaseFirstList.resolve(undefined);
         await refreshed;
@@ -210,12 +224,18 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
       expect(row()).toMatchObject(lowEntry);
       expect(order).toEqual(["create-ack", "list-1-read", "directive-complete", "list-2-read"]);
       expect(sessions.think(key, "main")).toBeUndefined();
+      expect(sessions.think(key, "main") ?? row()?.thinkingLevel).toBe("low");
     } finally {
+      releaseSecondList.resolve(undefined);
       releaseReply.resolve(undefined);
       releaseFirstList.resolve(undefined);
       try {
         await settleWorkspaceRuns(context, storePath, key, true);
+        if (mode === "delivered-event" && listCalls >= 2) {
+          await waitFor(lowListPublished.promise, "successor cleanup");
+        }
       } finally {
+        unsubscribe();
         sessions.dispose();
         requests.mockRestore();
         gatewayReplyMock.mockReset();

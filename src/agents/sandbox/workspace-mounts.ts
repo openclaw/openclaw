@@ -102,11 +102,12 @@ function resolveReadOnlyWorkspaceSkillMountCandidates(params: WorkspaceSkillMoun
   return mounts;
 }
 
-/** Materialize protected sources before selecting the first sandbox's mounts. */
+/** Materialize protected sources and report whether preparation created a directory. */
 export async function ensureReadOnlyWorkspaceSkillMountSources(
   params: WorkspaceSkillMountParams,
   assertCurrent?: () => void,
-): Promise<void> {
+): Promise<boolean> {
+  let created = false;
   for (const mount of resolveReadOnlyWorkspaceSkillMountCandidates(params)) {
     const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(path.resolve(mount.rootDir));
     const canonicalSource = resolveSandboxHostPathViaExistingAncestor(path.resolve(mount.hostPath));
@@ -148,7 +149,9 @@ export async function ensureReadOnlyWorkspaceSkillMountSources(
     });
     await directory.mkdir(path.relative(ancestor, canonicalSource));
     assertCurrent?.();
+    created = true;
   }
+  return created;
 }
 
 export function resolveReadOnlyWorkspaceSkillMounts(

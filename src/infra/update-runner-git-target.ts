@@ -4,7 +4,12 @@ import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { ignoreMissingPath } from "./errno.js";
-import { executeGitCommand, gitNullConfigPath, normalizeGitPathForFilesystem } from "./git-exec.js";
+import {
+  executeGitCommand,
+  gitNullConfigPath,
+  normalizeGitPathForFilesystem,
+  quoteGitConfig,
+} from "./git-exec.js";
 import {
   DEV_BRANCH,
   isBetaTag,
@@ -86,10 +91,6 @@ export async function classifyPartialCloneGitFailure(params: {
       "corruption with git fsck. Retry the update; if it recurs, inspect the repository with " +
       "git fsck before attempting repair.",
   );
-}
-
-function quoteGitConfig(value: string): string {
-  return `"${value.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"').replace(/\n/gu, "\\n").replace(/\t/gu, "\\t").replaceAll("\b", "\\b")}"`;
 }
 
 function gitConfigEntry(key: string, value: string): string {

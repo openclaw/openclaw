@@ -117,7 +117,9 @@ beforeEach(() => {
   resetLifecycleRuntimeLogs();
   lifecycleTestRuntime.error.mockClear();
   resetLifecycleServiceMocks();
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-restart-intent-cli-"));
+  const environment = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-restart-intent-cli-") };
+  vi.stubEnv("OPENCLAW_STATE_DIR", environment.OPENCLAW_STATE_DIR);
+  service.readCommand.mockResolvedValue({ programArguments: [], environment });
   vi.stubEnv("OPENCLAW_PROFILE", "default");
   vi.stubEnv("OPENCLAW_SYSTEMD_UNIT", "");
   vi.stubEnv("OPENCLAW_LAUNCHD_LABEL", "");

@@ -16,7 +16,7 @@ import { VoiceCallWebhookServer } from "./webhook.js";
 import { connectWs, waitForClose } from "./websocket-test-support.js";
 
 type ResponseParams = { userMessage: string; onEarlyText?: (text: string) => Promise<boolean> };
-type ResponseResult = { text: string; deliveredEarly: boolean };
+type ResponseResult = { text: string | null; deliveredEarly: boolean; error?: string };
 const mocks = vi.hoisted(() => ({
   generate: vi.fn<(params: ResponseParams) => Promise<ResponseResult>>(),
   createTranscription: vi.fn<(request: RealtimeTranscriptionSessionCreateRequest) => void>(),
@@ -162,6 +162,14 @@ async function responseAt(index: number) {
       response.resolve({ text, deliveredEarly: false });
       await completion.promise;
     },
+    fail: async (error: string | Error) => {
+      if (typeof error === "string") {
+        response.resolve({ text: null, deliveredEarly: false, error });
+      } else {
+        response.reject(error);
+      }
+      await completion.promise;
+    },
   };
 }
 
@@ -231,6 +239,56 @@ afterEach(async () => {
 });
 
 describe("automatic phone reply ownership", () => {
+  it.each(["reported", "thrown"])(
+    "speaks once for a %s generation failure and accepts the next turn",
+    async (kind) => {
+      const call = await startCall();
+      await call.speech("first question");
+      const first = await responseAt(0);
+      const detail = "provider failed: synthetic-private-detail";
+      await first.fail(kind === "reported" ? detail : new Error(detail));
+      call.expectPlayback("Sorry, I hit a problem working out a response. Please try again.");
+      expect(call.provider.playTtsCalls[0]?.listenAfterPlayback).toBe(true);
+      await call.speech("next question");
+      await (await responseAt(1)).finish("Here is your answer.");
+      call.expectPlayback(
+        "Sorry, I hit a problem working out a response. Please try again.",
+        "Here is your answer.",
+      );
+    },
+  );
+
+  it.each(["delivered", "superseded"])("keeps a failed %s turn silent", async (kind) => {
+    const call = await startCall();
+    await call.speech("first question");
+    const first = await responseAt(0);
+    if (kind === "delivered") {
+      expect(await first.early("Already answered.")).toBe(true);
+    } else {
+      await call.speech("replacement question");
+    }
+    await first.fail(new Error("generation timed out"));
+    call.expectPlayback(...(kind === "delivered" ? ["Already answered."] : []));
+    if (kind === "superseded") {
+      await (await responseAt(1)).finish("Replacement answer.");
+      call.expectPlayback("Replacement answer.");
+    }
+  });
+
+  it("does not retry a failed fallback playback and keeps the call usable", async () => {
+    const call = await startCall();
+    const playback = vi
+      .spyOn(call.provider, "playTts")
+      .mockRejectedValueOnce(new Error("TTS unavailable"));
+    await call.speech("first question");
+    await (await responseAt(0)).fail("generation failed");
+    expect(playback).toHaveBeenCalledOnce();
+    expect(call.manager.getCall(call.callId)?.state).toBe("listening");
+    await call.speech("next question");
+    await (await responseAt(1)).finish("Recovered.");
+    call.expectPlayback("Recovered.");
+  });
+
   it.each([true, false])(
     "orders pending playback behind partial speech (stream=%s)",
     async (streaming) => {

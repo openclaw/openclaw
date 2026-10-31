@@ -5,6 +5,7 @@ import type { PersonActivityRouting } from "../../../components/person-activity-
 import type { SessionPlacementPresentation } from "../../../components/session-placement-move-dialog.tsx";
 import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
+import type { ChatHeaderSharingSnapshot } from "../chat-header-viewers-snapshot.ts";
 import type { ChatMobilePeopleMentions } from "../chat-mobile-people-mentions.ts";
 import type { ChatMobilePeople } from "../chat-mobile-people.ts";
 import type { PaneHeaderPresence, PaneSubagentStop } from "../chat-pane-header-view.tsx";
@@ -72,6 +73,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   runAction?: Parameters<typeof PaneSubagentStop>[0];
   presence?: Parameters<typeof PaneHeaderPresence>[0];
   sharingControl?: ChatSessionSharingProps;
+  sharingPlaceholder?: ChatHeaderSharingSnapshot;
   mobileSharing?: PreparedChatSessionSharing;
   mobileVersions?: ChatSessionVersionsMobileProps;
   mobilePeople?: ChatMobilePeople;

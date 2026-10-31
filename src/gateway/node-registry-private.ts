@@ -25,14 +25,11 @@ import { buildNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-reques
 import type { NodeInvokeParams, NodeInvokeResult } from "./node-invoke.types.js";
 import type { NodePairingLeaseResolution } from "./node-registry-pairing.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
-import type {
-  NodeInvokeStreamController,
-  PendingInvoke,
-  PendingSystemRunEvent,
-} from "./node-registry.invoke-stream.js";
+import type { NodeInvokeStreamController, PendingInvoke } from "./node-registry.invoke-stream.js";
 import {
   normalizeSystemRunInvokeParams,
   resolvePendingSystemRunEvent,
+  type NodeSystemRunEvents,
 } from "./node-registry.system-run.js";
 import {
   createNodeRunnerStatePublisher,
@@ -104,12 +101,7 @@ type NodeRegistryPrivateContext = {
   pendingInvokes: Map<string, PendingInvoke>;
   invokeStreams: NodeInvokeStreamController;
   sendEventToSession: (node: NodeRunnerRegistrySession, event: string, payload: unknown) => boolean;
-  rememberAuthorizedSystemRunEvent: (
-    event: PendingSystemRunEvent & {
-      nodeId: string;
-      connId: string;
-    },
-  ) => void;
+  rememberAuthorizedSystemRunEvent: NodeSystemRunEvents["remember"];
   publishActiveNodeContext: () => void;
   closeHostStats: () => Promise<void>;
 };
@@ -239,6 +231,8 @@ async function invokeNodeRegistryCore(
     turnSource,
   });
   const authorizeDispatch = params.authorizeDispatch;
+  const closedAuthority = () =>
+    nodeInvokeError("APPROVAL_AUTHORITY_CLOSED", "runtime authority closed before node dispatch");
   if (authorizeDispatch) {
     let authorized: boolean | typeof ABSOLUTE_DEADLINE_EXPIRED;
     try {
@@ -257,123 +251,129 @@ async function invokeNodeRegistryCore(
       return nodeInvokeError("TIMEOUT", "node invoke timed out");
     }
     if (!authorized) {
-      return nodeInvokeError(
-        "APPROVAL_AUTHORITY_CLOSED",
-        "runtime authority closed before node dispatch",
-      );
+      return closedAuthority();
     }
   }
   const dispatchNode = node;
-  const dispatched = await runWithSessionSourceScope(
-    params.isDispatchAuthorized,
-    async () => {
-      // Serialization can consume the budget or close caller-owned authority.
-      // Revalidate both before arming pending state and handing off to transport.
-      // The authority callback may publish a deadline abort.
-      if (params.isDispatchAuthorized?.() === false) {
-        return {
-          result: nodeInvokeError(
-            "APPROVAL_AUTHORITY_CLOSED",
-            "runtime authority closed before node dispatch",
-          ),
-        };
-      }
-      if (params.signal?.aborted) {
-        return { result: nodeInvokeError("ABORTED", "node invoke cancelled") };
-      }
-      if (state.context.getNode(params.nodeId) !== dispatchNode) {
-        return {
-          result: nodeInvokeError("ROUTE_CHANGED", "node connection changed before dispatch"),
-        };
-      }
-      if (
-        dispatchNode.client.invalidated === true ||
-        (expectedPairingGeneration && dispatchNode.pairingGeneration !== expectedPairingGeneration)
-      ) {
-        return {
-          result: nodeInvokeError("PAIRING_CHANGED", "node pairing changed before dispatch"),
-        };
-      }
-      if (!state.context.isCommandAllowed(params.nodeId, params.command)) {
-        return { result: nodeInvokeError("POLICY_CHANGED", "node command is no longer allowed") };
-      }
-      if (deadlineAtMs !== undefined) {
-        timeoutMs = Math.max(0, deadlineAtMs - performance.now());
-        if (timeoutMs === 0) {
-          return { result: nodeInvokeError("TIMEOUT", "node invoke timed out") };
+  let source =
+    systemRunEvent && params.prepareSystemRunEventSource
+      ? await params.prepareSystemRunEventSource(systemRunEvent.sessionKey ?? "node")
+      : undefined;
+  if (systemRunEvent && source) {
+    systemRunEvent.source = source;
+  }
+  try {
+    const dispatched = await runWithSessionSourceScope(
+      params.isDispatchAuthorized,
+      async () => {
+        // Serialization can consume the budget or close caller-owned authority.
+        // Revalidate both before arming pending state and handing off to transport.
+        // The authority callback may publish a deadline abort.
+        systemRunEvent?.source?.expectedTarget.assertCurrent?.();
+        if (params.isDispatchAuthorized?.() === false) {
+          return { result: closedAuthority() };
         }
-        // Keep the precise monotonic budget for Gateway timers, but satisfy the integer
-        // node-event contract without turning a sub-millisecond budget into "unbounded".
-        payload.timeoutMs = Math.ceil(timeoutMs);
-      }
-      const result = new Promise<NodeInvokeResult>((resolve, reject) => {
-        const pending: PendingInvoke = {
-          nodeId: params.nodeId,
-          connId: dispatchNode.connId,
-          command: params.command,
-          systemRunEvent,
-          resolve,
-          reject,
-          nextProgressSeq: 0,
-          progressChunks: new Map(),
-          nextInputSeq: 0,
-          ...(params.onProgress ? { onProgress: params.onProgress } : {}),
-          // Lifecycle cleanup retains its exact owner through reply settlement.
-          ...(isCompletionAuthorized ? { isCompletionAuthorized } : {}),
-        };
-        const generationController = params.expectedPairingGeneration
-          ? new AbortController()
-          : undefined;
-        if (params.expectedPairingGeneration && generationController) {
-          state.generationBoundInvokes.set(pending, {
-            expectedGeneration: params.expectedPairingGeneration,
-            controller: generationController,
+        if (params.signal?.aborted) {
+          return { result: nodeInvokeError("ABORTED", "node invoke cancelled") };
+        }
+        if (state.context.getNode(params.nodeId) !== dispatchNode) {
+          return {
+            result: nodeInvokeError("ROUTE_CHANGED", "node connection changed before dispatch"),
+          };
+        }
+        if (
+          dispatchNode.client.invalidated === true ||
+          (expectedPairingGeneration &&
+            dispatchNode.pairingGeneration !== expectedPairingGeneration)
+        ) {
+          return {
+            result: nodeInvokeError("PAIRING_CHANGED", "node pairing changed before dispatch"),
+          };
+        }
+        if (!state.context.isCommandAllowed(params.nodeId, params.command)) {
+          return { result: nodeInvokeError("POLICY_CHANGED", "node command is no longer allowed") };
+        }
+        if (deadlineAtMs !== undefined) {
+          timeoutMs = Math.max(0, deadlineAtMs - performance.now());
+          if (timeoutMs === 0) {
+            return { result: nodeInvokeError("TIMEOUT", "node invoke timed out") };
+          }
+          // Keep the precise monotonic budget for Gateway timers, but satisfy the integer
+          // node-event contract without turning a sub-millisecond budget into "unbounded".
+          payload.timeoutMs = Math.ceil(timeoutMs);
+        }
+        const result = new Promise<NodeInvokeResult>((resolve, reject) => {
+          const pending: PendingInvoke = {
+            nodeId: params.nodeId,
+            connId: dispatchNode.connId,
+            command: params.command,
+            systemRunEvent,
+            resolve,
+            reject,
+            nextProgressSeq: 0,
+            progressChunks: new Map(),
+            nextInputSeq: 0,
+            ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+            // Lifecycle cleanup retains its exact owner through reply settlement.
+            ...(isCompletionAuthorized ? { isCompletionAuthorized } : {}),
+          };
+          const generationController = params.expectedPairingGeneration
+            ? new AbortController()
+            : undefined;
+          if (params.expectedPairingGeneration && generationController) {
+            state.generationBoundInvokes.set(pending, {
+              expectedGeneration: params.expectedPairingGeneration,
+              controller: generationController,
+            });
+          }
+          const signal = generationController
+            ? params.signal
+              ? AbortSignal.any([params.signal, generationController.signal])
+              : generationController.signal
+            : params.signal;
+          const idleTimeoutMs = resolveTimerTimeoutMs(params.idleTimeoutMs, 0, 0);
+          state.context.invokeStreams.armPending({
+            requestId,
+            pending,
+            timeoutMs,
+            deadlineAtMs,
+            idleTimeoutMs,
+            ...(signal ? { signal } : {}),
           });
-        }
-        const signal = generationController
-          ? params.signal
-            ? AbortSignal.any([params.signal, generationController.signal])
-            : generationController.signal
-          : params.signal;
-        const idleTimeoutMs = resolveTimerTimeoutMs(params.idleTimeoutMs, 0, 0);
-        state.context.invokeStreams.armPending({
-          requestId,
-          pending,
-          timeoutMs,
-          deadlineAtMs,
-          idleTimeoutMs,
-          ...(signal ? { signal } : {}),
         });
-      });
-      const pendingAtDispatch = state.context.pendingInvokes.get(requestId);
-      if (!pendingAtDispatch) {
-        return { result };
-      }
-      const dispatchDeadlineAtMs = pendingAtDispatch.deadlineAtMs;
-      const ok = state.context.sendEventToSession(dispatchNode, "node.invoke.request", payload);
-      if (!ok) {
-        const pending = state.context.pendingInvokes.get(requestId);
-        if (pending) {
-          state.context.invokeStreams.clearTimers(pending);
-          state.context.pendingInvokes.delete(requestId);
-          pending.resolve(nodeInvokeError("UNAVAILABLE", "failed to send invoke to node"));
+        const pendingAtDispatch = state.context.pendingInvokes.get(requestId);
+        if (!pendingAtDispatch) {
+          return { result };
         }
+        const dispatchDeadlineAtMs = pendingAtDispatch.deadlineAtMs;
+        const ok = state.context.sendEventToSession(dispatchNode, "node.invoke.request", payload);
+        if (!ok) {
+          const pending = state.context.pendingInvokes.get(requestId);
+          if (pending) {
+            state.context.invokeStreams.clearTimers(pending);
+            state.context.pendingInvokes.delete(requestId);
+            pending.resolve(nodeInvokeError("UNAVAILABLE", "failed to send invoke to node"));
+          }
+          return { result };
+        }
+        if (systemRunEvent) {
+          state.context.rememberAuthorizedSystemRunEvent({
+            nodeId: params.nodeId,
+            connId: dispatchNode.connId,
+            ...systemRunEvent,
+          });
+          source = undefined;
+        }
+        params.onDispatchReady?.(requestId, dispatchDeadlineAtMs);
         return { result };
-      }
-      if (systemRunEvent) {
-        state.context.rememberAuthorizedSystemRunEvent({
-          nodeId: params.nodeId,
-          connId: dispatchNode.connId,
-          ...systemRunEvent,
-        });
-      }
-      params.onDispatchReady?.(requestId, dispatchDeadlineAtMs);
-      return { result };
-    },
-    { checkAfter: false },
-  );
-  // The prepared source ends at dispatch; the pending node reply owns its lifetime.
-  return await dispatched.result;
+      },
+      { checkAfter: false },
+    );
+    // The prepared source ends at dispatch; the pending node reply owns its lifetime.
+    return await dispatched.result;
+  } finally {
+    source?.release();
+  }
 }
 
 export function registerNodeRegistryPrivateRuntime(

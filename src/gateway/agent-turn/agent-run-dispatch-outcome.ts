@@ -15,6 +15,16 @@ export function projectWithdrawnAgentInput(
   if (!pendingInputId || !isRecord(payload)) {
     return payload;
   }
+  const effectiveStopReason = stopReason ?? payload.stopReason;
+  // Failed preparation also cancels unconsumed input during cleanup; retain its actual failure.
+  if (
+    payload.status === "error" &&
+    effectiveStopReason !== "rpc" &&
+    effectiveStopReason !== "stop" &&
+    effectiveStopReason !== "timeout"
+  ) {
+    return payload;
+  }
   return {
     ...payload,
     ...(stopReason ? { stopReason } : {}),
@@ -22,7 +32,7 @@ export function projectWithdrawnAgentInput(
     pendingInputId,
     summary:
       `Input ${pendingInputId} was withdrawn before its turn started and was not delivered.` +
-      ((stopReason ?? payload.stopReason) === "timeout"
+      (effectiveStopReason === "timeout"
         ? " Raise --timeout and retry."
         : " Resend it when ready."),
   };

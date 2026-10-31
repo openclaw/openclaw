@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
 
 const it = createMacScriptTest();
@@ -15,23 +16,19 @@ describe.runIf(process.platform === "darwin")("bundled SQLite library", () => {
       mac.lifetime.run(async () => {
         const root = mac.createTempDir("openclaw-sqlite-build-");
         const at = (file: string) => path.join(root, file);
-        const write = async (file: string, data: string, mode?: number) => {
+        const write = async (file: string, data: string | Uint8Array, mode?: number) => {
           await mkdir(path.dirname(at(file)), { recursive: true });
           await writeFile(at(file), data, { mode });
         };
+        const archive = "apps/macos/.build/sqlite/3.53.4/sqlite-amalgamation-3530400.zip";
         // Compile an inert library through the real builder without downloading upstream code.
         await write(
-          "sqlite-amalgamation-3530400/sqlite3.c",
-          'const char *sqlite3_libversion(void) { return "fixture"; }\n',
+          archive,
+          makeStoredZip({
+            "sqlite-amalgamation-3530400/sqlite3.c":
+              'const char *sqlite3_libversion(void) { return "fixture"; }\n',
+          }),
         );
-        const archive = at("apps/macos/.build/sqlite/3.53.4/sqlite-amalgamation-3530400.zip");
-        await mkdir(path.dirname(archive), { recursive: true });
-        const zipped = await mac.run(
-          "/usr/bin/zip",
-          ["-q", archive, "sqlite-amalgamation-3530400/sqlite3.c"],
-          { cwd: root },
-        );
-        expect(zipped.status).toBe(0);
         await write(
           "scripts/lib/sqlite-macos.json",
           JSON.stringify({
@@ -41,7 +38,7 @@ describe.runIf(process.platform === "darwin")("bundled SQLite library", () => {
               scenario === "wrong-checksum"
                 ? "0".repeat(64)
                 : createHash("sha256")
-                    .update(await readFile(archive))
+                    .update(await readFile(at(archive)))
                     .digest("hex"),
           }),
         );
@@ -70,7 +67,7 @@ exit 2
             env: {
               PATH: `${at("tools")}:${nodeDirectory}:/usr/bin:/bin`,
               TMPDIR: root,
-              fixture_archive: archive,
+              fixture_archive: at(archive),
             },
           },
         );

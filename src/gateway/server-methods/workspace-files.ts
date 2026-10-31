@@ -293,7 +293,8 @@ export async function listSessionWorkspaceFiles(
     const readRoot = workspaceRoot ?? root;
     if (search) {
       const entries: SessionFileBrowserEntry[] = [];
-      const query = search.toLowerCase();
+      // Normalize comparison text only; on-disk filenames stay original.
+      const query = search.toLowerCase().normalize("NFC");
       let visitedEntries = 0;
       let truncated = false;
       const shouldStop = (): boolean => {
@@ -317,7 +318,7 @@ export async function listSessionWorkspaceFiles(
           }
           visitedEntries += 1;
           const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
-          if (browserPath.toLowerCase().includes(query)) {
+          if (browserPath.toLowerCase().normalize("NFC").includes(query)) {
             const entry = toWorkspaceBrowserEntry(browserPath, dirent, relevance);
             if (entry) {
               entries.push(entry);
@@ -348,8 +349,11 @@ export async function listSessionWorkspaceFiles(
     if (!resolved) {
       return undefined;
     }
-    const stat = await statWorkspacePath(readRoot, browserPath, assertCurrent);
-    if (!stat?.isDirectory) {
+    // Local roots are admitted directories; listing rechecks their identity.
+    if (
+      (browserPath || !workspaceRoot || "access" in workspaceRoot) &&
+      !(await statWorkspacePath(readRoot, browserPath, assertCurrent))?.isDirectory
+    ) {
       return undefined;
     }
     const dirents = await listWorkspacePath(readRoot, browserPath, assertCurrent);

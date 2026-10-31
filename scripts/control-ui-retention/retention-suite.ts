@@ -50,7 +50,7 @@ import { specialDialogCoverageNotes, specialDialogScenes } from "./special-dialo
 
 const bundleDir = path.resolve(process.env.OPENCLAW_RETENTION_BUNDLE ?? "dist/control-ui");
 const filter = new RegExp(process.env.OPENCLAW_RETENTION_FILTER ?? ".", "u");
-const clawsConfig = { gateway: { controlUi: { experimental: { claws: true } } } };
+const templatesConfig = { gateway: { controlUi: { experimental: { templates: true } } } };
 const dialogIds = new Set([
   "session-modal",
   "session-menu",
@@ -73,20 +73,20 @@ const selectedScenes = [
 ]
   .filter((scene) => filter.test(scene.id))
   .map((scene) =>
-    scene.id === "route-claws"
+    scene.id === "route-templates"
       ? Object.assign({}, scene, {
-          ready: ".agents-home__claw-empty",
+          ready: ".agents-home__template-empty",
           scenario: {
-            featureMethods: [...baseScenario.featureMethods!, "claws.catalog.search"],
+            featureMethods: [...baseScenario.featureMethods!, "templates.catalog.search"],
             methodResponses: {
               "config.get": {
-                config: clawsConfig,
-                raw: JSON.stringify(clawsConfig),
-                hash: "retention-claws",
+                config: templatesConfig,
+                raw: JSON.stringify(templatesConfig),
+                hash: "retention-templates",
                 valid: true,
                 issues: [],
               },
-              "claws.catalog.search": { entries: [] },
+              "templates.catalog.search": { entries: [] },
             },
           },
         })

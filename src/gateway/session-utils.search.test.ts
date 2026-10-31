@@ -68,6 +68,51 @@ test.each(["München", "한국어"])("search finds both canonical forms of %s", 
   }
 });
 
+test("search reuses row owners and reads model facts only after the resolved identity misses", () => {
+  const parentKey = "agent:main:parent";
+  const childKey = "agent:main:subagent:child";
+  const modelConfig = {
+    ...cfg,
+    agents: { entries: { main: { model: "openai/gpt-4.1" } } },
+  };
+  setRuntimeConfigSnapshot(modelConfig);
+  projection = createSessionRowProjectionFixture({
+    cfg: modelConfig,
+    agentId: "main",
+    store: {
+      [parentKey]: entry("parent", 1, {
+        displayName: "Investigation parent",
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4",
+      }),
+      [childKey]: entry("child", 2, {
+        label: "Investigation child",
+        parentSessionKey: parentKey,
+        spawnedBy: parentKey,
+      }),
+    },
+  });
+  for (const [search, expected, factKeys] of [
+    ["investigation", [childKey, parentKey], []],
+    ["gpt-4.1", [childKey], [parentKey]],
+    ["claude-sonnet-4", [childKey, parentKey], [childKey]],
+    ["zz-no-match", [], []],
+  ] as const) {
+    const prepared = prepareSessionRowSelection(projection, { search });
+    const getTarget = vi.fn(prepared.getTarget);
+    const getModelFacts = vi.fn(prepared.getModelFacts);
+    const result = filterAndSortSessionEntries({ ...prepared, getTarget, getModelFacts });
+    expect(
+      result.map(([key]) => key),
+      search,
+    ).toEqual(expected);
+    expect(getTarget).toHaveBeenCalledTimes(2);
+    expect(getModelFacts.mock.calls.map(([key]) => key).toSorted(), search).toEqual(
+      [...factKeys].toSorted(),
+    );
+  }
+});
+
 test("ranks by real interaction without heartbeat or cron noise", () => {
   const now = Date.now();
   const select = selection(

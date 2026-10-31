@@ -26,11 +26,11 @@ import {
   assertSessionFileReadPolicy,
   type SessionFileReadPolicyTarget,
 } from "./session-file-read-authority.js";
+import { withSessionFileRoot } from "./session-files-root.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { loadRepositoryArtifactDiff } from "./session-repository-artifacts.js";
 import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
-import { withSessionFileRoot } from "./sessions-files.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -235,6 +235,7 @@ export async function loadSessionDiff(
         sessionKey: params.sessionKey,
         baseCommit: managedBase?.baseCommit,
         summaryOnly: params.summaryOnly,
+        refreshIndex: Boolean(entry.worktree && !entry.repositoryWorkspaceId),
         poll: params.poll,
       };
       let result: SessionsDiffResult;

@@ -48,6 +48,8 @@ function transferableManifestInput(command: GitWorkerCommand): ArrayBuffer[] {
     return [command.input.payload.buffer];
   }
   switch (command.type) {
+    case "workspace.manifest.local":
+      return [command.input.snapshot.buffer];
     case "workspace.manifest.paths":
     case "workspace.manifest.parse":
       return [command.input.raw.buffer];
@@ -328,6 +330,7 @@ export async function overlayWorkspaceManifest(
 }
 
 export async function parseWorkspaceManifestPair(input: {
+  buildCacheInputs?: string[];
   baseRaw: string;
   baseRef: string;
   currentRaw: string;
@@ -339,6 +342,7 @@ export async function parseWorkspaceManifestPair(input: {
     input: {
       baseRef: input.baseRef,
       currentRef: input.currentRef,
+      buildCacheInputs: input.buildCacheInputs,
       baseRaw: encoder.encode(input.baseRaw),
       currentRaw: encoder.encode(input.currentRaw),
     },

@@ -257,91 +257,64 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     );
   });
 
-  it("retains sender projection for earlier in-memory turns after a queued turn", async () => {
-    const initialRuntime = {
-      role: "user",
-      content: [{ type: "text", text: "The launch is Friday" }],
-      timestamp: 1,
-    } as AgentMessage;
-    const queuedRuntime = {
-      role: "user",
-      content: [{ type: "text", text: "I can present it" }],
-      timestamp: 2,
-    } as AgentMessage;
-    const { activeSession } = createActiveSession();
-    await prepareEmbeddedAttemptSessionBoundary({
-      activeSession,
-      attempt: { sessionId: "session-boundary", prompt: "The launch is Friday" },
-      getUserTranscriptContexts: () => [
+  for (const { name, prompt, messages, contextOrder } of [
+    {
+      name: "retains sender projection for earlier in-memory turns after a queued turn",
+      prompt: "The launch is Friday",
+      messages: [
         {
-          runtimeMessage: initialRuntime,
-          transcriptMessage: {
-            role: "user",
-            content: "The launch is Friday",
-            timestamp: 1,
-            __openclaw: { senderId: "alice-id", senderName: "Alice" },
-          } as AgentMessage,
+          text: "The launch is Friday",
+          timestamp: 1,
+          sender: { senderId: "alice-id", senderName: "Alice" },
         },
         {
-          runtimeMessage: queuedRuntime,
-          transcriptMessage: {
-            role: "user",
-            content: "I can present it",
-            timestamp: 2,
-            __openclaw: { senderId: "bob-id", senderName: "Bob" },
-          } as AgentMessage,
+          text: "I can present it",
+          timestamp: 2,
+          sender: { senderId: "bob-id", senderName: "Bob" },
         },
       ],
-      ...createBoundaryInputDefaults(),
-    });
-
-    const converted = await activeSession.agent.convertToLlm([initialRuntime, queuedRuntime]);
-
-    expect((converted[0] as { content?: unknown }).content).toContain('"name":"Alice"');
-    expect((converted[1] as { content?: unknown }).content).toContain('"name":"Bob"');
-  });
-
-  it("reserves exact pairings before matching duplicate timestamp and text", async () => {
-    const firstRuntime = {
-      role: "user",
-      content: [{ type: "text", text: "same" }],
-      timestamp: 1,
-    } as AgentMessage;
-    const secondRuntime = {
-      role: "user",
-      content: [{ type: "text", text: "same" }],
-      timestamp: 1,
-    } as AgentMessage;
-    const { activeSession } = createActiveSession();
-    await prepareEmbeddedAttemptSessionBoundary({
-      activeSession,
-      attempt: { sessionId: "session-boundary", prompt: "same" },
-      getUserTranscriptContexts: () => [
-        {
-          runtimeMessage: secondRuntime,
-          transcriptMessage: {
-            role: "user",
-            content: "same",
-            timestamp: 1,
-            __openclaw: { senderName: "Bob" },
-          } as AgentMessage,
-        },
-        {
-          runtimeMessage: firstRuntime,
-          transcriptMessage: {
-            role: "user",
-            content: "same",
-            timestamp: 1,
-            __openclaw: { senderName: "Alice" },
-          } as AgentMessage,
-        },
+      contextOrder: [0, 1],
+    },
+    {
+      name: "reserves exact pairings before matching duplicate timestamp and text",
+      prompt: "same",
+      messages: [
+        { text: "same", timestamp: 1, sender: { senderName: "Alice" } },
+        { text: "same", timestamp: 1, sender: { senderName: "Bob" } },
       ],
-      ...createBoundaryInputDefaults(),
+      contextOrder: [1, 0],
+    },
+  ] as const) {
+    it(name, async () => {
+      const runtimeMessages = messages.map(
+        ({ text, timestamp }) =>
+          ({
+            role: "user",
+            content: [{ type: "text", text }],
+            timestamp,
+          }) as AgentMessage,
+      );
+      const { activeSession } = createActiveSession();
+      await prepareEmbeddedAttemptSessionBoundary({
+        activeSession,
+        attempt: { sessionId: "session-boundary", prompt },
+        getUserTranscriptContexts: () =>
+          contextOrder.map((index) => ({
+            runtimeMessage: runtimeMessages[index]!,
+            transcriptMessage: {
+              role: "user",
+              content: messages[index].text,
+              timestamp: messages[index].timestamp,
+              __openclaw: { ...messages[index].sender },
+            } as AgentMessage,
+          })),
+        ...createBoundaryInputDefaults(),
+      });
+
+      const converted = await activeSession.agent.convertToLlm(runtimeMessages);
+
+      expect((converted[0] as { content?: unknown }).content).toContain('"name":"Alice"');
+      expect((converted[1] as { content?: unknown }).content).toContain('"name":"Bob"');
     });
-
-    const converted = await activeSession.agent.convertToLlm([firstRuntime, secondRuntime]);
-
-    expect((converted[0] as { content?: unknown }).content).toContain('"name":"Alice"');
-    expect((converted[1] as { content?: unknown }).content).toContain('"name":"Bob"');
-  });
+  }
 });

@@ -552,85 +552,22 @@ function recordPath(record: ManagedImageRecord) {
 }
 
 describe("managed media worker custody", () => {
-  it("retains committed bytes without accepting a result after its database admission closes", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", label: "managed-media-retirement" },
-      async (state) => {
-        const accepted = vi.fn();
-        const result = withChannelReadAuthority(
-          () => {},
-          async () => {
-            const blocks = await createMedia(state.stateDir);
-            await closeOpenClawStateDatabaseByPathAsync(
-              state.statePath("state", "openclaw.sqlite"),
-            );
-            return blocks;
-          },
-          undefined,
-          accepted,
-        );
-        const outcome = await result.then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        expect(isStateDatabaseReadAdmissionInvalidatedError(outcome)).toBe(true);
-        expect(accepted).not.toHaveBeenCalled();
-        const entries = await listManagedImageRecordEntries({ stateDir: state.stateDir });
-        expect(entries).toHaveLength(1);
-        expect(entries[0]?.cleanupPending).toBe(false);
-        const record = entries[0]!.record;
-        expect(await fsAsync.readFile(recordPath(record))).toEqual(bytes);
-      },
-    );
-  });
-
-  it("rejects a replaced file without deleting either inode after record custody is delegated", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", label: "managed-media-replacement" },
-      async (state) => {
-        const accepted = vi.fn();
-        const displaced = state.statePath("displaced-original.png");
-        let originalPath: string | undefined;
-        const result = withChannelReadAuthority(
-          () => {},
-          async () => {
-            const blocks = await createMedia(state.stateDir);
-            const entries = await listManagedImageRecordEntries({ stateDir: state.stateDir });
-            expect(entries).toHaveLength(1);
-            const record = entries[0]!.record;
-            originalPath = recordPath(record);
-            await fsAsync.rename(originalPath, displaced);
-            await fsAsync.writeFile(originalPath, "synthetic replacement");
-            return blocks;
-          },
-          undefined,
-          accepted,
-        );
-        await expect(result).rejects.toThrow("Media output no longer names the created file");
-        expect(accepted).not.toHaveBeenCalled();
-        expect(originalPath).toBeDefined();
-        if (!originalPath) {
-          throw new Error("Managed media fixture did not commit a file");
-        }
-        expect(await fsAsync.readFile(originalPath, "utf8")).toBe("synthetic replacement");
-        expect(await fsAsync.readFile(displaced)).toEqual(bytes);
-        expect(await listManagedImageRecordEntries({ stateDir: state.stateDir })).toMatchObject([
-          { cleanupPending: true, record: { retentionClass: "transient", messageId: null } },
-        ]);
-      },
-    );
-  });
-
   it.each([
+    "closed database",
+    "replaced original",
     "refused commit",
     "revoked after commit",
     "lost ordinary reply",
     "lost native receipt",
-  ] as const)("settles the original file and record after a %s", async (failure) => {
+  ] as const)("settles file, record and authority after %s", async (failure) => {
     await withOpenClawTestState(
       { layout: "state-only", label: "managed-media-custody" },
       async (state) => {
-        await listManagedImageRecordEntries({ stateDir: state.stateDir });
+        const entries = () => listManagedImageRecordEntries({ stateDir: state.stateDir });
+        const scopedOnly = failure === "closed database" || failure === "replaced original";
+        if (!scopedOnly) {
+          await entries();
+        }
         const revoked = new Error("Synthetic channel authority revoked");
         let active = true;
         let nativeReplies = 0;
@@ -642,79 +579,118 @@ describe("managed media worker custody", () => {
           }
         };
         const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-        const admissionSpy = vi
-          .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) => {
-            const admission = createAdmission((request, grant) => {
-              if (failure === "refused commit" && request.stage === "commit") {
-                refused = true;
+        const admissionSpy = scopedOnly
+          ? undefined
+          : vi
+              .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
+              .mockImplementation((admit, attachment) => {
+                const admission = createAdmission((request, grant) => {
+                  if (failure === "refused commit" && request.stage === "commit") {
+                    refused = true;
+                    active = false;
+                  }
+                  admit(request, grant);
+                }, attachment);
+                if (failure !== "lost native receipt") {
+                  return admission;
+                }
+                // Keep native execution, but lose its retained facts as well as the ordinary reply.
+                return new Proxy(admission, {
+                  get(target, key, receiver) {
+                    return key === "committed" || key === "settlement"
+                      ? undefined
+                      : Reflect.get(target, key, receiver);
+                  },
+                });
+              });
+        const restoreReplies = scopedOnly
+          ? () => {}
+          : interceptManagedImageMutationReplies((commandType) => {
+              if (commandType !== "managedImages.insert") {
+                return false;
+              }
+              nativeReplies++;
+              if (failure === "revoked after commit") {
                 active = false;
               }
-              admit(request, grant);
-            }, attachment);
-            if (failure !== "lost native receipt") {
-              return admission;
-            }
-            // Native work still executes and joins; only its retained facts are unavailable
-            // to the media owner, alongside the independently corrupted ordinary reply.
-            return new Proxy(admission, {
-              get(target, key, receiver) {
-                if (key === "committed" || key === "settlement") {
-                  return undefined;
-                }
-                return Reflect.get(target, key, receiver);
-              },
+              return failure === "lost ordinary reply" || failure === "lost native receipt";
             });
-          });
-        const restoreReplies = interceptManagedImageMutationReplies((commandType) => {
-          if (commandType !== "managedImages.insert") {
-            return false;
-          }
-          nativeReplies++;
-          if (failure === "revoked after commit") {
-            active = false;
-          }
-          return failure === "lost ordinary reply" || failure === "lost native receipt";
-        });
+        const displaced = state.statePath("displaced-original.png");
         try {
-          const outcome = await withChannelReadAuthority(
+          const result = withChannelReadAuthority(
             assertCurrent,
-            () => createMedia(state.stateDir, assertCurrent),
+            async () => {
+              const blocks = await createMedia(
+                state.stateDir,
+                scopedOnly ? undefined : assertCurrent,
+              );
+              if (failure === "closed database") {
+                await closeOpenClawStateDatabaseByPathAsync(
+                  state.statePath("state", "openclaw.sqlite"),
+                );
+              } else if (failure === "replaced original") {
+                const records = await entries();
+                expect(records).toHaveLength(1);
+                const original = recordPath(records[0]!.record);
+                await fsAsync.rename(original, displaced);
+                await fsAsync.writeFile(original, "synthetic replacement");
+              }
+              return blocks;
+            },
             undefined,
             accepted,
-          ).then(
+          );
+          const outcome = await result.then(
             (blocks) => ({ blocks }),
             (error: unknown) => ({ error }),
           );
-          // Stop injecting transport faults before independently reading the persisted result.
+          // Read persisted state only after disabling transport fault injection.
           restoreReplies();
-          admissionSpy.mockRestore();
-          const entries = await listManagedImageRecordEntries({ stateDir: state.stateDir });
-          const originals = state.statePath("media", "outgoing", "originals");
-          if (failure === "lost ordinary reply" || failure === "lost native receipt") {
-            expect(nativeReplies).toBe(1);
-            expect(entries).toHaveLength(1);
-            const record = entries[0]!.record;
-            expect(record).toMatchObject({ retentionClass: "transient", messageId: null });
-            expect(await fsAsync.readFile(recordPath(record))).toEqual(bytes);
-            if (failure === "lost ordinary reply") {
-              expect(outcome).toHaveProperty("blocks");
-              expect(accepted).toHaveBeenCalledOnce();
-            } else {
-              expect(outcome).toHaveProperty("error");
-              expect(accepted).not.toHaveBeenCalled();
-            }
-          } else {
+          admissionSpy?.mockRestore();
+          const records = await entries();
+          if (failure === "refused commit" || failure === "revoked after commit") {
             expect(outcome).toEqual({ error: revoked });
-            expect(accepted).not.toHaveBeenCalled();
-            expect(entries).toEqual([]);
-            expect(await fsAsync.readdir(originals)).toEqual([]);
+            expect(records).toEqual([]);
+            expect(
+              await fsAsync.readdir(state.statePath("media", "outgoing", "originals")),
+            ).toEqual([]);
             expect(refused).toBe(failure === "refused commit");
             expect(nativeReplies).toBe(failure === "refused commit" ? 0 : 1);
+          } else {
+            expect(records).toHaveLength(1);
+            const record = records[0]!.record;
+            if (failure === "closed database") {
+              expect(
+                "error" in outcome && isStateDatabaseReadAdmissionInvalidatedError(outcome.error),
+              ).toBe(true);
+              expect(records[0]?.cleanupPending).toBe(false);
+            } else {
+              expect(record).toMatchObject({ retentionClass: "transient", messageId: null });
+              if (failure === "replaced original") {
+                await expect(result).rejects.toThrow(
+                  "Media output no longer names the created file",
+                );
+                expect(records[0]?.cleanupPending).toBe(true);
+              } else {
+                expect(nativeReplies).toBe(1);
+                expect(outcome).toHaveProperty(
+                  failure === "lost ordinary reply" ? "blocks" : "error",
+                );
+              }
+            }
+            if (failure === "replaced original") {
+              expect(await fsAsync.readFile(recordPath(record), "utf8")).toBe(
+                "synthetic replacement",
+              );
+              expect(await fsAsync.readFile(displaced)).toEqual(bytes);
+            } else {
+              expect(await fsAsync.readFile(recordPath(record))).toEqual(bytes);
+            }
           }
+          expect(accepted).toHaveBeenCalledTimes(failure === "lost ordinary reply" ? 1 : 0);
         } finally {
           restoreReplies();
-          admissionSpy.mockRestore();
+          admissionSpy?.mockRestore();
         }
       },
     );

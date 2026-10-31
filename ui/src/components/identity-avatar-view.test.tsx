@@ -194,7 +194,7 @@ it("retains pending images through replacement/remount under pressure", async ()
     await Promise.all(pressureLoads);
   }
 });
-it("remounts public images without authenticated fetching", () => {
+it("remounts public images loaded without a load event or authenticated fetching", () => {
   setAvatarGatewayOrigin(globalThis.location.origin, ["avatar-token"], "/control");
   const fetchAvatar = vi.spyOn(globalThis, "fetch");
   const view = mountAgent({ id: "main", avatar: "/favicon.svg", textAvatar: "🦀" });
@@ -202,6 +202,8 @@ it("remounts public images without authenticated fetching", () => {
   view.present(false);
   view.present(true);
   expect(view.image()?.getAttribute("src")).toBe("/favicon.svg");
+  expect(view.frame()?.classList.contains("is-pending")).toBe(false);
+  expect(view.frame()?.getAttribute("data-avatar-state")).toBe("loaded");
   expect(fetchAvatar).not.toHaveBeenCalled();
 });
 
@@ -225,18 +227,6 @@ it("updates reserved avatars on theme publication", async () => {
   flush();
   expect(view.container.querySelector("openclaw-theme-brand-icon")).toBeNull();
   expect(view.image()?.getAttribute("src")).toContain("favicon.svg");
-});
-
-it("recognizes cached decoding on remount without a load event", async () => {
-  vi.spyOn(HTMLImageElement.prototype, "complete", "get").mockReturnValue(true);
-  vi.spyOn(HTMLImageElement.prototype, "naturalWidth", "get").mockReturnValue(32);
-  const view = mountAgent({ id: "cached", avatar: "/avatar/cached" });
-  view.present(false);
-  view.present(true);
-  await Promise.resolve();
-  flush();
-  expect(view.frame()?.classList.contains("is-pending")).toBe(false);
-  expect(view.frame()?.getAttribute("data-avatar-state")).toBe("loaded");
 });
 
 it("uses UI mount/build for the remote Gateway's system mark", () => {

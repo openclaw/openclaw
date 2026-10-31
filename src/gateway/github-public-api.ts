@@ -276,13 +276,13 @@ export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() =
     return {
       token,
       apiBaseUrl,
-      cacheScope: `${selectedHost}:${apiBaseUrl}:${library.githubApiCredentialCacheScope(token)}`,
+      apiScope: `${selectedHost}:${apiBaseUrl}`,
     };
   };
   const resolvePublicScope = () =>
     resolveConfiguredGitHubHost(getRuntimeConfigSnapshot()) === "github.com"
       ? resolveScope()
-      : { token: undefined, cacheScope: "public:anonymous" };
+      : { token: undefined, apiScope: "public" };
   const resolveReadIdentity = (
     identity: ControlUiGitHubPreviewIdentity | undefined,
   ): ControlUiGitHubPreviewIdentity => {
@@ -293,12 +293,14 @@ export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() =
     }
     const selected = resolvePublicScope();
     const assertSelected = () => {
-      if (resolvePublicScope().cacheScope !== selected.cacheScope) {
+      const current = resolvePublicScope();
+      if (current.apiScope !== selected.apiScope || current.token !== selected.token) {
         throw new library.ControlUiGitHubError(409, "GitHub credential changed; retry the request");
       }
     };
     return {
-      ...selected,
+      token: selected.token,
+      cacheScope: `${selected.apiScope}:${library.githubApiCredentialCacheScope(selected.token)}`,
       optionalAuth: true,
       assertSelected,
       revalidate: async () => assertSelected(),
@@ -350,7 +352,14 @@ export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() =
       args[4] ??= resolveConfiguredGitHubApiBaseUrl(getRuntimeConfigSnapshot());
       return library.fetchGitHubJson(...args);
     },
-    resolveGitHubApiCredentialScope: resolveScope,
+    resolveGitHubApiCredentialScope(env, host) {
+      const { token, apiBaseUrl, apiScope } = resolveScope(env, host);
+      return {
+        token,
+        apiBaseUrl,
+        cacheScope: `${apiScope}:${library.githubApiCredentialCacheScope(token)}`,
+      };
+    },
     formatControlUiGitHubPreviewError(error) {
       return isTrustedSecretSurfaceUnavailableError(error)
         ? { message: CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE, retryable: false }

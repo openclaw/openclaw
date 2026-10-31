@@ -58,7 +58,7 @@ Set the plugin-wide policy under `plugins.entries.crabbox.config.warmImages`, or
 use **Advanced → Snapshot retention** under **Cloud environments**. These controls
 apply to all repositories. Saving reloads the Crabbox plugin without restarting
 the Gateway. Worker lease lifetimes and the 128-profile capacity limit stay
-unchanged. Unused, unpinned images expire after `retainUnused`; images held by allocations wait for those workers to stop. Replaced snapshots retire after allocations release them unless retained as a previous generation or pinned. Failed deletion stays pending and retries during maintenance.
+unchanged. Unused, unpinned images expire after `retainUnused`; images held by allocations wait for those workers to stop. Replaced snapshots retire after allocations release them unless retained as a previous generation or pinned. Failed deletion stays pending and retries during the Gateway's periodic maintenance (every 60 seconds by default). Pending retirements run before capture reconciliation so a slow capture cannot block their retries. Each failed deletion attempt logs the provider error in the Gateway log; successful deletion clears the pending retirement. Maintenance checks allocation leases that hold a pending retirement and releases their holds only after confirming the lease is gone. Live dispatches keep their holds even before the provider creates the lease. Live or unconfirmed holding leases remain protected and are named in the Gateway log and Doctor finding.
 
 | Key            | Default | Accepted values                                                   |
 | -------------- | ------- | ----------------------------------------------------------------- |
@@ -143,7 +143,9 @@ Status identifies the capture selector, source lease, checkpoint references, and
 A paused capture does not prevent source-lease cleanup, but enrollment on its uncertain source remains blocked until recovery clears the reservation.
 
 Gateway warm-image maintenance runs at startup and during the periodic worker
-environment sweep (every minute by default). It retries uncertain captures until
+environment sweep (every minute by default), including when the prepared pool is
+disabled and no worker sessions are active. Maintenance follows the configured
+provider's plugin activation policy. It retries uncertain captures until
 their source lease is absent, stopped, released, or expired. Released and expired
 leases cannot start another checkpoint; lease teardown still owns physical resource
 cleanup. Maintenance matches the exact recorded lease ID in Crabbox's checkpoint
@@ -164,7 +166,7 @@ Before manual recovery, stop the owning Gateway, any original capture processes,
 openclaw crabbox warm-images --recover <capture-selector> --acknowledge-provider-cleanup
 ```
 
-The acknowledgement attests that the original capture and worker are stopped and untracked artifacts are resolved; elapsed time alone does not establish those facts. Recovery clears only that capture reservation, preserves known checkpoint references and allocation choices, and rejects a replaced selector. It does not stop processes, run provider commands, delete snapshots, or allocate a worker. Restart the Gateway afterward; the next eligible worker can capture again. Failed checkpoint retirements retry during periodic maintenance or that profile's later capture or warm-image-enabled worker teardown after provider deletion errors are resolved; they do not use capture recovery.
+The acknowledgement attests that the original capture and worker are stopped and untracked artifacts are resolved; elapsed time alone does not establish those facts. Recovery clears that capture reservation and its source lease's allocation, preserves known checkpoint references and all other allocation choices, and rejects a replaced selector. It does not stop processes, run provider commands, delete snapshots, or allocate a worker. Restart the Gateway afterward; the next eligible worker can capture again. Failed checkpoint retirements retry during periodic maintenance or that profile's later capture or warm-image-enabled worker teardown after provider deletion errors are resolved; they do not use capture recovery.
 
 ### Upgrade warm-image state
 

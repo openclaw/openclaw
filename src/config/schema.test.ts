@@ -1,4 +1,6 @@
 // Covers canonical config schema defaults, validation, and sensitive redaction.
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchemaCore, lookupConfigSchema, type PluginUiMetadata } from "./schema.js";
@@ -258,7 +260,6 @@ describe("config schema", () => {
 
   it("omits later plugin schemas after the aggregate extension schema budget is exhausted", () => {
     const res = buildConfigSchemaCore({
-      cache: false,
       plugins: Array.from({ length: 40 }, (_, index) => ({
         id: `plugin-${index}`,
         configSchema: objectSchema({
@@ -277,22 +278,6 @@ describe("config schema", () => {
     expect(last?.schema?.description).toContain("omitted");
   });
 
-  it("caches merged schemas for identical plugin/channel metadata", () => {
-    const plugin = {
-      id: "voice-call",
-      name: "Voice Call",
-      configSchema: objectSchema({ provider: { type: "string" } }),
-    };
-    const channel = {
-      id: "matrix",
-      label: "Matrix",
-      configSchema: objectSchema({ accessToken: { type: "string" } }),
-    };
-    const first = buildConfigSchemaCore({ plugins: [plugin], channels: [channel] });
-    const second = buildConfigSchemaCore({ plugins: [{ ...plugin }], channels: [{ ...channel }] });
-    expect(second).toBe(first);
-  });
-
   it("keeps merged plugin schema fragments independent of manifest metadata", () => {
     const value = { type: "string" };
     const result = pluginSchema({
@@ -303,6 +288,28 @@ describe("config schema", () => {
     expect(
       lookupConfigSchema(result, "plugins.entries.independent-schema.config.value")?.schema.type,
     ).toBe("string");
+  });
+
+  it("releases merged schemas when their callers no longer retain them", async () => {
+    const retired = new WeakRef(
+      pluginSchema({
+        id: "retired-schema-generation",
+        configSchema: objectSchema({ previous: { type: "string" } }),
+      }),
+    );
+    const current = pluginSchema({
+      id: "retired-schema-generation",
+      configSchema: objectSchema({ current: { type: "number" } }),
+    });
+    const control = new WeakRef({});
+    await nextTurn();
+    queryObjects(WeakRef);
+    expect(control.deref()).toBeUndefined();
+    expect(retired.deref() === undefined).toBe(true);
+    expect(
+      lookupConfigSchema(current, "plugins.entries.retired-schema-generation.config.current")
+        ?.schema.type,
+    ).toBe("number");
   });
 
   it("refreshes sensitive hints when only a plugin's SecretInput paths change", () => {

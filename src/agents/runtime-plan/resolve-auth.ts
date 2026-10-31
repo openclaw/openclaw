@@ -11,9 +11,8 @@ import { shouldForceDirectAuthFallbackModelResolve } from "./credential-scoped-m
 import {
   canRunPreparedAgentRuntimeAuthAttempt,
   preparedAgentRuntimeProfileAttemptHasCandidate,
-  type PreparedAgentRuntimeAuthAttempt,
 } from "./prepare-auth.js";
-import type { AgentRuntimeAuthPlan } from "./types.js";
+import type { PreparedAgentRuntimeAuthAttempt, AgentRuntimeAuthPlan } from "./types.js";
 
 type PreparedRuntimeModelAuthResolution = Readonly<{
   auth: Awaited<ReturnType<typeof getApiKeyForModelCore>>;

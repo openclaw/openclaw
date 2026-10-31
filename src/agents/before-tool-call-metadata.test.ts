@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { getInternalToolExecutionPreparer as getPreparer } from "../../packages/agent-core/src/internal-hooks.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
@@ -9,7 +10,6 @@ import {
   wrapToolWithBeforeToolCallHook as wrap,
 } from "./agent-tools.before-tool-call.wrapper.js";
 import * as metadata from "./before-tool-call-metadata.js";
-import { getInternalToolExecutionPreparer as getPreparer } from "./runtime/internal-hooks.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import {

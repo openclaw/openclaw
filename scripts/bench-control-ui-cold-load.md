@@ -1,5 +1,22 @@
 # Team-scale Control UI cold-load benchmark
 
+## Low-memory mobile profile
+
+Both `bench-control-ui-cold-load.ts` and `bench-control-ui-interactions.ts` accept
+`--low-memory`. This starts Chromium in low-end-device mode with a 128 MiB V8
+old-generation limit and records the profile in the report. It does not impose
+an Android OS/process RSS limit or emulate a physical Android WebView. Pair it
+with `--viewport mobile --cpu-throttle 6`; keep the memory profile identical in
+the unthrottled control. For slow-4G boot delivery, use
+`--network-latency-ms 150 --download-kbps 1600` in the cold-load runner. Static
+HTTP delivery and synthetic Gateway RPC delays remain separate measurements.
+
+Use untraced runs for ranking and interleaved base/control/head comparisons,
+then a separate `--trace` interaction run to attribute an expensive cell. On a
+busy host, repeat with `--thread-cpu-time` to distinguish renderer CPU from
+descheduling. Multi-action scenarios report aggregate task time, not per-event
+input latency.
+
 ## Cold route CSS coverage and rendering cost
 
 `bench-control-ui-css.ts` serves already-built base and head bundles through the
@@ -110,8 +127,29 @@ runs both localhost and 100 ms RTT / 10 Mbps profiles by default:
 NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-media.ts \
   --bundle-dir /absolute/base/control-ui \
   --compare-bundle-dir /absolute/head/control-ui \
-  --pairs 10 --output /absolute/proof/media
+  --engine chromium --pairs 10 --output /absolute/proof/media
 ```
+
+Repeat with `--engine webkit` for the same media workload in WebKit. Chromium
+is the default; WebKit records wall timings, request counts, blob lifetimes, and
+feature-detected layout shifts without CDP CPU, heap, or trace metrics. Unsupported
+native Layout Instability is recorded as `nativeLayoutShiftSupported: false` and
+`cls: null` / `mediaCls: null`; it is never presented as zero CLS.
+
+Use `--dimensions canonical` to include the persisted `__openclaw.media` image
+width/height and inline slot mapping. The default `--dimensions missing` preserves
+the original metadata-free cohort. Compare the same cohort on base and head;
+known-dimension reservation cannot prove zero shift for absent dimensions.
+
+For attribution, add `--geometry --pairs 1` in a separate diagnostic run. It captures
+all DOM element rectangles before and after the held-media release, including
+row keys, classes, scroll geometry, and image decode dimensions. During that
+fixed-viewport load interval only, an rAF sampler records changed visible
+transcript row, image, frame, footer, and footer-descendant rectangles with
+timestamps and source classes. Insertions and removals have a null previous or
+current rectangle. Sampling stops before scrolling; these rectangle changes are
+not a synthetic CLS score. The geometry reads add layout work, so do not mix
+these diagnostic timings with uninstrumented timing runs.
 
 The initial viewport is settled while media is held. Releasing those requests
 measures media-induced CLS separately from scrolling. Each measured phase allows
@@ -122,15 +160,29 @@ transcript and online roster, remounts the first/last rows, and removes the nati
 `openclaw-app` host to exercise production disconnection while preserving the
 document for lifetime measurement. Settings parks chat and cannot prove disposal.
 A document nonce assertion rejects any reload as invalid disposal evidence.
-Per-sample JSON records request counts by full URL (including revision, ticket,
+Per-sample JSON records synthetic route admission counts by full URL (including revision, ticket,
 and size queries), method, kind and opaque auth-context identity; credentials are
 never recorded. Cumulative before/stable/scroll/disposal snapshots and separate
 boot/steady duplicate counts distinguish request ownership from bootstrap work.
-Duration metrics use Chrome’s `threadTicks` clock to measure thread CPU time,
+`cacheProbe.routeFulfillments` separately counts successfully fulfilled synthetic
+responses, split by Playwright resource type (`image` versus `fetch`).
+`cacheProbe.fetchAttempts` separates `cacheOnly` (`only-if-cached`) thumbnail probes
+from `networkEligible` fetches and records their cache mode, request mode,
+credentials mode, opaque authorization identity, and outcome. Correlate these with
+fulfillments by exact URL and method; the browser-side authorization identities
+are independent of route-side auth contexts, which also include cookies.
+`cacheProbe.networkDownloads` is `null`: these responses never reach
+an HTTP server, so this harness does not measure real downloads or browser-cache
+hits. The `requests`, snapshot, and duplicate fields all count route admissions,
+including admissions that fail before fulfillment. A repeat may be a cache-only
+probe rather than missing application reuse; it cannot prove a repeated network
+transfer.
+Chromium duration metrics use its `threadTicks` clock to measure thread CPU time,
 excluding time descheduled by other work on the host. Wall-clock load/scroll
 timings remain separate.
 
-It also records CLS source rectangles and media attribution, object URL
+It also records native CLS source rectangles, timestamps, and media attribution when
+the engine supports Layout Instability, object URL
 creation/revocation and remaining DOM consumers, CDP script/task/layout/style
 duration, and JS heap before scrolling and after forced GC immediately before
 and after host disconnection, including unreferenced favicon blob URLs. The
@@ -138,20 +190,22 @@ first pair includes pending and loaded screenshots for each bundle/profile.
 `summary.json` retains every sample, load
 average, bundle identity, and median/p95 load/scroll timings.
 
-Acceptance is zero CLS in the fixed media viewport, at most one fetch per unique
-media resource and kind, and no live object URLs owned only by disposed markdown
-consumers. Review retained URLs against their actual owner: a documented shared
+Acceptance is zero CLS in the fixed media viewport and no live object URLs owned
+only by disposed markdown consumers. Review repeated admissions alongside cache-only
+probes before attributing application reuse. Review retained URLs against their actual owner: a documented shared
 page-lifetime cache is distinct from a disposed consumer leak. Timing needs ten
 pairs with median regression ≤5% and p95 not worse. On a loaded host, repeat with
 the same base directory supplied as both bundles for an A/A control, then use
 20 interleaved pairs and CDP CPU plus structural counters if wall timing is noisy.
 
-Use a separate `--trace --pairs 1` run for decode/paint attribution; tracing adds
+Use a separate Chromium `--trace --pairs 1` run for decode/paint attribution; tracing adds
 overhead and must not be mixed with the untraced timing samples. The trace and
 named-event duration sums are retained per sample. CDP JS heap excludes native
-decoded-image/GPU memory. The mock RPC transport has no RTT; static HTTP uses CDP
-throttling and routed media uses equivalent explicit delay because Playwright
-fulfillment bypasses it. Routing disables the HTTP cache, so duplicate counts
+decoded-image/GPU memory. The mock RPC transport has no RTT; Chromium static HTTP
+uses CDP throttling, while WebKit static HTTP is unthrottled. Both engines use
+the same explicit routed-media delay because Playwright fulfillment bypasses
+network emulation. Load measurement starts after static assets are ready; this
+is not a cross-engine cold-navigation comparison. Routing disables the HTTP cache, so duplicate counts
 measure application request reuse rather than disk-cache behavior. These are
 renderer/media results, not real-Gateway throughput or process-memory results.
 
@@ -418,6 +472,29 @@ For a boot-weight comparison, use `--bundle-dir <base> --compare-bundle-dir <hea
 each build's own warm state. Every run records `presentation.firstNonemptyTranscriptMs`
 and `presentation.firstEnabledComposerMs` from visible DOM observed on animation
 frames; these are readiness observations, not compositor paint timestamps.
+`firstEnabledComposerMs` retains its original definition: the first matching
+hydrated-chat or New Session textarea is visible and enabled. It does not include
+the static boot composer or reject read-only or inert editors.
+
+`presentation.firstUsableComposerMs` adds an editable-input observation, with
+`firstUsableComposerKind` identifying `static`, `hydrated`, or `new`. It accepts a
+visible, enabled, non-read-only textarea with no inert ancestor from the static
+boot composer, the active hydrated chat pane, or New Session. It uses the same
+animation-frame sampler and visibility check, with no extra geometry or hit test.
+This is editor eligibility, not actual key-to-paint latency, compositor paint,
+click-occlusion proof, or send admission. Sampling ends at the existing shell and
+route completion boundary; the value remains null if no eligible editor was
+observed during that window. Older captures have no such fields: preserve them
+as absent, without relabeling or retrofitting the legacy metric.
+
+Warm reloads also record `warmReload.milestones.firstLiveTranscript` on the first
+sample with both visible transcript rows and the pane's `transcriptReady` state.
+It reuses the existing visibility and catch-up observations. `firstTranscript`
+still marks the first visible rows, including saved rows, and `catchupApplied`
+still marks owner readiness even while the virtualizer keeps rows hidden. The
+new marker distinguishes live transcript visibility from both; it is a DOM
+readiness observation, not an Element Timing paint. It remains absent if not
+observed before collection stops. Cold `firstNonemptyTranscriptMs` is unchanged.
 
 Every run also records browser paint entries (`presentation.firstPaintMs` and
 `firstContentfulPaintMs`), the first visible `#openclaw-boot-shell` frame and its
@@ -655,6 +732,14 @@ The native typing probe appends to the existing draft and verifies that every
 dispatched character survives streaming; `streaming.typing` retains the count
 and final synthetic draft alongside the timing evidence.
 
+Use `--transcript-messages 2000` for the long-session stream. Add
+`--streaming-content tool-code` to grow an open TypeScript fence alongside an
+expanded tool card, or `--streaming-panes 2` to stream two independent sessions
+in the native split layout. Each pane must retain its typed draft, show the
+complete reply, and follow its own growing tail. `streaming.panes` and
+`streaming.typingByPane` retain these results; the original first-pane fields
+remain available. The default Markdown fixture is still 645 deltas.
+
 Add `--streaming-allocations` to sample JavaScript allocations during the stream
 with CDP HeapProfiler at a 4 KiB interval, retaining samples collected by both
 major and minor GC. `streaming.allocations` reports estimated bytes and bytes per
@@ -685,6 +770,41 @@ Solid and Markdown work. The source-mapped CPU profile covers that later work;
 the task/microtask and next-rAF timings do not measure presentation to the screen.
 After timing, each run also checks that the real transcript grew and remains
 within two pixels of its native scroll bottom, without manually requesting a render.
+
+For a mixed fast turn in both engines, use the cross-engine companion:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --bundle-dir dist/control-ui --steps streaming-mixed-fast \
+  --viewport desktop --engines chromium,webkit --pairs 1 \
+  --output .artifacts/streaming-profile
+```
+
+This workload delivers the 645-delta Markdown reply at 150 deltas/s in bursts
+of five, with reasoning, 24 tool calls and results, and an image arriving midway.
+It requires `--viewport desktop`: mobile's modal navigation drawer prevents
+simultaneous composer and sidebar input.
+It checks native composer typing, the sidebar's Show more action, complete text,
+tool results, reasoning, tail following, and image decoding. The outer action
+includes the final image inspection; streaming probe metrics stop before that
+inspection. Delivery-to-next-task includes scheduling delay. Delivery-to-rAF and
+DOM-mutation-to-rAF are frame-boundary proxies, not paint timestamps.
+
+Use a separate `--trace` run for script/layout/style attribution. Long Task API
+metrics are present only when supported; WebKit's missing counters are not zero.
+WebKit Inspector durations are elapsed time, not CPU consumed by the action.
+The probe emits `streaming-reply:start:<startedAt>` once per stream run to align
+Inspector records with the snapshot's page-clock `startedAt` and relative delta
+timestamps. `startMarkCompletedAt` bounds the mark call's completion; use the
+interval between it and `startedAt` as clock uncertainty when Inspector records
+the mark's emission time. Delivery-window script/style/layout durations may
+overlap and include other tasks between deltas; they are elapsed work within the
+window, not CPU time or causal attribution to a single delta. Pool deliveries
+with identical timestamps and end the last window at `startedAt + elapsedMs`.
+`--cpu-throttle 4 --engines chromium` measures Chromium's emulated slowdown;
+WebKit has no equivalent supported CPU throttle, so requesting it fails explicitly.
+Use `--compare-bundle-dir` and `--control-bundle-dir` for interleaved candidate and
+A/A comparisons, following the same-machine timing rules above.
 
 ## Initial baseline
 

@@ -7,6 +7,7 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import type { SessionState } from "../../lib/sessions/session-capability.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
+import { chatSessionPresentationTitle } from "./chat-pane-session-presentation.ts";
 import { createTestChatPane, nativeHistoryMessage } from "./chat-pane.test-support.ts";
 import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
@@ -90,6 +91,37 @@ const presentationChanges: Record<
 };
 
 describe("chat pane session presentation", () => {
+  it("uses create metadata only until the title owner has a session row", () => {
+    const f = fixture();
+    Object.assign(f.state.sessions.presentation, { result: null });
+    expect(chatSessionPresentationTitle(f.state, undefined, "", true, "Created title")).toBe(
+      "Created title",
+    );
+    const canonical = { ...f.selected, label: "Renamed after creation" };
+    Object.assign(f.state.sessions.presentation, { result: sessionsResult([canonical], 2) });
+    expect(chatSessionPresentationTitle(f.state, undefined, "", false, "Created title")).toBe(
+      canonical.label,
+    );
+    Object.assign(f.state.sessions.presentation, { result: null });
+    expect(
+      chatSessionPresentationTitle(
+        f.state,
+        { ...f.selected, label: undefined, derivedTitle: "Derived title" },
+        "",
+        false,
+        "Created title",
+      ),
+    ).toBe("Derived title");
+    expect(
+      chatSessionPresentationTitle(
+        undefined,
+        { key: "agent:main:main", kind: "direct" },
+        "",
+        false,
+        "Created title",
+      ),
+    ).toBe("Main Session");
+  });
   it.each(Object.entries(presentationChanges))(
     "redraws when the visible %s presentation changes",
     (_change, change) => {

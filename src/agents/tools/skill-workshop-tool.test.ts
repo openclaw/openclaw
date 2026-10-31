@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -5,6 +6,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { listWorkshopArchive, listWorkshopChanges } from "../../skills/workshop/library.js";
+import { resolveWorkshopDraftsDir } from "../../skills/workshop/skills-root.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -107,6 +109,56 @@ describe("skill_workshop", () => {
       "write_file",
     ]);
   });
+  it("saves a background review's change as a draft in propose mode and leaves skills unchanged", async () => {
+    setRuntimeConfigSnapshot({ skills: { workshop: { autonomous: { mode: "propose" } } } });
+    const review = workshop({ runId: "propose-run", reviewOf: "agent:main:main" });
+    await review("view");
+    await expect(review("patch", patch)).rejects.toThrow(
+      "Learning is in propose mode; save this change with action=draft instead.",
+    );
+    const drafted = await review("draft", {
+      content: "---\nname: deploy\ndescription: Deploy staging\n---\n\n1. Run make ship.\n",
+      reason: "target was renamed",
+    });
+    const id = /Saved draft (\S+) for "deploy"/.exec(drafted)?.[1];
+    expect(id).toBeDefined();
+    await expect(review("discard", { draft: id })).rejects.toThrow(
+      "Background reviews may not discard drafts.",
+    );
+    expect(await review("view")).toContain("1. Run make deploy.");
+    expect(await listWorkshopChanges("main", { runId: "propose-run" })).toEqual([]);
+
+    // A foreground /learn drafts turn finds, reads, and clears the draft.
+    const foreground = workshop();
+    expect(await foreground("list")).toContain(`- ${id} (deploy): target was renamed`);
+    expect(await foreground("view", { draft: id })).toContain("1. Run make ship.");
+    expect(await foreground("discard", { draft: id })).toBe(`Discarded draft ${id}.`);
+    expect(await foreground("list")).not.toContain("Drafts waiting");
+  });
+
+  it("stops draft saves and discards whose run is aborted while they prepare", async () => {
+    const content = "---\nname: deploy\ndescription: Deploy staging\n---\n\n1. Run make ship.\n";
+    const draftsDir = resolveWorkshopDraftsDir({}, "main");
+    const draftIds = async () =>
+      (await fs.readdir(draftsDir).catch(() => [] as string[])).toSorted((a, b) =>
+        a.localeCompare(b),
+      );
+
+    // The call captures the run's authority, then awaits; the abort lands before any file effect.
+    const saving = new AbortController();
+    const save = workshop()("draft", { content }, saving.signal);
+    saving.abort(new Error("run aborted"));
+    await expect(save).rejects.toThrow("run aborted");
+    expect(await draftIds()).toEqual([]);
+
+    const id = /Saved draft (\S+) for/.exec(await workshop()("draft", { content }))?.[1];
+    const discarding = new AbortController();
+    const discard = workshop()("discard", { draft: id }, discarding.signal);
+    discarding.abort(new Error("run aborted"));
+    await expect(discard).rejects.toThrow("run aborted");
+    expect(await draftIds()).toEqual([id]);
+  });
+
   it("shows the other learned skills on create so the agent can merge duplicates", async () => {
     const result = await workshop()("create", {
       name: "staging-deploy",

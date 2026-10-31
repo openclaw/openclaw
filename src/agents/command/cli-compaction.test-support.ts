@@ -122,6 +122,7 @@ export function createPreparedRuntimeLease(input: {
       pluginMetadataSnapshot: prepared.metadataSnapshot,
       pluginRegistry: prepared.pluginRegistry,
     },
+    run: <T>(run: () => T): T => run(),
     [Symbol.asyncDispose]: vi.fn(async () => {}),
   };
 }

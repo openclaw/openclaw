@@ -145,15 +145,26 @@ function AgentSkillsContent(
   const allowSet = createMemo(() => new Set(params.allowlist ?? []));
   const usingAllowlist = () => params.allowlist !== undefined;
   const rawSkills = createMemo(() => params.report?.skills ?? []);
+  const searchableSkills = createMemo(() =>
+    rawSkills().map((skill) => ({
+      skill,
+      text: normalizeLowercaseStringOrEmpty(
+        [skill.name, skill.description, skill.source].join(" "),
+      ),
+    })),
+  );
   const filter = createMemo(() => normalizeLowercaseStringOrEmpty(params.filter));
-  const filtered = createMemo(() =>
-    filter()
-      ? rawSkills().filter((skill) =>
-          normalizeLowercaseStringOrEmpty(
-            [skill.name, skill.description, skill.source].join(" "),
-          ).includes(filter()),
-        )
-      : rawSkills(),
+  const filtered = createMemo(
+    () =>
+      filter()
+        ? searchableSkills()
+            .filter((entry) => entry.text.includes(filter()))
+            .map((entry) => entry.skill)
+        : rawSkills(),
+    {
+      equals: (previous, next) =>
+        previous.length === next.length && previous.every((skill, index) => skill === next[index]),
+    },
   );
   const groups = createMemo(() => groupSkills(filtered()));
   const enabledCount = createMemo(() =>

@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import type { measureUpdateStateFiles } from "./update-candidate-io.js";
@@ -9,10 +13,12 @@ import { UpdateCaptureSpaceError } from "./update-capture-space.js";
 export async function checkUpdateDatabaseBackupSpace(
   directory: string,
   { bytes, largest, families }: Awaited<ReturnType<typeof measureUpdateStateFiles>>,
+  context: { stateDir: string; config: OpenClawConfig },
 ) {
   const warnings: string[] = [];
   const diagnostics: string[] = [];
-  const check = (target: string, requiredBytes: number, purpose: string) => {
+  const check = (target: string, requiredBytes: number, volume: "backup" | "rollback") => {
+    const purpose = `Update database ${volume}`;
     const space = tryReadDiskSpace(target);
     diagnostics.push(
       `${purpose} near ${target}: ${formatDiskSpaceBytes(requiredBytes)} (${requiredBytes} bytes) needed; ${space ? `${formatDiskSpaceBytes(space.availableBytes)} (${space.availableBytes} bytes) free` : "free space unknown"}.`,
@@ -20,7 +26,7 @@ export async function checkUpdateDatabaseBackupSpace(
     if (space && space.availableBytes < requiredBytes) {
       throw new UpdateCaptureSpaceError(
         `${purpose} needs ${formatDiskSpaceBytes(requiredBytes)} (${requiredBytes} bytes) near ${target}, but only ${formatDiskSpaceBytes(space.availableBytes)} (${space.availableBytes} bytes) is available. Free disk space before retrying; the databases have not been migrated.`,
-        { requiredBytes, availableBytes: space.availableBytes },
+        { requiredBytes, availableBytes: space.availableBytes, volume },
       );
     }
     if (!space) {
@@ -30,8 +36,21 @@ export async function checkUpdateDatabaseBackupSpace(
     }
   };
   const reserve = 64 * 1024 * 1024;
-  // This volume holds snapshots, same-volume rollback copies, and acquisition/publication scratch.
-  check(directory, bytes === 0 ? 0 : 2 * bytes + 3 * largest + reserve, "Update database backup");
+  const sharedPath = resolvePathViaExistingAncestorSync(
+    resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: context.stateDir }),
+  );
+  const sharedBytes = Object.values(resolveDatabaseFamilyEngines(context.config)).every(
+    (engine) => engine === "sqlite",
+  )
+    ? families.find((family) => family.path === sharedPath)?.bytes
+    : undefined;
+  // Keep one backup S and independent writable rollback outputs S. Only shared
+  // state H needs a current-history image and merge/journal scratch; a large
+  // agent is never history scratch. Capture/publication fits within 2S and does
+  // not overlap rollback preparation. Restore rechecks actual output space if
+  // history grows after capture. Unknown/mixed ownership retains the old bound.
+  const historyBytes = sharedBytes || largest;
+  check(directory, bytes === 0 ? 0 : 2 * bytes + 3 * historyBytes + reserve, "backup");
   // Preflight runs before the backup directory exists; inspect its existing ancestor.
   let ancestor = directory;
   let backupDevice: bigint;
@@ -73,7 +92,7 @@ export async function checkUpdateDatabaseBackupSpace(
   }
   for (const source of sources.values()) {
     // Migrated files remain in place during rollback: reserve S + largest publication scratch + headroom.
-    check(source.directory, source.bytes + source.largest + reserve, "Update database rollback");
+    check(source.directory, source.bytes + source.largest + reserve, "rollback");
   }
   return { warnings, diagnostics };
 }

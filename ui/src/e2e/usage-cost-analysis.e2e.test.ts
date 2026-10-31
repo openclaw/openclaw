@@ -283,6 +283,7 @@ suite.define(() => {
         if (scenario === "recent-tab") {
           for (const name of ["Visible C", "Visible A", "Visible B"]) {
             await list.getByRole("button", { name, exact: true }).click();
+            await expectText(page.locator(".session-detail-title")).toBe(name);
           }
           await card.getByRole("button", { name: "Recently viewed", exact: true }).click();
           list = card.locator(".session-bars--recent");

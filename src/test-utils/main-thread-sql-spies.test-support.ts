@@ -52,9 +52,26 @@ export async function withoutMainThreadSql<T>(run: () => Promise<T>): Promise<T>
   }
 }
 
-export function observeMainThreadReads() {
+export function observeMainThreadReads(
+  onRead?: (sql: string, bindings: readonly unknown[]) => void,
+) {
   return observeSqlCalls(
-    (["all", "get", "iterate"] as const).map((method) => vi.spyOn(StatementSync.prototype, method)),
+    (["all", "get", "iterate"] as const).map((method) => {
+      const original = StatementSync.prototype[method];
+      const spy = vi.spyOn(StatementSync.prototype, method);
+      if (onRead) {
+        spy.mockImplementation(
+          new Proxy(original, {
+            apply(target, receiver: StatementSync, args) {
+              // Capture before control returns to the statement's disposal owner.
+              onRead(receiver.sourceSQL, args);
+              return Reflect.apply(target, receiver, args);
+            },
+          }),
+        );
+      }
+      return spy;
+    }),
   );
 }
 

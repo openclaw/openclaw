@@ -492,17 +492,24 @@ export function defineSessionPlacementModuleBoundaryTests(
       const localSessionRow = page.locator('[data-session-key="agent:cloud:local-e2e"]');
       await sessionRow.waitFor();
       await localSessionRow.waitFor();
-      const cloudPlacementBadge = sessionRow.locator('[data-placement-state="active"]');
-      await cloudPlacementBadge.waitFor();
+      expect(await sessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
+      expect(await localSessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
+      await localSessionRow.click({ button: "right" });
+      const sessionMenu = page.getByRole("menu", {
+        name: "Actions for Local session",
+        exact: true,
+      });
+      await sessionMenu.waitFor();
+      expect(await sessionMenu.getByRole("menuitem", { name: "Stop cloud worker…" }).count()).toBe(
+        0,
+      );
+      await page.keyboard.press("Escape");
       await sessionRow.hover();
       await sessionRow.click({ button: "right" });
       const stopWorker = page
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Stop cloud worker…" });
       await stopWorker.waitFor();
-      expect(await localSessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
-      expect(await cloudPlacementBadge.locator("circle").count()).toBe(1);
-      expect(await cloudPlacementBadge.locator("rect").count()).toBe(0);
       await stopWorker.click();
       await (await waitForConfirmModal(page)).getByRole("button", { name: "Stop worker" }).click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");

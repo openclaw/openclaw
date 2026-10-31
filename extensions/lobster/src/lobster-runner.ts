@@ -99,7 +99,9 @@ export function resolveLobsterCwd(cwdRaw: unknown): string {
   if (typeof cwdRaw !== "string" || !cwdRaw.trim()) {
     return process.cwd();
   }
-  const cwd = cwdRaw.trim();
+  // Keep the caller's literal directory name: its whitespace is part of the
+  // filesystem identity, not decoration to strip before resolution.
+  const cwd = cwdRaw;
   if (path.isAbsolute(cwd)) {
     throw new Error("cwd must be a relative path");
   }
@@ -168,7 +170,8 @@ async function detectWorkflowFile(candidate: string, cwd: string) {
   if (!trimmed || trimmed.includes("|") || !workflowExts.has(path.extname(trimmed).toLowerCase())) {
     return null;
   }
-  const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(cwd, trimmed);
+  // Keep the caller's literal name: its whitespace belongs to the file identity.
+  const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(cwd, candidate);
   try {
     if (!(await stat(resolved)).isFile()) {
       throw new Error("Workflow path is not a file");
@@ -224,8 +227,9 @@ export function createEmbeddedLobsterRunner() {
           let envelope: EmbeddedToolEnvelope;
 
           if (params.action === "run") {
-            const pipeline = params.pipeline?.trim() ?? "";
-            if (!pipeline) {
+            // Keep the caller's literal pipeline name; only blank counts as omitted.
+            const pipeline = params.pipeline ?? "";
+            if (!pipeline.trim()) {
               throw new Error("pipeline required");
             }
 

@@ -1,17 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import { encodeSessionArchiveContent } from "../../config/sessions/archive-compression.js";
 import {
+  appendTranscriptMessage,
   listSessionTranscriptInstances,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
+  rewindSessionToMessage,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
@@ -349,6 +351,51 @@ it("uses committed metadata for selected usage and families with an empty curren
         },
       ]);
       expect(result.totals.totalTokens).toBe(17);
+    }
+  });
+});
+
+it("keeps a rewound window in its session's usage family", async () => {
+  await withUsageState(async (state) => {
+    const key = "agent:main:usage-rewind";
+    const scope = sessionScope(state, "main", key);
+    const firstId = "usage-rewind-first";
+    const timestamp = Date.now() - 60_000;
+    await upsertSessionEntryCore(scope, { sessionId: firstId, updatedAt: timestamp });
+    const target = { ...scope, sessionId: firstId };
+    await appendTranscriptMessage(target, {
+      eventId: "rewind-user",
+      message: { role: "user", content: "first prompt" },
+      now: timestamp - 1_000,
+      parentId: null,
+    });
+    await appendTranscriptMessage(target, {
+      eventId: "rewind-assistant",
+      message: usageMessage(23, timestamp),
+      now: timestamp,
+      parentId: "rewind-user",
+    });
+
+    const rewound = await rewindSessionToMessage({ ...scope, entryId: "rewind-user" });
+    assert(rewound.status === "created");
+    const currentId = rewound.entry.sessionId;
+    await warmUsage(["main"]);
+    for (const projection of [{}, { projection: "overview" }]) {
+      const result = await readUsage({
+        range: "all",
+        agentId: "main",
+        groupBy: "family",
+        ...projection,
+      });
+      expect(result.sessions).toMatchObject([
+        {
+          key,
+          currentSessionId: currentId,
+          includedSessionIds: [currentId, firstId],
+          usage: { totalTokens: 23 },
+        },
+      ]);
+      expect(result.totals.totalTokens).toBe(23);
     }
   });
 });

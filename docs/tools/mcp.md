@@ -214,7 +214,7 @@ openclaw mcp login <name>
 
 Follow the printed authorization URL. OpenClaw normally captures the loopback redirect and saves the credentials automatically; use the printed `--code` command when the browser cannot reach the callback listener.
 
-The CLI signs in only to servers defined under `mcp.servers`. A server that a plugin declares signs in from the plugin's page (**Accounts** → **Connect**); a failed browser sign-in for it points back to the plugin settings instead of a CLI command.
+The CLI signs in only to servers defined under `mcp.servers`. A server that a plugin declares signs in from the plugin's page (**Sign in**, or **Accounts** → **Sign in**); a failed browser sign-in for it points back to the plugin settings instead of a CLI command.
 
 ### Changes do not reach an active agent
 

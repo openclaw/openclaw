@@ -213,6 +213,8 @@ suite.define(() => {
             sessionKey: key,
             message: "Help me plan my own work.",
           });
+          await expect.poll(() => initialMessage.locator(".chat-send-status").count()).toBe(0);
+          await initialMessage.locator("time.chat-group-timestamp").waitFor();
           expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
           return;
         }

@@ -80,9 +80,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await closeChatDetails(page);
       const sidebarRow = page.locator(`.sidebar-recent-session[data-session-key="${session.key}"]`);
-      expect(await sidebarRow.locator(".session-row-badge--cloud").getAttribute("aria-label")).toBe(
-        "machine0 · team · Linux · medium · 4 vCPU · 16 GB · active",
-      );
+      expect(await sidebarRow.locator(".session-row-badge--cloud").count()).toBe(0);
       await sidebarRow.hover();
       const context = page.locator(
         '.session-hovercard__context-row[aria-label="Runs on machine0 · team"]',

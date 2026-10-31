@@ -137,7 +137,7 @@ export function createSessionDetails<Scope extends DetailScope>(options: {
       synchronize();
     },
     synchronize,
-    row() {
+    row(this: void) {
       rowRevision();
       return activeBinding?.matches() ? activeBinding.row() : null;
     },

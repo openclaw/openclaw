@@ -7,11 +7,8 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deliverQueuedSessionDelivery } from "../gateway/server-restart-sentinel.js";
-import {
-  completeSessionDelivery,
-  enqueueSessionDelivery,
-  loadPendingSessionDelivery,
-} from "../infra/session-delivery-queue-storage.js";
+import { loadPendingSessionDelivery } from "../infra/session-delivery-queue-storage.js";
+import { enqueueUnclaimedSessionDeliveryFixture as enqueueSessionDelivery } from "../infra/session-delivery-queue.test-helpers.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -32,7 +29,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("keeps recovered system events and agent turns on the ordinary execution budget", async () => {
+it("keeps legacy queued inference inert without changing its persisted payload", async () => {
   await withOpenClawTestState(
     { label: "restart-continuation-budget", env: { OPENCLAW_TEST_FAST: "0" } },
     async (state) => {
@@ -104,15 +101,8 @@ it("keeps recovered system events and agent turns on the ordinary execution budg
           "queued recovery",
         );
         await deliverQueuedSessionDelivery({ deps: {}, queueContext, entry });
-        expect(model).toHaveBeenCalledOnce();
-        const turn = expectDefined(model.mock.calls[0]?.[0], "recovered turn");
-        expect(turn.trigger).toBe("event");
-        expect(turn.prompt).toContain(message);
-        expect(turn.timeoutMs).toBe(172_800_000);
-        expect(await loadPendingSessionDelivery(id, queueContext)).toMatchObject({
-          deliveryStartedAt: expect.any(Number),
-        });
-        await completeSessionDelivery(id, queueContext);
+        expect(model).not.toHaveBeenCalled();
+        expect(await loadPendingSessionDelivery(id, queueContext)).toEqual(entry);
       }
     },
   );

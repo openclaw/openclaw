@@ -1,4 +1,5 @@
 import type { JSX } from "@solidjs/web";
+import type { IconName } from "./icon-data.ts";
 
 export type PickerOption = {
   value: string;
@@ -34,6 +35,8 @@ export type PickerParams<Option extends PickerOption> = {
   searchPlaceholder?: string;
   groupBy?: (option: Option) => PickerGroup | undefined;
   showOptionTooltips?: boolean;
+  /** Trigger chevron for anchored menus; submenus and sheets keep their own direction. */
+  triggerIcon?: IconName;
   showSelectedDescription?: boolean;
   onOpen?: () => void;
   /** Exposes this mounted picker's controls to an enclosing focus boundary. */

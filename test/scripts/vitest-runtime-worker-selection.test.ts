@@ -9,16 +9,20 @@ const e2e = "test/vitest/vitest.e2e.config.ts";
 const tui = "test/vitest/vitest.tui-pty.config.ts";
 const doctor = "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts";
 const sqlite = "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts";
+const nativeHost = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
+const discord = "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts";
 const local = "src/tui/tui-pty-local.e2e.test.ts";
 const built = { OPENCLAW_TUI_PTY_USE_BUILT_CLI: "1" };
 
 it.each([
   { name: "Doctor", config: e2e, files: [doctor], env: {}, runtime: true },
   { name: "SQLite", config: e2e, files: [sqlite], env: {}, runtime: true },
+  { name: "native host", config: e2e, files: [nativeHost], env: {}, runtime: true },
+  { name: "Discord attachment", config: e2e, files: [discord], env: {}, runtime: true },
   {
-    name: "both built proofs",
+    name: "all built proofs",
     config: e2e,
-    files: [doctor, `./${sqlite}`],
+    files: [doctor, `./${sqlite}`, nativeHost, discord],
     env: {},
     runtime: true,
   },

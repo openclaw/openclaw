@@ -93,12 +93,24 @@ Existing one-argument hooks remain compatible, and direct callers can omit confi
 
 ## Hook examples
 
+Use `prepareRuntimeAuthV2` for credential exchange. Its context includes
+`capability: "chat" | "decision"` and a transport model with required `id` and
+`provider`; `name`, `api`, `baseUrl`, and `headers` are optional. Do not require
+chat costs, context windows, or token limits to exchange credentials.
+
+The host prefers V2 when both hooks exist. The shipped `prepareRuntimeAuth`
+hook remains available for chat with its full `ProviderRuntimeModel` context.
+A decision request cannot use a legacy-only exchange and returns
+`unsupported-input`; migrate the hook to V2 before advertising decision support.
+Explicit provider `auth: "none"` skips both hooks. Existing credential ownership
+and caller cancellation checks apply before and after either exchange.
+
 <Tabs>
   <Tab title="Token exchange">
     For providers that need a token exchange before each inference call:
 
     ```typescript
-    prepareRuntimeAuth: async (ctx) => {
+    prepareRuntimeAuthV2: async (ctx) => {
       const exchanged = await exchangeToken(ctx.apiKey);
       return {
         apiKey: exchanged.token,
@@ -307,7 +319,8 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `supportsXHighThinking`           | `xhigh` reasoning support compatibility (deprecated - prefer `resolveThinkingProfile`)      |
 | `resolveDefaultThinkingLevel`     | Default `/think` policy compatibility (deprecated - prefer `resolveThinkingProfile`)        |
 | `isModernModelRef`                | Live/smoke model matching                                                                   |
-| `prepareRuntimeAuth`              | Token exchange before inference                                                             |
+| `prepareRuntimeAuthV2`            | Capability-aware token exchange before chat or decision inference                           |
+| `prepareRuntimeAuth`              | Legacy chat exchange with a full runtime model; migrate to V2 for decision support          |
 | `resolveUsageAuth`                | Custom usage credential parsing                                                             |
 | `fetchUsageSnapshot`              | Custom usage endpoint                                                                       |
 | `createEmbeddingProvider`         | Provider-owned embedding adapter for memory/search                                          |
@@ -328,7 +341,7 @@ Runtime fallback notes:
 - Error classification uses the prepared provider owner or already loaded provider hooks. `matchesContextOverflowError` and `classifyFailoverReason` never trigger plugin discovery while handling an error; provider preparation owns loading those hooks.
 - Config assembly calls `normalizeConfig` only through the owning bundled provider's lightweight policy surface, without loading provider runtime or scanning other providers. Google's own hook normalizes `google` / `google-vertex` / `google-antigravity` config entries through that surface.
 - Config assembly likewise uses the lightweight policy surface for `resolveConfigApiKey`. Amazon Bedrock keeps AWS env-marker resolution in its provider plugin; runtime auth itself still uses the AWS SDK default chain when configured with `auth: "aws-sdk"`.
-- `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional catalog route facts `api` and `baseUrl`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
+- `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional catalog route facts `api` and `baseUrl`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile. Without this hook, the ladder is the base levels plus any `xhigh` or `max` declared in catalog `compat.supportedReasoningEfforts` or `thinkingLevelMap`; `supportedReasoningEfforts` alone never removes base levels, while a `thinkingLevelMap` entry set to `null` does. To expose exactly the advertised efforts, return `resolveEffortThinkingProfile(ctx.compat?.supportedReasoningEfforts)` from `openclaw/plugin-sdk/provider-thinking-runtime` instead of a hard-coded level list.
 - `normalizeResolvedModel(ctx)` can set `compactionThinkingDefault` on the returned `ProviderRuntimeModel` when the provider has a preferred embedded-summary effort. This is prepared runtime metadata, not an operator setting or catalog field. Explicit `agents.defaults.compaction.thinkingLevel` takes precedence; otherwise the host uses this preference and then `low`. The chosen effort is still clamped to the actual compaction candidate.
 - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over the legacy plugin-wide `before_prompt_build` hook when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
 

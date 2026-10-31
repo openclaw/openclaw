@@ -103,6 +103,7 @@ describe("memory manager FTS-only reindex", () => {
   });
 
   beforeEach(async () => {
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     createEmbeddingProviderMock.mockClear();
     providerConstructionError = null;
     providerConstructionGate = null;

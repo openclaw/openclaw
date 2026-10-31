@@ -24,6 +24,7 @@ import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import * as startRepair from "../daemon-cli/start-repair.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { expectNoCalls as expectUncalled } from "./update-boundary.test-support.js";
 import { registerGenerationRecoveryTests } from "./update-command-generation.test-support.js";
 import { registerRestartOutcomeTests } from "./update-command-restart-outcome.test-support.js";
 import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
@@ -278,11 +279,6 @@ const activate = (overrides: Partial<Parameters<typeof maybeRestartService>[0]>)
     timeoutMs: 1000,
     ...overrides,
   });
-const expectUncalled = (...functions: Array<{ mock: { calls: unknown[][] } }>) => {
-  for (const fn of functions) {
-    expect(fn).not.toHaveBeenCalled();
-  }
-};
 const expectStaleCleanup = () =>
   expect(mocks.terminateStale).toHaveBeenCalledWith(
     [4242],

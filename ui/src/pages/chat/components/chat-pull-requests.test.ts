@@ -22,6 +22,7 @@ import {
   chatPullRequestId,
   dismissChatPullRequest,
   listDismissedChatPullRequests,
+  publicationPullRequest,
 } from "./chat-pull-requests.ts";
 
 let container: HTMLDivElement;
@@ -331,6 +332,25 @@ describe("branch row dismissal", () => {
 
     paint({ ...props, branchDismissed: true });
     expect(query(".chat-pr")).toBeNull();
+  });
+});
+
+describe("publication pull request", () => {
+  it("folds only a confirmed published receipt into the listed PR it names", () => {
+    const listed = pullRequest({ owner: "OpenClaw", number: 42 });
+    const receipt = published("receipt", "https://github.com/openclaw/openclaw/pull/42");
+
+    expect(publicationPullRequest(publication({ result: receipt }), [listed])).toBe(listed);
+    expect(
+      publicationPullRequest(publication({ result: receipt }), [pullRequest({ number: 43 })]),
+    ).toBeUndefined();
+    // A failed verification keeps its own recovery pill.
+    expect(
+      publicationPullRequest(publication({ result: receipt, error: "Verify first" }), [listed]),
+    ).toBeUndefined();
+    expect(
+      publicationPullRequest(publication({ result: failedResult("Retry") }), [listed]),
+    ).toBeUndefined();
   });
 });
 

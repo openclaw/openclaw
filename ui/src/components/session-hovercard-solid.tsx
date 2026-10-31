@@ -2,17 +2,15 @@ import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show, useContext } from "solid-js";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
-import type {
-  ControlUiSessionPullRequest,
-  ControlUiSessionPullRequestSnapshot,
-} from "../../../src/gateway/control-ui-contract.js";
+import type { ControlUiSessionPullRequestSnapshot } from "../../../src/gateway/control-ui-contract.js";
 import { registerGitHubEnglish } from "../i18n/locales/en-github.ts";
 import { registerSessionProgressEnglish } from "../i18n/locales/en-session-progress.ts";
 import { i18nRevision, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { sessionOwnerInitials } from "../lib/session-owner.ts";
 import {
-  orderSessionPullRequests,
+  displaySessionPullRequests,
   sessionPullRequestStateIcons,
+  type SessionDisplayPullRequest,
 } from "../lib/session-pull-request-presentation.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { formatGitHubItemReference } from "./github-link-target.ts";
@@ -185,12 +183,6 @@ function SessionHovercardContext(
 
 registerEnglishCatalog(registerGitHubEnglish);
 
-type SessionDisplayPullRequest = Omit<ControlUiSessionPullRequest, "state"> & {
-  state?: ControlUiSessionPullRequest["state"];
-  sourceSessionKey?: string;
-  sourceAgentId?: string;
-};
-
 const MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS = 4;
 type SessionHovercardAvatarAuth = { authTokens: readonly string[]; authReady: boolean };
 export type SessionHovercardInput = SessionHovercardContextInput & {
@@ -199,6 +191,7 @@ export type SessionHovercardInput = SessionHovercardContextInput & {
   personActivity?: PersonActivityRouting;
   pullRequests?: ControlUiSessionPullRequestSnapshot;
   progressCard?: ProgressCard | null;
+  connected?: boolean;
 };
 function ParticipantLink(props: {
   participant: SessionParticipant;
@@ -521,28 +514,7 @@ function PullRequestRow(props: { request: SessionDisplayPullRequest }) {
 
 function PullRequestDetails(props: { snapshot?: ControlUiSessionPullRequestSnapshot }) {
   const branch = () => props.snapshot?.branch;
-  const requests = createMemo((): SessionDisplayPullRequest[] => {
-    /** Presentation only: task results never become evidence that the current branch was published. */
-    const snapshot = props.snapshot;
-    const byUrl = new Map<string, SessionDisplayPullRequest>();
-    for (const task of snapshot?.taskPullRequests ?? []) {
-      byUrl.set(task.url, {
-        owner: task.owner,
-        repo: task.repo,
-        number: task.number,
-        branch: task.branch,
-        url: task.url,
-        title: task.title ?? `${task.owner}/${task.repo}#${task.number}`,
-        ...task.pullRequest,
-        sourceSessionKey: task.sourceSessionKey,
-        sourceAgentId: task.sourceAgentId,
-      });
-    }
-    for (const request of snapshot?.pullRequests ?? []) {
-      byUrl.set(request.url, { ...byUrl.get(request.url), ...request });
-    }
-    return orderSessionPullRequests([...byUrl.values()]);
-  });
+  const requests = createMemo(() => displaySessionPullRequests(props.snapshot));
   const count = createMemo(
     () =>
       props.snapshot?.pullRequestCount ??
@@ -611,7 +583,10 @@ export function SessionHovercard(props: SessionHovercardInput) {
       props.progressCard,
       props.row?.status,
       props.row?.startedAt,
-      props.row?.hasActiveRun ?? false,
+      props.connected !== false &&
+        (props.row?.gatewayHasActiveRun ?? props.row?.hasActiveRun) === true,
+      props.connected !== false && props.row?.hasActiveSubagentRun === true,
+      props.row?.endedAt,
     ),
   );
   const hasPullRequests = () =>

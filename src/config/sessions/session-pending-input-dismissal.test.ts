@@ -80,7 +80,8 @@ async function createFixture(database: OpenClawAgentDatabase) {
     queued: await stage("queued"),
     interrupted: await stage("interrupted", "interrupted"),
     cancelled: await stage("cancelled", "cancelled"),
-    second: await stage("second-interrupted", "interrupted"),
+    first: await stage("first-cancelled", "cancelled"),
+    second: await stage("second-cancelled", "cancelled"),
     rows,
     states,
     dismiss: (inputIds: readonly string[], sessionId = target.sessionId) =>
@@ -104,10 +105,10 @@ it.aroundEach(async (run) => {
 it("tombstones retired inputs in the database worker and keeps their rows and content", async () => {
   const hostSql = observeHostDataSql();
   try {
-    expect(await f.dismiss([f.interrupted, f.cancelled])).toEqual({
+    expect(await f.dismiss([f.first, f.cancelled])).toEqual({
       kind: "dismissed",
-      inputIds: [f.interrupted, f.cancelled],
-      runIds: ["interrupted", "cancelled"],
+      inputIds: [f.first, f.cancelled],
+      runIds: ["first-cancelled", "cancelled"],
       missingIds: [],
     });
     expect(hostSql.queries).toEqual([]);
@@ -116,10 +117,10 @@ it("tombstones retired inputs in the database worker and keeps their rows and co
   }
   const rows = f.rows();
   expect(Object.keys(rows).toSorted()).toEqual(
-    [f.queued, f.interrupted, f.cancelled, f.second].toSorted(),
+    [f.queued, f.interrupted, f.cancelled, f.first, f.second].toSorted(),
   );
   for (const [id, runId] of [
-    [f.interrupted, "interrupted"],
+    [f.first, "first-cancelled"],
     [f.cancelled, "cancelled"],
   ] as const) {
     expect(rows[id]).toEqual({
@@ -128,7 +129,8 @@ it("tombstones retired inputs in the database worker and keeps their rows and co
     });
   }
   expect(rows[f.queued]?.state).toBe("queued");
-  expect(rows[f.second]?.state).toBe("interrupted");
+  expect(rows[f.second]?.state).toBe("cancelled");
+  expect(rows[f.interrupted]).toEqual({ state: "interrupted", message: message("interrupted") });
 });
 
 it("repeats a dismissal idempotently and reports ids that are no longer retained", async () => {
@@ -137,35 +139,39 @@ it("repeats a dismissal idempotently and reports ids that are no longer retained
   expect(await f.dismiss([f.cancelled, "missing-input", f.second])).toEqual({
     kind: "dismissed",
     inputIds: [f.cancelled, f.second],
-    runIds: ["cancelled", "second-interrupted"],
+    runIds: ["cancelled", "second-cancelled"],
     missingIds: ["missing-input"],
   });
   expect(f.rows()[f.cancelled]).toEqual(after[f.cancelled]);
   expect(f.states()[f.second]).toBe("cancelled");
 });
 
-it("refuses an interrupted input that a resend has reclaimed", async () => {
-  const resent = expectDefined(
-    await stageSessionPendingInput(target, {
+it("leaves legacy interrupted input inert when the sender submits a fresh input", async () => {
+  await expect(
+    stageSessionPendingInput(target, {
       runId: "interrupted",
       message: message("interrupted"),
       requestFingerprint,
-      retryInterrupted: true,
+      retryCancelled: true,
       assertCurrent,
     }),
-    "Expected the resend to reclaim interrupted custody",
+  ).rejects.toThrow("ownership ended");
+  const resent = expectDefined(
+    await stageSessionPendingInput(target, {
+      runId: "fresh-send",
+      message: message("fresh-send"),
+      requestFingerprint,
+      assertCurrent,
+    }),
+    "Expected a fresh send to acquire custody",
   );
   f.receipts.push(resent);
-  expect(resent.inputId).toBe(f.interrupted);
-  expect(f.states()[f.interrupted]).toBe("queued");
-  expect(await f.dismiss([f.interrupted])).toEqual({
-    kind: "active",
-    inputIds: [f.interrupted],
-  });
-  resent.finish("interrupted");
-  await resent.settled?.();
+  expect(resent.inputId).not.toBe(f.interrupted);
   expect(f.states()[f.interrupted]).toBe("interrupted");
-  expect((await f.dismiss([f.interrupted])).kind).toBe("dismissed");
+  expect(await f.dismiss([resent.inputId])).toEqual({
+    kind: "active",
+    inputIds: [resent.inputId],
+  });
 });
 
 it("refuses stale targets without changing retained inputs", async () => {
@@ -177,7 +183,7 @@ it("refuses stale targets without changing retained inputs", async () => {
 it("refuses retired rows whose registered owner is still settling", async () => {
   const before = f.rows();
   const owner = {
-    inputId: f.interrupted,
+    inputId: f.first,
     sessionKey: target.sessionKey,
     sessionId: target.sessionId,
     workerDatabasePath: realpathSync(f.database.path),
@@ -186,13 +192,13 @@ it("refuses retired rows whose registered owner is still settling", async () => 
   } as SessionPendingInputOwner;
   registerSessionPendingInputOwner(owner);
   try {
-    expect(await f.dismiss([f.interrupted, f.cancelled])).toEqual({
+    expect(await f.dismiss([f.first, f.cancelled])).toEqual({
       kind: "active",
-      inputIds: [f.interrupted],
+      inputIds: [f.first],
     });
     expect(f.rows()).toEqual(before);
   } finally {
     releaseSessionPendingInputOwner(owner);
   }
-  expect((await f.dismiss([f.interrupted])).kind).toBe("dismissed");
+  expect((await f.dismiss([f.first])).kind).toBe("dismissed");
 });

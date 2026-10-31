@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
@@ -14,6 +15,7 @@ import {
   SIDEBAR_SESSION_SORT_OPTIONS,
   SIDEBAR_SESSION_STATUS_OPTIONS,
 } from "./app-sidebar-session-types.ts";
+import { createPersonalSessionGroupActions } from "./personal-session-group-actions.ts";
 import type { PickerFocusHandle } from "./select-picker-types.ts";
 import {
   createSessionGroup,
@@ -38,6 +40,8 @@ import {
   SidebarOwnerFilter,
   SidebarOwnerOptions,
 } from "./solid/sidebar-owner-filter.tsx";
+
+registerSessionMenuEnglish();
 
 type SidebarSessionGroupMenuAction =
   | "group-defaults"
@@ -475,6 +479,24 @@ export function renderSidebarSessionSortMenuForMenus(
             )}
           </section>
           <footer class="sidebar-session-menu-footer">
+            <button
+              ref={(element) => controls.set("new-collection", element)}
+              type="button"
+              class="sidebar-session-filter-footer"
+              disabled={!host.connected}
+              onClick={() => {
+                const context = host.sessionDataContext;
+                if (context && host.connected) {
+                  menus.closePositionedMenu("sessionSort");
+                  void createPersonalSessionGroupActions(context).edit();
+                }
+              }}
+            >
+              <span aria-hidden="true">
+                <Icon name="plus" />
+              </span>
+              {t("sessionsView.personalGroupNew")}
+            </button>
             <a
               ref={(element) => controls.set("sources", element)}
               id="sidebar-sessions-sources"

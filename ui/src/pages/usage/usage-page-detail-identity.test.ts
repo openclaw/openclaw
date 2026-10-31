@@ -1,8 +1,13 @@
 /* @vitest-environment jsdom */
 
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { UsageSessionEntry } from "./types.ts";
 import {
   createUsagePageFixture,
@@ -12,12 +17,15 @@ import {
   cacheSnapshot,
   cleanupUsagePageTest,
   contextWeight,
+  contextWithClient,
   focusDocument,
   refreshButton,
   usagePoints,
   loadUsagePage,
   selectUsageSession,
 } from "./usage-page.test-support.ts";
+import { UsagePageContent } from "./usage-page.tsx";
+import { usageFixture } from "./view.test-support.ts";
 
 beforeEach(focusDocument);
 afterEach(cleanupUsagePageTest);
@@ -99,6 +107,68 @@ function dragTimelineRange(page: Pick<HTMLElement, "querySelector">) {
   move();
   return { move, end: () => document.dispatchEvent(new MouseEvent("mouseup")) };
 }
+
+it("keeps roster rows distinct when the selected detail changes to another session", () => {
+  const { result } = cacheSnapshot("fresh");
+  const sessions = ["A", "B", "C"].map((label) => ({
+    key: `agent:main:detail-${label.toLowerCase()}`,
+    label: `Visible ${label}`,
+    agentId: "main",
+    usage: { ...result.totals },
+  }));
+  const initial = usageFixture(
+    { sessions, totals: result.totals, selectedSession: sessions[2] },
+    { selectedSessions: [sessions[2]!.key] },
+  );
+  const [state, setState] = createSignal(initial);
+  const context = contextWithClient(createTestGatewayClient(async () => ({})));
+  const { container } = mountSolid(
+    () =>
+      UsagePageContent({
+        get state() {
+          return state();
+        },
+        result: null,
+      }),
+    { wrapper: createSolidApplicationContextProvider(context).wrapper },
+  );
+  flush();
+  const buttons = () => [
+    ...container.querySelectorAll<HTMLButtonElement>(
+      ".session-bars:not(.session-bars--selected) .session-bar-selection",
+    ),
+  ];
+  const original = buttons();
+  expect(original.map((button) => button.getAttribute("aria-label"))).toEqual([
+    "Visible A",
+    "Visible B",
+    "Visible C",
+  ]);
+  expect(textOf(container, ".session-detail-title")).toBe("Visible C");
+
+  const hydrated = { ...sessions[0]!, usage: { ...sessions[0]!.usage, totalTokens: 900 } };
+  setState(
+    usageFixture(
+      { ...initial.data, selectedSession: hydrated, overview: undefined },
+      { ...initial.filters, selectedSessions: [hydrated.key] },
+    ),
+  );
+  flush();
+
+  expect(textOf(container, ".session-detail-title")).toBe("Visible A");
+  expect(textOf(container, ".session-detail-stats strong")).toBe("900");
+  expect(buttons().map((button) => button.getAttribute("aria-label"))).toEqual([
+    "Visible A",
+    "Visible B",
+    "Visible C",
+  ]);
+  buttons().forEach((button, index) => expect(button).toBe(original[index]));
+  expect(buttons().map((button) => button.getAttribute("aria-pressed"))).toEqual([
+    "true",
+    "false",
+    "false",
+  ]);
+});
 
 it("retains chart bars across conversation changes and updates chart modes", async () => {
   const { page } = await timelineFixture("stable-instance", "[Tool: read]\nRetained turn");

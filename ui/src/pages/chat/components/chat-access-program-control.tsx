@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { CyberAccessProgram } from "../../../api/types.ts";
 import { DETAILS_SECTION_MOTION } from "../../../components/details-section-motion.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -28,7 +28,9 @@ export type ChatAccessProgramControlProps = {
 export function ChatAccessProgramControl(props: ChatAccessProgramControlProps) {
   const programs = () => (props.programs ?? []).filter((program) => program !== "standard");
   const selected = () => props.requested ?? props.effectiveAccessProgram;
-  const enabled = () => selected() !== undefined && selected() !== "standard";
+  // Streamed snapshots must not reset native activation before the change event.
+  const enabled = createMemo(() => selected() !== undefined && selected() !== "standard");
+  const disabled = createMemo(() => props.disabled);
   const unavailable = () => {
     const current = selected();
     return props.programs !== undefined &&
@@ -52,7 +54,7 @@ export function ChatAccessProgramControl(props: ChatAccessProgramControlProps) {
           <SettingsToggle
             ariaLabel={t("chat.modelControls.daybreak")}
             checked={enabled()}
-            disabled={props.disabled}
+            disabled={disabled()}
             onChange={(checked) => {
               if (checked) {
                 const next =
@@ -103,7 +105,7 @@ export function ChatAccessProgramControl(props: ChatAccessProgramControlProps) {
                     class="chat-controls__access-option"
                     data-chat-access-option={program}
                     aria-pressed={selected() === program ? "true" : "false"}
-                    disabled={props.disabled}
+                    disabled={disabled()}
                     onClick={() => {
                       if (program !== selected()) {
                         void props.onSelect(program, props.sessionKey);

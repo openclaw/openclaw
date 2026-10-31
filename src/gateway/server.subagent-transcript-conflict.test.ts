@@ -553,7 +553,7 @@ for (const scenario of [
             expectDelivery("failed");
             expect(readChild()?.delivery).toMatchObject({
               status: "failed",
-              lastError: "requester_transcript_conflict",
+              lastError: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
             });
             expect(synthesisCount).toBe(3);
             return;

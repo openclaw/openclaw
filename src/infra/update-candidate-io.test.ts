@@ -43,8 +43,8 @@ it.each([
 );
 
 it("checks completion against the absolute allowance before its timer runs", async () => {
-  const now = Date.now();
-  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const now = performance.now();
+  const clock = vi.spyOn(performance, "now").mockReturnValue(now);
   const { exit, operation } = pendingIo({ bytes: 32 * 1024 ** 2 });
   const rejected = expect(operation).rejects.toThrow("exceeded its 340 second allowance");
   clock.mockReturnValue(now + 340_000);
@@ -53,8 +53,8 @@ it("checks completion against the absolute allowance before its timer runs", asy
 });
 
 it("expires the active snapshot after a completed inspection with a moving clock", async () => {
-  let now = Date.now();
-  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  let now = performance.now();
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
   const expireDeadline = captureUpdateCandidateDeadline();
   await withUpdateCandidateIoBudget({ directory: "unused", bytes: 0 }, async () => undefined);
   clock.mockImplementation(() => now++);
@@ -94,4 +94,15 @@ it("preserves uncertain worker settlement instead of replacing it with expiry", 
   await vi.advanceTimersByTimeAsync(300_000);
   exit.reject(failure);
   await rejected;
+});
+
+it("does not let a wall-clock rollback stretch the update I/O stall deadline", async () => {
+  vi.useFakeTimers();
+  const allowance = 300_000;
+  const { exit, state, operation } = pendingIo({ bytes: 0, timeoutMs: 1 });
+  vi.setSystemTime(Date.now() - 90_000);
+  await vi.advanceTimersByTimeAsync(allowance);
+  expect(state).toMatchObject({ signal: { aborted: true }, settled: false });
+  exit.resolve();
+  await operation.catch(() => undefined);
 });

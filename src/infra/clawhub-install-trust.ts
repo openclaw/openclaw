@@ -1,7 +1,7 @@
-// Shared ClawHub exact-release trust gate for plugin, skill, and Claw installs.
+// Shared ClawHub exact-release trust gate for plugin, skill, and Template installs.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveClawHubBaseUrl } from "./clawhub-client.js";
 import { encodeClawHubPackagePath, formatClawHubReleaseLabel } from "./clawhub-display.js";
@@ -55,7 +55,7 @@ type ClawHubInstallLogger = {
 
 type ClawHubTrustSubject =
   | { kind: "plugin"; packageName: string }
-  | { kind: "claw"; packageName: string }
+  | { kind: "template"; packageName: string }
   | { kind: "skill"; packageName: string; workspaceDir: string; ownerHandle?: string };
 
 type ClawHubFetchedSubjectSecurity = {
@@ -66,7 +66,7 @@ type ClawHubFetchedSubjectSecurity = {
   };
 };
 
-type ClawHubExpectedClawArtifact = {
+type ClawHubExpectedTemplateArtifact = {
   sha256: string;
   npmIntegrity: string;
   npmShasum?: string;
@@ -153,8 +153,8 @@ function resolveClawHubSubjectUrl(params: {
   const pathRoot =
     params.subject.kind === "skill"
       ? "skills"
-      : params.subject.kind === "claw"
-        ? "claws"
+      : params.subject.kind === "template"
+        ? "templates"
         : "plugins";
   return `${resolveClawHubBaseUrl(params.baseUrl)}/${pathRoot}/${encodeClawHubPackagePath(params.subject.packageName)}`;
 }
@@ -266,30 +266,26 @@ function mapSkillSecurityVerdictToPackageSecurity(params: {
   const responseSlug = normalizeOptionalString(params.item.slug ?? params.item.requestedSlug);
   if (responseSlug !== params.packageName) {
     throw new Error(
-      `ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" returned skill "${sanitizeTerminalText(responseSlug ?? "unknown")}".`,
+      terminalText`ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" returned skill "${responseSlug ?? "unknown"}".`,
     );
   }
   const responsePublisher = normalizeOptionalString(params.item.publisherHandle);
   if (params.ownerHandle && responsePublisher !== params.ownerHandle) {
     throw new Error(
-      `ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" returned publisher "${sanitizeTerminalText(responsePublisher ?? "unknown")}", expected "${sanitizeTerminalText(params.ownerHandle)}".`,
+      terminalText`ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" returned publisher "${responsePublisher ?? "unknown"}", expected "${params.ownerHandle}".`,
     );
   }
   const responseVersion = normalizeOptionalString(params.item.version);
   if (responseVersion !== params.version) {
-    const reason = params.item.error?.message
-      ? `: ${sanitizeTerminalText(params.item.error.message)}`
-      : "";
+    const reason = params.item.error?.message ? `: ${params.item.error.message}` : "";
     throw new Error(
-      `ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" returned version "${sanitizeTerminalText(responseVersion ?? "unknown")}"${reason}.`,
+      terminalText`ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" returned version "${responseVersion ?? "unknown"}"${reason}.`,
     );
   }
   if (hasSkillVerdictSecurityError(params.item)) {
-    const reason = params.item.error?.message
-      ? `: ${sanitizeTerminalText(params.item.error.message)}`
-      : "";
+    const reason = params.item.error?.message ? `: ${params.item.error.message}` : "";
     throw new Error(
-      `ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" did not return a usable security verdict${reason}.`,
+      terminalText`ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" did not return a usable security verdict${reason}.`,
     );
   }
   const decision = normalizeClawHubTrustToken(params.item.decision);
@@ -374,7 +370,7 @@ async function fetchClawHubSubjectSecurity(params: {
   token?: string;
   timeoutMs?: number;
 }): Promise<ClawHubFetchedSubjectSecurity> {
-  if (params.subject.kind === "plugin" || params.subject.kind === "claw") {
+  if (params.subject.kind === "plugin" || params.subject.kind === "template") {
     const security = await fetchClawHubPackageSecurity({
       name: params.subject.packageName,
       version: params.version,
@@ -418,7 +414,7 @@ async function fetchClawHubSubjectSecurity(params: {
 export async function checkClawHubPackageTrust(params: {
   subject: ClawHubTrustSubject;
   version: string;
-  expectedClawArtifact?: ClawHubExpectedClawArtifact;
+  expectedTemplateArtifact?: ClawHubExpectedTemplateArtifact;
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
@@ -439,13 +435,13 @@ export async function checkClawHubPackageTrust(params: {
       token: params.token,
       timeoutMs: params.timeoutMs,
     });
-    const expectedFamily = params.subject.kind === "claw" ? "claw" : undefined;
-    const expectedClawArtifact = expectedFamily ? params.expectedClawArtifact : undefined;
+    const expectedFamily = params.subject.kind === "template" ? "template" : undefined;
+    const expectedTemplateArtifact = expectedFamily ? params.expectedTemplateArtifact : undefined;
     const responsePackageName = normalizeOptionalString(fetchedSecurity.security.package?.name);
     if (responsePackageName !== params.subject.packageName) {
       return {
         ok: false,
-        error: `ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned package "${sanitizeTerminalText(responsePackageName ?? "unknown")}".`,
+        error: terminalText`ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned package "${responsePackageName ?? "unknown"}".`,
         code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
         version: params.version,
       };
@@ -462,12 +458,12 @@ export async function checkClawHubPackageTrust(params: {
     if (responseVersion !== params.version) {
       return {
         ok: false,
-        error: `ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned version "${sanitizeTerminalText(responseVersion ?? "unknown")}".`,
+        error: terminalText`ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned version "${responseVersion ?? "unknown"}".`,
         code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
         version: params.version,
       };
     }
-    if (expectedFamily === "claw" && !expectedClawArtifact) {
+    if (expectedFamily === "template" && !expectedTemplateArtifact) {
       return {
         ok: false,
         error: `ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" has no selected artifact identity.`,
@@ -475,14 +471,15 @@ export async function checkClawHubPackageTrust(params: {
         version: params.version,
       };
     }
-    if (expectedClawArtifact) {
+    if (expectedTemplateArtifact) {
       const release = fetchedSecurity.security.release;
       if (
         release?.artifactKind !== "npm-pack" ||
-        normalizeClawHubSha256Hex(release.artifactSha256 ?? "") !== expectedClawArtifact.sha256 ||
-        release.npmIntegrity !== expectedClawArtifact.npmIntegrity ||
-        (expectedClawArtifact.npmShasum !== undefined &&
-          release.npmShasum !== expectedClawArtifact.npmShasum)
+        normalizeClawHubSha256Hex(release.artifactSha256 ?? "") !==
+          expectedTemplateArtifact.sha256 ||
+        release.npmIntegrity !== expectedTemplateArtifact.npmIntegrity ||
+        (expectedTemplateArtifact.npmShasum !== undefined &&
+          release.npmShasum !== expectedTemplateArtifact.npmShasum)
       ) {
         return {
           ok: false,
@@ -497,7 +494,7 @@ export async function checkClawHubPackageTrust(params: {
   } catch (error) {
     return {
       ok: false,
-      error: `ClawHub release trust check failed for "${releaseLabel}": ${sanitizeTerminalText(formatErrorMessage(error))}`,
+      error: terminalText`ClawHub release trust check failed for "${releaseLabel}": ${formatErrorMessage(error)}`,
       code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
       version: params.version,
     };
@@ -505,7 +502,7 @@ export async function checkClawHubPackageTrust(params: {
 
   const assessedDisposition = assessClawHubTrust(security);
   const disposition =
-    params.subject.kind === "claw" && assessedDisposition === "review-recommended"
+    params.subject.kind === "template" && assessedDisposition === "review-recommended"
       ? "review-required"
       : assessedDisposition;
   const checkedAt = new Date().toISOString();
@@ -528,14 +525,14 @@ export async function checkClawHubPackageTrust(params: {
         ? theme.success("Safe")
         : theme.warn("Review");
   const terminalAudit = renderClawHubAuditBox([
-    auditReleaseLabel,
+    terminalText`${auditReleaseLabel}`,
     "",
     `Outcome: ${outcome}`,
     "",
     "Overview:",
-    ...overview.split("\n").map((line) => sanitizeTerminalText(line)),
+    ...overview.split("\n").map((line) => terminalText`${line}`),
     "",
-    `Details: ${sanitizeTerminalText(securityAuditUrl)}`,
+    terminalText`Details: ${securityAuditUrl}`,
   ]);
   const audit = stripAnsi(terminalAudit);
   if (disposition === "clean") {

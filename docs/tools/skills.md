@@ -884,6 +884,11 @@ ineligible, and model-hidden skills are not added by search. Existing explicit
 user references remain separate. Search does not query ClawHub, install a
 skill, or grant permission to execute its commands.
 
+When Tool Search defers these tools in its default `tools` mode, call
+`dispatch_action` with `{"id":"skills_read","args":{"name":"<name>"}}` or
+`{"id":"skills_search","args":{"query":"<query>"}}`. The Skills prompt selects
+this invocation automatically; directly callable tools keep their normal syntax.
+
 Instruction-body indexing requires the effective native `skills_read` tool.
 When reads are denied or shadowed, search uses metadata only and performs no
 instruction-body reads. Revocation also excludes cached body matches and rejects
@@ -902,6 +907,11 @@ Codex refuses a skill read that exceeds the turn's dynamic-tool output budget
 instead of returning partial instructions as a successful read.
 An existing `read` policy grant also permits `skills_read`. An explicit
 `skills_read` denial still wins; search permission alone does not grant reads.
+
+For embedded runs, finite runtime tool allowlists retain the Skills catalog when
+the final callable tool set supports reading instructions. Missing readers are
+not added automatically, and an explicit `toolsAllow: []` remains tool-less.
+Skill and reference files must also be accessible in the run's execution environment.
 
 List and search results cap descriptions at 512 UTF-16 code units without splitting
 surrogate pairs. The source `SKILL.md` and complete skill instructions stay unchanged.

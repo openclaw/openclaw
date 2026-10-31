@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { WorkboardToast } from "./toast.tsx";
 
 const errorMessage = "Session unavailable";
+type ToastProps = Parameters<typeof WorkboardToast>[0];
 let disposeRoot: (() => void) | undefined;
 
 afterEach(() => {
@@ -15,87 +16,65 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function mountToasts(...sources: (() => Parameters<typeof WorkboardToast>[0])[]) {
+function mount(initial: ToastProps, shared = false) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  const owner = shared ? {} : undefined;
+  const [props, setProps] = createSignal(() => initial);
   const container = document.body.appendChild(document.createElement("div"));
-  const toasts = () => sources.map((source) => createComponent(WorkboardToast, merge(source)));
-  disposeRoot = render(toasts, container);
+  const view = (source: () => ToastProps) => createComponent(WorkboardToast, merge(source));
+  const views = () => [
+    view(() => ({ ...props(), owner, outcomeSource: shared })),
+    shared && view(() => ({ owner, message: "", hidden: !props().hidden })),
+  ];
+  disposeRoot = render(views, container);
   flush();
-  return expectDefined(container.querySelector("openclaw-workboard-toast"), "toast");
-}
-
-function createFlushedSignal<T>(initial: T) {
-  const [read, write] = createSignal<T>(() => initial);
-  const update = (value: T) => {
-    write(() => value);
+  async function step(change: Partial<ToastProps>, elapsed = 0) {
+    await vi.advanceTimersByTimeAsync(elapsed);
+    setProps((previous) => ({ ...previous, ...change }));
     flush();
-  };
-  return [read, update] as const;
-}
-
-async function advance(ms: number) {
-  await vi.advanceTimersByTimeAsync(ms);
-  flush();
-}
-
-it.each([false, true])("pauses lifetime while hidden: %s", async (initiallyHidden) => {
-  const [hidden, update] = createFlushedSignal(initiallyHidden);
-  const toast = mountToasts(() => ({ message: errorMessage, tone: "error", hidden: hidden() }));
-  if (!initiallyHidden) {
-    await vi.advanceTimersByTimeAsync(4_000);
-    update(true);
   }
-  await vi.advanceTimersByTimeAsync(12_000);
-  update(false);
+  const toast = expectDefined(container.querySelector("openclaw-workboard-toast"), "toast");
+  return { toast, step };
+}
+
+it.each([0, 4_000])("pauses lifetime while hidden after %d ms", async (elapsed) => {
+  const { toast, step } = mount({ message: errorMessage, tone: "error", hidden: elapsed === 0 });
+  await step({ hidden: true }, elapsed);
+  await step({ hidden: false }, 12_000);
   expect(toast.querySelector('[role="alert"]')?.textContent).toBe(errorMessage);
-  await advance((initiallyHidden ? 10_000 : 6_000) - 1);
+  await step({}, 10_000 - elapsed - 1);
   expect(toast.querySelector('[role="alert"]')).not.toBeNull();
-  await advance(1);
-  expect(toast.querySelector('[role="alert"]')).toBeNull();
-  update(false);
+  await step({}, 1);
   expect(toast.querySelector('[role="alert"]')).toBeNull();
 });
 
 it.each(["dismiss", "expire"])("keeps %s results dismissed", async (action) => {
-  const owner = {};
-  const [result, setResult] = createFlushedSignal({});
-  const [error, setError] = createFlushedSignal("");
-  const [dialogOpen, setDialogOpen] = createFlushedSignal(false);
-  const boardToast = mountToasts(
-    () => ({
-      owner,
-      outcomeSource: true,
-      message: error() || "Applied to 2 of 2 cards.",
-      key: error() || result(),
-      tone: error() ? "error" : "info",
-      hidden: dialogOpen(),
-    }),
-    () => ({ owner, message: "", hidden: !dialogOpen() }),
-  );
-  expect(boardToast.querySelector('[role="status"]')?.textContent).toBe("Applied to 2 of 2 cards.");
+  const result: ToastProps = { message: "Applied to 2 of 2 cards.", key: {}, tone: "info" };
+  const error: ToastProps = { message: errorMessage, key: errorMessage, tone: "error" };
+  const { toast, step } = mount(result, true);
+  expect(toast.querySelector('[role="status"]')?.textContent).toBe(result.message);
   if (action === "dismiss") {
-    expectDefined(boardToast.querySelector<HTMLButtonElement>("button"), "close").click();
+    expectDefined(toast.querySelector<HTMLButtonElement>("button"), "close").click();
   } else {
-    await vi.advanceTimersByTimeAsync(6_000);
+    await step({}, 6_000);
   }
   flush();
-  expect(boardToast.querySelector('[role="status"]')).toBeNull();
+  expect(toast.querySelector('[role="status"]')).toBeNull();
   if (action === "dismiss") {
-    setDialogOpen(true);
-    await vi.advanceTimersByTimeAsync(12_000);
-    setDialogOpen(false);
+    await step({ hidden: true });
+    await step({ hidden: false }, 12_000);
   } else {
-    setError(errorMessage);
-    expect(boardToast.querySelector('[role="alert"]')?.textContent).toBe(errorMessage);
-    await advance(10_000);
-    expect(boardToast.querySelector('[role="alert"]')).toBeNull();
-    setError("");
-    expect(boardToast.querySelector('[role="status"]')).toBeNull();
-    setError(errorMessage);
-    expect(boardToast.querySelector('[role="alert"]')?.textContent).toBe(errorMessage);
-    setError("");
+    await step(error);
+    expect(toast.querySelector('[role="alert"]')?.textContent).toBe(errorMessage);
+    await step({}, 10_000);
+    expect(toast.querySelector('[role="alert"]')).toBeNull();
+    await step(result);
+    expect(toast.querySelector('[role="status"]')).toBeNull();
+    await step(error);
+    expect(toast.querySelector('[role="alert"]')?.textContent).toBe(errorMessage);
+    await step(result);
   }
-  expect(boardToast.querySelector('[role="status"]')).toBeNull();
-  setResult({});
-  expect(boardToast.querySelector('[role="status"]')).not.toBeNull();
+  expect(toast.querySelector('[role="status"]')).toBeNull();
+  await step({ key: {} });
+  expect(toast.querySelector('[role="status"]')).not.toBeNull();
 });

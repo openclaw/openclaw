@@ -700,30 +700,6 @@ it("observes later queue admission without completing terminal or another Gatewa
   }
 });
 
-it.each([undefined, "agent", "chat"] as const)(
-  "resolves concurrent %s waiters when the terminal dedupe entry lands",
-  async (source) => {
-    const { runId, wait, complete } = runFixture();
-    const first = wait(1_000, source);
-    const second = wait(1_000, source);
-
-    await Promise.resolve();
-    complete(source);
-    await Promise.all([first.promise, second.promise]);
-
-    const expected = expect.objectContaining({
-      runId,
-      status: "ok",
-      startedAt: 100,
-      endedAt: 200,
-      error: undefined,
-      stopReason: undefined,
-    });
-    expect(first.respond).toHaveBeenCalledWith(true, expected);
-    expect(second.respond).toHaveBeenCalledWith(true, expected);
-  },
-);
-
 it("retires only its scope's observer without ending the shared run", async () => {
   const { runId, complete, job } = runFixture();
   const observer = () => {
@@ -779,11 +755,19 @@ it.each([
       ...(reset ? { timeoutPhase: "gateway_draining" } : {}),
     });
     await expectReply(wait(0, activeKind), { runId, status: "timeout" });
+    const observers = [wait(1_000, activeKind), wait(1_000, activeKind)];
+    await Promise.resolve();
     complete(activeKind);
-    await expectReply(
-      wait(0, activeKind),
-      expect.objectContaining({ runId, status: "ok", endedAt: 200 }),
-    );
+    const completed = expect.objectContaining({
+      runId,
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      error: undefined,
+      stopReason: undefined,
+    });
+    await Promise.all(observers.map((observer) => expectReply(observer, completed)));
+    await expectReply(wait(0, activeKind), completed);
   },
 );
 

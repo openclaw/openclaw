@@ -56,7 +56,7 @@ describe("Agent-specific tool filtering", () => {
   }
 
   async function withApplyPatchEscapeCase(
-    workspaceOnly: boolean,
+    workspaceOnly: boolean | undefined,
     run: (params: {
       applyPatchTool: ReturnType<typeof createMainSessionTools>[number];
       escapedPath: string;
@@ -74,7 +74,7 @@ describe("Agent-specific tool filtering", () => {
         {
           tools: {
             allow: ["read", "write", "exec"],
-            exec: { applyPatch: workspaceOnly ? {} : { workspaceOnly: false } },
+            exec: { applyPatch: workspaceOnly === undefined ? {} : { workspaceOnly } },
           },
         },
         {
@@ -173,7 +173,7 @@ describe("Agent-specific tool filtering", () => {
     );
   });
 
-  it("defaults apply_patch to workspace-only (blocks traversal)", async () => {
+  it("enforces explicit apply_patch workspace containment", async () => {
     await withApplyPatchEscapeCase(true, async ({ applyPatchTool, escapedPath, patch }) => {
       await expect(applyPatchTool.execute("tc1", { input: patch })).rejects.toThrow(
         /Path escapes sandbox root/,
@@ -182,8 +182,8 @@ describe("Agent-specific tool filtering", () => {
     });
   });
 
-  it("allows disabling apply_patch workspace-only via config (dangerous)", async () => {
-    await withApplyPatchEscapeCase(false, async ({ applyPatchTool, escapedPath, patch }) => {
+  it("allows host apply_patch outside the workspace by default", async () => {
+    await withApplyPatchEscapeCase(undefined, async ({ applyPatchTool, escapedPath, patch }) => {
       await applyPatchTool.execute("tc2", { input: patch });
       const contents = await fs.readFile(escapedPath, "utf8");
       expect(contents).toBe("escaped\n");

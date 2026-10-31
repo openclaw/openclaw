@@ -1,5 +1,13 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, lazy, onSettled, Show, useContext } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  lazy,
+  onSettled,
+  Show,
+  useContext,
+} from "solid-js";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
@@ -46,12 +54,16 @@ import { EmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
 import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu-state.ts";
 import { HumanMentionMenuView } from "../chat/components/chat-composer-mention-menu.tsx";
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
-import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.types.ts";
+import type { ChatComposerCapabilityMenuSource } from "../chat/components/chat-composer-plus-menu.types.ts";
 import { SelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.tsx";
 import type { SkillMenuHost } from "../chat/components/chat-composer-skill-menu-state.ts";
 import { SkillMenu } from "../chat/components/chat-composer-skill-menu.tsx";
 import type { SlashMenuHost } from "../chat/components/chat-composer-slash-menu-state.ts";
 import { SlashMenu } from "../chat/components/chat-composer-slash-menu.tsx";
+import {
+  ComposerWidthEdge,
+  prepareComposerWidthEdge,
+} from "../chat/components/chat-composer-width-ref.tsx";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import {
@@ -94,11 +106,13 @@ export type NewSessionComposerOptions = {
   nativeTerminal?: boolean;
   onUnsupportedAttachment?: () => void;
   submitting: boolean;
+  chatMessageMaxWidth?: string | null;
+  onComposerWidthChange?: (value: string | undefined) => void;
   voiceControl?: JSX.Element;
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
   draftAvailable?: boolean;
-  capabilityMenu?: ChatComposerCapabilityMenuProps;
+  capabilityMenu?: ChatComposerCapabilityMenuSource;
   toolOverrides?: SessionToolOverrides | null;
   onInput: (message: string, mentions?: readonly HumanMention[]) => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
@@ -331,15 +345,12 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
   };
 }
 
-// Only the first visit waits for idle; later composers reuse the loaded pet.
-const idleAdmission = Promise.withResolvers<void>();
-const LobsterPet = lazy(
-  async () => {
-    await idleAdmission.promise;
-    return import("../../components/lobster-pet.tsx");
-  },
-  { export: "LobsterPet" },
-);
+// Gate rendering, not a shared pending promise: drafts retired before idle
+// must not leave lazy read callbacks retaining their DOM. Admission stays warm.
+const [petAdmitted, admitPet] = createSignal(false);
+const LobsterPet = lazy(() => import("../../components/lobster-pet.tsx"), {
+  export: "LobsterPet",
+});
 
 export function NewSessionComposer(props: {
   options: NewSessionComposerOptions;
@@ -347,7 +358,7 @@ export function NewSessionComposer(props: {
 }) {
   const textarea = useContext(NewSessionComposerTextareaContext);
   const petLoader = createSidebarRendererLoader(async () => {
-    idleAdmission.resolve();
+    admitPet(true);
     await LobsterPet.preload();
   });
   const PetBoundary = petLoader.Boundary;
@@ -421,6 +432,8 @@ export function NewSessionComposer(props: {
     <div
       ref={footerControl}
       class="agent-chat__composer-shell new-session-page__composer"
+      onPointerEnter={() => void prepareComposerWidthEdge()}
+      onKeyDown={() => void prepareComposerWidthEdge()}
       onDrop={(event) => {
         if (options().nativeTerminal && event.dataTransfer?.files.length) {
           event.preventDefault();
@@ -451,36 +464,38 @@ export function NewSessionComposer(props: {
         }}
       >
         <PetBoundary>
-          <LobsterPet
-            composerElements={composerElements}
-            seed={lobsterPetSeed(`${textarea.critterVisit}:${options().draftOwnerKey}`)}
-            mode={resolveLobsterPetMode(
-              !options().context?.gateway.snapshot.offlineStable,
-              options().context?.sessions.state.result?.sessions,
-            )}
-            runOutcome={resolveLobsterRunOutcome(
-              options().context?.sessions.state.result?.sessions,
-            )}
-            visitsEnabled={options().context?.theme.settings.lobsterPetVisits !== false}
-            residentEnabled={options().context?.theme.branding.mascot !== "none"}
-            critters={options().context?.theme.branding.critters}
-            critterArtwork={options().context?.theme.branding.artwork?.critters}
-            soundsEnabled={options().context?.theme.settings.lobsterPetSounds === true}
-            gatewayVersion={
-              options().context?.config.current.serverVersion ??
-              options().context?.gateway.snapshot.hello?.server?.version ??
-              null
-            }
-            onVisitsDisabled={() => options().context?.theme.refresh()}
-            floorEnabled={
-              !frame().composerLocked &&
-              frame().visibleMessage.length === 0 &&
-              options().attachmentDraft.attachments.length === 0 &&
-              options().attachmentDraft.reads.pendingReads === 0 &&
-              !frame().menuVisible &&
-              !textarea.capabilityMenuOpen
-            }
-          />
+          <Show when={petAdmitted()}>
+            <LobsterPet
+              composerElements={composerElements}
+              seed={lobsterPetSeed(`${textarea.critterVisit}:${options().draftOwnerKey}`)}
+              mode={resolveLobsterPetMode(
+                !options().context?.gateway.snapshot.offlineStable,
+                options().context?.sessions.state.result?.sessions,
+              )}
+              runOutcome={resolveLobsterRunOutcome(
+                options().context?.sessions.state.result?.sessions,
+              )}
+              visitsEnabled={options().context?.theme.settings.lobsterPetVisits !== false}
+              residentEnabled={options().context?.theme.branding.mascot !== "none"}
+              critters={options().context?.theme.branding.critters}
+              critterArtwork={options().context?.theme.branding.artwork?.critters}
+              soundsEnabled={options().context?.theme.settings.lobsterPetSounds === true}
+              gatewayVersion={
+                options().context?.config.current.serverVersion ??
+                options().context?.gateway.snapshot.hello?.server?.version ??
+                null
+              }
+              onVisitsDisabled={() => options().context?.theme.refresh()}
+              floorEnabled={
+                !frame().composerLocked &&
+                frame().visibleMessage.length === 0 &&
+                options().attachmentDraft.attachments.length === 0 &&
+                options().attachmentDraft.reads.pendingReads === 0 &&
+                !frame().menuVisible &&
+                !textarea.capabilityMenuOpen
+              }
+            />
+          </Show>
         </PetBoundary>
         <HumanMentionMenuView args={[textarea.mentionMenu, frame().mentionMenuHost]} />
         <EmojiMenu args={[textarea.emojiMenu, "new-session", textarea.getTextarea()]} />
@@ -636,7 +651,12 @@ export function NewSessionComposer(props: {
               />
             </Show>
             {options().permissionControl}
-            <Show when={!options().nativeTerminal && options().draftAvailable}>
+            <Show
+              when={
+                !options().nativeTerminal &&
+                (options().draftAvailable || options().visibility === "draft")
+              }
+            >
               <NewSessionDraftVisibility options={options()} />
             </Show>
             <Show when={!options().nativeTerminal}>
@@ -681,6 +701,7 @@ export function NewSessionComposer(props: {
           </div>
         </div>
       </div>
+      <ComposerWidthEdge options={options} />
     </div>
   );
 }

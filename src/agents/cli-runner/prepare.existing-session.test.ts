@@ -48,7 +48,13 @@ let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
 const sent: Array<
   Pick<
     CliBackendExecuteContext,
-    "args" | "sessionId" | "useResume" | "systemPrompt" | "prompt" | "toolAvailability"
+    | "args"
+    | "sessionId"
+    | "useResume"
+    | "systemPrompt"
+    | "prompt"
+    | "promptContext"
+    | "toolAvailability"
   >
 > = [];
 
@@ -77,6 +83,7 @@ function installBackend(args?: string[]) {
               useResume: input.useResume,
               systemPrompt: input.systemPrompt,
               prompt: input.prompt,
+              promptContext: input.promptContext,
               toolAvailability: input.toolAvailability,
             });
             yield {
@@ -128,7 +135,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-it("keeps a stored Claude conversation across the upgrade while excluding native customization", async () => {
+async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | undefined) {
   const { dir, sessionTarget } = fixture.session;
   vi.stubEnv("HOME", dir);
   const nativeSettingsPath = path.join(dir, ".claude", "settings.json");
@@ -245,7 +252,7 @@ it("keeps a stored Claude conversation across the upgrade while excluding native
     },
     session: { store: sessionTarget.storePath },
     plugins: { enabled: false },
-    tools: { allow: ["read"] },
+    tools: { allow: ["read"], ...(toolSearch === undefined ? {} : { toolSearch }) },
   } satisfies OpenClawConfig);
   fs.writeFileSync(configPath, storedConfig);
   const io = createConfigIO({
@@ -280,6 +287,7 @@ it("keeps a stored Claude conversation across the upgrade while excluding native
   const prepareTurn = (
     completion: boolean,
     cliSessionBinding: ReturnType<typeof getCliSessionBinding>,
+    changedPrompt = false,
   ) => {
     const sessionEntry = loadSessionEntry(sessionTarget);
     expect(sessionEntry).toMatchObject({
@@ -298,6 +306,12 @@ it("keeps a stored Claude conversation across the upgrade while excluding native
       prompt: completion ? "The child completed." : "What did I ask you to remember?",
       skillsSnapshot: skills.snapshot,
       sourceReplyDeliveryMode: "automatic",
+      ...(changedPrompt
+        ? {
+            extraSystemPrompt: "Updated instructions.",
+            extraSystemPromptStatic: "Updated instructions.",
+          }
+        : {}),
       ...(completion
         ? {
             trustedInternalHandoff: {
@@ -346,7 +360,15 @@ it("keeps a stored Claude conversation across the upgrade while excluding native
     await completion.preparedBackend.cleanup?.();
   }
 
-  expect(sent).toHaveLength(2);
+  const drifted = await prepareTurn(false, upgradedBinding, true);
+  try {
+    expect(drifted.reusableCliSession).toMatchObject({ mode: "reuse-with-drift" });
+    await executePreparedCliRun(drifted, nativeSessionId);
+  } finally {
+    await drifted.preparedBackend.cleanup?.();
+  }
+
+  expect(sent).toHaveLength(3);
   expect(sent[0]?.useResume).toBe(false);
   expect(sent[0]?.args).not.toContain("--resume");
   expect(sent[1]?.sessionId).toBe(nativeSessionId);
@@ -364,7 +386,11 @@ it("keeps a stored Claude conversation across the upgrade while excluding native
     expect(turn.args).not.toContain(nativeSettingsPath);
     expect(turn.args).not.toContain("--plugin-dir");
     expect(turn.args).not.toContain("--no-session-persistence");
-    expect(turn.toolAvailability).toEqual({ native: [], openClaw: ["read"] });
+    expect(turn.toolAvailability).toEqual({
+      native: [],
+      openClaw: ["read"],
+      ...(toolSearch === false ? {} : { discovery: ["ToolSearch"] }),
+    });
     expect(turn.systemPrompt).toContain("OPENCLAW_CONTEXT_SURVIVES_UPGRADE");
     expect(turn.systemPrompt).toContain("weather");
     expect(turn.systemPrompt).not.toContain("NATIVE_CUSTOMIZATION_MUST_NOT_BE_INJECTED");
@@ -372,8 +398,12 @@ it("keeps a stored Claude conversation across the upgrade while excluding native
   }
   expect(nativeSkillsPlugin).not.toHaveBeenCalled();
   // A fresh session learns the chat has history without taking another account's text.
-  expect(sent[0]?.prompt).toContain("2 earlier messages in this chat");
-  expect(sent[0]?.prompt.endsWith("What did I ask you to remember?")).toBe(true);
+  expect(sent[0]?.promptContext?.prependContext).toContain("2 earlier messages in this chat");
+  expect(sent[0]?.prompt).toBe("What did I ask you to remember?");
+  expect(sent[2]?.promptContext?.prependContext).toContain(
+    "OpenClaw resumed this CLI session after prompt content changed.",
+  );
+  expect(sent[2]?.prompt).toBe("What did I ask you to remember?");
   expect(sent[1]?.prompt).toContain(`[Inter-session message] sourceSession=${childSessionKey}`);
   expect(sent[1]?.prompt.endsWith("The child completed.")).toBe(true);
   expect(sent[1]?.systemPrompt).toBe(sent[0]?.systemPrompt);
@@ -381,4 +411,9 @@ it("keeps a stored Claude conversation across the upgrade while excluding native
   expect(fs.readFileSync(nativeTranscriptPath, "utf8")).toBe(nativeTranscript);
   expect(fs.readFileSync(configPath, "utf8")).toBe(storedConfig);
   expect(fs.readFileSync(nativeSettingsPath, "utf8")).toBe(nativeSettings);
-});
+}
+
+it.each([undefined, false])(
+  "keeps a stored Claude conversation across the upgrade while excluding native customization (toolSearch=%s)",
+  assertStoredConversationSurvivesUpgrade,
+);

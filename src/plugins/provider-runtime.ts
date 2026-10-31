@@ -1,4 +1,4 @@
-import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import { createSystemPromptCacheBoundaryStripper } from "@openclaw/ai/internal/shared";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -439,14 +439,8 @@ export function resolveProviderStreamFn(
   if (!streamFn || plugin?.supportsSystemPromptCacheBoundary) {
     return streamFn ?? undefined;
   }
-  return (model, context, options) =>
-    streamFn(
-      model,
-      context.systemPrompt
-        ? { ...context, systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt) }
-        : context,
-      options,
-    );
+  const stripCacheBoundary = createSystemPromptCacheBoundaryStripper();
+  return (model, context, options) => streamFn(model, stripCacheBoundary(context), options);
 }
 
 export function resolveProviderTransportTurnStateWithPlugin(
@@ -574,8 +568,6 @@ export function listProviderUsagePluginDescriptors(params: {
 export { classifyProviderFailoverSignalWithPlugin } from "./provider-failover.js";
 
 export const formatProviderAuthProfileApiKeyWithPlugin = runtimeHook("formatApiKey");
-
-export const buildProviderAuthDoctorHintWithPlugin = asyncRuntimeHook("buildAuthDoctorHint");
 
 export const resolveProviderCacheTtlEligibility = runtimeHook("isCacheTtlEligible");
 

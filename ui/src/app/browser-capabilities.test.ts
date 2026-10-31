@@ -6,7 +6,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("Control UI browser capability admission", () => {
   it.each(["supported", "css", "anchor", "popover", "invoker", "field-sizing"])(
-    "requires overlays but accepts optional sizing (%s)",
+    "requires overlays but accepts unused invokers and optional sizing (%s)",
     (missing) => {
       vi.stubGlobal(
         "CSS",
@@ -26,7 +26,7 @@ describe("Control UI browser capability admission", () => {
         prototype: missing === "invoker" ? {} : { commandForElement: null },
       });
       expect(isControlUiBrowserSupported()).toBe(
-        missing === "supported" || missing === "field-sizing",
+        missing === "supported" || missing === "invoker" || missing === "field-sizing",
       );
     },
   );

@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   dualRoutes,
@@ -23,7 +23,12 @@ import {
 } from "../server-model-catalog-auth.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import { buildModelsListResult, prepareModelsListResult } from "./models-list-result.js";
-import { createModelsListTestContext } from "./models-list-result.openai-routes.test-support.js";
+import {
+  createModelsListTestContext,
+  providerCatalogEntry,
+} from "./models-list-result.openai-routes.test-support.js";
+
+afterEach(() => vi.useRealTimers());
 
 const advertisedTiers = ["priority", "ultrafast"];
 const subscriptionFields = { api: subscriptionRoute.api, baseUrl: subscriptionRoute.baseUrl };
@@ -88,6 +93,7 @@ function preparePublic(context: ReturnType<typeof createModelsListTestContext>) 
 it.each(["profile", "direct"] as const)(
   "keeps %s API-key tiers selectable and projects transient fulfillment without discovery",
   async (source) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     const model = catalogModel("synthetic-api-model");
     const profileId = source === "profile" ? "openai:api-fixture" : undefined;
     const cfg = modelConfig([model.id]);
@@ -149,12 +155,15 @@ it.each(["profile", "direct"] as const)(
       serviceTierObservations: observations,
     });
     observe(tierObservation("ultrafast", "ultrafast"));
-    expect(read()).toMatchObject({
-      serviceTierObservations: [priority],
-    });
     observe(tierObservation("priority", "priority"));
+    expect(read()).toMatchObject({
+      serviceTiers: advertisedTiers,
+      serviceTierObservations: observations,
+    });
+    vi.setSystemTime(Date.now() + 60_000);
     expect(read()).not.toHaveProperty("serviceTierObservation");
     expect(read()).not.toHaveProperty("serviceTierObservations");
+    expect(read()).toMatchObject({ serviceTiers: advertisedTiers });
   },
 );
 it.for(["codex", "openclaw"] as const)(
@@ -352,5 +361,43 @@ it("publishes provider tier restrictions through the model catalog projection", 
       supportsFastMode,
       serviceTiers,
     });
+  }
+});
+
+it("asks speed policy about the implicit OpenClaw runtime a row will use", async () => {
+  const provider = "example-router";
+  const ids = ["synthetic-priority-route", "synthetic-standard-route"];
+  const pluginRegistry = createEmptyPluginRegistry();
+  // Bundled speed policies answer only for the runtime that maps the request.
+  pluginRegistry.providers.push({
+    pluginId: provider,
+    source: "test",
+    provider: {
+      id: provider,
+      label: "Example router",
+      auth: [],
+      resolveFastModeSupport: ({ modelId, runtimeId }) =>
+        runtimeId === "openclaw" ? modelId === ids[0] : undefined,
+    },
+  });
+  const context = createModelsListTestContext({
+    pluginRegistry,
+    cfg: { agents: { defaults: { model: `${provider}/${ids[0]}` } } },
+    catalog: ids.map((id) => providerCatalogEntry(provider, id)),
+    preparedAuthStore: {
+      version: 1,
+      profiles: {
+        [`${provider}:fixture`]: { type: "api_key", provider, key: "synthetic-api-key" },
+      },
+    },
+  });
+  const models = (await preparePublic(context)).read().models;
+  for (const [index, supportsFastMode] of [
+    [0, true],
+    [1, false],
+  ] as const) {
+    const row = models.find((candidate) => candidate.id === ids[index]);
+    expect(row?.agentRuntime).toBeUndefined();
+    expect(row?.supportsFastMode).toBe(supportsFastMode);
   }
 });

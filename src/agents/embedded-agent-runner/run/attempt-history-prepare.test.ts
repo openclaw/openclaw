@@ -1,11 +1,19 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import * as crypto from "node:crypto";
+import { assert, beforeEach, expect, it, vi } from "vitest";
+import { model } from "../../../../packages/agent-core/src/agent-loop.test-support.js";
+import { createAssistantOutput } from "../../../../packages/ai/src/transports/assistant-output.js";
+import { convertResponsesMessages } from "../../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
+import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
+
+// mock-isolation: Count repeated history hashing while preserving native digests.
+vi.mock("node:crypto", { spy: true });
 
 const mocks = vi.hoisted(() => ({
   readEntry:
@@ -115,6 +123,38 @@ function createFixture() {
 
 beforeEach(() => {
   vi.resetAllMocks();
+});
+
+it("publishes restored assistant history without rehashing it on later model requests", async () => {
+  const fixture = createFixture();
+  mocks.readEntry.mockResolvedValue(undefined);
+  const restored = createAssistantOutput(model);
+  restored.content = [
+    {
+      type: "toolCall",
+      id: "call_restored",
+      name: "lookup",
+      arguments: { nested: { key: "saved" } },
+    },
+  ];
+  fixture.messages.push(restored);
+  const wire = (message: typeof restored) =>
+    JSON.stringify(convertResponsesMessages(model, { messages: [message] }, new Set()));
+  const before = wire(restored);
+  await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
+  const published = fixture.agent.state.messages.find((message) => message.role === "assistant");
+  assert(published?.role === "assistant");
+  expect(wire(published)).toBe(before);
+  const observer = createPromptCacheRequestObserver(
+    { sessionId: "restored-history", streamStrategy: "test" },
+    () => {},
+  );
+  await observer.onModelRequest(model, { messages: [published] });
+  for (let turn = 0; turn < 3; turn++) {
+    vi.mocked(crypto.hash).mockClear();
+    await observer.onModelRequest(model, { messages: [published] });
+    expect(crypto.hash).not.toHaveBeenCalled();
+  }
 });
 
 it.each([

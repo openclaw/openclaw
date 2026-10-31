@@ -1,6 +1,6 @@
 import { beforeEach, expect, it } from "vitest";
+import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
 import { attachEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
-import { copyInternalToolResultState } from "./runtime/internal-hooks.js";
 import {
   createSourceReplyBatchCompletion,
   ToolSourceReplyCell,

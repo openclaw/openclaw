@@ -379,4 +379,45 @@ suite.define(() => {
     await button(place, "Browse folders").waitFor();
     expect(await place.evaluate((element) => element.matches(":popover-open"))).toBe(true);
   });
+
+  it("shows a retry when project discovery fails and restores the list", async () => {
+    const page = await openPage({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1280, height: 900 },
+    });
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "projects.list"],
+      methodResponses: {
+        "projects.list": {
+          __mockError: {
+            code: "UNAVAILABLE",
+            message: "Session projection changed while preparing the listing. Retry the request.",
+          },
+        },
+      },
+    });
+    await page.goto(`${suite.server.baseUrl}new`);
+    await gateway.waitForRequest("projects.list");
+    const message = page.locator(".new-session-page__message");
+    await message.fill("Keep this draft while projects reload.");
+    const trigger = page.locator("#new-session-project-trigger");
+    await trigger.click();
+    const error = page.locator(".new-session-page__project-error");
+    await pollLocatorText(error).toContain(
+      "Session projection changed while preparing the listing",
+    );
+    await page.screenshot({ path: "/tmp/pr-187062-projects-failed.png", fullPage: true });
+    await gateway.setMethodResponse("projects.list", {
+      projects: [{ id: "registered", displayName: "Registered Project", source: "registered" }],
+    });
+    await button(error, "Retry").click();
+    await pollLocatorText(page.locator(".new-session-page__project-popover")).toContain(
+      "Registered Project",
+    );
+    expect(await error.count()).toBe(0);
+    expect(await message.inputValue()).toBe("Keep this draft while projects reload.");
+    await page.screenshot({ path: "/tmp/pr-187062-projects-recovered.png", fullPage: true });
+  });
 });

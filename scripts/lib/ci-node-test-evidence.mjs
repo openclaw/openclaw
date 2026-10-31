@@ -25,7 +25,7 @@ export function extractNodeFailedTests(log) {
       continue;
     }
     const match =
-      /\b((?:src|test|extensions|packages|ui)\/[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?)\b(.*)$/u.exec(
+      /\b((?:src|test|extensions|packages|ui)\/[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?)\b(?::\d+(?::\d+)?)?(.*)$/u.exec(
         text,
       );
     if (!match || !isNodeTestEvidencePath(match[1])) {
@@ -226,7 +226,7 @@ export function parseNodeFailureReport(log, requireComplete) {
         continue;
       }
       failureHeaders++;
-      const failure = /^FAIL\s+(?:\S+\s+)?(\S+) > (.+)$/u.exec(line);
+      const failure = /^FAIL\s+(?:\S+\s+)?(\S+?)(?::\d+(?::\d+)?)? > (.+)$/u.exec(line);
       const message = lines[index + 1];
       if (
         !failure ||

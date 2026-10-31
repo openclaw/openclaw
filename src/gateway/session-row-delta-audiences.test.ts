@@ -2,18 +2,22 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { GatewayChatEvents } from "../../ui/src/api/gateway-chat-events.ts";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as modelPresentation from "./operator-model-presentation.js";
+import { createSessionLifecyclePublisher } from "./server-chat-lifecycle-publication.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import {
   initializeSessionReadContext,
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
+import { drainSessionEventPublications } from "./session-event-prepared-row.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -121,11 +125,12 @@ it("preserves shared ancestor references across staggered roster reads and first
   });
 });
 
-it("shares producer envelopes across matching authority and divergent baselines", async () => {
+it.each(["direct", "lifecycle", "agent"])("shares %s envelopes", async (producer) => {
   using _ = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = rolePolicyConfig();
     cfg.agents = { entries: { main: {} } };
+    setRuntimeConfigSnapshot(cfg);
     const owner = ensureProfileForEmail("row-delta-owner@example.test");
     const viewer = ensureProfileForEmail("row-delta-viewer@example.test");
     setUserProfileRole(owner.id, "view");
@@ -174,23 +179,53 @@ it("shares producer envelopes across matching authority and divergent baselines"
         ),
       ),
     );
-    const publish = (ids: string[]) =>
-      connection.broadcastToConnIds(
-        "sessions.changed",
-        {
+    const publish = async (ids: string[]) => {
+      if (producer === "lifecycle") {
+        await createLifecycleEventBroadcastHandler({
+          broadcastToConnIds: connection.broadcastToConnIds,
+          sessionEventSubscribers: { getAll: () => new Set(ids) },
+          getSessionRowProjection: () => projection,
+        })({ sessionKey: key, agentId: "main", reason: "rename" });
+      } else if (producer === "agent") {
+        createSessionLifecyclePublisher({
+          broadcastToConnIds: (event, payload, _ids, options) =>
+            connection.broadcastToConnIds(event, payload, new Set(ids), options),
+          sessionEventSubscribers: connection.sessionEventSubscribers,
+          getSessionRowProjection: () => projection,
+          persistGatewaySessionLifecycleEventForEvent: async () => {},
+          loadGatewaySessionLifecycleSnapshotForEvent: (_key, options) => {
+            const read = options!.sessionRows!;
+            const record = read.describe({ key, agentId: "main" })!;
+            return { row: read.present(record) };
+          },
+        }).publish({
+          phase: "model",
           sessionKey: key,
           agentId: "main",
-          reason: "rename",
-          ["__proto__"]: { fixture: "own-data-property" },
-        },
-        new Set(ids),
-        {
-          prepareSessionProjection: prepareSessionEventProjection(projection, undefined, {
-            ancestors: [],
-            reuseEnvelope: true,
-          }),
-        },
-      );
+          clientRunId: "run",
+          event: { runId: "run", stream: "lifecycle", seq: 1, ts: Date.now(), data: {} },
+          runContext: undefined,
+        });
+        await drainSessionEventPublications(projection);
+      } else {
+        connection.broadcastToConnIds(
+          "sessions.changed",
+          {
+            sessionKey: key,
+            agentId: "main",
+            reason: "rename",
+            ["__proto__"]: { fixture: "own-data-property" },
+          },
+          new Set(ids),
+          {
+            prepareSessionProjection: prepareSessionEventProjection(projection, undefined, {
+              ancestors: [],
+              reuseEnvelope: true,
+            }),
+          },
+        );
+      }
+    };
     const decodeLast = (peer: (typeof peers)[number]) => {
       const frame = JSON.parse(peer.send.mock.lastCall![0]) as EventFrame;
       let decoded: EventFrame | undefined;
@@ -199,9 +234,9 @@ it("shares producer envelopes across matching authority and divergent baselines"
       });
       return decoded?.payload;
     };
-    const prime = (selected: typeof peers, label: string) => {
+    const prime = async (selected: typeof peers, label: string) => {
       const previousSends = selected.map((peer) => peer.send.mock.calls.length);
-      publish(selected.map((peer) => peer.client.connId));
+      await publish(selected.map((peer) => peer.client.connId));
       for (const [index, peer] of selected.entries()) {
         expect(peer.send).toHaveBeenCalledTimes(previousSends[index]! + 1);
         expect(decodeLast(peer)).toMatchObject({
@@ -210,7 +245,7 @@ it("shares producer envelopes across matching authority and divergent baselines"
       }
     };
     try {
-      prime(
+      await prime(
         peers.filter((peer) =>
           peer.capability === "legacy" ? peer.copy === 0 : peer.baseline === "stale",
         ),
@@ -218,7 +253,7 @@ it("shares producer envelopes across matching authority and divergent baselines"
       );
       write("After");
       await projection.ensureMaterialized();
-      prime(
+      await prime(
         peers.filter((peer) => peer.capability !== "legacy" && peer.baseline === "current"),
         "After",
       );
@@ -287,8 +322,16 @@ it("shares producer envelopes across matching authority and divergent baselines"
       let rowEncodings = 0;
       let envelopeEncodings = 0;
       let sharingKeyEncodings = 0;
+      let ancestorFieldEncodings = 0;
       const encoding = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
         const value: unknown = args[0];
+        if (
+          isRecord(value) &&
+          Object.keys(value).length === 1 &&
+          (Object.hasOwn(value, "ancestorSessions") || Object.hasOwn(value, "ancestorSessionRefs"))
+        ) {
+          ancestorFieldEncodings++;
+        }
         if (
           Array.isArray(value) &&
           value.length === 10 &&
@@ -306,7 +349,7 @@ it("shares producer envelopes across matching authority and divergent baselines"
         return stringify(...args);
       });
       try {
-        publish(peers.map((peer) => peer.client.connId));
+        await publish(peers.map((peer) => peer.client.connId));
       } finally {
         globalThis.Map = MapConstructor;
         encoding.mockRestore();
@@ -331,9 +374,11 @@ it("shares producer envelopes across matching authority and divergent baselines"
           },
         });
         const payload = JSON.parse(peer.send.mock.lastCall![0]).payload;
-        expect(Object.getOwnPropertyDescriptor(payload, "__proto__")?.value).toEqual({
-          fixture: "own-data-property",
-        });
+        if (producer === "direct") {
+          expect(Object.getOwnPropertyDescriptor(payload, "__proto__")?.value).toEqual({
+            fixture: "own-data-property",
+          });
+        }
         if (peer.capability === "refs") {
           expect(payload.sessionFieldRefs).toEqual(expect.any(Array));
           expect(payload).not.toHaveProperty("label");
@@ -356,7 +401,7 @@ it("shares producer envelopes across matching authority and divergent baselines"
           }
         }
       });
-      publish(peers.map((peer) => peer.client.connId));
+      await publish(peers.map((peer) => peer.client.connId));
       for (const [index, peer] of peers.entries()) {
         const visible = peer.profile === owner;
         expect(peer.send).toHaveBeenCalledTimes(beforeRevocation[index]! + Number(visible));
@@ -384,6 +429,8 @@ it("shares producer envelopes across matching authority and divergent baselines"
       expect(rowEncodings).toBeLessThanOrEqual(16);
       // Two wire capabilities per group, plus one legacy envelope per authority.
       expect(envelopeEncodings).toBeLessThanOrEqual(10);
+      // Empty ancestor fields are constant across divergent connection histories.
+      expect(ancestorFieldEncodings).toBe(0);
     } finally {
       detach();
       await connection.mentionInbox.dispose();
@@ -392,7 +439,7 @@ it("shares producer envelopes across matching authority and divergent baselines"
   });
 });
 
-it("prepares model presentation once per audience at growing fanout", async () => {
+it("shares model presentation and full-row encodings across audience delivery histories", async () => {
   using _ = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = rolePolicyConfig();
@@ -418,22 +465,49 @@ it("prepares model presentation once per audience at growing fanout", async () =
       bootId: "fanout",
       cfg,
     });
-    const detach = connection.attachSessionRowProjection(projection);
+    let detach = connection.attachSessionRowProjection(projection);
     using modelPreparations = vi.spyOn(modelPresentation, "prepareOperatorModelPresentation");
     try {
-      for (const count of [1, 4, 16, 65]) {
+      for (const [count, deltas] of [
+        [1, false],
+        [4, false],
+        [16, false],
+        [65, false],
+        [65, true],
+      ] as const) {
         const peers = Array.from({ length: count }, (_entry, i) => {
           const peer = createSessionRowEventPeer(profile, `fanout-${count}-${i}`, 1);
-          peer.client.connect.caps = i % 2 ? ["ultrafast"] : [];
+          peer.client.connect.caps = [
+            ...(i % 2 ? ["ultrafast"] : []),
+            ...(deltas ? ["session-row-deltas"] : []),
+          ];
           connection.clients.add(peer.client);
           connection.sessionEventSubscribers.subscribe(peer.client.connId);
           return peer;
         });
+        if (deltas) {
+          for (const [index, peer] of peers.entries()) {
+            for (let prior = 0; prior <= index % 4; prior++) {
+              connection.broadcastToConnIds(
+                "sessions.changed",
+                { sessionKey: key, agentId: "main" },
+                new Set([peer.client.connId]),
+              );
+            }
+            peer.send.mockClear();
+          }
+          detach();
+          detach = connection.attachSessionRowProjection(projection);
+        }
         modelPreparations.mockClear();
         const stringify = JSON.stringify;
         let nestedKeyEncodings = 0;
+        let fullRowTraversals = 0;
         const encoding = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
           const value: unknown = args[0];
+          if (isRecord(value) && isRecord(value.full) && value.full.key === key) {
+            fullRowTraversals++;
+          }
           if (
             Array.isArray(value) &&
             value.length === 3 &&
@@ -455,11 +529,19 @@ it("prepares model presentation once per audience at growing fanout", async () =
         }
         expect.soft(modelPreparations).toHaveBeenCalledTimes(Math.min(count, 2));
         expect.soft(nestedKeyEncodings).toBe(0);
+        // History-specific wrappers must reuse the immutable row encoding.
+        expect.soft(fullRowTraversals).toBe(0);
         for (const [i, peer] of peers.entries()) {
           expect(peer.send).toHaveBeenCalledOnce();
           const frame = peer.send.mock.lastCall![0];
-          expect(frame).toBe(peers[i % 2]!.send.mock.lastCall![0]);
-          const row = JSON.parse(frame).payload.session;
+          if (!deltas) {
+            expect(frame).toBe(peers[i % 2]!.send.mock.lastCall![0]);
+          }
+          const session = JSON.parse(frame).payload.session;
+          if (deltas) {
+            expect(session.version).toBe(2 + (i % 4));
+          }
+          const row = deltas ? session.full : session;
           expect(row).toMatchObject({
             key,
             sharingRole: "viewer",

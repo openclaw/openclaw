@@ -2,13 +2,13 @@ import { once } from "node:events";
 import fs from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
-import { captureClawInstallSchemaVersionFacts } from "../../claws/provenance-runtime-read.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
+import { captureTemplateInstallSchemaVersionFacts } from "../../templates/provenance-runtime-read.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import { createOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
@@ -201,7 +201,7 @@ api.registerProvider({
             request: {
               kind: "catalog",
               syntheticAuth: [],
-              clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env }),
+              templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({ env }),
             },
           },
           { signal: controller.signal, timeoutMs: 30_000 },

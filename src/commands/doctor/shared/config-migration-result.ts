@@ -64,6 +64,8 @@ export type DoctorConfigPreflightResult = {
   postSessionPluginMigrationPlanBound?: boolean;
   /** Config whose pre-session state migrations completed without unresolved work. */
   preflightLegacyStateConfig?: OpenClawConfig;
+  configChanged?: boolean;
+  stateMigrationUnsettled?: boolean;
 };
 
 /** Keep migrated selectors with Doctor's model-policy owner until billing facts are captured. */

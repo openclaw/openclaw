@@ -84,10 +84,14 @@ export function createGatewayConnectionState(params: {
   );
   // Lifecycle owns viewer declarations; agent-finished pushes fail open until it attaches them.
   let sessionViewers: SessionViewerPresenceDeclarations | undefined;
-  const eventWebPush = createEventWebPushDelivery(loadRuntimeConfig, {
-    isViewedOnDevice: (deviceId, sessionKey) =>
-      sessionViewers?.isViewedOnDevice(deviceId, sessionKey) === true,
-  });
+  const eventWebPush = createEventWebPushDelivery(
+    loadRuntimeConfig,
+    {
+      isViewedOnDevice: (deviceId, sessionKey) =>
+        sessionViewers?.isViewedOnDevice(deviceId, sessionKey) === true,
+    },
+    () => sessionRowProjection,
+  );
   const gatewayBroadcaster = createGatewayBroadcaster({
     clients,
     preparePresenceProjection: (presence) =>

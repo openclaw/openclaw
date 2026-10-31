@@ -67,16 +67,29 @@ export function createChatModelSearchView(
   const matches = createMemo(
     () => {
       const term = query().trim().toLocaleLowerCase();
-      return read()
-        .rows.flatMap((row, index) => {
-          const visible = row.provider
-            ? providerOpen(row.provider) && (!row.more || disclosure.groups[row.provider]?.more)
-            : row.visible !== false;
-          const score = term ? modelMatchRank(row, term) : visible ? 0 : null;
-          return score === null ? [] : [{ row, score, index }];
-        })
-        .toSorted((a, b) => a.score - b.score || a.index - b.index)
-        .map(({ row }, rank): SearchMatch => ({ row, rank }));
+      const buckets: ChatModelSearchRow[][] = [[], [], [], [], [], []];
+      for (const row of read().rows) {
+        const score = term
+          ? modelMatchRank(row, term)
+          : (
+                row.provider
+                  ? providerOpen(row.provider) &&
+                    (!row.more || disclosure.groups[row.provider]?.more)
+                  : row.visible !== false
+              )
+            ? 0
+            : null;
+        if (score !== null) {
+          buckets[score]!.push(row);
+        }
+      }
+      const ranked: SearchMatch[] = [];
+      for (const bucket of buckets) {
+        for (const row of bucket) {
+          ranked.push({ row, rank: ranked.length });
+        }
+      }
+      return ranked;
     },
     {
       equals: (a, b) =>
@@ -92,6 +105,11 @@ export function createChatModelSearchView(
       (query().trim() ? undefined : rows.find(({ row }) => row.selected)?.row.key) ??
       rows[0]?.row.key
     );
+  });
+  // A highlight move changes only its old and new rows, including offscreen choices.
+  const highlightedRows = createProjection<Record<string, true | undefined>>(() => {
+    const key = highlighted();
+    return key === undefined ? {} : { [key]: true };
   });
   const rowStates = createProjection<Record<string, ReturnType<ChatModelSearchView["row"]>>>(() => {
     const states: Record<string, ReturnType<ChatModelSearchView["row"]>> = {};
@@ -122,6 +140,7 @@ export function createChatModelSearchView(
     selectable,
     reveal,
     highlighted,
+    isHighlighted: (key: string) => highlightedRows[key] === true,
     highlight,
     providerOpen,
     moreOpen: (provider: string) => disclosure.groups[provider]?.more ?? false,

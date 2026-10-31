@@ -1,8 +1,14 @@
-import { expect, it } from "vitest";
+import { hash } from "node:crypto";
+import { expect, it, vi } from "vitest";
 import {
   createSessionRowDeltaDiffer,
   prepareSessionRowDeltaFields,
 } from "./session-row-delta-fields.js";
+
+vi.mock("node:crypto", async (importOriginal) => {
+  const crypto = await importOriginal<typeof import("node:crypto")>();
+  return { ...crypto, hash: vi.fn(crypto.hash) };
+});
 
 const compare = (previous: Record<string, unknown>, current: Record<string, unknown>) =>
   createSessionRowDeltaDiffer()(
@@ -37,12 +43,42 @@ it.each([
   [null, Number.NaN, false],
   [1, "1", true],
   [true, "true", true],
+  ["", "", false],
+  ["allow", "allow", false],
+  ["allow", "allows", true],
+  ["a", "a\0", true],
+  ["\u007f", "\u0080", true],
+  ["🦞\ud800", "🦞\ufffd", true],
 ])("compares primitive JSON values %j → %j", (before, after, changed) => {
   expect(compare({ value: before }, { value: after })).toEqual({
     set: changed ? { value: after } : {},
     remove: [],
   });
 });
+
+it("avoids native hashing for short ASCII JSON while retaining only numeric fingerprints", () => {
+  vi.mocked(hash).mockClear();
+  const { fingerprints } = prepareSessionRowDeltaFields({
+    agentId: "main",
+    sharingRole: "owner",
+    permissionMode: "allow",
+    reasoningLevel: "off",
+    empty: [],
+    longer: "viewer",
+  });
+  expect(hash).toHaveBeenCalledExactlyOnceWith("sha256", '"viewer"', "buffer");
+  expect([...fingerprints.values()].every((value) => typeof value === "bigint")).toBe(true);
+});
+
+it.each(["", "allow", "allows", "\u007f", "\u0080", "\0", "\ud800"])(
+  "keeps a short JSON string equivalent to an object encoding the same value: %j",
+  (value) => {
+    expect(compare({ value }, { value: { toJSON: () => value } })).toEqual({
+      set: {},
+      remove: [],
+    });
+  },
+);
 
 it("compares nested JSON semantically and replaces a changed nested field whole", () => {
   const previous = {
@@ -67,4 +103,53 @@ it("recomputes mutable children shared by distinct shallow-frozen row snapshots"
   expect(
     createSessionRowDeltaDiffer()(previous, prepareSessionRowDeltaFields(current), current),
   ).toEqual({ set: { usage: { input: 4, output: 5 } }, remove: [] });
+});
+
+it("reuses materialized field digests across clock samples without hiding viewer or source changes", () => {
+  const source = Object.freeze({
+    label: "Original label",
+    status: "running",
+    unread: false,
+    model: "original-model",
+    subagentCount: 2,
+  });
+  const initial = prepareSessionRowDeltaFields(source, source);
+  vi.mocked(hash).mockClear();
+  for (let snapshotAt = 0; snapshotAt < 20; snapshotAt++) {
+    const current = { ...source, snapshotAt };
+    expect(
+      createSessionRowDeltaDiffer()(
+        initial,
+        prepareSessionRowDeltaFields(current, source),
+        current,
+      ),
+    ).toEqual({ set: { snapshotAt }, remove: [] });
+  }
+  expect(hash).not.toHaveBeenCalled();
+  const overrides = {
+    label: "Viewer label",
+    status: "done",
+    unread: true,
+    model: "next-model",
+    subagentCount: 3,
+  };
+  for (const [field, value] of Object.entries(overrides)) {
+    const current = { ...source, [field]: value };
+    expect(
+      createSessionRowDeltaDiffer()(
+        initial,
+        prepareSessionRowDeltaFields(current, source),
+        current,
+      ),
+    ).toEqual({ set: { [field]: value }, remove: [] });
+  }
+  const replacement = Object.freeze(overrides);
+  const current = { ...replacement };
+  expect(
+    createSessionRowDeltaDiffer()(
+      initial,
+      prepareSessionRowDeltaFields(current, replacement),
+      current,
+    ),
+  ).toEqual({ set: overrides, remove: [] });
 });

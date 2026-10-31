@@ -45,6 +45,19 @@ export const recoveryObservationStep = (cwd = process.cwd()) => ({
     ),
   ],
 });
+export const recoveryCleanupStep = () => ({
+  name: "recovery-artifact-cleanup",
+  command: "openclaw update cleanup",
+  cwd: "",
+  durationMs: expect.any(Number),
+  exitCode: 0,
+  diagnostics: [
+    expect.stringMatching(
+      /^Recovery cleanup removed [1-9]\d* files \([1-9]\d* logical bytes\); protected recovery artifacts were retained\.$/,
+    ),
+  ],
+});
+
 export function registerForegroundFailureRecoveryTests(deps: {
   setupUpdatedRootRefresh: () => { root: string };
   spawn: Mock;
@@ -99,6 +112,7 @@ export function registerForegroundFailureRecoveryTests(deps: {
             ],
           }),
           expect.objectContaining({ name: "gateway recovery observation", exitCode: 0 }),
+          ...(handoff === undefined ? [recoveryCleanupStep()] : []),
         ],
       });
       expect(deps.updateNpmInstalledPlugins).not.toHaveBeenCalled();

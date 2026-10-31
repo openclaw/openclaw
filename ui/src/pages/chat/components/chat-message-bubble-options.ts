@@ -9,7 +9,7 @@ import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import type { MessageActionDetails } from "./chat-message-markdown.types.ts";
-import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
+import type { ArtifactDownloadResolver, ImageRenderOptions } from "./chat-message-media.ts";
 import type { AssistantMessageDisclosure } from "./chat-message-text-preparation.ts";
 import type { ReplyLine } from "./chat-reply-attribution.ts";
 import type { ToolRenderOptions } from "./chat-tool-render-model.ts";
@@ -22,12 +22,15 @@ export type ActivityOperationProps = {
 };
 
 export type MessageRenderOptions = {
+  /** Links a handoff's child sessions; absent where this pane cannot open sessions. */
+  handoffSessionLinks?: import("../chat-subagent-wait.ts").HandoffSessionLinks;
   onOpenReply?: (replyToId: string) => void;
   replyNavigationId?: string | null;
   sessionKey?: string;
   presented?: boolean;
   boardProvider?: BoardProvider;
   widgetLayout?: import("../session-message-cache.ts").ChatWidgetLayout;
+  displayFacts?: import("../../../lib/chat/row-display-facts.ts").ChatDisplayFacts;
   agentId?: string;
   runActive?: boolean;
   asyncQuestions?: AsyncQuestionPresentation;
@@ -51,6 +54,7 @@ export type MessageRenderOptions = {
   fetchLinkFavicon?: LinkFaviconFetcher;
   pluginToolIcons?: PluginToolIcons;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+  onFindWorkspaceFile?: ImageRenderOptions["onFindWorkspaceFile"];
   onPermissionRetry?: (message: string) => void;
 };
 
@@ -60,7 +64,6 @@ export type GroupedMessageOptions = MessageRenderOptions & {
   /** Search reveals matching transcript text inside disclosures. */
   searchResult?: boolean;
   transcriptVisible?: PresentationValue;
-  duplicateCount?: number;
   showReasoning: boolean;
   bubbleMode?: boolean;
   /** First visible message of the containing group/frame; null means none. */

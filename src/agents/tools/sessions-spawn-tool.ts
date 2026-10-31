@@ -2,7 +2,6 @@ import { Type } from "typebox";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   captureExecRequestOwners,
   withExecRequestOwners,
@@ -76,6 +75,11 @@ import {
   PlacedSessionsSpawnSchema,
   PLACED_SESSIONS_SPAWN_DESCRIPTION,
 } from "./sessions-placement-tool-contract.js";
+import {
+  readSessionsSpawnCyberAccessProgram,
+  SESSIONS_SPAWN_CYBER_ACCESS_PROGRAM_SCHEMA,
+} from "./sessions-spawn-access-program.js";
+import { resolveSessionsSpawnAcpUnavailableMessage } from "./sessions-spawn-acp-availability.js";
 import { describeSessionsSpawnAgentId } from "./sessions-spawn-agent-id.js";
 import type { SessionsSpawnToolOptions } from "./sessions-spawn-options.js";
 import { resolveSessionsSpawnThreadAvailability } from "./sessions-spawn-thread-availability.js";
@@ -166,6 +170,7 @@ function buildSessionsSpawnToolSchema(params: {
     thinking: Type.Optional(
       Type.String({ description: "Thinking override; unavailable with visible=true." }),
     ),
+    cyberAccessProgram: SESSIONS_SPAWN_CYBER_ACCESS_PROGRAM_SCHEMA,
     cwd: Type.Optional(
       Type.String({
         description:
@@ -282,16 +287,6 @@ function buildSessionsSpawnToolSchema(params: {
       : {}),
   };
   return Type.Object(schema);
-}
-
-function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: OpenClawConfig }) {
-  if (opts?.sandboxed === true) {
-    return 'runtime="acp" is unavailable from sandboxed sessions because ACP sessions run on the host. Use runtime="subagent".';
-  }
-  if (opts?.config?.acp?.enabled === false) {
-    return 'runtime="acp" is unavailable because ACP is disabled by policy (`acp.enabled=false`). Use runtime="subagent".';
-  }
-  return 'runtime="acp" is unavailable in this session because no ACP runtime backend is loaded. Enable the acpx plugin or use runtime="subagent".';
 }
 
 export function createSessionsSpawnTool(
@@ -467,6 +462,7 @@ export function createSessionsSpawnTool(
         const resumeSessionId = readToolStringParam(params, "resumeSessionId");
         const modelOverride = normalizeToolModelOverride(readToolStringParam(params, "model"));
         const thinkingOverrideRaw = readToolStringParam(params, "thinking");
+        const cyberAccessProgram = readSessionsSpawnCyberAccessProgram(params, runtime);
         const cwd = readToolStringParam(params, "cwd");
         const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
         const cleanup = params.cleanup === "delete" ? "delete" : "keep";
@@ -497,6 +493,7 @@ export function createSessionsSpawnTool(
             runTimeoutSeconds,
             sandbox,
             expectsCompletionMessage,
+            cyberAccessProgram,
             options: withExecRequestOwners(
               {
                 ...opts,
@@ -524,7 +521,7 @@ export function createSessionsSpawnTool(
         if (runtime === "acp" && !acpAvailable) {
           return spawnResult({
             status: "error",
-            error: resolveAcpUnavailableMessage({
+            error: resolveSessionsSpawnAcpUnavailableMessage({
               config: effectiveConfig,
               sandboxed: opts?.sandboxed,
             }),
@@ -643,13 +640,14 @@ export function createSessionsSpawnTool(
           return spawnResult(result);
         }
 
+        const checkoutParams = params.worktree === true ? params : {};
         const result = await spawnSubagentDirect(
           {
             ...spawnParams,
-            projectId: readToolStringParam(params, "projectId"),
+            projectId: readToolStringParam(checkoutParams, "projectId"),
             worktree: params.worktree === true,
-            worktreeName: readToolStringParam(params, "worktreeName"),
-            worktreeBaseRef: readToolStringParam(params, "worktreeBaseRef"),
+            worktreeName: readToolStringParam(checkoutParams, "worktreeName"),
+            worktreeBaseRef: readToolStringParam(checkoutParams, "worktreeBaseRef"),
             collect: hasCollectParam ? collect : undefined,
             outputSchema:
               params.outputSchema && typeof params.outputSchema === "object"
@@ -662,6 +660,7 @@ export function createSessionsSpawnTool(
               params.fastMode === "ultrafast"
                 ? params.fastMode
                 : undefined,
+            cyberAccessProgram,
             groupId: readToolStringParam(params, "groupId"),
             swarmLaunchReplayKey:
               typeof params[SWARM_CODE_MODE_IDEMPOTENCY_KEY] === "string"

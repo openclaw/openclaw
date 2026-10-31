@@ -47,12 +47,10 @@ import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-c
 import { readPackageVersion } from "./shared.js";
 import { withUpdateConfigWriteAuthority } from "./update-command-config.js";
 import {
-  assessPluginUpdate,
   buildInvalidConfigPostCoreUpdateResult,
   createPluginUpdateWarning,
   type PluginUpdateWarning,
   type PostCorePluginUpdateResult,
-  type ProducedPluginUpdateResult,
 } from "./update-command-plugins-internals.js";
 
 export type { PostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
@@ -63,14 +61,6 @@ function formatMissingPluginPayloadReason(entry: MissingPluginInstallPayload): s
     : entry.reason === "missing-package-json"
       ? `package.json is missing under ${entry.installPath}`
       : `package directory is missing: ${entry.installPath}`;
-}
-
-function isDisabledAfterFailureOutcome(outcome: PluginUpdateOutcome): boolean {
-  return outcome.status === "skipped" && outcome.message.includes("after plugin update failure");
-}
-
-function isActionableSkippedPostUpdateOutcome(outcome: PluginUpdateOutcome): boolean {
-  return isDisabledAfterFailureOutcome(outcome) || isClawHubTrustSkippedOutcome(outcome);
 }
 
 export async function updatePluginsAfterCoreUpdate(params: {
@@ -88,7 +78,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   acceptCapabilities?: boolean;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   runtime?: RuntimeEnv;
-}): Promise<ProducedPluginUpdateResult> {
+}): Promise<PostCorePluginUpdateResult> {
   if (!params.configSnapshot.valid) {
     params.assertCurrent?.();
     const invalid = buildInvalidConfigPostCoreUpdateResult(params.configSnapshot);
@@ -99,10 +89,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
         runtime.log(theme.muted(`  ${line}`));
       }
     }
-    return {
-      ...invalid.result,
-      assessment: { kind: "core-critical", reason: invalid.result.reason },
-    };
+    return invalid.result;
   }
   // Same-run migration receipts are facts from this lease. Keep their owner
   // continuously held from cohort planning through final index/config publication.
@@ -117,7 +104,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
 async function updatePluginsAfterCoreUpdateWithLease(
   params: Parameters<typeof updatePluginsAfterCoreUpdate>[0],
   lease: PluginLifecycleLeaseContext,
-): Promise<ProducedPluginUpdateResult> {
+): Promise<PostCorePluginUpdateResult> {
   params.assertCurrent?.();
   const runtime = params.runtime ?? defaultRuntime;
   const referenceSource = prepareDoctorConfigReferenceSource(params.configSnapshot);
@@ -189,7 +176,7 @@ async function updatePluginsAfterCoreUpdateWithLease(
       });
     }
     pluginUpdateOutcomes.push(outcome);
-    if (outcome.status !== "error" && !isActionableSkippedPostUpdateOutcome(outcome)) {
+    if (outcome.status !== "error" && !isClawHubTrustSkippedOutcome(outcome)) {
       return;
     }
     const includeWarningInReason =
@@ -495,22 +482,6 @@ async function updatePluginsAfterCoreUpdateWithLease(
     });
   }
 
-  const assessment = assessPluginUpdate({
-    smokeFailures: convergence.smokeFailures,
-    // A failed cohort repair can disable a plugin before active smoke verification.
-    // Keep that unavailable capability visible; prior failures that were re-enabled
-    // by a successful repair remain diagnostic history only.
-    hasDisabledPlugin: pluginUpdateOutcomes.some(
-      (outcome) =>
-        isDisabledAfterFailureOutcome(outcome) &&
-        pluginConfig.plugins?.entries?.[outcome.pluginId]?.enabled === false,
-    ),
-    errored: convergence.errored,
-    outcomes: pluginUpdateOutcomes,
-    integrityDrift: integrityDrifts.length > 0,
-  });
-  // Keep the established caller status contract. Assessment is separate evidence;
-  // consuming it to change restart/finalization requires a qualified caller cutover.
   const finalPluginOutcomes = [
     ...new Map(pluginUpdateOutcomes.map((outcome) => [outcome.pluginId, outcome])).values(),
   ];
@@ -520,9 +491,8 @@ async function updatePluginsAfterCoreUpdateWithLease(
     finalPluginOutcomes.some((outcome) => outcome.status === "error")
       ? "warning"
       : "ok";
-  const result: ProducedPluginUpdateResult = {
+  const result: PostCorePluginUpdateResult = {
     status,
-    assessment,
     changed: pluginsChanged,
     warnings,
     sync: {

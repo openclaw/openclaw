@@ -9,6 +9,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { readPendingInputSource } from "../../config/sessions/session-pending-input-source.js";
 import { loadDeviceIdentityIfPresentAsync } from "../../infra/device-identity-async.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -107,7 +108,7 @@ describe("chat.send persisted request identity", () => {
     { source: "input receipt", input: "attachment", storage: "memory" },
     { source: "transcript", input: "command", storage: "durable" },
   ] as const)(
-    "deduplicates a non-restart-safe $input from its $source in $storage after RAM identity expires",
+    "deduplicates a recorded $input from its $source in $storage after RAM identity expires",
     async ({ source, input, storage }) => {
       await using fixture = await createFixture({ preserveContent: true, storage });
       if (input === "override") {
@@ -126,16 +127,36 @@ describe("chat.send persisted request identity", () => {
       }
       await expectStarted(fixture);
       const recorder = await fixture.dispatchedRecorder;
+      const acceptedMessage = recorder.getPendingInputMessage?.();
       if (source === "transcript") {
         expect((await recorder.persistApproved())?.appended).toBe(true);
       } else {
-        recorder.finishPendingInput?.("interrupted");
+        recorder.finishPendingInput?.("cancelled");
         await recorder.waitForPendingInputSettlement?.();
       }
       await fixture.finishDispatch();
       const transcript = fixture.readTranscript();
       const receipts = await listSessionPendingInputs(fixture.scope);
       expect(receipts.total).toBe(source === "transcript" ? 0 : 1);
+      const retained =
+        source === "input receipt"
+          ? await readPendingInputSource(
+              fixture.scope,
+              `${fixture.params.idempotencyKey}:user`,
+              true,
+            )
+          : undefined;
+      if (source === "input receipt") {
+        expect(acceptedMessage).toBeDefined();
+        expect(retained?.snapshot).toMatchObject({
+          current: true,
+          pending: {
+            run_id: fixture.params.idempotencyKey,
+            state: "cancelled",
+            message_json: JSON.stringify(acceptedMessage),
+          },
+        });
+      }
       fixture.context.dedupe.clear();
       dispatchInboundMessageMock.mockClear();
 
@@ -162,6 +183,17 @@ describe("chat.send persisted request identity", () => {
       delete fixture.params.intent;
       fixture.params.thinking = "high";
       await expectUnchanged(fixture, transcript, receipts);
+      if (retained) {
+        expect(
+          (
+            await readPendingInputSource(
+              fixture.scope,
+              `${fixture.params.idempotencyKey}:user`,
+              true,
+            )
+          )?.snapshot.pending,
+        ).toEqual(retained.snapshot.pending);
+      }
 
       fixture.params.idempotencyKey = "fresh-browser-follow-up";
       fixture.params.message = editedMessage;

@@ -4,6 +4,7 @@ import {
   type TabIconPreference,
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import type { BoardSessionViews } from "../lib/board/settings.ts";
+import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import type {
   SidebarSessionActivePanels,
   SidebarSessionLayouts,
@@ -165,6 +166,7 @@ export type UiSettings = {
   sidebarCollapsedAgentIds?: string[];
   sidebarRecentlyCreatedAgentId?: string;
   sidebarEntries: string[]; // Ordered personal navigation references
+  personalSessionGroups?: PersonalSessionGroup[]; // Personal labels and references, not shared groups
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
   chatBubbleDisabledSessionKeys?: string[]; // Explicit per-session opt-outs, retained when the lab is off

@@ -30,11 +30,7 @@ import type { AuthStorageData } from "./sessions/index.js";
 const log = createSubsystemLogger("model-catalog");
 
 export type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
-export {
-  findModelCatalogEntry,
-  findModelInCatalog,
-  modelSupportsInput,
-} from "./model-catalog-lookup.js";
+export { findModelCatalogEntry, findModelInCatalog } from "./model-catalog-lookup.js";
 
 export type BuildPreparedModelCatalogParams = {
   agentDir: string;

@@ -111,79 +111,6 @@ describe("qa scenario catalog causality", () => {
     );
   });
 
-  it("binds live restart checkpoints to persisted ingress and exactly one final delivery", () => {
-    const { scenario, contract, prompt, actions } = flowFixture("gateway-restart-multi-live", 1);
-    const checkpoints = checkpointActions(actions);
-    const persistenceIndex = assertionIndex(
-      checkpoints,
-      "checkpointEntry",
-      "checkpointTranscript.userMessageCount >= 1",
-      "checkpointTranscript.eventCursor > 0",
-      "checkpointTranscript.probeTextEndLine ?? 0",
-      "restartRecoveryDeliveryContext?.channel === 'qa-channel'",
-      "restartRecoveryDeliveryContext.to === `dm:${conversationId}`",
-    );
-    const outboundCountIndex = actions.findIndex((action) =>
-      matchesAction(action, { set: "outboundCountAfterDelivery" }),
-    );
-    const quietWindowIndex = actions.findIndex(
-      (action) => typeof action === "object" && action !== null && "waitForNoOutbound" in action,
-    );
-    expect(scenario).toMatchObject({
-      execution: { retryCount: 0, runtime: "openclaw" },
-      gatewayConfigPatch: { tools: { alsoAllow: ["qa_restart_wait", "qa_restart_unsafe_probe"] } },
-    });
-    expect(scenario.runtimePairLane).toBeUndefined();
-    expectContains(
-      prompt,
-      ...["components", "risks", "deployments", "controls", "recommendation"].map(
-        (file) => `restart-audit/${file}.md`,
-      ),
-      "On this original user turn, perform only checkpoint 1",
-      "After the third Gateway-recovery system message, perform the audit and final report",
-      "make exactly one `exec` call with `restartSafe: true`",
-      "expired, or aborted `wait` result after restart is expected",
-      "Do not issue another `exec` until a new Gateway-recovery system message arrives",
-      '.some(candidate => candidate.toolName === "qa_restart_unsafe_probe")',
-      "Do not read the `restart-audit/` directory path",
-    );
-    expectContains(
-      contract,
-      "summary.hasPendingCodeModeWait",
-      "restarts=3",
-      "sendInbound",
-      "id: `dm:${conversationId}`",
-      "dmScope: env.cfg.session?.dmScope",
-      '"saveAs":"inbound"',
-      "probeText: config.finalMarker",
-      "pendingCodeModeExecNeedle: `CHECKPOINT-${checkpoint}`",
-      "dispatching restart-safe recovery",
-    );
-    expect(contract).not.toContain("startAgentRun");
-    expect(contract).not.toContain(
-      "assistantToolCallCounts.wait ?? 0) > (summary.completedToolCallCounts.wait ?? 0)",
-    );
-    expectInOrder(
-      callIndex(checkpoints, "waitForCondition", "checkpointTranscript"),
-      callIndex(checkpoints, "readRawQaSessionStore", "checkpointStore"),
-      persistenceIndex,
-      callIndex(checkpoints, "restartGatewayWithConfigPatch"),
-    );
-    expectInOrder(
-      callIndex(actions, "waitForOutboundMessage", "outbound"),
-      outboundCountIndex,
-      quietWindowIndex,
-      assertionIndex(actions, "finalMatches.length === 1"),
-    );
-    expect(actions[quietWindowIndex]).toMatchObject({
-      waitForNoOutbound: {
-        quietMs: 3000,
-        sinceIndex: { ref: "outboundCountAfterDelivery" },
-      },
-    });
-    expect(callIndex(actions, "sleep")).toBe(-1);
-  });
-
   it("rejects an unrelated pending wait at the current restart checkpoint", async () => {
     const { actions } = flowFixture("gateway-restart-inflight-run");
     const pendingWait = requireAction(checkpointActions(actions), {
@@ -221,46 +148,26 @@ describe("qa scenario catalog causality", () => {
     }
   });
 
-  it("runs one persisted inbound through three distinct restart lifecycles and quiet delivery", async () => {
-    const scenario = requireFlowScenario(readQaScenarioById("gateway-restart-inflight-run"));
-    // These settings are applied by the suite launcher, outside the flow interpreter.
-    // In particular, the unsafe probe must start available for its later absence to prove fencing.
-    expect(scenario.execution).toMatchObject({ retryCount: 0, suiteIsolation: "isolated" });
-    expect(scenario.gatewayConfigPatch).toMatchObject({
-      logging: { audit: { executionIdentity: true } },
-      plugins: {
-        slots: { memory: "none" },
-        entries: { acpx: { enabled: false }, "memory-core": { enabled: false } },
-      },
-      tools: { alsoAllow: ["qa_restart_wait", "qa_restart_unsafe_probe"] },
-    });
+  it("runs channel work through three graceful replacements and ordinary resume inputs", async () => {
     const fixture = createRestartFlowFixture();
     await expect(fixture.run()).resolves.toMatchObject({ status: "pass" });
-    const { events, auditRunIds, restartOrigins } = fixture;
-    expect({ events, auditRunIds, restartOrigins }).toEqual({
-      events: [
-        "inbound",
-        ...[1, 2, 3].flatMap((n) => [`pending:CHECKPOINT-${n}`, `persisted:${n}`, `restart:${n}`]),
-        "delivery",
-        "quiet:3000:1",
-      ],
-      auditRunIds: ["delivery-1", "delivery-1"],
-      restartOrigins: [64001, 64002, 64003].map((port) => [`http://127.0.0.1:${port}`]),
-    });
+    expect(fixture.events).toEqual([
+      "inbound",
+      ...[1, 2, 3].flatMap((n) => [`pending:CHECKPOINT-${n}`, `restart:${n}`, `resume:${n}`]),
+      "delivery",
+      "quiet:3000:1",
+    ]);
+    expect(fixture.restartOrigins).toEqual(
+      [64001, 64002, 64003].map((port) => [`http://127.0.0.1:${port}`]),
+    );
   });
 
   it.each([
-    ["missing delivery claim", "did not persist the one original prompt", 0],
-    ["stale lifecycle", "did not rotate the accepted delivery run/lifecycle fence", 2],
-    ["stale delivery owner", "did not rotate the accepted delivery run/lifecycle fence", 2],
-    ["changed audit identity", "original admitted audit identity changed", 3],
-    ["duplicate delivery", "expected exactly one automatically recovered marker", 3],
-    ["extra inbound", "expected one real qa-channel inbound turn", 3],
-    ["late delivery", "unexpected outbound during quiet window", 3],
-  ] as const)("rejects %s in the loaded three-restart flow", async (fault, message, restarts) => {
+    ["duplicate resume", "test condition was not met"],
+    ["duplicate delivery", "expected exactly one resumed final delivery"],
+  ] as const)("rejects %s in the loaded graceful-restart flow", async (fault, message) => {
     const fixture = createRestartFlowFixture(fault);
     await expect(fixture.run()).rejects.toThrow(message);
-    expect(fixture.restartOrigins).toHaveLength(restarts);
   });
 
   it("keeps full-access restart delivery independent from subagent completion handoff", async () => {
@@ -302,7 +209,7 @@ describe("qa scenario catalog causality", () => {
   });
 
   it.each(["gateway-restart-inflight-run", "gateway-restart-multi-live"] as const)(
-    "ignores pre-scenario gateway sentinel logs during %s recovery",
+    "ignores pre-scenario gateway sentinel logs during %s resume",
     async (scenarioId) => {
       const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
       const actions = scenario.execution.flow?.steps.flatMap((step) => step.actions) ?? [];

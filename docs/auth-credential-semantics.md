@@ -13,6 +13,26 @@ These semantics keep selection-time and runtime auth behavior aligned. They are 
 - `openclaw models status --probe`
 - `openclaw doctor` auth checks (`doctor-auth`)
 
+## Account status in Models
+
+In **Settings → Models**, OAuth access-token expiry is separate from sign-in
+health. **Access token expires in…** or **Access token expired** describes the
+short-lived token, not necessarily the saved sign-in. The page does not infer
+refresh support from OAuth alone. **Ready** requires a ready catalog result;
+without that evidence, an account reporting only access-token expiry remains
+**Credentials configured**.
+
+A missing OAuth credential shows **Sign in again**. A refresh marker whose outcome
+is not distinguished by the status response shows **Sign-in unavailable**, not a
+claim that another login is required. A provider authentication rejection shows
+**Credentials rejected** and takes precedence over expiry information. The card-wide
+result does not identify the rejected credential, so it does not prescribe OAuth
+sign-in or change recovery advice for an unrelated saved account. Static token
+expiry keeps its warning. Externally managed credentials remain identified as
+such, rather than being declared healthy just because another tool manages them.
+Provider-reported quota exhaustion and temporary rate-limit errors remain usage
+or connection results, not sign-out instructions.
+
 <a id="stable-probe-reason-codes" />
 
 ## Stable check reason codes
@@ -106,6 +126,12 @@ Cold agent opens validate integrity asynchronously and recheck ownership before
 writing.
 OAuth upserts recheck the current local or inherited credential after admission,
 before applying the existing generation-replacement rules.
+
+Cooldown, blocked, and disabled windows update the current availability view
+without replacing prepared plugin generations. Selection reads the committed
+windows immediately; bursts of availability changes coalesce metadata notifications
+without announcing a model catalog change. Credential, profile membership, order,
+and ownership changes still invalidate the prepared runtime before its next use.
 
 Runtime auth-store updates keep their read, merge, encode, and commit in the
 existing SQLite worker. Update callbacks execute at most once against the
@@ -258,6 +284,11 @@ its marker and inherits the shared credential only after verifying that the
 shared credential belongs to the same account. If that identity cannot be
 verified, the peer remains terminally fenced instead of inheriting another
 account.
+
+Concurrent requests serialize first-use authorization capture when their local
+or shared credential stores overlap. Each request retains its own live authority;
+closing one does not close another. Credential replacement, revocation, pending
+writes, and uncertain settlement still refuse stale authorization.
 
 Catalog discovery fences and settles historical peers through the same
 request-owned native writer as the refreshing credential. Each peer update

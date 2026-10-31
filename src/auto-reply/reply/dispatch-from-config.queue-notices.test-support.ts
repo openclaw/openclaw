@@ -137,6 +137,9 @@ export function registerQueuedFollowupNoticeCases(): void {
 
   it.each([
     { phase: "still queued", reason: "steering-unavailable" },
+    { phase: "still queued", reason: "requester-mismatch" },
+    { phase: "still queued", reason: "collaborative-steering-disabled" },
+    { phase: "still queued", reason: "explicit-followup" },
     { phase: "evicted before finalization", reason: "explicit-followup" },
     { phase: "evicted during progress flush", reason: "steering-unavailable" },
   ] as const)("reports a truthful $reason queue notice when $phase", async ({ phase, reason }) => {
@@ -229,9 +232,15 @@ export function registerQueuedFollowupNoticeCases(): void {
       const result = await dispatch;
       expect(deliveredTexts).toEqual([
         ...(phase === "evicted during progress flush" ? ["💬 Preparing the queue notice"] : []),
-        phase === "still queued"
-          ? "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress."
-          : "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress. Please send it again after the current response finishes.",
+        ...(phase === "still queued"
+          ? reason === "explicit-followup"
+            ? [
+                "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
+              ]
+            : []
+          : [
+              "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress. Please send it again after the current response finishes.",
+            ]),
       ]);
       if (phase === "still queued") {
         expect(disposition).not.toHaveBeenCalled();

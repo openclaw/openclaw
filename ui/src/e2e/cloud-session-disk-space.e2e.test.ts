@@ -53,10 +53,11 @@ suite.define(() => {
           label: string,
         ): Promise<void> => {
           await expect.poll(() => cloudBadge.getAttribute("data-disk-space-status")).toBe(status);
-          await expect.poll(() => cloudBadge.getAttribute("aria-label")).toBe(label);
-          const descriptionId = await cloudBadge.getAttribute("aria-describedby");
-          expect(descriptionId).toBeTruthy();
-          await expect.poll(() => page.locator(`#${descriptionId}`).textContent()).toBe(label);
+          await expect
+            .poll(() => sidebarRow.getByRole("img", { name: label, exact: true }).count())
+            .toBe(1);
+          await cloudBadge.hover();
+          await page.getByRole("tooltip").getByText(label, { exact: true }).waitFor();
         };
         const refresh = async (diskSpace: SessionPlacementDiskSpace): Promise<void> => {
           const requestCount = (await gateway.getRequests("sessions.list")).length;
@@ -72,7 +73,7 @@ suite.define(() => {
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await sidebarRow.getByText("Disk monitor", { exact: true }).waitFor();
-        await expectAccessibleBadge("ok", "Placement: active");
+        await expect.poll(() => cloudBadge.count()).toBe(0);
 
         for (const [status, freeMb, title] of [
           ["warning", 247, "Cloud session disk space is low"],
@@ -88,7 +89,7 @@ suite.define(() => {
         }
 
         await refresh({ ...healthy, observedAtMs: observedAtMs + 3_000 });
-        await expectAccessibleBadge("ok", "Placement: active");
+        await expect.poll(() => cloudBadge.count()).toBe(0);
       },
     ));
 });

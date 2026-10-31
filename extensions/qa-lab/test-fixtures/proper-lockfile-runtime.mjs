@@ -13,13 +13,13 @@ fs.mkdirSync(directory, { recursive: true });
 fs.writeFileSync(file, "fixture");
 
 const snapshot = () => ({
-  cwd: process.cwd,
-  chdir: process.chdir,
-  emit: process.emit,
-  reallyExit: process.reallyExit,
-  close: fs.close,
-  closeSync: fs.closeSync,
-  prepareStackTrace: Error.prepareStackTrace,
+  cwd: Reflect.get(process, "cwd"),
+  chdir: Reflect.get(process, "chdir"),
+  emit: Reflect.get(process, "emit"),
+  reallyExit: Reflect.get(process, "reallyExit"),
+  close: Reflect.get(fs, "close"),
+  closeSync: Reflect.get(fs, "closeSync"),
+  prepareStackTrace: Reflect.get(Error, "prepareStackTrace"),
 });
 
 const observerDisposers = [];

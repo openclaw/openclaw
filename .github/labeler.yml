@@ -693,6 +693,11 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: liquid-ai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/liquid-ai/**"
+          - "docs/providers/liquid-ai.md"
 "extensions: bifrost":
   - changed-files:
       - any-glob-to-any-file:
@@ -983,6 +988,12 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/parallel/**"
+"extensions: particle":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/particle/**"
+          - "docs/providers/particle.md"
+          - "docs/plugins/reference/particle.md"
 "extensions: perplexity":
   - changed-files:
       - any-glob-to-any-file:

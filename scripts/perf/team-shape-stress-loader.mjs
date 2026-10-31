@@ -1,13 +1,51 @@
-// Load TypeScript instrumentation without redirecting built Gateway package imports
-// through the controller checkout's tsconfig aliases. This must be the first loader.
-import { writeFileSync } from "node:fs";
+// Load TypeScript instrumentation without transforming built Gateway code.
+// This must be the first loader; package imports use the measured build's exports.
+import { readFileSync, writeFileSync } from "node:fs";
 import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
-import { register } from "tsx/esm/api";
+import { transformSync } from "esbuild";
 
-register({ tsconfig: false });
+// Only source instrumentation needs TypeScript loading and .js-to-.ts resolution.
+const sourceRoots = [
+  new URL("../../src/", import.meta.url).href,
+  new URL("../", import.meta.url).href,
+];
+registerHooks({
+  load(url, context, nextLoad) {
+    if (!url.endsWith(".ts") || !sourceRoots.some((root) => url.startsWith(root))) {
+      return nextLoad(url, context);
+    }
+    // Instrumentation can import parameter properties; strip-only mode rejects
+    // them. Built .mjs/.js stay byte-for-byte unchanged in every isolate.
+    return {
+      format: "module",
+      source: transformSync(readFileSync(new URL(url), "utf8"), {
+        loader: "ts",
+        format: "esm",
+        target: "esnext",
+        sourcefile: url,
+      }).code,
+      shortCircuit: true,
+    };
+  },
+  resolve(specifier, context, nextResolve) {
+    try {
+      return nextResolve(specifier, context);
+    } catch (error) {
+      if (
+        error?.code !== "ERR_MODULE_NOT_FOUND" ||
+        !specifier.startsWith(".") ||
+        !specifier.endsWith(".js") ||
+        !sourceRoots.some((root) => context.parentURL?.startsWith(root))
+      ) {
+        throw error;
+      }
+      return nextResolve(`${specifier.slice(0, -3)}.ts`, context);
+    }
+  },
+});
 
 if (isMainThread) {
   // Diagnostic allocation passes only: count owner work without changing production exports.
@@ -76,6 +114,7 @@ if (isMainThread) {
       }
     });
   }
+  process.channel?.unref();
   const instrumentationSource = new URL("../../src/", import.meta.url).href;
   const packages = new Set(["@openclaw/normalization-core", "@openclaw/worker-runtime"]);
   registerHooks({

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
+import { runWithAsyncStore } from "../shared/async-store.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -122,7 +123,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       task = name;
       phase = taskPhase;
       try {
-        return taskPhase === undefined ? taskState.context.run(name, run) : run();
+        return taskPhase === undefined ? runWithAsyncStore(taskState.context, name, run) : run();
       } finally {
         const at = now();
         segment(at);

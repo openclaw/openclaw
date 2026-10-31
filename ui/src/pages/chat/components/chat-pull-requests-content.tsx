@@ -2,7 +2,6 @@ import { createMemo, For, Show, useContext } from "solid-js";
 import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
-  ControlUiSessionPullRequestSnapshot,
 } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { SessionGitDiff } from "../../../components/session-git-diff.tsx";
@@ -105,106 +104,104 @@ function Checks(props: {
   );
 }
 
-function WorkRow(props: {
-  branch?: ControlUiSessionBranch;
-  status: ControlUiSessionPullRequestSnapshot["status"];
-  onOpenSessionDiff?: () => void;
-  publication?: GitHubPublicationView;
-  onDismissBranch?: (branch: ControlUiSessionBranch) => void;
-  presented?: PresentationValue;
-}) {
-  const published = () =>
-    !props.branch && props.publication?.result?.status === "published"
-      ? props.publication.result
-      : undefined;
-  return (
-    <article
-      class="chat-pr"
-      data-state={published() ? "published" : props.branch ? "branch" : "publication"}
-    >
-      <span class="chat-pr__link chat-pr__link--static">
-        <span class="chat-pr__icon" aria-hidden="true">
-          <Icon name={published() || !props.branch ? "gitPullRequest" : "gitBranch"} />
-        </span>
-        <span class="chat-pr__identity">
-          <span class="chat-pr__repo">
-            {published()?.repository ?? props.branch?.repo ?? t("chat.pullRequests.publishPr")}
-          </span>
-          <span class="chat-pr__branch">{published()?.branch ?? props.branch?.branch}</span>
-        </span>
-      </span>
-      <span class="chat-pr__meta">
-        <Show when={!published() ? props.branch : undefined}>
-          {(branch) => (
-            <SessionGitDiff
-              classPrefix="chat-pr"
-              item={branch()}
-              onOpen={props.onOpenSessionDiff}
-            />
-          )}
-        </Show>
-        <StatusWarning status={props.status} />
-        <Show
-          when={props.publication}
-          fallback={
-            <Show when={props.branch?.createUrl}>
-              {(url) => (
-                <a
-                  class="chat-pr__create"
-                  href={url()}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label={t("chat.pullRequests.createPrLabel", {
-                    label: t("chat.pullRequests.createPr"),
-                    branch: props.branch?.branch ?? "",
-                  })}
-                >
-                  {t("chat.pullRequests.createPr")}
-                </a>
-              )}
-            </Show>
-          }
-        >
-          {(publication) => (
-            <GitHubPublicationAction publication={publication()} presented={props.presented} />
-          )}
-        </Show>
-        <Show when={props.branch && !published() && props.onDismissBranch}>
-          <button
-            class="chat-pr__dismiss"
-            type="button"
-            disabled={props.publication?.activity != null}
-            aria-label={t("chat.pullRequests.dismissBranch", {
-              branch: props.branch?.branch ?? "",
-            })}
-            onClick={() => {
-              if (props.branch) {
-                props.onDismissBranch?.(props.branch);
-              }
-            }}
-          >
-            <Icon name="x" />
-          </button>
-        </Show>
-      </span>
-      <Show when={props.publication}>
-        {(publication) => <GitHubPublicationDetails publication={publication()} />}
-      </Show>
-    </article>
-  );
-}
-
 export function ChatPullRequestsContent(props: ChatPullRequestsProps) {
   const published = () =>
     props.publication?.result?.status === "published" ? props.publication.result : undefined;
   const retained = () => retainedPublication(props.publication);
-  const branch = () => (props.publishedOnly || props.branchDismissed ? undefined : props.branch);
+  const visibleBranch = () =>
+    props.publishedOnly || props.branchDismissed ? undefined : props.branch;
   const workRow = () => !props.publishedOnly && showWorkRow(props);
   const visible = createMemo(() => chatPullRequestRows(props));
   const recovery = () =>
     !props.publishedOnly && retained() && (!published() || props.publication?.error)
       ? props.publication
       : undefined;
+  function WorkRow(childProps: { branch?: ControlUiSessionBranch }) {
+    const workPublished = () =>
+      !childProps.branch && props.publication?.result?.status === "published"
+        ? props.publication.result
+        : undefined;
+    return (
+      <article
+        class="chat-pr"
+        data-state={workPublished() ? "published" : childProps.branch ? "branch" : "publication"}
+      >
+        <span class="chat-pr__link chat-pr__link--static">
+          <span class="chat-pr__icon" aria-hidden="true">
+            <Icon name={workPublished() || !childProps.branch ? "gitPullRequest" : "gitBranch"} />
+          </span>
+          <span class="chat-pr__identity">
+            <span class="chat-pr__repo">
+              {workPublished()?.repository ??
+                childProps.branch?.repo ??
+                t("chat.pullRequests.publishPr")}
+            </span>
+            <span class="chat-pr__branch">
+              {workPublished()?.branch ?? childProps.branch?.branch}
+            </span>
+          </span>
+        </span>
+        <span class="chat-pr__meta">
+          <Show when={!workPublished() ? childProps.branch : undefined}>
+            {(branch) => (
+              <SessionGitDiff
+                classPrefix="chat-pr"
+                item={branch()}
+                onOpen={props.onOpenSessionDiff}
+              />
+            )}
+          </Show>
+          <StatusWarning status={props.status} />
+          <Show
+            when={props.publication}
+            fallback={
+              <Show when={childProps.branch?.createUrl}>
+                {(url) => (
+                  <a
+                    class="chat-pr__create"
+                    href={url()}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={t("chat.pullRequests.createPrLabel", {
+                      label: t("chat.pullRequests.createPr"),
+                      branch: childProps.branch?.branch ?? "",
+                    })}
+                  >
+                    {t("chat.pullRequests.createPr")}
+                  </a>
+                )}
+              </Show>
+            }
+          >
+            {(publication) => (
+              <GitHubPublicationAction publication={publication()} presented={props.presented} />
+            )}
+          </Show>
+          <Show when={childProps.branch && !workPublished() && props.onDismissBranch}>
+            <button
+              class="chat-pr__dismiss"
+              type="button"
+              disabled={props.publication?.activity != null}
+              aria-label={t("chat.pullRequests.dismissBranch", {
+                branch: childProps.branch?.branch ?? "",
+              })}
+              onClick={() => {
+                if (childProps.branch) {
+                  props.onDismissBranch?.(childProps.branch);
+                }
+              }}
+            >
+              <Icon name="x" />
+            </button>
+          </Show>
+        </span>
+        <Show when={props.publication}>
+          {(publication) => <GitHubPublicationDetails publication={publication()} />}
+        </Show>
+      </article>
+    );
+  }
+
   return (
     <Show when={hasChatPullRequests(props)}>
       <div class="chat-prs" aria-live="polite">
@@ -229,14 +226,7 @@ export function ChatPullRequestsContent(props: ChatPullRequestsProps) {
             </>
           }
         >
-          <WorkRow
-            branch={branch()}
-            status={props.status}
-            onOpenSessionDiff={props.onOpenSessionDiff}
-            publication={props.publication}
-            onDismissBranch={props.onDismissBranch}
-            presented={props.presented}
-          />
+          <WorkRow branch={visibleBranch()} />
         </Show>
       </div>
     </Show>
