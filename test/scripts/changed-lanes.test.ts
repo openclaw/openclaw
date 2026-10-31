@@ -1,6 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  constants as fsConstants,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -13,7 +15,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   createEmptyChangedLanes,
   detectChangedLanes,
@@ -44,6 +46,8 @@ import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support
 import { copyOxlintConfigFixture } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const templates = useAutoCleanupTempDirTracker(afterAll);
+let template: string | undefined;
 const repoRoot = process.cwd();
 const testNodeExecPath = resolveTestNodeExecPath();
 const githubActivityHelper = ".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh";
@@ -56,9 +60,10 @@ const git = (cwd: string, args: string[]) =>
     env: createNestedGitEnv(),
   }).trim();
 
-function commitAll(cwd: string, message: string): void {
-  git(cwd, ["add", "."]);
+function commitAll(cwd: string, message: string, options: string[] = []): void {
+  git(cwd, [...options, "add", "."]);
   git(cwd, [
+    ...options,
     "-c",
     "user.email=test@example.com",
     "-c",
@@ -145,9 +150,19 @@ export function createChangedCoreTestCheck() {
 
 function createGitRepo(prefix: string) {
   const dir = tempDirs.make(prefix);
-  git(dir, ["init", "-q", "--initial-branch=main"]);
-  writeRepoFile(dir, "README.md", "initial\n");
-  commitAll(dir, "initial");
+  const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
+  if (template) {
+    cpSync(template, dir, copyOptions);
+  } else {
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeRepoFile(dir, "README.md", "initial\n");
+    // Finish the seed without background maintenance, before callers stage or branch.
+    commitAll(dir, "initial", ["-c", "maintenance.auto=false", "-c", "gc.auto=0"]);
+    const seed = templates.make("openclaw-changed-lanes-template-");
+    // Copies own complete refs, indexes and objects; no shared Git metadata or hardlinks.
+    cpSync(dir, seed, copyOptions);
+    template = seed;
+  }
   return dir;
 }
 
