@@ -79,7 +79,9 @@ text. This enables bounded, redacted input messages, output messages, tool
 inputs, tool outputs, tool definitions, and OTLP log bodies. System prompts
 remain excluded. Provider-internal `thinking` and `redacted_thinking` payloads
 are also excluded: compatibility attributes retain only a redacted structural
-marker, while GenAI message attributes omit those parts.
+marker, while GenAI message attributes omit those parts. Inline image data
+longer than 128 KiB, which no attribute could carry whole, is dropped from
+model input and output messages; the image part and its MIME type remain.
 
 The same setting also exports the bounded, redacted turn prompt and the model's
 final answer as `input.value` and `output.value` on `openclaw.message.processed`,
