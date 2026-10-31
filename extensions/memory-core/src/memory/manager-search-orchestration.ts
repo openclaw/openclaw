@@ -361,6 +361,18 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
         log.warn(
           "memory search: format upgrade rebuild is pending; serving the existing keyword index",
         );
+        // Answering from keyword rows must not strand the upgrade: hand it to the
+        // search-maintenance owner so the index still reaches the current format.
+        if (searchSyncEnabled && this.activeBackgroundSearchSyncs.size === 0) {
+          const trackedFormatRepair = this.syncPublishedIndexInBackground({ reason: "search" })
+            .catch((err: unknown) => {
+              log.warn(`memory sync failed (format upgrade): ${String(err)}`);
+            })
+            .finally(() => {
+              this.activeBackgroundSearchSyncs.delete(trackedFormatRepair);
+            });
+          this.activeBackgroundSearchSyncs.add(trackedFormatRepair);
+        }
       }
       // No watcher can observe later edits after kernel capacity exhaustion.
       // Record a fresh generation at the search boundary so detached maintenance
