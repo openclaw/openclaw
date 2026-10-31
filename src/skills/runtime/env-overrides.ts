@@ -151,6 +151,10 @@ function applySkillConfigEnvOverrides(params: {
         continue;
       }
       pendingOverrides[envKey] = envValue;
+      // Operator-authored `skills.entries.<skill>.env` values are explicit authorization to
+      // inject that name even when it matches a credential-suffix pattern (e.g.
+      // GOG_KEYRING_PASSWORD). Always-blocked host variables stay rejected below.
+      allowedSensitiveKeys.add(envKey);
     }
   }
 
