@@ -26,6 +26,8 @@ type MediaOptions = Exclude<Parameters<typeof media.loadWebMedia>[1], number | u
 const suiteDirs = useAutoCleanupTempDirTracker(afterAll);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const TINY_PNG = createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 });
+// Fixed CP932 bytes for "摘要,金額\\r\\n保険料,100\\r\\n"; no UTF-8 re-encoding.
+const CP932_CSV = Buffer.from("934597762c8be08a7a0d0a95db8caf97bf2c3130300d0a", "hex");
 const IMAGE_MODELS = [
   { maxSidePx: 32, preferredSidePx: 32 },
   { maxSidePx: 64, preferredSidePx: 64 },
@@ -392,6 +394,16 @@ describe("loadWebMedia", () => {
     ["notes.txt", ",,,,,,,,,,\n", "text/plain"],
     ["legacy.csv", Buffer.from("caf\xe9,ni\xf1o\n", "latin1"), "text/csv"],
     ["report.html", "<!doctype html><title>Report</title><h1>Report</h1>\n", "text/html"],
+    ["japanese.csv", CP932_CSV, "text/csv"],
+    ["mostly-ascii.csv", Buffer.from("612c620d0a81402c310d0a", "hex"), "text/csv"],
+    [
+      "quoted.CSV",
+      Buffer.from(
+        "934597762c8be08a7a0d0a228a948eae89ef8ed02c938c8b9e222c3130300d0a2296bc8fcc222294f58d6c0a91b182ab222c3230300d0a",
+        "hex",
+      ),
+      "text/csv",
+    ],
   ] as const)("allows validated host-read %s", async (name, body, contentType) => {
     const result = await loadWithHostRead(await writeFile(name, body));
     expect(result).toMatchObject({ kind: "document", contentType });
@@ -410,6 +422,23 @@ describe("loadWebMedia", () => {
     ],
     ["bom-binary.csv", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.alloc(9000, 0xff)])],
     ["alternating-high.csv", Buffer.alloc(9000, Buffer.from([0x41, 0xff]))],
+    ["cp932.txt", CP932_CSV],
+    ["cp932.json", CP932_CSV],
+    ["truncated-cp932.csv", Buffer.concat([CP932_CSV, Buffer.from([0x81])])],
+    ["cp932-control.csv", Buffer.concat([CP932_CSV, Buffer.from([0x00])])],
+    ["renamed-image.csv", TINY_PNG],
+    [
+      "cp932-ragged.csv",
+      Buffer.from("934597762c8be08a7a0d0a95db8caf97bf2c3130302c3230300d0a", "hex"),
+    ],
+    [
+      "cp932-open-quote.csv",
+      Buffer.from("934597762c8be08a7a0d0a2295db8caf97bf2c3130300d0a", "hex"),
+    ],
+    [
+      "cp932-quote-tail.csv",
+      Buffer.from("934597762c8be08a7a0d0a2295db8caf97bf22782c3130300d0a", "hex"),
+    ],
   ] as const)("rejects unsafe host-read document %s", async (name, body) => {
     if (name === "prefix-tail.csv") {
       expect(body.length - 4).toBeGreaterThan(8192);
