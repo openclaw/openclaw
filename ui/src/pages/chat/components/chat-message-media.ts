@@ -17,6 +17,7 @@ import {
   labelForMediaPath,
 } from "../../../lib/media-file-extension.ts";
 import { isCrossOriginHttpSource } from "./chat-attachment-href.ts";
+import type { WorkspaceFileSearchTarget } from "./chat-message-media-actions.ts";
 
 registerChatComposerEnglish();
 
@@ -32,17 +33,6 @@ export type ImageBlock = {
   width?: number;
   height?: number;
 } & ({ url: string; artifactId?: string } | { url?: undefined; artifactId: string });
-
-/** Native admission and open actions shared with non-preview catalog rows. */
-export type MessageMediaAction = {
-  onOpen?: () => void;
-  onRetry?: () => void;
-  onAllow?: () => void;
-  onFocus?: () => void;
-  observeElement?: (element: Element | undefined) => void;
-  pending: boolean;
-  reason?: string;
-};
 
 export type ArtifactDownloadResolver = (
   params: {
@@ -77,6 +67,8 @@ export type ImageRenderOptions = {
   onMediaChange?: () => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+  /** Filename query only; the Files owner selects and authorizes any eventual file. */
+  onFindWorkspaceFile?: (target: WorkspaceFileSearchTarget) => void;
   resolveArtifactDownload?: ArtifactDownloadResolver;
 };
 

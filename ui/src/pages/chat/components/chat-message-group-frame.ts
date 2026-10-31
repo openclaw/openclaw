@@ -119,6 +119,14 @@ export function resolveFileLinkOwnerOptions(
             )),
       }
     : options;
+  if (
+    group.senderSession &&
+    (sourceSessionKey !== options.sessionKey ||
+      (group.senderSession.agentId && group.senderSession.agentId !== options.agentId))
+  ) {
+    // Files search belongs to the current pane, unlike source-bound direct file references.
+    return { ...owned, onFindWorkspaceFile: undefined };
+  }
   return owned;
 }
 

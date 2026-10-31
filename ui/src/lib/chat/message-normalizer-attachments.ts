@@ -22,6 +22,7 @@ export function normalizeAttachmentContentBlock(
     if (
       attachment.code !== "file-not-found" &&
       attachment.code !== "unsupported-format" &&
+      attachment.code !== "file-too-large" &&
       attachment.code !== "delivery-failed" &&
       attachment.code !== "invalid-reference"
     ) {
