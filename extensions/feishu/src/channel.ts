@@ -30,7 +30,6 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { resolveLegacyInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
-import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
 import {
@@ -58,9 +57,16 @@ import {
   resolveDefaultFeishuAccountId,
   resolveFeishuAccount,
 } from "./accounts.js";
+import {
+  readFirstString,
+  resolveFeishuActionAnchor,
+  resolveFeishuActionTarget,
+  resolveFeishuMessageId,
+} from "./action-target.js";
 import { buildFeishuMessageToolHints } from "./agent-prompt.js";
 import { feishuApprovalAuth } from "./approval-auth.js";
 import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
+import { loadFeishuChannelRuntime } from "./channel-runtime-loader.js";
 import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
 import { FeishuChannelConfigSchema } from "./config-schema.js";
 import {
@@ -84,7 +90,6 @@ import { messageActionTargetAliases } from "./message-action-contract.js";
 import { readNativeFeishuCardJson } from "./native-card.js";
 import {
   FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER,
-  resolveFeishuReplyMode,
   type FeishuOutboundSendMedia,
 } from "./outbound.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
@@ -117,7 +122,6 @@ import { resolveFeishuStickerSet, searchFeishuStickerSet } from "./sticker-catal
 import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
 import { getFeishuThreadBindingManager } from "./thread-bindings.js";
 import { feishuThreading } from "./threading.js";
-import { resolveFeishuTopicAutoThreadAnchor } from "./topic-anchors.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
 
 function resolveFeishuSendAttachmentMedia(params: Record<string, unknown>): string | undefined {
@@ -267,11 +271,6 @@ const meta: ChannelMeta = {
   order: 70,
   preferSessionLookupForAnnounceTarget: true,
 };
-
-const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
-  () => import("./channel.runtime.js"),
-  "feishuChannelRuntime",
-);
 
 const feishuOutboundAdapter: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -443,39 +442,6 @@ function isFeishuActionEnabled(
   return createActionGate(account.config.actions)(action, action === "reactions");
 }
 
-type FeishuActionReplyAnchor = {
-  replyToMessageId: string | undefined;
-  replyInThread: boolean;
-};
-
-type FeishuSendActionContext = Pick<
-  ChannelMessageActionContext,
-  "action" | "params" | "sessionKey" | "toolContext" | "requesterAccountId" | "reply"
->;
-
-function buildFeishuSendReplyAnchor(
-  ctx: FeishuSendActionContext,
-  accountId: string,
-): FeishuActionReplyAnchor {
-  if (ctx.action === "thread-reply") {
-    return {
-      replyToMessageId: resolveFeishuMessageId(ctx.params),
-      replyInThread: true,
-    };
-  }
-  const threadId =
-    readFirstString(ctx.params, ["threadId"]) ??
-    resolveFeishuTopicAutoThreadAnchor(ctx, accountId, resolveFeishuActionTarget(ctx));
-  // Core also writes implicit reply IDs into params; they must not override
-  // native topic delivery. Only an explicit reply can choose normal reply mode.
-  const replyToId = ctx.reply
-    ? ctx.reply.source === "implicit" && threadId
-      ? undefined
-      : ctx.reply.replyToId
-    : readFirstString(ctx.params, ["replyTo", "reply_to"]);
-  return resolveFeishuReplyMode({ replyToId, threadId });
-}
-
 function isSupportedFeishuDirectConversationId(conversationId: string): boolean {
   const trimmed = conversationId.trim();
   return (
@@ -507,20 +473,6 @@ function normalizeFeishuAcpConversationId(conversationId: string) {
 
 function jsonActionResult(details: Record<string, unknown>) {
   return textResult(JSON.stringify(details), details);
-}
-
-function readFirstString(
-  params: Record<string, unknown>,
-  keys: string[],
-  fallback?: string | null,
-): string | undefined {
-  for (const key of keys) {
-    const value = normalizeOptionalString(params[key]);
-    if (value) {
-      return value;
-    }
-  }
-  return normalizeOptionalString(fallback);
 }
 
 const UNRESOLVED_RESPONSE_PREFIX_VAR_PATTERN = /\{[a-zA-Z][a-zA-Z0-9.]*\}/;
@@ -559,13 +511,6 @@ function readOptionalPositiveInteger(
   return undefined;
 }
 
-function resolveFeishuActionTarget(ctx: {
-  params: Record<string, unknown>;
-  toolContext?: { currentChannelId?: string } | null;
-}): string | undefined {
-  return readFirstString(ctx.params, ["to", "target"], ctx.toolContext?.currentChannelId);
-}
-
 function resolveFeishuChatId(ctx: {
   params: Record<string, unknown>;
   toolContext?: { currentChannelId?: string } | null;
@@ -585,10 +530,6 @@ function resolveFeishuChatId(ctx: {
     return normalizeFeishuTarget(raw) ?? undefined;
   }
   return raw;
-}
-
-function resolveFeishuMessageId(params: Record<string, unknown>): string | undefined {
-  return readFirstString(params, ["messageId", "message_id", "replyTo", "reply_to"]);
 }
 
 function resolveFeishuMessageReadTarget(ctx: {
@@ -899,6 +840,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         describeMessageTool: describeFeishuMessageTool,
         handleAction: async (ctx) => {
           const { assertDirectAdapterHandoff } = ctx;
+          const sendContext = {
+            assertDirectAdapterHandoff,
+            onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+          };
           const account = resolveFeishuAccount({
             cfg: ctx.cfg,
             accountId: ctx.accountId,
@@ -937,7 +882,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 "Feishu sticker requires fileId (or first stickerId): use the file_key of a sticker this bot previously received.",
               );
             }
-            const anchor = buildFeishuSendReplyAnchor(ctx, account.accountId);
+            const anchor = await resolveFeishuActionAnchor(ctx, account.accountId);
             const runtime = await loadFeishuChannelRuntime();
             const result = await runtime.sendStickerFeishu({
               cfg: ctx.cfg,
@@ -950,15 +895,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             return jsonActionResult({ ok: true, channel: "feishu", action: "sticker", ...result });
           }
           if (ctx.action === "send" || ctx.action === "thread-reply") {
-            const sendContext = {
-              assertDirectAdapterHandoff,
-              onPlatformSendDispatch: ctx.onPlatformSendDispatch,
-            };
             const to = resolveFeishuActionTarget(ctx);
             if (!to) {
               throw new Error(`Feishu ${ctx.action} requires a target (to).`);
             }
-            const { replyToMessageId, replyInThread } = buildFeishuSendReplyAnchor(
+            const { replyToMessageId, replyInThread } = await resolveFeishuActionAnchor(
               ctx,
               account.accountId,
             );
@@ -1514,6 +1455,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         normalizeTarget: (raw) => normalizeFeishuTarget(raw) ?? undefined,
         inferTargetChatType: ({ to }) =>
           resolveReceiveIdType(to) === "chat_id" ? "group" : "direct",
+        // A heartbeat for a group session must reply into the session's topic instead of
+        // starting a new top-level topic, so core may reuse the recorded route thread id.
+        preserveHeartbeatThreadIdForGroupRoute: true,
         resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
           const directId = parseFeishuDirectConversationId(conversationId);
           if (directId) {
