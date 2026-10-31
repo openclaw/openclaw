@@ -234,7 +234,9 @@ function ConfigBody(props: {
         />
       </Show>
       <Show when={!["updates", "memory", "talk", "mcp", "security"].includes(props.pageId)}>
-        <Config {...config()} progressive={props.pageId === "advanced"} />
+        <Show when={props.pageId === "advanced"} fallback={<Config {...config()} />}>
+          <Config {...config()} progressive />
+        </Show>
       </Show>
     </>
   );
