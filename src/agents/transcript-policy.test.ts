@@ -234,6 +234,27 @@ describe("resolveTranscriptPolicy", () => {
     }
   });
 
+  it("keeps runtime-context carriers for custom Responses providers", () => {
+    // A plugin-unowned provider that speaks the Responses API keeps earlier carriers
+    // so the request prefix stays stable across turns (docs/concepts/context.md).
+    const model = makeOpenAiCompatibleReasoningModel({
+      provider: "custom-openai",
+      api: "openai-responses",
+      baseUrl: "https://litellm.example.test/v1",
+    });
+    const policy = resolveTranscriptPolicy({
+      config: {},
+      provider: "custom-openai",
+      modelApi: "openai-responses",
+      modelId: model.id,
+      model,
+    });
+
+    expect(policy.appendOnlyRuntimeContext).toBe(true);
+    // The in-history system update switch is a separate, native-only decision.
+    expect(policy.inHistorySystemUpdates).toBe(false);
+  });
+
   it("limits OpenAI prompt updates to native Responses routes", () => {
     for (const [provider, api, baseUrl, expected] of [
       ["openai", "openai-responses", "https://api.openai.com/v1", true],
@@ -253,7 +274,11 @@ describe("resolveTranscriptPolicy", () => {
         runtimeHandle: updatingPlugin(provider),
       });
       expect(policy.inHistorySystemUpdates).toBe(expected);
-      expect(policy.appendOnlyRuntimeContext).toBe(api === "openai-completions" || expected);
+      // Responses-compatible routes keep earlier carriers (docs/concepts/context.md);
+      // the in-history system update switch stays limited to native OpenAI Responses.
+      expect(policy.appendOnlyRuntimeContext).toBe(
+        api === "openai-completions" || api === "openai-responses" || expected,
+      );
     }
   });
 

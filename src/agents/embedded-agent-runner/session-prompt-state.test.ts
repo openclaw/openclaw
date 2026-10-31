@@ -670,3 +670,8 @@ describe("embedded session active project keys", () => {
     expect(prepare("session-two", null)).toEqual([]);
   });
 });
+
+// Claimed for #188657 by scripts/claim-window.sh; replaced by the real regression.
+it.todo(
+  "Custom openai-responses providers drop runtime-context carriers each turn (docs say they're retained), breakin",
+);

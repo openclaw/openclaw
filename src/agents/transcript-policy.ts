@@ -161,7 +161,10 @@ export function resolveTranscriptPolicy(params: {
   const policy = {
     ...DEFAULT_TRANSCRIPT_POLICY,
     // Exact-entry caches need earlier temporal carriers to remain in the request prefix.
-    appendOnlyRuntimeContext: modelApi === "openai-completions" || modelApi === "ollama",
+    // Responses-compatible endpoints keep their earlier user-role carriers too;
+    // dropping them rewrites the prompt prefix on every turn.
+    appendOnlyRuntimeContext:
+      modelApi === "openai-completions" || modelApi === "openai-responses" || modelApi === "ollama",
   };
   for (const [key, value] of Object.entries(replayPolicy ?? {})) {
     if (value != null) {
