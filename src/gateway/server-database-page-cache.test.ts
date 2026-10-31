@@ -26,6 +26,8 @@ const complete: PageCacheProgress = {
   residency: undefined,
   readBytes: 0,
   diskBytes: 0,
+  estimatedReadBytes: 0,
+  ioCountersUnavailable: false,
   elapsedMs: 0,
   complete: true,
   limited: false,
