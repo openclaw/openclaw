@@ -141,6 +141,48 @@ const reply = (
 ) => expect(sendRequest(port, data)).resolves.toMatchObject(expected);
 const rejectRequest = (port: MessagePort, data: Record<string, unknown>, error: string) =>
   reply(port, data, { ok: false, error });
+// Stands in for the outer sandbox proxy, which answers activation queries with
+// its own navigator.userActivation.isActive (src/agents/sandbox-host.ts).
+function answerActivation(
+  f: ReturnType<typeof createHost>,
+  active: boolean,
+  source: Window | null = f.frame.contentWindow,
+  origin = SANDBOX_ORIGIN,
+) {
+  f.post.mockImplementation(((data: { method?: string; params?: { id?: unknown } }) => {
+    if (data?.method === "ui/notifications/sandbox-activation-query") {
+      f.send(
+        {
+          jsonrpc: "2.0",
+          method: "ui/notifications/sandbox-activation",
+          params: { id: data.params?.id, active },
+        },
+        [],
+        source,
+        origin,
+      );
+    }
+  }) as Window["postMessage"]);
+}
+// Dashboard activation as WebKit keeps it: showPicker() spends it page-wide.
+function stubDashboardActivation() {
+  const activation = { isActive: true };
+  Object.defineProperty(navigator, "userActivation", { configurable: true, value: activation });
+  Object.defineProperty(HTMLInputElement.prototype, "showPicker", {
+    configurable: true,
+    value: () => {
+      if (!activation.isActive) {
+        throw new DOMException("showPicker() requires a user gesture", "NotAllowedError");
+      }
+      activation.isActive = false;
+    },
+  });
+  onTestFinished(() => {
+    Reflect.deleteProperty(navigator, "userActivation");
+    Reflect.deleteProperty(HTMLInputElement.prototype, "showPicker");
+  });
+  return activation;
+}
 afterEach(() => {
   vi.useRealTimers();
   document.body.replaceChildren();
@@ -257,6 +299,134 @@ describe("BoardWidgetSandboxHost", () => {
     const recreated = await setup(prefix + "-a", "b".repeat(32));
     await reply(recreated, prompt("recreated-view", "Independent generation"));
   });
+  it("opens widget links only from the adopted wrapper port and ticket", async () => {
+    const postMessage = vi.fn();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+    stubDashboardActivation();
+    const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+    const f = await readyHost({ client: client() });
+    answerActivation(f, true);
+    const link = (id: string, ticket = "ticket") =>
+      request(id, "host.open", { url: "https://example.com/" + id }, ticket);
+    const other = document.createElement("iframe");
+    document.body.append(other);
+    // Window-channel requests from the widget frame, another frame, or another origin.
+    f.send(link("window-channel"));
+    f.send(link("other-frame"), [], other.contentWindow);
+    f.send(link("other-origin"), [], f.frame.contentWindow, "https://evil.example");
+    const port = await f.port();
+    // A second port offer, as forged by widget code after the wrapper's offer.
+    const forged = channel();
+    const forgedReplies: unknown[] = [];
+    forged.port2.addEventListener("message", (event) => forgedReplies.push(event.data));
+    const closeForged = vi.spyOn(forged.port1, "close");
+    f.send({ type: "openclaw:widget-bridge-port-offer" }, [forged.port1]);
+    // The host settles the forged port while handling its offer: it closes the
+    // port without listening, so nothing posted on it can reach the host.
+    expect(closeForged).toHaveBeenCalledOnce();
+    forged.port2.postMessage(link("forged-port"), []);
+    await rejectRequest(
+      port,
+      link("forged-ticket", "forged"),
+      "widget view ticket does not match the active frame",
+    );
+    await reply(port, link("wrapper"));
+    expect(postMessage.mock.calls).toEqual([
+      [{ type: "open-link", url: "https://example.com/wrapper", target: "external" }],
+    ]);
+    expect(open).not.toHaveBeenCalled();
+    expect(forgedReplies).toEqual([]);
+  });
+  it("opens native widget links only on activation reported by that widget's sandbox frame", async () => {
+    const postMessage = vi.fn();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+    // The dashboard holds activation, as after a click anywhere in it.
+    stubDashboardActivation();
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const f = await readyHost({ client: client() });
+    const port = await f.port();
+    const link = (id: string) => request(id, "host.open", { url: "https://example.com/" + id });
+    const refused = "widget link could not be opened";
+    // The proxy reports no activation: the input happened outside this widget.
+    answerActivation(f, false);
+    await rejectRequest(port, link("outside-widget"), refused);
+    // Answers from another frame or origin are ignored; the query times out.
+    const other = document.createElement("iframe");
+    document.body.append(other);
+    answerActivation(f, true, other.contentWindow);
+    await rejectRequest(port, link("other-frame"), refused);
+    answerActivation(f, true, f.frame.contentWindow, "https://evil.example");
+    await rejectRequest(port, link("other-origin"), refused);
+    // A guessed query id from the right frame is ignored too.
+    f.post.mockImplementation(((data: { method?: string }) => {
+      if (data?.method === "ui/notifications/sandbox-activation-query") {
+        f.notify("activation", { id: "guess", active: true });
+      }
+    }) as Window["postMessage"]);
+    await rejectRequest(port, link("guessed-id"), refused);
+    expect(postMessage).not.toHaveBeenCalled();
+    answerActivation(f, true);
+    await reply(port, link("inside-widget"));
+    expect(postMessage.mock.calls).toEqual([
+      [{ type: "open-link", url: "https://example.com/inside-widget", target: "external" }],
+    ]);
+    expect(
+      f.post.mock.calls
+        .filter(
+          ([data]) =>
+            (data as { method?: string })?.method === "ui/notifications/sandbox-activation-query",
+        )
+        .map(([, targetOrigin]) => targetOrigin),
+    ).toEqual(Array(5).fill(SANDBOX_ORIGIN));
+    expect(open.mock.calls.map(([url]) => url)).toEqual([
+      "https://example.com/outside-widget",
+      "https://example.com/other-frame",
+      "https://example.com/other-origin",
+      "https://example.com/guessed-id",
+    ]);
+  });
+  it.each([
+    ["retired", (f: ReturnType<typeof createHost>) => f.host.setActive(false)],
+    ["reconnected", (f: ReturnType<typeof createHost>) => f.update({ client: client() })],
+    ["disconnected", (f: ReturnType<typeof createHost>) => f.update({ connected: false })],
+  ] as const)(
+    "opens nothing for a widget link %s while its activation query is pending",
+    async (_, retire) => {
+      const postMessage = vi.fn();
+      vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+      const activation = stubDashboardActivation();
+      // Earlier tests in this file leave window.open spied with their calls.
+      const open = vi
+        .spyOn(window, "open")
+        .mockClear()
+        .mockReturnValue({} as Window);
+      const f = await readyHost({ client: client() });
+      const port = await f.port();
+      const queries: string[] = [];
+      f.post.mockImplementation(((data: { method?: string; params?: { id?: string } }) => {
+        if (data?.method === "ui/notifications/sandbox-activation-query") {
+          queries.push(data.params?.id ?? "");
+        }
+      }) as Window["postMessage"]);
+      // Fake timers expose the query's refusal timeout as the only live timer.
+      vi.useFakeTimers();
+      const response = sendRequest(
+        port,
+        request("pending-query", "host.open", { url: "https://example.com/pending" }),
+      );
+      await vi.waitFor(() => expect(queries).toHaveLength(1));
+      expect(vi.getTimerCount()).toBe(1);
+      retire(f);
+      // Retirement settles the pending query at once instead of leaving it live.
+      expect(vi.getTimerCount()).toBe(0);
+      // The proxy's positive answer arrives after the request was revoked.
+      f.notify("activation", { id: queries[0], active: true });
+      await expect(response).resolves.toMatchObject({ ok: false });
+      expect(postMessage).not.toHaveBeenCalled();
+      expect(open).not.toHaveBeenCalled();
+      expect(activation.isActive).toBe(true);
+    },
+  );
   it("keeps the adopted ticket valid until renewal is acknowledged", async () => {
     const pending = Promise.withResolvers<unknown>();
     const c = {

@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasNativeExternalLink, postNativeExternalLink } from "../../app/native-link-routing.ts";
 import { dispatchWidgetPrompt } from "../../components/mcp-app-security.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 
@@ -18,6 +19,19 @@ const STATE_PAYLOAD_MAX_BYTES = 8 * 1024;
 const STATE_COALESCE_WINDOW_MS = 5_000;
 const STATE_RATE_WINDOW_MS = 60_000;
 const STATE_RATE_MAX_ATTEMPTS = 12;
+
+// Spends the page's transient activation the way an opened popup does. WebKit's
+// consume-user-activation clears it in every frame, so the widget frame needs
+// new input before the next open. A detached text input has no picker to show,
+// and showPicker() throws when no activation is left to spend.
+function consumeUserActivation(): boolean {
+  try {
+    document.createElement("input").showPicker();
+  } catch {
+    return false;
+  }
+  return !navigator.userActivation.isActive;
+}
 
 export function isBoardWidgetBridgeRequest(value: unknown): value is BoardWidgetBridgeRequest {
   if (!value || typeof value !== "object") {
@@ -55,6 +69,8 @@ export class BoardWidgetBridgeOwner {
       client: BoardWidgetBridgeGatewayClient;
       rateKey: string;
       confirmPrompt: (text: string) => boolean | Promise<boolean>;
+      /** Whether this widget's own sandbox frame holds live user activation. */
+      widgetActivated: () => Promise<boolean>;
     },
   ) {
     this.options = { ...options };
@@ -63,6 +79,24 @@ export class BoardWidgetBridgeOwner {
   updateIdentity(frame: HTMLIFrameElement, ticket: string): void {
     this.options.frame = frame;
     this.options.ticket = ticket;
+  }
+
+  // The native route skips WebKit's popup blocker, so it keeps that blocker's
+  // rules: the dashboard and this widget's own sandbox frame must both hold
+  // live user activation, and each open spends it. Activation reaches that
+  // frame only from input inside this widget, so code that took the wrapper's
+  // port cannot open links on input elsewhere, and one gesture opens one link.
+  private async openNativeLink(url: string, isCurrent?: () => boolean): Promise<boolean> {
+    if (!hasNativeExternalLink() || !navigator.userActivation?.isActive) {
+      return false;
+    }
+    const widgetActivated = await this.options.widgetActivated();
+    // Widget retirement or a Gateway reconnect during the query revokes the
+    // request. The native receiver cannot tell, so neither opener may run.
+    if (isCurrent?.() === false) {
+      throw new Error("widget link request is no longer current");
+    }
+    return widgetActivated && consumeUserActivation() && postNativeExternalLink(url);
   }
 
   private async emitState(payload: unknown): Promise<unknown> {
@@ -121,17 +155,22 @@ export class BoardWidgetBridgeOwner {
     }
     switch (request.method) {
       // Opening a link the user clicked is navigation, not a granted capability,
-      // so this stays outside the tool-grant checks. Opening goes through the
+      // so this stays outside the tool-grant checks. Native hosts take it through
+      // their link owner, because WebKit's popup blocker scopes the click's
+      // gesture to its own task and refuses window.open in this MessagePort task,
+      // although transient user activation survives the hop. Browsers use the
       // Control UI's openExternalUrlSafe owner, which applies noopener/noreferrer
       // regardless of the `rel` a widget wrote. The absolute-http(s) gate here is
-      // deliberately narrower than that shared policy: widget-supplied links must
-      // not reach `blob:`, which the general external-link path allows.
+      // deliberately narrower than both: widget-supplied links must not reach
+      // `blob:`, which the general external-link path allows.
       case "host.open": {
         const url = requiredString(params, "url");
         if (!/^https?:\/\//i.test(url)) {
           throw new Error("widget link url is invalid");
         }
-        if (!openExternalUrlSafe(url)) {
+        // A request the native route refuses falls through to window.open,
+        // which WebKit's popup blocker refuses as it does on main.
+        if (!(await this.openNativeLink(url, options.isCurrent)) && !openExternalUrlSafe(url)) {
           throw new Error("widget link could not be opened");
         }
         return { ok: true };
