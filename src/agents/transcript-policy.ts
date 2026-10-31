@@ -164,9 +164,7 @@ export function resolveTranscriptPolicy(params: {
     // Responses-compatible endpoints keep their earlier user-role carriers too;
     // dropping them rewrites the prompt prefix on every turn.
     appendOnlyRuntimeContext:
-      modelApi === "openai-completions" ||
-      modelApi === "openai-responses" ||
-      modelApi === "ollama",
+      modelApi === "openai-completions" || modelApi === "openai-responses" || modelApi === "ollama",
   };
   for (const [key, value] of Object.entries(replayPolicy ?? {})) {
     if (value != null) {
