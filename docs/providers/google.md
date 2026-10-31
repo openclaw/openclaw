@@ -611,8 +611,8 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
 
     A model-level `api` overrides the provider-level value; either explicit
     setting wins over the endpoint and catalog defaults. To use Interactions on
-    another Gemini text model or a compatible proxy, set `api: "google-interactions"`
-    instead.
+    another Gemini text model, set `api: "google-interactions"` on that model's
+    entry. A compatible proxy can also set it provider-wide.
 
     Interactions supports tool calling, thinking levels, image and native video
     inputs, and streamed replies. Native video remains available on supported

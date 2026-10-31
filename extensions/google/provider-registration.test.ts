@@ -155,7 +155,16 @@ describe("Google catalog transport defaults", () => {
     endpoints.flatMap((baseUrl) => [
       { baseUrl, scope: "default", api: undefined },
       { baseUrl, scope: "model-endpoint", api: undefined },
-      ...apis.flatMap((api) => ["provider", "model"].map((scope) => ({ baseUrl, scope, api }))),
+      ...apis.flatMap((api) =>
+        ["provider", "model"]
+          // Catalog routes admit a provider-wide API that matches the catalog row;
+          // AI Studio selects Interactions per model (or by the Flash default).
+          .filter(
+            (scope) =>
+              !(scope === "provider" && api === "google-interactions" && baseUrl === endpoints[0]),
+          )
+          .map((scope) => ({ baseUrl, scope, api })),
+      ),
     ]),
   )("resolves $scope API $api on $baseUrl from the catalog", ({ baseUrl, scope, api }) => {
     const providerConfig = {

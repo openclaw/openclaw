@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  normalizeConfig,
-  resolveModelRoutes,
-  resolveThinkingProfile,
-} from "./provider-policy-api.js";
+import { normalizeConfig, resolveThinkingProfile } from "./provider-policy-api.js";
 
 // Config and model policy must remain usable without initializing streaming transports.
 vi.mock("openclaw/plugin-sdk/provider-stream-shared", () => {
@@ -145,27 +141,4 @@ describe("google provider policy public artifact", () => {
   it("honors catalog reasoning=false for non-thinking-level Google models", () => {
     expect(thinking("gemma-4-26b-a4b-it")).toBeUndefined();
   });
-
-  it.each(["google-generative-ai", "google-interactions"] as const)(
-    "admits an explicit %s provider API without a configured base URL",
-    (api) => {
-      expect(
-        resolveModelRoutes({
-          provider: "google",
-          modelId: "gemini-3.8-flash",
-          configuredProvider: { api },
-        }),
-      ).toEqual({
-        kind: "routes",
-        routes: [
-          {
-            api,
-            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-            authRequirement: "api-key",
-            requestTransportOverrides: "none",
-          },
-        ],
-      });
-    },
-  );
 });

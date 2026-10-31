@@ -274,7 +274,8 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
                   resolveMergedModelProviderConfig(params.ctx.config, params.providerId),
               }),
             }
-          : context.template?.api === "google-interactions"
+          : // A configured google row may carry Interactions; other providers never use it.
+            context.template?.api === "google-interactions"
             ? { api: "google-generative-ai" }
             : {}),
       }),

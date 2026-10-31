@@ -42,6 +42,6 @@ export function buildGoogleVertexStaticCatalogProvider(): ModelProviderConfig {
   return {
     baseUrl: GOOGLE_VERTEX_BASE_URL,
     api: "google-vertex",
-    models: GOOGLE_GEMINI_TEXT_MODELS.map(({ api: _api, ...model }) => model),
+    models: GOOGLE_GEMINI_TEXT_MODELS,
   };
 }

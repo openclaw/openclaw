@@ -45,6 +45,8 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
   const methods = record.supportedGenerationMethods;
   const contextWindow = asPositiveSafeInteger(record.inputTokenLimit);
   const maxTokens = asPositiveSafeInteger(record.outputTokenLimit);
+  // Flash rows may advertise only the Interactions API; the effective endpoint
+  // picks the transport when the model resolves (resolveGoogleModelApi).
   if (
     !id ||
     !isGoogleTextGenerationModelId(id) ||
@@ -62,7 +64,6 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
   const staticModel = staticId ? GOOGLE_GEMINI_TEXT_MODEL_BY_ID.get(staticId) : undefined;
   return {
     id,
-    ...(isGoogleFlashTextModelId(id) ? { api: "google-interactions" as const } : {}),
     name: normalizeOptionalString(record.displayName) ?? id,
     reasoning: record.thinking === true,
     // models.list omits modalities. Gemma has both text-only small variants and
