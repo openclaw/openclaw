@@ -1474,7 +1474,6 @@ describe("mock OpenAI response markers", () => {
               text: "probe ok; PLUGIN_ROOT=/tmp/plugin; PLUGIN_DATA=/tmp/plugin-data; PROBE_MODE=live",
             },
           ],
-          details: { mcpServer: "weather-probe", mcpTool: "weather_probe" },
         },
       });
       expect((await request()).content[0].text).toBe("AGENT_BUNDLE_MCP_OK");
