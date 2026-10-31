@@ -26,11 +26,16 @@ import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agen
 import { invalidateOperatorRolePolicy } from "../../gateway/operator-role-policy.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
+import { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { waitForPluginCacheRetirement } from "../../plugins/plugin-cache.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
@@ -107,8 +112,9 @@ async function withChannelCommandPlugin(
 ) {
   const channelId = options.channelId ?? "discord";
   await withAdminIngress(
-    async ({ cfg, state, admins, context, gateway }) => {
+    async ({ cfg, state, admins, context, gateway, resolveGatewayContext }) => {
       const bridge = Symbol.for(`openclaw.channel-command-native-test.${randomUUID()}`);
+      gateway.resolveGatewayContext = resolveGatewayContext;
       const storePath = path.join(state.sessionsDir("main"), "sessions.json");
       const sessionKey = `agent:main:${channelId}:channel:maintainers`;
       const messages = async (role: "user" | "assistant") => {
@@ -200,7 +206,7 @@ async function withChannelCommandPlugin(
           gateway,
           createDirectChatContext({
             getRuntimeConfig: () => cfg,
-            resolveGatewayContext: () => gateway,
+            resolveGatewayContext,
             validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
             getGatewayMethodRegistry: () => createRequestGatewayMethodRegistry(),
             trackExecution: trackAsyncWork,
@@ -213,6 +219,13 @@ async function withChannelCommandPlugin(
       );
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
+      await using gatewayResources = new AsyncDisposableStack();
+      const scheduler = new GatewayScheduler();
+      gatewayResources.defer(() => scheduler.stop());
+      const sdkHost = new LegacyPluginSdkResourceHost();
+      gatewayResources.defer(() => sdkHost.close());
+      sdkHost.bindScheduler(scheduler);
+      bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkHost);
       let registry: PluginRegistry | undefined;
       const blockers: string[] = [];
       try {
@@ -251,7 +264,7 @@ async function withChannelCommandPlugin(
           });
           // Match startChannel's resolver without inheriting a request-local client.
           await withPluginRuntimeGatewayContextResolver(
-            () => gateway,
+            resolveGatewayContext,
             () =>
               withReplyDispatcher({
                 dispatcher,
