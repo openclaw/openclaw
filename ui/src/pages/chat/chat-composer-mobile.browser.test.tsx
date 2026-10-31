@@ -201,8 +201,8 @@ it.each([
     const assertStable = () => {
       for (const [index, actual] of rects().entries()) {
         for (const key of ["x", "y", "width", "height"] as const) {
-          expect(actual[key], `${elements[index].className} ${key}`).toBeCloseTo(
-            resting[index][key],
+          expect(actual[key], `${elements[index]!.className} ${key}`).toBeCloseTo(
+            resting[index]![key],
             1,
           );
         }
